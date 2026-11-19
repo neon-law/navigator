@@ -446,7 +446,9 @@ async fn refuses_drift(kind: Drift) {
     assert!(backfill::family::require_scope(&pg, Family::Tenancy)
         .await
         .is_err());
-    let actual = sqlx::query(PROJECT_BY_ID.as_str())
+    let statement = format!("{} WHERE id=$1", PROJECT_SELECT.as_str());
+    // Only the canonical static projection and a literal bound predicate form this query.
+    let actual = sqlx::query(sqlx::AssertSqlSafe(statement))
         .bind(image.id)
         .fetch_one(pg.pool())
         .await

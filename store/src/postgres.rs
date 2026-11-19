@@ -1,31 +1,30 @@
-//! PostgreSQL runtime connection for the Firm journal. Credentials are discrete
+//! PostgreSQL application admission and explicit operator connections.
+//! Ordinary access requires complete authority history. Credentials are discrete
 //! environment values and never form a printable connection string.
-use include_dir::{Dir, include_dir};
+use include_dir::{include_dir, Dir};
 use sqlx::migrate::{Migration, MigrationType, Migrator};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions, PgSslMode};
 use sqlx::{AssertSqlSafe, PgPool, SqlSafeStr};
 /// PostgreSQL authority for the accounting domain — Xero invoices, IOLTA
-/// accounts and withdrawals, and the finance aggregate — automatic on a
-/// configured host.
+/// accounts and withdrawals, and the finance aggregate.
 pub mod accounting;
 /// PostgreSQL authority for the litigation domain — cases, docket entries,
-/// discovery, and filings — automatic on a configured host.
+/// discovery, and filings.
 pub mod cases;
-/// PostgreSQL authority for the shared catalogs, behind an opt-in switch.
+/// PostgreSQL authority for the shared catalogs.
 pub mod catalog;
-/// PostgreSQL authority for Communications and the email tables, behind an
-/// opt-in switch.
+/// PostgreSQL authority for Communications and the email tables.
 pub mod communications;
 /// PostgreSQL authority for a Person's and an Entity's identity detail.
 pub mod identity;
 pub mod notation_creation_attempts;
 pub mod people;
 /// PostgreSQL authority for the review surface — review documents and
-/// document comments — automatic on a configured host.
+/// document comments.
 pub mod review;
 
 /// PostgreSQL authority for the provider-envelope family — signatures,
-/// verifications, and notarizations — automatic on a configured host.
+/// verifications, and notarizations.
 pub mod signatures;
 
 /// Consuming a journaled Forgejo push receipt: analysis on the row, the
@@ -41,12 +40,12 @@ pub mod forgejo_push_webhook_journal;
 #[cfg(test)]
 mod forgejo_push_webhook_journal_tests;
 
-/// PostgreSQL-authoritative Inbox slice (LAW-238 D0): ingest, dedup, threading,
-/// attribution, and the reads the renderers use, behind an opt-in cutover flag.
+/// PostgreSQL-authoritative Inbox ingest, deduplication, threading,
+/// attribution, and renderer reads.
 pub mod inbox;
 
 pub(crate) mod captions;
-/// PostgreSQL-authoritative matter records whenever the host is configured.
+/// PostgreSQL-authoritative matter records.
 pub mod matter;
 
 pub(crate) mod assets;

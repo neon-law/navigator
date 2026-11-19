@@ -1,13 +1,10 @@
-//! The PostgreSQL authority switch for the shared catalogs: Authorities,
-//! Entity Types, Glossary Terms, Jurisdictions, Notation packages and their
-//! templates, Notation rates, and Questions.
+//! PostgreSQL authority for the shared catalogs: Authorities, Entity Types,
+//! Glossary Terms, Jurisdictions, Notation packages and their templates,
+//! Notation rates, and Questions.
 //!
-//! These rows belong to no Firm or Project. Wherever PostgreSQL is configured
-//! (`NAVIGATOR_POSTGRES_HOST`), each owning module reads and writes PostgreSQL
-//! only, a PostgreSQL failure is returned rather than falling back, and the
-//! catalog mirror copies SurrealDB rows only during the first Mirror Backfill
-//! (see [`crate::postgres_mirror::initial_copy`]). SurrealDB serves a process
-//! without PostgreSQL, which today means only the SurrealDB test harness.
+//! These rows belong to no Firm or Project. Ordinary access requires application
+//! admission. Explicit Source reads belong to the captured compatibility context;
+//! catalog imports may copy rows only before global enrollment completes.
 
 use std::future::Future;
 use std::pin::Pin;

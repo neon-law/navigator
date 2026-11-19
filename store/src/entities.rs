@@ -485,7 +485,6 @@ pub async fn find_by_id(db: &SurrealDb, id: Uuid) -> Result<Option<Entity>, Enti
         .await
         .and_then(surrealdb::IndexedResults::check)?;
     let entity = one(response)?;
-    crate::postgres_shadow::entity_read(id, entity.as_ref());
     Ok(entity)
 }
 

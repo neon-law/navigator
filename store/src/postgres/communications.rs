@@ -2,14 +2,9 @@
 //! `communication`, `email_conversation`, `email_conversation_message`,
 //! `email_receipt`, `email_delivery`, and `email_delivery_attempt`.
 //!
-//! Whenever `NAVIGATOR_POSTGRES_HOST` is set ([`PostgresDb::configured`]),
-//! each owning module (`communications`, `email_conversations`,
-//! `email_receipts`, `email_deliveries`) reads and writes PostgreSQL only, a
-//! PostgreSQL failure is returned rather than falling back, and the mirror
-//! stops copying SurrealDB rows over the authoritative ones. Without a
-//! PostgreSQL host the SurrealDB path is the fallback. Parent rows the tables
-//! name — the Project, Person, Firm, Notation, and Asset — must exist in
-//! PostgreSQL.
+//! Ordinary access requires PostgreSQL application admission. Parent Project,
+//! Person, Firm, Notation, and Asset rows must exist in PostgreSQL. Explicit
+//! Source reads remain confined to captured-history compatibility operations.
 //!
 //! Rows come back as the JSON object `to_jsonb` makes of them, so every
 //! statement selects `to_jsonb(<alias>) AS row` and the owning module's own

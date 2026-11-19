@@ -15,7 +15,6 @@ use uuid::Uuid;
 use super::tenancy::{compare, images, remirror, select_sql, source, target, upsert_sql};
 use super::{changed, micros, MirrorError, MirrorKey, Mirrored, ParityReport};
 use crate::postgres::PostgresDb;
-use crate::postgres_shadow::{compare_row, Comparison, ShadowKey};
 use crate::surreal::{record_id, record_uuid, SurrealDb};
 
 const JURISDICTION_COLUMNS: &[&str] = &[
@@ -77,27 +76,6 @@ static ENTITY_TYPE_SELECT: LazyLock<String> =
     LazyLock::new(|| select_sql("entity_type", ENTITY_TYPE_COLUMNS));
 static ENTITY_SELECT: LazyLock<String> = LazyLock::new(|| select_sql("entity", ENTITY_COLUMNS));
 static PERSON_SELECT: LazyLock<String> = LazyLock::new(|| select_sql("person", PERSON_COLUMNS));
-static ENTITY_BY_ID: LazyLock<String> =
-    LazyLock::new(|| format!("{} WHERE id = $1", select_sql("entity", ENTITY_COLUMNS)));
-
-/// Compare one Entity read by id with PostgreSQL's row, through the
-/// mirror's Entity image.
-pub(crate) async fn shadow_entity(
-    pg: &PostgresDb,
-    id: Uuid,
-    source: Option<&crate::entities::Entity>,
-) -> Result<Comparison, MirrorError> {
-    compare_row(
-        pg,
-        ENTITY_BY_ID.as_str(),
-        ShadowKey::Id(id),
-        source.map(EntityImage::from_source),
-        EntityImage::from_row,
-        |image| image.id,
-    )
-    .await
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct JurisdictionImage {
     id: Uuid,

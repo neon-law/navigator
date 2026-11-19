@@ -669,9 +669,7 @@ pub(crate) async fn participation_by_id_in_surreal(
     Ok(row.and_then(PersonProjectRoleRow::into_role))
 }
 
-/// Publish rows a SurrealDB transaction wrote. Under tenancy authority the
-/// write is not complete until PostgreSQL holds every row, so a refusal is
-/// returned; otherwise the best-effort mirror runs when configured.
+/// Complete explicit compatibility writes through the shared projection boundary.
 async fn publish(
     surreal: &SurrealDb,
     keys: impl IntoIterator<Item = MirrorKey>,
@@ -1767,10 +1765,6 @@ pub async fn find_by_code(
     let row: Option<ProjectRow> = response.take(0)?;
     let mut project = row.and_then(ProjectRow::into_project);
     Box::pin(overlay_lifecycle(project.as_mut_slice())).await?;
-    crate::postgres_shadow::project_read(
-        crate::postgres_shadow::ShadowKey::Text(code.to_string()),
-        project.as_ref(),
-    );
     Ok(project)
 }
 
@@ -1920,10 +1914,6 @@ pub(crate) async fn find_by_id_in_surreal(
     let row: Option<ProjectRow> = response.take(0)?;
     let mut project = row.and_then(ProjectRow::into_project);
     Box::pin(overlay_lifecycle(project.as_mut_slice())).await?;
-    crate::postgres_shadow::project_read(
-        crate::postgres_shadow::ShadowKey::Id(id),
-        project.as_ref(),
-    );
     Ok(project)
 }
 

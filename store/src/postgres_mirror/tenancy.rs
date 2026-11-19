@@ -25,7 +25,6 @@ use uuid::Uuid;
 
 use super::{changed, identity, MirrorError, MirrorKey, Mirrored, ParityReport, TableParity};
 use crate::postgres::PostgresDb;
-use crate::postgres_shadow::{compare_row, Comparison, ShadowKey};
 use crate::surreal::SurrealDb;
 
 const FIRM_COLUMNS: &[&str] = &[
@@ -202,56 +201,6 @@ statement!(
     PARTICIPATION_SELECT,
     select_sql("person_project_role", PARTICIPATION_COLUMNS)
 );
-
-statement!(
-    FIRM_BY_ID,
-    format!("{} WHERE id = $1", select_sql("firm", FIRM_COLUMNS))
-);
-statement!(
-    PROJECT_BY_ID,
-    format!("{} WHERE id = $1", select_sql("project", PROJECT_COLUMNS))
-);
-statement!(
-    PROJECT_BY_CODE,
-    format!("{} WHERE code = $1", select_sql("project", PROJECT_COLUMNS))
-);
-
-/// Compare one Firm read by id with PostgreSQL's row, through the mirror's
-/// Firm image.
-pub(crate) async fn shadow_firm(
-    pg: &PostgresDb,
-    id: Uuid,
-    source: Option<&crate::firms::Firm>,
-) -> Result<Comparison, MirrorError> {
-    let source = source.map(FirmImage::from_source).transpose()?;
-    compare_row(
-        pg,
-        FIRM_BY_ID.as_str(),
-        ShadowKey::Id(id),
-        source,
-        FirmImage::from_row,
-        |image| image.id,
-    )
-    .await
-}
-
-/// Compare one Project read, by id or by code, with PostgreSQL's row for
-/// the same lookup, through the mirror's Project image.
-pub(crate) async fn shadow_project(
-    pg: &PostgresDb,
-    key: ShadowKey,
-    source: Option<&crate::projects::Project>,
-) -> Result<Comparison, MirrorError> {
-    let source = source.map(ProjectImage::from_source).transpose()?;
-    let sql = match key {
-        ShadowKey::Id(_) => PROJECT_BY_ID.as_str(),
-        ShadowKey::Text(_) => PROJECT_BY_CODE.as_str(),
-    };
-    compare_row(pg, sql, key, source, ProjectImage::from_row, |image| {
-        image.id
-    })
-    .await
-}
 
 /// A Surreal RFC 3339 timestamp at PostgreSQL's microsecond precision.
 pub(super) fn timestamp(text: &str) -> Result<DateTime<Utc>, MirrorError> {

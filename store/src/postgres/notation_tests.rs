@@ -698,3 +698,92 @@ async fn asset_metadata_lifecycle_and_note_key_protection_are_postgres_authorita
     .await;
     pg.pool().close().await;
 }
+
+#[tokio::test]
+async fn native_notation_query_shapes_preserve_project_person_and_template_isolation() {
+    let Some((options, database)) = fresh_schema().await else {
+        return;
+    };
+    let pg = connect(&options, &database).await;
+    crate::postgres::fixtures::activate_application(&pg).await;
+    let (person_a, a, _) = workflow_fixture(&pg).await;
+    let (person_b, b, _) = workflow_fixture(&pg).await;
+    let (project_a, template_a): (Uuid, Uuid) =
+        sqlx::query_as("SELECT project_id,template_id FROM notation WHERE id=$1")
+            .bind(a)
+            .fetch_one(pg.pool())
+            .await
+            .unwrap();
+    let project_b: Uuid = sqlx::query_scalar("SELECT project_id FROM notation WHERE id=$1")
+        .bind(b)
+        .fetch_one(pg.pool())
+        .await
+        .unwrap();
+    let unavailable = crate::surreal::SurrealDb::uninitialized();
+    with_test_db(pg.clone(), async {
+        use crate::notations;
+        let ids = |rows: Vec<notations::Notation>| {
+            rows.into_iter()
+                .map(|row| row.id)
+                .collect::<std::collections::BTreeSet<_>>()
+        };
+        assert_eq!(
+            ids(notations::list_by_project(&unavailable, project_a)
+                .await
+                .unwrap()),
+            [a].into()
+        );
+        assert_eq!(
+            ids(
+                notations::list_by_projects(&unavailable, &[project_a, project_b])
+                    .await
+                    .unwrap()
+            ),
+            [a, b].into()
+        );
+        for (person, expected) in [(person_a, a), (person_b, b)] {
+            assert_eq!(
+                ids(notations::list_by_person(&unavailable, person)
+                    .await
+                    .unwrap()),
+                [expected].into()
+            );
+        }
+        assert_eq!(
+            ids(notations::list_all(&unavailable).await.unwrap()),
+            [a, b].into()
+        );
+        assert_eq!(
+            notations::find_by_project_template_person(
+                &unavailable,
+                project_a,
+                template_a,
+                person_a
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .id,
+            a
+        );
+        for (project, person) in [(project_a, person_b), (project_b, person_a)] {
+            assert!(notations::find_by_project_template_person(
+                &unavailable,
+                project,
+                template_a,
+                person
+            )
+            .await
+            .unwrap()
+            .is_none());
+        }
+        assert!(notations::exists_for_project(&unavailable, project_a)
+            .await
+            .unwrap());
+        assert!(!notations::exists_for_project(&unavailable, Uuid::new_v4())
+            .await
+            .unwrap());
+    })
+    .await;
+    pg.pool().close().await;
+}

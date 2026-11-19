@@ -113,204 +113,44 @@ unchanged. Repair the source-backed mirror and retry; never invent a version or 
 
 ## PostgreSQL mirror tables and reconciliation
 
-For domains using SurrealDB authority, the source accessor determines each write's outcome. PostgreSQL mirrors are
-recoverable copies. [Storage models and writes](storage-models.md) documents PostgreSQL-authoritative paths and their
-configuration; authority cutover takes precedence over the source mirror. The mirror coverage is implemented in
-[`store::postgres_mirror`](../store/src/postgres_mirror.rs):
+Application reads and writes use PostgreSQL. Missing configuration or incomplete authority history stops ordinary
+access before a Source connection. [Storage models and writes](storage-models.md) describes native ownership,
+authorization, and transaction boundaries.
 
-- **Identity:** `person`, `entity`, and the `entity_type` and `jurisdiction` rows an Entity names. The Person and
-  Entity writers in `store::persons` and `store::entities` call the mirror. Mirroring an Entity first mirrors each
-  reference row PostgreSQL does not hold.
-- **Tenancy:** `firm`, `brand`, `firm_brand`, `project`, `person_firm_role`, and `person_project_role`. The Firm,
-  Brand, and Project commands in `store::firms`, `store::brands`, and `store::projects` call the mirror.
-- **Documents:** `asset`, both document assets and bare content assets. Every asset writer in `store::assets` and
-  `store::documents` calls the mirror, including each revision a soft deletion, restore, Legal Hold, or purge stamps.
-- **Workflow:** `notation`, `notation_event`, `answer`, and `notation_clause`. `store::notations`,
-  `store::notation_events`, `store::answers`, `store::notation_reset`, and `store::notation_clauses` call the mirror.
-- **Templates:** versioned Template metadata. `store::templates::save_version` mirrors each newly written version and
-  the retired version; the nullable unique `current_key` is copied from SurrealDB, while bodies remain in Assets.
-- **Editorial:** `post`, `blog_video`, `social_handle`, and `social_publication`. Wherever PostgreSQL is configured
-  these tables and the Social Account tables are read and written in PostgreSQL by their owning modules; only the first
-  [Mirror Backfill](#mirror-backfill) copies SurrealDB rows into them (see [storage
-  models](storage-models.md#brand-and-social-content)).
-- **Social Accounts:** `social_account` and `social_account_selection`. The account mirror copies the encrypted KMS
-  bundle and account metadata as SurrealDB stored them. It preserves ciphertext and wrapped-key bytes, and never
-  decrypts them. Firm, Brand, and connected or revoking Person links remain explicit. The saved-selection mirror
-  preserves the chosen Brand/provider destination without credentials or publishing authority; disconnecting the account
-  leaves that selection intact. The one-use Social OAuth Attempt follows the [scoped PostgreSQL
-  authority](#scoped-family-enrollment).
-- **Catalog:** `authority`, `glossary_term`, `question`, `notation_package`, `notation_package_template`, and
-  `notation_rate`. These are shared catalogs owned by no Firm or Project. The Authority, glossary, Question, and
-  Notation package writers in `store::authorities`, `store::glossary`, `store::questions`, and
-  `store::notation_packages` call the mirror; the canonical seed reaches it through those writers. Notation rates have
-  no SurrealDB writer. Wherever PostgreSQL is configured these tables, with `jurisdiction` and `entity_type`, are read
-  and written in PostgreSQL by their owning modules; only the first [Mirror Backfill](#mirror-backfill) copies SurrealDB
-  rows into them.
-- **Identity detail:** what a Person or Entity holds beside its own row: `address`, `credential`, `email_token`,
-  `entity_role`, `person_delegate`, `person_external_identity`, and `person_mailbox`. Their writers in
-  `store::addresses`, `store::credentials`, `store::email_tokens`, `store::entity_roles`, `store::delegations`,
-  `store::external_identities`, and `store::persons` (mailbox claims) call the mirror. The `entity_role` writer is the
-  exception: wherever PostgreSQL is configured the tie lands there (row, then its `HAS_ROLE` graph edge), SurrealDB
-  receives nothing, and the mirror copies Surreal-era ties without ever deleting one.
-- **Communications:** `summary_sender_approval` and its append-only
-  `summary_sender_approval_event`. The approval and audit writers call the mirror after their SurrealDB writes.
-- **Inbox:** `inbox_conversation`, `message`, `inbox_ingress`, `inbox_assignment`, and
-  `inbox_delivery_attempt`. Intake, assignment, reply, delivery, and alert writers mirror their successful SurrealDB
-  writes. Parity compares the full transcript and audit rows. Reconciliation restores missing parents before children
-  and repairs mutable rows; ingress, assignment, and delivery-attempt evidence remains insert-only, with any changed or
-  extra target row reported as drift. Firm and Project references remain explicit, and internal notes keep their
-  recorded direction and visibility. Whenever `NAVIGATOR_POSTGRES_HOST` is set, Inbox reads, writes, alerts, and
-  historical file imports go through PostgreSQL. The first [Mirror Backfill](#mirror-backfill) inserts missing history,
-  including attachment links and triage. Identity, tenancy, Document Assets, and Communications keep their own seams.
-  Native tests are recorded in `store/postgres/runtime-parity.json`.
-- **Inbound email delivery:** `email_receipt`, `email_delivery`, and `email_delivery_attempt`. The receipt and Slack
-  delivery writers mirror each successful write. Reconciliation restores parents before children; receipt deletion
-  cascades through the delivery and attempt records. Whenever `NAVIGATOR_POSTGRES_HOST` is set, PostgreSQL holds these
-  tables and `communication`, `email_conversation`, and `email_conversation_message`. The first Mirror Backfill inserts
-  missing history. Parity skips those tables after the first completed run.
-- **Outbound email audit:** `sent_email`. Its writer in `store::sent_emails` mirrors each recorded attempt.
-  Reconciliation inserts missing rows; changed or extra audit rows remain drift for review. No audit history is
-  overwritten or deleted. The optional Project foreign key preserves matter scope.
-- **Deadlines:** `project_deadlines`. Its writer in `store::project_deadlines` calls the mirror after a deadline write.
-- **Services:** `project_service`. Its writer in `store::project_service` mirrors a Service after recording it and
-  removes the target row when a Project cascade removes the source. Each row keeps its Project and served Document; the
-  Document must belong to that same Project. Optional recipient, declarant, and sent-email references are mirrored when
-  absent from PostgreSQL. The Service's named recipient, method, address, declarant, and service date are copied as
-  recorded; this mirror does not derive a deadline. Letter references remain UUIDs until the Letter table is mirrored.
-- **Project references:** `project_reference`. The writer in `store::project_references` mirrors a verified Person or
-  Entity reference after its SurrealDB write. This row does not create Project participation or grant access; the portal
-  party list does not render it. PostgreSQL enforces exactly one Person or Entity endpoint and the source reason set.
-- **Project records:** `project_module`, `statutory_deadline`, `testimonial`, and `playbook`, mirrored whole by
-  `store::postgres_mirror::records`. Their writers in `store::project_modules`, `store::statutory_deadlines`,
-  `store::testimonials`, and `store::playbooks` mirror each successful write. Each row keeps its record UUID and names
-  its Project, Person, or Entity by foreign key; the parent is mirrored first when PostgreSQL lacks it.
-- **Notation inputs:** `notation_source` and `notation_draft`, mirrored whole by the same module.
-  `store::notation_sources` and `store::notation_drafts` mirror each write, and deleting a preview draft removes its
-  row. A source names its Communication by foreign key, never a copy of the message; deleting a Notation in PostgreSQL
-  removes its sources.
-- **Git access:** `git_repository` and `git_access_token`, mirrored whole by the same module. `store::git_repositories`
-  and `store::git_access_tokens` mirror each create and revocation. A token is stored only as its SHA-256 hash, never
-  its plaintext; an unscoped token has no Project.
+[`store::postgres_mirror`](../store/src/postgres_mirror.rs) retains explicit captured-history adapters. Global history
+and the five disjoint scoped families bind their registered tables to verified captures. A completed receipt fences
+Source import and reconciliation before Source access, including under an explicit Source-read context. A missing
+native parent after ownership transfer is a refusal, not permission to restore it from old Source data.
 
-After a Surreal write to a mutable mirrored row succeeds, the writer reads it back from SurrealDB by key and upserts it
-into PostgreSQL. If SurrealDB no longer has that row, the writer deletes it from PostgreSQL. Append-only audit events
-use insert-only semantics and are never overwritten or deleted by the mirror.
-
-| Setting | Effect |
+| Historical group | Captured behavior |
 | --- | --- |
-| `NAVIGATOR_POSTGRES_HOST` set | Mirror each write through the shared pool |
-| Unset | Do nothing; PostgreSQL is never contacted |
+| Identity and detail | Preserve UUIDs, typed fields, and canonical natural mailbox claims without reassignment |
+| Tenancy | Preserve ownership and participation; prove native lifecycle chains before accepting divergence |
+| Documents | Compare complete Asset metadata and JSON; preserve independently proven native protection |
+| Templates | Preserve immutable versions, provenance and pins; never delete target-only versions |
+| Workflow | Preserve Notation pins, respondent/actor attribution, answer chronology, and live reset protections |
+| Catalogs and graph | Permit genuine first-global copy; completed ownership prevents parent resurrection |
+| Brand and social content | Preserve stable content identity, connected accounts, selections, and encrypted context |
+| Communications and Inbox | Preserve transcript, scope, visibility, and audit evidence; replay no external effects |
+| Application records | Insert captured missing rows; preserve native changes and target-only history |
+| Sent Email | Compare retained history; admit missing rows only with the exact proven retention exclusion |
+| Journal | Prove every captured event represented and all retained native projections and history coherent |
 
-Each row has one identity in both stores. A Firm, Brand, Project, Project participation, asset, Notation, Notation
-Event, answer, and Post use their record UUID. A `firm_brand` row uses its Brand key. A Firm membership uses its Person
-and Firm. A Social Handle uses its Brand and provider. A Social Publication uses its Post and provider. Both schemas
-enforce these keys as unique. An upsert writes only when a column differs, so a replay changes nothing. Timestamps
-compare at PostgreSQL's microsecond precision. When a Brand and slug in PostgreSQL carry a different Post id,
-SurrealDB's row replaces the stale Post.
+Comparisons retain canonical columns, nested values, nullable references, and PostgreSQL timestamp precision.
+Invalid identities or timestamps fail closed rather than being dropped or assigned substitutes. Encrypted values retain
+their exact authenticated context and ciphertext; import does not decrypt or normalize authenticated text. Mailbox
+reports contain Person ids and claim counts, never mailbox strings. Other reports contain ids, counts, and sanitized
+reasons rather than client content or secret values.
 
-A mirror waits synchronously for up to three projection attempts within a total fifteen-second budget. Each attempt has
-a four-second timeout and reads the current source again. Transient connection, timeout, serialization, and lock
-failures retry; invalid timestamps and integrity constraints stop immediately. Retries never replay the domain write or
-an external effect. A failed projection logs its table and sanitized error at error level and leaves the committed
-Surreal write intact. Returning a retryable request error after that commit could duplicate external effects.
+The explicit import command uses the existing enrollment ledger and its captured Source. It does not grant ordinary
+application requests an alternative storage path. Pending import policies preserve each family's immutable history,
+native ownership exceptions, and unresolved-reference checks; a clean table count alone cannot certify transfer.
+See [scoped enrollment](#scoped-family-enrollment) for the verified capture and activation protocol.
 
-Every deployment mirrors. Ship requires a clean reconciliation before applying the application and installs a
-reconciliation CronJob every five minutes. It uses the existing CLI image, verify-full TLS, and the app login.
-Concurrent scheduled runs are forbidden; failed or overdue recovery raises a critical monitoring rule. Alert routing and
-kube-state metrics must be operational in the deployment.
-
-Existing authorities with the global-import contract (the catalogs, matter records, and Brand and social content
-described in storage models) are never repaired from SurrealDB after their first global Mirror Backfill. Before that
-global completion, parity reports source rows PostgreSQL lacks; afterward it skips them. The thirteen satellite tables
-instead require their own [scoped enrollment](#scoped-family-enrollment): global completion does not activate them, and
-an activated receipt prevents replay even before any global run completes.
-
-Durable source rows and target drift allow the recurring scan to rediscover missing, differing, and extra mutable rows
-after an application process exits. This is eventual convergence when both stores recover and writes settle, not a
-transaction across databases, a durable event queue, or preservation of intermediate versions. A source row created and
-deleted before any successful projection cannot be reconstructed. Only tables with registered mirrors participate; SQL
-schema coverage is incomplete. Do not use this policy when every intermediate event must be retained. The initial scan
-is a release gate, not proof that concurrent writes remain equal indefinitely. Each group's `parity` compares its rows
-and names every divergent key; `reconcile` retries those rows from SurrealDB and returns the comparison after repair.
-PostgreSQL foreign keys refuse rows whose required parent is absent, leaving them divergent until the parent exists
-there. Append-only event rows missing from SurrealDB remain in PostgreSQL and are reported.
-
-`postgres_mirror::tenancy::parity` and `tenancy::reconcile` do the same for the tenancy tables, parents first; run them
-before the editorial pair. Before a Firm, Project, or membership is upserted, the Person or Entity it names is mirrored
-when PostgreSQL does not hold it. A reference SurrealDB cannot supply is refused by its foreign key and stays divergent.
-`postgres_mirror::social_accounts::parity` and `social_accounts::reconcile` compare and repair encrypted Social Account
-connections after the identity and tenancy mirrors. Before an account is upserted, its Firm, Firm-owned Brand, and
-connected or revoking Person are mirrored. Ciphertext and wrapped data keys are copied as stored; this mirror never
-decrypts them. The stable source key, KMS context, key version, status, and timestamps remain part of parity. The saved
-Social Account Selection is mirrored separately by `social_account_selections`; it preserves the Brand/provider record
-key and selected destination without credentials or publishing authority. A cancelled or disconnected Social Account
-does not remove that saved selection. After `satellites:1` activation, `social_oauth_attempt` uses PostgreSQL; callback
-consumption returns the verifier once and erases its stored value atomically. `postgres_mirror::identity::parity` and
-`identity::reconcile` compare and repair every identity row; run them after the tenancy pair. They name rows by key
-only. A Person whose email or sign-in subject PostgreSQL still holds under another id is refused, not overwritten, and
-converges once that other row is mirrored. Surreal timestamps are RFC 3339 text; a row whose timestamp does not parse is
-refused and reported, never given a substitute time.
-
-`postgres_mirror::documents::parity` compares Asset metadata before enrollment. The frozen scoped import inserts
-Source-only identities and preserves existing PostgreSQL rows, including visibility and provenance. Every canonical
-column and JSON value participates in the comparison; absent JSON and explicit JSON `null` remain distinct. Source
-metadata cannot establish a trusted onboarding verification marker. Reports contain Asset ids and counts, without
-filenames or storage keys. The scoped native ownership exception is described below.
-
-`postgres_mirror::catalog::parity` and `catalog::reconcile` compare and repair the catalog tables, a Notation package
-before its templates; run them after the editorial pair. Mirroring a package template first mirrors its package when
-PostgreSQL does not hold it, and mirrors the exact Template version on demand. An Authority naming an archived Asset
-PostgreSQL lacks is refused by its foreign key and stays divergent until that Asset exists there. Template foreign keys
-retain pinned package versions. A citation, slug, or code PostgreSQL holds under another id is refused, not overwritten;
-`reconcile` deletes the stale row and converges.
-
-`postgres_mirror::workflow::parity` compares the pending Notation, Notation Event, and answer enrollment against the
-frozen capture. Events retain actor and Template attribution; answers keep respondent and author separate. Event
-ordering uses UUIDv7, and answer ordering uses insertion time at PostgreSQL precision followed by UUID for ties. The
-matching scoped importer may refresh divergent captured rows. Missing Source rows are never deletion evidence, and
-completed enrollment prevents import or reconciliation from resurrecting native rows.
-
-`postgres_mirror::notation_clauses::parity` applies the same pending-enrollment boundary to custom clauses. Native
-append and move operations serialize render positions. PostgreSQL draft reset locks the Notation, rechecks its state and
-live document, Asset, and signature protection, then deletes its four child families and parent in one transaction.
-Canonical fact writers lock the parent before committing their facts, so a queued reset observes their committed
-protection. Compensation uses the same protected deletion seam.
-
-`postgres_mirror::identity_detail::parity` and `identity_detail::reconcile` cover the identity-detail tables; run them
-after the identity pair. Rows with a record UUID keep it. An `entity_role` row is keyed by its Person, Entity, and role,
-the edge's unique tie in SurrealDB. A `person_mailbox` row's key is the claimed mailbox, a lowercased email, so the
-mirror keys claims by their Person and copies all of one Person's claims together; a report never names a mailbox.
-Before a row is upserted, the Person, Entity, or Jurisdiction it names is mirrored when PostgreSQL does not hold it. No
-foreign key cascades: SurrealDB does not cascade a Person delete, so an orphaned child is reported, not removed. An
-`email_token` row carries the SHA-256 hex of its token, the only form SurrealDB stores; the plaintext exists only in the
-emailed link.
-
-`postgres_mirror::communications::parity` and `communications::reconcile` compare and repair the approval and audit
-tables; run them after the identity and tenancy pairs. An approval is identified by its record id and carries its Firm,
-optional Project, provider account, sender email, Person, status, and update time. Its Firm, Project, and Person parents
-are mirrored when PostgreSQL does not hold them. Audit events also carry the actor Person and are insert-only: replay
-with the same id does not overwrite an existing event, and an event missing from SurrealDB is not deleted from
-PostgreSQL. A missing parent or a failed write remains divergent and is reported by parity. Times are compared at
-PostgreSQL microsecond precision.
-
-`postgres_mirror::deadlines::parity` and `deadlines::reconcile` compare and repair Project deadlines; run them after the
-tenancy, document, and identity pairs. A deadline keeps its Project, due time, authority and source, optional source
-Asset and owner Person, status, calendar role, reminder lead days, replay key, and insertion and update times. The
-Project, Asset, and Person parents are mirrored when PostgreSQL does not hold them. Invalid RFC 3339 timestamps are
-refused and reported; valid times compare at PostgreSQL microsecond precision. Reconcile repairs divergent rows and
-removes target-only deadlines when the source row is gone.
-
-`postgres_mirror::project_services::parity` and `project_services::reconcile` compare and repair recorded Service rows;
-run them after the tenancy, document, identity, and communications groups. The Project and served Document must agree on
-Project ownership; a mismatched Document is refused. Optional recipient Person, recipient Entity, declarant Person, and
-sent-email parents are mirrored on demand. The nullable Letter id remains source data because PostgreSQL does not yet
-have a Letter table. Reconcile removes target-only Service rows when SurrealDB no longer holds them.
-
-`postgres_mirror::project_references::parity` and `project_references::reconcile` compare and repair verified Project
-Reference rows; run them after identity and tenancy. A reference is keyed by Project, party kind and id, and reason. Its
-Person or Entity endpoint and Project parents are mirrored when PostgreSQL does not hold them. Reconcile removes a
-target-only row when SurrealDB no longer holds the reference. A Project Reference does not substitute for
-`person_project_role` and is not an authorization input.
+Normal deployment runs the PostgreSQL-only application readiness Job before application rollout. It requires global
+history and every current scoped receipt. Only successful admission retires the obsolete automatic mirror-recovery
+schedule and monitoring rule. Explicit import, archive, and recovery commands remain separate operator actions;
+readiness failure leaves recovery intact and blocks rollout.
 
 ## Mirror backfill
 
@@ -366,8 +206,7 @@ hudson ops postgres backfill --resume <run-id> --json  # continue a run from its
 
 Exit status is 0 when the post-run parity report is clean, 1 when a plan has rows to write or a completed run has
 failures or parity drift, 2 when a store is unavailable or the run could not advance, and 3 when a run paused at
-`--max-batches`; a backfill is not a cross-store snapshot. Writes that land during a run reach PostgreSQL through the
-write mirror and recurring reconciliation.
+`--max-batches`; a backfill is not a cross-store snapshot. The scoped protocol below requires writer quiescence.
 
 Before relying on a backfill report, run `ops postgres mirror parity` and require a clean result.
 
@@ -377,8 +216,20 @@ Before relying on a backfill report, run `ops postgres mirror parity` and requir
 `expunge_record`, `expunge_request`, `git_access_token`, `matter_caption`, `playbook`, `project_module`,
 `social_oauth_attempt`, and `testimonial`. `notation:1` enrolls exactly `notation`, `answer`, `notation_event`,
 `notation_clause`, `notation_source`, `asset`, `notation_document`, and `notation_document_version`. Both scopes are
-independent of global completion. Signature and Notarization retain their existing PostgreSQL authority; encrypted
-deployment changes retain their existing storage contract.
+disjoint from global completion. The additional scoped sets are:
+
+- `identity:1`: `entity`, `person`, `person_mailbox`, `address`, `credential`, `email_token`, `person_delegate`,
+  `person_external_identity`, and `person_phone`.
+- `tenancy:1`: `firm`, `brand`, `firm_brand`, `person_firm_role`, `project`, and `person_project_role`.
+- `application:1`: `template`, `mailroom`, `letter`, `lead`, `lead_consent`, `project_deadlines`, `project_service`,
+  `summary_sender_approval`, `summary_sender_approval_event`, `inbox_triage`, `deployment_secret_change`, `matter_page`,
+  `notation_document_comment`, `firm_integration_secret`, `sent_email`, and `journal_entry`.
+
+Ordinary application admission requires completed global history and every registered scoped family. Signature and
+Notarization retain their existing PostgreSQL authority. Identity imports preserve natural mailbox ownership; Tenancy
+verifies native lifecycle history rather than replacing it. Application imports preserve immutable Template pins,
+encrypted authenticated context, proven email retention exclusions, and complete Journal projections and history.
+Retained native Journal and Sent Email rows remain authoritative; their typed containment proofs account for them.
 
 Apply the checked-in PostgreSQL migrations through the existing operator migration command before enrollment. Use the
 importer binary before launching application or worker binaries that require the new scope. PostgreSQL connections and
@@ -460,42 +311,10 @@ writer cutoff.
 
 ## Shadow reads
 
-A [Shadow Read](glossary/shadow-read.md) proves a PostgreSQL read returns what the SurrealDB read it will replace
-returns, before any caller depends on it. SurrealDB still answers every read.
-[`store::postgres_shadow`](../store/src/postgres_shadow.rs) runs the equivalent PostgreSQL query in a detached task with
-a two-second budget, and compares both rows through the mirror's own image, so timestamps compare at microsecond
-precision exactly as `ops postgres mirror parity` compares them. The caller's result, latency, and errors never depend
-on PostgreSQL.
+A [Shadow Read](glossary/shadow-read.md) compares two query implementations while one answers the caller.
+Navigator application reads use PostgreSQL directly. They do not sample a second store or contact SurrealDB for
+runtime comparisons. Missing authority history fails closed before the read.
 
-| Store | Shadowed reads |
-| --- | --- |
-| `entities` | `entities::find_by_id` |
-| `firms` | `firms::find_by_id` |
-| `notations` | `notations::find_by_id`, `find_by_project_template_person` |
-| `notations` | `notations::list_by_project`, `list_by_projects`, `list_by_person` |
-| `notations` | `notations::list_all`, `exists_for_project` |
-| `projects` | `projects::find_by_id`, `projects::find_by_code` |
-
-| Setting | Effect |
-| --- | --- |
-| `NAVIGATOR_POSTGRES_SHADOW_READS` unset or empty | Off; PostgreSQL is never contacted for a read |
-| `NAVIGATOR_POSTGRES_SHADOW_READS=projects,firms` | Shadow those stores' reads (any of the four names above) |
-| `NAVIGATOR_POSTGRES_SHADOW_SAMPLE` | Share of covered reads shadowed, `(0, 1]`; default `0.1` |
-
-Shadow reads also need `NAVIGATOR_POSTGRES_HOST` and the mirror's PostgreSQL login. An unknown store name or a sample
-outside `(0, 1]` turns every shadow read off and logs one error naming the setting; a read never fails on it.
-
-Each verdict is logged under the `navigator::postgres_shadow` target with the table, the row's UUID, and `match`,
-`mismatch` (a row missing from one store, or a column that differs), or `unavailable` (PostgreSQL errored or exceeded
-the budget). Mismatches log at warning level, matches at debug. No column value is ever logged.
-`postgres_shadow::counts()` holds the same tallies per table for the running process.
-
-A store's reads may cut over to PostgreSQL in a deployment only when, with the mirror enabled and its recurring
-reconciliation clean throughout:
-
-1. Its shadow reads ran at sample `1` for at least seven consecutive days.
-2. Each covered table recorded at least 1,000 compared reads in that window, or every read it served if fewer.
-3. Mismatches are zero. Any mismatch restarts the window once its cause is fixed and parity is clean again.
-4. `unavailable` verdicts are at most 0.1% of compared reads.
-
-These thresholds are evidence for one store's read path; they do not cover a store that is not shadowed.
+Explicit captured imports verify table images, references, immutable pins, and protected native history through
+`hudson ops postgres mirror`. Those operator checks use the captured Source and PostgreSQL parity adapters,
+separate from ordinary application requests.

@@ -3812,7 +3812,6 @@ pub async fn conversation_by_id(
         .check()?;
     let row: Option<ConversationRow> = response.take(0)?;
     let conversation = row.and_then(ConversationRow::into_conversation);
-    crate::postgres_shadow::conversation_read(id, conversation.as_ref());
     Ok(conversation)
 }
 
@@ -3827,7 +3826,6 @@ pub async fn message_by_id(db: &SurrealDb, id: Uuid) -> Result<Option<Message>, 
         .check()?;
     let row: Option<MessageRow> = response.take(0)?;
     let message = row.and_then(MessageRow::into_message);
-    crate::postgres_shadow::message_read(id, message.as_ref());
     Ok(message)
 }
 

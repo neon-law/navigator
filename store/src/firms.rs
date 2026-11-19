@@ -26,7 +26,7 @@ use uuid::Uuid;
 
 use crate::persons::Role;
 use crate::postgres_mirror::MirrorKey;
-use crate::surreal::{SurrealDb, record_id, record_uuid, retry};
+use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 
 pub(crate) const TABLE: &str = "firm";
 const MEMBERSHIP_TABLE: &str = "person_firm_role";
@@ -533,7 +533,6 @@ pub async fn find_by_id(surreal: &SurrealDb, id: Uuid) -> Result<Option<Firm>, F
         .and_then(surrealdb::IndexedResults::check)?;
     let row: Option<FirmRow> = response.take(0)?;
     let firm = row.and_then(FirmRow::into_firm);
-    crate::postgres_shadow::firm_read(id, firm.as_ref());
     Ok(firm)
 }
 
@@ -596,7 +595,7 @@ async fn authorize_manage_firm(
     actor_person_id: Option<Uuid>,
     firm_id: Uuid,
 ) -> Result<(), FirmError> {
-    use crate::firm_capability::{FirmCapability, FirmCapabilityDecision, resolve};
+    use crate::firm_capability::{resolve, FirmCapability, FirmCapabilityDecision};
     match resolve(
         surreal,
         actor_role,
@@ -711,7 +710,7 @@ async fn authorize_brand_ownership(
     firm_id: Uuid,
     capability: crate::firm_capability::FirmCapability,
 ) -> Result<(), FirmError> {
-    use crate::firm_capability::{FirmCapabilityDecision, resolve};
+    use crate::firm_capability::{resolve, FirmCapabilityDecision};
     match resolve(surreal, actor_role, actor_person_id, firm_id, capability).await? {
         FirmCapabilityDecision::Allowed => Ok(()),
         FirmCapabilityDecision::FirmNotFound => Err(FirmError::NoSuchFirm(firm_id)),
