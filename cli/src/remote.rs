@@ -932,9 +932,9 @@ pub fn unreachable_host_error(base: &str, request: &str, error: reqwest::Error) 
 /// `project.host` at a host this deployment serves.
 fn unreachable_host_message(base: &str, request: &str) -> String {
     format!(
-        "project.host `{}` does not resolve: no DNS record answers for it, so \
-         {request} never reached Navigator. Publish the host's DNS record, or set \
-         project.host to a host this deployment serves.",
+        "project.host `{}` could not be resolved by this CLI's DNS lookup, so \
+         {request} never reached Navigator. Check the local DNS resolver and \
+         VPN/network settings, and confirm the host's DNS record.",
         host_of(base)
     )
 }
@@ -4096,11 +4096,41 @@ async fn find_visible_person(
     let endpoint = format!("{base}{PEOPLE_PATH}");
     let mut request = client.get(&endpoint).query(&[("filter[email]", email)]);
     loop {
-        let response = request
-            .bearer_auth(token)
-            .send()
-            .await
-            .context("GET /app/api/people")?;
+        let mut response = None;
+        for attempt in 1..=PROJECT_LOOKUP_ATTEMPTS {
+            match request
+                .try_clone()
+                .context("clone GET /app/api/people")?
+                .bearer_auth(token)
+                .send()
+                .await
+            {
+                Ok(result) if result.status().is_success() => {
+                    response = Some(result);
+                    break;
+                }
+                Ok(result) => {
+                    if matches!(result.status().as_u16(), 502..=504)
+                        && attempt < PROJECT_LOOKUP_ATTEMPTS
+                    {
+                        tokio::time::sleep(PROJECT_LOOKUP_RETRY_DELAY * attempt).await;
+                        continue;
+                    }
+                    response = Some(result);
+                    break;
+                }
+                Err(error)
+                    if (error.is_timeout() || error.is_connect())
+                        && attempt < PROJECT_LOOKUP_ATTEMPTS =>
+                {
+                    tokio::time::sleep(PROJECT_LOOKUP_RETRY_DELAY * attempt).await;
+                }
+                Err(error) => {
+                    return Err(unreachable_host_error(base, "GET /app/api/people", error));
+                }
+            }
+        }
+        let response = response.context("GET /app/api/people exhausted retries")?;
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
         if !status.is_success() {
@@ -6270,6 +6300,10 @@ fn first_line(body: &str) -> String {
 const PROJECT_LOOKUP_ATTEMPTS: u32 = 4;
 const PROJECT_LOOKUP_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(500);
 
+fn retryable_lookup_status(status: reqwest::StatusCode) -> bool {
+    matches!(status.as_u16(), 502..=504)
+}
+
 /// `GET /app/api/projects` with the retry every project-code lookup shares.
 /// The read is idempotent, so a 502, 503, 504, connect failure, or timeout is
 /// retried with a growing delay; any other status (401, 404, ...) returns at
@@ -6321,6 +6355,7 @@ async fn fetch_project_list_with(
 ) -> Result<String> {
     for attempt in 1..=attempts {
         let failure;
+        let mut transport_error = None;
         let retryable = match client
             .get(format!("{base}/app/api/projects"))
             .bearer_auth(token)
@@ -6337,14 +6372,21 @@ async fn fetch_project_list_with(
                     return Err(UploadSessionExpired(base.to_string()).into());
                 }
                 failure = format!("{status}: {}", trimmed_body(&body));
-                matches!(status.as_u16(), 502..=504)
+                retryable_lookup_status(status)
             }
             Err(error) => {
                 failure = error.to_string();
-                error.is_timeout() || error.is_connect()
+                let retryable = error.is_timeout() || error.is_connect();
+                transport_error = Some(error);
+                retryable
             }
         };
         if !retryable || attempt == attempts {
+            if let Some(error) = transport_error {
+                if error.is_connect() || error.is_timeout() {
+                    return Err(unreachable_host_error(base, "GET /app/api/projects", error));
+                }
+            }
             return Err(anyhow!(
                 "list projects failed: {failure} (attempt {attempt} of {attempts})"
             ));
@@ -6410,8 +6452,8 @@ mod tests {
     use super::{
         archive_repository, create_notation_draft, document_reclassify, document_repair,
         document_slug, document_transcribe_from, document_upload, document_upload_from,
-        document_visibility, fetch_status, mail_file, matter_close, notation_answers,
-        notation_approve, notation_create, notation_document, notation_list,
+        document_visibility, fetch_status, find_visible_person, mail_file, matter_close,
+        notation_answers, notation_approve, notation_create, notation_document, notation_list,
         notation_request_changes, notation_send, notation_status, notation_update,
         picker_selection_fields, project_code_exists, projects_create, projects_create_named,
         read_reviewed_transcript, seed, seed_directory, select_candidate, source_revision,
@@ -7346,7 +7388,7 @@ mod tests {
         .expect_err("an .invalid host cannot resolve");
         let message = error.to_string();
         assert!(
-            message.contains("project.host `unpublished-brand-host.invalid` does not resolve"),
+            message.contains("project.host `unpublished-brand-host.invalid` could not be resolved"),
             "{error:#}"
         );
         assert!(
@@ -7369,7 +7411,7 @@ mod tests {
             .expect_err("an .invalid host cannot resolve");
         let message = format!("{error:#}");
         assert!(
-            message.contains("project.host `brand.invalid` does not resolve"),
+            message.contains("project.host `brand.invalid` could not be resolved"),
             "{message}"
         );
         assert!(
@@ -7377,7 +7419,7 @@ mod tests {
             "{message}"
         );
         assert!(
-            message.contains("Publish the host's DNS record"),
+            message.contains("Check the local DNS resolver and VPN/network settings"),
             "{message}"
         );
         assert!(
@@ -7433,7 +7475,7 @@ mod tests {
         );
         assert!(annotation.starts_with("::error::"), "{annotation}");
         assert!(
-            annotation.contains("project.host `brand.invalid` does not resolve"),
+            annotation.contains("project.host `brand.invalid` could not be resolved"),
             "{annotation}"
         );
         assert!(
@@ -10576,6 +10618,63 @@ mod tests {
             }
             assert_eq!(server.received_requests().await.unwrap().len(), 1);
         }
+    }
+
+    #[tokio::test]
+    async fn people_lookup_retries_a_gateway_failure_before_resolving_the_person() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/app/api/people"))
+            .and(query_param("filter[email]", "client@example.com"))
+            .respond_with(ResponseTemplate::new(502))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/app/api/people"))
+            .and(query_param("filter[email]", "client@example.com"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!([{
+                    "id": Uuid::now_v7(),
+                    "email": "client@example.com",
+                    "name": "Client Example",
+                    "role": "client"
+                }])),
+            )
+            .mount(&server)
+            .await;
+
+        let person = find_visible_person(
+            &reqwest::Client::new(),
+            &server.uri(),
+            "test-token",
+            "client@example.com",
+        )
+        .await
+        .expect("the retry succeeds")
+        .expect("the matching Person is returned");
+
+        assert_eq!(person.email, "client@example.com");
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
+    }
+
+    #[test]
+    fn project_lookup_retries_only_gateway_statuses() {
+        assert!(super::retryable_lookup_status(
+            reqwest::StatusCode::BAD_GATEWAY
+        ));
+        assert!(super::retryable_lookup_status(
+            reqwest::StatusCode::SERVICE_UNAVAILABLE
+        ));
+        assert!(super::retryable_lookup_status(
+            reqwest::StatusCode::GATEWAY_TIMEOUT
+        ));
+        assert!(!super::retryable_lookup_status(
+            reqwest::StatusCode::UNAUTHORIZED
+        ));
+        assert!(!super::retryable_lookup_status(
+            reqwest::StatusCode::NOT_FOUND
+        ));
     }
 
     #[test]
