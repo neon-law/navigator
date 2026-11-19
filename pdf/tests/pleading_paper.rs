@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
 use lopdf::Document;
-use pdf::pleading::{variant_for_jurisdiction, Variant};
+use pdf::pleading::Variant;
 use pdf::{Letterhead, OutputFormat};
 
 const PAGE_H: f64 = 792.0;
@@ -19,7 +19,7 @@ const PAGE_W: f64 = 612.0;
 const TITLE: &str = "RESPONSES TO REQUESTS FOR ADMISSION, SET ONE";
 
 fn california() -> Variant {
-    variant_for_jurisdiction("CA").expect("CA is calibrated")
+    Variant::NumberedRailTrial
 }
 
 fn caption(counsel: &[&str]) -> String {
@@ -353,7 +353,7 @@ fn text_stays_inside_the_pleading_margins() {
 /// top left of page 1.
 #[test]
 fn washington_paper_keeps_gr_14_margins_and_carries_counsel_in_the_footer() {
-    let variant = variant_for_jurisdiction("WA").expect("WA is calibrated");
+    let variant = Variant::WashingtonSuperior;
     let mut body = String::from(
         "```caption\ncourt: SUPERIOR COURT OF WASHINGTON, COUNTY OF SAMPLE\n\
          parties: In re the Marriage of:\nparties: Petitioner:\nparties: PAT ONE\n\
@@ -427,7 +427,7 @@ fn washington_paper_keeps_gr_14_margins_and_carries_counsel_in_the_footer() {
 // --- LAW-327: Washington ---
 
 fn washington() -> Variant {
-    variant_for_jurisdiction("WA").expect("WA is calibrated")
+    Variant::WashingtonSuperior
 }
 
 fn washington_render(body: &str) -> Vec<u8> {

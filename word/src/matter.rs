@@ -110,18 +110,6 @@ pub enum CaptionStyle {
     Washington,
 }
 
-impl CaptionStyle {
-    /// The style a template's `jurisdiction:` code selects.
-    #[must_use]
-    pub fn for_jurisdiction(code: &str) -> Self {
-        if code.trim() == "WA" {
-            Self::Washington
-        } else {
-            Self::Trial
-        }
-    }
-}
-
 /// What differs from one filing to the next: read from the notation's
 /// frontmatter.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -765,11 +753,6 @@ mod tests {
             ]
         );
         assert!(caption.page_count);
-        assert_eq!(
-            CaptionStyle::for_jurisdiction("WA"),
-            CaptionStyle::Washington
-        );
-        assert_eq!(CaptionStyle::for_jurisdiction("CA"), CaptionStyle::Trial);
         assert_eq!(
             compose(&m, &filing(), CaptionStyle::Trial).case[0],
             "Case No. __________"

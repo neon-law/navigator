@@ -143,7 +143,7 @@ fn notation_help_lists_the_notation_authoring_workbench() {
 
     assert_eq!(
         command_names(&output),
-        vec!["import", "kinds", "pdf", "preview", "word", "help"]
+        vec!["frame", "import", "kinds", "pdf", "preview", "word", "help"]
     );
 }
 

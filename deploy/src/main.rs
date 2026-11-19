@@ -898,6 +898,14 @@ enum NotationCmd {
     /// List every `kind:` and `output:` value a notation may declare, with
     /// the frame each gets (letterhead, plain, contract, pleading, form).
     Kinds,
+    /// Print the court paper a `kind: pleading` notation renders on, without
+    /// rendering it: its `pleading_frame:` when declared, else the frame its
+    /// `jurisdiction:` and the matter's court select, falling back to the
+    /// standard numbered pleading paper (`numbered_rail_trial`).
+    Frame {
+        /// The notation template.
+        file: PathBuf,
+    },
     /// Render a single notation template to PDF, framed by the render
     /// profile its declared `kind:` selects.
     ///
@@ -3450,6 +3458,7 @@ fn run() -> ExitCode {
                 host.as_deref(),
             ))),
             NotationCmd::Kinds => notation_kinds::run(),
+            NotationCmd::Frame { file } => cli::notation_render::frame(&file),
             NotationCmd::Pdf {
                 file,
                 out,
@@ -3923,7 +3932,7 @@ mod command_boundary_tests {
     /// renderer, which the lean `navigator` leaves out. Each moves once it
     /// reads through the site API; remove it here when it does.
     const PENDING_MATTER_VERBS: &[&str] = &["preview"];
-    const PENDING_NOTATION_VERBS: &[&str] = &["help"];
+    const PENDING_NOTATION_VERBS: &[&str] = &["frame", "help"];
 
     /// Every subcommand of `hudson` at `group` is Firm work, a pending
     /// matter verb, or carried by `navigator` at the same path.

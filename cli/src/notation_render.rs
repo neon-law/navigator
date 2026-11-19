@@ -89,7 +89,34 @@ fn render_validation_gate(
     None
 }
 
+/// `hudson notation frame`: print the pleading frame a render would use.
+#[must_use]
+pub fn frame(file: &std::path::Path) -> ExitCode {
+    let contents = match std::fs::read_to_string(file) {
+        Ok(contents) => contents,
+        Err(error) => {
+            eprintln!(
+                "navigator: could not read the template file: {}",
+                error.kind()
+            );
+            return ExitCode::from(2);
+        }
+    };
+    match crate::projects::matter::pleading_frame(file, &contents) {
+        Ok(variant) => {
+            println!("{}", variant.as_str());
+            ExitCode::SUCCESS
+        }
+        Err(message) => {
+            eprintln!("navigator: {message}");
+            ExitCode::from(2)
+        }
+    }
+}
+
 fn resolve_render_format(
+    file: &std::path::Path,
+    contents: &str,
     field: impl Fn(&str) -> Option<String>,
 ) -> Result<(String, pdf::OutputFormat), ExitCode> {
     let profile = field("output")
@@ -99,37 +126,17 @@ fn resolve_render_format(
                 .map(|k| k.default_output().to_string())
         })
         .unwrap_or_else(|| PLAIN_PROFILE.to_string());
-    // `pleading` is the one profile a bare name cannot construct: court
-    // geometry is calibrated by the template's `jurisdiction:`, a second
-    // field `OutputFormat::parse` never sees, so it returns `None` for the
-    // name by design. Feeding it through that parser and taking
-    // `unwrap_or_default()` put a validation-passing motion on the plain
-    // frame — no numbered rail, wrong margins, wrong typeface — and said
-    // nothing. Court paper rendered to the wrong geometry is a filing a
-    // clerk can reject, so resolve the calibration here and refuse when
-    // the table has not been extended to that jurisdiction:
-    // `variant_for_jurisdiction` returning `None` means a template that
-    // cannot render as a pleading yet, never a reason to guess.
+    // `pleading` is the one profile a bare name cannot construct: its court
+    // paper is chosen from the template's `pleading_frame:`, `jurisdiction:`
+    // and the matter's court (LAW-435), fields `OutputFormat::parse` never
+    // sees.
     let format = if profile == PLEADING_PROFILE {
-        let jurisdiction = field("jurisdiction").unwrap_or_default();
-        if let Some(variant) = pdf::pleading::variant_for_jurisdiction(&jurisdiction) {
-            pdf::OutputFormat::Pleading(variant)
-        } else {
-            // Neither the template's `jurisdiction:` nor its path is echoed
-            // back. Both reach this line from caller-supplied input — the
-            // one from a parsed document, the other from the command line —
-            // and `rust/cleartext-logging` flags a new log of either. There
-            // is nothing to lose by leaving them out: `notation pdf`/`notation
-            // word` take exactly one file, named on the command line a moment
-            // earlier, and what the author cannot already see is which
-            // calibrations exist.
-            eprintln!(
-                "navigator: this template declares `kind: pleading`, but its `jurisdiction:` \
-                 has no court-paper calibration; the calibrated jurisdictions are {}. Add one \
-                 to `pdf::pleading::variant_for_jurisdiction` before rendering it",
-                pdf::pleading::CALIBRATED_JURISDICTIONS.join(", ")
-            );
-            return Err(ExitCode::from(2));
+        match crate::projects::matter::pleading_frame(file, contents) {
+            Ok(variant) => pdf::OutputFormat::Pleading(variant),
+            Err(message) => {
+                eprintln!("navigator: {message}");
+                return Err(ExitCode::from(2));
+            }
         }
     } else {
         pdf::OutputFormat::parse(&profile).unwrap_or_default()
@@ -180,7 +187,7 @@ pub fn run_render(
             .and_then(|fm| rules::frontmatter::field(fm, key))
             .filter(|value| !value.is_empty())
     };
-    let (profile, format) = match resolve_render_format(field) {
+    let (profile, format) = match resolve_render_format(file, &contents, field) {
         Ok(resolved) => resolved,
         Err(code) => return code,
     };

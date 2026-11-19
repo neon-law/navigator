@@ -504,7 +504,7 @@ caption lines are single-spaced, then padded to whole grid lines so the body aft
 `navigator project gate` warns on an incomplete `matter:` (`Y019`), naming each missing field as `matter.<path>`, and
 `notation pdf` and `notation word` refuse the same way.
 
-**Washington paper.** A template with `jurisdiction: WA` renders GR 14 court paper: letter size, 28 numbered lines on a
+**Washington paper.** A template with `jurisdiction: WA` and a superior court in `matter.court` renders GR 14 court paper: letter size, 28 numbered lines on a
 23pt grid, 1in at the bottom and both sides of every page, and the first page's top seven lines left blank so the
 court's title sits below 3in. Counsel prints in the footer of every page — the title and "Page N of M" on the left, the
 firm, address, telephone, and email on the right — and the signature block in the body, rather than above the court's
@@ -516,8 +516,8 @@ assigns a case number, leave `case_number` out: every style prints a blank `No. 
 Washington matter](../cli/tests/fixtures/synthetic_washington_matter/navigator.yaml).
 
 **The filing** is what differs per notation, in its frontmatter: `caption_title` (the full title in the right cell) and
-`footer_title` (the short title the footer prints) are required; `hearing_date` (`YYYY-MM-DD`), `hearing_time`, and
-`reservation_id` are optional. A notation declaring any hearing field prints all three lines, a blank fill line for each
+`footer_title` (the short title the footer prints) are required; `hearing_date` (`YYYY-MM-DD`), `hearing_time`,
+`reservation_id`, and `pleading_frame` are optional. A notation declaring any hearing field prints all three lines, a blank fill line for each
 unset one; one declaring none prints no hearing lines. Changing the case number or counsel address in `navigator.yaml`
 changes every pleading on its next render, with no template edit.
 

@@ -95,6 +95,38 @@ pub fn jurisdiction_of(contents: &str) -> String {
         .unwrap_or_default()
 }
 
+/// The court paper the pleading at `file` renders on (LAW-435): the
+/// template's `pleading_frame:` when it declares one, else the frame its
+/// `jurisdiction:` and the Project's `matter.court` select
+/// ([`pdf::pleading::variant_for`]), whose fallback is the standard
+/// numbered pleading paper.
+///
+/// # Errors
+///
+/// A `pleading_frame:` that names no frame.
+pub fn pleading_frame(file: &Path, contents: &str) -> Result<pdf::pleading::Variant, String> {
+    let named = rules::frontmatter::extract(contents)
+        .and_then(|fm| rules::frontmatter::field(fm, "pleading_frame"))
+        .filter(|value| !value.trim().is_empty());
+    if let Some(name) = named {
+        return pdf::pleading::Variant::parse(&name).ok_or_else(|| {
+            let frames: Vec<&str> = pdf::pleading::Variant::ALL
+                .iter()
+                .map(|variant| variant.as_str())
+                .collect();
+            format!("`pleading_frame:` must be one of {}", frames.join(", "))
+        });
+    }
+    let court = find_manifest(file)
+        .and_then(|path| declared(&path).ok())
+        .map(|(_, matter)| matter.court)
+        .unwrap_or_default();
+    Ok(pdf::pleading::variant_for(
+        &jurisdiction_of(contents),
+        &court,
+    ))
+}
+
 /// Fill counsel's blank `firm`, `address`, `telephone`, and `email` from the
 /// office the Project's Brand publishes for `jurisdiction` (LAW-329), so a
 /// Washington pleading carries the Washington office without anyone typing
@@ -273,7 +305,7 @@ fn caption_for_export(file: &Path, contents: &str, final_export: bool) -> Result
             if final_export {
                 require_assigned(&matter)?;
             }
-            let style = word::matter::CaptionStyle::for_jurisdiction(&jurisdiction_of(contents));
+            let style = pleading_frame(file, contents)?.caption_style(&jurisdiction_of(contents));
             Ok(word::matter::compose(&matter, &filing, style).to_fence())
         }
         _ => Err(format!(
@@ -451,6 +483,33 @@ mod tests {
 
     const NAMED_COUNSEL: &str = "    name: Pat Sample\n    bar_jurisdiction: Washington\n    \
         bar_number: \"00000\"\n    appears_for: Respondent SAM SYNTHETIC TWO\n";
+
+    /// LAW-435: Washington superior-court paper applies only to a superior
+    /// court; a Washington district court takes the standard numbered paper
+    /// and its counsel block on lines 1–7.
+    #[test]
+    fn a_washington_district_court_pleading_takes_standard_paper() {
+        use pdf::pleading::Variant;
+        let (dir, notice) = washington_tree(NAMED_COUNSEL, "WA");
+        let contents = std::fs::read_to_string(&notice).unwrap();
+        assert_eq!(
+            super::pleading_frame(&notice, &contents),
+            Ok(Variant::WashingtonSuperior)
+        );
+        let manifest = dir.path().join("navigator.yaml");
+        let district = std::fs::read_to_string(&manifest).unwrap().replace(
+            "SUPERIOR COURT OF WASHINGTON",
+            "DISTRICT COURT OF WASHINGTON",
+        );
+        std::fs::write(&manifest, district).unwrap();
+        assert_eq!(
+            super::pleading_frame(&notice, &contents),
+            Ok(Variant::NumberedRailTrial)
+        );
+        let caption = super::caption_for(&notice, &contents).unwrap();
+        assert!(caption.contains("counsel:"), "{caption}");
+        assert!(!caption.contains("office:"), "{caption}");
+    }
 
     /// LAW-329: a pleading whose counsel block names only the lawyer takes
     /// the Firm's office in the pleading's jurisdiction — never the Nevada

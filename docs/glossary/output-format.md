@@ -17,8 +17,9 @@ back to plain.
   name. Declare it on a `kind: letter` template. Default for: nothing; always declared.
 - `contract` — An executed instrument: no letterhead, denser leading, visible heading hierarchy, unbreakable signature
   tables, and no numbering of its own. `agreement` is its retired spelling and still parses. Default for: `agreement`.
-- `pleading` — Court paper with no letterhead, calibrated by the template's `jurisdiction:` (`NV`, `CA`, `US`, `WA`); an
-  uncalibrated jurisdiction is refused. Default for: `pleading`.
+- `pleading` — Court paper with no letterhead: the standard numbered pleading paper unless the template's
+  `jurisdiction:` and the matter's court select a verified frame, or its `pleading_frame:` names one. `hudson notation
+  frame` prints the choice. Default for: `pleading`.
 - `form` — Not typesetting: an AcroForm fill of an official government form. Requires `form:` and `origin_url:`, and
   those keys are allowed on no other output. Default for: `filing`.
 - `resume` — Dense geometry for one or two pages, no letterhead, tight list spacing, and everything above the first `##`

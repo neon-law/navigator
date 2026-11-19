@@ -846,37 +846,49 @@ fn a_california_pleading_word_render_carries_the_numbered_rail() {
     }
 }
 
+/// LAW-435: a court with no verified calibration renders on the standard
+/// numbered pleading paper; `hudson notation frame` says so before any
+/// render, and `pleading_frame:` overrides the choice.
 #[test]
-fn a_pleading_whose_jurisdiction_has_no_calibration_is_refused() {
-    // `pleading::variant_for_jurisdiction` returns `None` for a real
-    // jurisdiction the calibration table has not been extended to, and its
-    // own docs are explicit that this is "a template that cannot render as
-    // a pleading yet, not a reason to guess". Falling back to plain would
-    // be exactly that guess, and it would be silent.
+fn an_uncalibrated_court_renders_on_standard_numbered_paper() {
     let work = TempDir::new().unwrap();
     write_matter(&work);
     let src = write(&work, "motion.md", &pleading_fixture("CO"));
+    let frame = render("frame", &[src.as_os_str()]);
+    assert!(frame.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&frame.stdout).trim(),
+        "numbered_rail_trial"
+    );
     let out = work.path().join("motion.pdf");
     let result = render_pdf(&[src.as_os_str(), "--out".as_ref(), out.as_ref()]);
     assert!(
-        !result.status.success(),
-        "an uncalibrated jurisdiction must refuse rather than render plain"
+        result.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
     );
-    let stderr = String::from_utf8_lossy(&result.stderr);
-    assert!(
-        stderr.contains("no court-paper calibration"),
-        "the refusal must say what is missing, got: {stderr}"
+    assert!(String::from_utf8_lossy(&result.stdout).contains("Pleading(NumberedRailTrial)"));
+
+    let declared = pleading_fixture("CO").replacen(
+        "jurisdiction: CO\n",
+        "jurisdiction: CO\npleading_frame: no_rail_trial\n",
+        1,
     );
-    // It names the calibrations that do exist rather than echoing the
-    // template's own `jurisdiction:` back — the actionable half, and it
-    // keeps a value read straight from a parsed document out of the log.
-    for calibrated in ["NV", "CA", "US"] {
-        assert!(
-            stderr.contains(calibrated),
-            "the refusal must name `{calibrated}` as a supported jurisdiction, got: {stderr}"
-        );
-    }
-    assert!(!out.exists(), "no PDF should be written on refusal");
+    let src = write(&work, "motion.md", &declared);
+    let frame = render("frame", &[src.as_os_str()]);
+    assert_eq!(
+        String::from_utf8_lossy(&frame.stdout).trim(),
+        "no_rail_trial"
+    );
+
+    let src = write(
+        &work,
+        "motion.md",
+        &declared.replace("no_rail_trial", "some_other_court"),
+    );
+    let frame = render("frame", &[src.as_os_str()]);
+    assert!(!frame.status.success());
+    assert!(String::from_utf8_lossy(&frame.stderr).contains("numbered_rail_trial"));
 }
 
 /// The wholly synthetic California responses-to-requests-for-admission
