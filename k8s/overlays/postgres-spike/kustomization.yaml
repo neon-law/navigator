@@ -6,4 +6,4 @@ resources:
 images:
   - name: navigator/postgres
     newName: ghcr.io/neon-law/navigator/postgres
-    digest: sha256:7a1f179d841230ff684d5ccb0656f73bf6ceae6283c6ad996c37ea60c8e78f20
+    digest: sha256:e35b30928a1f3d0deb6695e0c0974dfa17d3c05839dd9a298e2770ea32d126f5
