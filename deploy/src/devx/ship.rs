@@ -602,7 +602,7 @@ where
 const DBOS_ONLY_PATCH_TOKEN: &str = "  # NAVIGATOR_DBOS_ONLY_PATCHES\n";
 
 /// Omit process/network objects from the desired tree; apply never prunes the
-/// existing worker. Its ServiceAccount remains for operational archive Jobs.
+/// existing worker. Its `ServiceAccount` remains for operational archive Jobs.
 fn dbos_only_patch<F>(deployment: &str, get: &F) -> Result<Substitution>
 where
     F: Fn(&str) -> Option<String>,
@@ -3622,68 +3622,13 @@ fn offline_ship_plan(
             operations.push("verify public assets and smoke-check the public host".to_owned());
         }
         ShipLane::Roll => {
-            let tag = opts.tag.as_deref().ok_or_else(|| anyhow!(
-                "`--tag <YY.M.D|YY.M.D-hotfix.N>` is required: name the published release to roll onto"
-            ))?;
-            registry::validate_release_tag(tag)?;
-            local_validation.push("selected release tag is valid".to_owned());
-            require_ordered_service_prerequisites(deployment)?;
-            require_dbos_schedule_prerequisites(deployment)?;
-            let substitutions = deployment_substitutions(deployment, tag)?;
-            let rendered = render_release_plan(&substitutions, cfg, deployment)?;
-            let count = validate_rendered_tree(rendered.application.path())?;
-            validate_yaml_documents(&rendered.collector, "rendered collector")?;
-            local_validation.push(format!(
-                "parsed {count} rendered YAML documents and collector YAML"
-            ));
-            let firm = firm_certificate_name(&firm_certificate_hosts(&cfg.public_host));
-            operations.push(format!(
-                "request {firm} for this build's brand hosts unless it already serves, keeping \
-                 the serving Firm certificate attached"
-            ));
-            operations.extend(ordered_release_steps().iter().map(|step| match step {
-                ReleaseStep::Postgres => "reconcile PostgreSQL StatefulSet".to_owned(),
-                ReleaseStep::PostgresRoles => "run PostgreSQL roles Job".to_owned(),
-                ReleaseStep::NavigatorMigrations => "run Navigator migrations Job".to_owned(),
-                ReleaseStep::ForgejoDatabase => "run Forgejo database Job".to_owned(),
-                ReleaseStep::Forgejo => "reconcile Forgejo StatefulSet".to_owned(),
-                ReleaseStep::ApplicationReadiness => {
-                    "verify PostgreSQL application-history Job; stop unless ready".to_owned()
-                }
-                ReleaseStep::RetireAutomaticMirrorRecovery => {
-                    "retire automatic Source mirror recovery after PostgreSQL admission".to_owned()
-                }
-                ReleaseStep::Application => {
-                    format!("apply {}", restart_deployments(cfg).join(", "))
-                }
-            }));
-            for cronjob in retired_cronjobs(deployment)? {
-                operations.push(format!(
-                    "delete the Restate CronJob {cronjob} now hosted by DBOS"
-                ));
-            }
-            for name in retired_brand_certificates() {
-                operations.push(format!(
-                    "delete the ManagedCertificate {name} now carried by {firm}"
-                ));
-            }
-            operations.push("pin Navigator CronJob images to the selected tag".to_owned());
-            operations.push("wait for selected application rollouts".to_owned());
-            if !cfg.dbos_only {
-                operations.push("re-register the Restate worker".to_owned());
-            }
-            if cfg.dbos_only {
-                operations.push(
-                    "keep existing worker resources until operator-verified drain and retirement"
-                        .to_owned(),
-                );
-            }
-            operations.push("verify public assets".to_owned());
-            operations.push(format!(
-                "wait for {firm} to serve every brand host, then delete the Firm certificates it \
-                 replaces"
-            ));
-            operations.push("smoke-check the public host".to_owned());
+            offline_roll_plan(
+                cfg,
+                deployment,
+                opts,
+                &mut local_validation,
+                &mut operations,
+            )?;
         }
     }
     if cfg.dbos_only {
@@ -3711,6 +3656,80 @@ fn offline_ship_plan(
         opts.quiet,
         opts.project_id.is_some(),
     );
+    Ok(())
+}
+
+fn offline_roll_plan(
+    cfg: &ShipConfig,
+    deployment: &super::deployments::Deployment,
+    opts: &ShipOpts,
+    local_validation: &mut Vec<String>,
+    operations: &mut Vec<String>,
+) -> Result<()> {
+    let tag = opts.tag.as_deref().ok_or_else(|| {
+        anyhow!(
+            "`--tag <YY.M.D|YY.M.D-hotfix.N>` is required: name the published release to roll onto"
+        )
+    })?;
+    registry::validate_release_tag(tag)?;
+    local_validation.push("selected release tag is valid".to_owned());
+    require_ordered_service_prerequisites(deployment)?;
+    require_dbos_schedule_prerequisites(deployment)?;
+    let substitutions = deployment_substitutions(deployment, tag)?;
+    let rendered = render_release_plan(&substitutions, cfg, deployment)?;
+    let count = validate_rendered_tree(rendered.application.path())?;
+    validate_yaml_documents(&rendered.collector, "rendered collector")?;
+    local_validation.push(format!(
+        "parsed {count} rendered YAML documents and collector YAML"
+    ));
+    let firm = firm_certificate_name(&firm_certificate_hosts(&cfg.public_host));
+    operations.push(format!(
+        "request {firm} for this build's brand hosts unless it already serves, keeping \
+         the serving Firm certificate attached"
+    ));
+    operations.extend(ordered_release_steps().iter().map(|step| match step {
+        ReleaseStep::Postgres => "reconcile PostgreSQL StatefulSet".to_owned(),
+        ReleaseStep::PostgresRoles => "run PostgreSQL roles Job".to_owned(),
+        ReleaseStep::NavigatorMigrations => "run Navigator migrations Job".to_owned(),
+        ReleaseStep::ForgejoDatabase => "run Forgejo database Job".to_owned(),
+        ReleaseStep::Forgejo => "reconcile Forgejo StatefulSet".to_owned(),
+        ReleaseStep::ApplicationReadiness => {
+            "verify PostgreSQL application-history Job; stop unless ready".to_owned()
+        }
+        ReleaseStep::RetireAutomaticMirrorRecovery => {
+            "retire automatic Source mirror recovery after PostgreSQL admission".to_owned()
+        }
+        ReleaseStep::Application => {
+            format!("apply {}", restart_deployments(cfg).join(", "))
+        }
+    }));
+    for cronjob in retired_cronjobs(deployment)? {
+        operations.push(format!(
+            "delete the Restate CronJob {cronjob} now hosted by DBOS"
+        ));
+    }
+    for name in retired_brand_certificates() {
+        operations.push(format!(
+            "delete the ManagedCertificate {name} now carried by {firm}"
+        ));
+    }
+    operations.push("pin Navigator CronJob images to the selected tag".to_owned());
+    operations.push("wait for selected application rollouts".to_owned());
+    if !cfg.dbos_only {
+        operations.push("re-register the Restate worker".to_owned());
+    }
+    if cfg.dbos_only {
+        operations.push(
+            "keep existing worker resources until operator-verified drain and retirement"
+                .to_owned(),
+        );
+    }
+    operations.push("verify public assets".to_owned());
+    operations.push(format!(
+        "wait for {firm} to serve every brand host, then delete the Firm certificates it \
+         replaces"
+    ));
+    operations.push("smoke-check the public host".to_owned());
     Ok(())
 }
 
@@ -8346,7 +8365,7 @@ mod tests {
                     store::deployment::GITHUB_AUTOMATION_HOME_FLAG => Some(automation_home.into()),
                     _ => native_ship_env(key),
                 };
-                let manifests = rendered_manifests(&get);
+                let manifests = rendered_manifests(get);
                 let mut objects = Vec::new();
                 for document in serde_yaml::Deserializer::from_str(&manifests) {
                     use serde::Deserialize as _;
@@ -8428,7 +8447,7 @@ mod tests {
                     token["valueFrom"]["secretKeyRef"]["key"].as_str(),
                     Some(workflows::trigger::DBOS_INGRESS_TOKEN_ENV)
                 );
-                let cfg = ShipConfig::from_lookup("synthetic-deployment", &get).unwrap();
+                let cfg = ShipConfig::from_lookup("synthetic-deployment", get).unwrap();
                 let mut secret_keys = satisfying_secret_keys();
                 secret_keys.retain(|key| !key.starts_with("RESTATE_"));
                 secret_keys.remove(workflows::trigger::DBOS_INGRESS_TOKEN_ENV);
@@ -8471,7 +8490,7 @@ mod tests {
                     native_ship_env(key)
                 }
             };
-            let manifests = rendered_manifests(&get);
+            let manifests = rendered_manifests(get);
             let service = manifest_doc(&manifests, "Service", DBOS_INTERNAL_SERVICE);
             assert_eq!(service["spec"]["type"].as_str(), Some("ClusterIP"));
             assert_eq!(
@@ -8683,7 +8702,7 @@ mod tests {
                     env_getter(FULL_ENV)(name)
                 }
             };
-            let defaults = rendered_manifests(&get);
+            let defaults = rendered_manifests(get);
             let web = manifest_doc(&defaults, "Deployment", WEB_DEPLOYMENT);
             assert!(
                 web_env_value(&web, key).is_none(),

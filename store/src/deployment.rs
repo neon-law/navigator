@@ -358,8 +358,7 @@ pub fn is_restate_requirement(requirement: &Requirement) -> bool {
     }
     matches!(
         requirement.any_of[0],
-        ["RESTATE_BROKER_URL"]
-            | ["RESTATE_IDENTITY_KEY"]
+        ["RESTATE_BROKER_URL" | "RESTATE_IDENTITY_KEY"]
             | ["RESTATE_INGRESS_URL", "RESTATE_AUTH_TOKEN"]
     )
 }

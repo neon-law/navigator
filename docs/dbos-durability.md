@@ -109,7 +109,7 @@ uses the Sunday 14:00 UTC slot as its deterministic workflow identity, so both h
 same run. The Xero step resolves one fixed system contact twice; the provider's stable email find-or-create behavior
 prevents a second contact if the call repeats before its checkpoint. This adapter does not accept a DBOS Effect Key. The
 Slack operations notice is at least once: a crash after Slack accepts it and before the `email` checkpoint can post it
-again. The switch defaults off, and enabling it requires the configured Xero provider and Slack webhook. The existing
+again. Registration defaults off, and enabling it requires the configured Xero provider and Slack webhook. The existing
 Restate service remains available in mixed deployments. Standalone and mixed hosts retain their existing automatic start
 default when the new control is omitted. Complete native cohosting defaults the timer off even outside ship; ship also
 renders that choice explicitly, and activation requires opt-in.
