@@ -7234,7 +7234,10 @@ mod tests {
         )
         .await
         .expect_err("a 300 ms response cannot pass a 50 ms bound");
-        assert!(error.to_string().contains("attempt 4 of 4"), "{error:#}");
+        assert!(
+            error.to_string().contains("operation timed out"),
+            "{error:#}"
+        );
     }
 
     /// A plain 500 on a revision read recovers — the read is idempotent, so
