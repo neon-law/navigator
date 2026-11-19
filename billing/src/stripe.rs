@@ -545,7 +545,7 @@ mod subscription_tests {
 
     fn subscription() -> serde_json::Value {
         json!({"id":"sub_synthetic", "livemode":false, "customer":"cus_synthetic", "status":"active",
-            "cancel_at_period_end":true, "items":{"data":[{"current_period_end":1900000000,
+            "cancel_at_period_end":true, "items":{"data":[{"current_period_end":1_900_000_000,
             "price":{"unit_amount":2900, "currency":"usd", "recurring":{"interval":"month","interval_count":1}}}]}})
     }
 

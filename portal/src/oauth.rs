@@ -3079,12 +3079,9 @@ async fn resolve_person(
         .await;
     }
 
-    let bootstrap_owner = bootstrap_owner_email.map(str::to_lowercase);
-    let email_lower = claims.email.as_deref().map(str::to_lowercase);
-    let is_bootstrap_owner = matches!(
-        (&bootstrap_owner, &email_lower),
-        (Some(a), Some(e)) if a == e,
-    );
+    let is_bootstrap_owner = bootstrap_owner_email
+        .zip(claims.email.as_deref())
+        .is_some_and(|(owner, email)| owner.to_lowercase() == email.to_lowercase());
 
     if let Some(existing) = find_by_provider_subject(surreal, provider, &claims.sub).await? {
         if !persons::is_admitted(surreal, existing.id).await? {

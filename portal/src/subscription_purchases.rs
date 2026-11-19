@@ -396,7 +396,7 @@ mod tests {
         subscription.customer = "cus_other".into();
         assert!(observation(&purchase, &subscription, now).is_err());
         subscription.customer = "cus_synthetic".into();
-        subscription.items.data[0].price.unit_amount = Some(29000);
+        subscription.items.data[0].price.unit_amount = Some(29_000);
         assert!(observation(&purchase, &subscription, now).is_err());
         subscription.items.data[0].price.unit_amount = Some(2900);
         subscription.items.data[0].price.recurring.interval = "year".into();
