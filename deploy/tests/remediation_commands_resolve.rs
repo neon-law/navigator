@@ -620,16 +620,30 @@ fn every_command_named_in_operator_facing_text_resolves() {
 #[test]
 fn the_help_parser_still_reads_the_top_level_commands() {
     let mut cache = BTreeMap::new();
-    let root = node_at(&mut cache, Binary::Hudson, &[]);
+    let roots = [
+        (
+            Binary::Hudson,
+            node_at(&mut cache, Binary::Hudson, &[]),
+            &["dev", "ops"][..],
+        ),
+        (
+            Binary::Navigator,
+            node_at(&mut cache, Binary::Navigator, &[]),
+            &["notation", "project", "release"][..],
+        ),
+    ];
 
-    for expected in ["dev", "notation", "ops", "project", "site"] {
-        assert!(
-            root.children.iter().any(|name| name == expected),
-            "the `Commands:` parser read {:?} at the top level and missed \
-             `{expected}` — it has stopped reading clap's output, so every node \
-             would read as a leaf and this guard would blame the wrong thing",
-            root.children
-        );
+    for (binary, root, expected_commands) in roots {
+        for expected in expected_commands {
+            assert!(
+                root.children.iter().any(|name| name == expected),
+                "the `Commands:` parser read {:?} from {} at the top level and missed \
+                 `{expected}` — it has stopped reading clap's output, so every node \
+                 would read as a leaf and this guard would blame the wrong thing",
+                root.children,
+                binary.as_str()
+            );
+        }
     }
 }
 
