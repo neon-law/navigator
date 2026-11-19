@@ -186,7 +186,11 @@ pub async fn assert_color_scheme(c: &Client, scheme: ColorScheme) {
 /// Panics if `path` doesn't combine with [`base_url`] into a valid
 /// URL, or if the page never reaches the target within `timeout`.
 pub async fn wait_for_path(c: &Client, path: &str, timeout: Duration) {
-    let target = Url::parse(&format!("{}{path}", base_url())).expect("valid url");
+    wait_for_path_at(c, &base_url(), path, timeout).await;
+}
+
+async fn wait_for_path_at(c: &Client, origin: &str, path: &str, timeout: Duration) {
+    let target = Url::parse(&format!("{origin}{path}")).expect("valid url");
     c.wait()
         .at_most(timeout)
         .for_url(&target)
@@ -357,7 +361,7 @@ pub async fn login_as_at(c: &Client, base_url: &str, email: &str, password: &str
         .expect("password field after email submit");
     fill_text_field(c, "input[name='password']", password).await;
     submit_login_form(c).await;
-    wait_for_path(c, return_to, Duration::from_secs(20)).await;
+    wait_for_path_at(c, base_url, return_to, Duration::from_secs(20)).await;
 }
 
 async fn submit_login_form(c: &Client) {
