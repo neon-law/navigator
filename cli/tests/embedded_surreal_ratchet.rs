@@ -22,7 +22,7 @@ const BASELINE: &[(&str, usize)] = &[
     ("archives", 11),
     ("billing-workflows", 16),
     ("cli", 3),
-    ("deploy", 21),
+    ("deploy", 19),
     ("features", 96),
     ("import", 5),
     ("mcp", 42),
