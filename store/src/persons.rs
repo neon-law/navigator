@@ -1,13 +1,12 @@
 //! The person directory: the [`Role`] authorization tier and every query
 //! that reads or writes a `person` row.
 //!
-//! # The default table lives in SurrealDB
+//! # PostgreSQL identity authority
 //!
-//! SurrealDB remains the default authority through the compatibility
-//! release. An explicit `NAVIGATOR_POSTGRES_PEOPLE_AUTHORITY=1` opts the
-//! complete People facade into PostgreSQL; a configured PostgreSQL failure
-//! is returned to the caller rather than falling back. Sign-in resolves
-//! against the selected authority: the OIDC callback looks up the
+//! The People facade requires PostgreSQL configuration and completed historical
+//! enrollment. Configuration, history, and database failures reach the caller.
+//! Explicit import readers retain their narrowly scoped compatibility context.
+//! Sign-in resolves against PostgreSQL: the OIDC callback looks up the
 //! row by the presenting provider's subject or by email and reads `role` from it.
 //!
 //! [`Role`] is the system-wide tier every authorization gate evaluates

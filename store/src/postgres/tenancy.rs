@@ -1,11 +1,9 @@
 //! PostgreSQL authority for Firms, Brands, Firm Brands, Firm memberships,
 //! Projects and Project participation.
 //!
-//! These are canonical tenancy rows, not mirror payloads. The authority
-//! switch is opt-in per deployment; once enabled, configuration and database
-//! errors are returned to callers and never fall back to SurrealDB. Projects
-//! and their participation ledger keep a SurrealDB compatibility projection
-//! (see `crate::projects`) for the readers that have not moved yet.
+//! These canonical rows require PostgreSQL configuration and completed historical
+//! enrollment. Application operations return admission and database failures;
+//! they do not copy writes into the legacy import source.
 
 use crate::{brands, firms};
 use chrono::{DateTime, Utc};

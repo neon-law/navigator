@@ -412,8 +412,7 @@ impl From<ProjectStoreError> for ProjectCommandError {
     }
 }
 
-/// The PostgreSQL handle when tenancy authority owns Projects and their
-/// participation ledger (`NAVIGATOR_POSTGRES_TENANCY_AUTHORITY`), else `None`.
+/// The admitted PostgreSQL handle, or `None` only inside explicit Source import reads.
 async fn authority() -> Result<Option<PostgresDb>, ProjectStoreError> {
     if crate::postgres::tenancy::enabled() {
         Ok(Some(Box::pin(crate::postgres::tenancy::db()).await?))
@@ -4193,10 +4192,9 @@ pub enum OpenMatterError {
 /// and writes the same audit trail — no door can open a matter without them.
 ///
 /// The order is load-bearing. Cheap caller-correctable input checks run first;
-/// then **one** `SERIALIZABLE` transaction reads every reference, runs the
-/// conflict check, and writes the project, the attestation audit row, both DRI
-/// designations, and the repository — so a failure at any step rolls the whole
-/// open back and no read the open acted on can have changed underneath it.
+/// then references, Firm ownership, and conflicts are checked. PostgreSQL commits
+/// the Project and both DRI designations together. The conflict attestation is
+/// recorded after that transaction; an audit failure is returned to the caller.
 ///
 /// The attestation is required on **every** open and audited on **every**
 /// open, not just flagged ones (see [`OpenMatterCommand::attestation`]). The
@@ -4366,8 +4364,7 @@ async fn resolve_open_firm(
     Ok(firm_id)
 }
 
-/// Open a matter PostgreSQL-first, then copy the Project and both DRI rows into
-/// the SurrealDB compatibility copy.
+/// Commit the canonical Project and both DRI rows in PostgreSQL.
 async fn open_matter_in_postgres(
     _surreal: &SurrealDb,
     pg: &PostgresDb,

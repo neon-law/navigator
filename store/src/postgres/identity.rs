@@ -18,13 +18,12 @@ pub enum AuthorityError {
     Query(#[from] sqlx::Error),
 }
 
-/// The PostgreSQL pool when People authority is configured, `None` when the
-/// SurrealDB path stays in force.
+/// The admitted PostgreSQL pool, or `None` only inside explicit Source import reads.
 ///
 /// # Errors
 ///
-/// [`AuthorityError::Unavailable`] when the setting is invalid or PostgreSQL
-/// cannot be reached.
+/// [`AuthorityError::Unavailable`] when PostgreSQL configuration or historical
+/// enrollment is unavailable.
 pub(crate) async fn authority() -> Result<Option<PostgresDb>, AuthorityError> {
     crate::persons::postgres_authority()
         .await
