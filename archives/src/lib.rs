@@ -1,8 +1,7 @@
-//! Archives: snapshot `SurrealDB` tables to Parquet files on object
-//! storage, post a Slack digest of the run to firm ops, repeat at 05:55 and 17:55 UTC
-//! each day, driven by a Restate workflow. Configured PostgreSQL exports cover
-//! Navigator and Forgejo with separate watermarks and a paired completion
-//! marker ([`coverage`]).
+//! Archives: export PostgreSQL coverage to Parquet and Iceberg on object storage,
+//! then post a Slack digest at the 05:55 and 17:55 UTC schedule slots. Navigator
+//! and Forgejo have separate watermarks and a paired completion marker ([`coverage`]).
+//! Explicit `all` compatibility runs additionally snapshot `SurrealDB` tables.
 //!
 //! Iceberg metadata authorship (`metadata/v<n>.metadata.json` +
 //! manifest Avro over the `<lane>/<table>/metadata/` prefix, `lane` being
@@ -21,6 +20,7 @@ pub mod postgres;
 pub mod runner;
 pub mod sent_email_export;
 pub mod snapshot;
+mod source;
 pub mod tables;
 /// Test doubles for the crate's storage interactions. `pub` so the
 /// integration drills (`archives/tests/`) share the exact double the

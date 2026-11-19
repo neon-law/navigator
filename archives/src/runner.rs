@@ -1,5 +1,4 @@
-//! Snapshot orchestration driven by the Restate workflow inside the
-//! journaled `ctx.run("snapshot", …)` step.
+//! Snapshot orchestration inside the durable Archives workflow's snapshot step.
 //!
 //! [`snapshot_all`] walks [`crate::tables::ALL_TABLES`], encodes each
 //! non-empty table to Parquet, uploads it under the canonical
@@ -12,7 +11,7 @@
 
 use std::sync::Arc;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use chrono::{DateTime, NaiveDate, Utc};
 use cloud::{StorageError, StorageService};
 use serde::{Deserialize, Serialize};
@@ -22,6 +21,7 @@ use billing::gcp_cost::{
     adc_token_provider, billing_export_tables, BillingClient, CostReport, CostRow,
 };
 
+use crate::source::ArchiveSource;
 use crate::tables::{fetch_batch, is_safe_archive_table_name, source_tables};
 use crate::{
     batch_from_rows, classify, encode_parquet, fingerprint, fingerprint_attempt_key,
@@ -48,14 +48,15 @@ pub struct SnapshotSummary {
     pub scheduled_for: Option<DateTime<Utc>>,
     pub entries: Vec<SnapshotEntry>,
     pub failures: Vec<TableFailure>,
-    /// The PostgreSQL generation of this run; `None` when PostgreSQL is not
-    /// configured (and in summaries journaled before the source existed).
+    /// The PostgreSQL generation of this run; `None` only for explicit
+    /// compatibility exports without a configured PostgreSQL source.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub postgres: Option<crate::postgres::PostgresExport>,
 }
 
-/// Open the selected source and object-storage backend the
-/// snapshot phase needs. PostgreSQL-only exports acquire no `SurrealDB` connection.
+/// Open the selected source and object-storage backend the snapshot phase needs.
+/// The default requires PostgreSQL application admission before storage is opened
+/// and acquires no `SurrealDB` connection. `all` explicitly includes that source.
 /// A failure here propagates so the workflow
 /// step retries — the database or GCS being unreachable is transient.
 pub async fn open_resources() -> Result<(Option<SurrealDb>, Arc<dyn StorageService>)> {
@@ -64,16 +65,16 @@ pub async fn open_resources() -> Result<(Option<SurrealDb>, Arc<dyn StorageServi
     Ok((db, storage))
 }
 
-async fn open_surreal_source(get: impl Fn(&str) -> Option<String>) -> Result<Option<SurrealDb>> {
-    match get("NAVIGATOR_ARCHIVE_SOURCE").as_deref() {
-        Some("postgres") => {
-            if get("NAVIGATOR_POSTGRES_HOST").is_none_or(|host| host.trim().is_empty()) {
-                bail!("PostgreSQL-only archives require NAVIGATOR_POSTGRES_HOST");
-            }
-            return Ok(None);
-        }
-        None | Some("all") => {}
-        Some(_) => bail!("NAVIGATOR_ARCHIVE_SOURCE must be all or postgres"),
+pub(crate) async fn open_surreal_source(
+    get: impl Fn(&str) -> Option<String>,
+) -> Result<Option<SurrealDb>> {
+    let source = ArchiveSource::from_lookup(&get)?;
+    if matches!(source, ArchiveSource::Postgres) {
+        source
+            .postgres()
+            .await
+            .context("admit PostgreSQL archives")?;
+        return Ok(None);
     }
     let config = SurrealConfig::from_lookup(get).context("read SurrealDB coordinates")?;
     Ok(Some(
@@ -610,43 +611,6 @@ mod tests {
             "{}",
             listed[0].key
         );
-    }
-
-    #[tokio::test]
-    async fn postgres_only_source_does_not_require_surreal_coordinates() {
-        let source = super::open_surreal_source(|key| match key {
-            "NAVIGATOR_ARCHIVE_SOURCE" => Some("postgres".into()),
-            "NAVIGATOR_POSTGRES_HOST" => Some("unreachable.invalid".into()),
-            _ => None,
-        })
-        .await
-        .unwrap();
-        assert!(source.is_none());
-        let dir = tempfile::tempdir().unwrap();
-        let storage = FsStorage::new(dir.path().to_path_buf()).await.unwrap();
-        let scheduled = "2026-10-20T05:55:00Z".parse().unwrap();
-        let summary = super::snapshot_selected(source.as_ref(), &storage, Some(scheduled)).await;
-        assert_eq!(summary.scheduled_for, Some(scheduled));
-        assert_eq!(summary.run_date, scheduled.date_naive());
-        assert!(summary.entries.is_empty());
-        assert!(summary.failures.is_empty());
-        assert!(std::fs::read_dir(dir.path()).unwrap().next().is_none());
-    }
-
-    #[tokio::test]
-    async fn missing_or_invalid_source_configuration_cannot_skip_surreal() {
-        for mode in [None, Some(""), Some("postgre"), Some("postgres")] {
-            let result = super::open_surreal_source(|key| {
-                (key == "NAVIGATOR_ARCHIVE_SOURCE")
-                    .then(|| mode.map(str::to_owned))
-                    .flatten()
-            })
-            .await;
-            assert!(
-                result.is_err(),
-                "mode {mode:?} must refuse incomplete configuration"
-            );
-        }
     }
 
     fn row(service: &str, cost: f64) -> CostRow {

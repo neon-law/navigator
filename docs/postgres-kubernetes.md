@@ -300,6 +300,11 @@ Physical recovery evidence and archive export evidence are separate. An archive 
 trigger submission. Verify runtime source configuration, completed generation manifests, table outcomes, and independent
 rehydration before calling PostgreSQL or Forgejo Iceberg exports recoverable.
 
+Scheduled Iceberg exports default to PostgreSQL and require completed application storage handoff before publication.
+`NAVIGATOR_ARCHIVE_SOURCE=all` includes SurrealDB for migration or recovery; it does not certify that handoff. Physical
+base backups, WAL archiving, the restore drill, and raw PostgreSQL export helpers do not require application admission
+or a reachable SurrealDB server. See [archive source selection](iceberg-archive.md#postgresql-coverage-generations).
+
 ## Rollout runbook
 
 Staging first. Production starts only after staging passes every step and its restore drill succeeds. Each step names

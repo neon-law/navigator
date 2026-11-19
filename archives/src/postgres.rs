@@ -288,7 +288,9 @@ impl AfterTable for NoPause {
     async fn after(&self, _table: &str) {}
 }
 
-/// Export configured PostgreSQL sources, skipping unconfigured sources.
+/// Export the configured PostgreSQL sources after normal application admission.
+/// Only explicit `all` compatibility runs may skip an unconfigured PostgreSQL source
+/// or export without application admission; raw recovery helpers are independent.
 /// Connection and coverage errors become [`PostgresExport::Failed`].
 /// The workflow retains completed
 /// source snapshots for notification, then fails the coverage invocation.
@@ -297,15 +299,24 @@ pub async fn export_configured<F: Fn(&str) -> Option<String>>(
     storage: &dyn StorageService,
     _scheduled_for: Option<DateTime<Utc>>,
 ) -> Option<PostgresExport> {
+    let source = match crate::source::ArchiveSource::from_lookup(&get) {
+        Ok(source) => source,
+        Err(error) => {
+            return Some(PostgresExport::Failed {
+                error: error.to_string(),
+            })
+        }
+    };
     let host = get("NAVIGATOR_POSTGRES_HOST").filter(|host| !host.trim().is_empty());
     if host.is_none() {
-        return if [
-            "NAVIGATOR_ARCHIVE_COVERAGE",
-            "NAVIGATOR_ARCHIVE_POSTGRES_USER",
-            "NAVIGATOR_ARCHIVE_FORGEJO_USER",
-        ]
-        .iter()
-        .any(|key| get(key).is_some_and(|value| !value.trim().is_empty()))
+        return if matches!(source, crate::source::ArchiveSource::Postgres)
+            || [
+                "NAVIGATOR_ARCHIVE_COVERAGE",
+                "NAVIGATOR_ARCHIVE_POSTGRES_USER",
+                "NAVIGATOR_ARCHIVE_FORGEJO_USER",
+            ]
+            .iter()
+            .any(|key| get(key).is_some_and(|value| !value.trim().is_empty()))
         {
             Some(PostgresExport::Failed {
                 error: "NAVIGATOR_POSTGRES_HOST is required for paired coverage".into(),
@@ -323,7 +334,7 @@ pub async fn export_configured<F: Fn(&str) -> Option<String>>(
         let coverage: crate::coverage::ConfiguredCoverage =
             serde_json::from_str(&required("NAVIGATOR_ARCHIVE_COVERAGE")?)
                 .context("decode reviewed database coverage")?;
-        let db = store::postgres::PostgresDb::from_env().await?;
+        let db = source.postgres().await?;
         let server = db.pool().connect_options().as_ref().clone();
         // The runtime login reads only `public`; a deployed archive signs in
         // to Navigator as its own read-everything login instead.
@@ -1091,12 +1102,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_unset_host_skips_without_writing() {
+    async fn explicit_compatibility_can_skip_unconfigured_postgres_without_writing() {
         let dir = tempfile::tempdir().unwrap();
         let storage = FsStorage::new(dir.path()).await.unwrap();
         for get in [
-            &(|_: &str| None) as &dyn Fn(&str) -> Option<String>,
-            &|key: &str| (key == "NAVIGATOR_POSTGRES_HOST").then(|| " ".to_string()),
+            &(|key: &str| (key == "NAVIGATOR_ARCHIVE_SOURCE").then(|| "all".into()))
+                as &dyn Fn(&str) -> Option<String>,
+            &|key: &str| match key {
+                "NAVIGATOR_ARCHIVE_SOURCE" => Some("all".into()),
+                "NAVIGATOR_POSTGRES_HOST" => Some(" ".into()),
+                _ => None,
+            },
         ] {
             assert!(export_configured(get, &storage, None).await.is_none());
         }
