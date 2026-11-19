@@ -17,6 +17,7 @@ use billing::XeroBillingProvider;
 use billing_workflows::{reconcile_once, ReconcileReport};
 
 pub const ENABLED_ENV: &str = "NAVIGATOR_DBOS_RECONCILE_INVOICES_ENABLED";
+pub use workflows::flags::RECONCILE_INVOICES_SCHEDULE_ENABLED_ENV as SCHEDULE_ENABLED_ENV;
 const WORKFLOW: &str = "ReconcileInvoices";
 const NOTIFY_ATTEMPTS: u32 = 3;
 const SLOT_HOUR_UTC: u32 = 11;
@@ -53,6 +54,7 @@ pub struct Context {
     slack: Arc<dyn SlackBot>,
     finance_channel: String,
     simulated: bool,
+    schedule_enabled: bool,
 }
 
 impl Context {
@@ -62,6 +64,7 @@ impl Context {
         simulated: bool,
         get: impl Fn(&str) -> Option<String>,
     ) -> Result<Self, &'static str> {
+        let schedule_enabled = schedule_enabled(&get)?;
         if XeroBillingProvider::from_env().is_none() {
             return Err("DBOS ReconcileInvoices requires XERO_* configuration");
         }
@@ -77,6 +80,7 @@ impl Context {
             slack,
             finance_channel,
             simulated,
+            schedule_enabled,
         })
     }
 
@@ -91,8 +95,37 @@ impl Context {
             slack,
             finance_channel,
             simulated,
+            schedule_enabled: true,
         }
     }
+
+    /// Keep manual ingress registered while choosing whether the daily loop runs.
+    #[must_use]
+    pub fn with_schedule_enabled(mut self, enabled: bool) -> Self {
+        self.schedule_enabled = enabled;
+        self
+    }
+
+    pub(crate) fn schedule_enabled(&self) -> bool {
+        self.schedule_enabled
+    }
+}
+
+fn schedule_enabled(get: &impl Fn(&str) -> Option<String>) -> Result<bool, &'static str> {
+    workflows::flags::schedule_enabled(SCHEDULE_ENABLED_ENV, get).map_err(|error| match error {
+        workflows::flags::SettingsError::Invalid(key)
+        | workflows::flags::SettingsError::Missing(key) => key,
+    })
+}
+
+pub(crate) fn schedule_starter(
+    workflow: ReconcileWorkflow,
+    enabled: bool,
+) -> Option<workflows::dbos_engine::ScheduleStarter> {
+    if !enabled {
+        return None;
+    }
+    Some(Box::new(move |stop| tokio::spawn(schedule(workflow, stop))))
 }
 
 pub fn enabled(get: impl Fn(&str) -> Option<String>) -> Result<bool, &'static str> {
@@ -253,6 +286,50 @@ mod tests {
     use std::time::Duration;
 
     #[test]
+    fn timer_activation_is_independent_strict_and_preserves_the_existing_default() {
+        assert!(super::schedule_enabled(&|_| None).unwrap());
+        assert!(!super::schedule_enabled(&|key| {
+            (key == super::SCHEDULE_ENABLED_ENV).then(|| "false".into())
+        })
+        .unwrap());
+        assert!(super::schedule_enabled(&|key| {
+            (key == super::SCHEDULE_ENABLED_ENV).then(|| "true".into())
+        })
+        .unwrap());
+        assert!(super::schedule_enabled(&|key| {
+            (key == super::SCHEDULE_ENABLED_ENV).then(|| "invalid".into())
+        })
+        .unwrap_err()
+        .contains(super::SCHEDULE_ENABLED_ENV));
+        let error = Context::from_env(
+            store::surreal::SurrealDb::uninitialized(),
+            Arc::new(workflows::CapturingSlackBot::new()),
+            true,
+            |key| (key == super::SCHEDULE_ENABLED_ENV).then(|| "invalid".into()),
+        )
+        .err()
+        .unwrap();
+        assert!(
+            error.contains(super::SCHEDULE_ENABLED_ENV),
+            "invalid activation fails before provider construction"
+        );
+    }
+
+    #[tokio::test]
+    async fn registered_manual_reconcile_keeps_its_handle_without_an_automatic_loop() {
+        let workflow = unlaunched_workflow();
+        assert!(super::schedule_starter(workflow.clone(), false).is_none());
+        let starter = super::schedule_starter(workflow, true)
+            .expect("explicit timer activation produces a launcher");
+        let stop = CancellationToken::new();
+        stop.cancel();
+        tokio::time::timeout(Duration::from_secs(2), starter(stop))
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[test]
     fn a_misspelled_switch_is_refused_rather_than_left_off() {
         for value in ["TRUE", "yes", "1"] {
             assert_eq!(
@@ -285,19 +362,19 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn a_live_context_refuses_to_build_without_xero_configuration() {
+    #[test]
+    fn a_live_context_refuses_to_build_without_xero_configuration() {
         // The suite never configures XERO_*, so the first refusal is the
         // provider's, before any Slack setting is consulted.
         if billing::XeroBillingProvider::from_env().is_some() {
             return;
         }
-        let surreal = store::test_support::mem_surreal().await;
+        let surreal = store::surreal::SurrealDb::uninitialized();
         let refused = Context::from_env(
             surreal,
             Arc::new(workflows::CapturingSlackBot::new()),
             true,
-            |_| Some("configured".into()),
+            |_| None,
         );
         assert_eq!(
             refused.err(),

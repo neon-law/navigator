@@ -1,0 +1,42 @@
+# Only the complete native cohost renders this cluster-internal endpoint.
+apiVersion: v1
+kind: Service
+metadata:
+  name: navigator-web-dbos
+  namespace: navigator
+spec:
+  type: ClusterIP
+  selector:
+    app: navigator-web
+  ports:
+    - name: dbos
+      protocol: TCP
+      port: 9083
+      targetPort: YOUR_DBOS_COHOST_PORT
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: navigator-web-dbos
+  namespace: navigator
+spec:
+  podSelector:
+    matchLabels:
+      app: navigator-web
+  policyTypes: [Ingress]
+  ingress:
+    # Preserve the existing public/API port and its current source admission.
+    - ports:
+        - protocol: TCP
+          port: 3001
+    # Same-namespace trigger pods alone reach the authenticated DBOS port.
+    - from:
+        - podSelector:
+            matchLabels:
+              app: nightly-project-update-trigger
+        - podSelector:
+            matchLabels:
+              app: youtube-comments-poll-trigger
+      ports:
+        - protocol: TCP
+          port: YOUR_DBOS_COHOST_PORT

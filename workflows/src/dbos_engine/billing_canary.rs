@@ -13,6 +13,7 @@ use crate::{EmailService, SlackOpsDelivery};
 
 pub const WORKFLOW: &str = "BillingCanary";
 pub const ENABLED_ENV: &str = "NAVIGATOR_DBOS_BILLING_CANARY_ENABLED";
+pub use crate::flags::BILLING_CANARY_SCHEDULE_ENABLED_ENV as SCHEDULE_ENABLED_ENV;
 const RETRY_START: Duration = Duration::from_mins(1);
 const WEEK: Duration = Duration::from_hours(168);
 
@@ -33,6 +34,7 @@ pub struct Context {
     pub provider: Arc<dyn crate::billing_canary::BillingCanaryProvider>,
     pub email: Arc<dyn EmailService>,
     pub recipient: String,
+    pub(super) schedule_enabled: bool,
 }
 
 impl Context {
@@ -41,6 +43,7 @@ impl Context {
         use crate::billing_canary::{notify_recipient, BillingProviderAdapter};
         use billing::BillingProvider;
 
+        let schedule_enabled = schedule_enabled(&lookup)?;
         let provider = XeroBillingProvider::from_env().ok_or(SettingsError::Missing("XERO_*"))?;
         let provider: Arc<dyn BillingProvider> = Arc::new(provider);
         let provider: Arc<dyn crate::billing_canary::BillingCanaryProvider> =
@@ -60,7 +63,15 @@ impl Context {
             provider,
             email: Arc::new(SlackOpsDelivery::new(notifier)),
             recipient: notify_recipient(&lookup),
+            schedule_enabled,
         })
+    }
+
+    /// Keep manual starts registered while choosing whether the weekly loop runs.
+    #[must_use]
+    pub fn with_schedule_enabled(mut self, enabled: bool) -> Self {
+        self.schedule_enabled = enabled;
+        self
     }
 
     pub fn new(
@@ -71,8 +82,13 @@ impl Context {
             provider,
             email,
             recipient: "nick@neonlaw.com".to_owned(),
+            schedule_enabled: true,
         }
     }
+}
+
+fn schedule_enabled(get: &impl Fn(&str) -> Option<String>) -> Result<bool, SettingsError> {
+    crate::flags::schedule_enabled(SCHEDULE_ENABLED_ENV, get)
 }
 
 pub fn enabled(lookup: impl Fn(&str) -> Option<String>) -> Result<bool, SettingsError> {
@@ -183,6 +199,35 @@ pub async fn schedule(workflow: BillingCanaryWorkflow, clock: Clock, stop: Cance
 mod tests {
     use super::{enabled, slot, workflow_id, ENABLED_ENV};
     use chrono::{TimeZone, Utc};
+    #[test]
+    fn schedule_activation_is_separate_strict_and_preserves_the_standalone_default() {
+        assert!(super::schedule_enabled(&|_| None).unwrap());
+        assert!(!super::schedule_enabled(&|key| {
+            (key == super::SCHEDULE_ENABLED_ENV).then(|| "false".into())
+        })
+        .unwrap());
+        assert!(super::schedule_enabled(&|key| {
+            (key == super::SCHEDULE_ENABLED_ENV).then(|| "true".into())
+        })
+        .unwrap());
+        assert_eq!(
+            super::schedule_enabled(&|key| {
+                (key == super::SCHEDULE_ENABLED_ENV).then(|| "invalid".into())
+            }),
+            Err(super::SettingsError::Invalid(super::SCHEDULE_ENABLED_ENV))
+        );
+        let error = super::Context::from_lookup(|key| {
+            (key == super::SCHEDULE_ENABLED_ENV).then(|| "invalid".into())
+        })
+        .err()
+        .unwrap();
+        assert_eq!(
+            error,
+            super::SettingsError::Invalid(super::SCHEDULE_ENABLED_ENV),
+            "invalid activation fails before live provider construction"
+        );
+    }
+
     #[test]
     fn weekly_slot_is_sunday_at_fourteen_utc_and_stable() {
         let now = Utc.with_ymd_and_hms(2026, 10, 21, 10, 0, 0).unwrap();

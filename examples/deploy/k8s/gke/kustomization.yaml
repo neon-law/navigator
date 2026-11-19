@@ -20,6 +20,7 @@ kind: Kustomization
 #   to save ~$15/mo. No WAF / rate-limit at the LB today.
 
 resources:
+  # NAVIGATOR_DBOS_INTERNAL_RESOURCE
   # NAVIGATOR_ARCHIVES_COVERAGE_RESOURCE
   - ../exports
   - ../../../../k8s/base
@@ -100,3 +101,5 @@ patches:
       metadata:
         name: navigator-web
         namespace: navigator
+
+  # NAVIGATOR_DBOS_ONLY_PATCHES

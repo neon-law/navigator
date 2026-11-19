@@ -902,6 +902,7 @@ async fn run_host(
                         }));
                     }
                     if let Some(context) = reconcile_context {
+                        let schedule_enabled = context.schedule_enabled();
                         let workflow = crate::dbos_reconcile::register(dbos, context)?;
                         if let (Some(token), Some(_surreal)) =
                             (dbos_ingress_token.clone(), reconcile_surreal)
@@ -910,9 +911,10 @@ async fn run_host(
                                 crate::dbos_ingress::ReconcileIngress::new(token, workflow.clone()),
                             );
                         }
-                        launchers.push(Box::new(move |stop| {
-                            tokio::spawn(crate::dbos_reconcile::schedule(workflow, stop))
-                        }));
+                        launchers.extend(crate::dbos_reconcile::schedule_starter(
+                            workflow,
+                            schedule_enabled,
+                        ));
                     }
                     if let Some(context) = email_summary_context {
                         let workflow = crate::dbos_email_summary::register(dbos, context)?;

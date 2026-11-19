@@ -383,6 +383,7 @@ mod tests {
             name: "test-deployment".into(),
             environment: store::DeploymentEnvironment::Dev,
             capabilities: store::deployment::DeploymentCapabilities::default(),
+            dbos_only: false,
             project_id: "test-project".into(),
             location: "example-region".into(),
             cluster: "navigator".into(),

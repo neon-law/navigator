@@ -547,6 +547,44 @@ mod tests {
     }
 
     #[test]
+    fn complete_native_production_and_automation_boot_without_any_restate_key() {
+        use store::workflow_engine::{COHOST_ENV, DBOS_ENABLED_ENV, ENGINE_ENV, WORKFLOWS};
+        for automation_home in ["false", "true"] {
+            let mut pairs = full_with_jwks();
+            pairs.retain(|(key, _)| !key.starts_with("RESTATE_"));
+            pairs.extend(WORKFLOWS.iter().map(|row| (row.flag, "true")));
+            pairs.extend([
+                (COHOST_ENV, "true"),
+                (DBOS_ENABLED_ENV, "true"),
+                (ENGINE_ENV, "dbos"),
+                (
+                    store::deployment::GITHUB_AUTOMATION_HOME_FLAG,
+                    automation_home,
+                ),
+            ]);
+            production_invariants(lookup(&pairs)).unwrap();
+            pairs.retain(|(key, _)| *key != "NAVIGATOR_DBOS_INBOUND_MESSAGE_ALERT_ENABLED");
+            pairs.push(("NAVIGATOR_DBOS_INBOUND_MESSAGE_ALERT_ENABLED", "false"));
+            let mixed = production_invariants(lookup(&pairs)).unwrap_err();
+            assert!(mixed
+                .violations
+                .iter()
+                .any(|message| message.starts_with("RESTATE_BROKER_URL")));
+            assert!(mixed
+                .violations
+                .iter()
+                .any(|message| message.starts_with("RESTATE_IDENTITY_KEY")));
+            assert_eq!(
+                mixed
+                    .violations
+                    .iter()
+                    .any(|message| message.starts_with("RESTATE_INGRESS_URL")),
+                automation_home == "true"
+            );
+        }
+    }
+
+    #[test]
     fn oidc_disabled_true_is_rejected() {
         let mut pairs = full_with_jwks();
         pairs.push(("OIDC_DISABLED", "true"));

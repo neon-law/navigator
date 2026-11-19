@@ -26,6 +26,7 @@ spec:
       containers:
         - name: web
           env:
+            # NAVIGATOR_DBOS_TIMER_ENV
             - name: NAVIGATOR_DBOS_ENABLED
               value: "true"
             # `ops ship` renders each daily schedule's switch here, and the

@@ -185,6 +185,7 @@ fn slot() -> chrono::DateTime<Utc> {
 
 fn context(runner: Runner, slack: Arc<dyn SlackBot>) -> Context {
     Context::with_runner(Arc::new(runner), slack, "synthetic-finance".into(), true)
+        .with_schedule_enabled(false)
 }
 
 async fn result(dbos: &dbos::DBOS, id: &str) -> ReconcileReport {

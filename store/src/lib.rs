@@ -278,3 +278,5 @@ pub use config::{
 pub mod communication_dashboard;
 
 pub mod fi_import;
+
+pub use model::workflow_engine;
