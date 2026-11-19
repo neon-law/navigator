@@ -108,7 +108,7 @@ async fn native_dependent_counts_preserve_all_categories_order_and_endpoint_kind
         assert!(entities::dependents(&db, target.id).await.unwrap().is_empty());
         let pg = PostgresDb::application().await.unwrap();
         let project = Uuid::new_v4();
-        sqlx::query("INSERT INTO project(id,code,name,status,entity_id) VALUES($1,$2,'Synthetic matter','open',$3)")
+        sqlx::query("INSERT INTO project(id,code,name,status,entity_id,brand) VALUES($1,$2,'Synthetic matter','open',$3,'synthetic')")
             .bind(project).bind(format!("synthetic-{}", project.simple())).bind(target.id)
             .execute(pg.pool()).await.unwrap();
         for suffix in ["one", "two"] {
