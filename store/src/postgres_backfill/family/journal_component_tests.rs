@@ -89,14 +89,14 @@ async fn copy(
     rows: &[CapturedJournalRow],
     requested: Uuid,
 ) -> Result<CapturedImportReport, JournalError> {
-    crate::postgres_backfill::with_import_lock(pg, async {
+    Box::pin(crate::postgres_backfill::with_import_lock(pg, async {
         Ok(during_import(
             run,
             Family::Application,
             import_captured_event(rows, pg, requested),
         )
         .await)
-    })
+    }))
     .await
     .expect("isolated pending import lease")
 }
