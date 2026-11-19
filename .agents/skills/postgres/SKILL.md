@@ -88,7 +88,9 @@ The standalone persistence and restore drill remains in `k8s/overlays/kind-postg
 
 ## What is still open
 
-Login roles and grants, the `web` opt-in, the migration Job, WAL archiving, base backups, and the restore drill are
-defined in [`docs/postgres-kubernetes.md`](../../../docs/postgres-kubernetes.md). Failover, AGE and DBOS grants,
-major-version upgrades, and the data migration off SurrealDB remain undecided. Do not pick one in passing. Raise it with
-the user, or file it with [author-linear-issue](../author-linear-issue/SKILL.md).
+Runtime roles, AGE and DBOS grants, mandatory application admission, migration Jobs, WAL archiving, base backups, and
+restore drills are defined in [`docs/postgres-kubernetes.md`](../../../docs/postgres-kubernetes.md). Captured Source
+enrollment follows [`docs/postgres-tooling.md`](../../../docs/postgres-tooling.md); production transfer and recovery
+acceptance require actual operator evidence. Failover and major-version upgrades require their own operational
+decisions. Do not choose them in passing: coordinate with the user or
+[author-linear-issue](../author-linear-issue/SKILL.md).

@@ -35,10 +35,10 @@ storage credential and **refuses to write** when the match cannot be confirmed: 
 before any object is written. The Slack digest then annotates the archive project and pins its console links with
 `?project=`. Leave it unset for an in-project bucket and on non-GCS backends.
 
-When `NAVIGATOR_POSTGRES_HOST` is set, the snapshot step requires reviewed coverage for Navigator and Forgejo. Both
-databases must export successfully before a paired completion manifest is written. Each retains its own MVCC watermark.
-Missing inventory, inaccessible relations, schema drift, or failed Iceberg metadata publication records a PostgreSQL
-failure in the digest. The SurrealDB snapshot has its own outcome. See PostgreSQL coverage below.
+The default PostgreSQL snapshot requires reviewed coverage for Navigator and Forgejo. Both databases must export
+successfully before a paired completion manifest is written. Each retains its own MVCC watermark. Missing inventory,
+inaccessible relations, schema drift, or failed Iceberg metadata publication records a PostgreSQL failure in the digest.
+Explicit `all` mode records a separate Source snapshot outcome. See PostgreSQL coverage below.
 
 An unset `NAVIGATOR_ARCHIVE_SOURCE`, or `postgres`, requires completed PostgreSQL application handoff before opening
 archive storage. It opens no SurrealDB connection. PostgreSQL host, reviewed paired coverage, reader credentials and TLS
@@ -47,8 +47,8 @@ only that mode may omit PostgreSQL when its host and paired settings are absent.
 
 Physical backup/WAL procedures and the raw PostgreSQL generation exporter remain available independently of application
 admission and SurrealDB availability. PostgreSQL selection does not recover rows still held solely in SurrealDB;
-retiring its separate backup requires reconciliation and recovery proof. The combined Restate worker still needs
-SurrealDB for its other services.
+retiring its separate backup requires reconciliation and recovery proof. Ordinary application and worker startup require
+PostgreSQL application admission and use inert Source handles.
 
 A PostgreSQL failure is journaled for digest delivery and terminates that invocation. Repair its configuration or source
 and start a new invocation; replay retains the failed extraction outcome.

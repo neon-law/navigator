@@ -97,8 +97,8 @@ when a matter opens, closed when its workflow terminates. **In our legal practic
 opening a new matter creates one; walking a client through engagement, intake, and signing advances it through its
 states.
 
-- Schema: [`notation` in `navigator.surql`](../store/src/schema/navigator.surql) Queries:
-  [`store::notations`](../store/src/notations.rs) Lives in: the `notation` table in SurrealDB
+- Schema: [`notation` in the PostgreSQL schema](../store/postgres/schema.sql). Queries:
+  [`store::notations`](../store/src/notations.rs). Lives in: the PostgreSQL `notation` table.
 
 > **Note — two meanings.** "Notation" is also the umbrella name for Neon Law Navigator's markdown notation format (the
   file format Templates are written in). Templates *are* notations in that sense; each row in the `notations` table is
@@ -217,7 +217,7 @@ Type](glossary/question-type.md) from `store::question_registry` (record / refer
 closed vocabulary `N113`–`N117` and the render/form-fill evaluator all share. Use glossary-backed states and dotted
 fields for durable nouns: `person__client` with `{{person__client.name}}`, not `custom_text__client_name`.
 
-- Schema: [`store::questions`](../store/src/questions.rs) Lives in: the `question` table in SurrealDB (ENG-121) Seed:
+- Queries: [`store::questions`](../store/src/questions.rs). Lives in: the PostgreSQL `question` table. Seed:
   [`store/seeds/Question.yaml`](../store/seeds/Question.yaml)
 
 ## Answer
@@ -227,7 +227,7 @@ the latest row for a `(notation, state)` wins on read, ordered by its insertion 
 by its UUID for deterministic ties. The seed's own fixtures deduplicate on `(question, person, value)`, so re-seeding
 the same value is a no-op.
 
-- Schema: [`store::answers`](../store/src/answers.rs) Lives in: the `answer` table in SurrealDB (ENG-121)
+- Queries: [`store::answers`](../store/src/answers.rs). Lives in: the PostgreSQL `answer` table.
 
 ## Rule
 
