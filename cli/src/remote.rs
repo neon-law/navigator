@@ -7234,10 +7234,12 @@ mod tests {
         )
         .await
         .expect_err("a 300 ms response cannot pass a 50 ms bound");
-        assert!(
-            error.to_string().contains("operation timed out"),
-            "{error:#}"
-        );
+        let timed_out = error.chain().any(|cause| {
+            cause
+                .downcast_ref::<reqwest::Error>()
+                .is_some_and(reqwest::Error::is_timeout)
+        });
+        assert!(timed_out, "{error:#}");
     }
 
     /// A plain 500 on a revision read recovers — the read is idempotent, so
