@@ -5,7 +5,7 @@ use std::process::ExitCode;
 
 #[derive(Subcommand)]
 pub enum PersonCmd {
-    /// Create a contact, or administer a Firm's staff roles.
+    /// Create a contact, or administer a Firm's Firm roles.
     Create {
         #[arg(long)]
         name: String,

@@ -133,11 +133,6 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Search, read, draft, and file Gmail correspondence; sending stays with the lawyer.
-    Mail {
-        #[command(subcommand)]
-        action: crate::mail::MailAction,
-    },
     /// Interact with a project hosted on a navigator site.
     ///
     /// Singular because a checkout is one Project — the repository name *is* the Project code.
@@ -488,7 +483,6 @@ fn run() -> ExitCode {
         Command::Sync { host, dir, dry_run } => {
             runtime().block_on(projects::watch::run_sync(dir, &host, dry_run))
         }
-        Command::Mail { action } => runtime().block_on(crate::mail::run(action)),
         Command::Projects { action } => runtime().block_on(run_projects(action)),
         Command::Notation {
             action: NotationCmd::Envelope { action },

@@ -1301,9 +1301,9 @@ async fn only_owner_can_create_an_owner_identity() {
     assert_eq!(row.role, store::persons::Role::Owner);
 }
 
-/// A Lawyer can create contacts, but cannot grant a staff role through the API.
+/// A Lawyer can create contacts, but cannot grant a Firm role through the API.
 #[tokio::test]
-async fn api_people_create_refuses_a_lawyer_callers_staff_role() {
+async fn api_people_create_refuses_a_lawyer_callers_firm_role() {
     let (state, surreal) = state_with_engines().await;
     let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
     let (cookie, csrf) = session_cookie_and_csrf_for_role(store::persons::Role::Lawyer);
@@ -1316,7 +1316,7 @@ async fn api_people_create_refuses_a_lawyer_callers_staff_role() {
                 .header(header::COOKIE, &cookie)
                 .header("x-csrf-token", &csrf)
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-                // A hand-crafted staff grant is refused without creating a Person.
+                // A hand-crafted Firm-role grant is refused without creating a Person.
                 .body(Body::from(
                     "name=Ceres%20Lead&email=ceres%40test.invalid&role=admin",
                 ))

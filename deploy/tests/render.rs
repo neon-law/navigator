@@ -1397,7 +1397,7 @@ fn a_resume_renders_on_its_own_frame_to_pdf_and_word() {
 /// or the output extension.
 #[test]
 fn render_failures_do_not_echo_cli_values() {
-    let source = include_str!("../src/main.rs");
+    let source = include_str!("../../cli/src/notation_render.rs");
     assert!(source.contains("could not read the template file: {}\", e.kind()"));
     assert!(!source.contains("navigator: read {}: {e}\", file.display()"));
     assert!(!source.contains("output extension must be `.{output_extension}`"));

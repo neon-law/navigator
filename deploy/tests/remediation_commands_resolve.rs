@@ -71,11 +71,6 @@ const PREFIXES: &[&str] = &["navigator", "hudson", "cli", "deploy"];
 /// The prefixes that name the lean `navigator`.
 const LEAN_PREFIXES: &[&str] = &["navigator", "cli"];
 
-/// The `site` verbs the lean `navigator` kept.
-const LEAN_SITE_VERBS: &[&str] = &[
-    "document", "import", "login", "logout", "mail", "notation", "whoami",
-];
-
 /// A floor on what the scan finds, so an extractor that quietly stops matching
 /// fails loudly instead of passing over an empty set. The real count is
 /// comfortably above this; the number only has to be high enough that reaching
@@ -257,11 +252,13 @@ fn lean_verb(literal: &str, path: &[String]) -> Result<(), String> {
         return Ok(());
     }
     let first = path.first().map(String::as_str).unwrap_or_default();
-    let moved = cli::projects::cli_docs::HUDSON_VERBS.contains(&first)
+    let tree = cli::navigator_command();
+    let moved = tree.find_subcommand(first).is_none()
         || (first == "site"
-            && path
-                .get(1)
-                .is_some_and(|verb| !LEAN_SITE_VERBS.contains(&verb.as_str())));
+            && path.get(1).is_some_and(|verb| {
+                tree.find_subcommand("site")
+                    .is_none_or(|site| site.find_subcommand(verb).is_none())
+            }));
     if moved {
         Err(format!(
             "`{}` is a `hudson` command; the lean `navigator` does not carry it",
@@ -360,6 +357,7 @@ fn command_names(help: &str) -> Vec<String> {
 
 /// What the real binary accepts at `path`, memoized so a tree of invocations
 /// costs one `--help` run per distinct node rather than one per invocation.
+/// Combine Navigator's application tree with Hudson's operator tree.
 fn node_at(cache: &mut BTreeMap<Vec<String>, Node>, path: &[String]) -> Node {
     if let Some(hit) = cache.get(path) {
         return hit.clone();
@@ -379,10 +377,28 @@ fn node_at(cache: &mut BTreeMap<Vec<String>, Node>, path: &[String]) -> Node {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let help = String::from_utf8_lossy(&output.stdout);
+    let operator_help = String::from_utf8_lossy(&output.stdout);
+    let mut tree = cli::navigator_command();
+    let mut application = true;
+    for part in path {
+        if let Some(next) = tree.find_subcommand(part).cloned() {
+            tree = next;
+        } else {
+            application = false;
+            break;
+        }
+    }
+    let application_help = application.then(|| tree.render_long_help().to_string());
+    let mut children = command_names(&operator_help);
+    if let Some(help) = &application_help {
+        children.extend(command_names(help));
+        children.sort();
+        children.dedup();
+    }
     let node = Node {
-        children: command_names(&help),
-        takes_positional: takes_positional(&help),
+        children,
+        takes_positional: takes_positional(&operator_help)
+            || application_help.as_deref().is_some_and(takes_positional),
     };
     cache.insert(path.to_vec(), node.clone());
     node
@@ -421,6 +437,20 @@ fn resolve(cache: &mut BTreeMap<Vec<String>, Node>, path: &[String]) -> Result<(
         }
 
         if !node.children.contains(token) {
+            // Hudson keeps application compatibility groups hidden from help.
+            // Probe the actual parser before calling a hidden group missing.
+            if walked.is_empty()
+                && Command::cargo_bin("hudson")
+                    .expect("build Hudson")
+                    .args([token.as_str(), "--help"])
+                    .output()
+                    .expect("read compatibility help")
+                    .status
+                    .success()
+            {
+                walked.push(token.clone());
+                continue;
+            }
             return Err(format!(
                 "`{token}` is not a subcommand of `{}`, which offers: {}",
                 spelled(&walked),
@@ -567,7 +597,7 @@ fn the_help_parser_still_reads_the_top_level_commands() {
     let mut cache = BTreeMap::new();
     let root = node_at(&mut cache, &[]);
 
-    for expected in ["dev", "forms", "notation", "ops", "project", "site"] {
+    for expected in ["dev", "notation", "ops", "project", "site"] {
         assert!(
             root.children.iter().any(|name| name == expected),
             "the `Commands:` parser read {:?} at the top level and missed \

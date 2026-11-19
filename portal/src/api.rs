@@ -15388,7 +15388,7 @@ Content-Disposition: attachment; filename=\"records.pdf\"\r\n\
         assert_eq!(
             status,
             StatusCode::FORBIDDEN,
-            "a Lawyer cannot assign a staff tier"
+            "a Lawyer cannot assign a Firm role"
         );
         let (status, created) = call(
             &f.state,

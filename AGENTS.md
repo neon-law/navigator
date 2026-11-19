@@ -39,9 +39,8 @@ fixtures, or duplicate another check. Keep coverage for authorization, isolation
 
 Every authorized application operation belongs in `navigator`, the toolchain Project repositories name and Homebrew
 installs. This includes People, Firm and Brand administration, Legal Plans, mail drafts, Inbox, Downloads, and local
-Notation previews and rendering. Lawyers can create contacts without a Project requirement. Staff-role grants follow
-Firm administration; only an Owner creates Admin or Owner identities. Creation does not itself grant Project
-participation.
+Notation previews and rendering. Lawyers can create contacts without a Project requirement. Firm-role grants follow Firm
+administration; only an Owner creates Admin or Owner identities. Creation does not itself grant Project participation.
 
 `hudson` operates the installation through `ops` and `dev`: cloud access, deployments, infrastructure, migrations,
 backups, recovery, secrets provisioning and the remaining Restate operations. Application commands use Navigator's

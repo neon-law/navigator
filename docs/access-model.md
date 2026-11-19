@@ -83,8 +83,8 @@ the deployment's anchor Firm.
 
 `navigator site person create` lets a Lawyer create a client contact without an existing Project. Optional Project
 context must be visible to the caller. A Firm Admin can create a Client, Clerk, or Lawyer within an administered Firm;
-staff grants require that Firm context. An Owner can also assign Admin or Owner roles. Client creation grants no Firm
-membership, and creating any Person grants no Project participation.
+Firm-role grants require that Firm context. An Owner can also assign Admin or Owner roles. Client creation grants no
+Firm membership, and creating any Person grants no Project participation.
 
 ## Evidence invitations
 

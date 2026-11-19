@@ -56,8 +56,6 @@ use cli::commands::{
 };
 #[cfg(test)]
 use cli::commands::{help_headline, parse_notarization};
-#[cfg(test)]
-use cli::credentials;
 use cli::{
     answers_file, atomic_directory, authorities, document_layout, document_sync, legal_plans,
     login, palette, projects, release, remote,

@@ -1,4 +1,4 @@
-//! Contact creation and staff-role grants use the existing role and Firm boundaries.
+//! Contact creation and Firm-role grants use the existing role and Firm boundaries.
 use crate::persons::Role;
 
 pub(crate) fn permits(actor: Role, requested: Role, firm: bool) -> bool {
@@ -17,7 +17,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn contact_creation_needs_no_project_but_staff_grants_keep_their_authority() {
+    fn contact_creation_needs_no_project_but_firm_role_grants_keep_their_authority() {
         for actor in [Role::Owner, Role::Admin, Role::Lawyer] {
             assert!(permits(actor, Role::Client, false));
         }

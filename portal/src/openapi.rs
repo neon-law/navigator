@@ -776,7 +776,7 @@ fn add_cli_operations(document: &mut Value) {
     fields["project_id"] = json!({ "type": ["string", "null"], "format": "uuid",
         "description": "Optional Project context; requires participation when supplied by a Lawyer." });
     fields["firm_id"] = json!({ "type": ["string", "null"], "format": "uuid",
-        "description": "Staff-role grants require an administered Firm; Project context must agree." });
+        "description": "Firm-role grants require an administered Firm; Project context must agree." });
     document["paths"]["/app/api/people"]["post"]["description"] = json!(
         "Lawyers create client contacts without a Project requirement. Admins may also grant Lawyer or Clerk roles within an administered Firm. Only Owners create Admins or Owners. Creation grants no Project participation."
     );
