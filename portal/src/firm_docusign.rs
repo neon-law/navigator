@@ -32,7 +32,8 @@ struct Connection {
 
 impl Connection {
     fn provider(self, demo: bool) -> Result<DocuSignSignatureProvider, SignatureError> {
-        let url = reqwest::Url::parse(&self.base_url).map_err(|_| unavailable())?;
+        let url = reqwest::Url::parse(&self.base_url)
+            .map_err(|_| unavailable("its base_url is not a URL"))?;
         let permitted_host = url.host_str().is_some_and(|host| {
             if demo {
                 host == "demo.docusign.net"
@@ -49,7 +50,11 @@ impl Connection {
             || url.fragment().is_some()
             || url.port().is_some()
         {
-            return Err(unavailable());
+            return Err(unavailable(if demo {
+                "its base_url must be https://demo.docusign.net/restapi on a simulated deployment"
+            } else {
+                "its base_url must be a live https://<host>.docusign.net/restapi"
+            }));
         }
         let oauth = if demo {
             "https://account-d.docusign.com"
@@ -71,9 +76,29 @@ impl Connection {
     }
 }
 
-fn unavailable() -> SignatureError {
-    SignatureError::Provider("The Firm's DocuSign connection is unavailable".into())
+/// The refusal every unresolvable connection answers with. `reason` names
+/// which check failed and never carries a credential byte, so it is safe in
+/// logs and in the API response a Firm administrator acts on.
+fn unavailable(reason: &str) -> SignatureError {
+    SignatureError::Provider(format!(
+        "The Firm's DocuSign connection is unavailable: {reason}"
+    ))
 }
+
+/// serde's message can quote the offending value, so only its category and
+/// position leave this function.
+fn parse_connection(json: &str) -> Result<Connection, SignatureError> {
+    serde_json::from_str(json).map_err(|error| {
+        unavailable(&format!(
+            "the saved connection JSON is invalid ({:?} at line {}, column {})",
+            error.classify(),
+            error.line(),
+            error.column()
+        ))
+    })
+}
+
+const NOT_CONNECTED: &str = "this provider resolves a Firm connection per Project";
 
 pub(crate) struct FirmDocuSign {
     pub kms: Arc<dyn cloud::RuntimeKms>,
@@ -99,7 +124,7 @@ impl FirmDocuSign {
         let key = connection
             .connect_hmac_key
             .filter(|value| !value.is_empty())
-            .ok_or_else(unavailable)?;
+            .ok_or_else(|| unavailable("it has no connect_hmac_key"))?;
         Ok((account, key))
     }
 
@@ -112,8 +137,8 @@ impl FirmDocuSign {
             self.kms.as_ref(),
         )
         .await
-        .map_err(|_| unavailable())?;
-        serde_json::from_str(credential.expose_for_provider_call()).map_err(|_| unavailable())
+        .map_err(|error| unavailable(&error.to_string()))?;
+        parse_connection(credential.expose_for_provider_call())
     }
 }
 
@@ -126,12 +151,13 @@ impl SignatureProvider for FirmDocuSign {
     ) -> Result<Option<DocuSignSignatureProvider>, SignatureError> {
         let pg = store::postgres::PostgresDb::from_env()
             .await
-            .map_err(|_| unavailable())?;
+            .map_err(|_| unavailable("PostgreSQL is not configured"))?;
         let firm = store::postgres::projects::find_by_id_on(&pg, project_id)
             .await
-            .map_err(|_| unavailable())?
-            .and_then(|project| project.firm_id)
-            .ok_or_else(unavailable)?;
+            .map_err(|_| unavailable("the Project lookup failed"))?
+            .ok_or_else(|| unavailable("the Project is not in PostgreSQL"))?
+            .firm_id
+            .ok_or_else(|| unavailable("the Project has no owning Firm"))?;
         self.for_firm(db, firm).await.map(Some)
     }
 
@@ -166,11 +192,11 @@ impl SignatureProvider for FirmDocuSign {
         _: &SignatureManifest,
         _: SendMode,
     ) -> Result<SignatureRequestId, SignatureError> {
-        Err(unavailable())
+        Err(unavailable(NOT_CONNECTED))
     }
 
     async fn dispatch_prepared(&self, _: &SignatureRequestId) -> Result<(), SignatureError> {
-        Err(unavailable())
+        Err(unavailable(NOT_CONNECTED))
     }
 
     async fn create_recipient_view(
@@ -178,7 +204,7 @@ impl SignatureProvider for FirmDocuSign {
         _: &SignatureRequestId,
         _: &RecipientView,
     ) -> Result<String, SignatureError> {
-        Err(unavailable())
+        Err(unavailable(NOT_CONNECTED))
     }
 
     async fn create_sender_view(
@@ -186,14 +212,14 @@ impl SignatureProvider for FirmDocuSign {
         _: &SignatureRequestId,
         _: &str,
     ) -> Result<String, SignatureError> {
-        Err(unavailable())
+        Err(unavailable(NOT_CONNECTED))
     }
 
     async fn fetch_completed_documents(
         &self,
         _: &SignatureRequestId,
     ) -> Result<CompletedDocuments, SignatureError> {
-        Err(unavailable())
+        Err(unavailable(NOT_CONNECTED))
     }
 }
 
@@ -204,8 +230,8 @@ pub(crate) async fn for_notation(
 ) -> Result<Option<DocuSignSignatureProvider>, SignatureError> {
     let notation = store::notations::find_by_id(db, notation_id)
         .await
-        .map_err(|_| unavailable())?
-        .ok_or_else(unavailable)?;
+        .map_err(|_| unavailable("the Notation lookup failed"))?
+        .ok_or_else(|| unavailable("the Notation does not exist"))?;
     provider.for_project(db, notation.project_id).await
 }
 
@@ -218,7 +244,7 @@ pub(crate) fn resolved<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::Connection;
+    use super::{parse_connection, Connection};
     use uuid::Uuid;
 
     fn connection(base_url: &str) -> Connection {
@@ -254,5 +280,28 @@ mod tests {
         assert!(connection("https://demo.docusign.net/restapi")
             .provider(true)
             .is_ok());
+    }
+
+    #[test]
+    fn a_refusal_names_the_check_that_failed() {
+        let Err(error) = connection("https://demo.docusign.net/restapi").provider(false) else {
+            panic!("a demo host must not serve a live deployment");
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("live https://<host>.docusign.net/restapi"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn invalid_connection_json_never_echoes_the_secret() {
+        let Err(error) = parse_connection(r#"{"account_id":"synthetic-secret-value"}"#) else {
+            panic!("a non-UUID account_id must not parse");
+        };
+        let message = error.to_string();
+        assert!(message.contains("connection JSON is invalid"), "{message}");
+        assert!(!message.contains("synthetic-secret-value"), "{message}");
     }
 }
