@@ -1,16 +1,14 @@
 //! Synthetic multi-database coverage and Iceberg-reader recovery drill.
 use archives::coverage::{export_pair, inventory, CoverageManifest, DatabaseSource, Rule};
 use cloud::{FsStorage, ObjectListing, StorageError, StorageService, StoredObject};
-use futures::TryStreamExt;
 use sqlx::{postgres::PgConnectOptions, PgPool};
 use store::postgres::PostgresDb;
 use store::postgres_backfill::family::{require_scope, Family, FamilyError, SourceReceipt};
 
-use arrow_array58::{
-    Array, BinaryArray, BooleanArray, Int32Array, Int64Array, RecordBatch, StringArray,
-};
-use sha2::{Digest, Sha256};
-use std::fmt::Write as _;
+#[path = "coverage_postgres/native_ownership.rs"]
+mod native_ownership;
+#[path = "coverage_postgres/restore.rs"]
+mod restore;
 
 const NAV_SCHEMA: &str = "CREATE TABLE public.probe (id bigint PRIMARY KEY, status text); CREATE TABLE public.empty (id bigint); CREATE VIEW public.derived AS SELECT * FROM public.probe";
 const FORGE_SCHEMA: &str = "CREATE SCHEMA forge; CREATE TABLE forge.repository (id bigint PRIMARY KEY, name text, private boolean, payload bytea, metadata jsonb)";
@@ -110,6 +108,9 @@ async fn manifest(pool: &PgPool) -> CoverageManifest {
         .map(|relation| {
             let reason = match (relation.schema.as_str(), relation.name.as_str()) {
                 ("public", "derived") => "rebuild from probe",
+                ("public", "person_directory" | "firm_visible_person") => {
+                    "recreated by the canonical Navigator schema"
+                }
                 ("public", "geography_columns" | "geometry_columns") => "recreated by PostGIS",
                 _ => return Rule::Export(relation),
             };
@@ -392,190 +393,15 @@ async fn postgres_paired_sources_fail_closed_and_rehydrate_from_iceberg() {
     );
     assert!(paired.databases.iter().all(|db| !db.snapshot.is_empty()));
 
-    // Load only objects from cloud::StorageService into the reader's FileIO.
-    let io = iceberg::io::FileIO::new_with_memory();
-    for object in storage.list("").await.unwrap() {
-        let bytes = storage.get(&object.key).await.unwrap().bytes;
-        io.new_output(format!("{base}/{}", object.key))
-            .unwrap()
-            .write(bytes.into())
-            .await
-            .unwrap();
-    }
-    for (db, target) in paired.databases.iter().zip([&target_nav, &target_forge]) {
-        let mut restored_largeobjects = std::collections::BTreeSet::new();
-        let mut ordered = db
-            .tables
-            .iter()
-            .zip(&db.schemas)
-            .zip(&db.iceberg_metadata_keys)
-            .collect::<Vec<_>>();
-        ordered.sort_by_key(|((_, schema), _)| match schema.relation.name.as_str() {
-            "workflow_status" => 0,
-            "mirror_backfill_run" => 1,
-            "mirror_backfill_checkpoint" | "mirror_backfill_failure" => 2,
-            _ => 3,
-        });
-        for ((entry, schema), metadata_key) in ordered {
-            let object = storage.get(&entry.key).await.unwrap();
-            let hash =
-                Sha256::digest(&object.bytes)
-                    .iter()
-                    .fold(String::new(), |mut output, byte| {
-                        write!(output, "{byte:02x}").unwrap();
-                        output
-                    });
-            assert_eq!(entry.sha256, hash);
-            let table = iceberg::table::StaticTable::from_metadata_file(
-                &format!("{base}/{metadata_key}"),
-                iceberg::TableIdent::from_strs(["coverage", "probe"]).unwrap(),
-                io.clone(),
-            )
-            .await
-            .unwrap();
-            let tasks = table.scan().build().unwrap().plan_files().await.unwrap();
-            let batches: Vec<_> = table
-                .reader_builder()
-                .build()
-                .read(tasks)
-                .unwrap()
-                .stream()
-                .try_collect()
-                .await
-                .unwrap();
-            assert_eq!(
-                batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
-                entry.rows
-            );
-            if schema.relation.schema == "pg_catalog" && schema.relation.name == "pg_largeobject" {
-                for batch in batches {
-                    for row in 0..batch.num_rows() {
-                        let oid = batch
-                            .column_by_name("loid")
-                            .unwrap()
-                            .as_any()
-                            .downcast_ref::<StringArray>()
-                            .unwrap()
-                            .value(row);
-                        let page = batch
-                            .column_by_name("pageno")
-                            .unwrap()
-                            .as_any()
-                            .downcast_ref::<Int32Array>()
-                            .unwrap()
-                            .value(row);
-                        let data = arrow_cast58::cast(
-                            batch
-                                .column_by_name("data")
-                                .expect("large-object data column"),
-                            &arrow_schema58::DataType::Binary,
-                        )
-                        .unwrap();
-                        let bytes = data
-                            .as_any()
-                            .downcast_ref::<BinaryArray>()
-                            .unwrap()
-                            .value(row);
-                        if restored_largeobjects.insert(oid.to_string()) {
-                            sqlx::query("SELECT lo_create($1::text::oid)")
-                                .bind(oid)
-                                .execute(target)
-                                .await
-                                .unwrap();
-                        }
-                        sqlx::query("SELECT lo_put($1::text::oid, $2, $3)")
-                            .bind(oid)
-                            .bind(i64::from(page) * 2048)
-                            .bind(bytes)
-                            .execute(target)
-                            .await
-                            .unwrap();
-                    }
-                }
-                continue;
-            }
-            if ["pg_catalog", "ag_catalog"].contains(&schema.relation.schema.as_str()) {
-                // Native schema and large-object procedures reconstruct
-                // these catalogs and resolve identifiers in the target.
-                continue;
-            }
-            if schema.relation.kind == archives::coverage::RelationKind::Sequence {
-                for batch in batches {
-                    let value = batch
-                        .column_by_name("last_value")
-                        .unwrap()
-                        .as_any()
-                        .downcast_ref::<Int64Array>()
-                        .unwrap()
-                        .value(0);
-                    let called = batch
-                        .column_by_name("is_called")
-                        .unwrap()
-                        .as_any()
-                        .downcast_ref::<BooleanArray>()
-                        .unwrap()
-                        .value(0);
-                    let qualified = format!(
-                        "\"{}\".\"{}\"",
-                        schema.relation.schema, schema.relation.name
-                    );
-                    sqlx::query("SELECT setval($1::regclass, $2, $3)")
-                        .bind(qualified)
-                        .bind(value)
-                        .bind(called)
-                        .execute(target)
-                        .await
-                        .unwrap();
-                }
-                continue;
-            }
-            for batch in batches {
-                for row in 0..batch.num_rows() {
-                    let qualified = format!(
-                        "\"{}\".\"{}\"",
-                        schema.relation.schema, schema.relation.name
-                    );
-                    let columns = schema
-                        .columns
-                        .iter()
-                        .map(|(name, _)| format!("\"{name}\""))
-                        .collect::<Vec<_>>()
-                        .join(",");
-                    let placeholders = schema
-                        .columns
-                        .iter()
-                        .enumerate()
-                        .map(|(index, (_, ty))| format!("${}::text::{ty}", index + 1))
-                        .collect::<Vec<_>>()
-                        .join(",");
-                    let statement =
-                        format!("INSERT INTO {qualified} ({columns}) VALUES ({placeholders})");
-                    let mut query = sqlx::query(sqlx::AssertSqlSafe(statement));
-                    for (column, (_, pg_type)) in batch.columns().iter().zip(&schema.columns) {
-                        let value = (!column.is_null(row)).then(|| {
-                            arrow_cast58::display::array_value_to_string(column, row).unwrap()
-                        });
-                        let value = if pg_type == "bytea" {
-                            value.map(|hex| format!("\\x{hex}"))
-                        } else {
-                            value
-                        };
-                        query = query.bind(value);
-                    }
-                    query.execute(target).await.unwrap();
-                }
-            }
-            if schema.relation.name == "mirror_backfill_run" {
-                assert!(
-                    matches!(
-                        require_scope(&target_ledger, Family::Satellites).await,
-                        Err(FamilyError::Receipt)
-                    ),
-                    "a restored run without all checkpoint proofs must not activate authority"
-                );
-            }
-        }
-    }
+    restore::restore_pair(
+        &paired,
+        &storage,
+        base,
+        &target_nav,
+        &target_forge,
+        &target_ledger,
+    )
+    .await;
     assert_ledger_preserved(&navigator, &target_nav).await;
     require_scope(&target_ledger, Family::Satellites)
         .await
@@ -640,38 +466,11 @@ async fn postgres_paired_sources_fail_closed_and_rehydrate_from_iceberg() {
         .await
         .unwrap();
     assert_eq!(restored_large_object, [0_u8, 255].repeat(8192));
-    // Compare every stored table, including DBOS and large-object storage.
-    // Native AGE schema reconstruction maps source OIDs to target OIDs.
     for (db, source, target) in [
         (&paired.databases[0], &navigator, &target_nav),
         (&paired.databases[1], &forgejo, &target_forge),
     ] {
-        for schema in &db.schemas {
-            if schema.relation.schema == "ag_catalog" {
-                continue;
-            }
-            let relation = format!(
-                "\"{}\".\"{}\"",
-                schema.relation.schema, schema.relation.name
-            );
-            let statement = if schema.relation.kind == archives::coverage::RelationKind::Sequence {
-                format!("SELECT md5(last_value::text || ':' || is_called::text), 1::bigint FROM {relation}")
-            } else {
-                format!("SELECT md5(COALESCE(string_agg(row_to_json(t)::text, ',' ORDER BY row_to_json(t)::text), '')), count(*)::bigint FROM ONLY {relation} t")
-            };
-            let original: (String, i64) = sqlx::query_as(sqlx::AssertSqlSafe(statement.clone()))
-                .fetch_one(source)
-                .await
-                .unwrap();
-            let restored: (String, i64) = sqlx::query_as(sqlx::AssertSqlSafe(statement))
-                .fetch_one(target)
-                .await
-                .unwrap();
-            assert_eq!(
-                original, restored,
-                "complete stored-table restoration for {relation}"
-            );
-        }
+        restore::assert_database_equal(db, source, target).await;
     }
     let source_oid: String = sqlx::query_scalar(
         "SELECT graphid::text FROM ag_catalog.ag_graph WHERE name = 'coverage_graph'",
