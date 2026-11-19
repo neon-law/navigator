@@ -209,10 +209,12 @@ jobs:
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           shared-key: gate-cli
-      - name: build navigator CLI
+      - name: build Hudson privacy scanner
         run: cargo build -p hudson --quiet
+      - name: build navigator CLI
+        run: cargo build -p cli --bin navigator --quiet
       - name: gate the content tree with navigator
-        run: "${CARGO_TARGET_DIR:-target}/debug/hudson project gate --ci"
+        run: "${CARGO_TARGET_DIR:-target}/debug/navigator project gate --ci"
       - name: start the local PII analyzer
         run: |
           # Start the analyzer as a plain docker step, not a job service: its
