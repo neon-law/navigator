@@ -915,6 +915,11 @@ async fn mirror_source(
         MirrorKey::MatterPages(_) | MirrorKey::MatterCaption(_) => {
             matter_pages_captions::mirror(surreal, pg, key).await
         }
+        // Journal copies require the immutable captured component, never a live generic row read.
+        MirrorKey::Record {
+            table: "journal_entry",
+            ..
+        } => Err(MirrorError::MatterAuthority),
         MirrorKey::Record { table, id } => records::mirror(surreal, pg, table, *id).await,
         MirrorKey::RecordString { table, id } => {
             records::mirror_string(surreal, pg, table, id).await

@@ -79,16 +79,18 @@ fn an_existing_source_orphan_cannot_mask_a_different_missing_postgres_parent() {
         reset_union: None,
         template_pins: None,
         project_lifecycle: None,
+        sent_email_union: None,
+        journal_handoff: None,
     };
     assert!(!snapshot.clean());
 }
 
 use crate::postgres::PostgresDb;
-use crate::postgres_mirror::{MirrorKey, TableParity, records};
-use serde_json::{Value, json};
+use crate::postgres_mirror::{records, MirrorKey, TableParity};
+use serde_json::{json, Value};
 use std::sync::{
-    Mutex,
     atomic::{AtomicBool, Ordering},
+    Mutex,
 };
 use uuid::Uuid;
 
@@ -164,6 +166,8 @@ impl super::Source for FrozenRows {
                 reset_union: None,
                 template_pins: None,
                 project_lifecycle: None,
+                sent_email_union: None,
+                journal_handoff: None,
             })
         })
     }
@@ -308,13 +312,11 @@ async fn scoped_import_repairs_sql_null_then_retries_failure_without_replaying_a
         .await
         .unwrap();
     source.unavailable.store(true, Ordering::SeqCst);
-    assert!(
-        advance(&pg, &source, run, None, true)
-            .await
-            .unwrap()
-            .snapshot
-            .is_none()
-    );
+    assert!(advance(&pg, &source, run, None, true)
+        .await
+        .unwrap()
+        .snapshot
+        .is_none());
     let mode = crate::postgres_mirror::during_initial_copy(super::import_mode(&pg, "playbook"))
         .await
         .unwrap();

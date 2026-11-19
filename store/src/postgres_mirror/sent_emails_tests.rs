@@ -11,14 +11,34 @@ fn audit_key_and_timestamps_do_not_expose_message_content() {
     assert_eq!(micros(at).timestamp_subsec_nanos(), 123_456_000);
 }
 
+async fn captured_message(
+    source: &SurrealDb,
+    new: &crate::sent_emails::NewSentEmail,
+) -> SentEmailImage {
+    let id = Uuid::now_v7();
+    source.query("CREATE $id CONTENT {recipient:$recipient,subject:$subject,sender:$sender,template_slug:$template,body:$body,outcome:$outcome,sg_message_id:$receipt,sent_at:$at,inserted_at:$at,updated_at:$at}")
+        .bind(("id", crate::surreal::record_id("sent_email", id)))
+        .bind(("recipient", new.recipient.clone()))
+        .bind(("subject", new.subject.clone()))
+        .bind(("sender", new.sender.clone()))
+        .bind(("template", new.template_slug.clone()))
+        .bind(("body", new.body.clone()))
+        .bind(("outcome", new.outcome.clone()))
+        .bind(("receipt", new.sg_message_id.clone()))
+        .bind(("at", Datetime::from(new.sent_at)))
+        .await.unwrap().check().unwrap();
+    source_one(source, id).await.unwrap().unwrap()
+}
+
 #[tokio::test]
 async fn sent_email_audit_replays_preserve_history_and_report_drift() {
     let Some((options, database)) = fresh_schema().await else {
         return;
     };
     let pg = connect(&options, &database).await;
-    let surreal = crate::test_support::mem_surreal().await;
-    let first = crate::sent_emails::record(
+    super::super::during_initial_copy(async {
+    let surreal = super::super::from_source(crate::test_support::mem_surreal()).await;
+    let first = captured_message(
         &surreal,
         &crate::sent_emails::NewSentEmail {
             recipient: "recipient@example.com".into(),
@@ -33,8 +53,7 @@ async fn sent_email_audit_replays_preserve_history_and_report_drift() {
             sent_at: "2026-10-16T12:00:00.123456789Z".parse().unwrap(),
         },
     )
-    .await
-    .unwrap();
+    .await;
     assert_eq!(
         mirror(&surreal, &pg, first.id).await.unwrap(),
         Mirrored::Written
@@ -93,7 +112,7 @@ async fn sent_email_audit_replays_preserve_history_and_report_drift() {
         .execute(&pg.0)
         .await
         .unwrap();
-    let old = crate::sent_emails::record(
+    let old = captured_message(
         &surreal,
         &crate::sent_emails::NewSentEmail {
             recipient: "recipient@example.com".into(),
@@ -108,8 +127,7 @@ async fn sent_email_audit_replays_preserve_history_and_report_drift() {
             sent_at: "2024-01-02T09:00:00Z".parse().unwrap(),
         },
     )
-    .await
-    .unwrap();
+    .await;
     assert_eq!(
         mirror(&surreal, &pg, old.id).await.unwrap(),
         Mirrored::Unchanged
@@ -119,5 +137,6 @@ async fn sent_email_audit_replays_preserve_history_and_report_drift() {
     // A referenced Project must exist; unscoped audit records remain valid.
     assert!(sqlx::query("INSERT INTO sent_email (id,recipient,subject,sender,project_id,body,outcome,sent_at,inserted_at,updated_at) VALUES ($1,'recipient@example.com','Synthetic','sender@example.com',$2,'Synthetic','sent',now(),now(),now())")
         .bind(Uuid::new_v4()).bind(Uuid::new_v4()).execute(&pg.0).await.is_err());
+    }).await;
     pg.0.close().await;
 }

@@ -64,7 +64,7 @@ pub const BORN_IN_POSTGRES: &str = "born_in_postgres";
 const OBJECT_CHECK_TIMEOUT: Duration = Duration::from_secs(120);
 
 use crate::postgres::PostgresDb;
-use crate::postgres_mirror::{MIRRORS, Mirror, MirrorError, MirrorKey, mirror, missing};
+use crate::postgres_mirror::{mirror, missing, Mirror, MirrorError, MirrorKey, MIRRORS};
 use crate::surreal::SurrealDb;
 
 /// Asset object coverage after checking both stores' metadata pointers and
@@ -879,6 +879,10 @@ pub struct ParityTableReport {
     pub template_pins: Option<family::TemplatePinProof>,
     /// Verified lifecycle ownership retained on overlapping Project rows.
     pub project_lifecycle: Option<family::ProjectLifecycleProof>,
+    /// Exact retained/purged audit coverage for the captured rows.
+    pub sent_email_union: Option<family::SentEmailUnionProof>,
+    /// Full immutable Journal projection and captured-history integrity.
+    pub journal_handoff: Option<crate::journal_startup_migration::JournalHandoff>,
 }
 
 /// A run's state, read back from its checkpoints.
@@ -1076,6 +1080,8 @@ async fn parity_report(
                 reset_union: None,
                 template_pins: None,
                 project_lifecycle: None,
+                sent_email_union: None,
+                journal_handoff: None,
             });
         }
     }
@@ -1518,7 +1524,7 @@ mod archive_source {
     use futures::StreamExt;
 
     use crate::surreal::SurrealDb;
-    use anyhow::{Context, Result, bail};
+    use anyhow::{bail, Context, Result};
     use std::collections::BTreeMap;
     /// Count every live and canonical source table.
     ///
@@ -1670,6 +1676,27 @@ mod tests;
 
 struct FamilySource<'a> {
     surreal: &'a SurrealDb,
+    journal: tokio::sync::OnceCell<CapturedJournal>,
+}
+
+struct CapturedJournal {
+    rows: Vec<crate::journal_startup_migration::CapturedJournalRow>,
+    fingerprint: (u64, String),
+}
+
+struct FamilyComparisons {
+    tables: Vec<crate::postgres_mirror::TableParity>,
+    asset_union: Option<family::AssetUnionProof>,
+    project_lifecycle: Option<family::ProjectLifecycleProof>,
+    sent_email_union: Option<family::SentEmailUnionProof>,
+    journal_handoff: Option<crate::journal_startup_migration::JournalHandoff>,
+}
+
+fn journal_error(error: crate::firm_journal::JournalError) -> BackfillError {
+    match error {
+        crate::firm_journal::JournalError::Postgres(error) => MirrorError::from(error).into(),
+        _ => family::FamilyError::Receipt.into(),
+    }
 }
 
 impl FamilySource<'_> {
@@ -1677,20 +1704,21 @@ impl FamilySource<'_> {
         &self,
         pg: &PostgresDb,
         selected: family::Family,
-    ) -> Result<
-        (
-            Vec<crate::postgres_mirror::TableParity>,
-            Option<family::AssetUnionProof>,
-            Option<family::ProjectLifecycleProof>,
-        ),
-        BackfillError,
-    > {
+    ) -> Result<FamilyComparisons, BackfillError> {
         let mut tables = Vec::new();
         let mut asset_union = None;
+        let mut sent_email_union = None;
+        let mut journal_handoff = None;
         if selected == family::Family::Tenancy {
             let (report, proof) =
                 crate::postgres_mirror::tenancy::scoped_parity(self.surreal, pg).await?;
-            return Ok((report.tables, None, Some(proof)));
+            return Ok(FamilyComparisons {
+                tables: report.tables,
+                asset_union: None,
+                project_lifecycle: Some(proof),
+                sent_email_union: None,
+                journal_handoff: None,
+            });
         }
         if selected == family::Family::Identity {
             tables.extend(
@@ -1736,6 +1764,39 @@ impl FamilySource<'_> {
                     tables.push(table);
                     asset_union = Some(proof);
                 }
+                "sent_email" => {
+                    let (table, proof) =
+                        crate::postgres_mirror::sent_emails::scoped_parity(self.surreal, pg)
+                            .await?;
+                    tables.push(table);
+                    sent_email_union = Some(proof);
+                }
+                "journal_entry" => {
+                    let proof = crate::journal_startup_migration::handoff_captured(
+                        self.journal_rows().await?,
+                        pg,
+                    )
+                    .await
+                    .map_err(journal_error)?;
+                    let divergent = proof
+                        .differences
+                        .iter()
+                        .filter_map(|difference| difference.entry_id)
+                        .collect::<std::collections::BTreeSet<_>>()
+                        .into_iter()
+                        .map(|id| MirrorKey::Record {
+                            table: "journal_entry",
+                            id,
+                        })
+                        .collect();
+                    tables.push(crate::postgres_mirror::TableParity {
+                        table: "journal_entry",
+                        source_rows: proof.source_rows,
+                        target_rows: proof.target_rows,
+                        divergent,
+                    });
+                    journal_handoff = Some(proof);
+                }
                 "template" => tables.push(
                     crate::postgres_mirror::templates::scoped_parity(self.surreal, pg).await?,
                 ),
@@ -1761,7 +1822,42 @@ impl FamilySource<'_> {
                 ),
             }
         }
-        Ok((tables, asset_union, None))
+        Ok(FamilyComparisons {
+            tables,
+            asset_union,
+            project_lifecycle: None,
+            sent_email_union,
+            journal_handoff,
+        })
+    }
+
+    async fn journal_rows(
+        &self,
+    ) -> Result<&[crate::journal_startup_migration::CapturedJournalRow], BackfillError> {
+        // Writer quiescence is the admission contract. Equal bookends bind this
+        // once-read vector to the receipt; they do not establish an atomic Source snapshot.
+        let rows = self
+            .journal
+            .get_or_try_init(|| async {
+                let before = source_archive_fingerprint(self.surreal)
+                    .await
+                    .map_err(|_| BackfillError::SourceInventory)?;
+                let rows = crate::journal_startup_migration::capture(self.surreal)
+                    .await
+                    .map_err(journal_error)?;
+                let after = source_archive_fingerprint(self.surreal)
+                    .await
+                    .map_err(|_| BackfillError::SourceInventory)?;
+                if before != after {
+                    return Err(family::FamilyError::Receipt.into());
+                }
+                Ok::<_, BackfillError>(CapturedJournal {
+                    rows,
+                    fingerprint: after,
+                })
+            })
+            .await?;
+        Ok(rows.rows.as_slice())
     }
 }
 
@@ -1776,7 +1872,7 @@ impl family::Source for FamilySource<'_> {
             let before = source_archive_inventory(self.surreal)
                 .await
                 .map_err(|_| BackfillError::SourceInventory)?;
-            let (tables, asset_union, project_lifecycle) = self.comparisons(pg, selected).await?;
+            let comparisons = self.comparisons(pg, selected).await?;
             let references = crate::postgres_mirror::records::scoped_references(
                 self.surreal,
                 pg,
@@ -1797,6 +1893,14 @@ impl family::Source for FamilySource<'_> {
             let after = source_archive_inventory(self.surreal)
                 .await
                 .map_err(|_| BackfillError::SourceInventory)?;
+            if selected == family::Family::Application
+                && self.journal.get().is_none_or(|captured| {
+                    captured.fingerprint.0 != export_bytes
+                        || captured.fingerprint.1 != export_sha256
+                })
+            {
+                return Err(family::FamilyError::Receipt.into());
+            }
             if before != after {
                 return Err(family::FamilyError::Receipt.into());
             }
@@ -1811,8 +1915,10 @@ impl family::Source for FamilySource<'_> {
                 })
                 .collect::<Result<_, BackfillError>>()?;
             Ok(family::Snapshot {
-                project_lifecycle,
-                asset_union,
+                project_lifecycle: comparisons.project_lifecycle,
+                asset_union: comparisons.asset_union,
+                sent_email_union: comparisons.sent_email_union,
+                journal_handoff: comparisons.journal_handoff,
                 reset_union,
                 template_pins: if selected == family::Family::Notation {
                     Some(
@@ -1822,7 +1928,7 @@ impl family::Source for FamilySource<'_> {
                 } else {
                     None
                 },
-                tables,
+                tables: comparisons.tables,
                 references,
                 reset_fact_differences,
                 raw_counts,
@@ -1840,7 +1946,21 @@ impl family::Source for FamilySource<'_> {
         key: &'a MirrorKey,
     ) -> std::pin::Pin<Box<dyn Future<Output = Result<(), BackfillError>> + Send + 'a>> {
         Box::pin(async move {
-            mirror(self.surreal, pg, key).await?;
+            if let MirrorKey::Record {
+                table: "journal_entry",
+                id,
+            } = key
+            {
+                crate::journal_startup_migration::import_captured_event(
+                    self.journal_rows().await?,
+                    pg,
+                    *id,
+                )
+                .await
+                .map_err(journal_error)?;
+            } else {
+                mirror(self.surreal, pg, key).await?;
+            }
             Ok(())
         })
     }
@@ -1915,7 +2035,10 @@ pub async fn refresh_family(
     with_import_lock(
         pg,
         Box::pin(async {
-            let source = FamilySource { surreal };
+            let source = FamilySource {
+                surreal,
+                journal: tokio::sync::OnceCell::new(),
+            };
             family::during_import(
                 run,
                 selected,
@@ -1968,7 +2091,10 @@ async fn resume_family_locked(
     if let Some(report) = completed_family_report(pg, selected, run).await? {
         return Ok(report);
     }
-    let source = FamilySource { surreal };
+    let source = FamilySource {
+        surreal,
+        journal: tokio::sync::OnceCell::new(),
+    };
     let advancement = family::during_import(
         run,
         selected,
@@ -1988,6 +2114,25 @@ async fn resume_family_locked(
                     proof.source_only_remaining,
                     proof.unresolved_overlaps,
                     proof.unknown_target_only,
+                )
+            } else if let Some(proof) = snapshot
+                .sent_email_union
+                .as_ref()
+                .filter(|_| table.table == "sent_email")
+            {
+                (proof.source_only_remaining, proof.differing_overlaps, 0)
+            } else if let Some(proof) = snapshot
+                .journal_handoff
+                .as_ref()
+                .filter(|_| table.table == "journal_entry")
+            {
+                (
+                    proof.source_only_remaining,
+                    proof
+                        .unresolved_source_rows
+                        .saturating_sub(proof.source_only_remaining)
+                        .saturating_add(proof.target_integrity_failures),
+                    0,
                 )
             } else if let Some(proof) = snapshot
                 .project_lifecycle
@@ -2032,9 +2177,20 @@ async fn resume_family_locked(
                     .project_lifecycle
                     .clone()
                     .filter(|_| table.table == "project"),
+                sent_email_union: snapshot
+                    .sent_email_union
+                    .clone()
+                    .filter(|_| table.table == "sent_email"),
+                journal_handoff: snapshot
+                    .journal_handoff
+                    .clone()
+                    .filter(|_| table.table == "journal_entry"),
             });
         }
         report.unresolved_references = snapshot.references;
     }
     Ok(report)
 }
+
+#[cfg(test)]
+mod application_family_tests;

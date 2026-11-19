@@ -5,8 +5,8 @@
 //! row with no SurrealDB original is the normal case — every send since the
 //! switch — so parity compares only the rows SurrealDB holds; a changed copy
 //! still reads as drift. A row whose UTC day the retention purge has already
-//! removed is neither imported nor compared: re-inserting it would bring back
-//! a row the export ledger no longer counts.
+//! removed is not imported. Retained rows are still compared on purged days;
+//! Project Service references can keep an audit row after the day is purged.
 
 use super::{changed, micros, Columns, MirrorError, MirrorKey, Mirrored, ParityReport};
 use crate::{
@@ -91,8 +91,11 @@ async fn retained_source(
 ) -> Result<BTreeMap<MirrorKey, Columns>, MirrorError> {
     let purged = purged_days(pg).await?;
     let mut rows = source(surreal).await?;
-    rows.retain(|_, columns| match columns {
-        Columns::SentEmail(image) => !purged.contains(&image.sent_at.date_naive()),
+    let target = target(pg).await?;
+    rows.retain(|key, columns| match columns {
+        Columns::SentEmail(image) => {
+            target.contains_key(key) || !purged.contains(&image.sent_at.date_naive())
+        }
         _ => true,
     });
     Ok(rows)
@@ -105,7 +108,9 @@ async fn source(surreal: &SurrealDb) -> Result<BTreeMap<MirrorKey, Columns>, Mir
         .map_err(|_| MirrorError::Source)?
         .take(0)
         .map_err(|_| MirrorError::Source)?;
-    rows.into_iter()
+    let count = rows.len();
+    let images: BTreeMap<_, _> = rows
+        .into_iter()
         .map(|row| {
             let image = SentEmailImage::try_from(row)?;
             Ok((
@@ -113,7 +118,11 @@ async fn source(surreal: &SurrealDb) -> Result<BTreeMap<MirrorKey, Columns>, Mir
                 Columns::SentEmail(Box::new(image)),
             ))
         })
-        .collect()
+        .collect::<Result<_, MirrorError>>()?;
+    if images.len() != count {
+        return Err(MirrorError::Source);
+    }
+    Ok(images)
 }
 async fn source_one(surreal: &SurrealDb, id: Uuid) -> Result<Option<SentEmailImage>, MirrorError> {
     let mut response = surreal
@@ -162,18 +171,17 @@ pub async fn mirror(
     pg: &PostgresDb,
     id: Uuid,
 ) -> Result<Mirrored, MirrorError> {
+    if !super::source_import_allowed(pg, "sent_email").await? {
+        return Ok(Mirrored::Unchanged);
+    }
     let Some(row) = source_one(surreal, id).await? else {
         return Ok(Mirrored::Unchanged);
     };
-    if let Some(project_id) = row.project_id {
-        let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM project WHERE id=$1)")
-            .bind(project_id)
-            .fetch_one(&pg.0)
-            .await?;
-        if !exists {
-            super::tenancy::mirror(surreal, pg, &MirrorKey::Project(project_id)).await?;
-        }
-    }
+    let mut tx = pg.pool().begin().await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
+        .execute(&mut *tx)
+        .await?;
+    crate::sent_emails::postgres::lock_retention_day(&mut tx, row.sent_at.date_naive()).await?;
     let result = sqlx::query("INSERT INTO sent_email (id, recipient, subject, sender, project_id, template_slug, body, outcome, sg_message_id, sent_at, inserted_at, updated_at) SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12 WHERE NOT EXISTS (SELECT 1 FROM sent_email_export WHERE day = ($10 AT TIME ZONE 'UTC')::date AND purged_at IS NOT NULL) ON CONFLICT (id) DO NOTHING")
         .bind(row.id)
         .bind(row.recipient)
@@ -187,13 +195,111 @@ pub async fn mirror(
         .bind(row.sent_at)
         .bind(row.inserted_at)
         .bind(row.updated_at)
-        .execute(&pg.0).await?;
+        .execute(&mut *tx).await?;
+    tx.commit().await?;
     Ok(changed(result.rows_affected(), Mirrored::Written))
 }
+/// Only retained or importable captured rows require a live canonical Project.
+/// A missing row covered by its actual UTC-day purge receipt is never restored.
+pub(crate) async fn scoped_references(
+    surreal: &SurrealDb,
+    pg: &PostgresDb,
+) -> Result<Vec<super::records::UnresolvedReference>, MirrorError> {
+    let rows = retained_source(surreal, pg).await?;
+    let source_ids: Vec<RecordId> = surreal
+        .query("SELECT VALUE id FROM project")
+        .await
+        .and_then(surrealdb::IndexedResults::check)
+        .map_err(|_| MirrorError::Source)?
+        .take(0)
+        .map_err(|_| MirrorError::Source)?;
+    let source_ids = source_ids
+        .iter()
+        .map(|id| record_uuid(id).ok_or(MirrorError::Source))
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    let target_ids: BTreeSet<Uuid> = sqlx::query_scalar("SELECT id FROM project")
+        .fetch_all(pg.pool())
+        .await?
+        .into_iter()
+        .collect();
+    let mut reference = super::records::UnresolvedReference {
+        table: "sent_email",
+        field: "project_id",
+        source_orphans: 0,
+        postgres_missing: 0,
+        newly_target_missing: 0,
+    };
+    for id in rows.values().filter_map(|row| match row {
+        Columns::SentEmail(image) => image.project_id,
+        _ => None,
+    }) {
+        reference.observe(source_ids.contains(&id), target_ids.contains(&id));
+    }
+    Ok(
+        if reference.source_orphans > 0 || reference.postgres_missing > 0 {
+            vec![reference]
+        } else {
+            Vec::new()
+        },
+    )
+}
+
+/// Compare the complete captured census without hiding retained rows on purged days.
+pub(crate) async fn scoped_parity(
+    surreal: &SurrealDb,
+    pg: &PostgresDb,
+) -> Result<
+    (
+        super::TableParity,
+        crate::postgres_backfill::family::SentEmailUnionProof,
+    ),
+    MirrorError,
+> {
+    let source = source(surreal).await?;
+    let target = target(pg).await?;
+    let purged = purged_days(pg).await?;
+    let mut proof = crate::postgres_backfill::family::SentEmailUnionProof {
+        full_metadata_compared: true,
+        ..Default::default()
+    };
+    let mut divergent = Vec::new();
+    for (key, expected) in &source {
+        if let Some(actual) = target.get(key) {
+            proof.compared_overlaps += 1;
+            if actual != expected {
+                proof.differing_overlaps += 1;
+                divergent.push(key.clone());
+            }
+        } else if matches!(expected, Columns::SentEmail(image) if purged.contains(&image.sent_at.date_naive()))
+        {
+            proof.excluded_purged += 1;
+        } else {
+            proof.source_only_remaining += 1;
+            divergent.push(key.clone());
+        }
+    }
+    proof.native_target_only = target
+        .keys()
+        .filter(|key| !source.contains_key(*key))
+        .count();
+    Ok((
+        super::TableParity {
+            table: "sent_email",
+            source_rows: source.len(),
+            target_rows: target.len(),
+            divergent,
+        },
+        proof,
+    ))
+}
+
 /// Compare all audit fields of the SurrealDB rows without exposing message
 /// values in the report. PostgreSQL rows with no SurrealDB original are not
 /// drift.
 pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
+    if crate::postgres_backfill::family::active_for_table(pg, "sent_email").await? {
+        return Ok(ParityReport { tables: Vec::new() });
+    }
     let source = retained_source(surreal, pg).await?;
     let mut target = target(pg).await?;
     target.retain(|key, _| source.contains_key(key));
@@ -203,6 +309,9 @@ pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport
 }
 /// Fill absent audit records and report all remaining divergence.
 pub async fn reconcile(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
+    if crate::postgres_backfill::family::active_for_table(pg, "sent_email").await? {
+        return Ok(ParityReport { tables: Vec::new() });
+    }
     let source = retained_source(surreal, pg).await?;
     let target = target(pg).await?;
     for key in source.keys().filter(|key| !target.contains_key(*key)) {

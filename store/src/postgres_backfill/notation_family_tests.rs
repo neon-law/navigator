@@ -48,6 +48,8 @@ impl Source for CapturedNotation {
                 reset_fact_differences: vec![],
                 foreign_keys_hold: foreign_keys_hold(pg, family).await?,
                 project_lifecycle: None,
+                sent_email_union: None,
+                journal_handoff: None,
                 asset_union: Some(AssetUnionProof {
                     proven_native_target_only: usize::from(self.known_native),
                     unknown_target_only: usize::from(!self.known_native),
@@ -288,6 +290,8 @@ impl Source for FrozenSourceNotes {
                 reset_fact_differences: vec![],
                 foreign_keys_hold: foreign_keys_hold(pg, family).await?,
                 project_lifecycle: None,
+                sent_email_union: None,
+                journal_handoff: None,
                 asset_union: Some(AssetUnionProof {
                     full_metadata_compared: true,
                     ..Default::default()

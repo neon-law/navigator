@@ -96,6 +96,24 @@ async fn capture(pg: &PostgresDb) -> Capture {
     }
 }
 
+pub(crate) async fn enrolled_source(pg: &PostgresDb) -> (SurrealDb, Uuid, Uuid) {
+    let captured = capture(pg).await;
+    let receipt = verified_family_capture(&captured.source).await;
+    let completed = backfill::start_family(
+        &captured.source,
+        pg,
+        Family::Tenancy,
+        receipt,
+        10,
+        None,
+        true,
+    )
+    .await
+    .unwrap();
+    assert!(completed.is_clean(), "{completed:?}");
+    (captured.source, captured.actor, captured.project)
+}
+
 async fn start(pg: &PostgresDb, capture: &Capture) -> backfill::RunReport {
     let receipt = verified_family_capture(&capture.source).await;
     let started = backfill::start_family(

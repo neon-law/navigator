@@ -25,7 +25,7 @@ use serde_json::Value;
 use sqlx::Row;
 use uuid::Uuid;
 
-use super::{Columns, MirrorError, MirrorKey, Mirrored, ParityReport, changed};
+use super::{changed, Columns, MirrorError, MirrorKey, Mirrored, ParityReport};
 use crate::{postgres::PostgresDb, surreal::SurrealDb};
 
 /// One mirrored table. Its PostgreSQL columns are exactly `columns`.
@@ -1372,6 +1372,26 @@ pub(super) const TABLES: &[Table] = &[
         timestamps: &["inserted_at", "updated_at"],
     },
     Table {
+        name: "sent_email",
+        group: "application_scoped",
+        columns: &[
+            "id",
+            "recipient",
+            "subject",
+            "sender",
+            "project_id",
+            "template_slug",
+            "body",
+            "outcome",
+            "sg_message_id",
+            "sent_at",
+            "inserted_at",
+            "updated_at",
+        ],
+        references: &[("project_id", "project")],
+        timestamps: &["sent_at", "inserted_at", "updated_at"],
+    },
+    Table {
         name: "matter_page",
         group: "application_scoped",
         columns: &[
@@ -1501,6 +1521,9 @@ pub(crate) async fn scoped_references(
     if tables.contains(&"matter_page") {
         references.extend(super::matter_pages_captions::scoped_page_references(surreal, pg).await?);
     }
+    if tables.contains(&"sent_email") {
+        references.extend(super::sent_emails::scoped_references(surreal, pg).await?);
+    }
     Ok(references)
 }
 
@@ -1513,7 +1536,7 @@ async fn reference_inventory(
     let selected: Vec<_> = TABLES
         .iter()
         .filter(|table| {
-            table.name != "matter_page"
+            !matches!(table.name, "matter_page" | "sent_email")
                 && filter.map_or_else(
                     || !table.group.ends_with("_scoped"),
                     |names| names.contains(&table.name),

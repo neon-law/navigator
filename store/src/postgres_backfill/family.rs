@@ -97,6 +97,8 @@ impl Family {
                 "matter_page",
                 "notation_document_comment",
                 "firm_integration_secret",
+                "sent_email",
+                "journal_entry",
             ],
             Self::Notation => &[
                 "notation",
@@ -379,6 +381,8 @@ pub(super) async fn completed_proof(
                 .then_some(proof.template_pins)
                 .flatten(),
             project_lifecycle: proof.project_lifecycle,
+            sent_email_union: proof.sent_email_union,
+            journal_handoff: proof.journal_handoff,
         });
     }
     Ok((tables, references))
@@ -576,6 +580,58 @@ impl AssetUnionProof {
     }
 }
 
+/// Exact captured audit coverage, including rows removed by a proven UTC-day purge.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SentEmailUnionProof {
+    pub compared_overlaps: usize,
+    pub source_only_remaining: usize,
+    pub excluded_purged: usize,
+    pub differing_overlaps: usize,
+    pub native_target_only: usize,
+    pub full_metadata_compared: bool,
+}
+
+impl SentEmailUnionProof {
+    pub(crate) fn valid(&self, source: usize, target: usize, differences: usize) -> bool {
+        self.full_metadata_compared
+            && self
+                .compared_overlaps
+                .checked_add(self.source_only_remaining)
+                .and_then(|count| count.checked_add(self.excluded_purged))
+                == Some(source)
+            && self.compared_overlaps.checked_add(self.native_target_only) == Some(target)
+            && self.differing_overlaps <= self.compared_overlaps
+            && self
+                .source_only_remaining
+                .checked_add(self.differing_overlaps)
+                == Some(differences)
+    }
+}
+
+fn journal_representable(
+    proof: &crate::journal_startup_migration::JournalHandoff,
+    source: usize,
+    target: usize,
+) -> bool {
+    proof.source_rows == source
+        && proof.target_rows == target
+        && proof
+            .compared_overlaps
+            .checked_add(proof.source_only_remaining)
+            == Some(source)
+        && proof
+            .compared_overlaps
+            .checked_add(proof.native_target_only)
+            == Some(target)
+        && proof.represented_source_rows <= proof.compared_overlaps
+        && proof
+            .represented_source_rows
+            .checked_add(proof.unresolved_source_rows)
+            == Some(source)
+        && proof.target_integrity_failures <= target
+}
+
 /// Exact Project overlap accounting after validating the complete lifecycle ledger.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -648,6 +704,8 @@ pub(super) struct Snapshot {
     pub reset_union: Option<ResetUnionProof>,
     pub template_pins: Option<TemplatePinProof>,
     pub project_lifecycle: Option<ProjectLifecycleProof>,
+    pub sent_email_union: Option<SentEmailUnionProof>,
+    pub journal_handoff: Option<crate::journal_startup_migration::JournalHandoff>,
 }
 
 impl Snapshot {
@@ -660,6 +718,25 @@ impl Snapshot {
             && self.export_bytes == receipt.export_bytes
             && self.tables.len() == expected.len()
             && actual == expected
+            && if family == Family::Application {
+                self.tables
+                    .iter()
+                    .find(|table| table.table == "sent_email")
+                    .zip(self.sent_email_union.as_ref())
+                    .is_some_and(|(table, proof)| {
+                        proof.valid(table.source_rows, table.target_rows, table.divergent.len())
+                    })
+                    && self
+                        .tables
+                        .iter()
+                        .find(|table| table.table == "journal_entry")
+                        .zip(self.journal_handoff.as_ref())
+                        .is_some_and(|(table, proof)| {
+                            journal_representable(proof, table.source_rows, table.target_rows)
+                        })
+            } else {
+                self.sent_email_union.is_none() && self.journal_handoff.is_none()
+            }
             && match family {
                 Family::Satellites | Family::Application | Family::Identity => {
                     self.asset_union.is_none()
@@ -719,6 +796,14 @@ impl Snapshot {
                         self.asset_union.as_ref().is_some_and(|proof| {
                             proof.valid(table.source_rows, table.target_rows, 0)
                         })
+                    } else if table.table == "sent_email" {
+                        self.sent_email_union.as_ref().is_some_and(|proof| {
+                            proof.valid(table.source_rows, table.target_rows, 0)
+                        })
+                    } else if table.table == "journal_entry" {
+                        self.journal_handoff
+                            .as_ref()
+                            .is_some_and(|proof| proof.is_clean())
                     } else {
                         table.source_rows == table.target_rows
                     }
@@ -900,6 +985,14 @@ pub(super) async fn advance_with(
                     .project_lifecycle
                     .clone()
                     .filter(|_| table.table == "project"),
+                sent_email_union: final_snapshot
+                    .sent_email_union
+                    .clone()
+                    .filter(|_| table.table == "sent_email"),
+                journal_handoff: final_snapshot
+                    .journal_handoff
+                    .clone()
+                    .filter(|_| table.table == "journal_entry"),
             })
             .map_err(|_| FamilyError::Receipt)?;
             sqlx::query("UPDATE mirror_backfill_checkpoint SET completed_at = now(), verification = $3, failed = 0, updated_at = now() WHERE run_id = $1 AND mirror = $2")
@@ -1026,6 +1119,10 @@ struct Verification {
     template_pins: Option<TemplatePinProof>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     project_lifecycle: Option<ProjectLifecycleProof>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sent_email_union: Option<SentEmailUnionProof>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    journal_handoff: Option<crate::journal_startup_migration::JournalHandoff>,
 }
 
 impl Verification {
@@ -1035,9 +1132,23 @@ impl Verification {
                 self.asset_union
                     .as_ref()
                     .is_some_and(|proof| proof.valid(captured, self.target_rows, self.differences))
+            } else if family == Family::Application && table == "sent_email" {
+                self.asset_union.is_none()
+                    && self.sent_email_union.as_ref().is_some_and(|proof| {
+                        proof.valid(captured, self.target_rows, self.differences)
+                    })
+            } else if family == Family::Application && table == "journal_entry" {
+                self.asset_union.is_none()
+                    && self.journal_handoff.as_ref().is_some_and(|proof| {
+                        journal_representable(proof, captured, self.target_rows) && proof.is_clean()
+                    })
             } else {
                 self.target_rows == captured && self.asset_union.is_none()
             }
+            && (family == Family::Application && table == "sent_email"
+                || self.sent_email_union.is_none())
+            && (family == Family::Application && table == "journal_entry"
+                || self.journal_handoff.is_none())
             && match family {
                 Family::Satellites | Family::Application | Family::Identity => {
                     self.reset_union.is_none()
@@ -1155,6 +1266,26 @@ pub(crate) async fn activate_fixture(pg: &PostgresDb, family: Family) {
                     ..Default::default()
                 },
             ),
+            sent_email_union: (family == Family::Application && *table == "sent_email").then_some(
+                SentEmailUnionProof {
+                    compared_overlaps: count,
+                    full_metadata_compared: true,
+                    ..Default::default()
+                },
+            ),
+            journal_handoff: if family == Family::Application && *table == "journal_entry" {
+                assert_eq!(
+                    count, 0,
+                    "Journal fixture enrollment precedes native records"
+                );
+                Some(
+                    crate::journal_startup_migration::handoff_captured(&[], pg)
+                        .await
+                        .unwrap(),
+                )
+            } else {
+                None
+            },
         };
         sqlx::query("INSERT INTO mirror_backfill_checkpoint (run_id, mirror, completed_at, verification) VALUES ($1, $2, now(), $3)")
             .bind(run).bind(checkpoint(table)).bind(serde_json::to_value(proof).unwrap()).execute(&mut *tx).await.unwrap();
