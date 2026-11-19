@@ -167,11 +167,7 @@ fn repo_store() -> repos::RepoStore {
     repos::RepoStore::new(root)
 }
 
-async fn build_fixture() -> Fixture {
-    let repo_guard = REPO_ENV_LOCK.lock().await;
-    repo_store();
-    let surreal = store::surreal::SurrealDb::uninitialized();
-    let pg = PostgresDb::application().await.unwrap();
+async fn seed_fixture_entity_and_brand(pg: &PostgresDb) -> Uuid {
     let jurisdiction = Uuid::now_v7();
     let entity_type = Uuid::now_v7();
     let entity_id = Uuid::now_v7();
@@ -191,6 +187,15 @@ async fn build_fixture() -> Fixture {
         .execute(pg.pool())
         .await
         .unwrap();
+    entity_id
+}
+
+async fn build_fixture() -> Fixture {
+    let repo_guard = REPO_ENV_LOCK.lock().await;
+    repo_store();
+    let surreal = store::surreal::SurrealDb::uninitialized();
+    let pg = PostgresDb::application().await.unwrap();
+    let entity_id = seed_fixture_entity_and_brand(&pg).await;
     let project = store::projects::create(
         &surreal,
         &store::projects::NewProject {
