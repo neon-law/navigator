@@ -293,7 +293,7 @@ pub enum OutputFormat {
     /// [`crate::pleading`]'s calibrated geometry rather than this module's
     /// own page-chrome constants. Carries the calibration a template's
     /// `jurisdiction:` selects
-    /// ([`crate::pleading::variant_for_jurisdiction`]); the caller resolves
+    /// ([`crate::pleading::variant_for`]); the caller resolves
     /// that mapping and constructs this variant directly; `parse` does not
     /// produce it (see [`OutputFormat::parse`]). No letterhead — a
     /// pleading's typeface, margins, and rail are a court-rule compliance
@@ -365,7 +365,7 @@ impl OutputFormat {
     /// Never returns [`OutputFormat::Pleading`] — its calibration comes
     /// from a jurisdiction, not the bare format name, so a caller that
     /// wants pleading paper resolves
-    /// [`crate::pleading::variant_for_jurisdiction`] itself and constructs
+    /// [`crate::pleading::variant_for`] itself and constructs
     /// `OutputFormat::Pleading(variant)` directly.
     #[must_use]
     pub fn parse(name: &str) -> Option<Self> {
@@ -991,8 +991,7 @@ mod tests {
         // ENG-103's acceptance bar: a document declaring the court-paper
         // format actually compiles through pleading.rs, not merely
         // produces a plausible preamble string.
-        let variant =
-            crate::pleading::variant_for_jurisdiction("NV").expect("NV is a mapped jurisdiction");
+        let variant = crate::pleading::variant_for("NV", &[]);
         let body = "Plaintiff alleges as follows.";
         let pdf = super::render_document(
             body,

@@ -75,8 +75,9 @@ empty:
 
 `Work Product/` holds seven fixed subfolders, each suffixed so it never collides with a served twin: `Client Calls (Work
 Product)/` (`transcript`), `Correspondence (Work Product)/` (letters drafted, not served), `Discovery (Work Product)/`
-(discovery in preparation), `Motions (Work Product)/` (one folder per motion), `Pleadings (Work Product)/`, `Research
-(Work Product)/` (`memo`), and `Stipulations (Work Product)/`.
+(discovery in preparation, with `Evidence Summaries/`), `Motions (Work Product)/` (`motion`, one folder per motion),
+`Pleadings (Work Product)/` (with `Answer/`), `Research (Work Product)/` (`memo`), and `Stipulations (Work Product)/`
+(`stipulation`).
 
 Git tracks only the pointers under `blobs/`. To file a document, drop it into its matter folder and run `navigator
 project sync`, or run `navigator site document upload --folder "<Folder>"`. A `Work Product` subfolder's name is its

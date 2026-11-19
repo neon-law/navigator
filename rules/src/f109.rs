@@ -43,7 +43,7 @@ impl F109OutputFormat {
     /// retired spelling, still accepted for a release so a template that
     /// has not been re-spelled keeps validating; `pleading` is court paper,
     /// calibrated by the template's `jurisdiction:`
-    /// (`pdf::pleading::variant_for_jurisdiction`); `form` is the
+    /// (`pdf::pleading::variant_for`); `form` is the
     /// `AcroForm` fill **mode**, not a Typst format. `plain` is the
     /// implicit default and is intentionally not declarable. This set is
     /// decoupled from `pdf::OutputFormat::FRONTMATTER_VALUES` on purpose —
@@ -332,7 +332,7 @@ mod tests {
     #[test]
     fn passes_for_the_pleading_profile() {
         // `pleading` is court paper, calibrated by the template's
-        // `jurisdiction:` (`pdf::pleading::variant_for_jurisdiction`). Being
+        // `jurisdiction:` (`pdf::pleading::variant_for`). Being
         // typeset rather than an AcroForm fill, it needs no companion keys.
         let f = file("---\ntitle: T\noutput: pleading\n---\n");
         let v = F109OutputFormat.lint(&f);

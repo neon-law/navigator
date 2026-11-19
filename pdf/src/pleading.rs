@@ -255,6 +255,20 @@ impl Variant {
         }
     }
 
+    /// The caption layout this paper carries for a `jurisdiction:`.
+    /// Washington superior-court paper prints counsel's office in the
+    /// footer and no counsel block; a Nevada pleading carries Clark
+    /// County's caption (LAW-243); every other puts counsel's block on
+    /// lines 1–7 over the trial caption.
+    #[must_use]
+    pub fn caption_style(self, jurisdiction: &str) -> word::matter::CaptionStyle {
+        match (self, jurisdiction.trim()) {
+            (Variant::WashingtonSuperior, _) => word::matter::CaptionStyle::Washington,
+            (_, "NV") => word::matter::CaptionStyle::Nevada,
+            _ => word::matter::CaptionStyle::Trial,
+        }
+    }
+
     /// Whether this calibration draws the numbered rail.
     #[must_use]
     pub fn has_rail(self) -> bool {
@@ -310,59 +324,41 @@ impl Variant {
     }
 }
 
-/// The calibration a notation's `jurisdiction:` selects — jurisdiction as a
-/// parameter to one geometry, not a fork (see the module-level docs).
-/// `jurisdiction` is a code from `store/seeds/Jurisdiction.yaml`
-/// (`rules::F110JurisdictionPath::JURISDICTIONS`); `pdf` does not depend on
-/// `rules`, so the table is keyed on the bare code string rather than a
-/// shared type.
+/// The calibration a pleading renders on: a court-specific frame only where
+/// that court's own rules require one, and the standard numbered pleading
+/// paper ([`Variant::NumberedRailTrial`]) everywhere else (LAW-435).
+/// `jurisdiction` is a code from `store/seeds/Jurisdiction.yaml`; `court` is
+/// the matter's printed court title (`matter.court` in `navigator.yaml`),
+/// because one state's courts can differ.
 ///
-/// Only the jurisdictions a template actually needs are mapped:
-///
-/// - **`NV`** → [`Variant::NumberedRailTrial`]. Eighth Judicial District
-///   Court (Clark County) Rule EDCR 7.20 requires lines numbered in the
-///   left margin.
-/// - **`CA`** → [`Variant::NumberedRailTrial`]. California Rules of Court
-///   2.108(4) requires "at least 3 lines numbered for each vertical inch"
-///   — the rule [`Calibration::DEFAULT`]'s grid is calibrated against.
+/// - **`WA`, a superior court** → [`Variant::WashingtonSuperior`]. GR 14(a):
+///   letter paper, a 3in top margin on the first page, and 1in at the
+///   bottom, at both sides, and at the top of every later page. A
+///   Washington court of limited jurisdiction (district or municipal) takes
+///   the standard paper.
 /// - **`US`** → [`Variant::NoRailTrial`]. Federal district local rules are
-///   not uniform on the numbered rail: S.D. Cal. `CivLR` 5.1(a) requires
-///   one, but nothing in the Federal Rules of Civil Procedure does, and
-///   most districts run no rail at all. `US` is deliberately the
-///   lowest-common-denominator calibration rather than a rail every
-///   federal filer would need to strip.
-/// - **`NY`** → [`Variant::NoRailTrial`]. New York trial courts accept
-///   plain Letter paper: the CPLR and the Uniform Rules set no numbered
-///   rail, so the same lowest-common-denominator reasoning as `US`
-///   applies — a rail a New York filer would have to strip.
-/// - **`WA`** → [`Variant::WashingtonSuperior`]. GR 14(a): letter paper,
-///   a 3in top margin on the first page, and 1in at the bottom, at both
-///   sides, and at the top of every later page.
-/// - Every other code (including a real jurisdiction this table has not
-///   yet been extended to, and [`Variant::Appellate`], which no
-///   jurisdiction has needed) returns `None` — there is no default
-///   calibration a caller may silently fall back to; an unmapped
-///   jurisdiction is a template that cannot render as a pleading yet, not
-///   a reason to guess.
+///   not uniform on the numbered rail: nothing in the Federal Rules of Civil
+///   Procedure requires one, and most districts run no rail at all.
+/// - **`NY`** → [`Variant::NoRailTrial`]. The CPLR and the Uniform Rules set
+///   no numbered rail.
+/// - **Everything else** → [`Variant::NumberedRailTrial`]: counsel block on
+///   lines 1–7, the 28-line rail, and a document-title footer — the paper
+///   EDCR 7.20 (Nevada) and California Rules of Court 2.108(4) require, and
+///   the safe default for a court with no verified calibration.
+///
+/// A template overrides the choice with `pleading_frame:` (see
+/// [`Variant::parse`]).
 #[must_use]
-pub fn variant_for_jurisdiction(jurisdiction: &str) -> Option<Variant> {
+pub fn variant_for(jurisdiction: &str, court: &[String]) -> Variant {
+    let superior = court
+        .iter()
+        .any(|line| line.to_ascii_uppercase().contains("SUPERIOR COURT"));
     match jurisdiction.trim() {
-        "NV" | "CA" => Some(Variant::NumberedRailTrial),
-        "NY" | "US" => Some(Variant::NoRailTrial),
-        "WA" => Some(Variant::WashingtonSuperior),
-        _ => None,
+        "WA" if superior => Variant::WashingtonSuperior,
+        "NY" | "US" => Variant::NoRailTrial,
+        _ => Variant::NumberedRailTrial,
     }
 }
-
-/// The jurisdiction codes [`variant_for_jurisdiction`] has a calibration
-/// for, so a caller refusing an unmapped one can say what it *does*
-/// support rather than only echoing what it was handed.
-///
-/// Kept beside the match it describes, and pinned to it by
-/// `every_listed_jurisdiction_resolves`, so extending the table without
-/// extending this list fails the build's own tests rather than leaving a
-/// diagnostic quietly out of date.
-pub const CALIBRATED_JURISDICTIONS: &[&str] = &["NV", "CA", "NY", "US", "WA"];
 
 /// Vertical space, expressible **only** in whole grid units of
 /// [`Calibration::DEFAULT`].
@@ -707,26 +703,9 @@ stroke: 0.5pt))\n\
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn every_listed_jurisdiction_resolves() {
-        // `CALIBRATED_JURISDICTIONS` exists so a refusal can name the
-        // supported set. A code listed there that no longer resolves would
-        // make that diagnostic a lie.
-        for code in super::CALIBRATED_JURISDICTIONS {
-            assert!(
-                super::variant_for_jurisdiction(code).is_some(),
-                "`{code}` is advertised as calibrated but resolves to no variant"
-            );
-        }
-        assert!(
-            super::variant_for_jurisdiction("CO").is_none(),
-            "an uncalibrated jurisdiction must stay uncalibrated"
-        );
-    }
-
     use super::{
-        authority_entry, chrome, grid_skip, page_limit_warning, preamble, variant_for_jurisdiction,
-        Calibration, Leading, Variant,
+        authority_entry, chrome, grid_skip, page_limit_warning, preamble, variant_for, Calibration,
+        Leading, Variant,
     };
 
     /// The single derivation the layout hangs off. If this drifts, every
@@ -889,47 +868,30 @@ mod tests {
         assert!(entry.ends_with("12]\n"));
     }
 
-    /// The jurisdiction→`Variant` table, asserted rather than assumed: a
-    /// transposed row would silently render the wrong court's paper.
+    /// The frame table, asserted rather than assumed: a transposed row
+    /// would silently render the wrong court's paper (LAW-435).
     #[test]
-    fn the_jurisdiction_table_matches_its_specified_mapping() {
+    fn the_frame_table_falls_back_to_standard_numbered_paper() {
+        let superior = ["SUPERIOR COURT OF WASHINGTON, COUNTY OF SAMPLE".to_string()];
+        let district = ["DISTRICT COURT OF WASHINGTON, COUNTY OF SAMPLE".to_string()];
         let table = [
-            ("NV", Some(Variant::NumberedRailTrial)),
-            ("CA", Some(Variant::NumberedRailTrial)),
-            ("NY", Some(Variant::NoRailTrial)),
-            ("US", Some(Variant::NoRailTrial)),
-            ("WA", Some(Variant::WashingtonSuperior)),
+            ("WA", &superior[..], Variant::WashingtonSuperior),
+            ("WA", &district[..], Variant::NumberedRailTrial),
+            ("WA", &[][..], Variant::NumberedRailTrial),
+            ("NV", &[][..], Variant::NumberedRailTrial),
+            ("CA", &superior[..], Variant::NumberedRailTrial),
+            ("NY", &[][..], Variant::NoRailTrial),
+            ("US", &[][..], Variant::NoRailTrial),
+            ("TX", &[][..], Variant::NumberedRailTrial),
+            ("", &[][..], Variant::NumberedRailTrial),
         ];
-        for (jurisdiction, expected) in table {
+        for (jurisdiction, court, expected) in table {
             assert_eq!(
-                variant_for_jurisdiction(jurisdiction),
+                variant_for(jurisdiction, court),
                 expected,
-                "{jurisdiction}"
+                "{jurisdiction} {court:?}"
             );
         }
-    }
-
-    /// `Variant::Appellate` is unmapped until a jurisdiction needs it, and
-    /// an unrecognized or not-yet-mapped jurisdiction code returns `None`
-    /// rather than guessing a calibration.
-    #[test]
-    fn appellate_and_unmapped_jurisdictions_return_none() {
-        assert_eq!(variant_for_jurisdiction("US"), Some(Variant::NoRailTrial));
-        assert_eq!(variant_for_jurisdiction("NY"), Some(Variant::NoRailTrial));
-        for jurisdiction in ["TX", "GMBH", "ZZ", "", "  "] {
-            assert_eq!(
-                variant_for_jurisdiction(jurisdiction),
-                None,
-                "{jurisdiction} must not silently resolve to a calibration"
-            );
-        }
-        // Nothing in the table maps to Appellate at all — it stays
-        // unreachable from a jurisdiction code until a future variant adds
-        // an appellate row.
-        assert_ne!(variant_for_jurisdiction("NV"), Some(Variant::Appellate));
-        assert_ne!(variant_for_jurisdiction("CA"), Some(Variant::Appellate));
-        assert_ne!(variant_for_jurisdiction("NY"), Some(Variant::Appellate));
-        assert_ne!(variant_for_jurisdiction("US"), Some(Variant::Appellate));
     }
 
     /// A party name carrying Typst sigils must render verbatim.

@@ -1206,6 +1206,11 @@ pub fn check_documents_root(documents: &Path) -> Result<Vec<CheckFailure>> {
         let Ok(relative) = path.strip_prefix(documents) else {
             continue;
         };
+        // The Case Timeline records are checked against their Docket
+        // Entries by `check_timeline_records`, never as documents.
+        if crate::document_layout::is_case_timeline(relative) {
+            continue;
+        }
         if entry.file_type().is_dir() {
             // A top-level directory must be a Matter Folder or a sibling
             // folder: a misspelled one (LAW-217's example) is invisible to
@@ -1335,6 +1340,7 @@ fn known_folders() -> String {
         .map(|folder| folder.as_str())
         .collect();
     names.extend_from_slice(model::document_pointers::SIBLING_FOLDERS);
+    names.push(crate::projects::docket::timeline_write::FOLDER);
     names.join(", ")
 }
 
@@ -1517,6 +1523,20 @@ mod tests {
             error.to_string().contains("navigator project sync"),
             "{error}"
         );
+    }
+
+    /// LAW-401: the folder sync renders the records into is a known folder
+    /// to the Documents Check, and its records are not documents.
+    #[test]
+    fn the_documents_check_accepts_the_case_timeline_sync_writes() {
+        let dir = timeline_checkout();
+        let documents = dir.path().join("documents");
+        matter_tree(&documents);
+        crate::projects::docket::timeline_write::write_after(dir.path(), "acme", &timeline_row())
+            .unwrap();
+        assert!(documents.join("Case Timeline").is_dir());
+        let errors = check_documents_root(&documents).unwrap();
+        assert!(errors.is_empty(), "{errors:?}");
     }
 
     #[test]

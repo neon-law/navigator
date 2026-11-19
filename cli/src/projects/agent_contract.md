@@ -107,9 +107,10 @@ the gap in the private matter handoff.
   * `Work Product/` holds drafts, research, and every other kind. Its seven fixed subfolders each carry the suffix so
     they read unambiguously out of context and never collide with a served twin: `Client Calls (Work Product)/` (call
     notes and transcripts, `kind: transcript`), `Correspondence (Work Product)/` (letters the firm drafted but did not
-    serve), `Discovery (Work Product)/` (discovery in preparation), `Motions (Work Product)/` (one folder per motion),
-    `Pleadings (Work Product)/` (pleadings in draft), `Research (Work Product)/` (memos, `kind: memo`), and
-    `Stipulations (Work Product)/`.
+    serve), `Discovery (Work Product)/` (discovery in preparation, with `Evidence Summaries/`), `Motions (Work
+    Product)/` (one folder per motion, `kind: motion`), `Pleadings (Work Product)/` (pleadings in draft, with
+    `Answer/`), `Research (Work Product)/` (memos, `kind: memo`), and `Stipulations (Work Product)/` (`kind:
+    stipulation`).
   * `onboarding/`, `offboarding/`, `invoices/`, `cases/`, and `rules/` keep their bytes at the pointer's own path.
 
   The slug is the path below the matter folder: `documents/Docket Filings/pleadings/motion.pdf` for

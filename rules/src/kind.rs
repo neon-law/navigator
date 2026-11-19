@@ -703,10 +703,9 @@ impl Kind {
     ///
     /// `"pleading"` is the one value a caller cannot hand to
     /// `pdf::OutputFormat::parse`: court geometry is calibrated by the
-    /// template's `jurisdiction:` through
-    /// `pdf::pleading::variant_for_jurisdiction`, so `run_render` resolves
-    /// that itself and refuses a jurisdiction the table has no
-    /// calibration for.
+    /// template's `jurisdiction:` and the matter's court through
+    /// `pdf::pleading::variant_for`, so `run_render` resolves
+    /// that itself.
     ///
     /// Only a notation-family kind ([`Kind::is_notation`]) ever reaches
     /// a render profile — `output:` means nothing for a content page, a

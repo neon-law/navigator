@@ -259,20 +259,23 @@ such as a `letter` sent in the client's own name (`output: client_letter`).
   curtly: narrower margins, closer leading, headings at body size, and no table ever split across a page break so a
   signature block stays whole. Reach for it when the document is navigated by section number rather than read straight
   through.
-- **`output: pleading`** carries no firm letterhead at all — a pleading's typeface, margins, and (where the jurisdiction
-  requires one) numbered line rail are a court-rule compliance decision, calibrated by the template's `jurisdiction:`
-  rather than by the firm's own brand. `NV` and `CA` both render with the 28-line numbered rail their courts require, in
-  the PDF and the Word document alike; `US` (federal district practice, not uniform on the rail) renders without one.
-  `WA` renders Washington superior-court paper under GR 14: 28 numbered lines on a 23pt grid so every page keeps 1in at
-  the bottom and both sides, the first page's top 3in clear, and counsel's office in the footer. The Project's `matter:`
-  block in `navigator.yaml` and the notation's `caption_title`, `footer_title`, and optional `hearing_date`,
-  `hearing_time`, and `reservation_id` give the paper its first-page caption and footer; the body's `<!-- keep -->`
-  groups give it unsplittable request/response and signature groups; see [Pleading
-  paper](notation-authoring.md#pleading-paper). A pleading in a Project that litigates more than one case also declares
-  `docket:` — a case number the Project lists under `dockets:` — so the caption carries the case the filing serves; see
-  the `docket` row in the key table below. A state-court case number of any shape is a valid `dockets:` entry and
-  `docket:` value, printed exactly as declared: a California number such as `00CV000000` and a Nevada district-court
-  number such as `D-26-000000-D` (case-type letter, two-digit year, six digits, department or type suffix) both work.
+- **`output: pleading`** carries no firm letterhead at all — a pleading's typeface, margins, and numbered line rail
+  are a court-rule compliance decision, chosen from the template's `jurisdiction:` and the Project's `matter.court`
+  rather than by the firm's own brand. Every court renders on the standard numbered pleading paper (counsel block on
+  lines 1–7, the 28-line rail, a document-title footer), in the PDF and the Word document alike, unless its own rules
+  need a verified frame: `US` and `NY` render without a rail, and a `WA` matter whose court is a superior court renders
+  Washington superior-court paper under GR 14 (28 numbered lines on a 23pt grid so every page keeps 1in at the bottom
+  and both sides, the first page's top 3in clear, and counsel's office in the footer). `pleading_frame:`
+  (`numbered_rail_trial`, `no_rail_trial`, `appellate`, or `washington_superior`) overrides the choice, and `hudson
+  notation frame <file>` prints it without rendering. The Project's `matter:` block in `navigator.yaml` and the
+  notation's `caption_title`, `footer_title`, and optional `hearing_date`, `hearing_time`, and `reservation_id` give the
+  paper its first-page caption and footer; the body's `<!-- keep -->` groups give it unsplittable request/response and
+  signature groups; see [Pleading paper](notation-authoring.md#pleading-paper). A pleading in a Project that litigates
+  more than one case also declares `docket:` — a case number the Project lists under `dockets:` — so the caption carries
+  the case the filing serves; see the `docket` row in the key table below. A state-court case number of any shape is a
+  valid `dockets:` entry and `docket:` value, printed exactly as declared: a California number such as `00CV000000` and
+  a Nevada district-court number such as `D-26-000000-D` (case-type letter, two-digit year, six digits, department or
+  type suffix) both work.
 - **`output: form`** is a different mode entirely: instead of typesetting prose, it prints the questionnaire answers
   onto an official government form (an AcroForm fill). A `form` template carries no legal prose — its body is the field
   map — so it always rides with the two form keys below (`form:` and `origin_url:`), and the checker (N109) requires
@@ -340,6 +343,8 @@ what each code actually checks, its severity, and whether it autofixes, see the 
 | `output` | no | `letter`, `client_letter`, `contract`, `pleading`, `form`, or `resume` (omit for the default) | N109 |
 | `caption_title`, `footer_title` | `kind: pleading` | the full caption title and the short footer title | N130, Y019 |
 | `hearing_date`, `hearing_time`, `reservation_id` | no | a `YYYY-MM-DD` date, a time, a reservation ID | Y019 |
+| `document_code` | no | the court's filing code printed above the counsel block (`SAO`, `NOA`, `NEOJ`) | none |
+| `pleading_frame` | no | a frame name (see `output: pleading`); omit for the court's frame | `hudson notation frame` |
 | `docket` | `kind: pleading` in a Project tree | any-shape case number declared under `dockets:` | N133, Y019 |
 | `form` | with `output: form` | the bundled form's code | N109 |
 | `origin_url` | forms only | the `.gov` page the blank form came from; refused anywhere else | N109, N110, N128 |
