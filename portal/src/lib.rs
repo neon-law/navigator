@@ -141,6 +141,7 @@ pub mod contract_review_walk;
 pub mod conversation;
 pub mod csrf;
 pub mod dioxus_app;
+mod dioxus_render;
 pub mod document_integrations;
 pub mod documents;
 pub mod docusign_auth;
