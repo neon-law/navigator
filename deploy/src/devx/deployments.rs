@@ -645,11 +645,11 @@ pub fn unsatisfied_requirements(deployment: &Deployment) -> Result<Vec<Requireme
 /// The lane is gated by `NAVIGATOR_SUMMARY_ENABLED`, a value rather than a
 /// presence, so it cannot ride `WEB_REQUIREMENTS`' presence triggers: a row
 /// that writes `"false"` would be asked for everything. The key list is
-/// `workflows::email_summary_config::REQUIRED_KEYS`, the one `web` and
+/// `workflows::email_summary_config::required_keys`, the one `web` and
 /// `workflows-service` refuse to boot without, so a key made mandatory there
 /// fails this gate before it can crash-loop a staging roll (26.10.10-rc.1).
 pub fn unsatisfied_summary_keys(deployment: &Deployment) -> Result<Vec<&'static str>> {
-    use workflows::email_summary_config::{self as summary, DEPLOYMENT_ENV, REQUIRED_KEYS};
+    use workflows::email_summary_config::{self as summary, DEPLOYMENT_ENV};
 
     let enabled = summary::enabled(&|key: &str| deployment.coordinates.get(key).cloned())
         .with_context(|| format!("{}: read the summary lane switch", deployment.name))?;
@@ -657,7 +657,8 @@ pub fn unsatisfied_summary_keys(deployment: &Deployment) -> Result<Vec<&'static 
         return Ok(Vec::new());
     }
     let supplied = deployment.supplied_keys();
-    Ok(REQUIRED_KEYS
+    let required = summary::required_keys(&|key| deployment.coordinates.get(key).cloned())?;
+    Ok(required
         .iter()
         .copied()
         // `ops ship` renders the row's own name into both pods.
@@ -3218,9 +3219,7 @@ sops:
     /// `EmailSummaryConfig` crash-looped staging because no row supplied it.
     #[test]
     fn an_enabled_summary_lane_demands_every_key_it_boots_with() {
-        use workflows::email_summary_config::{
-            CHANNEL_ENV, DEPLOYMENT_ENV, ENABLED_ENV, REQUIRED_KEYS,
-        };
+        use workflows::email_summary_config::{CHANNEL_ENV, DEPLOYMENT_ENV, ENABLED_ENV};
 
         let off = deployment(
             &[(PROJECT_ID, "neon-law-test"), (ENABLED_ENV, "false")],
@@ -3228,7 +3227,8 @@ sops:
         );
         assert!(unsatisfied_summary_keys(&off).unwrap().is_empty());
 
-        let supplied: Vec<&str> = REQUIRED_KEYS
+        let required = workflows::email_summary_config::required_keys(&|_| None).unwrap();
+        let supplied: Vec<&str> = required
             .iter()
             .copied()
             .filter(|key| *key != DEPLOYMENT_ENV && *key != CHANNEL_ENV)

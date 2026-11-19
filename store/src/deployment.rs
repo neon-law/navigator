@@ -359,11 +359,10 @@ pub fn applicable_web_requirements<F: Fn(&str) -> Option<String>>(
     Ok(WEB_REQUIREMENTS
         .iter()
         .filter(|requirement| {
-            !dbos_only
-                || !requirement
-                    .any_of
-                    .iter()
-                    .any(|alternative| alternative.contains(&"RESTATE_BROKER_URL"))
+            !(dbos_only
+                && requirement.any_of.len() == 1
+                && requirement.any_of[0].len() == 1
+                && requirement.any_of[0][0] == "RESTATE_BROKER_URL")
         })
         .filter(|requirement| !harness || !requirement.integration)
         .filter(|requirement| requirement.scope.applies(capabilities))

@@ -129,8 +129,8 @@ storage independent of the application container.
 Keep the separate worker deployment until the handover gate in [the cutover inventory](dbos-cutover-matrix.md) passes.
 Before selecting the combined host on a deployment, quiesce starts, account for pending runs and executor identities,
 remove the separate executor, and route internal callers and readiness probes to the application's workflow listener.
-The compatibility Restate endpoint remains available in the combined process, but its public HTTP/1.1-to-h2c proxy is
-not embedded. Retained Restate traffic still needs its existing proxy and routing until that traffic is reconciled. The
+The combined process exposes no Restate compatibility endpoint. Retained Restate traffic needs the separate worker,
+its proxy, and existing routing until that traffic is reconciled. The
 shipped separate-worker Kubernetes topology remains the default.
 
 ### Manual schedule controls
