@@ -38,6 +38,7 @@ pub mod gcs;
 pub mod kms;
 pub mod notion;
 pub mod notion_reconcile;
+pub mod pull_request_notice;
 pub mod redirect;
 pub mod s3;
 pub mod slack;

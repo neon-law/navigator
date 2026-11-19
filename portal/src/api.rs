@@ -1208,6 +1208,13 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             "/app/api/projects/{id}/events/main-push",
             post(main_push_event_door),
         ),
+        // Each pull-request run reports to the same channel; one message per
+        // pull request, edited in place.
+        (
+            "POST",
+            "/app/api/projects/{id}/events/pull-request",
+            post(crate::integrations_api::pull_request_event_door),
+        ),
         ("POST", "/app/api/playbooks", post(create_playbook_door)),
         ("PUT", "/app/api/playbooks/{id}", put(update_playbook_door)),
         (

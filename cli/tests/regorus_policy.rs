@@ -524,9 +524,10 @@ fn regorus_matches_every_checked_in_policy_decision() {
     // Envelope refresh covers lawyer admission and client denial.
     // Mail signature reads cover lawyer admission and denial to other tiers, anonymous callers, and CI.
     // Purchase cancellation covers every authenticated tier and rejects anonymous callers and GET.
+    // The pull-request notice route covers lawyer admission and client and anonymous denial: 698 + 3 = 701.
     assert_eq!(
         test_names.len(),
-        698,
+        701,
         "the policy decision inventory changed; review every new or removed rule"
     );
 

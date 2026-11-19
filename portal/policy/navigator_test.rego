@@ -3171,6 +3171,18 @@ test_anonymous_denied_report_a_main_push if {
 	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "events", "main-push"], "method": "POST", "session": null}
 }
 
+test_lawyer_can_report_a_pull_request if {
+	authz.allow with input as {"path": ["app", "api", "projects", "p1", "events", "pull-request"], "method": "POST", "session": lawyer_session}
+}
+
+test_client_denied_report_a_pull_request if {
+	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "events", "pull-request"], "method": "POST", "session": client_session}
+}
+
+test_anonymous_denied_report_a_pull_request if {
+	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "events", "pull-request"], "method": "POST", "session": null}
+}
+
 # The plural entry redirects to the lawyer workbench under the same role boundary.
 test_plural_lawyer_dashboard_has_the_same_role_boundary if {
     authz.allow with input as {"path": ["app", "lawyers"], "method": "GET", "session": lawyer_session}

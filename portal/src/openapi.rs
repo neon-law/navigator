@@ -3900,6 +3900,52 @@ fn canonical_document(base: &str) -> Value {
             }
           }
         },
+        "/app/api/projects/{id}/events/pull-request": {
+          "post": {
+            "summary": "Report a pull request in a Project repository",
+            "description":
+              "A Project repository's CI reports one pull-request run. Authorization: the document-scoped CI session minted for exactly this Project; any other session returns 403. The first report of a pull request posts one message to the Project's recorded private channel with the owning Firm's Slack bot; every later report of the same `number` edits that message in place. Each Pointer the pull request makes `visibility: client` is called out on its own line as a client release. The door never creates the channel: a Project without one, or whose Firm has not connected Slack, is refused with 409.",
+            "parameters": [
+              { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+            ],
+            "requestBody": { "required": true, "content": { "application/json": { "schema": {
+              "type": "object",
+              "required": ["number", "title", "url", "author_login", "stage"],
+              "additionalProperties": false,
+              "properties": {
+                "number": { "type": "integer", "minimum": 1 },
+                "title": { "type": "string", "maxLength": 512, "description": "One line; rendered as escaped plain text" },
+                "url": { "type": "string", "format": "uri", "description": "The pull request, https" },
+                "author_login": { "type": "string", "description": "The author's GitHub or Forgejo login" },
+                "stage": { "type": "string", "enum": ["checks_passed", "checks_failed", "merged", "closed"] },
+                "pointers": { "type": "array", "maxItems": 50, "items": {
+                  "type": "object",
+                  "required": ["slug", "visibility"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "slug": { "type": "string", "description": "The Pointer's path below blobs/, without .yaml" },
+                    "visibility": { "type": "string", "enum": ["internal", "client"] },
+                    "client_release": { "type": "boolean", "description": "The pull request makes this Pointer visibility client" }
+                  }
+                } }
+              }
+            } } } },
+            "responses": {
+              "200": { "description": "The notice was posted or edited", "content": { "application/json": { "schema": {
+                "type": "object",
+                "required": ["outcome"],
+                "properties": { "outcome": { "type": "string", "enum": ["posted", "updated"] } }
+              } } } },
+              "400": { "description": "A field is malformed", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "401": { "description": "No authenticated session", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "403": { "description": "Not the document-scoped CI session for this Project", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "404": { "description": "No such Project", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "409": { "description": "The Project has no private channel, or its Firm has not connected Slack; nothing was sent", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "500": { "description": "The notice record could not be read or written", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "502": { "description": "Slack did not accept the notice", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }
+            }
+          }
+        },
         "/app/api/notations/{id}": {
           "get": {
             "summary": "Get one notation",

@@ -241,6 +241,94 @@ jobs:
             notify_gave_up "could not post the main-push event: ${response}"
           fi
 
+  # On a pull request, keep one message for it in the Project's private Slack
+  # channel. The first run posts it; every later run, and the merge or close
+  # when the caller's `ci.yml` listens for `closed`, edits that same message.
+  # Each Pointer (`blobs/**/*.yaml`) the pull request adds or changes is
+  # listed with the visibility it ends with, and one it makes `client` is
+  # called out as a client release. Same session and same non-blocking rules
+  # as `notify`; a fork's run gets no OIDC token and sends nothing.
+  notify-pull-request:
+    needs: [read-manifest, verify, documents, seeds]
+    if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && needs.read-manifest.result == 'success'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: notify the Project channel of this pull request
+        env:
+          HOST: ${{ needs.read-manifest.outputs.host }}
+          STAGE: ${{ github.event.action == 'closed' && (github.event.pull_request.merged && 'merged' || 'closed') || ((needs.verify.result == 'success' && needs.documents.result == 'success' && needs.seeds.result == 'success') && 'checks_passed' || 'checks_failed') }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          AUTHOR_LOGIN: ${{ github.event.pull_request.user.login }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # The title is untrusted input: it reaches the script only through
+          # the environment, never by interpolation into it.
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          set -euo pipefail
+          notify_gave_up() { echo "::warning::[notify the Project channel of this pull request] $1 — the pull request notice was not sent (ci is unaffected)"; }
+          # Pointer paths are read with git, never through a shell, so a file
+          # name cannot become a command.
+          if ! pointers="$(git diff --name-only --diff-filter=AMR "${BASE_SHA}...${HEAD_SHA}" -- blobs | ruby -ryaml -rjson -e '
+            def visibility(sha, path)
+              text = IO.popen(["git", "show", "#{sha}:#{path}"], err: File::NULL, &:read)
+              return nil unless $?.success?
+              doc = YAML.safe_load(text, aliases: false)
+              doc.is_a?(Hash) ? doc["visibility"] : nil
+            rescue StandardError
+              nil
+            end
+            out = []
+            STDIN.each_line do |line|
+              path = line.chomp
+              next unless path =~ %r{\Ablobs/(.+)\.ya?ml\z}
+              slug = Regexp.last_match(1)
+              now = visibility(ENV.fetch("HEAD_SHA"), path)
+              next unless %w[internal client].include?(now)
+              out << { slug: slug, visibility: now, client_release: now == "client" && visibility(ENV.fetch("BASE_SHA"), path) != "client" }
+            end
+            puts JSON.generate(out.first(50))
+          ')"; then
+            notify_gave_up "could not read the pull request's Pointers"
+            exit 0
+          fi
+          base="https://${HOST}"
+          if ! oidc="$(curl -sSf --retry 3 --retry-connrefused --retry-all-errors -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${base}" | jq -r '.value')"; then
+            notify_gave_up "could not fetch the OIDC token"
+            exit 0
+          fi
+          if ! session="$(curl -sSf --retry 3 --retry-connrefused --retry-all-errors -X POST -H 'Content-Type: application/json' \
+            -d "$(jq -cn --arg token "${oidc}" '{token: $token}')" \
+            "${base}/auth/ci/document-token" | jq -r '.token')"; then
+            notify_gave_up "could not mint the CI session"
+            exit 0
+          fi
+          if ! project_id="$(curl -sSf --retry 3 --retry-connrefused --retry-all-errors -H "Authorization: Bearer ${session}" "${base}/app/api/projects" | jq -r '.[0].id')"; then
+            notify_gave_up "could not look up the project"
+            exit 0
+          fi
+          body="$(jq -cn \
+            --argjson number "${NUMBER}" \
+            --arg title "${PR_TITLE}" \
+            --arg url "${PR_URL}" \
+            --arg author_login "${AUTHOR_LOGIN}" \
+            --arg stage "${STAGE}" \
+            --argjson pointers "${pointers}" \
+            '{number: $number, title: $title, url: $url, author_login: $author_login, stage: $stage, pointers: $pointers}')"
+          if ! response="$(curl -sS --fail-with-body --retry 3 --retry-connrefused --retry-all-errors -X POST -H "Authorization: Bearer ${session}" -H 'Content-Type: application/json' \
+            -d "${body}" "${base}/app/api/projects/${project_id}/events/pull-request")"; then
+            notify_gave_up "could not post the pull-request event: ${response}"
+          fi
+
   # The one required check. Besides gathering the jobs above, it holds the
   # tree to `Y024` itself (ENG-1136, ENG-1139): a Project repository commits
   # only Markdown and YAML plus the canonical files at their release bytes.

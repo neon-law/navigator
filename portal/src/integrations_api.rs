@@ -704,6 +704,100 @@ pub(crate) async fn slack_notify_door(
     }
 }
 
+/// A refusal the CI step prints, so a lost notice never reads as delivered.
+fn pull_request_refusal(status: StatusCode, error: &str, message: &str) -> Response {
+    (
+        status,
+        Json(serde_json::json!({ "error": error, "message": message })),
+    )
+        .into_response()
+}
+
+/// `POST /app/api/projects/{id}/events/pull-request` — a Project repository's
+/// CI reports one pull-request run. The caller is the document-scoped CI
+/// session minted for exactly this Project; any other session is refused with
+/// 403. The first report of a pull request posts one message to the Project's
+/// recorded private channel with the owning Firm's Slack bot; every later
+/// report edits that message in place, so the channel holds one line per pull
+/// request. The door never provisions the channel: a Project without one is
+/// refused with 409 until `navigator project setup` creates it.
+pub(crate) async fn pull_request_event_door(
+    State(state): State<ApiState>,
+    authed: crate::api::AuthedSession,
+    axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
+    Json(event): Json<cloud::pull_request_notice::PullRequestEvent>,
+) -> Result<Response, ApiError> {
+    match &authed.0.scope {
+        Some(crate::session::SessionScope::Document(scope)) if scope.project_id == id => {}
+        _ => return Err(ApiError::Forbidden),
+    }
+    if let Err(message) = event.validate() {
+        return Ok(crate::api::bad_request("invalid_event", message));
+    }
+    let project = store::projects::find_by_id(&state.surreal, id)
+        .await
+        .map_err(|error| ApiError::Db(error.to_string()))?
+        .ok_or(ApiError::NotFound)?;
+    let slack = match state.integration_providers.slack(&state.surreal, id).await {
+        Ok(slack) => slack,
+        Err(error) => {
+            return Ok(pull_request_refusal(
+                StatusCode::CONFLICT,
+                "slack_not_connected",
+                &format!("the pull request notice was not sent: {error}"),
+            ))
+        }
+    };
+    let Some(channel_id) = project.internal_slack_channel_id.clone() else {
+        return Ok(pull_request_refusal(
+            StatusCode::CONFLICT,
+            "no_channel",
+            "the Project has no private Slack channel yet; run `navigator project setup`",
+        ));
+    };
+    let pg = store::postgres::PostgresDb::from_env()
+        .await
+        .map_err(|_| ApiError::Db("pull request notice storage is unavailable".into()))?;
+    // Two runs of one pull request must not both post: the second waits and
+    // edits what the first recorded.
+    let _guard = ensure_lock(format!("pull-request:{id}:{}", event.number)).await;
+    let recorded = store::postgres::pull_request_notices::find(&pg, id, event.number)
+        .await
+        .map_err(|_| ApiError::Db("pull request notice read failed".into()))?
+        .filter(|notice| notice.channel_id == channel_id)
+        .map(|notice| notice.message_ts);
+    let Ok(published) = cloud::pull_request_notice::publish(
+        slack.as_ref(),
+        &channel_id,
+        recorded.as_deref(),
+        &event,
+    )
+    .await
+    else {
+        return Ok(pull_request_refusal(
+            StatusCode::BAD_GATEWAY,
+            "provider_unavailable",
+            "Slack did not accept the pull request notice",
+        ));
+    };
+    store::postgres::pull_request_notices::record(
+        &pg,
+        id,
+        event.number,
+        &store::postgres::pull_request_notices::PullRequestNotice {
+            channel_id,
+            message_ts: published.ts().to_string(),
+        },
+    )
+    .await
+    .map_err(|_| ApiError::Db("pull request notice write failed".into()))?;
+    let outcome = match published {
+        cloud::pull_request_notice::Published::Posted(_) => "posted",
+        cloud::pull_request_notice::Published::Updated(_) => "updated",
+    };
+    Ok(Json(serde_json::json!({ "outcome": outcome })).into_response())
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CalendarEventsRequest {

@@ -1514,17 +1514,18 @@ route_allow if {
     is_lawyer(input.session)
 }
 
-# A Project repository's CI reports a push to `main`: POST
-# /app/api/projects/{id}/events/main-push. Lawyer tier at the policy — the CI
-# session `project-gate.yml` mints is attributed to the Project's lawyer DRI —
-# and the handler then requires that session's document scope to name this
-# exact Project, refusing every other session with 403. Six segments and POST.
+# A Project repository's CI reports a push to `main` or a pull request: POST
+# /app/api/projects/{id}/events/{main-push,pull-request}. Lawyer tier at the
+# policy — the CI session `project-gate.yml` mints is attributed to the
+# Project's lawyer DRI — and the handler then requires that session's document
+# scope to name this exact Project, refusing every other session with 403. Six
+# segments and POST.
 route_allow if {
     input.path[0] == "app"
     input.path[1] == "api"
     input.path[2] == "projects"
     input.path[4] == "events"
-    input.path[5] == "main-push"
+    input.path[5] in {"main-push", "pull-request"}
     count(input.path) == 6
     input.method == "POST"
     is_lawyer(input.session)

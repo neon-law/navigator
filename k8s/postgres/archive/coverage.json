@@ -1325,6 +1325,13 @@
       {
         "action": "export",
         "schema": "public",
+        "name": "project_pull_request_notice",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
         "name": "project_reference",
         "kind": "table",
         "accessible": true

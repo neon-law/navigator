@@ -200,6 +200,17 @@ pub trait SlackService: Send + Sync {
         channel_id: &str,
         channel_name: &str,
     ) -> Result<SlackChannel, SlackError>;
+    /// Post a message and return Slack's timestamp for it, the address
+    /// [`SlackService::update_message`] edits.
+    async fn post_message_ts(&self, channel_id: &str, text: &str) -> Result<String, SlackError>;
+    /// Replace the text of a message this bot posted. `Ok(false)` when Slack
+    /// no longer has that message, so the caller can post a new one.
+    async fn update_message(
+        &self,
+        channel_id: &str,
+        ts: &str,
+        text: &str,
+    ) -> Result<bool, SlackError>;
 }
 
 /// The canonical URL for a private channel, from its id. Slack's own
@@ -245,6 +256,8 @@ pub struct FakeSlack {
     by_id: Arc<Mutex<BTreeMap<String, SlackChannel>>>,
     members: Arc<Mutex<BTreeMap<String, BTreeSet<String>>>>,
     messages: Arc<Mutex<Vec<(String, String)>>>,
+    /// Messages addressable by timestamp, with their current text.
+    timestamped: Arc<Mutex<BTreeMap<String, (String, String)>>>,
     unavailable: Arc<Mutex<bool>>,
     next_id: Arc<Mutex<usize>>,
     /// Project codes whose name Slack reports as already taken by something
@@ -280,6 +293,24 @@ impl FakeSlack {
             .lock()
             .expect("Slack fake lock poisoned")
             .clone()
+    }
+
+    /// The current `(channel id, text)` of the message posted at `ts`.
+    #[must_use]
+    pub fn message_at(&self, ts: &str) -> Option<(String, String)> {
+        self.timestamped
+            .lock()
+            .expect("Slack fake lock poisoned")
+            .get(ts)
+            .cloned()
+    }
+
+    /// Simulate someone deleting a posted message by hand.
+    pub fn delete_message(&self, ts: &str) {
+        self.timestamped
+            .lock()
+            .expect("Slack fake lock poisoned")
+            .remove(ts);
     }
 
     /// Simulate a name Slack refuses on create with `name_taken` — a
@@ -451,6 +482,33 @@ impl SlackService for FakeSlack {
         let channel = by_id.get_mut(channel_id).ok_or(SlackError::Api)?;
         channel.name = channel_name.to_string();
         Ok(channel.clone())
+    }
+
+    async fn post_message_ts(&self, channel_id: &str, text: &str) -> Result<String, SlackError> {
+        self.post_message(channel_id, text).await?;
+        let ts = format!("{}.000100", self.messages().len());
+        self.timestamped
+            .lock()
+            .expect("Slack fake lock poisoned")
+            .insert(ts.clone(), (channel_id.to_string(), text.to_string()));
+        Ok(ts)
+    }
+
+    async fn update_message(
+        &self,
+        channel_id: &str,
+        ts: &str,
+        text: &str,
+    ) -> Result<bool, SlackError> {
+        self.check_available()?;
+        let mut timestamped = self.timestamped.lock().expect("Slack fake lock poisoned");
+        match timestamped.get_mut(ts) {
+            Some((channel, current)) if channel == channel_id => {
+                *current = text.to_string();
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
     }
 }
 
@@ -860,6 +918,61 @@ impl SlackService for SlackClient {
             is_private: channel.is_private,
         })
     }
+
+    async fn post_message_ts(&self, channel_id: &str, text: &str) -> Result<String, SlackError> {
+        let text = outbound_slack_text(text, self.from_staging);
+        let body = self
+            .post(
+                "chat.postMessage",
+                json!({
+                    "channel": channel_id,
+                    "text": text,
+                    "unfurl_links": false,
+                    "unfurl_media": false,
+                }),
+            )
+            .await?;
+        let response: MessageResponse =
+            serde_json::from_value(body).map_err(|_| SlackError::IncompleteResponse)?;
+        if !response.ok {
+            return Err(SlackError::Api);
+        }
+        response
+            .ts
+            .filter(|ts| !ts.is_empty())
+            .ok_or(SlackError::IncompleteResponse)
+    }
+
+    /// `chat.update`. A message deleted in Slack answers `message_not_found`,
+    /// which is reported as `Ok(false)` so the caller posts a fresh one.
+    async fn update_message(
+        &self,
+        channel_id: &str,
+        ts: &str,
+        text: &str,
+    ) -> Result<bool, SlackError> {
+        let text = outbound_slack_text(text, self.from_staging);
+        let body = self
+            .post(
+                "chat.update",
+                json!({ "channel": channel_id, "ts": ts, "text": text }),
+            )
+            .await?;
+        let response: BasicResponse =
+            serde_json::from_value(body).map_err(|_| SlackError::IncompleteResponse)?;
+        match (response.ok, response.error.as_deref()) {
+            (true, _) => Ok(true),
+            (false, Some("message_not_found")) => Ok(false),
+            (false, _) => Err(SlackError::Api),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct MessageResponse {
+    ok: bool,
+    #[serde(default)]
+    ts: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -885,7 +998,7 @@ mod tests {
         outbound_slack_text, FakeSlack, SlackClient, SlackError, SlackMemberId, SlackService,
         SLACK_STAGING_MARK,
     };
-    use wiremock::matchers::{method, path, query_param};
+    use wiremock::matchers::{body_partial_json, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     /// Slack's read methods are `GET` with query parameters. This asserts the
@@ -1212,6 +1325,48 @@ mod tests {
             client.rename_channel("C2", "navigator-taken").await,
             Err(SlackError::NameTaken)
         ));
+    }
+
+    /// `chat.update` addresses the message by channel and timestamp, and a
+    /// message deleted in Slack is "gone", not a failure, so the caller can
+    /// post a fresh one.
+    #[tokio::test]
+    async fn a_message_is_posted_with_its_ts_and_updated_in_place() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat.postMessage"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({ "ok": true, "channel": "C1", "ts": "1700000000.000100" }),
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/chat.update"))
+            .and(body_partial_json(
+                serde_json::json!({ "channel": "C1", "ts": "1700000000.000100" }),
+            ))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "ok": true })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/chat.update"))
+            .and(body_partial_json(serde_json::json!({ "ts": "1.2" })))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(
+                    serde_json::json!({ "ok": false, "error": "message_not_found" }),
+                ),
+            )
+            .mount(&server)
+            .await;
+        let client = SlackClient::with_base_url("test-token", server.uri());
+        let ts = client.post_message_ts("C1", "first").await.unwrap();
+        assert_eq!(ts, "1700000000.000100");
+        assert!(client.update_message("C1", &ts, "second").await.unwrap());
+        assert!(!client.update_message("C1", "1.2", "third").await.unwrap());
     }
 
     #[tokio::test]

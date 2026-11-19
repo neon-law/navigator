@@ -58,7 +58,9 @@ which an Owner may itself be.
 Slack is connected **once per Firm**. The Firm's `slack_bot_token` is the one bot every Project in that Firm uses:
 `navigator project setup` creates or adopts the Project's private channel with it, the main-push notice a Project
 repository's `cd` posts goes through it, and the Nightly Project Update repairs membership and writes the channel canvas
-with it. The channel is named from the Project code by environment — `navigator-<code>` in production, `staging-<code>`
+with it. Each pull request in a Project repository keeps one message in that channel: `project-gate.yml` posts it on the
+first run and edits it in place on every later run, merge, or close, listing the Pointers it files and calling out each
+one it makes `visibility: client` as a client release. The channel is named from the Project code by environment — `navigator-<code>` in production, `staging-<code>`
 on a simulated-matters deployment — and a channel found under its recorded id but another name is renamed back. Opening
 a Project in a Firm that has connected Slack needs no further Slack step; a Project whose Firm has not stored the token
 reports `credential_missing`, and the worker refuses to post rather than borrowing another token. The deployment-wide
