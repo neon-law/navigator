@@ -163,18 +163,12 @@ pub fn run(manifest_path: &Path, version: &str, no_commit: bool) -> ExitCode {
     };
 
     if rewritten == manifest {
-        println!(
-            "navigator: {} already at version {version}",
-            manifest_path.display()
-        );
+        println!("navigator: workspace version is already current");
     } else if let Err(error) = std::fs::write(&manifest_path, &rewritten) {
         eprintln!("navigator: release version: could not write the workspace manifest: {error}");
         return ExitCode::from(2);
     } else {
-        println!(
-            "navigator: set [workspace.package] version = {version} in {}",
-            manifest_path.display()
-        );
+        println!("navigator: updated the workspace version");
     }
 
     // The self-referencing action pins name an ABSOLUTE tag, so the bump that
@@ -192,15 +186,11 @@ pub fn run(manifest_path: &Path, version: &str, no_commit: bool) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    // A COUNT, and nothing else. Both of the obvious things to say here are
-    // values CodeQL's `rust/cleartext-logging` reads as secret: `pin.file`
-    // descends from the CLI manifest path, and `version` is the `--tag` the
-    // operator passed — `Command` carries `Secrets`, so any printed field of it
-    // is a cleartext-logging sink, and a NEW one fails the scan at high
-    // severity. It is the same reason the read and write failures above name no
-    // path. Nothing is lost: the line above already named the version, a
-    // release is a version-only commit so `git show` is the per-line report,
-    // and `navigator release pins` names any file and line still wrong.
+    // A count, and nothing else. `pin.file`, `manifest_path`, and `version` all
+    // originate in CLI arguments. CodeQL treats printed fields of `Command` as
+    // cleartext logging because the parsed command also carries Secrets and
+    // Certificates. The manifest and lock hold the chosen version, `git show`
+    // exposes the release diff, and `navigator release pins` reports pin drift.
     if !swept.is_empty() {
         println!(
             "navigator: swept {} self-referencing action pin(s)",
@@ -232,7 +222,7 @@ pub fn run(manifest_path: &Path, version: &str, no_commit: bool) -> ExitCode {
             );
             return ExitCode::from(2);
         }
-        println!("navigator: refreshed {} to {version}", lockfile.display());
+        println!("navigator: refreshed Cargo.lock");
     }
 
     if no_commit {
@@ -378,6 +368,18 @@ mod tests {
         assert!(
             !production.contains("release version: write {}"),
             "echoing the CLI manifest path trips CodeQL cleartext-logging because Command also carries Secrets"
+        );
+        assert!(
+            !production.contains("already at version {version}"),
+            "echoing the --tag trips CodeQL cleartext-logging because Command also carries Secrets"
+        );
+        assert!(
+            !production.contains("version = {version} in {}"),
+            "echoing the --tag or manifest path trips CodeQL cleartext-logging because Command also carries Secrets"
+        );
+        assert!(
+            !production.contains("refreshed {} to {version}"),
+            "echoing the --tag or Cargo.lock path trips CodeQL cleartext-logging because Command also carries Secrets"
         );
         // Staging `pin.file` for `git add` is fine — `Command::args` is not a
         // logging sink. PRINTING it is not: the path descends from the CLI
