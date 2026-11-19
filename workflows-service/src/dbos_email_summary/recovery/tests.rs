@@ -1017,3 +1017,57 @@ async fn committed_child_without_fork_acknowledgement_is_retrieved_by_its_owned_
         assert_eq!(case.slack.posted_messages().len(),2);
     }).await;
 }
+
+#[tokio::test]
+async fn a_restored_receipt_owner_without_its_controller_history_cannot_reopen_delivery() {
+    with_case(|case| async move {
+        case.failed_summary().await;
+        let missing_controller = Uuid::now_v7();
+        // Model a partial public-row restore through the real native admission seam.
+        // No DBOS status, inputs, outputs or checkpoints are manufactured.
+        ownership::claim(
+            &case.pg,
+            case.request.receipt_id,
+            missing_controller,
+            None,
+            &case.request.gemini.input_digest,
+            ownership::DeliveryRule::PreserveConfirmed,
+        )
+        .await
+        .unwrap();
+        let mut command = case.command();
+        command.from_recovery = Some(missing_controller);
+        let provider_calls = case.provider.received_requests().await.unwrap().len();
+        assert_eq!(case.submit(&command, true).await, StatusCode::CONFLICT);
+        assert_eq!(
+            ownership::current_operation(&case.pg, case.request.receipt_id)
+                .await
+                .unwrap(),
+            Some(missing_controller)
+        );
+        let state: String =
+            sqlx::query_scalar("SELECT state FROM email_delivery WHERE receipt_id=$1")
+                .bind(case.request.receipt_id)
+                .fetch_one(case.pg.pool())
+                .await
+                .unwrap();
+        assert_eq!(state, store::email_deliveries::CONFIRMED);
+        assert_eq!(
+            case.provider.received_requests().await.unwrap().len(),
+            provider_calls
+        );
+        assert_eq!(case.slack.posted_messages().len(), 1);
+        let controller = email_summary_recovery_id(command.operation_id);
+        assert!(case
+            .dbos
+            .list_workflows(&dbos::WorkflowFilter {
+                workflow_ids: vec![&controller],
+                limit: Some(1),
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .is_empty());
+    })
+    .await;
+}
