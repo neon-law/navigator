@@ -2073,10 +2073,10 @@ async fn repair_project_forgejo_mirror_door(
         .await
         .map_err(|error| ApiError::Db(error.to_string()))?
         .ok_or(ApiError::NotFound)?;
-    if !project
+    if project
         .repository_url
         .as_deref()
-        .is_some_and(|url| !url.trim().is_empty())
+        .is_none_or(|url| url.trim().is_empty())
     {
         return Err(ApiError::NotFound);
     }

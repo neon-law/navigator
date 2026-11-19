@@ -525,9 +525,10 @@ fn regorus_matches_every_checked_in_policy_decision() {
     // Mail signature reads cover lawyer admission and denial to other tiers, anonymous callers, and CI.
     // Purchase cancellation covers every authenticated tier and rejects anonymous callers and GET.
     // The pull-request notice route covers lawyer admission and client and anonymous denial: 698 + 3 = 701.
+    // The Forgejo mirror repair route admits Admin and denies Lawyer and Client: 701 + 3 = 704.
     assert_eq!(
         test_names.len(),
-        701,
+        704,
         "the policy decision inventory changed; review every new or removed rule"
     );
 
