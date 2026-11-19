@@ -224,12 +224,12 @@ access. The `ssh_public_key` rows then remain the registry of which public keys 
 
 ## Repository policy and Actions migration
 
-The current exact reconciliation command is `hudson ops github setup [repository]`, implemented in
-`deploy/src/devx/github_setup.rs`. It distinguishes public source from private Project repositories and checks
-CODEOWNERS, required `ci` checks, signed commits, deletion/force-push protection, pull requests, resolved review
-conversations, and squash-only merging. Port and independently test those outcomes against Forgejo before deprecating
-the GitHub command. Where Forgejo cannot express a rule directly, fail closed with an explicit tested equivalent rather
-than silently weakening policy. Preserve private Project defaults separately from open-source Navigator governance.
+`navigator github setup [repository]`, implemented in `cli/src/github_setup.rs`, reconciles GitHub repositories where
+GitHub remains the configured CI/CD provider. It distinguishes public source from private Project repositories and
+checks CODEOWNERS, required `ci` checks, signed commits, deletion/force-push protection, pull requests, resolved review
+conversations, and squash-only merging. Forgejo governance remains installation-specific and uses the Forgejo commands
+below. Where Forgejo cannot express a rule directly, fail closed with an explicit tested equivalent rather than silently
+weakening policy. Preserve private Project defaults separately from open-source Navigator governance.
 
 `hudson ops forgejo setup <owner/repository> --url <origin> --check-context <context> --dry-run` reads the repository
 and its `main` protection and lists drift without writing. Governance reads require the repository's `private` field to
@@ -388,7 +388,7 @@ guide](https://forgejo.org/docs/v15.0/admin/actions/registration/#runner-modes).
 Generated workflows install the release `navigator.yaml` pins from Forgejo's generic package
 `<forgejo>/api/packages/navigator/generic/navigator/<version>/navigator-<version>-linux.tar.gz`, and verify it against
 the `.sha256` beside it. A runner therefore never reaches GitHub, whose front-end and release-asset addresses rotate.
-`hudson ops forgejo release mirror --url <forgejo> --version <tag>` downloads the GitHub Release once on a trusted host,
+`navigator forgejo release mirror --url <forgejo> --version <tag>` downloads the GitHub Release once on a trusted host,
 checks the digest, creates the public `navigator` organization when it is missing, and uploads both files. It is
 idempotent. The runner controller below mirrors every version a waiting job pins before it starts the job, so an
 operator runs the verb only to pre-stage a release. A job whose release is missing fails with that exact command.

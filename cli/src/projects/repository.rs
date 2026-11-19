@@ -3682,7 +3682,7 @@ esac
     /// The generated gate is one always-running required job.
     ///
     /// A `paths:` filter here would let a required check pass by being skipped,
-    /// so the job name matches the one `ops github setup` binds and the gate
+    /// so the job name matches the one `navigator github setup` binds and the gate
     /// carries no filter at all.
     #[test]
     fn a_licence_at_the_root_is_part_of_the_layout() {
@@ -3825,7 +3825,7 @@ jobs:
 
     /// ENG-931's cross-organization Project fixture: a Project repository in
     /// an organization other than `neon-law-source-code` — the same
-    /// `acme/navigator`-shaped fixture `deploy/src/devx/github_setup.rs` already
+    /// `acme/navigator`-shaped fixture `cli/src/github_setup.rs` already
     /// uses — reconciles cleanly to a `ci.yml`/`cd.yml` pinned to an
     /// alternate, always-public `workflow_home` rather than this repository.
     /// This is the round trip the reusable-workflow relocation must prove
@@ -5855,7 +5855,7 @@ jobs:
         }
     }
 
-    /// The default `--action-version` pin `ops github setup` falls back to is
+    /// The default `--action-version` pin `navigator github setup` falls back to is
     /// empty, or it is a release tag — never a version-shaped string this
     /// build merely happens to carry.
     ///

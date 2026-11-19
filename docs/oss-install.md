@@ -65,8 +65,8 @@ The cluster lane refuses to start unless all five of these are on `PATH` — `de
 with `require_tools(&["kind", "kubectl", "docker", "helm"])`. Docker and `kubectl` are already above and both arrive
 with Docker Desktop, which is exactly why the remaining tools are easy to miss:
 
-- **`kind`, at v0.32.0** — the version `.github/workflows/deploy.yml:944` pins for the KIND integration gate, in
-  lockstep with the `kindest/node:v1.36.1` digest pinned at `.github/workflows/deploy.yml:951`. Take that version rather
+- **`kind`, at v0.32.0** — the version `.github/workflows/deploy.yml:943` pins for the KIND integration gate, in
+  lockstep with the `kindest/node:v1.36.1` digest pinned at `.github/workflows/deploy.yml:950`. Take that version rather
   than the latest release: the workflow records that v0.32.0's `kind load` is what understands the containerd config v4
   the v1.36.1 node writes, and that the two are meant to be bumped together.
 - **`openssl`** — the PostgreSQL fixture uses it to generate the task-owned TLS certificate before the application
