@@ -41,6 +41,7 @@ struct Fixture {
     firm_id: Uuid,
     dri_id: Uuid,
     dri: String,
+    other_admin_id: Uuid,
     other_admin: String,
     owner: String,
 }
@@ -101,6 +102,7 @@ async fn build_fixture() -> Fixture {
         firm_id: firm.id,
         dri_id,
         dri: bearer(dri_id, Role::Admin),
+        other_admin_id,
         other_admin: bearer(other_admin_id, Role::Admin),
         owner: bearer(owner_id, Role::Owner),
     }
@@ -375,4 +377,35 @@ async fn an_unknown_secret_kind_is_refused_without_writing_anything() {
     assert_eq!(status, StatusCode::SEE_OTHER);
     assert!(location.contains("secret_error="), "{location}");
     assert!(!location.contains(SECRET_VALUE), "{location}");
+}
+
+#[tokio::test]
+async fn remove_admin_demotes_to_lawyer_and_refuses_the_admin_dri() {
+    let fx = build_fixture().await;
+    let path = format!("/app/admin/firms/{}/members/remove-admin", fx.firm_id);
+
+    let (status, location, body) = post_form(
+        &fx.app,
+        &path,
+        &fx.owner,
+        &format!("person_id={}", fx.other_admin_id),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER, "{body}");
+    assert!(!location.contains("member_error"), "{location}");
+    let row = store::firms::membership_for_person(&fx.surreal, fx.other_admin_id, fx.firm_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.membership, store::firms::FirmMembership::Lawyer);
+
+    let (status, location, body) = post_form(
+        &fx.app,
+        &path,
+        &fx.owner,
+        &format!("person_id={}", fx.dri_id),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER, "{body}");
+    assert!(location.contains("member_error="), "{location}");
 }

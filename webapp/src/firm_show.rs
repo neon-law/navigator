@@ -40,6 +40,9 @@ pub struct FirmShowQuery {
     pub summary_saved: Option<String>,
     #[serde(default)]
     pub summary_revoked: Option<String>,
+    /// Why a Remove admin request was refused.
+    #[serde(default)]
+    pub member_error: Option<String>,
 }
 
 /// One row of the Firm's integration-secret metadata (ENG-491) — the
@@ -175,6 +178,8 @@ pub struct FirmFields {
     pub can_manage_summary_approvals: bool,
     #[serde(default)]
     pub csrf_token: String,
+    #[serde(default)]
+    pub member_error: Option<String>,
     #[serde(default)]
     pub secret_error: Option<String>,
     #[serde(default)]
@@ -532,6 +537,7 @@ pub async fn get_firm_show() -> Result<FirmShowView, ServerFnError> {
     .map(|axum::Extension(token)| token.0)
     .unwrap_or_default();
     let FirmShowQuery {
+        member_error,
         secret_error,
         secret_saved,
         secret_revoked,
@@ -563,6 +569,7 @@ pub async fn get_firm_show() -> Result<FirmShowView, ServerFnError> {
             can_view_secrets,
             can_manage_secrets,
             csrf_token,
+            member_error,
             secret_error,
             secret_saved,
             secret_revoked,
@@ -841,6 +848,9 @@ pub fn firm_show_body(view: &FirmShowView) -> Element {
             }
             section { id: "firm-members",
                 h2 { "People" }
+                if let Some(error) = fields.member_error.as_ref() {
+                    p { class: "nav-form-error", role: "alert", "{error}" }
+                }
                 if fields.members.is_empty() {
                     p { "No one holds a membership on this Firm yet." }
                 } else {
@@ -852,6 +862,9 @@ pub fn firm_show_body(view: &FirmShowView) -> Element {
                                     th { "Email" }
                                     th { "Membership" }
                                     th { "Admin DRI" }
+                                    if fields.can_edit {
+                                        th { "" }
+                                    }
                                 }
                             }
                             tbody {
@@ -861,6 +874,21 @@ pub fn firm_show_body(view: &FirmShowView) -> Element {
                                         td { "{member.email}" }
                                         td { "{member.membership}" }
                                         td { if member.is_dri { "Yes" } else { "" } }
+                                        if fields.can_edit {
+                                            td {
+                                                if member.membership == "admin" && !member.is_dri {
+                                                    form {
+                                                        class: "nav-form",
+                                                        method: "post",
+                                                        action: "/app/admin/firms/{view.id}/members/remove-admin",
+                                                        "aria-label": "Remove admin from {member.name}",
+                                                        input { r#type: "hidden", name: "_csrf", value: "{fields.csrf_token}" }
+                                                        input { r#type: "hidden", name: "person_id", value: "{member.person_id}" }
+                                                        button { class: "nav-btn nav-btn--secondary", r#type: "submit", "Remove admin" }
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -960,11 +988,33 @@ mod tests {
         assert!(html.contains("Nick Shook (nick@neonlaw.com)"), "{html}");
         assert!(html.contains("neon (www.neonlaw.com)"), "{html}");
         assert!(html.contains("Pat Lawyer"), "{html}");
+        // Only a non-DRI admin gets the demotion button.
+        assert_eq!(html.matches("Remove admin").count(), 0, "{html}");
         assert!(html.contains(r#"id="firm-show""#), "{html}");
         assert!(
             html.contains(r#"href="/app/admin/firms/firm-1/edit""#),
             "{html}"
         );
+    }
+
+    #[test]
+    fn offers_remove_admin_for_a_non_dri_admin_only() {
+        let html = render(Some(FirmFields {
+            members: vec![MemberRow {
+                person_id: "p-3".to_string(),
+                name: "Dana Admin".to_string(),
+                email: "dana@example.com".to_string(),
+                membership: "admin".to_string(),
+                is_dri: false,
+            }],
+            can_edit: true,
+            ..Default::default()
+        }));
+        assert!(
+            html.contains("/app/admin/firms/firm-1/members/remove-admin"),
+            "{html}"
+        );
+        assert!(html.contains("Remove admin"), "{html}");
     }
 
     /// A caller without `ManageMembership` sees the Firm's facts but no Edit

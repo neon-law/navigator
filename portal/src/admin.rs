@@ -706,6 +706,10 @@ fn register_firm_matter_routes(r: Router<AdminState>, prefix: &str) -> Router<Ad
 fn register_firm_admin_routes(r: Router<AdminState>, prefix: &str) -> Router<AdminState> {
     r.route(&format!("{prefix}/firms/{{id}}/edit"), post(firms_update))
         .route(
+            &format!("{prefix}/firms/{{id}}/members/remove-admin"),
+            post(firm_member_remove_admin),
+        )
+        .route(
             &format!("{prefix}/firms/{{id}}/secrets"),
             post(firm_secrets_put),
         )
@@ -3161,6 +3165,45 @@ fn parse_secret_kind(
 )> {
     let kind = store::firm_secrets::parse_kind(kind)?;
     Some((kind.provider(), kind))
+}
+
+#[derive(Deserialize)]
+pub(crate) struct FirmMemberInput {
+    person_id: Uuid,
+}
+
+/// `POST /app/admin/firms/{id}/members/remove-admin` — demote a Firm's admin
+/// to lawyer through `store::firms::update_membership`, which authorizes
+/// Owner or the Firm's own Admin and refuses to orphan the Admin DRI.
+pub(crate) async fn firm_member_remove_admin(
+    State(state): State<AdminState>,
+    Path(id): Path<Uuid>,
+    session: Option<Extension<SessionData>>,
+    Form(input): Form<FirmMemberInput>,
+) -> Response {
+    let Some(Extension(session_data)) = session else {
+        return not_found_response();
+    };
+    match store::firms::update_membership(
+        &state.surreal,
+        session_data.role,
+        session_data.person_id,
+        input.person_id,
+        id,
+        store::firms::FirmMembership::Lawyer,
+    )
+    .await
+    {
+        Ok(_) => back_to_firm_show(id, ""),
+        Err(store::firms::FirmError::NotAuthorized | store::firms::FirmError::NoSuchFirm(_)) => {
+            not_found_response()
+        }
+        Err(error) => {
+            let mut query = String::new();
+            push_query(&mut query, "member_error", &error.user_message());
+            back_to_firm_show(id, &query)
+        }
+    }
 }
 
 #[derive(Deserialize)]
