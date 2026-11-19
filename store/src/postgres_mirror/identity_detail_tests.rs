@@ -212,7 +212,12 @@ async fn scoped_mailbox_unknown_owner_is_counted_and_not_invented() {
     assert_eq!(copied, 0);
 }
 
-async fn details(source: &SurrealDb, holder: Uuid, subject: Uuid) -> Vec<MirrorKey> {
+async fn details(
+    source: &SurrealDb,
+    holder: Uuid,
+    subject: Uuid,
+    licensing: Uuid,
+) -> Vec<MirrorKey> {
     super::super::from_source(async {
         let address = crate::addresses::create(
             source,
@@ -225,13 +230,6 @@ async fn details(source: &SurrealDb, holder: Uuid, subject: Uuid) -> Vec<MirrorK
                 country: "US".into(),
                 ..Default::default()
             },
-        )
-        .await
-        .unwrap()
-        .id;
-        let licensing = crate::jurisdictions::create(
-            source,
-            &crate::jurisdictions::NewJurisdiction::new("Captured Licensing State", "SYN", "state"),
         )
         .await
         .unwrap()
@@ -300,7 +298,14 @@ async fn scoped_detail_import_preserves_every_typed_image_and_retains_native_dri
             .await
             .unwrap();
     }
-    let keys = details(&source, holder, subject).await;
+    let licensing = super::super::from_source(crate::jurisdictions::create(
+        &source,
+        &crate::jurisdictions::NewJurisdiction::new("Captured Licensing State", "SYN", "state"),
+    ))
+    .await
+    .unwrap()
+    .id;
+    let keys = details(&source, holder, subject, licensing).await;
     for key in &keys {
         assert_eq!(
             import(&source, &pg, key).await.unwrap(),
@@ -433,4 +438,279 @@ async fn scoped_comparisons_do_not_read_unregistered_catalog_or_graph_rows() {
             .is_clean()
     );
     assert!(scoped_parity(&source, &pg).await.unwrap().is_clean());
+}
+
+async fn verified_capture(
+    source: &SurrealDb,
+) -> crate::postgres_backfill::family::VerifiedSourceReceipt {
+    use futures::StreamExt;
+    use sha2::Digest;
+    let before = crate::postgres_backfill::source_archive_inventory(source)
+        .await
+        .unwrap();
+    let mut stream = source.export(()).await.unwrap();
+    let mut filter = crate::schema::export_filter::ExportFilter::new(
+        crate::schema::derived_tables()
+            .into_iter()
+            .map(|table| table.name),
+    );
+    let mut bytes = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        filter
+            .feed(&chunk.unwrap(), &mut |part| bytes.extend_from_slice(part))
+            .unwrap();
+    }
+    filter
+        .finish(&mut |part| bytes.extend_from_slice(part))
+        .unwrap();
+    assert_eq!(
+        before,
+        crate::postgres_backfill::source_archive_inventory(source)
+            .await
+            .unwrap()
+    );
+    let fingerprint = crate::postgres_backfill::source_archive_fingerprint(source)
+        .await
+        .unwrap();
+    assert_eq!(
+        fingerprint,
+        (
+            u64::try_from(bytes.len()).unwrap(),
+            hex::encode(sha2::Sha256::digest(&bytes))
+        )
+    );
+    crate::postgres_backfill::family::SourceReceipt {
+        format_version: 1,
+        consistency: "operator_quiesced".into(),
+        export_bytes: fingerprint.0,
+        export_sha256: fingerprint.1,
+        schema_sha256: before.1,
+        table_counts: before.0,
+    }
+    .verify_export(&bytes)
+    .unwrap()
+}
+
+async fn sealed_old_histories(pg: &PostgresDb) -> serde_json::Value {
+    sqlx::query_scalar("SELECT jsonb_build_object('runs',(SELECT jsonb_agg(to_jsonb(r) ORDER BY r.scope,r.id) FROM mirror_backfill_run r WHERE r.scope IN ('satellites:1','notation:1')),'checkpoints',(SELECT jsonb_agg(to_jsonb(c) ORDER BY c.run_id,c.mirror) FROM mirror_backfill_checkpoint c JOIN mirror_backfill_run r ON r.id=c.run_id WHERE r.scope IN ('satellites:1','notation:1')))")
+        .fetch_one(pg.pool()).await.unwrap()
+}
+
+struct DriverCapture {
+    source: SurrealDb,
+    person: Uuid,
+    address: Uuid,
+    old_history: serde_json::Value,
+}
+
+async fn driver_capture(pg: &PostgresDb) -> DriverCapture {
+    use crate::postgres_backfill::{self as backfill, family::Family};
+    let source = crate::surreal::test_support::unmigrated().await;
+    super::super::from_source(crate::schema::apply(&source))
+        .await
+        .unwrap();
+    let entity = crate::postgres_mirror::tests::synthetic_entity(&source).await;
+    let entity = super::super::from_source(crate::entities::find_by_id(&source, entity))
+        .await
+        .unwrap()
+        .unwrap();
+    let global = Box::pin(backfill::start(&source, pg, 100, None))
+        .await
+        .unwrap();
+    assert!(global.is_clean(), "{global:?}");
+    for family in [Family::Satellites, Family::Notation] {
+        let receipt = verified_capture(&source).await;
+        let old = Box::pin(backfill::start_family(
+            &source, pg, family, receipt, 1, None, true,
+        ))
+        .await
+        .unwrap();
+        assert!(old.is_clean(), "{old:?}");
+    }
+    let old_history = sealed_old_histories(pg).await;
+    let first = person(&source).await;
+    let second = person(&source).await;
+    claim(&source, "captured-first-alias@example.com", first).await;
+    claim(&source, "captured-second-alias@example.com", first).await;
+    let keys = details(&source, first, second, entity.jurisdiction_id).await;
+    let address = match keys[0] {
+        MirrorKey::Address(id) => id,
+        _ => unreachable!(),
+    };
+    source.query("CREATE $id SET person_id=$person,e164='+15555550199',label='mobile',is_primary=true,inserted_at=time::now(),updated_at=time::now()")
+        .bind(("id",record_id("person_phone",Uuid::new_v4()))).bind(("person",record_id("person",first)))
+        .await.unwrap().check().unwrap();
+    DriverCapture {
+        source,
+        person: first,
+        address,
+        old_history,
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ExistingIdentity {
+    None,
+    Drift,
+    TargetOnly,
+}
+
+async fn advance_identity_driver(
+    pg: &PostgresDb,
+    captured: &DriverCapture,
+    existing: ExistingIdentity,
+) -> crate::postgres_backfill::RunReport {
+    use crate::postgres_backfill::{self as backfill, family::Family};
+    if !matches!(existing, ExistingIdentity::None) {
+        let row = super::super::from_source(crate::persons::find_by_id(
+            &captured.source,
+            captured.person,
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+        let (id, email) = if matches!(existing, ExistingIdentity::Drift) {
+            (captured.person, row.email)
+        } else {
+            (Uuid::new_v4(), "native-only-driver@example.com".into())
+        };
+        sqlx::query(
+            "INSERT INTO person(id,name,email,role) VALUES($1,'Native disagreement',$2,'admin')",
+        )
+        .bind(id)
+        .bind(email)
+        .execute(pg.pool())
+        .await
+        .unwrap();
+    }
+    let receipt = verified_capture(&captured.source).await;
+    let started = Box::pin(backfill::start_family(
+        &captured.source,
+        pg,
+        Family::Identity,
+        receipt,
+        1,
+        Some(1),
+        false,
+    ))
+    .await
+    .unwrap();
+    assert_eq!(started.status, backfill::RunStatus::Paused);
+    let advanced = Box::pin(backfill::resume_family(
+        &captured.source,
+        pg,
+        Family::Identity,
+        started.run_id,
+        None,
+        false,
+    ))
+    .await
+    .unwrap();
+    assert_eq!(advanced.run_id, started.run_id);
+    assert_eq!(advanced.status, backfill::RunStatus::Paused);
+    let activated = Box::pin(backfill::resume_family(
+        &captured.source,
+        pg,
+        Family::Identity,
+        started.run_id,
+        None,
+        true,
+    ))
+    .await
+    .unwrap();
+    assert_eq!(captured.old_history, sealed_old_histories(pg).await);
+    activated
+}
+
+#[tokio::test]
+async fn real_identity_driver_imports_all_nine_then_replays_without_source() {
+    use crate::postgres_backfill::{
+        self as backfill,
+        family::{self, Family},
+    };
+    let (options, database) = fresh_schema().await.expect("required PostgreSQL fixture");
+    let pg = connect(&options, &database).await;
+    let captured = driver_capture(&pg).await;
+    let activated = advance_identity_driver(&pg, &captured, ExistingIdentity::None).await;
+    assert!(activated.is_clean(), "{activated:?}");
+    assert_eq!(activated.parity.len(), 9);
+    assert!(
+        activated
+            .parity
+            .iter()
+            .all(|table| table.surreal > 0 && table.surreal == table.postgres)
+    );
+    let claims = activated
+        .parity
+        .iter()
+        .find(|table| table.table == "person_mailbox")
+        .unwrap();
+    assert_eq!((claims.surreal, claims.postgres), (4, 4));
+    family::require_scope(&pg, Family::Identity).await.unwrap();
+    sqlx::query("DELETE FROM address WHERE id=$1")
+        .bind(captured.address)
+        .execute(pg.pool())
+        .await
+        .unwrap();
+    assert_eq!(
+        super::super::mirror(&captured.source, &pg, &MirrorKey::Address(captured.address))
+            .await
+            .unwrap(),
+        Mirrored::Unchanged
+    );
+    let present: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM address WHERE id=$1)")
+        .bind(captured.address)
+        .fetch_one(pg.pool())
+        .await
+        .unwrap();
+    assert!(!present);
+    let offline = crate::surreal::SurrealDb::uninitialized();
+    let replay = Box::pin(backfill::resume_family(
+        &offline,
+        &pg,
+        Family::Identity,
+        activated.run_id,
+        None,
+        true,
+    ))
+    .await
+    .unwrap();
+    assert_eq!(replay.status, backfill::RunStatus::Completed);
+    assert_eq!(replay.run_id, activated.run_id);
+    assert_eq!(captured.old_history, sealed_old_histories(&pg).await);
+}
+
+async fn refused_identity_driver(existing: ExistingIdentity) {
+    use crate::postgres_backfill::{
+        self as backfill,
+        family::{self, Family},
+    };
+    let (options, database) = fresh_schema().await.expect("required PostgreSQL fixture");
+    let pg = connect(&options, &database).await;
+    let captured = driver_capture(&pg).await;
+    let result = advance_identity_driver(&pg, &captured, existing).await;
+    assert!(!result.is_clean(), "{result:?}");
+    assert_eq!(result.status, backfill::RunStatus::Paused);
+    assert!(matches!(
+        family::require_scope(&pg, Family::Identity).await,
+        Err(family::FamilyError::NotActive)
+    ));
+    let retained: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM person WHERE name='Native disagreement' AND role='admin'",
+    )
+    .fetch_one(pg.pool())
+    .await
+    .unwrap();
+    assert_eq!(retained, 1);
+    assert_eq!(captured.old_history, sealed_old_histories(&pg).await);
+}
+
+#[tokio::test]
+async fn real_identity_driver_refuses_native_overlap_drift() {
+    refused_identity_driver(ExistingIdentity::Drift).await;
+}
+
+#[tokio::test]
+async fn real_identity_driver_refuses_native_target_only_rows() {
+    refused_identity_driver(ExistingIdentity::TargetOnly).await;
 }
