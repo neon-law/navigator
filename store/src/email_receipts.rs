@@ -9,6 +9,8 @@ use crate::postgres::communications::{self as authority, CommunicationsAuthority
 use crate::postgres::PostgresDb;
 use crate::surreal::{record_id, record_uuid, SurrealDb};
 
+pub mod summary_recovery;
+
 pub const TABLE: &str = "email_receipt";
 pub const PROCESSING_PENDING: &str = "pending";
 pub const PROCESSING_ARCHIVED: &str = "archived";
