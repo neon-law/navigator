@@ -30,7 +30,7 @@ async fn import(source: &SurrealDb, pg: &PostgresDb, key: &MirrorKey) -> Mirrore
 async fn scoped_identity_import_retains_native_drift_and_deletion() {
     let (options, database) = fresh_schema().await.expect("required PostgreSQL fixture");
     let pg = connect(&options, &database).await;
-    let source = mem_surreal().await;
+    let source = super::super::from_source(mem_surreal()).await;
     let entity = synthetic_entity(&source).await;
     let person = captured_person(&source).await;
     let before = scoped_parity(&source, &pg).await.unwrap();
@@ -95,7 +95,7 @@ async fn scoped_identity_import_retains_native_drift_and_deletion() {
 async fn scoped_identity_refuses_bad_source_keys_and_never_removes_target_only_rows() {
     let (options, database) = fresh_schema().await.expect("required PostgreSQL fixture");
     let pg = connect(&options, &database).await;
-    let source = mem_surreal().await;
+    let source = super::super::from_source(mem_surreal()).await;
     let native = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO person(id,name,email) VALUES($1,'Native Person','native-only@example.com')",

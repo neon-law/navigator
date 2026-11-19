@@ -48,7 +48,7 @@ fn mailbox_table(report: &ParityReport) -> &super::super::TableParity {
 async fn scoped_mailbox_census_counts_claims_without_reassignment_or_values_in_reports() {
     let (options, database) = fresh_schema().await.expect("required PostgreSQL fixture");
     let pg = connect(&options, &database).await;
-    let source = mem_surreal().await;
+    let source = super::super::from_source(mem_surreal()).await;
     let first = person(&source).await;
     let second = person(&source).await;
     for id in [first, second] {
@@ -141,7 +141,7 @@ async fn scoped_mailbox_census_counts_claims_without_reassignment_or_values_in_r
 async fn scoped_mailbox_refuses_malformed_keys_holders_and_casefold_aliases() {
     let (options, database) = fresh_schema().await.expect("required PostgreSQL fixture");
     let pg = connect(&options, &database).await;
-    let source = mem_surreal().await;
+    let source = super::super::from_source(mem_surreal()).await;
     let holder = person(&source).await;
     for (id, person) in [
         (
@@ -194,7 +194,7 @@ async fn scoped_mailbox_refuses_malformed_keys_holders_and_casefold_aliases() {
 async fn scoped_mailbox_unknown_owner_is_counted_and_not_invented() {
     let (options, database) = fresh_schema().await.expect("required PostgreSQL fixture");
     let pg = connect(&options, &database).await;
-    let source = mem_surreal().await;
+    let source = super::super::from_source(mem_surreal()).await;
     let unknown = Uuid::new_v4();
     claim(&source, "unknown-owner@example.com", unknown).await;
     let report = scoped_parity(&source, &pg).await.unwrap();
@@ -291,7 +291,7 @@ async fn details(source: &SurrealDb, holder: Uuid, subject: Uuid) -> Vec<MirrorK
 async fn scoped_detail_import_preserves_every_typed_image_and_retains_native_drift() {
     let (options, database) = fresh_schema().await.expect("required PostgreSQL fixture");
     let pg = connect(&options, &database).await;
-    let source = mem_surreal().await;
+    let source = super::super::from_source(mem_surreal()).await;
     let holder = person(&source).await;
     let subject = person(&source).await;
     for id in [holder, subject] {
@@ -371,7 +371,7 @@ async fn scoped_detail_import_preserves_every_typed_image_and_retains_native_dri
 async fn scoped_details_refuse_orphan_parents_malformed_ids_and_unparseable_times() {
     let (options, database) = fresh_schema().await.expect("required PostgreSQL fixture");
     let pg = connect(&options, &database).await;
-    let source = mem_surreal().await;
+    let source = super::super::from_source(mem_surreal()).await;
     let missing = Uuid::new_v4();
     let address = Uuid::new_v4();
     source.query("CREATE $id SET person_id=$person,line1='Orphan street',city='Synthetic',region='SC',postal_code='00000',country='US'")
@@ -423,12 +423,14 @@ async fn scoped_details_refuse_orphan_parents_malformed_ids_and_unparseable_time
 async fn scoped_comparisons_do_not_read_unregistered_catalog_or_graph_rows() {
     let (options, database) = fresh_schema().await.expect("required PostgreSQL fixture");
     let pg = connect(&options, &database).await;
-    let source = crate::surreal::test_support::unmigrated().await;
-    source.query("CREATE jurisdiction:malformed SET name=123; CREATE entity_type:malformed SET name=123; CREATE entity_role:malformed SET inserted_at='not-a-time'")
+    let source = super::super::from_source(mem_surreal()).await;
+    source.query("REMOVE TABLE jurisdiction; REMOVE TABLE entity_type; REMOVE TABLE entity_role; DEFINE TABLE jurisdiction SCHEMALESS; DEFINE TABLE entity_type SCHEMALESS; DEFINE TABLE entity_role SCHEMALESS; CREATE jurisdiction:malformed SET name=123; CREATE entity_type:malformed SET name=123; CREATE entity_role:malformed SET inserted_at='not-a-time'")
         .await.unwrap().check().unwrap();
-    assert!(identity::scoped_parity(&source, &pg)
-        .await
-        .unwrap()
-        .is_clean());
+    assert!(
+        identity::scoped_parity(&source, &pg)
+            .await
+            .unwrap()
+            .is_clean()
+    );
     assert!(scoped_parity(&source, &pg).await.unwrap().is_clean());
 }
