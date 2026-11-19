@@ -279,6 +279,18 @@ pub(crate) async fn authorize_firm_management(
     actor_person_id: Option<Uuid>,
     firm_id: Uuid,
 ) -> Result<(), firms::FirmError> {
+    authorize_firm_management_on(pool, actor_role, actor_person_id, firm_id).await
+}
+
+pub(crate) async fn authorize_firm_management_on<'e, E>(
+    executor: E,
+    actor_role: crate::persons::Role,
+    actor_person_id: Option<Uuid>,
+    firm_id: Uuid,
+) -> Result<(), firms::FirmError>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
     if actor_role == crate::persons::Role::Owner {
         return Ok(());
     }
@@ -293,7 +305,7 @@ pub(crate) async fn authorize_firm_management(
     )
     .bind(person_id)
     .bind(firm_id)
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await?;
     match membership.as_deref() {
         Some("admin") => Ok(()),
