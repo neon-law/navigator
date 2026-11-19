@@ -3995,49 +3995,59 @@ mod tests {
 
     #[tokio::test]
     async fn a_foreign_tenant_first_sign_in_creates_a_client_and_the_next_one_finds_it() {
-        let surreal = mem_surreal().await;
-        let claims = foreign_claims(TENANT_A, "s1", "sam@client.test");
-        let (id, role, meta) =
-            resolve_person_from_claims(&surreal, Some(ProviderId::Microsoft), &claims, None)
+        store::test_support::with_postgres(async {
+            let surreal = store::surreal::SurrealDb::uninitialized();
+            let claims = foreign_claims(TENANT_A, "s1", "sam@client.test");
+            let (id, role, meta) =
+                resolve_person_from_claims(&surreal, Some(ProviderId::Microsoft), &claims, None)
+                    .await
+                    .expect("an unknown foreign-tenant identity creates a client");
+            assert_eq!(role, Role::Client);
+            assert!(meta.fresh.is_some());
+            let stored = store::persons::find_by_microsoft_subject(&surreal, &claims.sub)
                 .await
-                .expect("an unknown foreign-tenant identity creates a client");
-        assert_eq!(role, Role::Client);
-        assert!(meta.fresh.is_some());
-        let stored = store::persons::find_by_microsoft_subject(&surreal, &claims.sub)
-            .await
-            .expect("lookup")
-            .expect("row carries the tenant-scoped subject");
-        assert_eq!(stored.id, id);
+                .expect("lookup")
+                .expect("row carries the tenant-scoped subject");
+            assert_eq!(stored.id, id);
 
-        let (again, _, meta) =
-            resolve_person_from_claims(&surreal, Some(ProviderId::Microsoft), &claims, None)
-                .await
-                .expect("returning sign-in");
-        assert_eq!(again, id);
-        assert!(meta.fresh.is_none());
+            let (again, _, meta) =
+                resolve_person_from_claims(&surreal, Some(ProviderId::Microsoft), &claims, None)
+                    .await
+                    .expect("returning sign-in");
+            assert_eq!(again, id);
+            assert!(meta.fresh.is_none());
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_foreign_tenant_address_never_links_to_an_existing_person() {
-        let surreal = mem_surreal().await;
-        let victim = store::persons::create(
-            &surreal,
-            &store::persons::NewPerson::with_role("Seeded Lawyer", "lawyer@firm.test", Role::Owner),
-        )
-        .await
-        .expect("seed an existing privileged person");
-        let claims = foreign_claims(TENANT_A, "attacker", "Lawyer@Firm.test");
-        let refused =
-            resolve_person_from_claims(&surreal, Some(ProviderId::Microsoft), &claims, None)
-                .await
-                .expect_err("an asserted address must not take over a person");
-        assert!(matches!(refused, ResolveError::AddressInUse));
-        let after = store::persons::find_by_email_ci(&surreal, "lawyer@firm.test")
+        store::test_support::with_postgres(async {
+            let surreal = store::surreal::SurrealDb::uninitialized();
+            let victim = store::persons::create(
+                &surreal,
+                &store::persons::NewPerson::with_role(
+                    "Seeded Lawyer",
+                    "lawyer@firm.test",
+                    Role::Owner,
+                ),
+            )
             .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(after.id, victim.id);
-        assert_eq!(after.microsoft_subject, None, "nothing was linked");
+            .expect("seed an existing privileged person");
+            let claims = foreign_claims(TENANT_A, "attacker", "Lawyer@Firm.test");
+            let refused =
+                resolve_person_from_claims(&surreal, Some(ProviderId::Microsoft), &claims, None)
+                    .await
+                    .expect_err("an asserted address must not take over a person");
+            assert!(matches!(refused, ResolveError::AddressInUse));
+            let after = store::persons::find_by_email_ci(&surreal, "lawyer@firm.test")
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(after.id, victim.id);
+            assert_eq!(after.microsoft_subject, None, "nothing was linked");
+        })
+        .await;
     }
 
     #[tokio::test]
@@ -4935,64 +4945,68 @@ mod tests {
 
     #[tokio::test]
     async fn new_provider_accounts_require_age_admission_but_existing_accounts_do_not() {
-        let surreal = mem_surreal().await;
-        for provider in [
-            ProviderId::Primary,
-            ProviderId::Microsoft,
-            ProviderId::Apple,
-        ] {
-            let claims = unknown_claims("new@example.com");
-            let refused =
-                super::resolve_person(&surreal, Some(provider), &claims, None, true, false).await;
+        store::test_support::with_postgres(async {
+            let surreal = store::surreal::SurrealDb::uninitialized();
+            for provider in [
+                ProviderId::Primary,
+                ProviderId::Microsoft,
+                ProviderId::Apple,
+            ] {
+                let claims = unknown_claims("new@example.com");
+                let refused =
+                    super::resolve_person(&surreal, Some(provider), &claims, None, true, false)
+                        .await;
+                assert!(matches!(refused, Err(ResolveError::AgeRequired)));
+                assert!(
+                    store::persons::find_by_email_ci(&surreal, "new@example.com")
+                        .await
+                        .unwrap()
+                        .is_none()
+                );
+            }
+            let claims = unknown_claims("existing@example.com");
+            let (id, _, _) = super::resolve_person(
+                &surreal,
+                Some(ProviderId::Primary),
+                &claims,
+                None,
+                true,
+                true,
+            )
+            .await
+            .unwrap();
+            let (existing, _, resolution) = super::resolve_person(
+                &surreal,
+                Some(ProviderId::Primary),
+                &claims,
+                None,
+                true,
+                false,
+            )
+            .await
+            .unwrap();
+            assert_eq!(id, existing);
+            assert!(resolution.fresh.is_none());
+            let mut foreign = unknown_claims("foreign@example.com");
+            foreign.foreign_tenant = true;
+            let refused = super::resolve_person(
+                &surreal,
+                Some(ProviderId::Microsoft),
+                &foreign,
+                None,
+                true,
+                false,
+            )
+            .await;
             assert!(matches!(refused, Err(ResolveError::AgeRequired)));
             assert!(
-                store::persons::find_by_email_ci(&surreal, "new@example.com")
+                store::persons::find_by_email_ci(&surreal, "foreign@example.com")
                     .await
                     .unwrap()
                     .is_none()
             );
-        }
-        let claims = unknown_claims("existing@example.com");
-        let (id, _, _) = super::resolve_person(
-            &surreal,
-            Some(ProviderId::Primary),
-            &claims,
-            None,
-            true,
-            true,
-        )
-        .await
-        .unwrap();
-        let (existing, _, resolution) = super::resolve_person(
-            &surreal,
-            Some(ProviderId::Primary),
-            &claims,
-            None,
-            true,
-            false,
-        )
-        .await
-        .unwrap();
-        assert_eq!(id, existing);
-        assert!(resolution.fresh.is_none());
-        let mut foreign = unknown_claims("foreign@example.com");
-        foreign.foreign_tenant = true;
-        let refused = super::resolve_person(
-            &surreal,
-            Some(ProviderId::Microsoft),
-            &foreign,
-            None,
-            true,
-            false,
-        )
+        })
         .await;
-        assert!(matches!(refused, Err(ResolveError::AgeRequired)));
-        assert!(
-            store::persons::find_by_email_ci(&surreal, "foreign@example.com")
-                .await
-                .unwrap()
-                .is_none()
-        );
     }
 
     #[tokio::test]
