@@ -126,7 +126,7 @@ async fn deployment_change_retains_exact_authenticated_timestamp_bytes() {
         format!("{key}\n{timestamp}\n{actor}"),
     );
     let kms = cloud::FakeKms::new("synthetic-runtime-key");
-    let data_key = [17; 32];
+    let data_key: [u8; 32] = rand::random();
     let wrapped = kms.wrap_data_key(&data_key, &context).await.unwrap();
     let ciphertext = cloud::seal(b"synthetic-value", &data_key, &context).unwrap();
     let base64 = base64::engine::general_purpose::STANDARD;
