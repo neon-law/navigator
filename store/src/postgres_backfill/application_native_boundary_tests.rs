@@ -247,3 +247,56 @@ async fn native_reads(pg: &PostgresDb, rows: &Rows, actor: Uuid, project: Uuid, 
     })
     .await;
 }
+
+#[tokio::test]
+async fn activated_postgres_seeds_real_local_portfolio_without_source() {
+    let Some((pg, source, _, _, _)) =
+        Box::pin(super::application_family_tests::database_with_domain_parents()).await
+    else {
+        return;
+    };
+    let receipt = Box::pin(verified_family_capture(&source)).await;
+    let completed = Box::pin(start_family(
+        &source,
+        &pg,
+        family::Family::Application,
+        receipt,
+        10,
+        None,
+        true,
+    ))
+    .await
+    .unwrap();
+    assert!(completed.is_clean(), "{completed:?}");
+    let before = prior_histories(&pg).await;
+    crate::clauses::seed(&pg, &rules::clauses::library_clauses().unwrap())
+        .await
+        .unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let storage: std::sync::Arc<dyn cloud::StorageService> =
+        std::sync::Arc::new(cloud::FsStorage::new(directory.path()).await.unwrap());
+    PostgresDb::with_test_db(pg.clone(), async {
+        PostgresDb::application().await.unwrap();
+        let offline = SurrealDb::uninitialized();
+        let report = Box::pin(crate::seed::seed_environment(
+            &offline,
+            &storage,
+            crate::DeploymentEnvironment::Dev,
+            crate::seed::BrandSeed::Neon,
+        ))
+        .await
+        .unwrap();
+        assert!(report.projects_inserted >= 3, "{report:?}");
+        let seeded: i64 = sqlx::query_scalar("SELECT count(*) FROM project WHERE code=ANY($1)")
+            .bind(&["sample-litigation", "sample-transactional", "sample-estate"])
+            .fetch_one(pg.pool())
+            .await
+            .unwrap();
+        assert_eq!(seeded, 3);
+        assert!(crate::mailrooms::count(&offline).await.unwrap() > 0);
+        assert!(!storage.list("").await.unwrap().is_empty());
+    })
+    .await;
+    assert_eq!(prior_histories(&pg).await, before);
+    pg.pool().close().await;
+}

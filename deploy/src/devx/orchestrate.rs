@@ -1875,7 +1875,7 @@ async fn enroll_fixture(
     }
     family::require_runtime_scopes(&pg).await?;
     // Only after real activation may ordinary accessors seed the sample portfolio.
-    let source = store::surreal::connect(&super::surreal::host_config(cfg, database)).await?;
+    let source = store::surreal::SurrealDb::uninitialized();
     let storage = cloud::from_env().await?;
     store::seed::seed_environment(
         &source,
