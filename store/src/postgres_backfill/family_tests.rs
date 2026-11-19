@@ -84,11 +84,11 @@ fn an_existing_source_orphan_cannot_mask_a_different_missing_postgres_parent() {
 }
 
 use crate::postgres::PostgresDb;
-use crate::postgres_mirror::{records, MirrorKey, TableParity};
-use serde_json::{json, Value};
+use crate::postgres_mirror::{MirrorKey, TableParity, records};
+use serde_json::{Value, json};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Mutex,
+    atomic::{AtomicBool, Ordering},
 };
 use uuid::Uuid;
 
@@ -248,6 +248,12 @@ async fn advance(
 #[tokio::test]
 async fn scoped_import_repairs_sql_null_then_retries_failure_without_replaying_active_authority() {
     let pg = fixture().await;
+    for family in Family::all()
+        .iter()
+        .filter(|family| **family != Family::Satellites)
+    {
+        super::activate_fixture(&pg, *family).await;
+    }
     let source = source(&pg).await;
     let row = source.rows.lock().unwrap()[0].clone();
     let id = row["id"].as_str().unwrap();
@@ -291,7 +297,6 @@ async fn scoped_import_repairs_sql_null_then_retries_failure_without_replaying_a
     assert!(completed.is_clean());
     assert_eq!(completed.unresolved_references.len(), 1);
     assert_eq!(completed.unresolved_references[0].source_orphans, 1);
-    super::activate_fixture(&pg, Family::Notation).await;
     super::require_runtime_scopes(&pg).await.unwrap();
     assert!(
         !crate::postgres_mirror::backfilled(&pg).await.unwrap(),
@@ -303,11 +308,13 @@ async fn scoped_import_repairs_sql_null_then_retries_failure_without_replaying_a
         .await
         .unwrap();
     source.unavailable.store(true, Ordering::SeqCst);
-    assert!(advance(&pg, &source, run, None, true)
-        .await
-        .unwrap()
-        .snapshot
-        .is_none());
+    assert!(
+        advance(&pg, &source, run, None, true)
+            .await
+            .unwrap()
+            .snapshot
+            .is_none()
+    );
     let mode = crate::postgres_mirror::during_initial_copy(super::import_mode(&pg, "playbook"))
         .await
         .unwrap();
@@ -502,8 +509,9 @@ async fn malformed_extra_and_ambiguous_completion_proofs_fail_closed() {
         super::require_runtime_scopes(&pg).await,
         Err(FamilyError::NotActive)
     ));
-    super::activate_fixture(&pg, Family::Satellites).await;
-    super::activate_fixture(&pg, Family::Notation).await;
+    for family in Family::all() {
+        super::activate_fixture(&pg, *family).await;
+    }
     super::require_runtime_scopes(&pg).await.unwrap();
     let run = super::validated_scope(&pg, Family::Satellites)
         .await
@@ -682,8 +690,9 @@ async fn an_older_runtime_refuses_disjoint_future_authority_but_reports_remain_a
         super::require_runtime_scopes(&pg).await,
         Err(FamilyError::NotActive)
     ));
-    super::activate_fixture(&pg, Family::Satellites).await;
-    super::activate_fixture(&pg, Family::Notation).await;
+    for family in Family::all() {
+        super::activate_fixture(&pg, *family).await;
+    }
     let known = super::validated_scope(&pg, Family::Satellites)
         .await
         .unwrap();

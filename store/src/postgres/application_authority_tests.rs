@@ -222,6 +222,94 @@ async fn completed_secret_import_replay_never_reads_source_or_changes_native_his
     assert_eq!(after, before);
 }
 
+#[tokio::test]
+async fn deployment_context_transfer_only_fills_missing_original_bytes_on_identical_rows() {
+    use crate::postgres_mirror::{Mirrored, during_initial_copy, records};
+    let (options, database) = crate::postgres_mirror::tests::fresh_schema()
+        .await
+        .expect("required PostgreSQL fixture");
+    let pg = crate::postgres_mirror::tests::connect(&options, &database).await;
+    let id = uuid::Uuid::now_v7();
+    let timestamp = "2026-11-18T09:04:03.123456-05:00";
+    let captured = serde_json::json!({
+        "id": id, "request_id": id.to_string(), "actor_id": uuid::Uuid::now_v7().to_string().to_uppercase(),
+        "key": "NAVIGATOR_META_APP_SECRET", "ciphertext": "synthetic-authenticated-bytes",
+        "wrapped_key": "synthetic-wrapped-key", "kms_key_version": "synthetic-kms-version",
+        "inserted_at": timestamp, "inserted_at_text": timestamp, "updated_at": timestamp,
+    });
+    let (_, captured) = records::normalized_record("deployment_secret_change", captured).unwrap();
+    assert_eq!(
+        during_initial_copy(records::copy_record(
+            &pg,
+            "deployment_secret_change",
+            captured.clone()
+        ))
+        .await
+        .unwrap(),
+        Mirrored::Written
+    );
+    sqlx::query("UPDATE deployment_secret_change SET inserted_at_text=NULL WHERE id=$1")
+        .bind(id)
+        .execute(pg.pool())
+        .await
+        .unwrap();
+    let mut conflicting = captured.clone();
+    conflicting["ciphertext"] = serde_json::json!("synthetic-conflicting-bytes");
+    assert_eq!(
+        during_initial_copy(records::copy_record(
+            &pg,
+            "deployment_secret_change",
+            conflicting
+        ))
+        .await
+        .unwrap(),
+        Mirrored::Unchanged
+    );
+    let absent: Option<String> =
+        sqlx::query_scalar("SELECT inserted_at_text FROM deployment_secret_change WHERE id=$1")
+            .bind(id)
+            .fetch_one(pg.pool())
+            .await
+            .unwrap();
+    assert!(absent.is_none());
+    assert_eq!(
+        during_initial_copy(records::copy_record(
+            &pg,
+            "deployment_secret_change",
+            captured.clone()
+        ))
+        .await
+        .unwrap(),
+        Mirrored::Written
+    );
+    let before: serde_json::Value =
+        sqlx::query_scalar("SELECT to_jsonb(r) FROM deployment_secret_change r WHERE id=$1")
+            .bind(id)
+            .fetch_one(pg.pool())
+            .await
+            .unwrap();
+    assert_eq!(before["inserted_at_text"], timestamp);
+    let mut normalized = captured;
+    normalized["inserted_at_text"] = serde_json::json!("2026-11-18T14:04:03.123456Z");
+    assert_eq!(
+        during_initial_copy(records::copy_record(
+            &pg,
+            "deployment_secret_change",
+            normalized
+        ))
+        .await
+        .unwrap(),
+        Mirrored::Unchanged
+    );
+    let after: serde_json::Value =
+        sqlx::query_scalar("SELECT to_jsonb(r) FROM deployment_secret_change r WHERE id=$1")
+            .bind(id)
+            .fetch_one(pg.pool())
+            .await
+            .unwrap();
+    assert_eq!(after, before);
+}
+
 #[test]
 fn source_forbidden_boundary_rejects_sdk_access_before_any_engine() {
     const CHILD: &str = "NAVIGATOR_TEST_FORBIDDEN_SOURCE_ACCESS";

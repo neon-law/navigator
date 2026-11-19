@@ -25,7 +25,7 @@ use serde_json::Value;
 use sqlx::Row;
 use uuid::Uuid;
 
-use super::{changed, Columns, MirrorError, MirrorKey, Mirrored, ParityReport};
+use super::{Columns, MirrorError, MirrorKey, Mirrored, ParityReport, changed};
 use crate::{postgres::PostgresDb, surreal::SurrealDb};
 
 /// One mirrored table. Its PostgreSQL columns are exactly `columns`.
@@ -1372,6 +1372,28 @@ pub(super) const TABLES: &[Table] = &[
         timestamps: &["inserted_at", "updated_at"],
     },
     Table {
+        name: "matter_page",
+        group: "application_scoped",
+        columns: &[
+            "id",
+            "project_id",
+            "firm_id",
+            "slug",
+            "kind",
+            "title",
+            "draft",
+            "position",
+            "client_sections",
+            "lawyer_sections",
+            "clerk_sections",
+            "synced_at",
+            "document_revision",
+            "media",
+        ],
+        references: &[("project_id", "project"), ("firm_id", "firm")],
+        timestamps: &["synced_at"],
+    },
+    Table {
         name: "firm_integration_secret",
         group: "application_scoped",
         columns: &[
@@ -1491,10 +1513,11 @@ async fn reference_inventory(
     let selected: Vec<_> = TABLES
         .iter()
         .filter(|table| {
-            filter.map_or_else(
-                || !table.group.ends_with("_scoped"),
-                |names| names.contains(&table.name),
-            )
+            table.name != "matter_page"
+                && filter.map_or_else(
+                    || !table.group.ends_with("_scoped"),
+                    |names| names.contains(&table.name),
+                )
         })
         .collect();
     let mut parent_tables = std::collections::BTreeSet::new();
@@ -2131,9 +2154,40 @@ fn upsert_sql(table: &Table) -> Result<String, MirrorError> {
         .map(|column| format!("\"{column}\""))
         .collect::<Vec<_>>()
         .join(",");
+    if table.name == "deployment_secret_change" {
+        // Only an identical captured encrypted row can supply previously absent
+        // authenticated timestamp bytes. PostgreSQL timestamps cannot reconstruct them.
+        let compared = table
+            .columns
+            .iter()
+            .filter(|column| **column != "inserted_at_text")
+            .map(|column| format!("\"deployment_secret_change\".\"{column}\""))
+            .collect::<Vec<_>>()
+            .join(",");
+        let captured = table
+            .columns
+            .iter()
+            .filter(|column| **column != "inserted_at_text")
+            .map(|column| format!("EXCLUDED.\"{column}\""))
+            .collect::<Vec<_>>()
+            .join(",");
+        return Ok(format!(
+            "INSERT INTO deployment_secret_change ({columns}) SELECT {projection} FROM jsonb_populate_record(NULL::deployment_secret_change, $1::jsonb) r ON CONFLICT (id) DO UPDATE SET inserted_at_text=EXCLUDED.inserted_at_text WHERE deployment_secret_change.inserted_at_text IS NULL AND EXCLUDED.inserted_at_text IS NOT NULL AND ROW({compared}) IS NOT DISTINCT FROM ROW({captured})"
+        ));
+    }
+    if crate::postgres_backfill::family::Family::for_table(table.name)
+        == Some(crate::postgres_backfill::family::Family::Application)
+    {
+        let name = table.name;
+        return Ok(format!(
+            "INSERT INTO \"{name}\" ({columns}) SELECT {projection} FROM jsonb_populate_record(NULL::\"{name}\", $1::jsonb) r ON CONFLICT DO NOTHING"
+        ));
+    }
     if authoritative(table) && !crate::postgres_backfill::family::importing(table.name) {
         let name = table.name;
-        return Ok(format!("INSERT INTO \"{name}\" ({columns}) SELECT {projection} FROM jsonb_populate_record(NULL::\"{name}\", $1::jsonb) r ON CONFLICT (id) DO NOTHING"));
+        return Ok(format!(
+            "INSERT INTO \"{name}\" ({columns}) SELECT {projection} FROM jsonb_populate_record(NULL::\"{name}\", $1::jsonb) r ON CONFLICT (id) DO NOTHING"
+        ));
     }
     let rest = &table.columns[1..];
     let updates = rest

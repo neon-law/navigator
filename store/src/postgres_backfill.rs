@@ -64,7 +64,7 @@ pub const BORN_IN_POSTGRES: &str = "born_in_postgres";
 const OBJECT_CHECK_TIMEOUT: Duration = Duration::from_secs(120);
 
 use crate::postgres::PostgresDb;
-use crate::postgres_mirror::{mirror, missing, Mirror, MirrorError, MirrorKey, MIRRORS};
+use crate::postgres_mirror::{MIRRORS, Mirror, MirrorError, MirrorKey, mirror, missing};
 use crate::surreal::SurrealDb;
 
 /// Asset object coverage after checking both stores' metadata pointers and
@@ -1518,7 +1518,7 @@ mod archive_source {
     use futures::StreamExt;
 
     use crate::surreal::SurrealDb;
-    use anyhow::{bail, Context, Result};
+    use anyhow::{Context, Result, bail};
     use std::collections::BTreeMap;
     /// Count every live and canonical source table.
     ///
@@ -1693,8 +1693,16 @@ impl FamilySource<'_> {
             return Ok((report.tables, None, Some(proof)));
         }
         if selected == family::Family::Identity {
-            tables.extend(crate::postgres_mirror::identity::scoped_parity(self.surreal, pg).await?.tables);
-            tables.extend(crate::postgres_mirror::identity_detail::scoped_parity(self.surreal, pg).await?.tables);
+            tables.extend(
+                crate::postgres_mirror::identity::scoped_parity(self.surreal, pg)
+                    .await?
+                    .tables,
+            );
+            tables.extend(
+                crate::postgres_mirror::identity_detail::scoped_parity(self.surreal, pg)
+                    .await?
+                    .tables,
+            );
         }
         if selected == family::Family::Notation {
             tables.extend(
@@ -1710,8 +1718,14 @@ impl FamilySource<'_> {
         }
         for name in selected.tables() {
             match *name {
-                "entity" | "person" | "address" | "credential" | "email_token"
-                | "person_delegate" | "person_external_identity" | "person_mailbox" => {}
+                "entity"
+                | "person"
+                | "address"
+                | "credential"
+                | "email_token"
+                | "person_delegate"
+                | "person_external_identity"
+                | "person_mailbox" => {}
                 "notation" | "answer" | "notation_event" | "notation_clause" => {}
                 "asset" => {
                     let (table, proof) =
@@ -1721,6 +1735,13 @@ impl FamilySource<'_> {
                 }
                 "template" => tables.push(
                     crate::postgres_mirror::templates::scoped_parity(self.surreal, pg).await?,
+                ),
+                "matter_page" => tables.push(
+                    crate::postgres_mirror::matter_pages_captions::scoped_page_parity(
+                        self.surreal,
+                        pg,
+                    )
+                    .await?,
                 ),
                 "attestation" => tables.extend(
                     crate::postgres_mirror::attestations::parity(self.surreal, pg)

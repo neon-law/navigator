@@ -62,7 +62,8 @@ async fn lifecycle_requires_a_baseline_and_database_refuses_broken_chain() {
         Some("matter_concluded"),
         None,
     )
-    .await.unwrap();
+    .await
+    .unwrap();
     assert!(
         verified_projection_history(&pg, project, &state("closed", Some(closed)))
             .await
@@ -70,7 +71,9 @@ async fn lifecycle_requires_a_baseline_and_database_refuses_broken_chain() {
             .is_none()
     );
     let (pg, project, _) = fixture().await;
-    event(&pg, project, None, "open", None, None, None).await.unwrap();
+    event(&pg, project, None, "open", None, None, None)
+        .await
+        .unwrap();
     assert!(event(
         &pg,
         project,
@@ -80,16 +83,24 @@ async fn lifecycle_requires_a_baseline_and_database_refuses_broken_chain() {
         Some("matter_concluded"),
         None,
     )
-    .await.is_err());
-    assert_eq!(verified_projection_history(&pg, project, &state("open", None))
-        .await.unwrap().unwrap(), vec![state("open", None)]);
+    .await
+    .is_err());
+    assert_eq!(
+        verified_projection_history(&pg, project, &state("open", None))
+            .await
+            .unwrap()
+            .unwrap(),
+        vec![state("open", None)]
+    );
 }
 
 #[tokio::test]
 async fn lifecycle_preserves_backdated_attestation_and_checks_terminal_projection() {
     let (pg, project, actor) = fixture().await;
     let closed = "2026-11-02T12:00:00Z";
-    event(&pg, project, None, "open", None, None, None).await.unwrap();
+    event(&pg, project, None, "open", None, None, None)
+        .await
+        .unwrap();
     event(
         &pg,
         project,
@@ -99,7 +110,8 @@ async fn lifecycle_preserves_backdated_attestation_and_checks_terminal_projectio
         Some("matter_concluded"),
         None,
     )
-    .await.unwrap();
+    .await
+    .unwrap();
     event(
         &pg,
         project,
@@ -109,7 +121,8 @@ async fn lifecycle_preserves_backdated_attestation_and_checks_terminal_projectio
         Some("new_matter_event"),
         Some(actor),
     )
-    .await.unwrap();
+    .await
+    .unwrap();
     let history = verified_projection_history(&pg, project, &state("open", None))
         .await
         .unwrap()
@@ -133,8 +146,13 @@ async fn lifecycle_preserves_backdated_attestation_and_checks_terminal_projectio
 async fn historical_state(pg: &PostgresDb, project: Uuid, status: &str, closed: &str) {
     let projection = state(status, Some(closed));
     sqlx::query("UPDATE project SET status=$2,closed_at=$3,closure_reason=$4 WHERE id=$1")
-        .bind(project).bind(status).bind(closed).bind(projection.closure_reason)
-        .execute(pg.pool()).await.unwrap();
+        .bind(project)
+        .bind(status)
+        .bind(closed)
+        .bind(projection.closure_reason)
+        .execute(pg.pool())
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -150,7 +168,8 @@ async fn lifecycle_refuses_unattested_reopen_and_database_keeps_archiving_termin
         Some("matter_concluded"),
         None,
     )
-    .await.unwrap();
+    .await
+    .unwrap();
     event(
         &pg,
         project,
@@ -160,7 +179,8 @@ async fn lifecycle_refuses_unattested_reopen_and_database_keeps_archiving_termin
         Some("new_matter_event"),
         None,
     )
-    .await.unwrap();
+    .await
+    .unwrap();
     assert!(
         verified_projection_history(&pg, project, &state("open", None))
             .await
@@ -178,7 +198,8 @@ async fn lifecycle_refuses_unattested_reopen_and_database_keeps_archiving_termin
         None,
         None,
     )
-    .await.unwrap();
+    .await
+    .unwrap();
     assert!(event(
         &pg,
         project,
@@ -188,7 +209,8 @@ async fn lifecycle_refuses_unattested_reopen_and_database_keeps_archiving_termin
         Some("matter_concluded"),
         None,
     )
-    .await.is_err());
+    .await
+    .is_err());
 }
 
 #[test]
@@ -196,7 +218,8 @@ fn lifecycle_decoder_rejects_discontinuous_untrusted_history() {
     let row = |from: Option<&str>, status| ProjectionEvent {
         from_status: from.map(str::to_owned),
         state: state(status, (status != "open").then_some("2026-11-02T12:00:00Z")),
-        effective_at: Some(Utc::now()), recorded_at: Some(Utc::now()),
+        effective_at: Some(Utc::now()),
+        recorded_at: Some(Utc::now()),
         reason: (status == "closed").then(|| "matter_concluded".into()),
         attesting_person_id: None,
     };
