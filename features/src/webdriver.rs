@@ -365,7 +365,25 @@ pub async fn login_as_at(c: &Client, base_url: &str, email: &str, password: &str
 }
 
 async fn submit_login_form(c: &Client) {
-    scroll_and_js_click(c, "button[type='submit'], input[type='submit']").await;
+    // Submit the form once: the provider also handles the button's click event.
+    let submitted = c
+        .execute(
+            "const submitters = Array.from(document.querySelectorAll(\"button[type='submit'], input[type='submit']\")) \
+             .filter(el => el.form && !el.matches(':disabled') && el.getClientRects().length \
+             && getComputedStyle(el).visibility !== 'hidden'); \
+             if (submitters.length !== 1) { return false; } \
+             const submitter = submitters[0]; \
+             submitter.scrollIntoView({block: 'center'}); \
+             submitter.form.requestSubmit(submitter); return true;",
+            vec![],
+        )
+        .await
+        .expect("submit the login form through its native submit handler");
+    assert_eq!(
+        submitted.as_bool(),
+        Some(true),
+        "one enabled login submitter"
+    );
 }
 
 /// Type `value` into the text input or textarea at `css`, confirming every character
