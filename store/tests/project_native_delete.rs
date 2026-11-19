@@ -51,7 +51,7 @@ async fn fixture(db: &SurrealDb) -> (Uuid, Uuid) {
     let firm = store::firms::create(
         db,
         &store::firms::NewFirm {
-            name: "Synthetic firm".to_owned(),
+            name: format!("Firm {}", Uuid::new_v4().simple()),
             status: "active".to_owned(),
             entity_id: entity(db).await,
             admin_dri_person_id: admin.id,
@@ -65,7 +65,7 @@ async fn fixture(db: &SurrealDb) -> (Uuid, Uuid) {
         Role::Admin,
         Some(admin.id),
         &store::brands::NewBrand {
-            name: "Synthetic brand".to_owned(),
+            name: format!("Brand {}", Uuid::new_v4().simple()),
             key: key.clone(),
             firm_id: Some(firm.id),
             ..Default::default()
