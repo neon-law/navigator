@@ -48,7 +48,7 @@ pub enum ReconciliationError {
     #[error("Project Slack reconciliation conflicts with retained delivery evidence")]
     Conflict,
     #[error("Project Slack reconciliation storage unavailable")]
-    Storage(#[source] sqlx::Error),
+    Storage,
 }
 
 impl From<sqlx::Error> for ReconciliationError {
@@ -59,7 +59,7 @@ impl From<sqlx::Error> for ReconciliationError {
         {
             Self::Conflict
         } else {
-            Self::Storage(error)
+            Self::Storage
         }
     }
 }

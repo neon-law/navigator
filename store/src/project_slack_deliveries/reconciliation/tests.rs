@@ -225,7 +225,7 @@ async fn a_failed_posted_receipt_rolls_back_disposition_and_immutable_audit() {
         let pg=PostgresDb::application().await.unwrap();let request=fixture(&pg).await;
         sqlx::raw_sql("CREATE FUNCTION reject_test_slack_receipt() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'synthetic receipt failure'; END; $$; CREATE TRIGGER reject_test_slack_receipt BEFORE INSERT ON project_slack_delivery FOR EACH ROW EXECUTE FUNCTION reject_test_slack_receipt();")
             .execute(pg.pool()).await.unwrap();
-        assert!(matches!(reconcile(&pg,request).await,Err(ReconciliationError::Storage(_))));
+        assert!(matches!(reconcile(&pg,request).await,Err(ReconciliationError::Storage)));
         assert_eq!(counts(&pg,request.project_id).await,(0,0,"unresolved".into()));
         sqlx::raw_sql("DROP TRIGGER reject_test_slack_receipt ON project_slack_delivery; DROP FUNCTION reject_test_slack_receipt();")
             .execute(pg.pool()).await.unwrap();
