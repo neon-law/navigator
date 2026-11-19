@@ -57,7 +57,7 @@ impl Action {
     fn target(self, source: &str, command: &EmailSummaryRecoveryRequest) -> String {
         match self {
             Self::Resume => source.to_owned(),
-            Self::Fork(_) => {
+            Self::Fork(_) | Self::RetryProvider(_) | Self::ReconciledDelivery(_) => {
                 email_summary_recovery_child(command.request.receipt_id, command.operation_id)
             }
         }
