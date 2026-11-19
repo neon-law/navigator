@@ -170,7 +170,10 @@ async fn failed_data_connection_drops_only_the_minted_fixture_database() {
             })
             .unwrap();
         assert!(database.starts_with("native_test_"));
-        assert!(error.root_cause().to_string().contains(&missing_user));
+        assert!(matches!(
+            error.downcast_ref::<crate::postgres::PostgresError>(),
+            Some(crate::postgres::PostgresError::Connection)
+        ));
         assert!(!format!("{error:#}").contains("cleanup also failed"));
         let exists: bool =
             sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname=$1)")
