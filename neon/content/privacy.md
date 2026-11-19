@@ -30,12 +30,9 @@ from Google's font servers.
 
 ## Billing Information
 
-We use Stripe Checkout for recurring plans and Xero for consultations; matter billing may also use Stripe. We share
-billing information needed to administer your purchase with the provider, which handles payment details under its own
-privacy policy. Before subscribing, you see the price, billing period, renewal terms, and cancellation method beside the
-payment control and choose whether to agree. You can stop renewal online from [Consultations and plans](/purchases).
-Stripe cancellation preserves the current paid period; it does not end a legal engagement or erase an existing invoice.
-Cancelling renewal does not limit refund rights under applicable law or your engagement agreement.
+Matter billing may use Stripe. We share billing information needed to administer payment with the provider, which
+handles payment details under its own privacy policy. We provide payment terms with the applicable service and in the
+engagement agreement.
 
 Court and government filing fees are billed separately at actual cost and itemized on your matter invoice.
 
