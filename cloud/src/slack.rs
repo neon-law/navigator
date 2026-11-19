@@ -204,6 +204,9 @@ pub trait SlackService: Send + Sync {
     /// call archived it; `Ok(false)` when it already was, so a re-run is a
     /// no-op. Navigator archives a matter's channel and never deletes it.
     async fn archive_channel(&self, channel_id: &str) -> Result<bool, SlackError>;
+    /// Unarchive a channel. `Ok(true)` when this call unarchived it;
+    /// `Ok(false)` when it was not archived.
+    async fn unarchive_channel(&self, channel_id: &str) -> Result<bool, SlackError>;
     /// Post a message and return Slack's timestamp for it, the address
     /// [`SlackService::update_message`] edits.
     async fn post_message_ts(&self, channel_id: &str, text: &str) -> Result<String, SlackError>;
@@ -249,38 +252,54 @@ pub async fn ensure_private_channel<S: SlackService + ?Sized>(
     Ok((channel, created))
 }
 
-/// What [`archive_recorded_channel`] found and did.
+/// What [`converge_recorded_channel`] found and did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ChannelRetirement {
+pub enum ChannelLifecycle {
     /// This call archived the channel.
     Archived,
-    /// The channel was already archived.
-    AlreadyArchived,
-    /// A dry run found an active channel this call would archive.
+    /// This call unarchived the channel.
+    Unarchived,
+    /// The channel already matched the Project's status.
+    Unchanged,
+    /// A dry run found an active channel of a closed Project.
     WouldArchive,
+    /// A dry run found an archived channel of an open Project.
+    WouldUnarchive,
     /// The recorded id no longer resolves to a channel.
     Missing,
 }
 
-/// Archive the channel a Project recorded, looking it up by id so a channel
-/// renamed by hand is still found. Archiving keeps the channel's history,
-/// which is part of the matter's record; Navigator never deletes it. A dry
-/// run reads the channel and archives nothing.
+/// Bring the channel a Project recorded in step with its status: archived
+/// when the Project is closed or archived, active when it is open. The
+/// channel is found by its recorded id, so a channel renamed by hand is still
+/// found. Archiving keeps the channel's history, which is part of the
+/// matter's record; Navigator never deletes it. A dry run reads the channel
+/// and changes nothing.
 ///
 /// # Errors
 /// Slack's refusal or an unreachable Slack.
-pub async fn archive_recorded_channel<S: SlackService + ?Sized>(
+pub async fn converge_recorded_channel<S: SlackService + ?Sized>(
     service: &S,
     channel_id: &str,
+    open: bool,
     dry_run: bool,
-) -> Result<ChannelRetirement, SlackError> {
-    match service.get_channel(channel_id).await? {
-        None => Ok(ChannelRetirement::Missing),
-        Some(channel) if channel.is_archived => Ok(ChannelRetirement::AlreadyArchived),
-        Some(_) if dry_run => Ok(ChannelRetirement::WouldArchive),
-        Some(channel) => {
+) -> Result<ChannelLifecycle, SlackError> {
+    let Some(channel) = service.get_channel(channel_id).await? else {
+        return Ok(ChannelLifecycle::Missing);
+    };
+    if channel.is_archived != open {
+        return Ok(ChannelLifecycle::Unchanged);
+    }
+    match (open, dry_run) {
+        (true, true) => Ok(ChannelLifecycle::WouldUnarchive),
+        (false, true) => Ok(ChannelLifecycle::WouldArchive),
+        (true, false) => {
+            service.unarchive_channel(&channel.id).await?;
+            Ok(ChannelLifecycle::Unarchived)
+        }
+        (false, false) => {
             service.archive_channel(&channel.id).await?;
-            Ok(ChannelRetirement::Archived)
+            Ok(ChannelLifecycle::Archived)
         }
     }
 }
@@ -525,14 +544,11 @@ impl SlackService for FakeSlack {
     }
 
     async fn archive_channel(&self, channel_id: &str) -> Result<bool, SlackError> {
-        self.check_available()?;
-        let mut by_id = self.by_id.lock().expect("Slack fake lock poisoned");
-        let channel = by_id.get_mut(channel_id).ok_or(SlackError::Api)?;
-        if channel.is_archived {
-            return Ok(false);
-        }
-        channel.is_archived = true;
-        Ok(true)
+        self.set_archived(channel_id, true)
+    }
+
+    async fn unarchive_channel(&self, channel_id: &str) -> Result<bool, SlackError> {
+        self.set_archived(channel_id, false)
     }
 
     async fn post_message_ts(&self, channel_id: &str, text: &str) -> Result<String, SlackError> {
@@ -560,6 +576,21 @@ impl SlackService for FakeSlack {
             }
             _ => Ok(false),
         }
+    }
+}
+
+impl FakeSlack {
+    /// Slack answers an archive of an archived channel, and an unarchive of
+    /// an active one, with a refusal the adapter reads as "already so".
+    fn set_archived(&self, channel_id: &str, archived: bool) -> Result<bool, SlackError> {
+        self.check_available()?;
+        let mut by_id = self.by_id.lock().expect("Slack fake lock poisoned");
+        let channel = by_id.get_mut(channel_id).ok_or(SlackError::Api)?;
+        if channel.is_archived == archived {
+            return Ok(false);
+        }
+        channel.is_archived = archived;
+        Ok(true)
     }
 }
 
@@ -973,16 +1004,15 @@ impl SlackService for SlackClient {
     /// `conversations.archive`. Slack's `already_archived` is the steady
     /// state of a re-run, not a failure.
     async fn archive_channel(&self, channel_id: &str) -> Result<bool, SlackError> {
-        let body = self
-            .post("conversations.archive", json!({ "channel": channel_id }))
-            .await?;
-        let response: BasicResponse =
-            serde_json::from_value(body).map_err(|_| SlackError::IncompleteResponse)?;
-        match (response.ok, response.error.as_deref()) {
-            (true, _) => Ok(true),
-            (false, Some("already_archived")) => Ok(false),
-            (false, _) => Err(SlackError::Api),
-        }
+        self.toggle_archive("conversations.archive", channel_id, "already_archived")
+            .await
+    }
+
+    /// `conversations.unarchive`. Slack's `not_archived` is the steady state
+    /// of a re-run, not a failure.
+    async fn unarchive_channel(&self, channel_id: &str) -> Result<bool, SlackError> {
+        self.toggle_archive("conversations.unarchive", channel_id, "not_archived")
+            .await
     }
 
     async fn post_message_ts(&self, channel_id: &str, text: &str) -> Result<String, SlackError> {
@@ -1034,6 +1064,24 @@ impl SlackService for SlackClient {
     }
 }
 
+impl SlackClient {
+    async fn toggle_archive(
+        &self,
+        method: &str,
+        channel_id: &str,
+        already: &str,
+    ) -> Result<bool, SlackError> {
+        let body = self.post(method, json!({ "channel": channel_id })).await?;
+        let response: BasicResponse =
+            serde_json::from_value(body).map_err(|_| SlackError::IncompleteResponse)?;
+        match (response.ok, response.error.as_deref()) {
+            (true, _) => Ok(true),
+            (false, Some(error)) if error == already => Ok(false),
+            (false, _) => Err(SlackError::Api),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct MessageResponse {
     ok: bool,
@@ -1060,8 +1108,8 @@ struct ResponseMetadata {
 #[cfg(test)]
 mod tests {
     use super::{
-        archive_recorded_channel, blocks_to_fallback_text, ensure_private_channel,
-        labels_slack_from_staging_from, outbound_slack_text, ChannelRetirement, FakeSlack,
+        blocks_to_fallback_text, converge_recorded_channel, ensure_private_channel,
+        labels_slack_from_staging_from, outbound_slack_text, ChannelLifecycle, FakeSlack,
         SlackClient, SlackError, SlackMemberId, SlackService, SLACK_STAGING_MARK,
     };
     use wiremock::matchers::{body_partial_json, method, path, query_param};
@@ -1475,63 +1523,108 @@ mod tests {
         ));
     }
 
-    /// The Project records the channel's id, so a channel renamed by hand is
-    /// still archived, one already archived is left alone, and a deleted one
-    /// is reported missing rather than failing the close.
+    /// Slack answers an unarchive of an active channel with `not_archived`,
+    /// the steady state of a re-run, so it reads as "nothing to do".
     #[tokio::test]
-    async fn a_recorded_channel_is_archived_once_whatever_its_name() {
+    async fn unarchiving_posts_the_channel_and_reads_not_archived_as_no_change() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/conversations.unarchive"))
+            .and(body_partial_json(serde_json::json!({ "channel": "C1" })))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "ok": true })),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/conversations.unarchive"))
+            .and(body_partial_json(serde_json::json!({ "channel": "C2" })))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "ok": false, "error": "not_archived" })),
+            )
+            .mount(&server)
+            .await;
+        let client = SlackClient::with_base_url("test-token", server.uri());
+        assert!(client.unarchive_channel("C1").await.unwrap());
+        assert!(!client.unarchive_channel("C2").await.unwrap());
+    }
+
+    /// The Project records the channel's id, so a channel renamed by hand is
+    /// still converged. A closed Project's channel is archived once, an open
+    /// Project's archived channel is unarchived once, a deleted channel is
+    /// reported missing rather than failing, and a dry run changes nothing.
+    #[tokio::test]
+    async fn a_recorded_channel_follows_the_projects_status_whatever_its_name() {
         let slack = FakeSlack::new();
         let (channel, _) = ensure_private_channel(&slack, "navigator-sample", &[])
             .await
             .unwrap();
         slack.rename(&channel.id, "renamed-by-hand");
-        assert_eq!(
-            archive_recorded_channel(&slack, &channel.id, false)
-                .await
-                .unwrap(),
-            ChannelRetirement::Archived
-        );
-        assert!(
+        let is_archived = || async {
             slack
                 .get_channel(&channel.id)
                 .await
                 .unwrap()
                 .unwrap()
                 .is_archived
-        );
+        };
+
+        // Closed: dry run reports, then archive, then steady state.
         assert_eq!(
-            archive_recorded_channel(&slack, &channel.id, false)
+            converge_recorded_channel(&slack, &channel.id, false, true)
                 .await
                 .unwrap(),
-            ChannelRetirement::AlreadyArchived
+            ChannelLifecycle::WouldArchive
         );
+        assert!(!is_archived().await, "a dry run archives nothing");
+        assert_eq!(
+            converge_recorded_channel(&slack, &channel.id, false, false)
+                .await
+                .unwrap(),
+            ChannelLifecycle::Archived
+        );
+        assert!(is_archived().await);
+        assert_eq!(
+            converge_recorded_channel(&slack, &channel.id, false, false)
+                .await
+                .unwrap(),
+            ChannelLifecycle::Unchanged
+        );
+
+        // Reopened: dry run reports, then unarchive, then steady state.
+        assert_eq!(
+            converge_recorded_channel(&slack, &channel.id, true, true)
+                .await
+                .unwrap(),
+            ChannelLifecycle::WouldUnarchive
+        );
+        assert!(is_archived().await, "a dry run unarchives nothing");
+        assert_eq!(
+            converge_recorded_channel(&slack, &channel.id, true, false)
+                .await
+                .unwrap(),
+            ChannelLifecycle::Unarchived
+        );
+        assert!(!is_archived().await);
+        assert_eq!(
+            converge_recorded_channel(&slack, &channel.id, true, false)
+                .await
+                .unwrap(),
+            ChannelLifecycle::Unchanged
+        );
+
         slack.remove(&channel.id);
         assert_eq!(
-            archive_recorded_channel(&slack, &channel.id, false)
+            converge_recorded_channel(&slack, &channel.id, false, false)
                 .await
                 .unwrap(),
-            ChannelRetirement::Missing
-        );
-        let (second, _) = ensure_private_channel(&slack, "navigator-other", &[])
-            .await
-            .unwrap();
-        assert_eq!(
-            archive_recorded_channel(&slack, &second.id, true)
-                .await
-                .unwrap(),
-            ChannelRetirement::WouldArchive
-        );
-        assert!(
-            !slack
-                .get_channel(&second.id)
-                .await
-                .unwrap()
-                .unwrap()
-                .is_archived,
-            "a dry run archives nothing"
+            ChannelLifecycle::Missing
         );
         slack.set_unavailable(true);
-        assert!(archive_recorded_channel(&slack, "C1", false).await.is_err());
+        assert!(converge_recorded_channel(&slack, "C1", true, false)
+            .await
+            .is_err());
     }
 
     #[tokio::test]

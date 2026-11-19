@@ -37,6 +37,9 @@ pub struct MembershipOutcome {
     pub channels_repaired: usize,
     /// `1` when a closed or archived Project's channel was archived this run.
     pub channels_archived: usize,
+    /// `1` when an open Project's archived channel was unarchived this run.
+    #[serde(default)]
+    pub channels_unarchived: usize,
 }
 
 /// Checkpoint-safe result of resolving a Project's channel. It deliberately
@@ -144,6 +147,7 @@ pub async fn resolve_channel(
                 .map_err(slack_error)?
             {
                 report.channels_archived += 1;
+                log_channel_archived(surreal, target.project_id, &target.status).await;
             }
         }
         return Ok(ChannelResolution {
@@ -158,7 +162,13 @@ pub async fn resolve_channel(
     let mut stale = false;
     if let Some(id) = channel_id.as_deref() {
         match slack.channel_member_ids(id).await {
-            Ok(_) => (),
+            Ok(_) => {
+                // A reopened Project's channel comes back with its history.
+                report.channels_unarchived += unarchive_open_channel(slack, id).await?;
+                if report.channels_unarchived > 0 {
+                    log_unarchived(surreal, target.project_id).await;
+                }
+            }
             Err(SlackBotError::Api(code)) if code == "channel_not_found" => stale = true,
             Err(error) => return Err(slack_error(error)),
         }
@@ -194,6 +204,53 @@ pub async fn resolve_channel(
         channel_id,
         outcome: report,
     })
+}
+
+/// Unarchive an open Project's recorded channel: `1` when this call did,
+/// `0` when it was already active. Slack answers an active channel with a
+/// steady-state refusal the bot adapter reads as `false`, so a nightly re-run
+/// changes nothing.
+async fn unarchive_open_channel(
+    slack: &Arc<dyn SlackBot>,
+    channel_id: &str,
+) -> Result<usize, HandlerError> {
+    slack
+        .unarchive_channel(channel_id)
+        .await
+        .map(usize::from)
+        .map_err(slack_error)
+}
+
+/// Record the unarchive on the Project's Relationship Log. A log write that
+/// fails is reported in the worker log and never undoes the change.
+async fn log_unarchived(surreal: &SurrealDb, project_id: Uuid) {
+    let entry = store::relationship_logs::NewRelationshipLog {
+        actor_person_id: None,
+        subject_type: "project".to_string(),
+        subject_id: project_id,
+        action: "slack_channel_unarchived".to_string(),
+        detail: "Project status open".to_string(),
+        project_id: Some(project_id),
+    };
+    if let Err(error) = store::relationship_logs::record(surreal, &entry).await {
+        tracing::warn!(%project_id, %error, "slack channel change not logged");
+    }
+}
+
+/// Record the archive on the Project's Relationship Log, like
+/// [`log_unarchived`].
+async fn log_channel_archived(surreal: &SurrealDb, project_id: Uuid, status: &str) {
+    let entry = store::relationship_logs::NewRelationshipLog {
+        actor_person_id: None,
+        subject_type: "project".to_string(),
+        subject_id: project_id,
+        action: "slack_channel_archived".to_string(),
+        detail: format!("Project status {status}"),
+        project_id: Some(project_id),
+    };
+    if let Err(error) = store::relationship_logs::record(surreal, &entry).await {
+        tracing::warn!(%project_id, %error, "slack channel change not logged");
+    }
 }
 
 /// Look up the eligible identities only inside this operation and invite the
@@ -246,7 +303,10 @@ pub async fn invite_members(
 
 #[cfg(test)]
 mod tests {
-    use super::{invite_members, reconcile_project, resolve_channel, MembershipOutcome};
+    use super::{
+        invite_members, reconcile_project, resolve_channel, unarchive_open_channel,
+        MembershipOutcome,
+    };
     use crate::nightly_project_update::{sweep_in_process, NightlyProjectUpdateReport};
     use async_trait::async_trait;
     use cloud::forge::{FakeForge, ForgeService};
@@ -273,6 +333,10 @@ mod tests {
         gone: Vec<String>,
         /// Channel ids archived, in order.
         archived: Mutex<Vec<String>>,
+        /// Channel ids Slack holds archived until unarchive is asked for.
+        archived_on_slack: Vec<String>,
+        /// Channel ids unarchive was asked for, in order.
+        unarchived: Mutex<Vec<String>>,
         lookup_error: bool,
         member_error: bool,
         invite_error: bool,
@@ -364,6 +428,16 @@ mod tests {
                 .expect("archived lock")
                 .push(channel_id.to_string());
             Ok(true)
+        }
+
+        async fn unarchive_channel(&self, channel_id: &str) -> Result<bool, SlackBotError> {
+            let mut unarchived = self.unarchived.lock().expect("unarchived lock");
+            // Only a channel Slack holds archived changes, and only once; a
+            // re-run finds it active, the steady state.
+            let changes = self.archived_on_slack.iter().any(|id| id == channel_id)
+                && !unarchived.iter().any(|id| id == channel_id);
+            unarchived.push(channel_id.to_string());
+            Ok(changes)
         }
 
         async fn create_channel_canvas(&self, _: &str, _: &str) -> Result<String, SlackBotError> {
@@ -872,5 +946,22 @@ mod tests {
             .await
             .expect("find")
             .is_some());
+    }
+
+    /// A reopened Project's archived channel is unarchived once, and the
+    /// nightly re-run finds it active and changes nothing.
+    #[tokio::test]
+    async fn an_open_projects_archived_channel_is_unarchived_once() {
+        let slack = Arc::new(ReconciliationSlack {
+            archived_on_slack: vec!["C1".to_string()],
+            ..ReconciliationSlack::default()
+        });
+        let bot: Arc<dyn SlackBot> = slack.clone();
+        assert_eq!(unarchive_open_channel(&bot, "C1").await.unwrap(), 1);
+        assert_eq!(unarchive_open_channel(&bot, "C1").await.unwrap(), 0);
+        assert_eq!(
+            *slack.unarchived.lock().unwrap(),
+            vec!["C1".to_string(), "C1".to_string()]
+        );
     }
 }

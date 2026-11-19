@@ -106,7 +106,8 @@ journal step opens no second pull request. Nothing is pushed to `main`. Particip
 deployment with no forge skips it. The parent retains its journal order: `membership`, `slack`, then `repository`. A
 repository created by the last tag appears in the next daily Slack update.
 
-A closed or archived Project is not updated: `membership` archives its recorded channel and nothing else runs. The
+A closed or archived Project is not updated: `membership` archives its recorded channel and nothing else runs. An open
+Project's archived channel is unarchived first, so a reopened matter gets its channel back with its history. The
 environment's `#messages` or `#staging-messages` channel gets aggregate counts only: Projects, channels, invitations,
 canvases, notices, repositories, pins by status, and failures per tag, plus the first failure's message (a missing Slack
 scope shows up here once, not as 21 silent counts). Email addresses and Slack identities stay inside the child's

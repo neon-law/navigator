@@ -149,6 +149,9 @@ pub struct NightlyProjectUpdateReport {
     /// Channels of a closed or archived Project archived this run.
     #[serde(default)]
     pub channels_archived: usize,
+    /// Channels of a reopened Project unarchived this run.
+    #[serde(default)]
+    pub channels_unarchived: usize,
     /// Internal channel canvases created for an open Project that had none.
     pub canvases_created: usize,
     /// Internal channel canvases edited in place.
@@ -280,6 +283,7 @@ impl NightlyProjectUpdateReport {
                 self.channels_created += m.channels_created;
                 self.channels_repaired += m.channels_repaired;
                 self.channels_archived += m.channels_archived;
+                self.channels_unarchived += m.channels_unarchived;
             }
             TagOutcome::Slack(o) => {
                 self.canvases_created += o.canvases_created;
@@ -609,7 +613,7 @@ fn render_headline(report: &NightlyProjectUpdateReport) -> String {
 
 pub(crate) fn render_report(report: &NightlyProjectUpdateReport) -> String {
     format!(
-        "{}\nProjects: {} ({} open).\nChannels checked: {}; channels created: {}; channels repaired: {}; channels archived: {}; Projects without a channel: {}; people invited: {}; already members: {}; unmatched assignments: {}.\nCanvases created: {}; canvases edited: {}; notices posted: {}.\nRepositories created or adopted: {}. Navigator pins — current: {}; stale: {}; unreadable: {}.\nUpdate pull requests — opened: {}; awaiting merge: {}; declined: {}. Governance repaired: {}.\nFailures by tag — membership: {}; slack: {}; repository: {}.",
+        "{}\nProjects: {} ({} open).\nChannels checked: {}; channels created: {}; channels repaired: {}; channels archived: {}; channels unarchived: {}; Projects without a channel: {}; people invited: {}; already members: {}; unmatched assignments: {}.\nCanvases created: {}; canvases edited: {}; notices posted: {}.\nRepositories created or adopted: {}. Navigator pins — current: {}; stale: {}; unreadable: {}.\nUpdate pull requests — opened: {}; awaiting merge: {}; declined: {}. Governance repaired: {}.\nFailures by tag — membership: {}; slack: {}; repository: {}.",
         render_headline(report),
         report.projects,
         report.open_projects,
@@ -617,6 +621,7 @@ pub(crate) fn render_report(report: &NightlyProjectUpdateReport) -> String {
         report.channels_created,
         report.channels_repaired,
         report.channels_archived,
+        report.channels_unarchived,
         report.projects_without_channel,
         report.invited,
         report.already_members,
@@ -1137,6 +1142,7 @@ mod tests {
             channels_created: 5,
             channels_repaired: 6,
             channels_archived: 14,
+            channels_unarchived: 2,
             canvases_created: 10,
             canvases_edited: 11,
             notices_posted: 12,
@@ -1152,7 +1158,7 @@ mod tests {
         });
         assert_eq!(
             message,
-            "*Nightly Project Update complete*\nProjects: 9 (8 open).\nChannels checked: 3; channels created: 5; channels repaired: 6; channels archived: 14; Projects without a channel: 2; people invited: 4; already members: 2; unmatched assignments: 1.\nCanvases created: 10; canvases edited: 11; notices posted: 12.\nRepositories created or adopted: 7. Navigator pins — current: 5; stale: 1; unreadable: 2.\nUpdate pull requests — opened: 4; awaiting merge: 1; declined: 0. Governance repaired: 3.\nFailures by tag — membership: 0; slack: 0; repository: 0."
+            "*Nightly Project Update complete*\nProjects: 9 (8 open).\nChannels checked: 3; channels created: 5; channels repaired: 6; channels archived: 14; channels unarchived: 2; Projects without a channel: 2; people invited: 4; already members: 2; unmatched assignments: 1.\nCanvases created: 10; canvases edited: 11; notices posted: 12.\nRepositories created or adopted: 7. Navigator pins — current: 5; stale: 1; unreadable: 2.\nUpdate pull requests — opened: 4; awaiting merge: 1; declined: 0. Governance repaired: 3.\nFailures by tag — membership: 0; slack: 0; repository: 0."
         );
         assert!(!message.contains('@'));
     }

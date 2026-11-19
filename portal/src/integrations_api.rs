@@ -719,12 +719,13 @@ pub(crate) struct SlackLifecycleRequest {
 
 /// `POST /app/api/integrations/slack/lifecycle` — bring each selected
 /// Project's recorded private channel in step with the Project's status: a
-/// closed or archived Project's channel is archived. Archiving keeps the
-/// channel's history, which is part of the matter's record; nothing here
-/// deletes a channel. The channel is found by its recorded id, never by name,
-/// and a Project with no recorded channel is reported, not provisioned. A dry
-/// run reports `would_archive` and changes nothing. Each change is logged
-/// against the Project.
+/// closed or archived Project's channel is archived, an open Project's
+/// archived channel is unarchived. Archiving keeps the channel's history,
+/// which is part of the matter's record; nothing here deletes a channel. The
+/// channel is found by its recorded id, never by name, and a Project with no
+/// recorded channel is reported, not provisioned. A dry run reports
+/// `would_archive` or `would_unarchive` and changes nothing. Each change is
+/// logged against the Project.
 pub(crate) async fn slack_lifecycle_door(
     State(state): State<ApiState>,
     authed: AdminSession,
@@ -746,7 +747,7 @@ pub(crate) async fn slack_lifecycle_door(
 /// Bring one Project's recorded channel in step with its status. The
 /// lifecycle door runs it for each selected Project; the lifecycle move
 /// (`POST /app/api/projects/{id}/lifecycle`) runs it right after the status
-/// changes, so a close does not wait for a sweep.
+/// changes, so a close or a reopen does not wait for a sweep.
 pub(crate) async fn converge_project_channel(
     state: &ApiState,
     actor_person_id: Option<uuid::Uuid>,
@@ -761,24 +762,30 @@ pub(crate) async fn converge_project_channel(
         Ok(slack) => slack,
         Err(error) => return unavailable(project, &error),
     };
-    if project.status == "open" {
-        return ProjectOutcome::plain(project.code.clone(), "open");
-    }
+    let open = project.status == "open";
     let Some(channel_id) = project.internal_slack_channel_id.clone() else {
         return ProjectOutcome::plain(project.code.clone(), "no_channel");
     };
     let _guard =
         ensure_lock(workflows::IntegrationJob::slack(project.id, &project.code).job_id).await;
-    let outcome = match cloud::archive_recorded_channel(slack.as_ref(), &channel_id, dry_run).await
-    {
-        Ok(cloud::ChannelRetirement::Archived) => "archived",
-        Ok(cloud::ChannelRetirement::AlreadyArchived) => "already_archived",
-        Ok(cloud::ChannelRetirement::WouldArchive) => "would_archive",
-        Ok(cloud::ChannelRetirement::Missing) => "recorded_resource_missing",
-        Err(_) => "provider_unavailable",
-    };
-    if outcome == "archived" {
-        log_channel_change(state, actor_person_id, project, "slack_channel_archived").await;
+    let outcome =
+        match cloud::converge_recorded_channel(slack.as_ref(), &channel_id, open, dry_run).await {
+            Ok(cloud::ChannelLifecycle::Archived) => "archived",
+            Ok(cloud::ChannelLifecycle::Unarchived) => "unarchived",
+            Ok(cloud::ChannelLifecycle::Unchanged) => "unchanged",
+            Ok(cloud::ChannelLifecycle::WouldArchive) => "would_archive",
+            Ok(cloud::ChannelLifecycle::WouldUnarchive) => "would_unarchive",
+            Ok(cloud::ChannelLifecycle::Missing) => "recorded_resource_missing",
+            Err(_) => "provider_unavailable",
+        };
+    match outcome {
+        "archived" => {
+            log_channel_change(state, actor_person_id, project, "slack_channel_archived").await;
+        }
+        "unarchived" => {
+            log_channel_change(state, actor_person_id, project, "slack_channel_unarchived").await;
+        }
+        _ => {}
     }
     ProjectOutcome::plain(project.code.clone(), outcome)
 }
