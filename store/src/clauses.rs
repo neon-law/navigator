@@ -277,7 +277,9 @@ pub async fn seed(db: &PostgresDb, library: &[LibraryClause]) -> Result<SeedRepo
         .rows_affected();
         if inserted == 0 {
             let same: bool = sqlx::query_scalar(
-                "SELECT kind = $3 AND inputs = $4 AND body_sha256 = $5 AND body = $6 AND heading IS NOT DISTINCT FROM $7 AND aliases IS NOT DISTINCT FROM $8 FROM clause WHERE code = $1 AND version = $2",
+                // Rows seeded before `aliases` existed hold NULL, which means the
+                // empty list the library now writes.
+                "SELECT kind = $3 AND inputs = $4 AND body_sha256 = $5 AND body = $6 AND heading IS NOT DISTINCT FROM $7 AND COALESCE(aliases, '[]'::jsonb) = $8 FROM clause WHERE code = $1 AND version = $2",
             )
             .bind(&source.code)
             .bind(source.version)

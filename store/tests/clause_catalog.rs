@@ -108,6 +108,27 @@ async fn a_seeded_library_has_one_row_per_version_and_reseeding_writes_nothing()
     assert!(clauses::current(&pg, "absent").await.unwrap().is_none());
 }
 
+/// Rows seeded before `heading` and `aliases` existed carry NULL in both. The
+/// release seed must read a NULL `aliases` as the empty list it writes today,
+/// or every pre-existing Clause is refused as changed (staging, 26.11.19-rc.1).
+#[tokio::test]
+async fn rows_seeded_before_reserved_headings_reseed_unchanged() {
+    let Some((pg, pool)) = database().await else {
+        return;
+    };
+    let library = rules::clauses::library_clauses().unwrap();
+    clauses::seed(&pg, &library).await.unwrap();
+    let untouched = sqlx::query("UPDATE clause SET aliases = NULL WHERE aliases = '[]'::jsonb")
+        .execute(&pool)
+        .await
+        .unwrap()
+        .rows_affected();
+    assert!(untouched > 0, "the library has Clauses without aliases");
+
+    let again = clauses::seed(&pg, &library).await.unwrap();
+    assert!(again.is_unchanged(), "{again:?}");
+}
+
 #[tokio::test]
 async fn retired_versions_remain_readable_and_reseeding_retires_existing_rows() {
     let Some((pg, pool)) = database().await else {
