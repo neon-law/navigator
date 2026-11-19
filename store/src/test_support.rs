@@ -25,6 +25,13 @@ pub async fn seed_postgres_family(
     crate::postgres_backfill::family::activate_fixture(pg, family).await;
 }
 
+/// Run a historical import fixture against its explicit legacy Source rows.
+/// Ordinary application fixtures use [`with_postgres`]; this preserves the
+/// existing operator import context without changing production admission.
+pub async fn with_source_import<T>(test: impl std::future::Future<Output = T>) -> T {
+    crate::postgres_mirror::from_source(test).await
+}
+
 /// Synthetic Twilio registry and credential fixtures shared by route tests.
 pub mod twilio;
 
