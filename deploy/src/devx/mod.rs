@@ -4092,9 +4092,9 @@ admin_base_url = "https://production-env.example.invalid:9070"
     }
 
     /// The documented fresh-clone loop is `dev up`, then `cargo run -p neon`
-    /// with only `.devx/env` sourced. With every private credential stripped,
-    /// that file alone must pass the web boot invariants and name no private
-    /// registry, bucket, or cloud project.
+    /// with only `.devx/env` sourced. The completed file combines the service
+    /// environment with the enrolled fixture's generated PostgreSQL credentials.
+    /// It must pass the web invariants without private shell credentials.
     #[test]
     fn fresh_clone_env_boots_web_without_private_credentials() {
         let _guard = lock();
@@ -4103,7 +4103,17 @@ admin_base_url = "https://production-env.example.invalid:9070"
             env::remove_var(key);
         }
         let root = Path::new("/fresh-clone");
-        let rendered = parse_rendered_env(&render_env(&KindConfig::from_env(), root));
+        let cfg = KindConfig::from_env();
+        let credentials = postgres_fixture::Credentials {
+            app_password: "synthetic-app".into(),
+            owner_password: "synthetic-owner".into(),
+            ca: "synthetic-ca".into(),
+        };
+        let mut environment = render_env(&cfg, root);
+        environment.push_str(&postgres_fixture::render_environment(
+            &credentials.environment(&cfg, root),
+        ));
+        let rendered = parse_rendered_env(&environment);
         let get = |key: &str| rendered.get(key).cloned();
 
         let config = portal::config::AppConfig::from_lookup(get)
