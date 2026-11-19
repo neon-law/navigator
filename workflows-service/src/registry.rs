@@ -58,6 +58,95 @@ pub const VIRTUAL_OBJECTS: &[&str] = &["notation", "project-slack"];
 mod tests {
     use super::{VIRTUAL_OBJECTS, WORKFLOW_SERVICES};
 
+    #[test]
+    fn deployment_admission_covers_actual_worker_bindings_and_caller_selectors() {
+        let mut runtime = vec![
+            ("EmailSummary", crate::dbos_email_summary::ENABLED_ENV),
+            ("Archives", archives::workflow::DBOS_ENABLED_ENV),
+            (
+                "BillingCanary",
+                workflows::dbos_engine::billing_canary::ENABLED_ENV,
+            ),
+            (
+                "BillingDigest",
+                workflows::dbos_engine::billing_digest::ENABLED_ENV,
+            ),
+            ("ReconcileInvoices", crate::dbos_reconcile::ENABLED_ENV),
+            (
+                "SandboxCreditReset",
+                workflows::trigger::SANDBOX_CREDIT_RESET_DBOS_ENABLED_ENV,
+            ),
+            ("DriDigest", workflows::dbos_engine::dri_digest::ENABLED_ENV),
+            (
+                "FinanceAggregate",
+                crate::dbos_finance_aggregate::ENABLED_ENV,
+            ),
+            (
+                "GeneralNag",
+                workflows::dbos_engine::general_nag::ENABLED_ENV,
+            ),
+            (
+                "InboundMessageAlert",
+                crate::dbos_inbound_message_alert::ENABLED_ENV,
+            ),
+            (
+                "InboundTriage",
+                workflows::trigger::INBOUND_TRIAGE_DBOS_ENABLED_ENV,
+            ),
+            (
+                "NightlyProjectUpdate",
+                crate::dbos_nightly_project_update::ENABLED_ENV,
+            ),
+            (
+                "NightlyProjectUpdateMembership",
+                crate::dbos_nightly_project_update::ENABLED_ENV,
+            ),
+            (
+                "NightlyProjectUpdateSlack",
+                crate::dbos_nightly_project_update::ENABLED_ENV,
+            ),
+            (
+                "NightlyProjectUpdateRepository",
+                crate::dbos_nightly_project_update::ENABLED_ENV,
+            ),
+            (
+                "NotationReset",
+                workflows::dbos_engine::notation_reset::ENABLED_ENV,
+            ),
+            (
+                "SocialPublisher",
+                crate::dbos_social_publisher::PUBLISHER_ENABLED_ENV,
+            ),
+            (
+                "SocialPublishReconciler",
+                crate::dbos_social_publisher::RECONCILER_ENABLED_ENV,
+            ),
+            (
+                "YoutubeCommentsPoller",
+                workflows::trigger::YOUTUBE_COMMENTS_DBOS_ENABLED_ENV,
+            ),
+            ("notation", crate::dbos_notation::ENABLED_ENV),
+            ("project-slack", crate::dbos_project_slack::ENABLED_ENV),
+        ];
+        runtime.sort_unstable();
+        let mut admission: Vec<_> = store::workflow_engine::WORKFLOWS
+            .iter()
+            .map(|row| (row.name, row.flag))
+            .collect();
+        admission.sort_unstable();
+        assert_eq!(runtime, admission);
+        let mut registered: Vec<_> = WORKFLOW_SERVICES
+            .iter()
+            .chain(VIRTUAL_OBJECTS)
+            .copied()
+            .collect();
+        registered.sort_unstable();
+        assert_eq!(
+            registered,
+            admission.iter().map(|(name, _)| *name).collect::<Vec<_>>()
+        );
+    }
+
     /// Every registered durable workflow is named `PascalCase`, checked with
     /// the canonical `rules::is_pascal_case` predicate so all registered names
     /// share one definition. (Template `.md` basenames follow the separate

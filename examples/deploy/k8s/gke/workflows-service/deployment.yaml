@@ -5,23 +5,11 @@
 # registration with the Restate Cloud tenant happens out-of-band
 # via the Restate CLI.
 #
-# Registration: a registered deployment is a SNAPSHOT of the worker's
-# handler list, not a subscription — rolling a new image does NOT
-# re-register, so a newly added service 404s at the ingress until you
-# re-register. `ship` does this automatically after every worker
-# rollout, targeting https://workflows.<domain>/ derived from
-# mounted brand.primary_domain (or the explicit NAVIGATOR_WORKFLOWS_URL).
-# It WARNS and continues on failure — it does not gate the ship — because
-# the admin :9070 endpoint may be unreachable from the operator's network
-# (see docs/durable-workflows.md "How ship re-registers"). Manual
-# fallbacks when the auto step warns:
-#   restate -y cloud login && restate -y cloud env config --env navigator-prod
-#   restate -y deployment register https://NAVIGATOR_WORKFLOWS_HOST/
-# Or POST the admin API directly (the CLI sometimes can't reach :9070):
-#   curl -X POST "$ADMIN:9070/deployments" -H "Authorization: Bearer $SSO" \
-#     -H "Content-Type: application/json" \   # REQUIRED — omitting it 415s
-#     -d '{"uri":"https://NAVIGATOR_WORKFLOWS_HOST/","force":true}'
-# Full mechanism + the two-tokens/two-ports auth note: docs/durable-workflows.md.
+# Restate registration snapshots the handler list. Ship requires registration
+# after rolling a mixed-engine worker; a failure refuses completion rather than
+# leaving new services unreachable. The complete DBOS cohost profile omits the
+# worker process and network objects from its desired tree. Retained work must
+# drain before that profile removes the worker's public route.
 #
 # Restate Cloud reaches workflows-service over HTTPS via the
 # `NAVIGATOR_WORKFLOWS_HOST` Ingress under `../ingress/`.

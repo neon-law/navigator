@@ -242,6 +242,7 @@ pub type ScheduleStarter =
 /// before launch, their schedule loops started after it.
 struct RestatePorts {
     billing_canary: Option<billing_canary::BillingCanaryWorkflow>,
+    schedule_billing_canary: bool,
     notation_reset: Option<notation_reset::NotationResetWorkflow>,
 }
 
@@ -251,7 +252,11 @@ impl RestatePorts {
         billing_canary: Option<billing_canary::Context>,
         notation_reset: Option<notation_reset::Context>,
     ) -> dbos::Result<Self> {
+        let schedule_billing_canary = billing_canary
+            .as_ref()
+            .is_some_and(|context| context.schedule_enabled);
         Ok(Self {
+            schedule_billing_canary,
             billing_canary: billing_canary
                 .map(|context| billing_canary::register(dbos, context))
                 .transpose()?,
@@ -273,7 +278,7 @@ impl RestatePorts {
     }
 
     fn spawn(self, stop: &dbos::CancellationToken, loops: &mut Vec<tokio::task::JoinHandle<()>>) {
-        if let Some(workflow) = self.billing_canary {
+        if let Some(workflow) = self.billing_canary.filter(|_| self.schedule_billing_canary) {
             loops.push(tokio::spawn(billing_canary::schedule(
                 workflow,
                 billing_canary::system_clock(),
@@ -800,6 +805,49 @@ mod tests {
                 .iter()
                 .find(|(name, _)| name == key)
                 .map(|(_, value)| value.clone())
+        }
+    }
+
+    #[tokio::test]
+    async fn billing_canary_keeps_manual_registration_when_its_timer_is_disabled() {
+        struct UnusedProvider;
+        #[async_trait::async_trait]
+        impl crate::billing_canary::BillingCanaryProvider for UnusedProvider {
+            async fn ensure_contact(
+                &self,
+                _: &billing::ContactRequest,
+            ) -> Result<billing::ContactId, crate::billing_canary::CanaryProviderError>
+            {
+                panic!("an unlaunched schedule must never contact a provider")
+            }
+        }
+        for scheduled in [None, Some(false), Some(true)] {
+            let dbos = dbos::DBOS::new(config("postgres://example.invalid/navigator", "test"));
+            let context = super::billing_canary::Context::new(
+                std::sync::Arc::new(UnusedProvider),
+                std::sync::Arc::new(crate::CapturingEmail::new()),
+            );
+            let context = if let Some(enabled) = scheduled {
+                context.with_schedule_enabled(enabled)
+            } else {
+                context
+            };
+            let ports = super::RestatePorts::register(&dbos, Some(context), None).unwrap();
+            assert!(
+                ports.manual_starts(None).billing_canary.is_some(),
+                "registration is independent of automatic starts"
+            );
+            let stop = dbos::CancellationToken::new();
+            stop.cancel();
+            let mut loops = Vec::new();
+            ports.spawn(&stop, &mut loops);
+            assert_eq!(loops.len(), usize::from(scheduled.unwrap_or(true)));
+            for task in loops {
+                tokio::time::timeout(std::time::Duration::from_secs(2), task)
+                    .await
+                    .unwrap()
+                    .unwrap();
+            }
         }
     }
 

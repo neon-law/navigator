@@ -33,3 +33,5 @@ pub mod workspace;
 
 pub mod brand_letterheads;
 pub mod fi_import;
+
+pub mod workflow_engine;

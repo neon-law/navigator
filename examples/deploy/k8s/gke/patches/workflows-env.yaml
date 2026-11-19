@@ -9,6 +9,7 @@ spec:
       containers:
         - name: worker
           env:
+            # NAVIGATOR_DBOS_TIMER_ENV
             - name: NAVIGATOR_GCP_PROJECT_ID
               value: YOUR_PROJECT_ID
             - name: NAVIGATOR_GITHUB_ORG

@@ -349,14 +349,30 @@ pub fn harness_relaxations_apply<F: Fn(&str) -> Option<String>>(
     environment == DeploymentEnvironment::Dev && ci_harness_enabled(get)
 }
 
+/// Exact engine-specific requirements shared by startup and manifest preflight.
+/// No larger conjunction or alternative is discarded because it contains one of these keys.
+#[must_use]
+pub fn is_restate_requirement(requirement: &Requirement) -> bool {
+    if requirement.any_of.len() != 1 {
+        return false;
+    }
+    matches!(
+        requirement.any_of[0],
+        ["RESTATE_BROKER_URL" | "RESTATE_IDENTITY_KEY"]
+            | ["RESTATE_INGRESS_URL", "RESTATE_AUTH_TOKEN"]
+    )
+}
+
 pub fn applicable_web_requirements<F: Fn(&str) -> Option<String>>(
     environment: DeploymentEnvironment,
     get: &F,
 ) -> anyhow::Result<Vec<Requirement>> {
     let harness = harness_relaxations_apply(environment, get);
     let capabilities = DeploymentCapabilities::from_lookup(get)?;
+    let dbos_only = crate::workflow_engine::dbos_only(get)?;
     Ok(WEB_REQUIREMENTS
         .iter()
+        .filter(|requirement| !dbos_only || !is_restate_requirement(requirement))
         .filter(|requirement| !harness || !requirement.integration)
         .filter(|requirement| requirement.scope.applies(capabilities))
         .filter(|requirement| {
@@ -370,6 +386,57 @@ pub fn applicable_web_requirements<F: Fn(&str) -> Option<String>>(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn native_admission_preserves_requirements_with_additional_obligations_or_alternatives() {
+        let mut requirement = super::Requirement {
+            any_of: &[&["RESTATE_BROKER_URL", "SESSION_SECRET"]],
+            trigger: None,
+            integration: false,
+            scope: super::RequirementScope::EveryDeployment,
+        };
+        assert!(!super::is_restate_requirement(&requirement));
+        requirement.any_of = &[&["RESTATE_BROKER_URL"], &["SESSION_SECRET"]];
+        assert!(!super::is_restate_requirement(&requirement));
+    }
+
+    #[test]
+    fn broker_admission_follows_complete_native_caller_selection() {
+        use crate::workflow_engine::{COHOST_ENV, DBOS_ENABLED_ENV, ENGINE_ENV, WORKFLOWS};
+        use std::collections::BTreeMap;
+        let mut values: BTreeMap<_, String> = WORKFLOWS
+            .iter()
+            .map(|row| (row.flag, "true".into()))
+            .collect();
+        values.extend([
+            (COHOST_ENV, "true".into()),
+            (DBOS_ENABLED_ENV, "true".into()),
+            (ENGINE_ENV, "dbos".into()),
+        ]);
+        let needs_broker = |values: &BTreeMap<&str, String>| {
+            super::applicable_web_requirements(super::DeploymentEnvironment::Production, &|key| {
+                values.get(key).cloned()
+            })
+            .unwrap()
+            .iter()
+            .any(|requirement| {
+                requirement
+                    .any_of
+                    .iter()
+                    .any(|alternative| alternative.contains(&"RESTATE_BROKER_URL"))
+            })
+        };
+        assert!(!needs_broker(&values));
+        values.insert(
+            "NAVIGATOR_DBOS_INBOUND_MESSAGE_ALERT_ENABLED",
+            "false".into(),
+        );
+        assert!(
+            needs_broker(&values),
+            "social reconciliation may still send an inbound notice through Restate"
+        );
+        assert!(needs_broker(&BTreeMap::new()));
+    }
+
     #[test]
     fn a_malformed_capability_flag_names_the_value_and_the_fix() {
         let get = |key: &str| (key == super::GITHUB_AUTOMATION_HOME_FLAG).then(|| "yes".to_owned());
