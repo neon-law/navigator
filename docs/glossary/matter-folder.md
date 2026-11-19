@@ -8,8 +8,10 @@ One of the folders `navigator project sync` creates under a Project checkout's `
 and its seven fixed subfolders, each suffixed so it reads unambiguously out of context — `Client Calls (Work Product)`,
 `Correspondence (Work Product)`, `Discovery (Work Product)`, `Motions (Work Product)`, `Pleadings (Work Product)`,
 `Research (Work Product)`, and `Stipulations (Work Product)` — and the two fixed subfolders below `Client Production`:
-`Agreements` and `Screenshots` (LAW-215). A lawyer browses them in Finder the way a case-management system groups a
-matter's papers. Each holds [Document](document.md) [Blobs](blob.md) only, and Git ignores them.
+`Agreements` and `Screenshots` (LAW-215). Sync also creates two empty lawyer subfolders, `Discovery (Work
+Product)/Evidence Summaries` and `Pleadings (Work Product)/Answer`. A lawyer browses them in Finder the way a
+case-management system groups a matter's papers. Each holds [Document](document.md) [Blobs](blob.md) only, and Git
+ignores them.
 
 The `(Work Product)` suffix separates the firm's drafts from what was actually served (`Correspondence (Work Product)`
 against `Correspondence (Served)`), and a downloaded or attached file reads unambiguously out of context. The bare
@@ -22,10 +24,11 @@ separate placement described below.
 A document's [Pointer](pointer.md) lives at `blobs/<slug>.yaml`, never in a Matter Folder. Its optional `folder:` key
 names the Matter Folder — a `Work Product` subfolder's name is its whole path below `documents/`. Without one, the
 folder follows from `kind`: `exhibit` → Client Production, `letter` → Correspondence (Served), `pleading`, `filing`, and
-`order` → [Docket Filings](docket-filings.md), `memo` → Research (Work Product), `transcript` → Client Calls (Work
-Product), `onboarding` → Engagement, `receipt` → Costs, and all other kinds → Work Product. The `Client
-Production/Agreements` and `Client Production/Screenshots` subfolders (LAW-215) hold their documents only where a
-pointer's `folder:` names them or a migration filed them there; no `kind` maps to them by default.
+`order` → [Docket Filings](docket-filings.md), `memo` → Research (Work Product), `motion` → Motions (Work Product),
+`stipulation` → Stipulations (Work Product), `transcript` → Client Calls (Work Product), `onboarding` → Engagement,
+`receipt` → Costs, and all other kinds → Work Product. The `Client Production/Agreements` and `Client
+Production/Screenshots` subfolders (LAW-215) hold their documents only where a pointer's `folder:` names them or a
+migration filed them there; no `kind` maps to them by default.
 
 The Project page shows the same layout. A lawyer sees every Matter Folder, empty ones included, with each document at
 its path below `documents/`. A client sees only the documents shared with them, each once as its newest shared revision,

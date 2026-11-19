@@ -15,8 +15,10 @@
 //!     Client Calls (Work Product)/<slug>
 //!     Correspondence (Work Product)/<slug>
 //!     Discovery (Work Product)/<slug>
-//!     Motions (Work Product)/<slug>
+//!       Evidence Summaries/
+//!     Motions (Work Product)/<motion>/<slug>
 //!     Pleadings (Work Product)/<slug>
+//!       Answer/
 //!     Research (Work Product)/<slug>
 //!     Stipulations (Work Product)/<slug>
 //!   onboarding/ offboarding/ invoices/ cases/ rules/
@@ -53,8 +55,6 @@ pub fn is_sibling(relative: &Path) -> bool {
     first_component(relative).is_some_and(|first| SIBLING_FOLDERS.contains(&first))
 }
 
-/// Whether the path below `documents/` begins with a fixed nested
-/// subfolder's two-component name (LAW-215): a `Work Product` or `Client
 /// Whether the path below `documents/` sits in the Case Timeline folder
 /// `project sync` and the docket verbs render Docket Entry records into.
 /// The records are renderings the store owns, checked by their own drift
@@ -64,6 +64,8 @@ pub fn is_case_timeline(relative: &Path) -> bool {
     first_component(relative) == Some(crate::projects::docket::timeline_write::FOLDER)
 }
 
+/// Whether the path below `documents/` begins with a fixed nested
+/// subfolder's two-component name (LAW-215): a `Work Product` or `Client
 /// Production` subfolder.
 fn begins_with_nested_subfolder(relative: &Path) -> bool {
     MatterFolder::ALL
@@ -140,6 +142,11 @@ pub fn ensure_tree(root: &Path) -> Result<()> {
     let folders = MatterFolder::TREE
         .iter()
         .map(|folder| documents.join(folder.as_str()))
+        .chain(
+            MatterFolder::SEEDED_SUBFOLDERS
+                .iter()
+                .map(|subfolder| documents.join(subfolder)),
+        )
         .chain([root.join(POINTER_DIRECTORY)]);
     for path in folders {
         match std::fs::symlink_metadata(&path) {
@@ -622,6 +629,9 @@ mod tests {
         for nested in [
             "Client Production/Agreements",
             "Client Production/Screenshots",
+            "Work Product/Discovery (Work Product)/Evidence Summaries",
+            "Work Product/Pleadings (Work Product)/Answer",
+            "Work Product/Stipulations (Work Product)",
         ] {
             assert!(
                 root.path().join("documents").join(nested).is_dir(),

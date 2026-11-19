@@ -233,6 +233,15 @@ impl MatterFolder {
         Self::StipulationsWorkProduct,
     ];
 
+    /// The lawyer-named subfolders a fresh checkout also creates empty
+    /// (LAW-215), as paths below `documents/`. They are not Matter Folders:
+    /// a document below one files in its parent and keeps the subfolder in
+    /// its slug, like any folder a lawyer makes.
+    pub const SEEDED_SUBFOLDERS: [&'static str; 2] = [
+        "Work Product/Discovery (Work Product)/Evidence Summaries",
+        "Work Product/Pleadings (Work Product)/Answer",
+    ];
+
     /// The folder's name on disk and in a pointer's `folder:` key.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -339,6 +348,8 @@ impl MatterFolder {
             // docket paper all the same (LAW-189).
             "pleading" | "filing" | "order" => Self::DocketFilings,
             "memo" => Self::ResearchWorkProduct,
+            "motion" => Self::MotionsWorkProduct,
+            "stipulation" => Self::StipulationsWorkProduct,
             "transcript" => Self::ClientCallsWorkProduct,
             "onboarding" => Self::Engagement,
             _ => Self::WorkProduct,
@@ -357,6 +368,8 @@ impl MatterFolder {
             Self::DocketFilings => "pleading",
             Self::ClientCallsWorkProduct => "transcript",
             Self::ResearchWorkProduct => "memo",
+            Self::MotionsWorkProduct => "motion",
+            Self::StipulationsWorkProduct => "stipulation",
             Self::Engagement => "onboarding",
             _ => "unclassified",
         }
@@ -749,6 +762,8 @@ mod tests {
             ("filing", MatterFolder::DocketFilings),
             ("order", MatterFolder::DocketFilings),
             ("memo", MatterFolder::ResearchWorkProduct),
+            ("motion", MatterFolder::MotionsWorkProduct),
+            ("stipulation", MatterFolder::StipulationsWorkProduct),
             ("transcript", MatterFolder::ClientCallsWorkProduct),
             ("onboarding", MatterFolder::Engagement),
             ("unclassified", MatterFolder::WorkProduct),
