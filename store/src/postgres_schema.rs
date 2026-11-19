@@ -1700,6 +1700,7 @@ mod tests {
                 include_str!("../postgres/migrations/20261117190000_add_satellite_authority_constraints.sql"),
             ),
             ("20261117200000_scope_mirror_backfill_runs.sql", include_str!("../postgres/migrations/20261117200000_scope_mirror_backfill_runs.sql")),
+            ("20261118160000_purchase_stripe.sql", include_str!("../postgres/migrations/20261118160000_purchase_stripe.sql")),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

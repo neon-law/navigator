@@ -1768,6 +1768,7 @@ erDiagram
         uuid project_task_id
     }
     purchase {
+        datetime access_ends_at
         string account_code
         datetime activated_at
         int amount_cents
@@ -1780,7 +1781,17 @@ erDiagram
         string offering
         string offering_name
         uuid person_id
+        datetime renewal_cancelled_at
+        datetime renewal_consented_at
+        string renewal_terms
         string state
+        string stripe_account_id
+        boolean stripe_cancel_at_period_end
+        string stripe_checkout_session_id
+        string stripe_customer_id
+        uuid stripe_firm_id
+        datetime stripe_period_end
+        string stripe_subscription_id
         datetime updated_at
         string xero_contact_id
         string xero_invoice_id
