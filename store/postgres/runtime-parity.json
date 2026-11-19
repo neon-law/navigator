@@ -4,8 +4,13 @@
     "runtime_tests": [
       {
         "file": "store/src/postgres_mirror/identity_detail_tests.rs",
-        "function": "each_identity_detail_row_converges_through_its_lifecycle",
-        "proves": "Identity-detail images converge through replay and lifecycle changes with explicit parent identities."
+        "function": "scoped_detail_import_preserves_every_typed_image_and_retains_native_drift",
+        "proves": "Explicit initial-copy fixtures preserve Address, Credential, Email Token, Delegation and External Identity typed images; replay is unchanged, native field drift remains reported, and the stored token hash matches the token digest."
+      },
+      {
+        "file": "store/src/postgres_mirror/identity_detail_tests.rs",
+        "function": "real_identity_driver_imports_all_nine_then_replays_without_source",
+        "proves": "A verified capture drives paused/resumed nine-table Identity enrollment and activation with nonempty matching counts; a completed same-run replay needs no Source and preserves sealed Satellite/Notation histories. Post-activation direct mirroring leaves a deleted Address absent."
       }
     ],
     "remaining": [
@@ -268,8 +273,13 @@
     "runtime_tests": [
       {
         "file": "store/src/postgres_mirror/identity_detail_tests.rs",
-        "function": "each_identity_detail_row_converges_through_its_lifecycle",
-        "proves": "Identity-detail images converge through replay and lifecycle changes with explicit parent identities."
+        "function": "scoped_detail_import_preserves_every_typed_image_and_retains_native_drift",
+        "proves": "Explicit initial-copy fixtures preserve Address, Credential, Email Token, Delegation and External Identity typed images; replay is unchanged, native field drift remains reported, and the stored token hash matches the token digest."
+      },
+      {
+        "file": "store/src/postgres_mirror/identity_detail_tests.rs",
+        "function": "real_identity_driver_imports_all_nine_then_replays_without_source",
+        "proves": "A verified capture drives paused/resumed nine-table Identity enrollment and activation with nonempty matching counts; a completed same-run replay needs no Source and preserves sealed Satellite/Notation histories. Post-activation direct mirroring leaves a deleted Address absent."
       }
     ],
     "remaining": [
@@ -421,8 +431,13 @@
     "runtime_tests": [
       {
         "file": "store/src/postgres_mirror/identity_detail_tests.rs",
-        "function": "each_identity_detail_row_converges_through_its_lifecycle",
-        "proves": "Identity-detail images converge through replay and lifecycle changes with explicit parent identities."
+        "function": "scoped_detail_import_preserves_every_typed_image_and_retains_native_drift",
+        "proves": "Explicit initial-copy fixtures preserve Address, Credential, Email Token, Delegation and External Identity typed images; replay is unchanged, native field drift remains reported, and the stored token hash matches the token digest."
+      },
+      {
+        "file": "store/src/postgres_mirror/identity_detail_tests.rs",
+        "function": "real_identity_driver_imports_all_nine_then_replays_without_source",
+        "proves": "A verified capture drives paused/resumed nine-table Identity enrollment and activation with nonempty matching counts; a completed same-run replay needs no Source and preserves sealed Satellite/Notation histories. Post-activation direct mirroring leaves a deleted Address absent."
       }
     ],
     "remaining": [
@@ -434,8 +449,13 @@
     "runtime_tests": [
       {
         "file": "store/src/postgres_mirror/identity_tests.rs",
-        "function": "person_and_entity_rows_converge_through_their_lifecycle",
-        "proves": "Stable source IDs and referenced identity rows round-trip; replay is unchanged; lifecycle changes converge."
+        "function": "scoped_identity_import_retains_native_drift_and_deletion",
+        "proves": "Explicit initial-copy imports keep Person and Entity UUIDs, replay unchanged, preserve native Person name/role/admission drift, and do not resurrect a deleted Entity outside the import boundary."
+      },
+      {
+        "file": "store/src/postgres_mirror/identity_detail_tests.rs",
+        "function": "real_identity_driver_imports_all_nine_then_replays_without_source",
+        "proves": "A verified capture drives paused/resumed nine-table Identity enrollment and activation with nonempty matching counts; a completed same-run replay needs no Source and preserves sealed Satellite/Notation histories. Post-activation direct mirroring leaves a deleted Address absent."
       }
     ],
     "remaining": [
@@ -447,12 +467,18 @@
     "runtime_tests": [
       {
         "file": "store/src/postgres_mirror/identity_detail_tests.rs",
-        "function": "each_identity_detail_row_converges_through_its_lifecycle",
-        "proves": "Identity-detail images converge through replay and lifecycle changes with explicit parent identities."
+        "function": "entity_role_first_global_copy_preserves_its_explicit_endpoints_and_replay",
+        "proves": "Before completed global history, an explicit Source Entity Role tie imports canonical PostgreSQL Person/Entity endpoints, role and microsecond timestamps; replay is unchanged and leaves one row."
+      },
+      {
+        "file": "store/src/postgres_graph_views_tests.rs",
+        "function": "project_view_renders_the_matter_neighborhood",
+        "proves": "Native PostgreSQL entity-role rows project to AGE HAS_ROLE edges with the expected endpoints, role and confidence; this graph query does not prove Source transport or route authorization."
       }
     ],
     "remaining": [
-      "Equivalent application queries and access decisions, including no inferred Project participation, require separate acceptance."
+      "Equivalent application queries and access decisions, including no inferred Project participation, require separate acceptance.",
+      "Full frozen global handoff, operational activation, and caller authorization remain separate from the row-copy and graph-query components."
     ]
   },
   "entity_type": {
@@ -460,8 +486,8 @@
     "runtime_tests": [
       {
         "file": "store/src/postgres_mirror/identity_tests.rs",
-        "function": "person_and_entity_rows_converge_through_their_lifecycle",
-        "proves": "Stable source IDs and referenced identity rows round-trip; replay is unchanged; lifecycle changes converge."
+        "function": "catalog_parents_copy_only_before_global_history_completes",
+        "proves": "An initial Entity import fills its referenced catalog parents; after a completed global-history fixture, a deleted Jurisdiction parent is not restored even under forced initial-copy replay."
       },
       {
         "file": "store/src/postgres/catalog_tests.rs",
@@ -595,13 +621,13 @@
     "runtime_tests": [
       {
         "file": "store/src/postgres_mirror/firm_secrets_tests.rs",
-        "function": "encrypted_secret_versions_replay_reconcile_and_revoke",
-        "proves": "Encrypted secret versions mirror without exposing secret values, replay unchanged, reconcile status drift, and remove stale source versions."
+        "function": "encrypted_secret_pending_copy_preserves_native_versions_and_rejects_drift",
+        "proves": "Encrypted versions retain exact context, replay unchanged, add a distinct second version, and preserve native or Source-missing history while reporting drift."
       },
       {
-        "file": "store/src/postgres_mirror/firm_secrets_tests.rs",
-        "function": "parity_detects_and_reconcile_removes_target_only_firm_secrets",
-        "proves": "Parity includes target-only Firm secret rows and reconciliation removes stale secrets even when the source Firm is absent."
+        "file": "store/src/postgres/application_authority_tests.rs",
+        "function": "completed_secret_import_replay_never_reads_source_or_changes_native_history",
+        "proves": "Activated Application ownership fences mirror, parity and reconciliation before inert Source access, even under explicit Source and initial-copy overrides."
       }
     ],
     "remaining": [
@@ -809,8 +835,8 @@
     "runtime_tests": [
       {
         "file": "store/src/postgres_mirror/identity_tests.rs",
-        "function": "person_and_entity_rows_converge_through_their_lifecycle",
-        "proves": "Stable source IDs and referenced identity rows round-trip; replay is unchanged; lifecycle changes converge."
+        "function": "catalog_parents_copy_only_before_global_history_completes",
+        "proves": "An initial Entity import fills its referenced catalog parents; after a completed global-history fixture, a deleted Jurisdiction parent is not restored even under forced initial-copy replay."
       },
       {
         "file": "store/src/postgres/catalog_tests.rs",
@@ -827,8 +853,13 @@
     "runtime_tests": [
       {
         "file": "store/src/postgres_mirror/leads_tests.rs",
-        "function": "leads_and_consent_history_mirror_replay_and_reconcile_without_rewriting_evidence",
-        "proves": "Lead images and append-only consent history replay and reconcile without rewriting evidence."
+        "function": "captured_lead_consent_import_preserves_native_drift_and_missing_source_rows",
+        "proves": "Captured Lead and consent rows insert and replay unchanged; native changes and rows missing from Source remain untouched and block clean parity."
+      },
+      {
+        "file": "store/src/postgres_backfill/application_native_boundary_tests.rs",
+        "function": "captured_application_boundaries_activate_and_read_without_source",
+        "proves": "The nonempty captured table participates in actual Application pause/resume/activation, preserves prior ledger images, and supports native reads and completed replay without Source."
       }
     ],
     "remaining": [
@@ -840,8 +871,13 @@
     "runtime_tests": [
       {
         "file": "store/src/postgres_mirror/leads_tests.rs",
-        "function": "leads_and_consent_history_mirror_replay_and_reconcile_without_rewriting_evidence",
-        "proves": "Lead images and append-only consent history replay and reconcile without rewriting evidence."
+        "function": "captured_lead_consent_import_preserves_native_drift_and_missing_source_rows",
+        "proves": "Captured Lead and consent rows insert and replay unchanged; native changes and rows missing from Source remain untouched and block clean parity."
+      },
+      {
+        "file": "store/src/postgres_backfill/application_native_boundary_tests.rs",
+        "function": "captured_application_boundaries_activate_and_read_without_source",
+        "proves": "The nonempty captured table participates in actual Application pause/resume/activation, preserves prior ledger images, and supports native reads and completed replay without Source."
       }
     ],
     "remaining": [
@@ -853,8 +889,13 @@
     "runtime_tests": [
       {
         "file": "store/src/postgres_mirror/mailrooms_letters_tests.rs",
-        "function": "source_rows_round_trip_and_reconcile_by_their_existing_ids",
-        "proves": "Mailroom and Letter images round-trip and reconcile under their source IDs."
+        "function": "captured_mail_preserves_native_drift_and_missing_source_history",
+        "proves": "Captured Mailroom and Letter identities copy and replay unchanged; native drift and missing Source history never overwrite or delete retained rows."
+      },
+      {
+        "file": "store/src/postgres_backfill/application_native_boundary_tests.rs",
+        "function": "captured_application_boundaries_activate_and_read_without_source",
+        "proves": "The nonempty captured table participates in actual Application pause/resume/activation, preserves prior ledger images, and supports native reads and completed replay without Source."
       }
     ],
     "remaining": [
@@ -866,8 +907,13 @@
     "runtime_tests": [
       {
         "file": "store/src/postgres_mirror/mailrooms_letters_tests.rs",
-        "function": "source_rows_round_trip_and_reconcile_by_their_existing_ids",
-        "proves": "Mailroom and Letter images round-trip and reconcile under their source IDs."
+        "function": "captured_mail_preserves_native_drift_and_missing_source_history",
+        "proves": "Captured Mailroom and Letter identities copy and replay unchanged; native drift and missing Source history never overwrite or delete retained rows."
+      },
+      {
+        "file": "store/src/postgres_backfill/application_native_boundary_tests.rs",
+        "function": "captured_application_boundaries_activate_and_read_without_source",
+        "proves": "The nonempty captured table participates in actual Application pause/resume/activation, preserves prior ledger images, and supports native reads and completed replay without Source."
       }
     ],
     "remaining": [
@@ -892,12 +938,17 @@
     "runtime_tests": [
       {
         "file": "store/src/postgres_mirror/matter_pages_captions_tests.rs",
-        "function": "a_whole_set_sync_converges_replays_and_drops_removed_pages",
-        "proves": "Whole-set page sync preserves source IDs and order, drops removed pages and replays unchanged."
+        "function": "captured_pages_keep_identities_order_and_actual_row_counts",
+        "proves": "Captured Page identities, order and lens/media values import without changing native Project metadata; each Page contributes its actual Project and derived Firm reference evidence."
+      },
+      {
+        "file": "store/src/postgres/matter_pages_tests.rs",
+        "function": "replacement_keeps_order_lenses_and_other_projects_isolated",
+        "proves": "Native whole-manifest replacement preserves order and lens/media values, removes the replaced Project set, and leaves another Project isolated."
       }
     ],
     "remaining": [
-      "Equivalent application page queries and cross-Firm access refusal require separate acceptance."
+      "HTTP actor authorization, including cross-Firm refusal, and production recovery acceptance remain separate from native manifest and captured ownership checks."
     ]
   },
   "message": {
@@ -954,13 +1005,18 @@
         "proves": "The existing ledger blocks unknown target provenance, seals the typed eight-table proof with fresh or completed global history, preserves Satellites receipts, and never replays deleted native rows."
       },
       {
+        "file": "store/src/postgres/notation_tests.rs",
+        "function": "native_notation_query_shapes_preserve_project_person_and_template_isolation",
+        "proves": "Native Project, batch, Person, all-row, exact-triple and existence queries preserve positive matches and cross-Project/Person misses with Source forbidden."
+      },
+      {
         "file": "store/src/postgres_mirror/workflow_tests.rs",
-        "function": "the_notation_list_shapes_shadow_a_match_after_the_mirror",
-        "proves": "All merged list/probe shadow shapes retain their comparison behavior, and referenced same-ID Template pin drift blocks clean capture until repaired."
+        "function": "captured_notation_template_pins_detect_drift_until_target_repair",
+        "proves": "Referenced captured Template pins report same-ID drift until PostgreSQL is repaired to the captured version; this is an explicit compatibility check."
       }
     ],
     "remaining": [
-      "Operational activation, observed deployment/shadow behavior, full route authorization, and broader recovery acceptance remain separate from these native storage boundaries."
+      "Operational activation, observed deployed behavior, full route authorization, and broader recovery acceptance remain separate from these native storage boundaries."
     ]
   },
   "notation_clause": {
@@ -1200,8 +1256,13 @@
     "runtime_tests": [
       {
         "file": "store/src/postgres_mirror/identity_tests.rs",
-        "function": "person_and_entity_rows_converge_through_their_lifecycle",
-        "proves": "Stable source IDs and referenced identity rows round-trip; replay is unchanged; lifecycle changes converge."
+        "function": "scoped_identity_import_retains_native_drift_and_deletion",
+        "proves": "Explicit initial-copy imports keep Person and Entity UUIDs, replay unchanged, preserve native Person name/role/admission drift, and do not resurrect a deleted Entity outside the import boundary."
+      },
+      {
+        "file": "store/src/postgres_mirror/identity_detail_tests.rs",
+        "function": "real_identity_driver_imports_all_nine_then_replays_without_source",
+        "proves": "A verified capture drives paused/resumed nine-table Identity enrollment and activation with nonempty matching counts; a completed same-run replay needs no Source and preserves sealed Satellite/Notation histories. Post-activation direct mirroring leaves a deleted Address absent."
       }
     ],
     "remaining": [
@@ -1213,8 +1274,13 @@
     "runtime_tests": [
       {
         "file": "store/src/postgres_mirror/identity_detail_tests.rs",
-        "function": "each_identity_detail_row_converges_through_its_lifecycle",
-        "proves": "Identity-detail images converge through replay and lifecycle changes with explicit parent identities."
+        "function": "scoped_detail_import_preserves_every_typed_image_and_retains_native_drift",
+        "proves": "Explicit initial-copy fixtures preserve Address, Credential, Email Token, Delegation and External Identity typed images; replay is unchanged, native field drift remains reported, and the stored token hash matches the token digest."
+      },
+      {
+        "file": "store/src/postgres_mirror/identity_detail_tests.rs",
+        "function": "real_identity_driver_imports_all_nine_then_replays_without_source",
+        "proves": "A verified capture drives paused/resumed nine-table Identity enrollment and activation with nonempty matching counts; a completed same-run replay needs no Source and preserves sealed Satellite/Notation histories. Post-activation direct mirroring leaves a deleted Address absent."
       }
     ],
     "remaining": [
@@ -1226,8 +1292,13 @@
     "runtime_tests": [
       {
         "file": "store/src/postgres_mirror/identity_detail_tests.rs",
-        "function": "each_identity_detail_row_converges_through_its_lifecycle",
-        "proves": "Identity-detail images converge through replay and lifecycle changes with explicit parent identities."
+        "function": "scoped_detail_import_preserves_every_typed_image_and_retains_native_drift",
+        "proves": "Explicit initial-copy fixtures preserve Address, Credential, Email Token, Delegation and External Identity typed images; replay is unchanged, native field drift remains reported, and the stored token hash matches the token digest."
+      },
+      {
+        "file": "store/src/postgres_mirror/identity_detail_tests.rs",
+        "function": "real_identity_driver_imports_all_nine_then_replays_without_source",
+        "proves": "A verified capture drives paused/resumed nine-table Identity enrollment and activation with nonempty matching counts; a completed same-run replay needs no Source and preserves sealed Satellite/Notation histories. Post-activation direct mirroring leaves a deleted Address absent."
       }
     ],
     "remaining": [
@@ -1252,8 +1323,13 @@
     "runtime_tests": [
       {
         "file": "store/src/postgres_mirror/identity_detail_tests.rs",
-        "function": "each_identity_detail_row_converges_through_its_lifecycle",
-        "proves": "Identity-detail images converge through replay and lifecycle changes with explicit parent identities."
+        "function": "scoped_mailbox_census_counts_claims_without_reassignment_or_values_in_reports",
+        "proves": "Four captured primary/alias claims reach parity; replay does not reassign an existing mailbox, native-only claims remain visible, and reports withhold mailbox values."
+      },
+      {
+        "file": "store/src/postgres_mirror/identity_detail_tests.rs",
+        "function": "real_identity_driver_imports_all_nine_then_replays_without_source",
+        "proves": "A verified capture drives paused/resumed nine-table Identity enrollment and activation with nonempty matching counts; a completed same-run replay needs no Source and preserves sealed Satellite/Notation histories. Post-activation direct mirroring leaves a deleted Address absent."
       }
     ],
     "remaining": [
@@ -1267,10 +1343,15 @@
         "file": "store/tests/person_phones.rs",
         "function": "setting_a_number_primary_demotes_the_previous_primary",
         "proves": "Row identity is stable across label and primary changes: differently formatted spellings converge on one row and exactly one primary survives each write, the facts the whole-row projection must reproduce."
+      },
+      {
+        "file": "store/src/postgres_mirror/identity_detail_tests.rs",
+        "function": "real_identity_driver_imports_all_nine_then_replays_without_source",
+        "proves": "Nonempty Person Phone rows participate in captured Identity enrollment, pause/resume, explicit activation and PostgreSQL-only completed replay."
       }
     ],
     "remaining": [
-      "PostgreSQL-side whole-row convergence for person_phone is covered by the shared source_domain_records mirror machinery; a live-Postgres parity run for this table specifically is pending with the identity-storage slice."
+      "Production activation and full native mutation/authorization acceptance remain separate from captured transport; the referenced legacy mutation fixture is not native application acceptance."
     ]
   },
   "person_project_role": {
