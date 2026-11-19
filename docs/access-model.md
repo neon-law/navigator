@@ -81,9 +81,10 @@ visibility listing as permission to use the target Firm's credentials.
 Person creation grants a Lawyer or Clerk membership in the selected Firm. If the caller omits the Firm, the store uses
 the deployment's anchor Firm.
 
-`hudson site person create` requires a Firm. A Firm Admin can create a Client, Clerk, or Lawyer within that scope. An
-Owner can also create an Admin, who joins that Firm without becoming its Admin DRI. Client creation grants no Firm
-membership. The command grants no Project participation.
+`navigator site person create` lets a Lawyer create a client contact without an existing Project. Optional Project
+context must be visible to the caller. A Firm Admin can create a Client, Clerk, or Lawyer within an administered Firm;
+Firm-role grants require that Firm context. An Owner can also assign Admin or Owner roles. Client creation grants no
+Firm membership, and creating any Person grants no Project participation.
 
 ## Evidence invitations
 

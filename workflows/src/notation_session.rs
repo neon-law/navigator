@@ -1855,9 +1855,7 @@ pub fn choice_label(
     state: &str,
     value: &str,
 ) -> Option<String> {
-    metadata_lookup(choices, state)
-        .and_then(|by_value| by_value.get(value))
-        .cloned()
+    store::question_registry::choice_label(choices, state, value)
 }
 
 /// Whether `state`'s answer is a single declared choice key, so it can be

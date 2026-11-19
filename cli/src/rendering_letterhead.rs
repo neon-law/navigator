@@ -1,7 +1,7 @@
 //! The frame a Project's letter is rendered in: the compiled registry's
 //! letterhead for a Brand, or the Brand's runtime letterhead row read over
 //! the deployment's authenticated HTTPS letterhead door. Which Brand a
-//! Project wears is [`cli::letterhead::resolve_brand`]'s answer, re-exported
+//! Project wears is [`crate::letterhead::resolve_brand`]'s answer, re-exported
 //! here beside the frame sources.
 //!
 //! The runtime row comes from one of two sources. When the signed-in
@@ -23,10 +23,10 @@
 
 use std::path::PathBuf;
 
-use store::brand_letterheads::{BrandLetterhead, LetterheadMark as StoreMark};
+use model::brand_letterheads::{BrandLetterhead, LetterheadMark as StoreMark};
 use views::brand::{BrandKey, DEFAULT_BRANDING};
 
-pub use cli::letterhead::{resolve_brand, LetterheadError};
+pub use crate::letterhead::{resolve_brand, LetterheadError};
 
 /// Cache-root override, so CI and test harnesses can pin the cache to a
 /// known directory instead of the user's `XDG_CACHE_HOME`.
@@ -229,7 +229,7 @@ fn cache_path(api_base: &str, key: &str) -> Option<PathBuf> {
 fn cache_key(api_base: &str, key: &str) -> PathBuf {
     PathBuf::from(format!(
         "{}.json",
-        store::assets::sha256_hex(format!("{api_base}\n{key}").as_bytes())
+        model::documents::sha256_hex(format!("{api_base}\n{key}").as_bytes())
     ))
 }
 

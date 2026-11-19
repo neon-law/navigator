@@ -290,7 +290,11 @@ pub async fn call_tool(
     // taken over the whole deployment.
     let scope = caller.read_scope();
     match name {
-        "create_person" => create_person::call(surreal, arguments).await,
+        "create_person" => {
+            let identity = caller.answer_identity()?;
+            create_person::call_for_actor(surreal, arguments, identity.role, identity.person_id)
+                .await
+        }
         "show_person" => show_person::call(surreal, &scope, arguments).await,
         "list_jurisdictions" => list_jurisdictions::call(surreal, arguments).await,
         "list_entities" => list_entities::call(surreal, arguments).await,

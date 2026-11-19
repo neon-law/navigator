@@ -50,6 +50,39 @@ pub struct Cli {
 #[derive(Subcommand)]
 #[allow(clippy::large_enum_variant)] // parsed once per process
 enum Command {
+    /// Search, read, draft and file correspondence; never send email.
+    Mail {
+        #[command(subcommand)]
+        action: crate::mail::MailAction,
+    },
+    /// Process the authenticated Firm Inbox.
+    Inbox {
+        #[command(subcommand)]
+        action: crate::inbox::InboxAction,
+    },
+    /// Inspect and file local Downloads through the site API.
+    Downloads {
+        #[command(subcommand)]
+        action: crate::downloads::DownloadsCmd,
+    },
+    /// Manage the Firm's Legal Plans through the site API.
+    LegalPlans {
+        #[arg(long)]
+        firm: String,
+        #[arg(long)]
+        host: Option<String>,
+        #[command(subcommand)]
+        action: crate::legal_plans::LegalPlansCmd,
+    },
+    /// Manage the Firm's operating assumptions through the site API.
+    Assumptions {
+        #[arg(long)]
+        firm: uuid::Uuid,
+        #[arg(long)]
+        host: Option<String>,
+        #[command(subcommand)]
+        action: crate::assumptions::AssumptionsCmd,
+    },
     /// Validate Markdown and YAML files in `<dir>` (default `.`). In a Project
     /// checkout with pointers, a current login for its manifest host also
     /// checks live document revisions using read-only, bounded requests.
@@ -100,11 +133,6 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Search, read, draft, and file Gmail correspondence; sending stays with the lawyer.
-    Mail {
-        #[command(subcommand)]
-        action: crate::mail::MailAction,
-    },
     /// Interact with a project hosted on a navigator site.
     ///
     /// Singular because a checkout is one Project — the repository name *is* the Project code.
@@ -127,7 +155,7 @@ enum Command {
     /// Prepare or send a Notation's rendered document envelope on the
     /// deployment. The Project — host and code — comes from the
     /// `navigator.yaml` in the current checkout.
-    #[command(name = "notation")]
+    #[command(name = "notation", visible_aliases = ["drafts", "templates"])]
     Notation {
         #[command(subcommand)]
         action: NotationCmd,
@@ -148,6 +176,8 @@ enum Command {
 /// The Notation envelope verbs a lawyer runs from a Project checkout.
 #[derive(Subcommand)]
 pub enum NotationCmd {
+    #[command(flatten)]
+    Render(crate::notation_render::RenderCmd),
     /// Work with a Notation's signature envelope.
     #[command(name = "envelope")]
     Envelope {
@@ -275,6 +305,21 @@ pub enum EnvelopeCmd {
 #[derive(Subcommand)]
 #[allow(clippy::large_enum_variant)] // parsed once per process
 pub enum SiteCmd {
+    /// Administer an authorized Firm using the Navigator session.
+    Firm {
+        #[command(subcommand)]
+        action: crate::firm_admin::SiteFirmCmd,
+    },
+    /// Administer a Brand using the Navigator session.
+    Brand {
+        #[command(subcommand)]
+        action: crate::firm_admin::SiteBrandCmd,
+    },
+    /// Create or merge People through the existing Navigator session.
+    Person {
+        #[command(subcommand)]
+        action: crate::person::PersonCmd,
+    },
     /// File, read, and verify a Project's documents — every document is
     /// scoped to one Project, and every Project to one brand deployment
     /// (`--host`, defaulting to the sole stored login).
@@ -417,6 +462,18 @@ fn run() -> ExitCode {
         return ExitCode::from(2);
     };
     match command {
+        Command::Mail { action } => runtime().block_on(crate::mail::run(action)),
+        Command::Inbox { action } => runtime().block_on(crate::inbox::run(action)),
+        Command::Downloads { action } => runtime().block_on(crate::downloads::run(action)),
+        Command::LegalPlans { firm, host, action } => {
+            runtime().block_on(crate::legal_plans::run(firm, host, action))
+        }
+        Command::Assumptions { firm, host, action } => {
+            runtime().block_on(crate::assumptions::run(firm, host, action))
+        }
+        Command::Notation {
+            action: NotationCmd::Render(action),
+        } => crate::notation_render::run(action),
         Command::Validate {
             dir,
             fix,
@@ -426,7 +483,6 @@ fn run() -> ExitCode {
         Command::Sync { host, dir, dry_run } => {
             runtime().block_on(projects::watch::run_sync(dir, &host, dry_run))
         }
-        Command::Mail { action } => runtime().block_on(crate::mail::run(action)),
         Command::Projects { action } => runtime().block_on(run_projects(action)),
         Command::Notation {
             action: NotationCmd::Envelope { action },
@@ -444,57 +500,61 @@ fn run() -> ExitCode {
         Command::Relationship { action } => runtime().block_on(relationship_log::run(action)),
         Command::Glossary { action } => crate::glossary::run(action),
         Command::Site { action } => run_site(action),
-        Command::Calendar { action } => match action {
-            CalendarCmd::Events {
-                project,
-                start,
-                end,
-                host,
-            } => runtime().block_on(crate::projects::calendar::events(
-                &host,
-                project.as_deref(),
-                start,
-                end,
-            )),
-            CalendarCmd::Freebusy {
-                project,
-                start,
-                end,
-                host,
-                attorneys,
-            } => runtime().block_on(crate::projects::calendar::freebusy(
-                &host,
-                project.as_deref(),
-                start,
-                end,
-                &attorneys,
-            )),
-            CalendarCmd::Check {
-                project,
-                start,
-                end,
-                host,
-                attorneys,
-            } => runtime().block_on(crate::projects::calendar::check(
-                &host,
-                project.as_deref(),
-                start,
-                end,
-                &attorneys,
-            )),
-            CalendarCmd::Access { project, host } => {
-                runtime().block_on(crate::projects::calendar::access(&host, project.as_deref()))
-            }
-            CalendarCmd::Register {
-                host,
-                calendar,
-                freebusy,
-            } => runtime().block_on(crate::projects::calendar::register(
-                &host,
-                calendar.as_deref(),
-                freebusy,
-            )),
-        },
+        Command::Calendar { action } => run_calendar(action, &runtime()),
+    }
+}
+
+fn run_calendar(action: CalendarCmd, runtime: &tokio::runtime::Runtime) -> ExitCode {
+    match action {
+        CalendarCmd::Events {
+            project,
+            start,
+            end,
+            host,
+        } => runtime.block_on(crate::projects::calendar::events(
+            &host,
+            project.as_deref(),
+            start,
+            end,
+        )),
+        CalendarCmd::Freebusy {
+            project,
+            start,
+            end,
+            host,
+            attorneys,
+        } => runtime.block_on(crate::projects::calendar::freebusy(
+            &host,
+            project.as_deref(),
+            start,
+            end,
+            &attorneys,
+        )),
+        CalendarCmd::Check {
+            project,
+            start,
+            end,
+            host,
+            attorneys,
+        } => runtime.block_on(crate::projects::calendar::check(
+            &host,
+            project.as_deref(),
+            start,
+            end,
+            &attorneys,
+        )),
+        CalendarCmd::Access { project, host } => {
+            runtime.block_on(crate::projects::calendar::access(&host, project.as_deref()))
+        }
+        CalendarCmd::Register {
+            host,
+            calendar,
+            freebusy,
+        } => runtime.block_on(crate::projects::calendar::register(
+            &host,
+            calendar.as_deref(),
+            freebusy,
+        )),
     }
 }
 
@@ -502,6 +562,9 @@ fn run() -> ExitCode {
 fn run_site(action: SiteCmd) -> ExitCode {
     let runtime = || tokio::runtime::Runtime::new().expect("tokio runtime");
     match action {
+        SiteCmd::Firm { action } => runtime().block_on(crate::firm_admin::run_firm(action)),
+        SiteCmd::Brand { action } => runtime().block_on(crate::firm_admin::run_brand(action)),
+        SiteCmd::Person { action } => runtime().block_on(crate::person::run(action)),
         SiteCmd::Document { action } => {
             runtime().block_on(crate::matter_site::run_document(action))
         }

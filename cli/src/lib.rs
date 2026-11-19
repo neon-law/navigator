@@ -40,6 +40,19 @@ pub use commands::{
     navigator_command, published_cli_version, run_gate, run_tracked_files_gate,
 };
 
+pub mod assumptions;
+pub mod downloads;
+pub mod inbox;
 pub mod inbox_import;
+pub mod lsp_download;
 pub mod mail;
+
 pub use commands::{concise_help, parse_asset_kind, HostOpt};
+pub mod firm_admin;
+pub mod firm_forgejo;
+pub mod forms_render;
+pub mod notation_import;
+pub mod notation_kinds;
+pub mod notation_render;
+pub mod person;
+pub mod rendering_letterhead;

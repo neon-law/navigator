@@ -1197,8 +1197,13 @@ async fn admin_people_new_form_lists_owner_first_for_owner() {
 #[tokio::test]
 async fn admin_people_new_creates_a_person_via_native_form_post() {
     let (state, surreal) = state_with_engines().await;
+    let (firm_id, admin_id, _, _) = seed_summary_dri(&surreal).await;
+    let admin = store::persons::find_by_id(&surreal, admin_id)
+        .await
+        .unwrap()
+        .unwrap();
     let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
-    let (cookie, csrf) = admin_session_cookie_and_csrf();
+    let (cookie, csrf) = session_cookie_and_csrf_for_person(&admin);
 
     let resp = app
         .oneshot(
@@ -1226,7 +1231,13 @@ async fn admin_people_new_creates_a_person_via_native_form_post() {
         .await
         .unwrap();
     assert!(created.is_some(), "the person should have been created");
-    assert_eq!(created.unwrap().role, store::persons::Role::Lawyer);
+    let created = created.unwrap();
+    assert_eq!(created.role, store::persons::Role::Lawyer);
+    assert!(store::firms::memberships_for_person(&surreal, created.id)
+        .await
+        .unwrap()
+        .iter()
+        .any(|membership| membership.firm_id == firm_id));
 }
 
 #[tokio::test]
@@ -1290,12 +1301,9 @@ async fn only_owner_can_create_an_owner_identity() {
     assert_eq!(row.role, store::persons::Role::Owner);
 }
 
-/// ENG-304 deleted the `/app/lawyer/people` browser mirror, so `POST /app/api/people`
-/// is the only Person create a lawyer can reach. The role coercion the deleted
-/// form carried has to hold there: a **lawyer** caller's submitted role is
-/// coerced to `client`, so a lawyer can't POST `role=admin` past the boundary.
+/// A Lawyer can create contacts, but cannot grant a Firm role through the API.
 #[tokio::test]
-async fn api_people_create_coerces_a_lawyer_callers_submitted_role() {
+async fn api_people_create_refuses_a_lawyer_callers_firm_role() {
     let (state, surreal) = state_with_engines().await;
     let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
     let (cookie, csrf) = session_cookie_and_csrf_for_role(store::persons::Role::Lawyer);
@@ -1308,7 +1316,7 @@ async fn api_people_create_coerces_a_lawyer_callers_submitted_role() {
                 .header(header::COOKIE, &cookie)
                 .header("x-csrf-token", &csrf)
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-                // A lawyer caller hand-crafts `role=admin`; the handler must drop it.
+                // A hand-crafted Firm-role grant is refused without creating a Person.
                 .body(Body::from(
                     "name=Ceres%20Lead&email=ceres%40test.invalid&role=admin",
                 ))
@@ -1316,15 +1324,12 @@ async fn api_people_create_coerces_a_lawyer_callers_submitted_role() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::CREATED);
-    let created = store::persons::find_by_email_ci(&surreal, "ceres@test.invalid")
-        .await
-        .unwrap()
-        .expect("the person should have been created");
-    assert_eq!(
-        created.role,
-        store::persons::Role::Client,
-        "a lawyer caller's submitted role must be coerced to client",
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    assert!(
+        store::persons::find_by_email_ci(&surreal, "ceres@test.invalid")
+            .await
+            .unwrap()
+            .is_none()
     );
 }
 

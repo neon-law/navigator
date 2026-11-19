@@ -158,10 +158,9 @@ Every document this repository produces for a client, a court, a counterparty, o
 Use available MCP servers and the `navigator` CLI, preferring them whenever they provide the needed operation. Never
 substitute browser or native-app automation for a server that is available.
 
-* **Navigator CLI** — the system of record.
-  Document bytes, archived authorities, and answers go through Navigator and never into Git. Preview a memo with `hudson
-  notation preview drafts/<code>.md`. A direct upload from this checkout writes only its pointer under `blobs/`; review
-  and commit that `.yaml` file.
+* **Navigator CLI** — the system of record. Document bytes, archived authorities, and answers go through Navigator and
+  never into Git. Preview a memo with `navigator notation preview drafts/<code>.md`. A direct upload from this checkout
+  writes only its pointer under `blobs/`; review and commit that `.yaml` file.
 * **Notion** — writing: handbooks, guides, and intake notes.
 * **Gmail** — review received mail and draft outgoing mail. Before an authorized archive, review the exact thread,
   file it or save a source-linked review in the approved matter record, and verify the save. If filing is blocked, leave

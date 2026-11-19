@@ -32,6 +32,8 @@ pub fn descriptor() -> Value {
         "inputSchema": {
             "type": "object",
             "properties": {
+                "project_id": { "type": "string", "format": "uuid", "description": "Optional Project context; it must be visible to the caller when supplied." },
+                "firm_id": { "type": "string", "format": "uuid", "description": "Optional Firm administration context; it never grants Project access." },
                 "name": {
                     "type": "string",
                     "description": "Full name of the person (e.g. \"Libra\")."
@@ -57,6 +59,39 @@ pub fn descriptor() -> Value {
 struct Args {
     name: String,
     email: String,
+    #[serde(default)]
+    project_id: Option<uuid::Uuid>,
+    #[serde(default)]
+    firm_id: Option<uuid::Uuid>,
+}
+
+/// Authenticated tool entry point; scope matches the REST creation boundary.
+pub async fn call_for_actor(
+    surreal: &store::surreal::SurrealDb,
+    arguments: &Value,
+    actor_role: store::persons::Role,
+    actor_person_id: uuid::Uuid,
+) -> Result<Value, ToolError> {
+    let args: Args = super::decode_args(arguments)?;
+    let input = CreatePersonCommand {
+        name: args.name,
+        email: args.email,
+        role: String::new(),
+        given_name: None,
+        family_name: None,
+        middle_name: None,
+        notion_user_id: None,
+        firm_id: args.firm_id,
+    };
+    let inserted = store::people_commands::create_person_for_actor(
+        surreal,
+        input,
+        actor_role,
+        Some(actor_person_id),
+        args.project_id,
+    )
+    .await?;
+    Ok(created_result(&inserted))
 }
 
 /// Create a Person through the shared command boundary and return the MCP
@@ -85,7 +120,11 @@ pub async fn call(
     };
     let inserted = create_person(surreal, &command).await?;
 
-    Ok(json!({
+    Ok(created_result(&inserted))
+}
+
+fn created_result(inserted: &store::persons::Person) -> Value {
+    json!({
         "content": [{
             "type": "text",
             "text": format!(
@@ -98,7 +137,7 @@ pub async fn call(
             "name": inserted.name,
             "email": inserted.email
         }
-    }))
+    })
 }
 
 #[cfg(test)]

@@ -103,6 +103,7 @@ pub fn document_with_base(base: &str) -> Value {
     add_relationship_log_operation(&mut document);
     add_upload_session_operations(&mut document);
     add_inbox_import_operation(&mut document);
+    add_cli_operations(&mut document);
     add_fi_import_operation(&mut document);
     add_private_chart_operation(&mut document);
     add_ephemeris_source_operation(&mut document);
@@ -744,6 +745,41 @@ fn add_inbox_import_operation(document: &mut Value) {
             "503": {"description": "Gmail attachment scanner unavailable"}
         }
     }});
+}
+
+fn add_cli_operations(document: &mut Value) {
+    document["paths"]["/app/api/mail-signature"] = json!({
+        "get": {
+            "summary": "Read the signed-in lawyer's mail signature",
+            "parameters": [{ "name": "account", "in": "query", "required": true,
+                "schema": { "type": "string", "format": "email" } }],
+            "responses": {
+                "200": { "description": "Signature with Person id and revision" },
+                "404": { "description": "No signature for the caller's account" }
+            }
+        }
+    });
+    document["paths"]["/app/api/forms/{code}/blank"] = json!({
+        "get": {
+            "summary": "Read a pin-verified registered form blank",
+            "parameters": [{ "name": "code", "in": "path", "required": true,
+                "schema": { "type": "string" } }],
+            "responses": {
+                "200": { "description": "Form blank", "content": { "application/pdf": {
+                    "schema": { "type": "string", "format": "binary" }
+                } } },
+                "404": { "description": "Unknown form code" }
+            }
+        }
+    });
+    let fields = &mut document["components"]["schemas"]["CreatePersonRequest"]["properties"];
+    fields["project_id"] = json!({ "type": ["string", "null"], "format": "uuid",
+        "description": "Optional Project context; requires participation when supplied by a Lawyer." });
+    fields["firm_id"] = json!({ "type": ["string", "null"], "format": "uuid",
+        "description": "Firm-role grants require an administered Firm; Project context must agree." });
+    document["paths"]["/app/api/people"]["post"]["description"] = json!(
+        "Lawyers create client contacts without a Project requirement. Admins may also grant Lawyer or Clerk roles within an administered Firm. Only Owners create Admins or Owners. Creation grants no Project participation."
+    );
 }
 
 #[allow(clippy::too_many_lines)]

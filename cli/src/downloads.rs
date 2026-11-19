@@ -1,4 +1,4 @@
-//! `hudson downloads` — the legal files sitting in the lawyer's Downloads
+//! `navigator downloads` — the legal files sitting in the lawyer's Downloads
 //! folder.
 //!
 //! Mail that came through `navigator mail` is already filed; the files that
@@ -22,7 +22,7 @@ use sha2::Digest;
 use uuid::Uuid;
 
 #[derive(Subcommand)]
-pub(crate) enum DownloadsCmd {
+pub enum DownloadsCmd {
     /// List the files in a Downloads directory with their intake facts.
     Scan {
         /// Directory to sweep. Defaults to the platform's Downloads directory.
@@ -512,11 +512,11 @@ fn match_project(
     None
 }
 
-pub(crate) async fn run(action: DownloadsCmd) -> ExitCode {
+pub async fn run(action: DownloadsCmd) -> ExitCode {
     match run_inner(action).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("hudson downloads: {error:#}");
+            eprintln!("navigator downloads: {error:#}");
             ExitCode::FAILURE
         }
     }
@@ -728,7 +728,7 @@ async fn file_file(
 ) -> Result<()> {
     let (upload_name, kind, slug) = file_preamble(path, kind, slug)?;
     let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
-    let local_sha256 = store::documents::sha256_hex(&bytes);
+    let local_sha256 = model::documents::sha256_hex(&bytes);
     let client = crate::remote::DocumentClient::connect(host, project).await?;
     let description = where_froms(path)
         .and_then(|urls| urls.last().cloned())
@@ -1144,7 +1144,7 @@ mod tests {
             "2026.10.12_complaint-annulment.pdf",
             b"complaint",
         );
-        let local_sha = store::documents::sha256_hex(b"complaint");
+        let local_sha = model::documents::sha256_hex(b"complaint");
         let outcome = file_document(
             &original,
             "2026.10.12_complaint-annulment.pdf",
@@ -1172,7 +1172,7 @@ mod tests {
             "2026.10.12_complaint-annulment.pdf",
             b"complaint",
         );
-        let local_sha = store::documents::sha256_hex(b"complaint");
+        let local_sha = model::documents::sha256_hex(b"complaint");
         let refused = match file_document(
             &original,
             "2026.10.12_complaint-annulment.pdf",
@@ -1191,8 +1191,8 @@ mod tests {
 
     #[test]
     fn clean_matches_candidates_by_digest_only() {
-        let filed_sha = store::documents::sha256_hex(b"complaint");
-        let loose_sha = store::documents::sha256_hex(b"notes");
+        let filed_sha = model::documents::sha256_hex(b"complaint");
+        let loose_sha = model::documents::sha256_hex(b"notes");
         let candidate = |path: &str, filename: &str, sha256: String| Candidate {
             path: path.to_owned(),
             filename: filename.to_owned(),

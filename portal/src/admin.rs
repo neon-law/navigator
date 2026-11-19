@@ -1435,14 +1435,18 @@ async fn admin_people_create(
         )
         .into_response();
     }
-    if let (Some(session), Some(firm_id)) = (session.as_deref(), command.firm_id) {
-        if let Err(error) =
-            crate::api::require_firm_administration(&surreal, session, firm_id).await
-        {
-            return error.into_response();
-        }
-    }
-    match crate::people_commands::create_person(&surreal, &command).await {
+    let Some(Extension(actor)) = session.as_ref() else {
+        return not_found_response();
+    };
+    match store::people_commands::create_person_for_actor(
+        &surreal,
+        command,
+        actor.role,
+        actor.person_id,
+        None,
+    )
+    .await
+    {
         Ok(_) => Redirect::to("/app/admin/people").into_response(),
         Err(e) => Redirect::to(&format!(
             "/app/admin/people/new?error={}",
@@ -3585,6 +3589,10 @@ struct ClientInlineInput {
     client_name: String,
     #[serde(default)]
     client_email: String,
+    #[serde(default)]
+    project_id: Option<Uuid>,
+    #[serde(default)]
+    firm_id: Option<Uuid>,
 }
 
 /// `POST /app/projects/new/client` — the inline "New client" form on the
@@ -3609,9 +3617,20 @@ async fn projects_new_client_inline(
         family_name: None,
         middle_name: None,
         notion_user_id: None,
-        firm_id: None,
+        firm_id: input.firm_id,
     };
-    match crate::people_commands::create_person(&state.surreal, &command).await {
+    let Some(Extension(actor)) = session.as_ref() else {
+        return not_found_response();
+    };
+    match store::people_commands::create_person_for_actor(
+        &state.surreal,
+        command,
+        actor.role,
+        actor.person_id,
+        input.project_id,
+    )
+    .await
+    {
         Ok(created) => {
             let mut query = String::new();
             push_query(&mut query, "client", &created.id.to_string());
@@ -7112,6 +7131,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)] // one form sequence proves the client bootstrap boundary
     async fn project_inline_forms_create_an_entity_or_a_client() {
         let db = store::test_support::mem_surreal().await;
         let state = blog_admin_state(db.clone()).await;
@@ -7173,6 +7193,8 @@ mod tests {
             axum::Form(super::ClientInlineInput {
                 client_name: name.into(),
                 client_email: email.into(),
+                project_id: None,
+                firm_id: None,
             })
         };
         assert_eq!(

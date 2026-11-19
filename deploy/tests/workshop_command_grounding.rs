@@ -1,5 +1,5 @@
-//! Extraction grounding test: every `navigator …` command the workshop docs
-//! and the `cli` crate README publish must parse against the real binary.
+//! Every Navigator or Hudson command in the workshops and CLI README must
+//! parse against its own command tree.
 //!
 //! `server/content/workshops/navigator/{README,DEPLOY,CONTRIBUTE}.md` and `cli/README.md`
 //! teach concrete `navigator` command sequences. That prose is a public
@@ -70,14 +70,11 @@ fn navigator_commands(md: &str) -> Vec<String> {
             pending.clear();
             joined
         };
-        // `hudson` carries every `navigator` command, so both
-        // spellings parse against this binary.
+        // Application commands use Navigator's parser; operator commands
+        // use Hudson's parser.
         let full = strip_comment(&full).trim().to_string();
-        if let Some(rest) = full
-            .strip_prefix("hudson ")
-            .or_else(|| full.strip_prefix("navigator "))
-        {
-            commands.push(rest.trim().to_string());
+        if full.starts_with("hudson ") || full.starts_with("navigator ") {
+            commands.push(full);
         }
     }
     commands
@@ -138,7 +135,7 @@ fn normalize(token: &str) -> String {
 /// runnable invocation — `navigator <COMMAND>` (subcommand normalized to the
 /// placeholder UUID) or a bare `navigator --help` / `--version`.
 fn is_meta(tokens: &[String]) -> bool {
-    match tokens.first() {
+    match tokens.get(1) {
         None => true,
         Some(first) => first == PLACEHOLDER || first.starts_with('-'),
     }
@@ -148,8 +145,19 @@ fn is_meta(tokens: &[String]) -> bool {
 /// short-circuits clap before any network or browser I/O, but clap still
 /// rejects an unknown flag or an unexpected positional first.
 fn parses(tokens: &[String]) -> (bool, String) {
+    if tokens.first().is_some_and(|name| name == "navigator") {
+        let mut args = tokens.to_vec();
+        args.push("--help".to_string());
+        return match cli::navigator_command().try_get_matches_from(args) {
+            Ok(_) => (true, String::new()),
+            Err(error) => (
+                error.kind() == clap::error::ErrorKind::DisplayHelp,
+                error.to_string(),
+            ),
+        };
+    }
     let out = Command::new(env!("CARGO_BIN_EXE_hudson"))
-        .args(tokens)
+        .args(&tokens[1..])
         .arg("--help")
         .output()
         .expect("run navigator --help");
@@ -174,7 +182,7 @@ fn every_published_navigator_command_parses() {
             checked += 1;
             let (ok, output) = parses(&tokens);
             if !ok {
-                failures.push(format!("{doc}: `navigator {command}`\n{}", output.trim()));
+                failures.push(format!("{doc}: `{command}`\n{}", output.trim()));
             }
         }
     }
@@ -413,9 +421,9 @@ fn every_documented_notation_create_names_a_seeded_template_code() {
     for doc in template_code_docs() {
         for command in navigator_commands(&repo_file(&doc)) {
             let tokens = tokenize(&command);
-            // `site notation create <CODE> …`
+            // `<binary> site notation create <CODE> …`
             let code = match tokens.as_slice() {
-                [site, notation, create, code, ..]
+                [_, site, notation, create, code, ..]
                     if site == "site" && notation == "notation" && create == "create" =>
                 {
                     code

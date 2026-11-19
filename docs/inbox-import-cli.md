@@ -1,9 +1,9 @@
-# `hudson inbox import`
+# `navigator inbox import`
 
 Import exported email and LinkedIn messages into a Firm's Inbox. The server retains the original payload, parses
 Messages, threads and deduplicates them, and files attachments when a Project is supplied.
 
-The command is ingest-only: there is no `hudson inbox send` command. `--dry-run` needs no login.
+The command is ingest-only: there is no `navigator inbox send` command. `--dry-run` needs no login.
 
 Log in with `navigator site login --host https://your-deployment.example` before transferring imports.
 
@@ -17,14 +17,14 @@ Supported sources:
 
 ```bash
 # Import one message and attribute its Conversation to a Project.
-hudson inbox import --source=email --mailbox=lawyer@neonlaw.com \
+navigator inbox import --source=email --mailbox=lawyer@neonlaw.com \
   --file=notice.eml --project=sample-litigation
 
 # Import a directory of messages.
-hudson inbox import --source=email --mailbox=lawyer@neonlaw.com --dir=./thread
+navigator inbox import --source=email --mailbox=lawyer@neonlaw.com --dir=./thread
 
 # Import a LinkedIn export using the exporting account's profile URL.
-hudson inbox import --source=linkedin --mailbox='https://www.linkedin.com/in/your-profile' \
+navigator inbox import --source=linkedin --mailbox='https://www.linkedin.com/in/your-profile' \
   --file=messages.csv
 ```
 
@@ -61,7 +61,7 @@ retry the same thread to finish it. Earlier Messages retain their Inbox IDs.
 Save each Gmail Message with `navigator mail save`. Import its RFC 5322 file through the authenticated Inbox route.
 
 ```sh
-hudson inbox import --source gmail --mailbox lawyer@example.test --file mail/example.eml
+navigator inbox import --source gmail --mailbox lawyer@example.test --file mail/example.eml
 ```
 
 Sign in as the lawyer with the verified mailbox. The server checks Firm membership and the canonical mailbox setting.

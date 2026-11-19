@@ -33,8 +33,12 @@ fn the_lean_navigator_names_only_its_own_verbs() {
     assert_eq!(
         command_names(&help(&["--help"])),
         [
+            "assumptions",
             "calendar",
+            "downloads",
             "glossary",
+            "inbox",
+            "legal-plans",
             "mail",
             "notation",
             "project",
@@ -48,8 +52,11 @@ fn the_lean_navigator_names_only_its_own_verbs() {
     );
     assert_eq!(
         command_names(&help(&["site", "--help"])),
-        ["document", "import", "login", "logout", "mail", "notation", "whoami", "help"]
-            .map(String::from)
+        [
+            "brand", "document", "firm", "import", "login", "logout", "mail", "notation", "person",
+            "whoami", "help"
+        ]
+        .map(String::from)
     );
     assert_eq!(
         command_names(&help(&["relationship", "--help"])),

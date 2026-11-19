@@ -2210,3 +2210,12 @@ ci_matter_content_denied if {
     input.session.source == "ci"
     input.path == ["app", "api", "mail-signature"]
 }
+
+# Only registry-named form blanks are available through the application API.
+route_allow if {
+    count(input.path) == 5
+    array.slice(input.path, 0, 3) == ["app", "api", "forms"]
+    input.path[4] == "blank"
+    input.method == "GET"
+    is_lawyer(input.session)
+}

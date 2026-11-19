@@ -60,18 +60,13 @@ fn write(dir: &TempDir, name: &str, body: &str) -> std::path::PathBuf {
 }
 
 #[test]
-fn top_level_help_shows_both_visible_group_aliases() {
+fn application_aliases_stay_out_of_operator_help() {
     let output = navigator(&["--help"]);
     assert!(output.status.success());
     let help = String::from_utf8_lossy(&output.stdout);
-    let notation_row = help
+    assert!(!help
         .lines()
-        .find(|line| line.trim_start().starts_with("notation"))
-        .unwrap_or_else(|| panic!("no `notation` row in:\n{help}"));
-    assert!(
-        notation_row.contains("drafts") && notation_row.contains("templates"),
-        "the `notation` row must advertise both visible aliases: {notation_row:?}"
-    );
+        .any(|line| line.trim_start().starts_with("notation ")));
 }
 
 #[test]

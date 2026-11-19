@@ -31,9 +31,9 @@ output: letter
 
 The filename supplies the code. A body-only memo needs neither `questionnaire:` nor `workflow:`.
 
-Run `navigator project gate`, review and commit the source, then push a preview with `hudson notation preview
-templates/<code>.md`. Preview stores a draft for review; it does not run a notation or produce a filed document. Do not
-substitute a document upload for authoring the notation's source.
+Preview uncommitted source with `navigator notation preview templates/<code>.md --no-open`. The command renders a local
+PDF without storing a Notation or starting a workflow. Run `navigator project gate`, review the artifact, then commit
+the source. Do not substitute a document upload for authoring the notation's source.
 
 Keep lines within 120 columns. Preserve exact statute numbers and citations when reflowing; verify the gate's edits
 before committing. Save and check each cited original through *Source preservation* below.
@@ -121,7 +121,7 @@ A pleading carries only the text meant for the court. Keep drafting guidance, re
 in the review record or an HTML comment (`<!-- … -->`), which never renders; never in the notation's prose. Before
 presenting a pleading as ready to file:
 
-1. Render it final, without `--preview`: `hudson notation pdf <template.md> --out <file.pdf>`. The render
+1. Render it final, without `--preview`: `navigator notation pdf <template.md> --out <file.pdf>`. The render
    refuses an unanswered placeholder, a bracket, a stray blank, a drafting note, an instruction such as `Note to
    drafter:`, and an incomplete certificate of service, naming each line. Answer the questionnaire state it names; never
    fill a missing fact with an invented one.

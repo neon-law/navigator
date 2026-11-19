@@ -14,7 +14,7 @@ is where the edit lands. Never commit a `.docx`.
 ## Open it in Word
 
 ```bash
-hudson notation word --preview drafts/<code>.md --out "documents/Work Product/drafts/<code>.docx"
+navigator notation word --preview drafts/<code>.md --out "documents/Work Product/drafts/<code>.docx"
 open -a "Microsoft Word" "documents/Work Product/drafts/<code>.docx"
 ```
 
@@ -31,7 +31,7 @@ Tell the lawyer three things:
 When the lawyer says the file is saved, preview the block-level changes:
 
 ```bash
-hudson notation import drafts/<code>.md "documents/Work Product/drafts/<code>.docx" --dry-run
+navigator notation import drafts/<code>.md "documents/Work Product/drafts/<code>.docx" --dry-run
 ```
 
 If the command reports unresolved revisions or comments, have the lawyer resolve them in Word. If the template changed
@@ -40,4 +40,4 @@ a placeholder or Clause include, review the proposed wording and keep the templa
 
 Review the diff before applying it. Run the same command without `--dry-run` to apply the plan. Import checks the edited
 template against the blocking project rules before writing. Then run `navigator project gate` and render a fresh PDF
-with `hudson notation pdf --preview` for the lawyer to check. Report the edits applied and any held items.
+with `navigator notation pdf --preview` for the lawyer to check. Report the edits applied and any held items.

@@ -33,11 +33,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::Arc;
 
-use cloud::StorageService;
-
-use cli::palette;
+use crate::palette;
 
 /// The render profile that selects this mode: `output: form`, or the
 /// `kind: filing` default (`Kind::Filing`'s `default_output`).
@@ -51,6 +48,7 @@ const CACHE_ROOT_ENV: &str = "NAVIGATOR_FORM_CACHE";
 /// forms registry, fill its `AcroForm` fields from the answers, and write
 /// the unflattened PDF. Every failure is a loud non-zero exit naming the
 /// next step — never a plain-page fallback.
+#[must_use]
 pub fn run(
     file: &Path,
     contents: &str,
@@ -214,7 +212,7 @@ fn resolve_blank(
         ));
     }
 
-    let bytes = fetch_from_assets(form.object_path)?;
+    let bytes = fetch_from_assets(form.code)?;
     verify_pin(&pin, &bytes, form)?;
     cache_put(origin_url, &pin, &bytes)?;
     Ok(bytes)
@@ -290,21 +288,22 @@ fn cache_put(origin_url: &str, pin: &str, bytes: &[u8]) -> Result<(), String> {
 
 /// Pull the blank from the assets lane — the same bucket `forms sync`
 /// vendors to — and leave verification to the caller.
-fn fetch_from_assets(object_path: &str) -> Result<Vec<u8>, String> {
-    let runtime = tokio::runtime::Runtime::new().map_err(|e| format!("tokio runtime: {e}"))?;
+fn fetch_from_assets(code: &str) -> Result<Vec<u8>, String> {
+    let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
     runtime.block_on(async {
-        let storage: Arc<dyn StorageService> =
-            cloud::assets_from_lookup(|key| std::env::var(key).ok())
-                .await
-                .map_err(|e| {
-                    format!(
-                        "open assets storage: {e} — pass --bucket or set \
-                NAVIGATOR_ASSETS_BUCKET (or NAVIGATOR_STORAGE_BUCKET)"
-                    )
-                })?;
-        let blank = storage.get(object_path).await.map_err(|e| {
-            format!("pull `{object_path}`: {e} — vendor the blank with `hudson forms sync`")
-        })?;
-        Ok(blank.bytes)
+        let (base, token) = crate::remote::resolve(None).map_err(|e| e.to_string())?;
+        let url = format!("{base}/app/api/forms/{code}/blank");
+        reqwest::Client::new()
+            .get(url)
+            .bearer_auth(token)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?
+            .error_for_status()
+            .map_err(|e| e.to_string())?
+            .bytes()
+            .await
+            .map(|b| b.to_vec())
+            .map_err(|e| e.to_string())
     })
 }

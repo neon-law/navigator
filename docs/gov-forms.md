@@ -56,7 +56,7 @@ provenance.
 Use [the synthetic answers file](examples/nv__llc_formation.answers.yaml) with the Nevada Secretary of State packet.
 
 ```bash
-hudson notation pdf \
+navigator notation pdf \
   templates/notations/forms/united_states/nevada/state/nv__llc_formation.md \
   --answers-file docs/examples/nv__llc_formation.answers.yaml \
   --out /tmp/formation.pdf

@@ -2,6 +2,10 @@
 
 const AGENT_CONTRACT: &str = include_str!("../src/projects/agent_contract.md");
 
+fn unwrapped(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 #[test]
 fn canonical_contract_preserves_project_boundaries_and_current_tool_guidance() {
     for required in [
@@ -23,7 +27,7 @@ fn canonical_contract_preserves_project_boundaries_and_current_tool_guidance() {
         "do not\nwrite application code",
     ] {
         assert!(
-            AGENT_CONTRACT.contains(required),
+            unwrapped(AGENT_CONTRACT).contains(&unwrapped(required)),
             "canonical contract is missing required guidance: {required}"
         );
     }
@@ -51,7 +55,7 @@ fn canonical_contract_makes_all_email_draft_only() {
         "and sends it personally.",
     ] {
         assert!(
-            AGENT_CONTRACT.contains(required),
+            unwrapped(AGENT_CONTRACT).contains(&unwrapped(required)),
             "canonical contract is missing critical email guidance: {required}"
         );
     }
@@ -66,7 +70,7 @@ fn contract_requires_pii_removal_before_filing_feedback() {
         "navigator project feedback-check",
     ] {
         assert!(
-            AGENT_CONTRACT.contains(required),
+            unwrapped(AGENT_CONTRACT).contains(&unwrapped(required)),
             "AGENTS.md missing {required:?}"
         );
     }
@@ -104,7 +108,7 @@ fn both_surfaces_state_the_branch_contract() {
         "Deadline",
     ] {
         assert!(
-            AGENT_CONTRACT.contains(required),
+            unwrapped(AGENT_CONTRACT).contains(&unwrapped(required)),
             "AGENTS.md missing {required:?}"
         );
     }

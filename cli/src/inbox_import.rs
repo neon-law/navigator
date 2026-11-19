@@ -1,4 +1,4 @@
-//! `hudson inbox import` — import a lawyer's own correspondence into the
+//! `navigator inbox import` — import a lawyer's own correspondence into the
 //! Firm Inbox through the server door `POST /app/api/inbox/import`: an RFC
 //! 5322 `.eml` (or a directory of them) with `--source=email`, or a `LinkedIn`
 //! data export's `messages.csv` with `--source=linkedin`.
@@ -26,7 +26,7 @@ use crate::{remote, HostOpt};
 /// authority on unknown values.
 const SOURCES: [&str; 3] = ["email", "gmail", "linkedin"];
 
-/// What `hudson inbox import` imports.
+/// What `navigator inbox import` imports.
 #[derive(Debug, Clone, Default)]
 pub struct NewInboxImport {
     pub source: String,
@@ -159,7 +159,7 @@ fn first_line(text: &str) -> String {
 
 /// The reconcile text every interrupted import names: a replayed payload is
 /// deduped to the existing rows, so re-running the same command is safe.
-const RECONCILE: &str = "import outcome unknown; re-run `hudson inbox import` — a replayed payload is deduped to the existing rows";
+const RECONCILE: &str = "import outcome unknown; re-run `navigator inbox import` — a replayed payload is deduped to the existing rows";
 
 fn print_imported(payload: &Path, imported: &InboxImportResponse) {
     println!(
@@ -183,7 +183,7 @@ fn print_imported(payload: &Path, imported: &InboxImportResponse) {
     }
 }
 
-pub fn import_http_client(base: &str) -> Result<reqwest::Client> {
+fn import_http_client(base: &str) -> Result<reqwest::Client> {
     remote::authenticated_client_builder(base)?
         .build()
         .context("build Inbox import client")
@@ -291,6 +291,51 @@ pub async fn import(new: NewInboxImport) -> Result<()> {
         )
         .await?;
         print_imported(&payload, &imported);
+    }
+    Ok(())
+}
+
+/// A mapped metadata-only Fi import; apply is deliberately opt-in.
+pub struct NewFiImport {
+    pub file: PathBuf,
+    pub mapping: PathBuf,
+    pub account: String,
+    pub brand: String,
+    pub project: Option<String>,
+    pub apply: bool,
+    pub host: Option<String>,
+}
+
+fn fi_request(new: &NewFiImport, mapping: &model::fi_import::Mapping, bytes: &[u8]) -> Value {
+    json!({"account":new.account,"brand":new.brand,"project":new.project,
+        "mapping":mapping,"payload_base64":base64::engine::general_purpose::STANDARD.encode(bytes),
+        "dry_run":!new.apply})
+}
+
+/// Preview or apply a complete mapped Fi CSV. Neither branch prints raw bytes.
+pub async fn import_fi(new: NewFiImport) -> Result<()> {
+    if std::fs::metadata(&new.mapping)?.len() > 65_536 {
+        return Err(anyhow!("Fi mapping exceeds 64 KiB"));
+    }
+    if std::fs::metadata(&new.file)?.len() > model::fi_import::MAX_CSV_BYTES as u64 {
+        return Err(anyhow!("Fi CSV exceeds its byte limit"));
+    }
+    let mapping: model::fi_import::Mapping = serde_json::from_slice(&std::fs::read(&new.mapping)?)
+        .context("parse explicit Fi mapping")?;
+    let bytes = std::fs::read(&new.file).context("read Fi metadata CSV")?;
+    model::fi_import::parse(&mapping, &new.account, &bytes).context("validate Fi metadata CSV")?;
+    let (base, token) = remote::resolve(new.host.as_deref())?;
+    let response=import_http_client(&base)?.post(format!("{base}/app/api/inbox/import/fi"))
+        .timeout(Duration::from_secs(120)).bearer_auth(token).json(&fi_request(&new,&mapping,&bytes))
+        .send().await.context("Fi request interrupted; rerun the unchanged batch to reconcile stable source identities")?;
+    let status = response.status();
+    let text = response.text().await.context("read Fi import result")?;
+    let report: Value = serde_json::from_str(&text).context("parse Fi import result")?;
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    if !status.is_success() {
+        return Err(anyhow!(
+            "Fi import refused: {status}; inspect the row diagnostics and committed IDs above"
+        ));
     }
     Ok(())
 }
