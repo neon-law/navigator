@@ -42,20 +42,6 @@ pub fn image_ref(registry: &str, image: &str, tag: &str) -> String {
     format!("{registry}/{image}:{tag}")
 }
 
-/// True when `tag` names an immutable release.
-///
-/// The grammar is semver's, via [`crate::release`], so `YY.M.D-hotfix.N` ranks
-/// below the `YY.M.D` it hangs off, as Cargo and every consumer resolving a
-/// version compute. One implementation answers this for the release pipeline
-/// and for `ops ship` alike.
-///
-/// A four-component `YY.M.D.H` tag is refused: Cargo cannot parse it as a
-/// version, and the tag comes from `[workspace.package].version`.
-#[must_use]
-pub fn is_release_tag(tag: &str) -> bool {
-    crate::release::is_release_version(tag)
-}
-
 /// Reject a `--tag` that is not an immutable release tag — rolling `latest`,
 /// `buildcache`, or `ci-<sha>` onto a workload is exactly the unauditable
 /// deploy we forbid.
@@ -392,44 +378,6 @@ mod tests {
         .await
         .unwrap_err();
         assert!(error.to_string().contains("returned 404"));
-    }
-
-    /// What `--tag` admits is a release VERSION, which is now the same question
-    /// the release pipeline asks. A rolling or per-commit ref is what this must
-    /// refuse: rolling `latest` onto a workload is the unauditable deploy the
-    /// whole immutable-tag convention exists to prevent.
-    #[test]
-    fn is_release_tag_accepts_a_release_version_and_nothing_else() {
-        assert!(is_release_tag("26.6.23"));
-        assert!(is_release_tag("26.6.5")); // single-digit day
-        assert!(is_release_tag("0.1.9"));
-        assert!(is_release_tag("26.8.19-hotfix.14"));
-        assert!(is_release_tag("26.8.19-hotfix.0"));
-        assert!(is_release_tag("26.8.19-hotfix.214"));
-        // The calendar is a convention, so a version departing from it is still
-        // a version: a four-digit year is accepted.
-        assert!(is_release_tag("2026.6.23"));
-        // Non-releases and malformed shapes stay rejected.
-        assert!(!is_release_tag("latest"));
-        assert!(!is_release_tag("buildcache"));
-        assert!(!is_release_tag("ci-6a5f96a"));
-        assert!(!is_release_tag("26.6")); // too few components
-        assert!(!is_release_tag("26..6")); // empty component
-        assert!(!is_release_tag("26.8.19-hotfix.")); // empty prerelease identifier
-        assert!(!is_release_tag("26.8.19-hotfix.014")); // a numeric identifier may not pad
-                                                        // A bare alphanumeric prerelease IS a version, and it orders below any
-                                                        // numbered one (`hotfix` < `hotfix.14`), so nothing needs to refuse it.
-                                                        // The old grammar did, for requiring `-hotfix.N` exactly.
-        assert!(is_release_tag("26.8.19-hotfix"));
-        assert!(is_release_tag("26.8.19-hotfix.14.1"));
-        // A fourth component is not a version Cargo can parse, so no release
-        // can carry one — the legacy `.H` spelling is retired with the
-        // derived-tag era that produced it.
-        assert!(!is_release_tag("26.6.25.14"));
-        assert!(!is_release_tag("26.6.25.14.30"));
-        // Build metadata does not order, so two tags differing only there would
-        // compare equal.
-        assert!(!is_release_tag("26.6.23+build.1"));
     }
 
     #[test]

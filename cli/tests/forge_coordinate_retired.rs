@@ -15,7 +15,7 @@
 //! configuration.** This is the sharper half, and it is the defect the collapse
 //! removed: `portal::config` read `NAVIGATOR_GIT_HOST` with a **public forge as
 //! the default**, so an unset variable silently pointed every Project's clone
-//! URL at a namespace the Firm does not control — while `ops github setup`
+//! URL at a namespace the Firm does not control — while `navigator github setup`
 //! deliberately had no such fallback and documented why. Two crates, opposite
 //! rules, and the permissive one was the one serving users.
 //!
@@ -33,7 +33,7 @@
 //! whatever forge hosts it, so the derivation those two halves used to police is
 //! gone rather than merely configured. The surviving host in configuration is
 //! half of one `(host, organization)` coordinate — where a deployment's own
-//! repositories are created, and the boundary `ops github setup` refuses a
+//! repositories are created, and the boundary `navigator github setup` refuses a
 //! governance write outside — and it never names a client matter's source.
 //!
 //! # Why the second half is scoped rather than tree-wide
@@ -82,7 +82,7 @@ const COORDINATE_SOURCES: &[&str] = &[
     "portal/src/project_portal.rs",
     "cli/src/projects/doctor.rs",
     "cli/src/projects/repository.rs",
-    "deploy/src/devx/github_setup.rs",
+    "cli/src/github_setup.rs",
     ".github/actions/gate/action.yml",
 ];
 

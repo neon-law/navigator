@@ -285,6 +285,8 @@ pub enum FirmError {
     InvalidCalendarOwner,
     #[error("Gmail addresses are not supported. Choose a Google Workspace mailbox on the Firm's own domain.")]
     GmailCalendarOwner,
+    #[error("Choose DocuSign or Dropbox Sign.")]
+    InvalidEsignProvider,
     #[error("no person {0}")]
     NoSuchPerson(Uuid),
     #[error("person {0} is a client and cannot hold a firm membership")]
@@ -409,7 +411,8 @@ impl FirmError {
             }
             Self::CalendarSettingsUnavailable
             | Self::InvalidCalendarOwner
-            | Self::GmailCalendarOwner => self.to_string(),
+            | Self::GmailCalendarOwner
+            | Self::InvalidEsignProvider => self.to_string(),
             Self::Db(_)
             | Self::Postgres(_)
             | Self::PostgresSql(_)

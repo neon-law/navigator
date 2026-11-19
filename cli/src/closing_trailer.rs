@@ -359,7 +359,7 @@ Fixes ENG-104
 
 Adds `record_signer_completion` and a webhook branch for it.
 
-The rollout to every Project finished last week, and `ops github setup` applies the ruleset on its next run.
+The rollout to every Project finished last week, and `navigator github setup` applies the ruleset on its next run.
 
 ## Tests
 

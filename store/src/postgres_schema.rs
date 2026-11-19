@@ -1707,6 +1707,10 @@ mod tests {
                 "20261119010000_create_project_pull_request_notice.sql",
                 include_str!("../postgres/migrations/20261119010000_create_project_pull_request_notice.sql"),
             ),
+            (
+                "20261119180000_add_firm_esign_provider.sql",
+                include_str!("../postgres/migrations/20261119180000_add_firm_esign_provider.sql"),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

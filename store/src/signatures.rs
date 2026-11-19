@@ -43,15 +43,41 @@ pub(crate) const TABLE: &str = "signature";
 pub enum SignatureProvider {
     /// DocuSign — the production e-signature seam (`portal::signature`).
     DocuSign,
+    /// Dropbox Sign — an alternative e-signature provider a Firm may choose.
+    DropboxSign,
 }
 
 impl SignatureProvider {
+    /// Every provider in the registry.
+    pub const ALL: [Self; 2] = [Self::DocuSign, Self::DropboxSign];
+
     /// String form stored in the `provider` column and matched by the
     /// completion webhook.
     #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::DocuSign => "docusign",
+            Self::DropboxSign => "dropbox_sign",
+        }
+    }
+
+    /// The provider's own page for a request, so Navigator can link out to it.
+    ///
+    /// DocuSign opens the envelope. Dropbox Sign opens its request list, which takes no id here.
+    #[must_use]
+    pub fn deep_link(&self, provider_id: &str) -> String {
+        match self {
+            Self::DocuSign => format!("https://app.docusign.com/documents/details/{provider_id}"),
+            Self::DropboxSign => "https://app.hellosign.com/home/manage".to_string(),
+        }
+    }
+
+    /// A short label for the provider, as the dashboard prints it.
+    #[must_use]
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::DocuSign => "DocuSign",
+            Self::DropboxSign => "Dropbox Sign",
         }
     }
 
@@ -63,6 +89,7 @@ impl SignatureProvider {
     pub fn from_stored(value: &str) -> Option<Self> {
         match value {
             "docusign" => Some(Self::DocuSign),
+            "dropbox_sign" => Some(Self::DropboxSign),
             _ => None,
         }
     }

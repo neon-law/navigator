@@ -43,7 +43,7 @@ gh api repos/neon-law/navigator/commits/<sha>/check-runs \
     --jq '.check_runs[] | "\(.name) \(.app.id) \(.app.slug)"'
 ```
 
-`hudson ops github setup [repository]` reconciles one repository at a time, and it governs **every** repository the Firm
+`navigator github setup [repository]` reconciles one repository at a time, and it governs **every** repository the Firm
 administers rather than a checked-in pair. The target resolves in precedence order — the explicit `owner/name` argument,
 then `GITHUB_REPOSITORY`, then the checkout's `origin` remote.
 
@@ -140,9 +140,9 @@ shell](project-repositories.md#a-repositorys-fixed-shell). Before this, moving t
 release meant hand-editing it in every one of the 19+ Project repositories that carry it — a manual, unreviewed in
 spirit, per-repository chore.
 
-`ops github setup` reconciles the callers against the exact templates in `cli/src/projects/repository.rs` — the same
-`workflow`/`cd_workflow` generators the gate checks — and updates the top-level version in `navigator.yaml` in the same
-pull request. When the selected tag matches the CLI's compiled version, it also copies missing or drifted canonical
+`navigator github setup` reconciles the callers against the exact templates in `cli/src/projects/repository.rs` — the
+same `workflow`/`cd_workflow` generators the gate checks — and updates the top-level version in `navigator.yaml` in the
+same pull request. When the selected tag matches the CLI's compiled version, it also copies missing or drifted canonical
 Agent Skills into that PR, including Legal Council. It reads only the catalog's exact skill paths, preserving custom
 skills. Use the target release CLI: an override for a different release updates the pins but prints a diagnostic that
 the matching CLI is required for skill reconciliation. It preserves the rest of the manifest and checks whether the
@@ -167,7 +167,7 @@ The `uses:` lines themselves default to this repository (`gate_workflow_prefix`/
 repository is public, so any Project repository, public or private, can call `project-gate.yml`, `project-publish.yml`,
 and the composite actions they use. The override is for a fork that hosts its own copies; it sweeps the fleet the same
 way an `--action-version` bump does. It is proven only against the cross-organization Project fixture in
-`deploy/src/devx/github_setup.rs`'s tests, so prove a live gate and publish from the fork's home before repointing real
+`cli/src/github_setup.rs`'s tests, so prove a live gate and publish from the fork's home before repointing real
 repositories.
 
 **A drifted file becomes a pull request, never a direct commit to `main`.** Every other reconciled artifact in this
@@ -187,8 +187,8 @@ makes any writes. A dry run can still show the plan.
 Run a dry run before applying drift, then rerun without it:
 
 ```bash
-hudson ops github setup neon-law/navigator --dry-run
-hudson ops github setup neon-law/ui --dry-run
+navigator github setup neon-law/navigator --dry-run
+navigator github setup neon-law/ui --dry-run
 ```
 
 A second dry run after applying must report *no drift*. That is the only proof the reconcile actually converged, and it
@@ -209,8 +209,8 @@ context never moves.
 The indirection exists because the alternative fails silently. A required status check is matched by string, so renaming
 the job renames its check run while the ruleset goes on waiting for the old spelling. Nothing turns red; pull requests
 simply sit forever on a check that will never arrive, and the usual fix — dropping the stale rule — leaves the branch
-enforcing nothing at all. `ops github setup` therefore reads the repository's CI workflow and refuses to bind the gate
-unless a job in it actually reports as `ci`.
+enforcing nothing at all. `navigator github setup` therefore reads the repository's CI workflow and refuses to bind the
+gate unless a job in it actually reports as `ci`.
 
 It accepts either `.github/workflows/ci.yml` or `.github/workflows/gate.yml`, and looks for them in that order.
 Firm-administered repositories and Project repositories both carry `ci.yml` as the required-check file. `ops github
@@ -243,12 +243,12 @@ requires zero approvals, disables code-owner approval, and disables the extra-ap
 changes, so no approval rule can keep an otherwise-green PR from auto-merging.
 
 Repository settings enable auto-merge. Once the required checks pass and all review threads are resolved, GitHub can
-squash-merge the PR. `ops github setup` deletes an existing `production-review` ruleset on governed source repositories;
-omitting it from desired state alone would leave its approval requirement active. The Homebrew tap remains outside the
-branch-protection policy.
+squash-merge the PR. `navigator github setup` deletes an existing `production-review` ruleset on governed source
+repositories; omitting it from desired state alone would leave its approval requirement active. The Homebrew tap remains
+outside the branch-protection policy.
 
-Repository permissions are the outer boundary. `ops github setup` governs branch protections only; it does not grant
-repository write access. A user without write permission cannot push, regardless of the ruleset.
+Repository permissions are the outer boundary. `navigator github setup` governs branch protections only; it does not
+grant repository write access. A user without write permission cannot push, regardless of the ruleset.
 
 `required_approving_review_count: 0`, `require_code_owner_review: false`, and
 `require_extra_approval_for_unattributed_changes: false` are explicit in `production`. Keeping all three conditions
@@ -272,8 +272,8 @@ the ownership file valid; it does not add an approval requirement to the merge g
 This was not hypothetical while the repository sat on an EMU-provisioned enterprise that shared no account namespace
 with github.com: a handle carried over from a github.com checkout resolved to nothing. The public host removed that
 particular trap, leaving the general one: a misspelled handle or a person who has left the org. Both fail just as
-silently. `ops github setup` resolves every account and team owner named in `.github/CODEOWNERS` against the API and
-fails closed before writing anything. Email owners are retained as commit-author matches without an API lookup.
+silently. `navigator github setup` resolves every account and team owner named in `.github/CODEOWNERS` against the API
+and fails closed before writing anything. Email owners are retained as commit-author matches without an API lookup.
 
 All assertions run before the first write, so a repository that cannot satisfy the policy is left exactly as it was
 rather than half-reconciled.
@@ -455,7 +455,7 @@ Reading the version out of the merged manifest answers all four by construction:
 | PROVENANCE — the tag's commit is reachable from `main` | a push to `main` **is** the provenance |
 
 What survives is the one question none of them asked, and it is now the whole gate: **is this version newer than every
-version already published?** `hudson ops release check` reads the manifest, lists every release tag, and compares them
+version already published?** `navigator release check` reads the manifest, lists every release tag, and compares them
 with semver's own ordering. Three answers:
 
 | Answer | What happens |
@@ -475,23 +475,23 @@ never caught by this check.
 
 **`release-version` runs a published `navigator`, not one it compiles.** Answering a yes/no question by building the CLI
 cost ~8 minutes of latency on every merge to `main`, at the very front of the train where nothing else can start. The
-job downloads the newest release that carries a Linux CLI archive, and runs `ops release check` with it. `ci.yml` still
-runs the in-tree command on every pull request, so the rule is proved on the branch that changes it.
+job downloads the newest release that carries a Linux CLI archive, and runs `navigator release check` with it. `ci.yml`
+still runs the in-tree command on every pull request, so the rule is proved on the branch that changes it.
 
-Two consequences worth stating rather than discovering. **The checker is release N-1's**, so a change to `ops release
-check` itself governs from the release after the one that lands it — tolerable because the binary carries the rule while
-the run supplies the data, reading this commit's manifest and the current tag list. That tolerance has one sharp edge:
-**a new OUTPUT is not governed a release late, it is silently absent.** An output the tree has just started reading is
-by definition one release N-1 never wrote, and an unwritten output is the empty string rather than an error — which is
-how a release can skip its Homebrew hand-off. So the `checker` step does not trust a `--help` probe alone: it makes the
-candidate binary write the outputs into a scratch file and falls back to a source build when any key the workflow reads
-is missing. `RELEASE_OUTPUTS` on that step names the set, and `cli/tests/deploy_workflow.rs` holds it to the
-`release-version` job's declared outputs so the two cannot drift. And **the binary is deliberately unpinned**, the one
-exception to [Pin every consumed image, binary, and action](#pin-every-consumed-image-binary-and-action): a checker that
-had to be pinned would freeze at one version and need a manual bump to ever move. `/releases/latest` is *not* how it is
-found — that endpoint excludes prereleases and every release here is one, so it answers 404; the job enumerates releases
-and takes the newest carrying the archive. A download that fails falls back to compiling from this tree, because a
-release lost to a blipped API is the failure this pipeline has already paid for once.
+Two consequences worth stating rather than discovering. **The checker is release N-1's**, so a change to `navigator
+release check` itself governs from the release after the one that lands it — tolerable because the binary carries the
+rule while the run supplies the data, reading this commit's manifest and the current tag list. That tolerance has one
+sharp edge: **a new OUTPUT is not governed a release late, it is silently absent.** An output the tree has just started
+reading is by definition one release N-1 never wrote, and an unwritten output is the empty string rather than an error —
+which is how a release can skip its Homebrew hand-off. So the `checker` step does not trust a `--help` probe alone: it
+makes the candidate binary write the outputs into a scratch file and falls back to a source build when any key the
+workflow reads is missing. `RELEASE_OUTPUTS` on that step names the set, and `cli/tests/deploy_workflow.rs` holds it to
+the `release-version` job's declared outputs so the two cannot drift. And **the binary is deliberately unpinned**, the
+one exception to [Pin every consumed image, binary, and action](#pin-every-consumed-image-binary-and-action): a checker
+that had to be pinned would freeze at one version and need a manual bump to ever move. `/releases/latest` is *not* how
+it is found — that endpoint excludes prereleases and every release here is one, so it answers 404; the job enumerates
+releases and takes the newest carrying the archive. A download that fails falls back to compiling from this tree,
+because a release lost to a blipped API is the failure this pipeline has already paid for once.
 
 The version threads into every image build as the `RELEASE_TAG` build-arg, which each Containerfile turns into the
 runtime environment variable `NAVIGATOR_RELEASE_TAG`.
@@ -507,19 +507,19 @@ next date's `YY.M.D-rc.N` once it is. A published `YY.M.D-rc.N` does not take to
 opens daily bumps only and skips a covered date.
 
 **`ops cut-release` selects that version and writes the bump.** It compares the candidate with the release tags fetched
-from `origin` and delegates the write to `ops release version`. A tag far ahead of the calendar or an operational error
-exits 2. `--repo` selects the worktree for the tags, root manifest, pins, lockfile, and commit. Relative
+from `origin` and delegates the write to `navigator release version`. A tag far ahead of the calendar or an operational
+error exits 2. `--repo` selects the worktree for the tags, root manifest, pins, lockfile, and commit. Relative
 `--manifest-path` values resolve from that worktree's root; the manifest must be its root `Cargo.toml`. Automatic
 commits require a clean index and worktree on a named branch other than `main`.
 
 `--dry-run` prints only the candidate on stdout and leaves release files unchanged. It checks tag ordering; [the
 cut-release skill](../.agents/skills/cut-release/SKILL.md) supplies the browser/axe gate and verifies the selected
-version, pins, and lockfile before push. An explicit version, including a hotfix, uses `ops release version --tag` and
-skips the daily probe. `deploy.yml` creates the tag after merge.
+version, pins, and lockfile before push. An explicit version, including a hotfix, uses `navigator release version --tag`
+and skips the daily probe. `deploy.yml` creates the tag after merge.
 
-**`ops release-default-tag` probes the same name.** It prints today's `YY.M.D`, or the next date's `YY.M.D-rc.N` once
-today is published. A tag far ahead of the calendar produces empty stdout, a reason on stderr, and exit 0. `ops release
-version --tag` writes the exact version the operator supplies.
+**`navigator release default-tag` probes the same name.** It prints today's `YY.M.D`, or the next date's `YY.M.D-rc.N`
+once today is published. A tag far ahead of the calendar produces empty stdout, a reason on stderr, and exit 0.
+`navigator release version --tag` writes the exact version the operator supplies.
 
 Three shape facts still hold, because they are semver's:
 
@@ -587,8 +587,8 @@ release the same day, and both are just "a bigger number":
 
 Both sort strictly above `26.8.22`, so both are admissible. What is **refused** is a prerelease of a version already
 released — `26.8.22-hotfix.1` after `26.8.22` — because semver ranks it below the release it would be fixing, and every
-consumer resolving those two versions would read the fix as the older one. `ops release check` says so by name rather
-than letting it publish.
+consumer resolving those two versions would read the fix as the older one. `navigator release check` says so by name
+rather than letting it publish.
 
 ### Why a hotfix prerelease ranks below its date
 
@@ -602,17 +602,18 @@ the matching normal version:
 
 After `26.8.22` is published, a same-day cut must bump the **core** — `26.8.23` or `26.8.23-hotfix.1`. A fourth numeric
 component (`26.8.22.1`) is not a version Cargo can parse, and build metadata (`26.8.22+hotfix.1`) cannot name an image
-tag, so neither is an escape. `ops release check` refuses the older spelling as a regression before the pipeline spends
-a tag.
+tag, so neither is an escape. `navigator release check` refuses the older spelling as a regression before the pipeline
+spends a tag.
 
 `N` in `-hotfix.N` is an unpadded nonnegative integer and it is the operator's to choose: a uniqueness-and-ordering
 discriminator, never an hour. The padding is not cosmetic — semver forbids a leading zero in a numeric prerelease
-identifier, so `hotfix.08` is not a version. Nothing derives `N`; `ops release version` writes the name it is given.
+identifier, so `hotfix.08` is not a version. Nothing derives `N`; `navigator release version` writes the name it is
+given.
 
 Write the version the same way as any other release, then land it:
 
 ```bash
-cargo run -p hudson -- ops release version --tag 26.8.23-hotfix.1
+navigator release version --tag 26.8.23-hotfix.1
 ```
 
 **A prerelease does not become the default download.** Exactly one thing behaves differently from an ordinary release,
@@ -649,7 +650,7 @@ sort strictly above. Every bump is an upgrade, whatever the shape of either tag.
 A prerelease is still a full release up to staging: it proves the workspace in KIND, publishes every image, and rolls to
 staging. `release-deploy.yml` holds it there and never rolls it to production.
 
-**The bump carries `Cargo.lock` too.** `hudson ops release version --tag <version>` writes `[workspace.package].version`
+**The bump carries `Cargo.lock` too.** `navigator release version --tag <version>` writes `[workspace.package].version`
 — the value every crate inherits through `version.workspace = true` and `cli/build.rs` bakes into `navigator --version`
 — and refreshes `Cargo.lock` in the same commit. Every workspace crate is pinned there as well, and the archive jobs
 build with `--locked`, which refuses a lock the manifest has moved past. `ci.yml` runs `cargo metadata --locked` on
@@ -658,10 +659,10 @@ every pull request for exactly that reason: it is the last place that failure is
 `--tag` is required, because naming a release is the operator's decision and a derived name is only ever a fact about
 when the command ran. That commit lands through an ordinary PR — `main` takes no direct commits.
 
-**The release preflight is a required check now, not a habit.** On every pull request `ci.yml` runs `ops release check`,
-`ops notices --check`, and the `--locked` lock check. All three lived only in the `cut-release` preflight script, run on
-the operator's machine, skippable by forgetting; the merge is what publishes now, so the pull request is the last point
-at which any of them is still free to fix.
+**The release preflight is a required check now, not a habit.** On every pull request `ci.yml` runs `navigator release
+check`, `ops notices --check`, and the `--locked` lock check. All three lived only in the `cut-release` preflight
+script, run on the operator's machine, skippable by forgetting; the merge is what publishes now, so the pull request is
+the last point at which any of them is still free to fix.
 
 `ops notices --check` was held back at first, because reading licence texts out of the runner's unpacked
 `$CARGO_HOME/registry/src` made the answer a property of the machine: cargo unpacks a crate there only when something
@@ -844,10 +845,10 @@ Three lanes, cheapest first.
    This is [The manual deploy](#the-manual-deploy). `ship` builds nothing, refuses a tag absent from the registry, and
    `--dry-run` rehearses it first.
 3. **Fix forward the same day with a `-hotfix.N` tag.** If the source is wrong, land the fix on `main`, bump it with
-   `ops release version`, passing the `-hotfix.N` name you chose as `--tag`, and tag the merged commit. See [Releasing
-   twice in one day](#releasing-twice-in-one-day) for the shape and for the two surfaces a hotfix deliberately does not
-   touch. A hotfix is a prerelease, so `release-deploy.yml` rolls it to staging and holds it there; production takes the
-   hotfix through [The manual deploy](#the-manual-deploy) once staging serves it.
+   `navigator release version`, passing the `-hotfix.N` name you chose as `--tag`, and tag the merged commit. See
+   [Releasing twice in one day](#releasing-twice-in-one-day) for the shape and for the two surfaces a hotfix
+   deliberately does not touch. A hotfix is a prerelease, so `release-deploy.yml` rolls it to staging and holds it
+   there; production takes the hotfix through [The manual deploy](#the-manual-deploy) once staging serves it.
 
 **The day's `YY.M.D` name is still spent, and the tag still cannot move.** The `release-tags` ruleset restricts
 deletion, update, and non-fast-forward with no bypass actor, and no second `YY.M.D` exists for that day — so a same-day
@@ -914,7 +915,8 @@ PROJECT_NUMBER=$(gcloud projects describe "$PROJECT" --format 'value(projectNumb
 gcloud iam service-accounts add-iam-policy-binding \
   "$SA@$PROJECT.iam.gserviceaccount.com" --project "$PROJECT" \
   --role roles/iam.workloadIdentityUser \
-  --member "principalSet://iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/navigator-github/attribute.repository/$GITHUB_REPO"
+  --member
+  "principalSet://iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/navigator-github/attribute.repository/$GITHUB_REPO"
 
 gh secret set NAVIGATOR_PUBLISHER_WIF_PROVIDER --repo "$GITHUB_REPO" --body \
   "projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/navigator-github/providers/navigator-publisher"

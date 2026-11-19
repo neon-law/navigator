@@ -5,7 +5,7 @@
 //! today" is the ordinary answer, not a failure.
 //!
 //! These run against the real clock (there is no `--now` to inject one,
-//! deliberately — see `deploy/src/release_default_tag.rs`), so the "releasable"
+//! deliberately — see `cli/src/release_default_tag.rs`), so the "releasable"
 //! case computes the expected tag the same way the binary does, and the
 //! "nothing to do" case anchors on a fixed tag far enough in the future to
 //! stay past today for the life of this repository.
@@ -32,6 +32,7 @@ fn init_repo(dir: &std::path::Path) {
             "release-default-tag-cli@example.com",
         ],
         vec!["config", "user.name", "release default tag cli"],
+        vec!["config", "commit.gpgsign", "false"],
         vec!["commit", "--quiet", "--allow-empty", "-m", "root"],
     ] {
         assert!(git(dir, &args).status.success(), "git {args:?} failed");

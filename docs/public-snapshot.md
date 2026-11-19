@@ -124,7 +124,7 @@ These steps change hosted repositories, so they stay with the maintainer who pub
    If the new repository requires signed commits, push before enabling that rule, or create the snapshot with `--sign`.
 8. Confirm the public repository's `main` SHA equals the recorded snapshot SHA, or its tree hash equals the recorded
    tree hash when signed.
-9. Apply branch protection and repository settings with `hudson ops github setup neon-law/navigator`, then
+9. Apply branch protection and repository settings with `navigator github setup neon-law/navigator`, then
    re-enable secret scanning and the required `ci` check.
 10. Point every working checkout at the public repository: `git remote set-url origin` to the new URL, then `git fetch`.
     Old local branches share no history with the new `main`; rebase their changes onto it with `git rebase --onto`, or

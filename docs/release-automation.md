@@ -52,7 +52,8 @@ Each ship job records a GitHub Deployment, installs the signed CLI image by dige
 reports the release tag, and runs:
 
 ```bash
-hudson ops ship --deployment <row> --project-id <project> --tag <tag> --image-digests /tmp/image-digests.json --assert-signing-iam --quiet --log-sink <sink>
+hudson ops ship --deployment <row> --project-id <project> --tag <tag> --image-digests /tmp/image-digests.json
+--assert-signing-iam --quiet --log-sink <sink>
 ```
 
 The runner checks out no deployment tree. `--project-id` reads the row's published record — the only source of a row,
@@ -99,18 +100,18 @@ finds the certificate serving. See [Changing shared certificate domains](dns.md#
 
 ### Prereleases stay on staging
 
-A tag is a prerelease when `ops release check` reports `prerelease=true` for it — any semver prerelease, such as `-rc.N`
-or `-hotfix.N`. `deploy.yml` marks such a Release as a prerelease, and `preflight` reads that flag back and also treats
-any tag with a `-` suffix as one. A prerelease rolls to staging; `ship-production` skips, `hold-production` posts that
-the tag was held at staging, and no production Deployment is recorded. A hotfix reaches production through
+A tag is a prerelease when `navigator release check` reports `prerelease=true` for it — any semver prerelease, such as
+`-rc.N` or `-hotfix.N`. `deploy.yml` marks such a Release as a prerelease, and `preflight` reads that flag back and also
+treats any tag with a `-` suffix as one. A prerelease rolls to staging; `ship-production` skips, `hold-production` posts
+that the tag was held at staging, and no production Deployment is recorded. A hotfix reaches production through
 [`manual-roll.md`](manual-roll.md) once staging serves it.
 
 ### Stable releases need no approval
 
 Every tag without a prerelease suffix rolls on to production as soon as staging's health checks pass. No person stands
 between the two: neither deploy environment carries a required reviewer or a wait timer, and each admits only `main`.
-That is desired state, not a hand setting — `hudson ops github setup neon-law/navigator` reconciles both environments
-and removes a reviewer anyone adds in the settings UI. The prerelease hold above is the only thing that keeps a tag off
+That is desired state, not a hand setting — `navigator github setup neon-law/navigator` reconciles both environments and
+removes a reviewer anyone adds in the settings UI. The prerelease hold above is the only thing that keeps a tag off
 production.
 
 ## The gate
@@ -240,7 +241,7 @@ retains the ten newest versions per image.
    `PERMISSION_DENIED`. Secret Manager returns 403, not 404, for a secret the caller cannot read, so a secret that was
    never published fails the same way. The ship error names both commands above.
 
-2. **Create `staging-deploy` and `production-deploy`** with `hudson ops github setup neon-law/navigator`,
+2. **Create `staging-deploy` and `production-deploy`** with `navigator github setup neon-law/navigator`,
    which limits each to the `main` branch with no reviewer, then add the secrets and variables above. Set the repository
    variable `DEPLOY_EXPECTED_REPOSITORY`. `*_SHIP_WIF_PROVIDER` is
    `projects/<number>/locations/global/workloadIdentityPools/navigator-release/providers/github`.

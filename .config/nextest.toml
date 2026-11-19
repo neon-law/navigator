@@ -40,7 +40,7 @@ filter = "package(cloud)"
 test-group = "platform-certs"
 
 [[profile.default.overrides]]
-filter = "binary(/^(project_native_delete|brand_move_mirror|firm_journal|api_reads|postgres_startup|entity_native_delete|practice_preview_native|native_cron_ingress)$/)"
+filter = "binary(/^(project_native_delete|brand_move_mirror|firm_journal|api_reads|postgres_startup|entity_native_delete|practice_preview_native|native_cron_ingress|inbox_native_projects)$/)"
 test-group = "canonical-postgres-fixtures"
 
 [profile.ci]

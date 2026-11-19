@@ -215,7 +215,7 @@ pub(super) mod tests {
 
     /// Mount converged reads for both deploy environments, so a reconcile test
     /// that is about something else sees no environment drift.
-    pub(in crate::devx::github_setup) async fn mount_converged(server: &MockServer, repo: &str) {
+    pub(in crate::github_setup) async fn mount_converged(server: &MockServer, repo: &str) {
         for name in DEPLOY_ENVIRONMENTS {
             mount_environment(
                 server,

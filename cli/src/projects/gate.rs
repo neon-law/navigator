@@ -1075,7 +1075,9 @@ mod tests {
 
         let message = format!("{error:#}");
         assert!(
-            message.contains("project.host `brand.invalid` does not resolve"),
+            message.contains(
+                "project.host `brand.invalid` could not be resolved by this CLI's DNS lookup"
+            ),
             "{message}"
         );
         assert!(message.contains("GET /app/api/projects"), "{message}");

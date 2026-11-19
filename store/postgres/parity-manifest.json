@@ -36,6 +36,13 @@
       "table": "fiduciary_role"
     },
     {
+      "extra_column": "esign_provider",
+      "extra_table": null,
+      "missing_column": null,
+      "missing_table": null,
+      "table": "firm"
+    },
+    {
       "extra_column": "id_kind",
       "extra_table": null,
       "missing_column": null,
@@ -3324,6 +3331,7 @@
       "firm": {
         "columns": {
           "entity_id": "UUID",
+          "esign_provider": "TEXT",
           "id": "UUID",
           "inserted_at": "TIMESTAMPTZ",
           "name": "TEXT",

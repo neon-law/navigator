@@ -125,7 +125,7 @@ fn both_surfaces_state_the_branch_contract() {
         "visibility: client",
         "Claude Code Gmail send, reply and forward tools while preserving draft creation",
         "Deadline",
-        "`hudson ops github setup` is deprecated",
+        "`navigator github setup` reconciles the repository contract",
         "Forgejo",
     ] {
         assert!(

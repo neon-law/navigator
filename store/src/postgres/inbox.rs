@@ -64,6 +64,33 @@ const MESSAGE_COLUMNS: &str = "id, conversation_id, parent_message_id, visibilit
 const ASSIGNMENT_COLUMNS: &str = "id, conversation_id, firm_id, from_project_id, to_project_id, \
     actor_person_id, inserted_at";
 
+/// The Firm's non-closed Projects, with the context the Inbox picker and classifier use.
+pub(crate) async fn projects_in_firm_on(
+    pg: &PostgresDb,
+    firm_id: Uuid,
+) -> Result<Vec<inbox::ProjectChoice>, InboxError> {
+    use sqlx::Row;
+    let rows = sqlx::query(
+        "SELECT id, code, name, description FROM project \
+         WHERE firm_id = $1 AND status != 'closed' ORDER BY name",
+    )
+    .bind(firm_id)
+    .fetch_all(pg.pool())
+    .await
+    .map_err(db_error)?;
+    rows.iter()
+        .map(|row| {
+            Ok(inbox::ProjectChoice {
+                id: row.try_get("id")?,
+                code: row.try_get("code")?,
+                name: row.try_get("name")?,
+                description: row.try_get("description")?,
+            })
+        })
+        .collect::<Result<Vec<_>, sqlx::Error>>()
+        .map_err(db_error)
+}
+
 // ---------------------------------------------------------------------------
 // Row mappers
 // ---------------------------------------------------------------------------

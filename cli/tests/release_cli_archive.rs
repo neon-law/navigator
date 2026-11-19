@@ -268,6 +268,31 @@ fn releases_build_and_attach_a_macos_cli_archive() {
             "deploy.yml must retain the macOS CLI release contract `{required}`"
         );
     }
+
+    let macos_job = deploy_job("release-cli-build-macos");
+    let proof = job_step(
+        &macos_job,
+        "prove the macOS CLI exposes the release workflow",
+    )
+    .and_then(|step| step.get("run"))
+    .and_then(|run| run.as_str())
+    .expect("the macOS archive proves Navigator command discovery");
+    for required in [
+        "github setup --help",
+        "forgejo release mirror --help",
+        "release default-tag --help",
+        "release check --help",
+        "release pins --help",
+        "release version --help",
+        "project repository push --help",
+        "project repository repair-mirror --help",
+        "project repository reconcile --help",
+    ] {
+        assert!(
+            proof.contains(required),
+            "macOS release archive proof omits `{required}`"
+        );
+    }
 }
 
 /// ENG-115: when the Apple secrets are present, the macOS build must sign,
@@ -484,18 +509,43 @@ fn releases_build_and_attach_a_linux_cli_archive() {
     }
 
     // `--version` falls back to the Cargo version, so only the published
-    // release proves build.rs saw NAVIGATOR_RELEASE_TAG. `ops github setup`
-    // is a `hudson` verb; that binary links the same `cli` library,
-    // built with the same variable, so its job carries the proof.
+    // release proves build.rs saw NAVIGATOR_RELEASE_TAG. The Navigator
+    // command used by a Project operator carries that baked release default.
     let deploy = deploy_job("release-deploy-cli-build-linux");
     let baked = job_step(&deploy, "prove the release tag was baked in")
         .and_then(|step| step.get("run"))
         .and_then(|run| run.as_str())
         .expect("release-deploy-cli-build-linux must prove the release tag was baked in");
-    for required in ["ops github setup --help", "grep -qF \"[default: ${TAG}]\""] {
+    for required in ["github setup --help", "grep -qF \"[default: ${TAG}]\""] {
         assert!(
             baked.contains(required),
             "the baked-tag proof must retain `{required}`"
+        );
+    }
+}
+
+#[test]
+fn release_archive_proves_the_complete_project_workflow_lives_in_navigator() {
+    let job = deploy_job("release-cli-build-linux");
+    let proof = job_step(&job, "prove the release workflow is in Navigator")
+        .and_then(|step| step.get("run"))
+        .and_then(|run| run.as_str())
+        .expect("the Linux release archive proves Navigator command discovery");
+
+    for required in [
+        "github setup --help",
+        "forgejo release mirror --help",
+        "release default-tag --help",
+        "release check --help",
+        "release pins --help",
+        "release version --help",
+        "project repository push --help",
+        "project repository repair-mirror --help",
+        "project repository reconcile --help",
+    ] {
+        assert!(
+            proof.contains(required),
+            "release archive proof omits `{required}`"
         );
     }
 }

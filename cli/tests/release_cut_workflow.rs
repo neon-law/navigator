@@ -186,7 +186,7 @@ fn the_merge_job_verifies_the_diff_shape_before_merging() {
         assert!(
             refuse_script.contains(allowed),
             "the allowed-path list must include `{allowed}`, the shape `ops cut-release` and \
-             `ops release pins` actually write"
+             `navigator release pins` actually write"
         );
     }
     assert!(

@@ -102,6 +102,15 @@ pub struct ProjectLink {
     /// The earliest open Deadline's date; empty when the matter has none.
     #[serde(default)]
     pub next_due: String,
+    /// `pitch` or `active` for an open matter; empty otherwise.
+    #[serde(default)]
+    pub lifecycle: String,
+    /// The pitch's e-signature request, such as "`DocuSign` · out for signature". Empty when none.
+    #[serde(default)]
+    pub esign: String,
+    /// The provider's own page for that request. Empty when none.
+    #[serde(default)]
+    pub esign_href: String,
 }
 
 /// One conflict finding, in a wasm-safe shape (ENG-307). `severity` is
@@ -187,6 +196,7 @@ pub struct DashboardQuery {
 /// `person_id`, and derive both the counts and the visible page of matters from
 /// the one access-scoped collection.
 #[server]
+#[allow(clippy::too_many_lines)]
 pub async fn get_lawyer_dashboard() -> Result<DashboardView, ServerFnError> {
     let role = crate::admin_listing::require_lawyer().await?;
     let axum::extract::Query(query) = dioxus_fullstack_core::FullstackContext::extract::<
@@ -214,10 +224,10 @@ pub async fn get_lawyer_dashboard() -> Result<DashboardView, ServerFnError> {
     let surreal = consume_context::<store::surreal::SurrealDb>();
     let projects = firm_overview_projects(&surreal, person_id, store_role).await?;
 
-    let status = if query.status.as_deref() == Some("closed") {
-        "closed"
-    } else {
-        "open"
+    let status = match query.status.as_deref() {
+        Some("closed") => "closed",
+        Some("pitch") => "pitch",
+        _ => "open",
     };
     // The pie splits the same three states the matter-row lifecycle pill uses.
     // Archived matters stay out of the chart; an open matter is pitch until
@@ -238,8 +248,17 @@ pub async fn get_lawyer_dashboard() -> Result<DashboardView, ServerFnError> {
     // Both the counts and the list come from `projects`, which is already
     // filtered through the lawyer lens, so the page cannot name an unrelated
     // matter.
-    let filtered: Vec<&store::projects::Project> =
-        projects.iter().filter(|p| p.status == status).collect();
+    let filtered: Vec<&store::projects::Project> = projects
+        .iter()
+        .filter(|p| match status {
+            "closed" => p.status == "closed",
+            "pitch" => p.status == "open" && !has_engagement.contains(&p.id),
+            _ => p.status == "open" && has_engagement.contains(&p.id),
+        })
+        .collect();
+    let pending_esign = store::projects::onboarding_esign_pending(&surreal, &projects)
+        .await
+        .unwrap_or_default();
     let total_pages = filtered
         .len()
         .saturating_add(PROJECTS_PER_PAGE - 1)
@@ -258,7 +277,13 @@ pub async fn get_lawyer_dashboard() -> Result<DashboardView, ServerFnError> {
     let rows = page_of_projects
         .iter()
         .map(|p| {
-            let mut row = project_link(p, &current_state_by_project);
+            let mut row = pitch_row(
+                project_link(p, &current_state_by_project),
+                p,
+                status,
+                has_engagement.contains(&p.id),
+                &pending_esign,
+            );
             if let Some(next) = deadlines.iter().find(|d| d.project_code() == p.code) {
                 row.next_due = next.due_label();
             }
@@ -403,7 +428,47 @@ fn project_link(
         state,
         next,
         next_due: String::new(),
+        lifecycle: String::new(),
+        esign: String::new(),
+        esign_href: String::new(),
     }
+}
+
+/// Stamp a row's lifecycle and, on the Pitches tab, its e-signature request and provider link.
+#[cfg(feature = "server")]
+fn pitch_row(
+    mut link: ProjectLink,
+    project: &store::projects::Project,
+    tab: &str,
+    official: bool,
+    pending: &std::collections::HashMap<uuid::Uuid, store::onboarding::EsignSummary>,
+) -> ProjectLink {
+    link.lifecycle =
+        store::projects::execution_lifecycle_label(&project.status, official).to_string();
+    if tab == "pitch" {
+        if let Some(request) = pending.get(&project.id) {
+            let provider = store::signatures::SignatureProvider::from_stored(&request.provider);
+            link.esign = esign_pill(provider, &request.state);
+            link.esign_href = provider
+                .map(|provider| provider.deep_link(&request.provider_id))
+                .unwrap_or_default();
+        }
+    }
+    link
+}
+
+/// The pill text for a pitch's e-signature request: provider and where it stands.
+#[cfg(feature = "server")]
+fn esign_pill(provider: Option<store::signatures::SignatureProvider>, state: &str) -> String {
+    let provider = provider.map_or("E-signature", |provider| provider.label());
+    let state = match state {
+        "requested" => "out for signature",
+        "declined" => "declined",
+        "voided" => "voided",
+        "expired" => "expired",
+        other => other,
+    };
+    format!("{provider} · {state}")
 }
 
 /// The current workflow state for each of `projects` that carries at least
@@ -692,22 +757,25 @@ fn ProjectKpiOverview(view: DashboardView) -> Element {
 /// The status-tabbed, paginated list of the caller's matters.
 #[component]
 fn ProjectKpiList(view: DashboardView) -> Element {
-    let closed = view.status == "closed";
-    let open_class = if closed {
-        "nav-tab"
-    } else {
-        "nav-tab is-active"
+    let tab_class = |name: &str| {
+        if view.status == name || (name == "open" && view.status.is_empty()) {
+            "nav-tab is-active"
+        } else {
+            "nav-tab"
+        }
     };
-    let closed_class = if closed {
-        "nav-tab is-active"
-    } else {
-        "nav-tab"
+    let pitch_class = tab_class("pitch");
+    let open_class = tab_class("open");
+    let closed_class = tab_class("closed");
+    let empty_message = match view.status.as_str() {
+        "closed" => "No closed projects in your workload.",
+        "pitch" => "No pitches in your workload.",
+        _ => "No active projects in your workload.",
     };
-    let empty_message = if closed {
-        "No closed projects in your workload."
-    } else {
-        "No active projects in your workload."
-    };
+    let pitch_href = format!(
+        "/app/lawyer?status=pitch&sort={}&dir={}",
+        view.sort, view.dir
+    );
     let open_href = format!(
         "/app/lawyer?status=open&sort={}&dir={}",
         view.sort, view.dir
@@ -722,6 +790,7 @@ fn ProjectKpiList(view: DashboardView) -> Element {
         div { class: "nav-card project-kpi-list",
             div { class: "nav-card__body",
                 nav { class: "nav-tabs", aria_label: "Project status",
+                    a { class: "{pitch_class}", href: "{pitch_href}", "Pitches" }
                     a { class: "{open_class}", href: "{open_href}", "Active" }
                     a { class: "{closed_class}", href: "{closed_href}", "Closed" }
                 }
@@ -741,7 +810,27 @@ fn ProjectKpiList(view: DashboardView) -> Element {
                             tbody {
                                 for row in rows.iter() {
                                     tr {
-                                        td { a { href: "/app/projects/{row.code}", "{row.name}" } }
+                                        td {
+                                            a { href: "/app/projects/{row.code}", "{row.name}" }
+                                            if !row.lifecycle.is_empty() {
+                                                " "
+                                                span { class: "nav-pill nav-pill--{row.lifecycle}", "{row.lifecycle}" }
+                                            }
+                                            if !row.esign.is_empty() {
+                                                " "
+                                                if row.esign_href.is_empty() {
+                                                    span { class: "nav-pill", "{row.esign}" }
+                                                } else {
+                                                    a {
+                                                        class: "nav-pill",
+                                                        href: "{row.esign_href}",
+                                                        rel: "noopener noreferrer",
+                                                        target: "_blank",
+                                                        "{row.esign}"
+                                                    }
+                                                }
+                                            }
+                                        }
                                         td { "{row.state}" }
                                         td { "{row.next}" }
                                         td { "{row.next_due}" }
@@ -1011,6 +1100,9 @@ mod tests {
                     state: "The firm is reviewing".to_string(),
                     next: "The firm approves it or asks you for changes. Nothing needed from you right now.".to_string(),
                     next_due: "2028-05-03".to_string(),
+                    lifecycle: String::new(),
+                    esign: String::new(),
+                    esign_href: String::new(),
                 },
                 ProjectLink {
                     id: "00000000-0000-0000-0000-000000000002".to_string(),
@@ -1211,5 +1303,29 @@ mod tests {
         // A surviving listing anchors the assertion: the nav renders, so the
         // absences above are removals rather than an empty page.
         assert!(html.contains("/app/lawyer/disclosures"), "{html}");
+    }
+
+    #[test]
+    fn the_pitches_tab_names_each_pitchs_esign_request_and_links_to_the_provider() {
+        let mut fixture = view();
+        fixture.status = "pitch".to_string();
+        fixture.rows = vec![ProjectLink {
+            id: "p".to_string(),
+            code: "example".to_string(),
+            name: "Example matter".to_string(),
+            state: String::new(),
+            next: String::new(),
+            lifecycle: "pitch".to_string(),
+            esign: "DocuSign · out for signature".to_string(),
+            esign_href: "https://app.docusign.com/documents/details/abc".to_string(),
+            ..Default::default()
+        }];
+        let html = dioxus_ssr::render_element(lawyer_dashboard_body(&fixture));
+        assert!(html.contains("status=pitch"), "{html}");
+        assert!(html.contains("DocuSign · out for signature"), "{html}");
+        assert!(
+            html.contains("https://app.docusign.com/documents/details/abc"),
+            "{html}"
+        );
     }
 }

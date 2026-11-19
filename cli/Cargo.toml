@@ -19,6 +19,7 @@ async-trait.workspace = true
 base64.workspace = true
 chrono.workspace = true
 clap.workspace = true
+cloud.workspace = true
 comfy-table.workspace = true
 dotenvy.workspace = true
 # `hudson lsp` unpacks the `.tar.gz` release archives it downloads for
@@ -62,6 +63,7 @@ walkdir.workspace = true
 # dependency and already linked into this crate's tests; this promotes it to a
 # runtime dependency of the binary itself.
 toml.workspace = true
+toml_edit.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3.7.0"
