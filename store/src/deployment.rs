@@ -388,6 +388,19 @@ pub fn applicable_web_requirements<F: Fn(&str) -> Option<String>>(
 #[cfg(test)]
 mod tests {
     #[test]
+    fn native_admission_preserves_requirements_with_additional_obligations_or_alternatives() {
+        let mut requirement = super::Requirement {
+            any_of: &[&["RESTATE_BROKER_URL", "SESSION_SECRET"]],
+            trigger: None,
+            integration: false,
+            scope: super::RequirementScope::EveryDeployment,
+        };
+        assert!(!super::is_restate_requirement(&requirement));
+        requirement.any_of = &[&["RESTATE_BROKER_URL"], &["SESSION_SECRET"]];
+        assert!(!super::is_restate_requirement(&requirement));
+    }
+
+    #[test]
     fn broker_admission_follows_complete_native_caller_selection() {
         use crate::workflow_engine::{COHOST_ENV, DBOS_ENABLED_ENV, ENGINE_ENV, WORKFLOWS};
         use std::collections::BTreeMap;
