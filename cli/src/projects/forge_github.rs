@@ -132,7 +132,12 @@ impl GitHubForge {
     }
 
     fn repo_path(&self, suffix: &str) -> String {
-        format!("/repos/{}/{}/{}", self.owner, self.name, suffix)
+        let suffix = suffix.trim_start_matches('/');
+        if suffix.is_empty() {
+            format!("/repos/{}/{}", self.owner, self.name)
+        } else {
+            format!("/repos/{}/{}/{}", self.owner, self.name, suffix)
+        }
     }
 
     async fn get_json<T: for<'de> Deserialize<'de>>(&self, path: &str) -> Result<T> {
@@ -659,6 +664,14 @@ mod tests {
     use serde_json::json;
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[test]
+    fn repository_item_path_has_no_trailing_slash() {
+        let github = GitHubForge::new("https://api.github.com", "acme", "nav", "test").unwrap();
+        assert_eq!(github.repo_path(""), "/repos/acme/nav");
+        assert_eq!(github.repo_path("/"), "/repos/acme/nav");
+        assert_eq!(github.repo_path("pulls/7"), "/repos/acme/nav/pulls/7");
+    }
 
     #[tokio::test]
     async fn reconciliation_requires_a_merged_same_repository_main_review() {
