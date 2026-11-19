@@ -186,7 +186,11 @@ pub async fn assert_color_scheme(c: &Client, scheme: ColorScheme) {
 /// Panics if `path` doesn't combine with [`base_url`] into a valid
 /// URL, or if the page never reaches the target within `timeout`.
 pub async fn wait_for_path(c: &Client, path: &str, timeout: Duration) {
-    let target = Url::parse(&format!("{}{path}", base_url())).expect("valid url");
+    wait_for_path_at(c, &base_url(), path, timeout).await;
+}
+
+async fn wait_for_path_at(c: &Client, origin: &str, path: &str, timeout: Duration) {
+    let target = Url::parse(&format!("{origin}{path}")).expect("valid url");
     c.wait()
         .at_most(timeout)
         .for_url(&target)
@@ -357,11 +361,29 @@ pub async fn login_as_at(c: &Client, base_url: &str, email: &str, password: &str
         .expect("password field after email submit");
     fill_text_field(c, "input[name='password']", password).await;
     submit_login_form(c).await;
-    wait_for_path(c, return_to, Duration::from_secs(20)).await;
+    wait_for_path_at(c, base_url, return_to, Duration::from_secs(20)).await;
 }
 
 async fn submit_login_form(c: &Client) {
-    scroll_and_js_click(c, "button[type='submit'], input[type='submit']").await;
+    // Submit the form once: the provider also handles the button's click event.
+    let submitted = c
+        .execute(
+            "const submitters = Array.from(document.querySelectorAll(\"button[type='submit'], input[type='submit']\")) \
+             .filter(el => el.form && !el.matches(':disabled') && el.getClientRects().length \
+             && getComputedStyle(el).visibility !== 'hidden'); \
+             if (submitters.length !== 1) { return false; } \
+             const submitter = submitters[0]; \
+             submitter.scrollIntoView({block: 'center'}); \
+             submitter.form.requestSubmit(submitter); return true;",
+            vec![],
+        )
+        .await
+        .expect("submit the login form through its native submit handler");
+    assert_eq!(
+        submitted.as_bool(),
+        Some(true),
+        "one enabled login submitter"
+    );
 }
 
 /// Type `value` into the text input or textarea at `css`, confirming every character
