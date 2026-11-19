@@ -55,6 +55,15 @@ pub fn is_sibling(relative: &Path) -> bool {
 
 /// Whether the path below `documents/` begins with a fixed nested
 /// subfolder's two-component name (LAW-215): a `Work Product` or `Client
+/// Whether the path below `documents/` sits in the Case Timeline folder
+/// `project sync` and the docket verbs render Docket Entry records into.
+/// The records are renderings the store owns, checked by their own drift
+/// gate, so they are never documents: no slug, no upload, no filename rule.
+#[must_use]
+pub fn is_case_timeline(relative: &Path) -> bool {
+    first_component(relative) == Some(crate::projects::docket::timeline_write::FOLDER)
+}
+
 /// Production` subfolder.
 fn begins_with_nested_subfolder(relative: &Path) -> bool {
     MatterFolder::ALL

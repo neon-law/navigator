@@ -3226,6 +3226,15 @@ fn discover(documents: &Path) -> Result<Vec<PathBuf>> {
         if is_authority_sidecar_path(entry.path()) {
             continue;
         }
+        // A Case Timeline record is the rendering of a Docket Entry that
+        // sync itself writes, never a document to upload.
+        if entry
+            .path()
+            .strip_prefix(documents)
+            .is_ok_and(crate::document_layout::is_case_timeline)
+        {
+            continue;
+        }
         binaries.push(entry.into_path());
     }
     binaries.sort();
@@ -3340,7 +3349,7 @@ mod interactive_tests;
 #[cfg(test)]
 mod tests {
     use super::{
-        authority_capture_folder, authority_class_belongs_in_folder, content_type,
+        authority_capture_folder, authority_class_belongs_in_folder, content_type, discover,
         folder_dry_run_note, folder_reconcile, inferred_kind, is_authority_sidecar_path,
         is_invoice_capture, is_invoice_filename, is_pointer_path, is_signed_pdf_filename,
         legacy_layout, matches_digest, migrate_legacy_layout, normalize_created_at,
@@ -3769,6 +3778,26 @@ mod tests {
             live,
         );
         assert_eq!(folder_reconcile(&plans[0]), None);
+    }
+
+    /// LAW-401: the Case Timeline records sync renders are never
+    /// documents to upload.
+    #[test]
+    fn discover_skips_the_case_timeline_records() {
+        let dir = tempfile::tempdir().unwrap();
+        let documents = dir.path().join("documents");
+        std::fs::create_dir_all(documents.join("Case Timeline")).unwrap();
+        std::fs::create_dir_all(documents.join("Work Product")).unwrap();
+        std::fs::write(
+            documents.join("Case Timeline/DKT 0004 - Notice.yaml"),
+            "number: '4'\n",
+        )
+        .unwrap();
+        std::fs::write(documents.join("Work Product/2026.10.12_memo.md"), "memo\n").unwrap();
+        assert_eq!(
+            discover(&documents).unwrap(),
+            vec![documents.join("Work Product/2026.10.12_memo.md")]
+        );
     }
 
     #[test]
