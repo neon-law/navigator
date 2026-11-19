@@ -2,7 +2,7 @@
 
 use super::{Family, FamilyError, SourceReceipt};
 
-fn receipt(family: Family, export: &[u8]) -> SourceReceipt {
+pub(super) fn receipt(family: Family, export: &[u8]) -> SourceReceipt {
     use sha2::Digest;
     SourceReceipt {
         format_version: 1,

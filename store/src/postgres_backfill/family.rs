@@ -1386,3 +1386,6 @@ mod tests;
 #[cfg(test)]
 #[path = "notation_family_tests.rs"]
 mod notation_tests;
+
+#[cfg(test)]
+mod journal_component_tests;
