@@ -5,7 +5,7 @@ use crate::firm_journal::{BeneficialOwnership, Category, JournalEntry, Posting, 
 use crate::postgres_mirror::tests::{connect, fresh_schema, verified_family_capture};
 use crate::sent_emails::NewSentEmail;
 
-async fn database() -> Option<(PostgresDb, SurrealDb, Uuid, Uuid, Uuid)> {
+pub(super) async fn database() -> Option<(PostgresDb, SurrealDb, Uuid, Uuid, Uuid)> {
     let (options, database) = fresh_schema().await?;
     let pg = connect(&options, &database).await;
     let (source, actor, project) =

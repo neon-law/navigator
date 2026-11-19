@@ -83,6 +83,20 @@ async fn capture(pg: &PostgresDb) -> Capture {
         (actor, project.id)
     })
     .await;
+    // Later Application mailrooms require an already-enrolled canonical Address.
+    super::super::from_source(crate::addresses::create(
+        &source,
+        &crate::addresses::NewAddress {
+            line1: "100 Synthetic Way".into(),
+            city: "Reno".into(),
+            region: "NV".into(),
+            postal_code: "89501".into(),
+            country: "US".into(),
+            ..Default::default()
+        },
+    ))
+    .await
+    .unwrap();
     let receipt = verified_family_capture(&source).await;
     let identity = backfill::start_family(&source, pg, Family::Identity, receipt, 10, None, true)
         .await
