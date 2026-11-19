@@ -149,6 +149,14 @@ jobs:
           cargo test -p store --features store/surreal-compatibility \
             --test firm_journal --test firm_journal_compatibility \
             --test journal_startup_migration --test postgres_tooling --test brand_move_mirror
+      - name: JWT health detects optional ambiguity and pins before the first probe
+        env:
+          NAVIGATOR_FORBID_SURREAL: '1'
+        run: |
+          cargo test -p workflows-service --features workflows-service/jwt-provider-regression \
+            --test crypto_provider_health_check
+          cargo test -p workflows-service --features workflows-service/jwt-provider-regression \
+            --lib request_identity::tests::crypto_provider_health_check_passes_once_the_provider_is_pinned -- --exact
       - name: Application and DBOS state survive image replacement and dump restore
         env:
           KUBECONFIG: /tmp/postgres-kind.config

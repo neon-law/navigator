@@ -1,16 +1,23 @@
-//! Proves `crypto_provider_is_healthy` actually detects the ENG-550
-//! regression it exists to catch (ENG-551): in a process that has never
-//! called `install_crypto_provider` — exactly the state this binary was in
-//! before ENG-550's fix — `jsonwebtoken`'s process-level `CryptoProvider` is
-//! still ambiguous (both `rust_crypto`, from `restate-jwt`, and `aws_lc_rs`,
-//! from `store`'s `surrealdb-core` dependency, are compiled in), so the
-//! health check must report `false` instead of panicking the probe itself.
-//! Runs in its own process (a separate binary from every other test in this
-//! crate) so no other test's `install_crypto_provider()` call can mask this.
+//! Exercise JWT provider selection in a fresh process, independent of other tests.
+//!
+//! The normal build has one backend and can auto-select it. The explicit
+//! `jwt-provider-regression` feature adds the second backend: the probe must
+//! catch that genuine ambiguity. The existing library test runs separately to
+//! verify startup pinning BEFORE its first probe: provider selection lasts for
+//! the process lifetime and cannot be repaired after probing ambiguity.
 
 use workflows_service::request_identity::crypto_provider_is_healthy;
 
 #[test]
-fn health_check_reports_unhealthy_when_the_provider_was_never_pinned() {
-    assert!(!crypto_provider_is_healthy());
+fn isolated_unpinned_provider_health_tracks_selected_backend_ambiguity() {
+    #[cfg(not(feature = "jwt-provider-regression"))]
+    assert!(
+        crypto_provider_is_healthy(),
+        "the single JWT backend must auto-select successfully"
+    );
+    #[cfg(feature = "jwt-provider-regression")]
+    assert!(
+        !crypto_provider_is_healthy(),
+        "two unpinned JWT backends must report unhealthy without escaping the probe"
+    );
 }
