@@ -1565,32 +1565,41 @@ async fn seeded_repository_path(
     Ok(path)
 }
 
-/// The smoke owns this exact new database and keeps its administrative forward
-/// alive until every receiver connection has drained and the database is dropped.
+/// The smoke owns this new database and independent administrative/data forwards.
+/// A data connection's close must not interrupt DROP through a shared forwarding session.
 struct SmokePostgres {
     fixture: store::test_support::PostgresFixture,
     forward: Forward,
+    admin_forward: Forward,
+}
+
+fn smoke_postgres_options(forward: &Forward, seed: &Seed) -> Result<PgConnectOptions> {
+    let port = reqwest::Url::parse(&forward.origin)?
+        .port()
+        .context("PostgreSQL forward port")?;
+    Ok(PgConnectOptions::new()
+        .host("127.0.0.1")
+        .port(port)
+        .username("postgres")
+        .password(&seed.postgres_password)
+        .database("postgres")
+        .ssl_mode(PgSslMode::Require)
+        .options([("session_preload_libraries", "age")]))
 }
 
 impl SmokePostgres {
     async fn create(kube: &Kube, seed: &Seed) -> Result<Self> {
+        let mut admin_forward = Forward::open_target(kube, POSTGRES_POD, 5432)?;
         let mut forward = Forward::open_target(kube, POSTGRES_POD, 5432)?;
-        let port = reqwest::Url::parse(&forward.origin)?
-            .port()
-            .context("PostgreSQL forward port")?;
-        let options = PgConnectOptions::new()
-            .host("127.0.0.1")
-            .port(port)
-            .username("postgres")
-            .password(&seed.postgres_password)
-            .database("postgres")
-            .ssl_mode(PgSslMode::Require)
-            .options([("session_preload_libraries", "age")]);
-        let fixture = store::test_support::PostgresFixture::create(options)
-            .await
-            .with_context(|| {
-                forward.failure_context("initialize the fresh smoke PostgreSQL fixture")
-            })?;
+        let fixture = store::test_support::PostgresFixture::create_with_connections(
+            smoke_postgres_options(&admin_forward, seed)?,
+            smoke_postgres_options(&forward, seed)?,
+        )
+        .await
+        .with_context(|| {
+            admin_forward.failure_context("initialize smoke PostgreSQL administration")
+        })
+        .with_context(|| forward.failure_context("initialize smoke PostgreSQL data"))?;
         let grants = grant_smoke_runtime(&fixture)
             .await
             .context("grant fresh smoke PostgreSQL runtime access");
@@ -1603,17 +1612,28 @@ impl SmokePostgres {
                 )),
             };
             return Err(original
-                .context(forward.failure_context("configure the fresh smoke PostgreSQL fixture")));
+                .context(admin_forward.failure_context("configure smoke PostgreSQL administration"))
+                .context(forward.failure_context("configure smoke PostgreSQL data")));
         }
-        Ok(Self { fixture, forward })
+        Ok(Self {
+            fixture,
+            forward,
+            admin_forward,
+        })
     }
 
     async fn close(mut self) -> Result<()> {
-        let closed = self.fixture.close().await.with_context(|| {
-            self.forward
-                .failure_context("close the owned smoke PostgreSQL fixture")
-        });
+        let closed = self
+            .fixture
+            .close()
+            .await
+            .with_context(|| {
+                self.admin_forward
+                    .failure_context("close smoke PostgreSQL administration")
+            })
+            .with_context(|| self.forward.failure_context("close smoke PostgreSQL data"));
         drop(self.forward);
+        drop(self.admin_forward);
         closed
     }
 }

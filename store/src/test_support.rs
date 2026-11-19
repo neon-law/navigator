@@ -909,7 +909,21 @@ impl PostgresFixture {
     /// # Errors
     /// Returns connection, creation, or canonical fixture initialization failures.
     pub async fn create(options: sqlx::postgres::PgConnectOptions) -> anyhow::Result<Self> {
-        let admin = crate::postgres::PostgresDb::connect(options.clone())
+        Self::create_with_connections(options.clone(), options).await
+    }
+
+    /// Create a fresh fixture with independently routed administration and data connections.
+    ///
+    /// Both options must address the same PostgreSQL server. Separate transports keep
+    /// closing a fixture connection from interrupting its administrative cleanup.
+    ///
+    /// # Errors
+    /// Returns connection, creation, or canonical fixture initialization failures.
+    pub async fn create_with_connections(
+        admin_options: sqlx::postgres::PgConnectOptions,
+        fixture_options: sqlx::postgres::PgConnectOptions,
+    ) -> anyhow::Result<Self> {
+        let admin = crate::postgres::PostgresDb::connect(admin_options)
             .await
             .context("connect synthetic fixture administration")?;
         let database = format!("native_test_{}", Uuid::now_v7().simple());
@@ -917,7 +931,9 @@ impl PostgresFixture {
             .execute(admin.pool())
             .await
             .context("create owned synthetic fixture database")?;
-        let prepared = prepare_postgres_fixture(options.database(&database)).await;
+        let prepared = prepare_postgres_fixture(fixture_options.database(&database))
+            .await
+            .with_context(|| format!("initialize owned synthetic fixture {database}"));
         match prepared {
             Ok(pg) => Ok(Self {
                 admin,
