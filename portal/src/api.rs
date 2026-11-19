@@ -2172,6 +2172,15 @@ async fn repository_remotes(
     Ok(serde_json::json!({"origin": project.repository_url, "forgejo": forgejo_url}))
 }
 
+/// The Drive folder a Project links, if any.
+fn linked_drive_folder(project: &store::projects::Project) -> Option<&str> {
+    project
+        .drive_folder_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+}
+
 /// Live lifecycle evidence for a firm-side participant. Filing establishes
 /// onboarding presence; `onboarding.status` carries the execution reading —
 /// `official` once the onboarding envelope is verified as completed.
@@ -2211,11 +2220,18 @@ async fn project_status_door(
         .filter(|asset| store::projects::template_opens_a_matter(asset.kind.as_deref()))
         .map(|asset| serde_json::json!({"id": asset.id, "visibility": asset.visibility}))
         .collect::<Vec<_>>();
-    let missing = if lifecycle == store::projects::MatterLifecycle::NeedsOnboarding {
-        vec!["Verify a completed onboarding envelope in the Firm's DocuSign account."]
+    let mut missing = if lifecycle == store::projects::MatterLifecycle::NeedsOnboarding {
+        vec!["Verify a completed onboarding envelope in the Firm's DocuSign account.".to_string()]
     } else {
         Vec::new()
     };
+    let drive_folder_id = linked_drive_folder(&project);
+    if project.status == "open" && drive_folder_id.is_none() {
+        missing.push(format!(
+            "Link the matter's Drive folder: `navigator project set {} --drive-folder <link>`.",
+            project.code
+        ));
+    }
     let remotes = repository_remotes(&state, &project).await?;
     let mut adopted_envelopes = Vec::new();
     let mut envelopes = Vec::new();
@@ -2257,6 +2273,7 @@ async fn project_status_door(
         "opened_at": project.inserted_at,
         "closed_at": project.closed_at,
         "source_state": store::project_surfaces::source_state(&project),
+        "drive_folder_id": drive_folder_id,
         "onboarding": {
             "filed": opening.contains(&id),
             "status": onboarding_status.label(),

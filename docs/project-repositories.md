@@ -292,9 +292,11 @@ it would make fails the job and the output names the fix. Uploading a staged fil
 **`navigator project status` reads the live lifecycle.** It takes the Project code and host from `navigator.yaml`, or an
 explicit code and `--host`. `--json` emits the full response. The caller must be a firm-side participant with the Lawyer
 tier or above. The command reports the workbench label, stored `project_status`, `opened_at` (Project creation),
-`closed_at`, and derived `source_state`. Onboarding evidence includes filed document visibility and generated onboarding
-instruments. Filing establishes presence; execution remains unverified. A pitch names the missing onboarding work. This
-command performs only authenticated reads.
+`closed_at`, derived `source_state`, and the linked Drive folder, or that none is linked. An open Project with no Drive
+folder names `navigator project set <code> --drive-folder <link>` as missing work, and `navigator project doctor
+--project <code>` run in that Project's checkout warns when `navigator.yaml` links none. Onboarding evidence includes
+filed document visibility and generated onboarding instruments. Filing establishes presence; execution remains
+unverified. A pitch names the missing onboarding work. This command performs only authenticated reads.
 
 **`navigator project participant list` reads the participation ledger as JSON.** Use a row's `id` with `navigator
 project participant dri <id>` to designate it, or add `--clear` to remove its marker. The side follows the Person's

@@ -222,7 +222,21 @@ async fn postgres_status_requires_participation_and_verified_execution() {
         StatusCode::NOT_FOUND
     );
     fx.participate().await;
-    assert_eq!(fx.status().await["status"], "pitch");
+    let status = fx.status().await;
+    assert_eq!(status["status"], "pitch");
+    assert_eq!(status["drive_folder_id"], serde_json::Value::Null);
+    assert!(status["missing"].as_array().unwrap().iter().any(|line| line
+        .as_str()
+        .unwrap()
+        .contains("navigator project set synthetic-onboarding --drive-folder <link>")));
+    sqlx::query("UPDATE project SET drive_folder_id='synthetic-drive-folder' WHERE id=$1")
+        .bind(fx.project)
+        .execute(fx.pg.pool())
+        .await
+        .unwrap();
+    let status = fx.status().await;
+    assert_eq!(status["drive_folder_id"], "synthetic-drive-folder");
+    assert!(!status["missing"].to_string().contains("--drive-folder"));
     let asset = Uuid::now_v7();
     let envelope = Uuid::now_v7();
     sqlx::query("INSERT INTO asset(id,project_id,storage_key,content_type,byte_size,sha256_hex,kind,visibility,metadata)

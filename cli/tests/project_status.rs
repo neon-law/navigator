@@ -47,7 +47,7 @@ async fn status_shows_live_history_in_text_and_json() {
              "recorded_at": "2026-03-02T00:00:00Z", "reason": "new_matter_event", "attesting_person_id": attester}
         ],
         "opened_at":"2026-01-01T00:00:00Z", "closed_at":null,
-        "source_state":"initialized", "onboarding":{"filed":true,"documents":[
+        "source_state":"initialized", "drive_folder_id":"synthetic-folder", "onboarding":{"filed":true,"documents":[
             {"id":Uuid::now_v7(),"visibility":"internal"}
         ]}, "missing":[]});
     Mock::given(method("GET"))
@@ -88,6 +88,9 @@ async fn status_shows_live_history_in_text_and_json() {
     assert!(output.contains("reason: engagement_completed"));
     assert!(output.contains("reason: new_matter_event"));
     assert!(output.contains(&format!("attester: {attester}")));
+    assert!(
+        output.contains("drive folder: https://drive.google.com/drive/folders/synthetic-folder")
+    );
     server.verify().await;
 }
 
