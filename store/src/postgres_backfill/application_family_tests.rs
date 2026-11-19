@@ -532,6 +532,17 @@ async fn captured_encrypted_changes_decrypt_with_exact_original_context_after_en
         before == after,
         "authenticated overlap fields must remain unchanged"
     );
+    assert_encrypted_context_rows(&pg, &kms, [&fresh, &historical], &inserted.to_rfc3339()).await;
+    assert_eq!(prior_histories(&pg).await, prior);
+    pg.pool().close().await;
+}
+
+async fn assert_encrypted_context_rows(
+    pg: &PostgresDb,
+    kms: &cloud::FakeKms,
+    expected: [&crate::deployment_secret_changes::EncryptedChange; 2],
+    normalized_timestamp: &str,
+) {
     PostgresDb::with_test_db(pg.clone(), async {
         let rows = crate::deployment_secret_changes::latest(
             &SurrealDb::uninitialized(),
@@ -541,24 +552,22 @@ async fn captured_encrypted_changes_decrypt_with_exact_original_context_after_en
         .await
         .unwrap();
         assert_eq!(rows.len(), 2);
-        for expected in [&fresh, &historical] {
+        for expected in expected {
             let actual = rows
                 .iter()
                 .find(|row| row.request_id == expected.request_id)
                 .unwrap();
             assert_eq!(actual.inserted_at, expected.inserted_at);
             assert_eq!(actual.actor_id, expected.actor_id);
-            assert!(crate::deployment_secret_changes::open(&kms, actual)
+            assert!(crate::deployment_secret_changes::open(kms, actual)
                 .await
                 .is_ok_and(|value| value == "synthetic-value"));
             let mut normalized = actual.clone();
-            normalized.inserted_at = inserted.to_rfc3339();
-            assert!(crate::deployment_secret_changes::open(&kms, &normalized)
+            normalized.inserted_at = normalized_timestamp.to_owned();
+            assert!(crate::deployment_secret_changes::open(kms, &normalized)
                 .await
                 .is_err());
         }
     })
     .await;
-    assert_eq!(prior_histories(&pg).await, prior);
-    pg.pool().close().await;
 }

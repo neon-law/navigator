@@ -475,7 +475,7 @@ fn repayment(cost: &JournalEntry, key: &str, amount: i128) -> JournalEntry {
     entry.postings[1].category = Category::Reimbursement;
     entry.postings[1].project_id = cost.postings[0].project_id;
     entry.postings[1].quantity = amount.to_string();
-    entry.links = cost.links.clone();
+    entry.links.clone_from(&cost.links);
     entry.links.push(approval(LinkKind::Repayment, cost.id));
     entry
 }

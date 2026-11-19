@@ -288,7 +288,7 @@ async fn activated_postgres_seeds_real_local_portfolio_without_source() {
         .unwrap();
         assert!(report.projects_inserted >= 3, "{report:?}");
         let seeded: i64 = sqlx::query_scalar("SELECT count(*) FROM project WHERE code=ANY($1)")
-            .bind(&["sample-litigation", "sample-transactional", "sample-estate"])
+            .bind(["sample-litigation", "sample-transactional", "sample-estate"])
             .fetch_one(pg.pool())
             .await
             .unwrap();

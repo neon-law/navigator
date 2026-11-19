@@ -803,7 +803,7 @@ impl Snapshot {
                     } else if table.table == "journal_entry" {
                         self.journal_handoff
                             .as_ref()
-                            .is_some_and(|proof| proof.is_clean())
+                            .is_some_and(crate::journal_startup_migration::JournalHandoff::is_clean)
                     } else {
                         table.source_rows == table.target_rows
                     }
@@ -957,44 +957,9 @@ pub(super) async fn advance_with(
         // quiescence, not that lock, excludes old source application writes.
         let mut tx = pg.0.begin().await?;
         for table in &final_snapshot.tables {
-            let proof = serde_json::to_value(Verification {
-                source_rows: table.source_rows,
-                target_rows: table.target_rows,
-                differences: 0,
-                references_checked: true,
-                foreign_keys_checked: true,
-                references: final_snapshot
-                    .references
-                    .iter()
-                    .filter(|reference| reference.table == table.table)
-                    .map(|reference| ReferenceVerification {
-                        field: reference.field.to_owned(),
-                        source_orphans: reference.source_orphans,
-                        postgres_missing: reference.postgres_missing,
-                        newly_target_missing: reference.newly_target_missing,
-                    })
-                    .collect(),
-                reset_facts_checked: family == Family::Notation,
-                reset_fact_differences: final_snapshot.reset_fact_differences.len(),
-                asset_union: (table.table == "asset")
-                    .then(|| final_snapshot.asset_union.clone())
-                    .flatten(),
-                reset_union: final_snapshot.reset_union.clone(),
-                template_pins: final_snapshot.template_pins.clone(),
-                project_lifecycle: final_snapshot
-                    .project_lifecycle
-                    .clone()
-                    .filter(|_| table.table == "project"),
-                sent_email_union: final_snapshot
-                    .sent_email_union
-                    .clone()
-                    .filter(|_| table.table == "sent_email"),
-                journal_handoff: final_snapshot
-                    .journal_handoff
-                    .clone()
-                    .filter(|_| table.table == "journal_entry"),
-            })
-            .map_err(|_| FamilyError::Receipt)?;
+            let proof =
+                serde_json::to_value(completion_verification(&final_snapshot, family, table))
+                    .map_err(|_| FamilyError::Receipt)?;
             sqlx::query("UPDATE mirror_backfill_checkpoint SET completed_at = now(), verification = $3, failed = 0, updated_at = now() WHERE run_id = $1 AND mirror = $2")
                 .bind(run).bind(checkpoint(table.table)).bind(proof).execute(&mut *tx).await?;
         }
@@ -1010,6 +975,50 @@ pub(super) async fn advance_with(
         batches,
         snapshot: Some(final_snapshot),
     })
+}
+
+fn completion_verification(
+    snapshot: &Snapshot,
+    family: Family,
+    table: &crate::postgres_mirror::TableParity,
+) -> Verification {
+    Verification {
+        source_rows: table.source_rows,
+        target_rows: table.target_rows,
+        differences: 0,
+        references_checked: true,
+        foreign_keys_checked: true,
+        references: snapshot
+            .references
+            .iter()
+            .filter(|reference| reference.table == table.table)
+            .map(|reference| ReferenceVerification {
+                field: reference.field.to_owned(),
+                source_orphans: reference.source_orphans,
+                postgres_missing: reference.postgres_missing,
+                newly_target_missing: reference.newly_target_missing,
+            })
+            .collect(),
+        reset_facts_checked: family == Family::Notation,
+        reset_fact_differences: snapshot.reset_fact_differences.len(),
+        asset_union: (table.table == "asset")
+            .then(|| snapshot.asset_union.clone())
+            .flatten(),
+        reset_union: snapshot.reset_union.clone(),
+        template_pins: snapshot.template_pins.clone(),
+        project_lifecycle: snapshot
+            .project_lifecycle
+            .clone()
+            .filter(|_| table.table == "project"),
+        sent_email_union: snapshot
+            .sent_email_union
+            .clone()
+            .filter(|_| table.table == "sent_email"),
+        journal_handoff: snapshot
+            .journal_handoff
+            .clone()
+            .filter(|_| table.table == "journal_entry"),
+    }
 }
 
 async fn apply_row(
@@ -1234,64 +1243,74 @@ pub(crate) async fn activate_fixture(pg: &PostgresDb, family: Family) {
         .bind(run).bind(family.scope()).bind(serde_json::to_value(&receipt).unwrap()).execute(&mut *tx).await.unwrap();
     for table in family.tables() {
         let count = usize::try_from(receipt.table_counts[*table]).unwrap();
-        let proof = Verification {
-            source_rows: count,
-            target_rows: count,
-            differences: 0,
-            references_checked: true,
-            foreign_keys_checked: true,
-            references: vec![],
-            reset_facts_checked: family == Family::Notation,
-            reset_fact_differences: 0,
-            asset_union: (family == Family::Notation && *table == "asset").then_some(
-                AssetUnionProof {
-                    compared_overlaps: count,
-                    full_metadata_compared: true,
-                    ..Default::default()
-                },
-            ),
-            reset_union: (family == Family::Notation).then(|| ResetUnionProof {
-                compared: usize::try_from(receipt.table_counts["notation"]).unwrap(),
-                retained_native_protections: 0,
-            }),
-            template_pins: (family == Family::Notation).then(|| TemplatePinProof {
-                compared: usize::try_from(template_count).unwrap(),
-                differences: 0,
-            }),
-            project_lifecycle: (family == Family::Tenancy && *table == "project").then_some(
-                ProjectLifecycleProof {
-                    compared_overlaps: count,
-                    full_metadata_compared: true,
-                    ledger_projections_checked: true,
-                    ..Default::default()
-                },
-            ),
-            sent_email_union: (family == Family::Application && *table == "sent_email").then_some(
-                SentEmailUnionProof {
-                    compared_overlaps: count,
-                    full_metadata_compared: true,
-                    ..Default::default()
-                },
-            ),
-            journal_handoff: if family == Family::Application && *table == "journal_entry" {
-                assert_eq!(
-                    count, 0,
-                    "Journal fixture enrollment precedes native records"
-                );
-                Some(
-                    crate::journal_startup_migration::handoff_captured(&[], pg)
-                        .await
-                        .unwrap(),
-                )
-            } else {
-                None
-            },
-        };
+        let proof = fixture_verification(pg, family, table, count, &receipt, template_count).await;
         sqlx::query("INSERT INTO mirror_backfill_checkpoint (run_id, mirror, completed_at, verification) VALUES ($1, $2, now(), $3)")
             .bind(run).bind(checkpoint(table)).bind(serde_json::to_value(proof).unwrap()).execute(&mut *tx).await.unwrap();
     }
     tx.commit().await.unwrap();
     require_scope(pg, family).await.unwrap();
+}
+
+#[cfg(any(test, feature = "test-support"))]
+async fn fixture_verification(
+    pg: &PostgresDb,
+    family: Family,
+    table: &str,
+    count: usize,
+    receipt: &SourceReceipt,
+    template_count: i64,
+) -> Verification {
+    Verification {
+        source_rows: count,
+        target_rows: count,
+        differences: 0,
+        references_checked: true,
+        foreign_keys_checked: true,
+        references: vec![],
+        reset_facts_checked: family == Family::Notation,
+        reset_fact_differences: 0,
+        asset_union: (family == Family::Notation && table == "asset").then_some(AssetUnionProof {
+            compared_overlaps: count,
+            full_metadata_compared: true,
+            ..Default::default()
+        }),
+        reset_union: (family == Family::Notation).then(|| ResetUnionProof {
+            compared: usize::try_from(receipt.table_counts["notation"]).unwrap(),
+            retained_native_protections: 0,
+        }),
+        template_pins: (family == Family::Notation).then(|| TemplatePinProof {
+            compared: usize::try_from(template_count).unwrap(),
+            differences: 0,
+        }),
+        project_lifecycle: (family == Family::Tenancy && table == "project").then_some(
+            ProjectLifecycleProof {
+                compared_overlaps: count,
+                full_metadata_compared: true,
+                ledger_projections_checked: true,
+                ..Default::default()
+            },
+        ),
+        sent_email_union: (family == Family::Application && table == "sent_email").then_some(
+            SentEmailUnionProof {
+                compared_overlaps: count,
+                full_metadata_compared: true,
+                ..Default::default()
+            },
+        ),
+        journal_handoff: if family == Family::Application && table == "journal_entry" {
+            assert_eq!(
+                count, 0,
+                "Journal fixture enrollment precedes native records"
+            );
+            Some(
+                crate::journal_startup_migration::handoff_captured(&[], pg)
+                    .await
+                    .unwrap(),
+            )
+        } else {
+            None
+        },
+    }
 }
 
 /// Check actual enrolled rows, including constraints marked NOT VALID.

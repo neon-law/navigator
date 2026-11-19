@@ -820,6 +820,19 @@ pub(crate) fn source_import_allowed<'a>(
     })
 }
 
+async fn mirror_record(
+    surreal: &SurrealDb,
+    pg: &PostgresDb,
+    table: &'static str,
+    id: Uuid,
+) -> Result<Mirrored, MirrorError> {
+    // Journal copies require the immutable captured component, never a live generic row read.
+    if table == "journal_entry" {
+        return Err(MirrorError::MatterAuthority);
+    }
+    records::mirror(surreal, pg, table, id).await
+}
+
 async fn mirror_source(
     surreal: &SurrealDb,
     pg: &PostgresDb,
@@ -915,12 +928,7 @@ async fn mirror_source(
         MirrorKey::MatterPages(_) | MirrorKey::MatterCaption(_) => {
             matter_pages_captions::mirror(surreal, pg, key).await
         }
-        // Journal copies require the immutable captured component, never a live generic row read.
-        MirrorKey::Record {
-            table: "journal_entry",
-            ..
-        } => Err(MirrorError::MatterAuthority),
-        MirrorKey::Record { table, id } => records::mirror(surreal, pg, table, *id).await,
+        MirrorKey::Record { table, id } => mirror_record(surreal, pg, table, *id).await,
         MirrorKey::RecordString { table, id } => {
             records::mirror_string(surreal, pg, table, id).await
         }
