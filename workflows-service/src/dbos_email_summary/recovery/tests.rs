@@ -1102,7 +1102,7 @@ async fn a_restored_receipt_owner_without_its_controller_history_cannot_reopen_d
         let controller = email_summary_recovery_id(command.operation_id);
         assert!(case
             .dbos
-            .list_workflows(&dbos::WorkflowFilter {
+            .list_workflows(&dbos::sysdb::types::WorkflowFilter {
                 workflow_ids: vec![&controller],
                 limit: Some(1),
                 ..Default::default()
