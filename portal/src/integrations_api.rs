@@ -704,6 +704,106 @@ pub(crate) async fn slack_notify_door(
     }
 }
 
+/// `{ "project_code": "…", "all": false, "dry_run": true }` for the Slack
+/// lifecycle door.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SlackLifecycleRequest {
+    #[serde(default)]
+    project_code: Option<String>,
+    #[serde(default)]
+    all: bool,
+    #[serde(default)]
+    dry_run: bool,
+}
+
+/// `POST /app/api/integrations/slack/lifecycle` — bring each selected
+/// Project's recorded private channel in step with the Project's status: a
+/// closed or archived Project's channel is archived. Archiving keeps the
+/// channel's history, which is part of the matter's record; nothing here
+/// deletes a channel. The channel is found by its recorded id, never by name,
+/// and a Project with no recorded channel is reported, not provisioned. A dry
+/// run reports `would_archive` and changes nothing. Each change is logged
+/// against the Project.
+pub(crate) async fn slack_lifecycle_door(
+    State(state): State<ApiState>,
+    authed: AdminSession,
+    Json(request): Json<SlackLifecycleRequest>,
+) -> Result<Response, ApiError> {
+    let selector = ProjectSelector {
+        project_code: request.project_code,
+        all: request.all,
+    };
+    let mut results = Vec::new();
+    for project in targets(&state, &authed, &selector).await? {
+        results.push(
+            converge_project_channel(&state, authed.0.person_id, &project, request.dry_run).await,
+        );
+    }
+    Ok(report(results))
+}
+
+/// Bring one Project's recorded channel in step with its status. The
+/// lifecycle door runs it for each selected Project; the lifecycle move
+/// (`POST /app/api/projects/{id}/lifecycle`) runs it right after the status
+/// changes, so a close does not wait for a sweep.
+pub(crate) async fn converge_project_channel(
+    state: &ApiState,
+    actor_person_id: Option<uuid::Uuid>,
+    project: &store::projects::Project,
+    dry_run: bool,
+) -> ProjectOutcome {
+    let slack = match state
+        .integration_providers
+        .slack(&state.surreal, project.id)
+        .await
+    {
+        Ok(slack) => slack,
+        Err(error) => return unavailable(project, &error),
+    };
+    if project.status == "open" {
+        return ProjectOutcome::plain(project.code.clone(), "open");
+    }
+    let Some(channel_id) = project.internal_slack_channel_id.clone() else {
+        return ProjectOutcome::plain(project.code.clone(), "no_channel");
+    };
+    let _guard =
+        ensure_lock(workflows::IntegrationJob::slack(project.id, &project.code).job_id).await;
+    let outcome = match cloud::archive_recorded_channel(slack.as_ref(), &channel_id, dry_run).await
+    {
+        Ok(cloud::ChannelRetirement::Archived) => "archived",
+        Ok(cloud::ChannelRetirement::AlreadyArchived) => "already_archived",
+        Ok(cloud::ChannelRetirement::WouldArchive) => "would_archive",
+        Ok(cloud::ChannelRetirement::Missing) => "recorded_resource_missing",
+        Err(_) => "provider_unavailable",
+    };
+    if outcome == "archived" {
+        log_channel_change(state, actor_person_id, project, "slack_channel_archived").await;
+    }
+    ProjectOutcome::plain(project.code.clone(), outcome)
+}
+
+/// Record one channel change on the Project's Relationship Log. A log write
+/// that fails is reported in the server log and never undoes the change.
+async fn log_channel_change(
+    state: &ApiState,
+    actor_person_id: Option<uuid::Uuid>,
+    project: &store::projects::Project,
+    action: &str,
+) {
+    let entry = store::relationship_logs::NewRelationshipLog {
+        actor_person_id,
+        subject_type: "project".to_string(),
+        subject_id: project.id,
+        action: action.to_string(),
+        detail: format!("Project status {}", project.status),
+        project_id: Some(project.id),
+    };
+    if let Err(error) = store::relationship_logs::record(&state.surreal, &entry).await {
+        tracing::warn!(project_id = %project.id, %error, "slack channel change not logged");
+    }
+}
+
 /// A refusal the CI step prints, so a lost notice never reads as delivered.
 fn pull_request_refusal(status: StatusCode, error: &str, message: &str) -> Response {
     (

@@ -483,6 +483,11 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             "/app/api/integrations/slack/notify",
             post(crate::integrations_api::slack_notify_door),
         ),
+        (
+            "POST",
+            "/app/api/integrations/slack/lifecycle",
+            post(crate::integrations_api::slack_lifecycle_door),
+        ),
         // Deliberately *not* under `/app/api/projects/`: the policy rule for
         // that prefix admits any authenticated caller up to five segments, so a
         // reconciliation path nested there would be policy-reachable by a
@@ -3963,6 +3968,21 @@ async fn transition_matter(
     } else {
         close_project_calendar(&state, updated).await
     };
+    // The private Slack channel follows the matter's status right away; the
+    // Nightly Project Update is the backstop. A provider fault is logged,
+    // never a failed lifecycle move.
+    let channel = crate::integrations_api::converge_project_channel(
+        &state,
+        lawyer.0.person_id,
+        &updated,
+        false,
+    )
+    .await;
+    tracing::info!(
+        project_id = %updated.id,
+        outcome = channel.outcome,
+        "project channel followed the lifecycle move"
+    );
     Ok(Json(updated).into_response())
 }
 

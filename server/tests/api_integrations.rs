@@ -416,12 +416,13 @@ async fn navigator_deadline_mutations_update_the_same_project_calendar_event() {
     assert_eq!(calendar.calendars().len(), 1);
 }
 
-const ALL_DOORS: [&str; 5] = [
+const ALL_DOORS: [&str; 6] = [
     "/app/api/integrations/notion/ensure",
     "/app/api/integrations/notion/reconcile",
     "/app/api/integrations/slack/ensure",
     "/app/api/integrations/slack/notify",
     "/app/api/integrations/calendar/ensure",
+    "/app/api/integrations/slack/lifecycle",
 ];
 
 /// Calls the resolver made for the provider behind `door`.

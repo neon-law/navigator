@@ -2150,6 +2150,31 @@ fn canonical_document(base: &str) -> Value {
             }
           }
         },
+        "/app/api/integrations/slack/lifecycle": {
+          "post": {
+            "summary": "Archive the private channel of each closed or archived Project (admin)",
+            "description":
+              "Brings each selected Project's recorded private channel in step with the Project's status: the channel of a `closed` or `archived` Project is archived. Archiving keeps the channel's history, which is part of the matter's record; nothing here deletes a channel. The channel is found by its recorded id, never by name, and a Project with no recorded channel reports `no_channel` rather than being provisioned. An `open` Project reports `open`. A dry run reports `would_archive` and changes nothing. Each change is logged against the Project. Outcomes: `archived`, `already_archived`, `would_archive`, `open`, `no_channel`, `recorded_resource_missing`, `provider_unavailable`, and the resolution outcomes. Authorization: admin-tier, plus `use_integrations` on the Project's owning Firm.",
+            "requestBody": { "required": true, "content": { "application/json": {
+              "schema": { "$ref": "#/components/schemas/SlackLifecycleRequest" }
+            } } },
+            "responses": {
+              "200": { "description": "One outcome per selected Project", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/IntegrationReport" } } } },
+              "400": { "description": "The selector is not accepted", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } },
+              "401": { "description": "No authenticated session", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } },
+              "403": { "description": "Authenticated caller is not admin-tier", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } },
+              "404": { "description": "No Project with that code is visible to the caller, or the caller may not use its Firm's integrations — the two answer identically on purpose", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } }
+            }
+          }
+        },
         "/app/api/project-repositories": {
           "get": {
             "summary": "Reconcile every matter against the repository it records (admin)",
@@ -2617,7 +2642,7 @@ fn canonical_document(base: &str) -> Value {
                that door opens the firm-signed closing-letter notation and leaves the status flip to \
                the walk that follows, while this one flips `status`/`closed_at` immediately and opens \
                no notation. A close or archive also makes the Project's shared calendar read-only and \
-               clears its booking link, best-effort. `closed_at` is derived from `transition` and optional \
+               clears its booking link, and archives its recorded private Slack channel, best-effort. `closed_at` is derived from `transition` and optional \
                `effective_at`, never posted directly. An effective time must be RFC 3339, not be in the future, and not \
                precede matter-open. Without one, an existing close stamp is preserved. Re-applying \
                the same transition and effective time is idempotent; supplying a different valid \
@@ -6087,6 +6112,18 @@ fn canonical_document(base: &str) -> Value {
                        "description": "Reconcile every Project visible to the caller — the same participation-scoped lens `GET /app/api/projects` uses." },
               "dry_run": { "type": "boolean", "default": false,
                            "description": "Plan the mirror without making writes — the door answers what it would insert, patch, and delete." }
+            }
+          },
+          "SlackLifecycleRequest": {
+            "type": "object",
+            "description": "The ensure door's selector with a dry-run flag beside it: `project_code` and `all` follow the same exactly-one rule.",
+            "properties": {
+              "project_code": { "type": ["string", "null"],
+                                "description": "One Project code. Omit when `all` is true." },
+              "all": { "type": "boolean", "default": false,
+                       "description": "Act on every Project visible to the caller." },
+              "dry_run": { "type": "boolean", "default": false,
+                           "description": "Report what would be archived without archiving anything." }
             }
           },
           "SlackIntegrationRequest": {
