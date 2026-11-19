@@ -1734,6 +1734,9 @@ enum OpsCmd {
     /// only by `apply` and written into that deployment's own Secret Manager.
     #[command(subcommand)]
     Secrets(SecretsCmd),
+    /// Privileged reconciliation of Project Slack delivery evidence.
+    #[command(subcommand)]
+    ProjectSlack(devx::project_slack_reconcile::Operation),
     /// Operator recovery for the inbound email-summary Restate workflow.
     #[command(subcommand)]
     EmailSummary(EmailSummaryCmd),

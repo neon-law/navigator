@@ -2,7 +2,7 @@
 
 use std::process::Command;
 
-use anyhow::{Result, bail};
+use anyhow::{bail, Result};
 use workflows::object_handover::{self, Readback};
 
 fn cli_query(environment: &str, sql: &str) -> Result<String> {
@@ -309,12 +309,10 @@ mod tests {
             sha256: "unused".to_owned(),
             operator_writers_held: false,
         });
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("operator-writers-held")
-        );
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("operator-writers-held"));
     }
 
     #[test]

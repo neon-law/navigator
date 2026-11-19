@@ -17,7 +17,7 @@ use std::sync::Arc;
 use restate_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 use tracing::Instrument;
-use workflows::{SlackBot, SlackBotError, SlackChannel, project_channel_name};
+use workflows::{project_channel_name, SlackBot, SlackBotError, SlackChannel};
 
 use crate::firm_slack::ProjectSlackBots;
 
@@ -679,13 +679,13 @@ impl ProjectSlackService {
 #[cfg(test)]
 mod tests {
     use super::{
-        CLIENT_PROJECT_VIEW_MESSAGE, CiOutcome, LaneError, MainPushOutcome, MainPushRequest,
-        ProjectSlackService, admit_main_push, client_project_view_span, ensure_internal_channel,
-        main_push_span, post_client_view_notice, project_command_error, project_id,
-        project_store_error, render_main_push,
+        admit_main_push, client_project_view_span, ensure_internal_channel, main_push_span,
+        post_client_view_notice, project_command_error, project_id, project_store_error,
+        render_main_push, CiOutcome, LaneError, MainPushOutcome, MainPushRequest,
+        ProjectSlackService, CLIENT_PROJECT_VIEW_MESSAGE,
     };
     use std::sync::Arc;
-    use store::projects::{NewProject, ProjectCommandError, create, set_internal_slack_channel_id};
+    use store::projects::{create, set_internal_slack_channel_id, NewProject, ProjectCommandError};
     use store::test_support::{mem_surreal, seed_entity};
     use uuid::Uuid;
     use workflows::CapturingSlackBot;

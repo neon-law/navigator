@@ -26,8 +26,8 @@ use sqlx::Connection;
 use store::surreal::SurrealDb;
 
 use crate::project_slack::{
-    CLIENT_PROJECT_VIEW_MESSAGE, LaneError, MainPushRequest, main_push_destination_on,
-    render_main_push,
+    main_push_destination_on, render_main_push, LaneError, MainPushRequest,
+    CLIENT_PROJECT_VIEW_MESSAGE,
 };
 
 /// The registered workflow's name. Distinct from every other DBOS workflow
@@ -426,8 +426,8 @@ fn lane_step_options() -> dbos::StepOptions<LaneError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CLIENT_VIEW_LANE, ENABLED_ENV, LaneKey, LaneRequest, WORKFLOW, client_view_workflow_id,
-        enabled, lane_lock_key, main_push_workflow_id, parse_workflow_id,
+        client_view_workflow_id, enabled, lane_lock_key, main_push_workflow_id, parse_workflow_id,
+        LaneKey, LaneRequest, CLIENT_VIEW_LANE, ENABLED_ENV, WORKFLOW,
     };
     use crate::project_slack::{CiOutcome, LaneError, MainPushRequest};
     use uuid::Uuid;

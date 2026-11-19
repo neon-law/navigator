@@ -1709,6 +1709,7 @@ mod tests {
             ),
             ("20261119020000_email_summary_recovery.sql", include_str!("../postgres/migrations/20261119020000_email_summary_recovery.sql")),
             ("20261119030000_project_slack_delivery.sql", include_str!("../postgres/migrations/20261119030000_project_slack_delivery.sql")),
+            ("20261119040000_project_slack_delivery_reconciliation.sql", include_str!("../postgres/migrations/20261119040000_project_slack_delivery_reconciliation.sql")),
             (
                 "20261119180000_add_firm_esign_provider.sql",
                 include_str!("../postgres/migrations/20261119180000_add_firm_esign_provider.sql"),

@@ -1,6 +1,6 @@
 #[path = "../support/native_database.rs"]
 mod native_database;
-pub use native_database::{APP_VERSION, DEADLINE, TestDatabase, database};
+pub use native_database::{database, TestDatabase, APP_VERSION, DEADLINE};
 use uuid::Uuid;
 
 /// A synthetic Firm, its admin, and one open Project on it.

@@ -957,9 +957,10 @@ impl PostgresFixture {
             .execute(admin.pool())
             .await
             .context("create owned synthetic fixture database")?;
-        let prepared = prepare_postgres_fixture(fixture_options.database(&database), native_objects)
-            .await
-            .with_context(|| format!("initialize owned synthetic fixture {database}"));
+        let prepared =
+            prepare_postgres_fixture(fixture_options.database(&database), native_objects)
+                .await
+                .with_context(|| format!("initialize owned synthetic fixture {database}"));
         match prepared {
             Ok(pg) => Ok(Self {
                 admin,

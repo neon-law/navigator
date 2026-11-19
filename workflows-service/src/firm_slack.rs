@@ -152,9 +152,9 @@ mod tests {
     use super::{FirmSlackBots, ProjectSlackBots, SharedSlackBot};
     use crate::project_slack::LaneError;
     use std::sync::Arc;
-    use store::firm_secrets::{IntegrationProvider, IntegrationSecretKind, SecretPutRequest, put};
+    use store::firm_secrets::{put, IntegrationProvider, IntegrationSecretKind, SecretPutRequest};
     use store::persons::Role;
-    use store::projects::{NewProject, create};
+    use store::projects::{create, NewProject};
     use store::test_support::{mem_surreal, seed_entity};
     use workflows::CapturingSlackBot;
 

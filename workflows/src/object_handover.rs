@@ -612,14 +612,12 @@ mod tests {
         let source = frozen_readback_with(|query| response(&fixture, query)).unwrap();
         let capture = mapped(&source).unwrap();
         assert_eq!(capture.notation_machines.len(), 2);
-        assert!(
-            capture
-                .notation_machines
-                .iter()
-                .all(|machine| machine.ephemeral
-                    && machine.current_state == "BEGIN"
-                    && machine.spec_yaml == SPEC)
-        );
+        assert!(capture
+            .notation_machines
+            .iter()
+            .all(|machine| machine.ephemeral
+                && machine.current_state == "BEGIN"
+                && machine.spec_yaml == SPEC));
         assert_eq!(capture.slack_projects[0].main_push_seen, vec!["abc1234:1"]);
         assert!(capture.slack_projects[0].client_view == ClientViewDisposition::Posted);
         let mut no_view = source;
@@ -647,13 +645,11 @@ mod tests {
                 .to_string(),
         );
         source.invocations.push(noop);
-        assert!(
-            mapped(&source)
-                .unwrap()
-                .notation_machines
-                .iter()
-                .all(|machine| machine.ephemeral)
-        );
+        assert!(mapped(&source)
+            .unwrap()
+            .notation_machines
+            .iter()
+            .all(|machine| machine.ephemeral));
         source
             .start_journal
             .retain(|row| row.id != "synthetic-questionnaire");
@@ -664,27 +660,23 @@ mod tests {
     fn mutating_source_and_truncated_inventories_refuse_capture() {
         let original = fixture();
         let mut reads = 0;
-        assert!(
-            frozen_readback_with(|query| {
-                reads += 1;
-                let mut changed = original.clone();
-                if reads > 5 {
-                    changed.services[0].revision += 1;
-                }
-                response(&changed, query)
-            })
-            .is_err()
-        );
-        assert!(
-            frozen_readback_with(|query| {
-                if query == STATE_COUNT {
-                    Ok("[{\"count\":999}]".to_owned())
-                } else {
-                    response(&original, query)
-                }
-            })
-            .is_err()
-        );
+        assert!(frozen_readback_with(|query| {
+            reads += 1;
+            let mut changed = original.clone();
+            if reads > 5 {
+                changed.services[0].revision += 1;
+            }
+            response(&changed, query)
+        })
+        .is_err());
+        assert!(frozen_readback_with(|query| {
+            if query == STATE_COUNT {
+                Ok("[{\"count\":999}]".to_owned())
+            } else {
+                response(&original, query)
+            }
+        })
+        .is_err());
     }
 
     #[test]

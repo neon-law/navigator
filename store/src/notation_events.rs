@@ -362,10 +362,13 @@ pub async fn for_notation(
 /// # Errors
 /// Refuses incomplete application history and propagates native read failures.
 pub async fn for_notation_on(
-    pg:&crate::postgres::PostgresDb,notation_id:Uuid,
-)->Result<Vec<NotationEvent>,NotationEventError> {
-    pg.require_application_history().await.map_err(|_|matter::MatterAuthorityError::Unavailable)?;
-    Ok(matter::select(pg,TABLE,json!({"notation_id":notation_id}),&["id"]).await?)
+    pg: &crate::postgres::PostgresDb,
+    notation_id: Uuid,
+) -> Result<Vec<NotationEvent>, NotationEventError> {
+    pg.require_application_history()
+        .await
+        .map_err(|_| matter::MatterAuthorityError::Unavailable)?;
+    Ok(matter::select(pg, TABLE, json!({"notation_id":notation_id}), &["id"]).await?)
 }
 
 /// Resolve the Person a transition is attributed to when no

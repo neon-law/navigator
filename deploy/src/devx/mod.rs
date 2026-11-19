@@ -53,6 +53,7 @@ mod observability;
 mod orchestrate;
 mod postgres_fixture;
 mod postgres_volume;
+pub(crate) mod project_slack_reconcile;
 mod quickstart;
 pub(crate) mod registry;
 mod restate_handover;
@@ -1441,6 +1442,9 @@ fn dispatch_with_dns_provider(
             } else {
                 deployments::apply(&root, &deployment, dry_run)
             }
+        }
+        crate::Command::Ops(crate::OpsCmd::ProjectSlack(operation)) => {
+            project_slack_reconcile::run(operation)
         }
         crate::Command::Ops(crate::OpsCmd::EmailSummary(crate::EmailSummaryCmd::Redrive {
             receipt,

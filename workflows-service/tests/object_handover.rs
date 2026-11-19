@@ -11,8 +11,8 @@ use store::postgres::PostgresDb;
 use store::surreal::SurrealDb;
 use tower::ServiceExt;
 use uuid::Uuid;
-use workflows::SlackBot;
 use workflows::object_handover::{self, Readback};
+use workflows::SlackBot;
 use workflows_service::dbos_ingress::{NotationIngress, ProjectSlackIngress, WorkerIngress};
 use workflows_service::dbos_notation::{self, Operation, TransitionRequest};
 use workflows_service::dbos_project_slack::{self, LaneRequest};
@@ -21,7 +21,7 @@ use workflows_service::project_slack::{CiOutcome, LaneError, MainPushRequest};
 
 #[path = "support/native_project.rs"]
 mod native_project;
-use native_project::{Matter, matter, new_project};
+use native_project::{matter, new_project, Matter};
 
 const SPEC: &str = "BEGIN:\n  _: END\nEND: {}\n";
 
@@ -421,17 +421,15 @@ async fn native_drift_unknown_keys_and_inventory_changes_refuse_without_overwrit
         );
         let mut unknown = source.clone();
         unknown.state[0]["key"] = "unknown".into();
-        assert!(
-            object_handover::map_capture(
-                &unknown.read(),
-                "synthetic",
-                capture.capture_id,
-                capture.ownership_epoch,
-                &BTreeSet::from([first.project]),
-                capture.captured_at_unix
-            )
-            .is_err()
-        );
+        assert!(object_handover::map_capture(
+            &unknown.read(),
+            "synthetic",
+            capture.capture_id,
+            capture.ownership_epoch,
+            &BTreeSet::from([first.project]),
+            capture.captured_at_unix
+        )
+        .is_err());
         assert_eq!(counts(&pg).await, (0, 1));
     })
     .await;
@@ -446,18 +444,14 @@ async fn native_drift_unknown_keys_and_inventory_changes_refuse_without_overwrit
         let mut changed = source.clone();
         changed.services[0]["deployment_id"] = "different-source".into();
         assert!(changed.activate(&pg, &capture).await.is_err());
-        assert!(
-            durable_object_handover::require_native_ownership(&pg)
-                .await
-                .is_err()
-        );
+        assert!(durable_object_handover::require_native_ownership(&pg)
+            .await
+            .is_err());
         new_project(&db, first.firm, &first.brand, first.entity).await;
         assert!(source.activate(&pg, &capture).await.is_err());
-        assert!(
-            durable_object_handover::require_native_ownership(&pg)
-                .await
-                .is_err()
-        );
+        assert!(durable_object_handover::require_native_ownership(&pg)
+            .await
+            .is_err());
         assert_eq!(counts(&pg).await, (1, 2));
     })
     .await;
@@ -565,11 +559,9 @@ async fn uncaptured_native_machine_or_pending_start_refuses_global_activation() 
             Err(HandoverError::Conflict)
         ));
         assert_eq!(counts(&pg).await, (1, 3));
-        assert!(
-            durable_object_handover::require_native_ownership(&pg)
-                .await
-                .is_err()
-        );
+        assert!(durable_object_handover::require_native_ownership(&pg)
+            .await
+            .is_err());
         assert_eq!(
             store::notation_machine_state::read(&pg, outside, "workflow")
                 .await
@@ -617,11 +609,9 @@ async fn uncaptured_native_machine_or_pending_start_refuses_global_activation() 
         .unwrap();
         assert!(pending);
         assert_eq!(counts(&pg).await, (1, 2));
-        assert!(
-            durable_object_handover::require_native_ownership(&pg)
-                .await
-                .is_err()
-        );
+        assert!(durable_object_handover::require_native_ownership(&pg)
+            .await
+            .is_err());
     })
     .await;
 }

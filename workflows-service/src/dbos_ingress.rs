@@ -928,11 +928,14 @@ impl ProjectSlackStarter for DbosProjectSlackStarter {
             .await
             .map_err(|_| StartError::StartFailed)?
             .ok_or(StartError::ProjectNotFound)?;
-        let (kind,key)=dbos_project_slack::delivery_identity(&request);
-        store::project_slack_deliveries::admission(&self.postgres,project_id,kind,&key)
-            .await.map_err(|error|match error {
+        let (kind, key) = dbos_project_slack::delivery_identity(&request);
+        store::project_slack_deliveries::admission(&self.postgres, project_id, kind, &key)
+            .await
+            .map_err(|error| match error {
                 store::project_slack_deliveries::DeliveryError::Unresolved
-                    | store::project_slack_deliveries::DeliveryError::InvalidEvent => StartError::Conflict,
+                | store::project_slack_deliveries::DeliveryError::InvalidEvent => {
+                    StartError::Conflict
+                }
                 _ => StartError::StartFailed,
             })?;
         claim_request_identity::<(), LaneError, LaneRequest>(
@@ -1142,7 +1145,12 @@ async fn notation_run(
 ) -> Result<Json<NotationStateResponse>, (StatusCode, String)> {
     store::durable_object_handover::require_native_ownership(&state.inner.postgres)
         .await
-        .map_err(|_| (StatusCode::SERVICE_UNAVAILABLE, "handover unavailable".to_owned()))?;
+        .map_err(|_| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "handover unavailable".to_owned(),
+            )
+        })?;
     let report = state
         .inner
         .workflow

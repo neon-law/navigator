@@ -9,6 +9,8 @@ use uuid::Uuid;
 
 use crate::postgres::PostgresDb;
 
+pub mod reconciliation;
+
 /// The same serialization key used by the native Project Slack adapter.
 #[must_use]
 pub fn lane_key(project_id: Uuid) -> i64 {

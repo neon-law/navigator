@@ -3,24 +3,24 @@
 //! per relayed event, and different Projects posting without waiting on
 //! each other.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use tower::ServiceExt;
-use workflows::{SlackBot, SlackBotError, SlackChannel, dbos_engine};
+use workflows::{dbos_engine, SlackBot, SlackBotError, SlackChannel};
 use workflows_service::dbos_ingress::{ProjectSlackIngress, WorkerIngress};
 use workflows_service::dbos_project_slack::{
-    self, LaneRequest, ProjectSlackLane, ProjectSlackWorkflow, lane_lock_key,
+    self, lane_lock_key, LaneRequest, ProjectSlackLane, ProjectSlackWorkflow,
 };
 use workflows_service::project_slack::{CiOutcome, LaneError, MainPushRequest};
 
 #[path = "support/native_database.rs"]
 mod support;
-use support::{APP_VERSION, database};
+use support::{database, APP_VERSION};
 
 #[path = "support/native_project.rs"]
 mod native_project;
