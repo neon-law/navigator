@@ -179,6 +179,7 @@ async fn deployment_change_retains_exact_authenticated_timestamp_bytes() {
 
 #[tokio::test]
 async fn completed_secret_import_replay_never_reads_source_or_changes_native_history() {
+    use crate::postgres_mirror::{Mirrored, during_initial_copy, firm_secrets, from_source};
     let (pg, actor, _, _, firm) = application_fixture().await;
     let id = uuid::Uuid::now_v7();
     sqlx::query("INSERT INTO firm_integration_secret (id,firm_id,provider,kind,version,ciphertext,wrapped_dek,kms_key_version,kms_context,status,actor_id,created_at,updated_at) VALUES ($1,$2,'xero','xero_client_secret',1,'synthetic-native-ciphertext','synthetic-native-wrap','synthetic-key','synthetic-native-context','revoked',$3,now(),now())")
@@ -190,7 +191,6 @@ async fn completed_secret_import_replay_never_reads_source_or_changes_native_his
             .await
             .unwrap();
     let source = crate::surreal::SurrealDb::uninitialized();
-    use crate::postgres_mirror::{Mirrored, during_initial_copy, firm_secrets, from_source};
     assert_eq!(
         from_source(during_initial_copy(firm_secrets::mirror(
             &source, &pg, firm
@@ -308,6 +308,33 @@ async fn deployment_context_transfer_only_fills_missing_original_bytes_on_identi
             .await
             .unwrap();
     assert_eq!(after, before);
+}
+
+#[tokio::test]
+async fn completed_global_import_cannot_resurrect_catalog_parents_even_under_source_override() {
+    let (pg, _, _, _, _) = application_fixture().await;
+    let id: uuid::Uuid = sqlx::query_scalar("DELETE FROM question RETURNING id")
+        .fetch_one(pg.pool())
+        .await
+        .unwrap();
+    let source = crate::surreal::SurrealDb::uninitialized();
+    let result = crate::postgres_mirror::from_source(crate::postgres_mirror::during_initial_copy(
+        crate::postgres_mirror::mirror(
+            &source,
+            &pg,
+            &crate::postgres_mirror::MirrorKey::Question(id),
+        ),
+    ))
+    .await
+    .unwrap();
+    assert_eq!(result, crate::postgres_mirror::Mirrored::Unchanged);
+    let remains_absent: bool =
+        sqlx::query_scalar("SELECT NOT EXISTS (SELECT 1 FROM question WHERE id=$1)")
+            .bind(id)
+            .fetch_one(pg.pool())
+            .await
+            .unwrap();
+    assert!(remains_absent);
 }
 
 #[test]

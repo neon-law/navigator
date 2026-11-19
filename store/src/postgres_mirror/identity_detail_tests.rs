@@ -70,7 +70,7 @@ async fn scoped_mailbox_census_counts_claims_without_reassignment_or_values_in_r
             .count(),
         3
     );
-    assert!(!format!("{before:?}").contains("@"));
+    assert!(!format!("{before:?}").contains('@'));
     for id in [first, second] {
         assert_eq!(
             import(&source, &pg, &MirrorKey::PersonMailbox(id))
@@ -134,7 +134,7 @@ async fn scoped_mailbox_census_counts_claims_without_reassignment_or_values_in_r
         ),
         (4, 5, 2)
     );
-    assert!(!format!("{extra:?}").contains("@"));
+    assert!(!format!("{extra:?}").contains('@'));
 }
 
 #[tokio::test]
@@ -201,7 +201,7 @@ async fn scoped_mailbox_unknown_owner_is_counted_and_not_invented() {
     let table = mailbox_table(&report);
     assert_eq!((table.source_rows, table.target_rows), (1, 0));
     assert_eq!(table.divergent, [MirrorKey::PersonMailbox(unknown)]);
-    assert!(!format!("{report:?}").contains("@"));
+    assert!(!format!("{report:?}").contains('@'));
     assert!(
         matches!(import(&source,&pg,&MirrorKey::PersonMailbox(unknown)).await,Err(MirrorError::Target(ref code)) if code=="23503")
     );
@@ -533,9 +533,8 @@ async fn driver_capture(pg: &PostgresDb) -> DriverCapture {
     claim(&source, "captured-first-alias@example.com", first).await;
     claim(&source, "captured-second-alias@example.com", first).await;
     let keys = details(&source, first, second, entity.jurisdiction_id).await;
-    let address = match keys[0] {
-        MirrorKey::Address(id) => id,
-        _ => unreachable!(),
+    let MirrorKey::Address(address) = keys[0] else {
+        unreachable!()
     };
     source.query("CREATE $id SET person_id=$person,e164='+15555550199',label='mobile',is_primary=true,inserted_at=time::now(),updated_at=time::now()")
         .bind(("id",record_id("person_phone",Uuid::new_v4()))).bind(("person",record_id("person",first)))

@@ -1,8 +1,9 @@
 //! PostgreSQL-only Template version and isolation boundaries.
-use crate::postgres::fixtures::{activate_application, firm_for_notation, workflow_fixture};
 use crate::postgres::PostgresDb;
+use crate::postgres::fixtures::{activate_application, firm_for_notation, workflow_fixture};
 use crate::postgres_backfill::family::Family;
 use crate::postgres_mirror::tests::{connect, fresh_schema};
+use crate::template_source::TemplateSourceError;
 use crate::templates::{self, Scope, Version};
 use uuid::Uuid;
 
@@ -30,17 +31,36 @@ async fn storage() -> (tempfile::TempDir, std::sync::Arc<dyn cloud::StorageServi
     (dir, storage)
 }
 
+async fn project_for_notation(pg: &PostgresDb, notation: Uuid) -> Uuid {
+    sqlx::query_scalar("SELECT project_id FROM notation WHERE id=$1")
+        .bind(notation)
+        .fetch_one(pg.pool())
+        .await
+        .unwrap()
+}
+
+async fn assert_scope_title(
+    source: &crate::surreal::SurrealDb,
+    project: Option<Uuid>,
+    title: &str,
+) {
+    assert_eq!(
+        templates::resolve(source, project, "scoped")
+            .await
+            .unwrap()
+            .unwrap()
+            .title,
+        title
+    );
+}
+
 #[tokio::test]
 async fn template_versions_keep_the_first_provenance_and_pinned_notation() {
     let Some(pg) = database().await else {
         return;
     };
     let (person, notation, _) = workflow_fixture(&pg).await;
-    let project: Uuid = sqlx::query_scalar("SELECT project_id FROM notation WHERE id=$1")
-        .bind(notation)
-        .fetch_one(pg.pool())
-        .await
-        .unwrap();
+    let project = project_for_notation(&pg, notation).await;
     let unavailable = crate::surreal::SurrealDb::uninitialized();
     let (_dir, storage) = storage().await;
     PostgresDb::with_test_db(pg.clone(), async {
@@ -115,13 +135,17 @@ async fn template_versions_keep_the_first_provenance_and_pinned_notation() {
                 .len(),
             2
         );
-        assert!(templates::find_by_ids(&unavailable, &[])
-            .await
-            .unwrap()
-            .is_empty());
-        assert!(templates::exists_for_project(&unavailable, project)
-            .await
-            .unwrap());
+        assert!(
+            templates::find_by_ids(&unavailable, &[])
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            templates::exists_for_project(&unavailable, project)
+                .await
+                .unwrap()
+        );
         assert_eq!(
             templates::body(&unavailable, &storage, &retired)
                 .await
@@ -133,13 +157,9 @@ async fn template_versions_keep_the_first_provenance_and_pinned_notation() {
     pg.pool().close().await;
 }
 
-#[tokio::test]
-async fn template_scope_resolution_keeps_other_firms_private() {
-    let Some(pg) = database().await else {
-        return;
-    };
-    let (_, notation, _) = workflow_fixture(&pg).await;
-    let (firm, project) = firm_for_notation(&pg, notation).await;
+async fn scope_fixture(pg: &PostgresDb) -> (Uuid, Uuid, Uuid, Uuid) {
+    let (_, notation, _) = workflow_fixture(pg).await;
+    let (firm, project) = firm_for_notation(pg, notation).await;
     let other = Uuid::new_v4();
     sqlx::query("INSERT INTO firm(id,name,status,slug) VALUES($1,'Synthetic','active',$2)")
         .bind(other)
@@ -147,12 +167,21 @@ async fn template_scope_resolution_keeps_other_firms_private() {
         .execute(pg.pool())
         .await
         .unwrap();
-    let (_, unowned_note, _) = workflow_fixture(&pg).await;
+    let (_, unowned_note, _) = workflow_fixture(pg).await;
     let unowned: Uuid = sqlx::query_scalar("SELECT project_id FROM notation WHERE id=$1")
         .bind(unowned_note)
         .fetch_one(pg.pool())
         .await
         .unwrap();
+    (firm, project, other, unowned)
+}
+
+#[tokio::test]
+async fn template_scope_resolution_keeps_other_firms_private() {
+    let Some(pg) = database().await else {
+        return;
+    };
+    let (firm, project, other, unowned) = scope_fixture(&pg).await;
     let unavailable = crate::surreal::SurrealDb::uninitialized();
     let (_dir, storage) = storage().await;
     PostgresDb::with_test_db(pg.clone(), async {
@@ -169,22 +198,8 @@ async fn template_scope_resolution_keeps_other_firms_private() {
                 .await
                 .unwrap();
         }
-        assert_eq!(
-            templates::resolve(&unavailable, None, "scoped")
-                .await
-                .unwrap()
-                .unwrap()
-                .title,
-            "Shared"
-        );
-        assert_eq!(
-            templates::resolve(&unavailable, Some(project), "scoped")
-                .await
-                .unwrap()
-                .unwrap()
-                .title,
-            "Own firm"
-        );
+        assert_scope_title(&unavailable, None, "Shared").await;
+        assert_scope_title(&unavailable, Some(project), "Own firm").await;
         assert_eq!(
             templates::list_for_firm(&unavailable, other).await.unwrap()[0].title,
             "Other firm"
@@ -197,14 +212,7 @@ async fn template_scope_resolution_keeps_other_firms_private() {
         )
         .await
         .unwrap();
-        assert_eq!(
-            templates::resolve(&unavailable, Some(project), "scoped")
-                .await
-                .unwrap()
-                .unwrap()
-                .title,
-            "Own project"
-        );
+        assert_scope_title(&unavailable, Some(project), "Own project").await;
         assert_eq!(
             templates::list_for_project(&unavailable, project)
                 .await
@@ -212,42 +220,32 @@ async fn template_scope_resolution_keeps_other_firms_private() {
                 .title,
             "Own project"
         );
-        assert_eq!(
-            templates::resolve(&unavailable, Some(unowned), "scoped")
-                .await
-                .unwrap()
-                .unwrap()
-                .title,
-            "Shared"
-        );
+        assert_scope_title(&unavailable, Some(unowned), "Shared").await;
         sqlx::query("UPDATE project SET firm_id=$1 WHERE id=$2")
             .bind(other)
             .bind(unowned)
             .execute(pg.pool())
             .await
             .unwrap();
-        assert_eq!(
-            templates::resolve(&unavailable, Some(unowned), "scoped")
+        assert_scope_title(&unavailable, Some(unowned), "Other firm").await;
+        assert!(
+            templates::list_current(&unavailable)
                 .await
                 .unwrap()
-                .unwrap()
-                .title,
-            "Other firm"
+                .iter()
+                .all(|row| row.firm_id.is_none())
         );
-        assert!(templates::list_current(&unavailable)
-            .await
-            .unwrap()
-            .iter()
-            .all(|row| row.firm_id.is_none()));
         assert!(
             templates::resolve_in(&unavailable, Scope::Firm(Uuid::new_v4()), "scoped")
                 .await
                 .unwrap()
                 .is_none()
         );
-        assert!(!templates::exists_for_project(&unavailable, Uuid::new_v4())
-            .await
-            .unwrap());
+        assert!(
+            !templates::exists_for_project(&unavailable, Uuid::new_v4())
+                .await
+                .unwrap()
+        );
     })
     .await;
     pg.pool().close().await;
@@ -303,11 +301,7 @@ async fn template_history_admission_precedes_content_and_question_writes() {
         return;
     };
     let (_, notation, _) = workflow_fixture(&pg).await;
-    let project: Uuid = sqlx::query_scalar("SELECT project_id FROM notation WHERE id=$1")
-        .bind(notation)
-        .fetch_one(pg.pool())
-        .await
-        .unwrap();
+    let project = project_for_notation(&pg, notation).await;
     sqlx::query(
         "UPDATE mirror_backfill_run SET status='running', completed_at=NULL WHERE scope=$1",
     )
@@ -354,11 +348,7 @@ async fn template_source_persists_and_reads_a_pinned_version_without_source() {
         return;
     };
     let (_, notation, _) = workflow_fixture(&pg).await;
-    let project: Uuid = sqlx::query_scalar("SELECT project_id FROM notation WHERE id=$1")
-        .bind(notation)
-        .fetch_one(pg.pool())
-        .await
-        .unwrap();
+    let project = project_for_notation(&pg, notation).await;
     let unavailable = crate::surreal::SurrealDb::uninitialized();
     let (_dir, storage) = storage().await;
     PostgresDb::with_test_db(pg.clone(), async {
@@ -469,10 +459,12 @@ async fn every_changed_spec_field_appends_and_whitespace_kind_is_normalized() {
             .unwrap()
             .into_model();
         assert_eq!(saved.kind, None);
-        assert!(templates::find_by_id(&unavailable, Uuid::new_v4())
-            .await
-            .unwrap()
-            .is_none());
+        assert!(
+            templates::find_by_id(&unavailable, Uuid::new_v4())
+                .await
+                .unwrap()
+                .is_none()
+        );
     })
     .await;
     pg.pool().close().await;
@@ -592,11 +584,7 @@ async fn an_unpinned_version_is_retained_when_a_pinned_version_is_appended() {
         return;
     };
     let (_, notation, _) = workflow_fixture(&pg).await;
-    let project: Uuid = sqlx::query_scalar("SELECT project_id FROM notation WHERE id=$1")
-        .bind(notation)
-        .fetch_one(pg.pool())
-        .await
-        .unwrap();
+    let project = project_for_notation(&pg, notation).await;
     let unavailable = crate::surreal::SurrealDb::uninitialized();
     let (_dir, storage) = storage().await;
     PostgresDb::with_test_db(pg.clone(), async {
@@ -790,7 +778,6 @@ async fn repository_errors_and_invalid_drafts_refuse_persistence() {
             )
             .await
             .unwrap_err();
-            use crate::template_source::TemplateSourceError;
             assert!(
                 match (expected, error) {
                     ("empty", TemplateSourceError::RepoEmpty(id)) => id == project,
@@ -824,10 +811,12 @@ async fn repository_errors_and_invalid_drafts_refuse_persistence() {
                 ));
             }
         }
-        assert!(templates::list_for_project(&unavailable, project)
-            .await
-            .unwrap()
-            .is_empty());
+        assert!(
+            templates::list_for_project(&unavailable, project)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     })
     .await;
     pg.pool().close().await;

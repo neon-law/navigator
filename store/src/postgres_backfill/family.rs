@@ -388,39 +388,46 @@ pub(super) async fn completed_proof(
 ///
 /// # Errors
 /// PostgreSQL could not read the ledger or the pending import receipt is invalid.
-pub async fn import_mode(pg: &PostgresDb, table: &str) -> Result<ImportMode, FamilyError> {
-    if active_for_table(pg, table).await? {
-        return Ok(ImportMode::Refuse);
-    }
-    if Family::for_table(table).is_none() {
-        return Ok(ImportMode::Refuse);
-    }
-    let scope = IMPORTING.try_with(|scope| *scope).ok();
-    if let Some((run, family)) = scope.filter(|(_, family)| family.tables().contains(&table)) {
-        let pending: bool = sqlx::query_scalar(
-            "SELECT EXISTS (SELECT 1 FROM mirror_backfill_run r \
+#[must_use]
+pub fn import_mode<'a>(
+    pg: &'a PostgresDb,
+    table: &'a str,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ImportMode, FamilyError>> + Send + 'a>>
+{
+    Box::pin(async move {
+        if active_for_table(pg, table).await? {
+            return Ok(ImportMode::Refuse);
+        }
+        if Family::for_table(table).is_none() {
+            return Ok(ImportMode::Refuse);
+        }
+        let scope = IMPORTING.try_with(|scope| *scope).ok();
+        if let Some((run, family)) = scope.filter(|(_, family)| family.tables().contains(&table)) {
+            let pending: bool = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM mirror_backfill_run r \
              JOIN mirror_backfill_checkpoint c ON c.run_id = r.id \
              WHERE r.id = $1 AND r.scope = $2 AND r.status = 'running' AND c.mirror = $3)",
-        )
-        .bind(run)
-        .bind(family.scope())
-        .bind(checkpoint(table))
-        .fetch_one(&pg.0)
-        .await?;
-        return if pending {
-            Ok(if matches!(family, Family::Identity | Family::Tenancy) {
-                ImportMode::InsertMissing
+            )
+            .bind(run)
+            .bind(family.scope())
+            .bind(checkpoint(table))
+            .fetch_one(&pg.0)
+            .await?;
+            return if pending {
+                Ok(if matches!(family, Family::Identity | Family::Tenancy) {
+                    ImportMode::InsertMissing
+                } else {
+                    ImportMode::Refresh
+                })
             } else {
-                ImportMode::Refresh
-            })
+                Err(FamilyError::Receipt)
+            };
+        }
+        Ok(if crate::postgres_mirror::initial_copy() {
+            ImportMode::InsertMissing
         } else {
-            Err(FamilyError::Receipt)
-        };
-    }
-    Ok(if crate::postgres_mirror::initial_copy() {
-        ImportMode::InsertMissing
-    } else {
-        ImportMode::Refuse
+            ImportMode::Refuse
+        })
     })
 }
 
@@ -790,6 +797,13 @@ pub(super) struct Advancement {
     pub snapshot: Option<Snapshot>,
 }
 
+fn configured_batch_size(raw: i32) -> Result<usize, super::BackfillError> {
+    usize::try_from(raw)
+        .ok()
+        .filter(|size| *size > 0)
+        .ok_or(super::BackfillError::BatchSize)
+}
+
 /// Advance only this persisted enrollment; a completed receipt is read-only.
 /// The caller holds the existing advisory lock and establishes `during_import`.
 pub(super) async fn advance_with(
@@ -818,10 +832,7 @@ pub(super) async fn advance_with(
     let receipt: SourceReceipt =
         serde_json::from_value(row.try_get("source_receipt")?).map_err(|_| FamilyError::Receipt)?;
     receipt.validate(family)?;
-    let batch_size = usize::try_from(row.try_get::<i32, _>("batch_size")?)
-        .ok()
-        .filter(|size| *size > 0)
-        .ok_or(super::BackfillError::BatchSize)?;
+    let batch_size = configured_batch_size(row.try_get("batch_size")?)?;
     let initial = source.snapshot(pg, family).await?;
     if !initial.representable(family, &receipt) {
         return Err(FamilyError::Receipt.into());

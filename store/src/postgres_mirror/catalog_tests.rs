@@ -60,6 +60,31 @@ async fn rate(surreal: &SurrealDb, code: &str) -> Uuid {
     id
 }
 
+#[tokio::test]
+async fn first_global_copy_preserves_captured_rate_identity_and_replay() {
+    let Some((options, database)) = fresh_schema().await else {
+        return;
+    };
+    let pg = connect(&options, &database).await;
+    let source = super::super::from_source(mem_surreal()).await;
+    let id = rate(&source, "synthetic-first-copy-rate").await;
+    let key = MirrorKey::NotationRate(id);
+    assert_eq!(
+        super::super::mirror(&source, &pg, &key).await.unwrap(),
+        Mirrored::Unchanged
+    );
+    assert_eq!(mirrored(&source, &pg, &key).await, Mirrored::Written);
+    assert_eq!(mirrored(&source, &pg, &key).await, Mirrored::Unchanged);
+    let copied: (Uuid, String, i64) =
+        sqlx::query_as("SELECT id,code,unit_amount_cents FROM notation_rate WHERE id=$1")
+            .bind(id)
+            .fetch_one(pg.pool())
+            .await
+            .unwrap();
+    assert_eq!(copied, (id, "synthetic-first-copy-rate".into(), 1000));
+    pg.pool().close().await;
+}
+
 async fn remove(surreal: &SurrealDb, table: &str, id: Uuid) {
     surreal
         .query("DELETE $id")

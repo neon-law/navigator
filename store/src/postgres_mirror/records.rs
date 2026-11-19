@@ -1872,25 +1872,7 @@ pub(super) fn normalize_surreal(
     } else {
         None
     };
-    if let surrealdb::types::Value::Object(fields) = &row {
-        let count = fields
-            .keys()
-            .filter(|name| {
-                // id_kind is generated from the typed source key, not copied from a source field.
-                let mapped = table.columns.contains(&name.as_str())
-                    && !(name.as_str() == "id_kind" && MIXED_KEY_TABLES.contains(&table.name));
-                // Person's derived lowercase index is represented by PostgreSQL citext.
-                let derived = table.name == "person" && name.as_str() == "email_lower";
-                !(mapped || derived || used_identity_alias && name.as_str() == "__surreal_key")
-            })
-            .count();
-        if count > 0 {
-            return Err(MirrorError::UnmappedSourceFields {
-                table: table.name,
-                count,
-            });
-        }
-    }
+    require_mapped_fields(table, &row, used_identity_alias)?;
     let mut tagged_values = BTreeMap::<&str, Value>::new();
     if let surrealdb::types::Value::Object(fields) = &row {
         for (_, field, _) in TAGGED_REFERENCES
@@ -1938,6 +1920,33 @@ pub(super) fn normalize_surreal(
         }
     }
     normalized_record(table.name, row)
+}
+
+fn require_mapped_fields(
+    table: &Table,
+    row: &surrealdb::types::Value,
+    used_identity_alias: bool,
+) -> Result<(), MirrorError> {
+    if let surrealdb::types::Value::Object(fields) = row {
+        let count = fields
+            .keys()
+            .filter(|name| {
+                // id_kind is generated from the typed source key, not copied from a source field.
+                let mapped = table.columns.contains(&name.as_str())
+                    && !(name.as_str() == "id_kind" && MIXED_KEY_TABLES.contains(&table.name));
+                // Person's derived lowercase index is represented by PostgreSQL citext.
+                let derived = table.name == "person" && name.as_str() == "email_lower";
+                !(mapped || derived || used_identity_alias && name.as_str() == "__surreal_key")
+            })
+            .count();
+        if count > 0 {
+            return Err(MirrorError::UnmappedSourceFields {
+                table: table.name,
+                count,
+            });
+        }
+    }
+    Ok(())
 }
 
 fn preserve_deployment_change_context(row: &mut Value) -> Result<(), MirrorError> {

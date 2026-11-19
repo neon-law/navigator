@@ -1725,8 +1725,11 @@ impl FamilySource<'_> {
                 | "email_token"
                 | "person_delegate"
                 | "person_external_identity"
-                | "person_mailbox" => {}
-                "notation" | "answer" | "notation_event" | "notation_clause" => {}
+                | "person_mailbox"
+                | "notation"
+                | "answer"
+                | "notation_event"
+                | "notation_clause" => {}
                 "asset" => {
                     let (table, proof) =
                         crate::postgres_mirror::documents::scoped_parity(self.surreal, pg).await?;
