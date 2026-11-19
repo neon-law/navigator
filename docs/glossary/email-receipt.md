@@ -19,7 +19,7 @@ The table is `email_receipt`.
 
 Schema: [`email_receipt`](../../store/postgres/schema.sql).
 
-The receipt records one summary recovery operation UUID. Its row lock keeps concurrent repairs from reopening the
-same delivery. A new operation takes ownership only after the previous controller and its actual target are verified
+The receipt records one summary recovery operation UUID. Its row lock keeps concurrent repairs from reopening the same
+delivery. A new operation takes ownership only after the previous controller and its actual target are verified
 terminal, or after an explicit retry of a parked target. A [Workflow Request](workflow-request.md) binds the operation
 to its immutable input and operator authorization.
