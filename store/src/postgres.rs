@@ -142,8 +142,11 @@ pub enum PostgresError {
 impl PostgresDb {
     /// Scope a PostgreSQL integration fixture without changing process-wide configuration.
     #[cfg(any(test, feature = "test-support"))]
-    pub async fn with_test_db<T>(pg: Self, future: impl std::future::Future<Output = T>) -> T {
-        TEST_POSTGRES.scope(pg, future).await
+    pub fn with_test_db<T>(
+        pg: Self,
+        future: impl std::future::Future<Output = T>,
+    ) -> impl std::future::Future<Output = T> {
+        Box::pin(TEST_POSTGRES.scope(pg, future))
     }
 
     /// The bounded pool, for read-only consumers such as the archive export.

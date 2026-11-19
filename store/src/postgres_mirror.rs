@@ -500,15 +500,21 @@ pub enum MirrorError {
     },
     #[error("SurrealDB Inbox repair is disabled while PostgreSQL holds the Inbox")]
     InboxAuthority,
-    #[error("PostgreSQL holds the matter records; only the first Mirror Backfill copies them from SurrealDB")]
+    #[error(
+        "PostgreSQL holds the matter records; only the first Mirror Backfill copies them from SurrealDB"
+    )]
     MatterAuthority,
-    #[error("a graph row SurrealDB lacks is not deleted while PostgreSQL holds the graph tables or is configured but unreachable")]
+    #[error(
+        "a graph row SurrealDB lacks is not deleted while PostgreSQL holds the graph tables or is configured but unreachable"
+    )]
     GraphAuthority,
     #[error("the SurrealDB source row carries an unreadable timestamp")]
     SourceTimestamp,
     #[error("the SurrealDB source row carries an unreadable date")]
     SourceDate,
-    #[error("the SurrealDB source row in table {table} has {count} unmapped field(s); update its PostgreSQL import mapping")]
+    #[error(
+        "the SurrealDB source row in table {table} has {count} unmapped field(s); update its PostgreSQL import mapping"
+    )]
     UnmappedSourceFields { table: &'static str, count: usize },
     #[error("PostgreSQL is unavailable")]
     Unavailable,
@@ -602,8 +608,10 @@ pub(crate) fn reading_source() -> bool {
 
 /// Run `future` reading the catalog modules from SurrealDB, the mirror's
 /// source; see [`reading_source`].
-pub(crate) async fn from_source<T>(future: impl std::future::Future<Output = T>) -> T {
-    READING_SOURCE.scope((), future).await
+pub(crate) fn from_source<T>(
+    future: impl std::future::Future<Output = T>,
+) -> impl std::future::Future<Output = T> {
+    Box::pin(READING_SOURCE.scope((), future))
 }
 
 /// Whether this task is the first Mirror Backfill, the one copy that may
@@ -614,8 +622,10 @@ pub(crate) fn initial_copy() -> bool {
 }
 
 /// Run `future` as the first Mirror Backfill; see [`initial_copy`].
-pub(crate) async fn during_initial_copy<T>(future: impl std::future::Future<Output = T>) -> T {
-    INITIAL_COPY.scope((), future).await
+pub(crate) fn during_initial_copy<T>(
+    future: impl std::future::Future<Output = T>,
+) -> impl std::future::Future<Output = T> {
+    Box::pin(INITIAL_COPY.scope((), future))
 }
 
 /// Whether a Mirror Backfill has completed against this PostgreSQL: the

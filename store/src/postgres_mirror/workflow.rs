@@ -12,17 +12,17 @@ use std::sync::LazyLock;
 
 use chrono::{DateTime, Utc};
 use serde_json::Value as Json;
-use sqlx::types::Json as Jsonb;
 use sqlx::Row;
+use sqlx::types::Json as Jsonb;
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
 use super::tenancy::{compare, images, remirror, select_sql, source, target, upsert_sql};
-use super::{changed, identity, micros, MirrorError, MirrorKey, Mirrored, ParityReport};
+use super::{MirrorError, MirrorKey, Mirrored, ParityReport, changed, identity, micros};
 use crate::postgres::PostgresDb;
 use crate::postgres_backfill::family::{self, ImportMode};
-use crate::postgres_shadow::{compare_row, Comparison, NotationShape, ShadowKey};
-use crate::surreal::{record_id, record_uuid, SurrealDb};
+use crate::postgres_shadow::{Comparison, NotationShape, ShadowKey, compare_row};
+use crate::surreal::{SurrealDb, record_id, record_uuid};
 
 pub(super) const NOTATION_COLUMNS: &[&str] = &[
     "id",
@@ -481,9 +481,9 @@ async fn upsert_notation(
         }
         if let Some(package) = notation.package_id {
             if !present(pg, PACKAGE_PRESENT, package).await? {
-                // A missing parent is copied even into the authoritative catalog.
+                // Only the genuine first global import may supply this parent.
                 let key = MirrorKey::NotationPackage(package);
-                super::during_initial_copy(super::catalog::mirror(surreal, pg, &key)).await?;
+                super::catalog::mirror(surreal, pg, &key).await?;
             }
         }
         ensure_template(surreal, pg, notation.template_id).await?;
@@ -603,9 +603,9 @@ async fn mirror_answer(
     if mode == ImportMode::InsertMissing
         && !present(pg, QUESTION_PRESENT, answer.question_id).await?
     {
-        // A missing parent is copied even into the authoritative catalog.
+        // After global completion, a missing native parent must remain a refusal.
         let key = MirrorKey::Question(answer.question_id);
-        super::during_initial_copy(super::catalog::mirror(surreal, pg, &key)).await?;
+        super::catalog::mirror(surreal, pg, &key).await?;
     }
     if let Some(notation) = answer.notation_id {
         ensure_notation(surreal, pg, notation).await?;

@@ -26,7 +26,7 @@ use uuid::Uuid;
 
 use crate::persons::Role;
 use crate::postgres_mirror::MirrorKey;
-use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
+use crate::surreal::{SurrealDb, record_id, record_uuid, retry};
 
 pub(crate) const TABLE: &str = "firm";
 const MEMBERSHIP_TABLE: &str = "person_firm_role";
@@ -71,12 +71,12 @@ pub(crate) async fn brand_key_exists(
     surreal: &SurrealDb,
     brand_key: &str,
 ) -> Result<bool, FirmError> {
-    if crate::postgres::tenancy::enabled() {
-        return Ok(Box::pin(crate::postgres::tenancy::brand_key_exists(brand_key)).await?);
-    }
     #[derive(SurrealValue)]
     struct BrandKeyRow {
         brand_key: String,
+    }
+    if crate::postgres::tenancy::enabled() {
+        return Ok(Box::pin(crate::postgres::tenancy::brand_key_exists(brand_key)).await?);
     }
     let mut response = surreal
         .query("SELECT brand_key FROM brand WHERE brand_key = $brand_key LIMIT 1")
@@ -596,7 +596,7 @@ async fn authorize_manage_firm(
     actor_person_id: Option<Uuid>,
     firm_id: Uuid,
 ) -> Result<(), FirmError> {
-    use crate::firm_capability::{resolve, FirmCapability, FirmCapabilityDecision};
+    use crate::firm_capability::{FirmCapability, FirmCapabilityDecision, resolve};
     match resolve(
         surreal,
         actor_role,
@@ -711,7 +711,7 @@ async fn authorize_brand_ownership(
     firm_id: Uuid,
     capability: crate::firm_capability::FirmCapability,
 ) -> Result<(), FirmError> {
-    use crate::firm_capability::{resolve, FirmCapabilityDecision};
+    use crate::firm_capability::{FirmCapabilityDecision, resolve};
     match resolve(surreal, actor_role, actor_person_id, firm_id, capability).await? {
         FirmCapabilityDecision::Allowed => Ok(()),
         FirmCapabilityDecision::FirmNotFound => Err(FirmError::NoSuchFirm(firm_id)),
@@ -1830,10 +1830,10 @@ async fn appoint_admin_dri_inner(
     {
         crate::firm_capability::FirmCapabilityDecision::Allowed => {}
         crate::firm_capability::FirmCapabilityDecision::FirmNotFound => {
-            return Err(FirmError::NoSuchFirm(firm_id))
+            return Err(FirmError::NoSuchFirm(firm_id));
         }
         crate::firm_capability::FirmCapabilityDecision::Forbidden => {
-            return Err(FirmError::NotAuthorized)
+            return Err(FirmError::NotAuthorized);
         }
     }
 
