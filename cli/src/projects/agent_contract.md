@@ -81,9 +81,9 @@ the gap in the private matter handoff.
 * "Save work" means a signed Jujutsu change rebased onto the latest `origin/main`, the Navigator gate green, and a
   ready pull request against `main`; "save this" and "save it" mean the same. Verify squash auto-merge is armed
   (`autoMergeRequest` non-null or the pull request is already merged), follow the required checks through confirmed
-  merge, update this checkout, and report the pull request and merge commit. Saving persists committed history and
-  what the merge publishes; it does not persist uncommitted files, git-ignored folders, or anything outside Git.
-  Follow `.agents/skills/push-changes/SKILL.md`.
+  merge, update this checkout, and report the pull request and merge commit. Saving persists committed history and what
+  the merge publishes; it does not persist uncommitted files, git-ignored folders, or anything outside Git. Follow
+  `.agents/skills/push-changes/SKILL.md`.
 * The required check is `ci`, which runs `navigator project gate`.
 * The forge enforces branch and merge settings; client-visibility decisions remain part of human review. A pre-commit
   hook is a convenience only.
