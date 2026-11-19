@@ -30,6 +30,12 @@ use store::postgres_mirror::{Drift, MirrorKey, MirrorParity};
 /// `hudson ops postgres`.
 #[derive(Debug, Subcommand)]
 pub enum PostgresCmd {
+    /// Verify completed application history using PostgreSQL alone; writes nothing.
+    Ready {
+        /// Print one content-free JSON object.
+        #[arg(long)]
+        json: bool,
+    },
     /// Compare or reconcile the `SurrealDB` mirrors in PostgreSQL.
     #[command(subcommand)]
     Mirror(MirrorCmd),
@@ -146,6 +152,7 @@ impl Report {
 /// Run one `ops postgres` command.
 pub fn run(command: PostgresCmd) -> ExitCode {
     let command = match command {
+        PostgresCmd::Ready { json } => return crate::postgres_admission::run(json),
         PostgresCmd::Mirror(command) => command,
         PostgresCmd::Backfill(args) => return crate::postgres_backfill::run(&args),
         PostgresCmd::Graph(command) => return run_graph(&command),

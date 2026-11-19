@@ -133,8 +133,8 @@ const EXPORTS_KUSTOMIZE_SUBPATH: &str = "examples/deploy/k8s/exports";
 /// Boot-required keys that ship as inline Deployment env / the
 /// `navigator-otel-env` `ConfigMap` rather than the deployment Secret, so the
 /// `SecretProviderClass` is not expected to declare them and no deployment's
-/// `deployments/<name>/` tree needs to carry them. Everything else in
-/// `store::deployment::WEB_REQUIREMENTS` rides the Secret rail.
+/// `deployments/<name>/` tree needs to carry them. PostgreSQL has a separate
+/// service-owned credential contract below.
 pub(super) const INLINE_ENV_WEB_KEYS: &[&str] = &[
     "NAVIGATOR_CLAMD_ADDR",                // inline env → the ClamAV service
     "NAVIGATOR_STORAGE_BACKEND",           // inline env
@@ -146,6 +146,17 @@ pub(super) const INLINE_ENV_WEB_KEYS: &[&str] = &[
     "NAVIGATOR_SOCIAL_OAUTH_REDIRECT_URI", // inline env → the social OAuth callback
     store::deployment::GITHUB_AUTOMATION_HOME_FLAG,
     store::deployment::SMS_TEST_RECIPIENTS_FLAG,
+];
+
+/// Required connection keys supplied by the PostgreSQL web patch, rather than
+/// the shared deployment Secret. The rendered deployment test verifies the
+/// runtime login, TLS coordinates, and dedicated password Secret together.
+pub(super) const POSTGRES_WEB_KEYS: &[&str] = &[
+    "NAVIGATOR_POSTGRES_HOST",
+    "NAVIGATOR_POSTGRES_PORT",
+    "NAVIGATOR_POSTGRES_DATABASE",
+    "NAVIGATOR_POSTGRES_USER",
+    "NAVIGATOR_POSTGRES_PASSWORD",
 ];
 
 /// The Secret Manager object keys listed by a `SecretProviderClass`.
@@ -446,7 +457,6 @@ where
     substitutions.extend(dbos_schedule_substitutions(deployment, &get)?);
     substitutions.extend(archives_substitutions(&get));
     substitutions.extend(replica_substitutions(deployment, &get)?);
-    substitutions.push(mirror_recovery_substitution());
     // Not in PLAINTEXT_SUBSTITUTIONS and not read from `get` at all: the additional brand
     // hosts this deployment's environment serves come from the compiled
     // `views::brand::BrandKey` registry, keyed off the `NAVIGATOR_PUBLIC_HOST`
@@ -519,17 +529,6 @@ where
         value: format!("            - name: {key}\n              value: \"{enabled}\"\n"),
     })
     .collect())
-}
-
-const MIRROR_RESOURCE_TOKEN: &str = "  # NAVIGATOR_POSTGRES_MIRROR_RESOURCE\n";
-/// The recurring mirror recovery every deployment runs: `web` mirrors
-/// wherever it has PostgreSQL, which is every deployment.
-fn mirror_recovery_substitution() -> Substitution {
-    Substitution {
-        token: MIRROR_RESOURCE_TOKEN,
-        env: "NAVIGATOR_POSTGRES_HOST",
-        value: "  - ../../../../k8s/postgres/mirror/recovery\n".into(),
-    }
 }
 
 /// The whole-line placeholder in `kustomization.yaml` that becomes the
@@ -1552,8 +1551,8 @@ fn render_release_plan(
 }
 
 /// Service overlays are applied individually so PostgreSQL readiness and
-/// database convergence can gate Navigator migrations, Forgejo, the mirror
-/// reconciliation, and finally the application. They remain outside the
+/// database convergence can gate Navigator migrations, Forgejo, completed
+/// application history, and finally the application. They remain outside the
 /// ordinary application kustomization.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReleaseStep {
@@ -1562,12 +1561,10 @@ enum ReleaseStep {
     NavigatorMigrations,
     ForgejoDatabase,
     Forgejo,
-    /// `web` reads PostgreSQL authoritatively, so the application waits for
-    /// a clean `ops postgres mirror reconcile`: it is clean only once a
-    /// Mirror Backfill has completed, so a deployment whose PostgreSQL does
-    /// not yet hold `SurrealDB`'s history stops here instead of cutting over to
-    /// an empty database.
-    MirrorReconcile,
+    /// The release binary validates completed global and exact scoped history
+    /// before applying the application. This gate neither contacts nor imports Source.
+    ApplicationReadiness,
+    RetireAutomaticMirrorRecovery,
     Application,
 }
 
@@ -1577,7 +1574,8 @@ const ORDERED_RELEASE_STEPS: &[ReleaseStep] = &[
     ReleaseStep::NavigatorMigrations,
     ReleaseStep::ForgejoDatabase,
     ReleaseStep::Forgejo,
-    ReleaseStep::MirrorReconcile,
+    ReleaseStep::ApplicationReadiness,
+    ReleaseStep::RetireAutomaticMirrorRecovery,
     ReleaseStep::Application,
 ];
 
@@ -1885,6 +1883,11 @@ fn service_images_with(
     )?;
     replace_in_tree(
         &rendered.path().join("k8s/postgres/mirror"),
+        "image: navigator-surreal-archive ",
+        &format!("image: {}/navigator-surreal-archive:{tag} ", cfg.registry()),
+    )?;
+    replace_in_tree(
+        &rendered.path().join("k8s/postgres/admission"),
         "image: navigator-surreal-archive ",
         &format!("image: {}/navigator-surreal-archive:{tag} ", cfg.registry()),
     )?;
@@ -2973,7 +2976,7 @@ fn ship_permissions(
             "postgres/migrate",
             "forgejo/database",
             "forgejo",
-            "postgres/mirror",
+            "postgres/admission",
         ] {
             let path = render_service_overlay(&rendered.application, cfg, service)?;
             permissions.extend(manifest_permissions(
@@ -2992,6 +2995,7 @@ fn ship_permissions(
             ),
             ("batch", "jobs", &["get", "list", "watch", "delete"][..]),
             ("batch", "cronjobs", &["get", "list", "patch", "delete"][..]),
+            ("monitoring.googleapis.com", "rules", &["get", "delete"][..]),
             (
                 "networking.gke.io",
                 "managedcertificates",
@@ -3342,12 +3346,13 @@ fn offline_ship_plan(
                 ReleaseStep::NavigatorMigrations => "run Navigator migrations Job".to_owned(),
                 ReleaseStep::ForgejoDatabase => "run Forgejo database Job".to_owned(),
                 ReleaseStep::Forgejo => "reconcile Forgejo StatefulSet".to_owned(),
-                ReleaseStep::MirrorReconcile => {
-                    "run PostgreSQL mirror reconcile Job; stop unless clean".to_owned()
+                ReleaseStep::ApplicationReadiness => {
+                    "verify PostgreSQL application-history Job; stop unless ready".to_owned()
                 }
-                ReleaseStep::Application => {
-                    "apply web, workflows, and recurring mirror recovery".to_owned()
+                ReleaseStep::RetireAutomaticMirrorRecovery => {
+                    "retire automatic Source mirror recovery after PostgreSQL admission".to_owned()
                 }
+                ReleaseStep::Application => "apply web and workflows".to_owned(),
             }));
             for cronjob in retired_cronjobs(deployment)? {
                 operations.push(format!(
@@ -4078,8 +4083,8 @@ fn reconcile_ordered_services(
             reconcile_manifests(cfg, dry_run, &service)?;
             wait_statefulset(cfg, dry_run, "navigator-forgejo", ROLLOUT_TIMEOUT)
         }
-        ReleaseStep::MirrorReconcile => {
-            let service = render_service_overlay(&rendered.application, cfg, "postgres/mirror")?;
+        ReleaseStep::ApplicationReadiness => {
+            let service = render_service_overlay(&rendered.application, cfg, "postgres/admission")?;
             pin_service_images(
                 &rendered.application,
                 &service,
@@ -4092,15 +4097,35 @@ fn reconcile_ordered_services(
                 cfg,
                 dry_run,
                 &service,
-                "navigator-postgres-mirror-reconcile",
-                "30m",
+                "navigator-postgres-application-readiness",
+                "10m",
             )
+        }
+        ReleaseStep::RetireAutomaticMirrorRecovery => {
+            retire_automatic_mirror_recovery(cfg, dry_run)
         }
         ReleaseStep::Application => {
             reconcile_manifests(cfg, dry_run, target)?;
             wait_rollouts(cfg, dry_run, ROLLOUT_TIMEOUT, rollout_wait_deployments())
         }
     })
+}
+
+/// Completion of the preceding release admission makes automatic Source repair obsolete.
+/// Explicit import and recovery manifests remain available to operators.
+fn retire_automatic_mirror_recovery(cfg: &ShipConfig, dry_run: bool) -> Result<()> {
+    for resource in ["cronjob", "rules.monitoring.googleapis.com"] {
+        exec(
+            dry_run,
+            kubectl(cfg).args([
+                "delete",
+                resource,
+                "navigator-postgres-mirror-recovery",
+                "--ignore-not-found=true",
+            ]),
+        )?;
+    }
+    Ok(())
 }
 
 /// The repository part of an image reference: `name@sha256:<digest>` loses
@@ -6324,7 +6349,8 @@ mod tests {
                 ReleaseStep::NavigatorMigrations,
                 ReleaseStep::ForgejoDatabase,
                 ReleaseStep::Forgejo,
-                ReleaseStep::MirrorReconcile,
+                ReleaseStep::ApplicationReadiness,
+                ReleaseStep::RetireAutomaticMirrorRecovery,
                 ReleaseStep::Application,
             ]
         );
@@ -6361,40 +6387,38 @@ mod tests {
         );
     }
 
-    /// A PostgreSQL that does not yet hold `SurrealDB`'s history (no completed
-    /// Mirror Backfill) makes the reconcile Job exit unclean. Every ship runs
-    /// that Job, whatever the deployment row says, and a failed one leaves the
-    /// application unapplied rather than cutting `web` over to an empty
-    /// database.
+    /// Incomplete history stops release ordering before any application mutation.
     #[test]
-    fn an_unclean_mirror_reconcile_stops_every_ship_before_the_application() {
+    fn incomplete_application_history_stops_every_ship_before_the_application() {
         let mut observed = Vec::new();
         let error = run_ordered_release(|step| {
             observed.push(step);
-            if step == ReleaseStep::MirrorReconcile {
-                bail!("synthetic reconcile drift: no completed Mirror Backfill");
+            if step == ReleaseStep::ApplicationReadiness {
+                bail!("synthetic application history: missing scoped receipt");
             }
             Ok(())
         })
-        .expect_err("an unclean reconcile aborts the release");
-        assert!(error.to_string().contains("MirrorReconcile"));
-        assert_eq!(observed.last(), Some(&ReleaseStep::MirrorReconcile));
+        .expect_err("incomplete application history aborts the release");
+        assert!(error.to_string().contains("ApplicationReadiness"));
+        assert_eq!(observed.last(), Some(&ReleaseStep::ApplicationReadiness));
+        assert!(!observed.contains(&ReleaseStep::RetireAutomaticMirrorRecovery));
         assert!(!observed.contains(&ReleaseStep::Application));
 
-        // A row naming no PostgreSQL or mirror setting still renders the Job.
-        let substitutions =
-            resolve_substitutions_for_deployment("synthetic", "26.9.16", env_getter(FULL_ENV))
-                .unwrap();
-        let rendered = render_manifests_with(&substitutions).unwrap();
-        let mirror = kustomize_build(
-            &rendered
-                .path()
-                .join(GKE_KUSTOMIZE_SUBPATH)
-                .join("postgres/mirror/production"),
-        )
+        let job: serde_json::Value = serde_yaml::from_str(include_str!(
+            "../../../k8s/postgres/admission/application-readiness-job.yaml"
+        ))
         .unwrap();
-        assert!(mirror.contains("kind: Job"));
-        assert!(mirror.contains("name: navigator-postgres-mirror-reconcile"));
+        assert_eq!(
+            job["spec"]["template"]["spec"]["containers"][0]["args"],
+            serde_json::json!(["ops", "postgres", "ready", "--json"])
+        );
+        let env = job["spec"]["template"]["spec"]["containers"][0]["env"]
+            .as_array()
+            .unwrap();
+        assert!(env.iter().all(|entry| !entry["name"]
+            .as_str()
+            .unwrap()
+            .starts_with("NAVIGATOR_SURREAL_")));
     }
 
     #[test]
@@ -7587,7 +7611,7 @@ mod tests {
     }
 
     #[test]
-    fn every_deployment_renders_web_postgres_and_recurring_mirror_recovery() {
+    fn application_rendering_uses_postgres_without_automatic_source_recovery() {
         let substitutions =
             resolve_substitutions_for_deployment("synthetic", "26.9.16", env_getter(FULL_ENV))
                 .unwrap();
@@ -7603,9 +7627,8 @@ mod tests {
         let manifest = kustomize_build(&rendered.path().join(GKE_KUSTOMIZE_SUBPATH)).unwrap();
         assert!(manifest.contains("name: NAVIGATOR_POSTGRES_HOST"));
         assert!(!manifest.contains("NAVIGATOR_POSTGRES_MIRROR"));
-        assert!(manifest.contains("name: navigator-postgres-mirror-recovery"));
-        assert!(manifest.contains("concurrencyPolicy: Forbid"));
-        assert!(manifest.contains("PostgresMirrorRecoveryIncomplete"));
+        assert!(!manifest.contains("name: navigator-postgres-mirror-recovery"));
+        assert!(!manifest.contains("PostgresMirrorRecoveryIncomplete"));
         assert!(!manifest.contains("YOUR_IMAGE_REGISTRY"));
         assert!(!manifest.contains("YY.M.D"));
         assert!(
@@ -7633,7 +7656,16 @@ mod tests {
     }
 
     #[test]
-    fn mirror_service_digest_pin_reaches_the_shared_job_outside_its_overlay() {
+    fn admission_and_operator_jobs_use_the_selected_release_digest() {
+        for service in [
+            "postgres/mirror/production",
+            "postgres/admission/production",
+        ] {
+            service_job_digest_is_pinned(service);
+        }
+    }
+
+    fn service_job_digest_is_pinned(service_name: &str) {
         let substitutions =
             resolve_substitutions_for_deployment("synthetic", "26.9.16", env_getter(FULL_ENV))
                 .unwrap();
@@ -7641,7 +7673,7 @@ mod tests {
         let service = rendered
             .path()
             .join(GKE_KUSTOMIZE_SUBPATH)
-            .join("postgres/mirror/production");
+            .join(service_name);
         let cfg = sample_config();
         let reference = format!("{}/navigator-surreal-archive", cfg.registry());
         let digest = format!("sha256:{}", "a".repeat(64));
@@ -7689,6 +7721,9 @@ mod tests {
                 .unwrap_or_else(|| panic!("{name} must be rendered"))
                 .clone()
         };
+        for name in POSTGRES_WEB_KEYS {
+            assert!(env.iter().any(|entry| entry["name"].as_str() == Some(name)));
+        }
         let host = format!("navigator-postgres.{namespace}.svc.cluster.local");
         for (name, expected) in [
             ("NAVIGATOR_POSTGRES_HOST", host.as_str()),
@@ -7792,6 +7827,9 @@ mod tests {
                 .unwrap_or_else(|| panic!("{name} must be rendered"))
                 .clone()
         };
+        for name in POSTGRES_WEB_KEYS {
+            assert!(env.iter().any(|entry| entry["name"].as_str() == Some(name)));
+        }
         let host = format!("navigator-postgres.{namespace}.svc.cluster.local");
         for (name, expected) in [
             ("NAVIGATOR_DBOS_ENABLED", "true"),
@@ -11226,12 +11264,14 @@ spec:
         );
     }
 
-    /// Every boot-required Secret key must be written by `ops secrets apply`.
+    /// Shared boot secrets must be catalogued; service-owned PostgreSQL inputs
+    /// are validated by the rendered web connection contract.
     #[test]
     fn secret_manager_catalog_lists_every_boot_required_secret_key() {
         let satisfied: BTreeSet<String> = secret_provider_class_keys()
             .into_iter()
             .chain(INLINE_ENV_WEB_KEYS.iter().map(ToString::to_string))
+            .chain(POSTGRES_WEB_KEYS.iter().map(ToString::to_string))
             .collect();
         let required = shared_web_requirements(store::deployment::DeploymentCapabilities {
             github_automation_home: true,
@@ -11241,8 +11281,8 @@ spec:
         let missing = unsatisfied_requirements(&effective, &satisfied);
         assert!(
             missing.is_empty(),
-            "Secret Manager catalog is missing boot-required keys: {}. \
-             Declare them in examples/deploy/k8s/gke/secrets/secret-provider-class.yaml.",
+            "Deployment inputs are missing boot-required keys: {}. \
+             Declare shared secrets in the Secret Manager catalog or their service-owned patch.",
             missing
                 .iter()
                 .map(SecretRequirement::describe)
@@ -13140,6 +13180,7 @@ spec:
         let cfg = sample_config();
         wait_statefulset(&cfg, true, "navigator-postgres", ROLLOUT_TIMEOUT).unwrap();
         wait_job(&cfg, true, "navigator-migrate", "15m").unwrap();
+        retire_automatic_mirror_recovery(&cfg, true).unwrap();
         ensure_ordered_service_objects(&cfg, true, true, true).unwrap();
         retire_dbos_hosted_cronjobs(&cfg, true, &ordered_deployment()).unwrap();
         retire_firm_only_brand_certificates(&cfg, true).unwrap();

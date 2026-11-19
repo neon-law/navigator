@@ -31,6 +31,7 @@ mod notation_kinds;
 mod notations_preview;
 mod notices;
 mod ops_private_terms;
+mod postgres_admission;
 mod postgres_backfill;
 mod postgres_mirror;
 mod project_preview;
@@ -1696,10 +1697,8 @@ enum OpsCmd {
     /// prove one stored export can be restored into a disposable namespace.
     #[command(subcommand)]
     SurrealArchive(SurrealArchiveCmd),
-    /// PostgreSQL mirror parity and reconcile against `SurrealDB`.
-    ///
-    /// Reads the same `NAVIGATOR_SURREAL_*` and `NAVIGATOR_POSTGRES_*`
-    /// variables `web` reads. Reports name rows by UUID only.
+    /// PostgreSQL application admission, explicit imports, and compatibility diagnostics.
+    /// Reports contain only counts and UUIDs.
     #[command(subcommand)]
     Postgres(postgres_mirror::PostgresCmd),
     /// Check a `deployments/` tree without changing anything or decrypting
