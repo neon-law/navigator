@@ -78,6 +78,12 @@ the gap in the private matter handoff.
 * "Push changes", "push this", "ship it", and "land it" mean signed-rebase onto the latest `origin/main`, gate, sign,
   push a topic branch, open a ready PR against `main`, and follow its checks and auto-merge through merge. The job ends
   when the pull request is merged and this checkout is current. Follow `.agents/skills/push-changes/SKILL.md`.
+* "Save work" means a signed Jujutsu change rebased onto the latest `origin/main`, the Navigator gate green, and a
+  ready pull request against `main`; "save this" and "save it" mean the same. Verify squash auto-merge is armed
+  (`autoMergeRequest` non-null or the pull request is already merged), follow the required checks through confirmed
+  merge, update this checkout, and report the pull request and merge commit. Saving persists committed history and
+  what the merge publishes; it does not persist uncommitted files, git-ignored folders, or anything outside Git.
+  Follow `.agents/skills/push-changes/SKILL.md`.
 * The required check is `ci`, which runs `navigator project gate`.
 * The forge enforces branch and merge settings; client-visibility decisions remain part of human review. A pre-commit
   hook is a convenience only.
