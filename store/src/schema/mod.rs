@@ -5,8 +5,8 @@
 //! The schema is a *statement of the present*
 //! ([`navigator.surql`](https://github.com/neon-law/navigator/blob/main/store/src/schema/navigator.surql)):
 //! one idempotent file describing the tables and fields that should
-//! exist, applied whole by [`apply`] on every boot and by every test
-//! that opens an embedded engine. The current shape is what the file
+//! exist, applied whole by explicit Source operators and compatibility tests.
+//! Ordinary application startup does not apply Source definitions. The current shape is what the file
 //! says, not what a chain of steps left behind.
 //!
 //! A describable present costs replayable history, which is why
@@ -781,73 +781,76 @@ async fn converge_derived_tables(db: &SurrealDb) -> Result<(), SchemaError> {
 ///
 /// Idempotent: running it against an already-prepared database converges
 /// every definition. The backfills fill only a missing value, so a second
-/// boot leaves an already-owned Project alone. Callers run it at boot
-/// without checking [`state`] first.
+/// apply leaves an already-owned Project alone. Explicit Source operators
+/// converge definitions without checking [`state`] first.
 pub async fn apply(db: &SurrealDb) -> Result<(), SchemaError> {
-    let installed = installed_version(db).await?;
-    // Before any definition changes: on a database that predates ENG-587
-    // (or whose brand rows were removed since), the required `brand`
-    // definition below must not take effect while historical rows still hold
-    // no value — the boot fails here instead, leaving the field optional and
-    // the data untouched for operator repair.
-    if installed.is_some() {
-        validate_project_brand(db).await?;
-    }
-    migrate_inbox_message_table(db).await?;
-    move_blog_post_rows_to_post(db).await?;
-    merge_duplicate_visitor_buckets(db).await?;
-    db.query(DEFINITIONS)
-        .await
-        .and_then(surrealdb::IndexedResults::check)
-        .map_err(classify_apply)?;
+    crate::postgres_mirror::from_source(async {
+        let installed = installed_version(db).await?;
+        // Before any definition changes: on a database that predates ENG-587
+        // (or whose brand rows were removed since), the required `brand`
+        // definition below must not take effect while historical rows still hold
+        // no value — the boot fails here instead, leaving the field optional and
+        // the data untouched for operator repair.
+        if installed.is_some() {
+            validate_project_brand(db).await?;
+        }
+        migrate_inbox_message_table(db).await?;
+        move_blog_post_rows_to_post(db).await?;
+        merge_duplicate_visitor_buckets(db).await?;
+        db.query(DEFINITIONS)
+            .await
+            .and_then(surrealdb::IndexedResults::check)
+            .map_err(classify_apply)?;
 
-    converge_derived_tables(db).await?;
-    finish_blog_post_move(db).await?;
+        converge_derived_tables(db).await?;
+        finish_blog_post_move(db).await?;
 
-    // Checked right after `DEFINE TABLE IF NOT EXISTS project` has run (so a
-    // never-touched table reads as empty rather than "does not exist") and
-    // before anything treats this apply as having converged: a reserved-code
-    // collision is a fact about existing data the new `ASSERT` cannot see
-    // retroactively, so it must fail the boot rather than pass silently.
-    guard_no_reserved_project_codes(db).await?;
+        // Checked right after `DEFINE TABLE IF NOT EXISTS project` has run (so a
+        // never-touched table reads as empty rather than "does not exist") and
+        // before anything treats this apply as having converged: a reserved-code
+        // collision is a fact about existing data the new `ASSERT` cannot see
+        // retroactively, so it must fail the boot rather than pass silently.
+        guard_no_reserved_project_codes(db).await?;
 
-    // Before anything reads a Firm: `store::firms` reads `slug` as required.
-    backfill_firm_slugs(db).await?;
-    backfill_project_brand(db).await?;
-    backfill_person_defaults(db).await?;
-    backfill_brand_firm_id(db).await?;
-    backfill_unowned_project_firms(db).await?;
-    if installed.is_some_and(|version| version < BRAND_WEBSITE_URL_VERSION) {
-        backfill_compiled_brand_website_urls(db).await?;
-    }
-    db.query(BLOG_POST_VERTICAL_VIDEO_BACKFILL)
-        .await
-        .and_then(surrealdb::IndexedResults::check)
-        .map_err(SchemaError::Apply)?;
-    db.query(SUMMARY_APPROVAL_PROJECT_BACKFILL)
-        .await
-        .and_then(surrealdb::IndexedResults::check)
-        .map_err(SchemaError::Apply)?;
-    if installed.is_none_or(|version| version < DEADLINE_CATEGORY_BACKFILL_VERSION) {
-        db.query(DEADLINE_CATEGORY_BACKFILL)
+        // Before anything reads a Firm: `store::firms` reads `slug` as required.
+        backfill_firm_slugs(db).await?;
+        backfill_project_brand(db).await?;
+        backfill_person_defaults(db).await?;
+        backfill_brand_firm_id(db).await?;
+        backfill_unowned_project_firms(db).await?;
+        if installed.is_some_and(|version| version < BRAND_WEBSITE_URL_VERSION) {
+            backfill_compiled_brand_website_urls(db).await?;
+        }
+        db.query(BLOG_POST_VERTICAL_VIDEO_BACKFILL)
             .await
             .and_then(surrealdb::IndexedResults::check)
             .map_err(SchemaError::Apply)?;
-    }
-    db.query(DRAFT_PIN_BACKFILL)
+        db.query(SUMMARY_APPROVAL_PROJECT_BACKFILL)
+            .await
+            .and_then(surrealdb::IndexedResults::check)
+            .map_err(SchemaError::Apply)?;
+        if installed.is_none_or(|version| version < DEADLINE_CATEGORY_BACKFILL_VERSION) {
+            db.query(DEADLINE_CATEGORY_BACKFILL)
+                .await
+                .and_then(surrealdb::IndexedResults::check)
+                .map_err(SchemaError::Apply)?;
+        }
+        db.query(DRAFT_PIN_BACKFILL)
+            .await
+            .and_then(surrealdb::IndexedResults::check)
+            .map_err(SchemaError::Apply)?;
+
+        db.query(format!(
+            "UPSERT {VERSION_RECORD} SET version = $version, applied_at = time::now()"
+        ))
+        .bind(("version", i64::from(SCHEMA_VERSION)))
         .await
         .and_then(surrealdb::IndexedResults::check)
-        .map_err(SchemaError::Apply)?;
+        .map_err(SchemaError::RecordVersion)?;
 
-    db.query(format!(
-        "UPSERT {VERSION_RECORD} SET version = $version, applied_at = time::now()"
-    ))
-    .bind(("version", i64::from(SCHEMA_VERSION)))
+        Ok(())
+    })
     .await
-    .and_then(surrealdb::IndexedResults::check)
-    .map_err(SchemaError::RecordVersion)?;
-
-    Ok(())
 }
 
 /// One duplicated `visitor_route_count` bucket: its summed visits and every

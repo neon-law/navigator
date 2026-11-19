@@ -132,9 +132,8 @@ pub(super) async fn migration_triage(
     authorize(&state, &session, firm).await?;
     // This authenticated, Firm-authorized migration endpoint is the only
     // request path that opens the explicitly configured legacy source.
-    let source = match store::surreal::connect_from_env().await {
-        Ok(source) => source,
-        Err(_) => return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response()),
+    let Ok(source) = store::surreal::connect_from_env().await else {
+        return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
     };
     Ok(
         match store::journal_startup_migration::triage(&source, firm).await {

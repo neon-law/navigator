@@ -12,6 +12,8 @@ pub(crate) enum JournalCmd {
     /// Explicitly import timestamped legacy entries for this Firm. Requires
     /// operator PostgreSQL credentials and read-only legacy source credentials.
     ImportLegacy,
+    /// Inspect read-only legacy timestamp triage through local operator connections.
+    TriageLegacy,
     /// Read durable reconciliation results and unresolved exceptions.
     Audits {
         #[arg(long)]
@@ -142,16 +144,24 @@ async fn execute(firm: Uuid, host: Option<String>, action: JournalCmd) -> Result
             .await?;
         return Ok(());
     }
-    if matches!(&action, JournalCmd::ImportLegacy) {
+    if matches!(&action, JournalCmd::ImportLegacy | JournalCmd::TriageLegacy) {
         if host.is_some() {
-            bail!("legacy import uses explicit local operator connections; omit --host");
+            bail!("legacy journal operators use explicit local connections; omit --host");
         }
         let pg = store::postgres::PostgresDb::from_env().await?;
+        if matches!(&action, JournalCmd::ImportLegacy) {
+            store::journal_startup_migration::require_import_admission(&pg).await?;
+        }
         let source = store::surreal::connect_from_env()
             .await
             .context("connect explicit read-only legacy journal source")?;
-        let report = store::journal_startup_migration::import_firm(&source, &pg, firm).await?;
-        println!("{}", serde_json::to_string_pretty(&report)?);
+        if matches!(&action, JournalCmd::ImportLegacy) {
+            let report = store::journal_startup_migration::import_firm(&source, &pg, firm).await?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        } else {
+            let triage = store::journal_startup_migration::triage(&source, firm).await?;
+            println!("{}", serde_json::to_string_pretty(&triage)?);
+        }
         return Ok(());
     }
     let (base, token) = crate::remote::resolve(host.as_deref())?;
@@ -165,7 +175,7 @@ async fn execute(firm: Uuid, host: Option<String>, action: JournalCmd) -> Result
 async fn execute_at(firm: Uuid, base: &str, token: &str, action: JournalCmd) -> Result<()> {
     let route = format!("/app/api/firms/{firm}/journal");
     match action {
-        JournalCmd::Migrate | JournalCmd::ImportLegacy => {}
+        JournalCmd::Migrate | JournalCmd::ImportLegacy | JournalCmd::TriageLegacy => {}
         JournalCmd::Status {
             job,
             stale_after_seconds,
@@ -554,15 +564,17 @@ mod tests {
     };
 
     #[tokio::test]
-    async fn legacy_import_refuses_a_remote_host_before_opening_databases() {
-        let error = execute(
-            Uuid::now_v7(),
-            Some("https://operator.example.invalid".into()),
-            JournalCmd::ImportLegacy,
-        )
-        .await
-        .unwrap_err();
-        assert!(error.to_string().contains("omit --host"));
+    async fn legacy_operators_refuse_a_remote_host_before_opening_databases() {
+        for action in [JournalCmd::ImportLegacy, JournalCmd::TriageLegacy] {
+            let error = execute(
+                Uuid::now_v7(),
+                Some("https://operator.example.invalid".into()),
+                action,
+            )
+            .await
+            .unwrap_err();
+            assert!(error.to_string().contains("omit --host"));
+        }
     }
 
     #[tokio::test]

@@ -129,7 +129,7 @@ struct Header {
     legacy_inserted_at_source: Option<String>,
 }
 impl Header {
-    fn read(row: sqlx::postgres::PgRow) -> Result<Self, sqlx::Error> {
+    fn read(row: &sqlx::postgres::PgRow) -> Result<Self, sqlx::Error> {
         Ok(Self {
             id: row.try_get("id")?,
             firm_id: row.try_get("firm_id")?,
@@ -269,14 +269,14 @@ async fn validate_postings(
     for (index, (row, expected)) in rows.into_iter().zip(&entry.postings).enumerate() {
         if row.try_get::<Uuid, _>("firm_id")? != entry.firm_id
             || usize::try_from(row.try_get::<i32, _>("position")?).ok() != Some(index)
-            || posting(row).as_ref() != Some(expected)
+            || posting(&row).as_ref() != Some(expected)
         {
             return Ok(false);
         }
     }
     Ok(true)
 }
-fn posting(row: sqlx::postgres::PgRow) -> Option<Posting> {
+fn posting(row: &sqlx::postgres::PgRow) -> Option<Posting> {
     Some(Posting {
         account: row.try_get("account").ok()?,
         unit: serde_json::from_value(
@@ -449,7 +449,7 @@ async fn audit_target(
             break;
         }
         for row in rows {
-            let header = Header::read(row)?;
+            let header = Header::read(&row)?;
             after = Some(header.id);
             let (meta, entry) = audit_event(tx, &header, firm.map(|_| source)).await?;
             if let Some(captured) = source.get(&header.id) {

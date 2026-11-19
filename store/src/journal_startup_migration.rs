@@ -203,8 +203,11 @@ async fn import_selected(
     firm: Option<Uuid>,
 ) -> Result<ImportReport, JournalError> {
     require_import_admission(pg).await?;
-    let (mut pending, mut triage) = classify(read(db, firm).await?);
+    let (pending, mut triage) = classify(read(db, firm).await?);
     let mut tx = pg.0.begin().await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
+        .execute(&mut *tx)
+        .await?;
     // Even an empty source must not hide an unprovisioned target schema.
     sqlx::query("SELECT id,legacy_imported_at,legacy_inserted_at_known,legacy_inserted_at_source FROM journal_entry LIMIT 0")
         .execute(&mut *tx)
@@ -212,6 +215,11 @@ async fn import_selected(
     sqlx::query("SELECT pg_advisory_xact_lock(20261011200001)")
         .execute(&mut *tx)
         .await?;
+    lock_import_firms(db, pg, &mut tx, &pending).await?;
+    require_import_admission(pg).await?;
+    let (mut pending, unresolved) = resolvable_reversals(&mut tx, pending).await?;
+    triage.extend(unresolved);
+    validate_import_firms(&mut tx, &pending).await?;
     let mut count = 0;
     while !pending.is_empty() {
         let before = pending.len();
@@ -266,7 +274,7 @@ async fn append_entry_on(
         if existing.len() != 1
             || existing[0].0 != entry.id
             || existing[0].1 != hash
-            || serde_json::to_value(&existing[0].2 .0)? != serde_json::to_value(&entry)?
+            || serde_json::to_value(&existing[0].2 .0)? != serde_json::to_value(entry)?
         {
             return Err(JournalError::Conflict);
         }
@@ -336,7 +344,8 @@ pub async fn import_captured_event(
     pg: &PostgresDb,
     requested: Uuid,
 ) -> Result<CapturedImportReport, JournalError> {
-    if crate::postgres_backfill::family::Family::for_table("journal_entry").is_none()
+    if !crate::postgres_backfill::family::importing("journal_entry")
+        || crate::postgres_backfill::family::Family::for_table("journal_entry").is_none()
         || !crate::postgres_mirror::source_import_allowed(pg, "journal_entry")
             .await
             .map_err(|_| JournalError::Invalid("Journal import history is unavailable".into()))?
@@ -533,4 +542,115 @@ fn captured_component(
         }
     }
     Ok(selected)
+}
+
+async fn lock_import_firms(
+    source: &SurrealDb,
+    pg: &PostgresDb,
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    rows: &[(JournalEntry, String)],
+) -> Result<(), JournalError> {
+    let firms: BTreeSet<_> = rows.iter().map(|(entry, _)| entry.firm_id).collect();
+    for id in firms {
+        let locked: Option<Uuid> = sqlx::query_scalar("SELECT id FROM firm WHERE id=$1 FOR UPDATE")
+            .bind(id)
+            .fetch_optional(&mut **tx)
+            .await?;
+        if locked.is_some() {
+            continue;
+        }
+        // Without a Firm there can be no retained Journal parent. A reversal-only
+        // source group remains triage without creating an unused Firm row.
+        if rows
+            .iter()
+            .filter(|(entry, _)| entry.firm_id == id)
+            .all(|(entry, _)| entry.reversal_of.is_some())
+        {
+            continue;
+        }
+        if crate::postgres_backfill::family::active_for_table(pg, "firm")
+            .await
+            .map_err(|_| JournalError::Invalid("Firm ownership history is unavailable".into()))?
+        {
+            return Err(JournalError::Invalid(
+                "canonical Journal Firm is missing".into(),
+            ));
+        }
+        let firm = crate::postgres_mirror::from_source(crate::firms::find_by_id(source, id))
+            .await
+            .map_err(|_| JournalError::Invalid("legacy Journal Firm lookup failed".into()))?
+            .ok_or_else(|| JournalError::Invalid("legacy Journal Firm is missing".into()))?;
+        crate::firm_journal::ensure_firm_row(tx, &firm).await?;
+        let locked: Option<Uuid> = sqlx::query_scalar("SELECT id FROM firm WHERE id=$1 FOR UPDATE")
+            .bind(id)
+            .fetch_optional(&mut **tx)
+            .await?;
+        if locked != Some(id) {
+            return Err(JournalError::Conflict);
+        }
+    }
+    Ok(())
+}
+
+async fn resolvable_reversals(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    rows: Vec<(JournalEntry, String)>,
+) -> Result<(Vec<(JournalEntry, String)>, Vec<TriageItem>), JournalError> {
+    use std::collections::BTreeMap;
+    let parents: Vec<_> = rows
+        .iter()
+        .filter_map(|(entry, _)| entry.reversal_of)
+        .collect();
+    let existing: Vec<(Uuid, Uuid)> =
+        sqlx::query_as("SELECT id,firm_id FROM journal_entry WHERE id=ANY($1::uuid[])")
+            .bind(parents)
+            .fetch_all(&mut **tx)
+            .await?;
+    let mut available: BTreeMap<_, _> = existing.into_iter().collect();
+    let mut ready = BTreeSet::new();
+    loop {
+        let before = ready.len();
+        for (entry, _) in &rows {
+            if entry
+                .reversal_of
+                .is_none_or(|parent| available.get(&parent) == Some(&entry.firm_id))
+            {
+                available.insert(entry.id, entry.firm_id);
+                ready.insert(entry.id);
+            }
+        }
+        if before == ready.len() {
+            break;
+        }
+    }
+    let (valid, unresolved): (Vec<_>, Vec<_>) = rows
+        .into_iter()
+        .partition(|(entry, _)| ready.contains(&entry.id));
+    let triage = unresolved
+        .into_iter()
+        .map(|(entry, timestamp)| {
+            item(
+                &entry,
+                Some(timestamp),
+                TriageReason::UnresolvedReversalTarget,
+            )
+        })
+        .collect();
+    Ok((valid, triage))
+}
+
+async fn validate_import_firms(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    rows: &[(JournalEntry, String)],
+) -> Result<(), JournalError> {
+    let firms: BTreeSet<_> = rows.iter().map(|(entry, _)| entry.firm_id).collect();
+    for firm in firms {
+        let component: Vec<_> = rows
+            .iter()
+            .filter(|(entry, _)| entry.firm_id == firm)
+            .map(|(entry, timestamp)| (entry, timestamp.as_str()))
+            .collect();
+        handoff::validate_import_on(tx, &component).await?;
+    }
+    Ok(())
 }
