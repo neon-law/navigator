@@ -10,8 +10,11 @@ name: deploy
 #      compares it against every release tag in the repository, using semver's
 #      own ordering. Three answers, and the middle one is the ordinary case:
 #
-#        - NEWER than every released version → this is a release.
-#          `publishable=true`, and everything below runs.
+#        - NEWER than every released version → this is a release when THIS
+#          commit is the bump: `publishable=true`, and everything below runs.
+#          A later merge whose first parent already carried the same unreleased
+#          version reports `publishable=false`, so a red release is re-run or
+#          bumped past instead of rebuilt by every merge behind it.
 #        - EQUAL to the newest → already released. `publishable=false`, and the
 #          run ends here in seconds. This is almost every push to `main`.
 #        - OLDER than the newest → the job FAILS. A manifest naming a version
@@ -485,10 +488,34 @@ jobs:
               exit 0
           fi
 
+          decision="$(mktemp)"
+          real_output="${GITHUB_OUTPUT}"
+          export GITHUB_OUTPUT="${decision}"
           if [ "${CHECKER_READY}" = "true" ]; then
               hudson ops release check --github-output
           else
               cargo run --locked -p hudson --quiet -- ops release check --github-output
+          fi
+          export GITHUB_OUTPUT="${real_output}"
+
+          # ONLY THE COMMIT THAT BUMPED THE VERSION PUBLISHES IT. An unreleased
+          # version stays unreleased while its KIND gate is red, and every later
+          # merge used to read it as a release, rebuilding every image and
+          # rerunning the suite. 26.11.18 and 26.11.19-rc.1 cost about 25
+          # neon-server builds that way. When the first parent already carried
+          # this version, the merge is not the bump. Recover by re-running the
+          # bump commit's run, or fix forward with a new version.
+          version="$(sed -n 's/^tag=//p' "${decision}")"
+          parent="$(git show HEAD^1:Cargo.toml 2>/dev/null | awk '
+              /^\[workspace\.package\]/ { inside = 1; next }
+              /^\[/ { inside = 0 }
+              inside && $1 == "version" { gsub(/"/, "", $3); print $3; exit }
+          ' || true)"
+          if grep -qx 'publishable=true' "${decision}" && [ -n "${parent}" ] && [ "${parent}" = "${version}" ]; then
+              echo "::notice::${version} was bumped by an earlier commit; this merge is not the bump and will not publish. Re-run that commit's deploy run or bump to a new version"
+              sed 's/^publishable=true$/publishable=false/' "${decision}" >> "$GITHUB_OUTPUT"
+          else
+              cat "${decision}" >> "$GITHUB_OUTPUT"
           fi
       # AN UNSET PUBLISHER VARIABLE MUST NOT LOOK LIKE A FORK. `github.repository
       # != vars.DEPLOY_EXPECTED_REPOSITORY` is true for every repository when

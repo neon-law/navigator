@@ -1795,3 +1795,111 @@ fn the_release_browser_gate_reports_every_failure_in_one_run() {
          failure and hide the rest until the next release"
     );
 }
+
+/// ONLY THE COMMIT THAT BUMPED THE VERSION PUBLISHES IT.
+///
+/// An unreleased version stays unreleased while its KIND gate is red, and every
+/// merge behind it used to answer "release", rebuilding every image. The
+/// decision step runs here against a scratch repository with a stub checker
+/// that always answers `publishable=true` for `1.0.1`.
+#[test]
+fn only_the_bump_commit_publishes_an_unreleased_version() {
+    let workflow: serde_yaml::Value =
+        serde_yaml::from_str(&deploy_workflow()).expect("deploy.yml parses as YAML");
+    let script = workflow["jobs"]["release-version"]["steps"]
+        .as_sequence()
+        .expect("release-version declares steps")
+        .iter()
+        .find(|step| step["id"].as_str() == Some("version"))
+        .and_then(|step| step["run"].as_str())
+        .expect("release-version has a version decision script")
+        .to_string();
+
+    let scratch = tempfile::tempdir().expect("scratch directory");
+    let repo = scratch.path().join("repo");
+    let bin = scratch.path().join("bin");
+    std::fs::create_dir_all(&repo).expect("repo directory");
+    std::fs::create_dir_all(&bin).expect("stub bin directory");
+    let stub = bin.join("hudson");
+    std::fs::write(
+        &stub,
+        "#!/bin/sh\nprintf 'tag=1.0.1\\npublishable=true\\nprerelease=false\\n' >> \"$GITHUB_OUTPUT\"\n",
+    )
+    .expect("write the stub checker");
+    let mut permissions = std::fs::metadata(&stub)
+        .expect("stub metadata")
+        .permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+    std::fs::set_permissions(&stub, permissions).expect("make the stub executable");
+
+    let git = |args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@example.com",
+                "-c",
+                "commit.gpgsign=false",
+            ])
+            .args(args)
+            .current_dir(&repo)
+            .status()
+            .expect("run git");
+        assert!(status.success(), "git {args:?}");
+    };
+    let commit = |version: &str, note: &str| {
+        std::fs::write(
+            repo.join("Cargo.toml"),
+            format!("[workspace]\nmembers = []\n\n[workspace.package]\nversion = \"{version}\"\n"),
+        )
+        .expect("write the manifest");
+        std::fs::write(repo.join("NOTE"), note).expect("write a change");
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", note]);
+    };
+    let decide = || {
+        let output = tempfile::NamedTempFile::new().expect("workflow output file");
+        let path = format!(
+            "{}:{}",
+            bin.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let result = std::process::Command::new("/bin/bash")
+            .arg("-c")
+            .arg(&script)
+            .current_dir(&repo)
+            .env("EVENT_NAME", "push")
+            .env("REF_NAME", "main")
+            .env("CHECKER_READY", "true")
+            .env("DUPLICATE", "false")
+            .env("PATH", path)
+            .env("GITHUB_OUTPUT", output.path())
+            .output()
+            .expect("run the version decision");
+        assert!(
+            result.status.success(),
+            "decision script failed: {result:?}"
+        );
+        std::fs::read_to_string(output.path()).expect("read the decision")
+    };
+
+    git(&["init", "-q"]);
+    commit("1.0.0", "released");
+    commit("1.0.1", "the bump");
+    assert!(
+        decide().contains("publishable=true\n"),
+        "the commit that changes the version is the release"
+    );
+
+    commit("1.0.1", "a merge behind a red release");
+    let behind = decide();
+    assert!(
+        behind.contains("publishable=false\n") && !behind.contains("publishable=true"),
+        "a merge whose parent already carried the unreleased version must not rebuild it: {behind}"
+    );
+    assert!(
+        behind.contains("tag=1.0.1\n"),
+        "the version is still reported: {behind}"
+    );
+}
