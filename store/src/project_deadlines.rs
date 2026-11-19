@@ -362,6 +362,45 @@ pub async fn list(surreal: &SurrealDb, project_id: Uuid) -> Result<Vec<Deadline>
         .collect())
 }
 
+/// Open Deadlines across `project_ids`, earliest due instant first: one
+/// statement for the whole workbench rather than one per Project.
+pub async fn open_for_projects(
+    surreal: &SurrealDb,
+    project_ids: &[Uuid],
+) -> Result<Vec<Deadline>, DeadlineError> {
+    if project_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    if let Some(pg) = crate::postgres::matter::authority_for("project_deadlines").await? {
+        return Ok(crate::postgres::matter::select_any(
+            &pg,
+            "project_deadlines",
+            serde_json::json!({"status": STATUS_OPEN}),
+            ("project_id", project_ids),
+            &["due_at", "id"],
+        )
+        .await?);
+    }
+
+    let ids: Vec<_> = project_ids
+        .iter()
+        .map(|id| record_id("project", *id))
+        .collect();
+    let mut response = surreal
+        .query(format!(
+            "SELECT {SELECT} FROM project_deadlines WHERE project_id IN $project_ids \
+             AND status = 'open' ORDER BY due_at, id"
+        ))
+        .bind(("project_ids", ids))
+        .await
+        .and_then(surrealdb::IndexedResults::check)?;
+    let rows: Vec<DeadlineRow> = response.take(0)?;
+    Ok(rows
+        .into_iter()
+        .filter_map(DeadlineRow::into_deadline)
+        .collect())
+}
+
 pub async fn find(
     surreal: &SurrealDb,
     project_id: Uuid,

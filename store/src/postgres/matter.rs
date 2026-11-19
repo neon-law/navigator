@@ -406,22 +406,41 @@ pub(crate) fn select<'a, T: DeserializeOwned + Send + 'a>(
     filter: Value,
     order: &'a [&'a str],
 ) -> Op<'a, Vec<T>> {
-    Box::pin(select_now(pg, table, filter, order))
+    Box::pin(select_now(pg, table, filter, None, order))
+}
+
+/// [`select`] narrowed to rows whose UUID `column` is any of `ids`: one
+/// statement for many parents instead of one per parent.
+pub(crate) fn select_any<'a, T: DeserializeOwned + Send + 'a>(
+    pg: &'a PostgresDb,
+    table: &'a str,
+    filter: Value,
+    any: (&'a str, &'a [Uuid]),
+    order: &'a [&'a str],
+) -> Op<'a, Vec<T>> {
+    Box::pin(select_now(pg, table, filter, Some(any), order))
 }
 
 async fn select_now<T: DeserializeOwned>(
     pg: &PostgresDb,
     table: &str,
     filter: Value,
+    any: Option<(&str, &[Uuid])>,
     order: &[&str],
 ) -> Result<Vec<T>, MatterAuthorityError> {
     let (table, columns) = registered(table)?;
     let filter = object(filter);
     let projection = row_json(table)?;
+    let mut clauses = conditions(table, columns, &filter)?;
+    if let Some((name, _)) = any {
+        clauses = format!(
+            "{clauses} AND r.{} = ANY($2::uuid[])",
+            column(table, columns, name)?
+        );
+    }
     let mut sql = format!(
         "SELECT {projection} AS row FROM \"{table}\" AS r, \
-         jsonb_populate_record(NULL::\"{table}\", $1::jsonb) AS f WHERE {}",
-        conditions(table, columns, &filter)?
+         jsonb_populate_record(NULL::\"{table}\", $1::jsonb) AS f WHERE {clauses}"
     );
     if !order.is_empty() {
         let mut terms = Vec::with_capacity(order.len());
@@ -434,10 +453,11 @@ async fn select_now<T: DeserializeOwned>(
         sql.push_str(" ORDER BY ");
         sql.push_str(&terms.join(", "));
     }
-    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
-        .bind(Value::Object(filter))
-        .fetch_all(pg.pool())
-        .await?;
+    let mut query = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(Value::Object(filter));
+    if let Some((_, ids)) = any {
+        query = query.bind(ids.to_vec());
+    }
+    let rows = query.fetch_all(pg.pool()).await?;
     rows.iter().map(decode).collect()
 }
 
@@ -447,7 +467,12 @@ pub(crate) fn find<'a, T: DeserializeOwned + Send + 'a>(
     table: &'a str,
     filter: Value,
 ) -> Op<'a, Option<T>> {
-    Box::pin(async move { Ok(select_now(pg, table, filter, &[]).await?.into_iter().next()) })
+    Box::pin(async move {
+        Ok(select_now(pg, table, filter, None, &[])
+            .await?
+            .into_iter()
+            .next())
+    })
 }
 
 /// Insert one whole row, or replace every column of the row holding its
@@ -566,7 +591,7 @@ pub(crate) fn update<'a, T: DeserializeOwned + Send + 'a>(
             });
         }
         if assignments.is_empty() {
-            return select_now(pg, table, Value::Object(filter), &[]).await;
+            return select_now(pg, table, Value::Object(filter), None, &[]).await;
         }
         let projection = row_json(table)?;
         let sql = format!(

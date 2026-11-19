@@ -765,6 +765,34 @@ async fn deadline_concurrent_identical_replay_keeps_calendar_revision() {
 }
 
 #[tokio::test]
+async fn open_deadlines_batch_across_projects_in_postgres() {
+    use crate::project_deadlines as deadlines;
+    let (pg, _, _, project, _) = application_fixture().await;
+    PostgresDb::with_test_db(pg, async {
+        let source = crate::surreal::SurrealDb::uninitialized();
+        let open = deadlines::create(&source, &native_deadline(project))
+            .await
+            .unwrap();
+        let mut closed_input = native_deadline(project);
+        closed_input.replay_key = Some("closed".into());
+        let closed = deadlines::create(&source, &closed_input).await.unwrap();
+        deadlines::complete(&source, project, closed.id)
+            .await
+            .unwrap();
+        let other = uuid::Uuid::new_v4();
+        let rows = deadlines::open_for_projects(&source, &[project, other])
+            .await
+            .unwrap();
+        assert_eq!(rows.iter().map(|d| d.id).collect::<Vec<_>>(), vec![open.id]);
+        assert!(deadlines::open_for_projects(&source, &[])
+            .await
+            .unwrap()
+            .is_empty());
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn deadline_changed_replay_advances_revision_and_preserves_cancellation() {
     use crate::project_deadlines as deadlines;
     let (pg, _, _, project, _) = application_fixture().await;

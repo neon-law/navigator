@@ -33,6 +33,8 @@
 //! docket — a hearing or trial's `scheduled_on`, following a continuance chain.
 //! Documents and project rows are not events.
 
+mod deadlines;
+
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -88,7 +90,7 @@ const API_ENDPOINTS: &[(&str, &str)] = &[
 /// `store::notations::furthest_along_state` picks as furthest along; both are
 /// empty when the matter carries no notation to report on (never a generic
 /// placeholder phrase).
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
 pub struct ProjectLink {
     pub id: String,
     pub code: String,
@@ -97,6 +99,9 @@ pub struct ProjectLink {
     pub state: String,
     #[serde(default)]
     pub next: String,
+    /// The earliest open Deadline's date; empty when the matter has none.
+    #[serde(default)]
+    pub next_due: String,
 }
 
 /// One conflict finding, in a wasm-safe shape (ENG-307). `severity` is
@@ -148,6 +153,11 @@ pub struct DashboardView {
     /// Current upcoming appearances across the caller's visible matters.
     #[serde(default)]
     pub calendar_events: Vec<crate::project_calendar::CalendarEvent>,
+    /// Open Deadlines across the caller's visible open matters, earliest first.
+    #[serde(default)]
+    pub deadlines: Vec<deadlines::Entry>,
+    #[serde(default = "chrono::Utc::now")]
+    pub deadlines_now: chrono::DateTime<chrono::Utc>,
     /// Ranked firm-wide conflict findings anchored on the caller's visible
     /// matters (ENG-307). Empty when the graph raises nothing — rendered as
     /// the section's own empty state, never synthesized.
@@ -244,9 +254,16 @@ pub async fn get_lawyer_dashboard() -> Result<DashboardView, ServerFnError> {
     let last = first.saturating_add(PROJECTS_PER_PAGE).min(filtered.len());
     let page_of_projects = &filtered[first..last];
     let current_state_by_project = current_states_for_projects(&surreal, page_of_projects).await?;
+    let deadlines = deadlines::load(&surreal, &projects).await?;
     let rows = page_of_projects
         .iter()
-        .map(|p| project_link(p, &current_state_by_project))
+        .map(|p| {
+            let mut row = project_link(p, &current_state_by_project);
+            if let Some(next) = deadlines.iter().find(|d| d.project_code() == p.code) {
+                row.next_due = next.due_label();
+            }
+            row
+        })
         .collect();
 
     let calendar_events = calendar_events_for_projects(&surreal, &projects).await?;
@@ -275,6 +292,8 @@ pub async fn get_lawyer_dashboard() -> Result<DashboardView, ServerFnError> {
         logo: crate::app_chrome::app_logo_from_context().await,
         tokens_href: crate::app_chrome::app_tokens_href_from_context().await,
         calendar_events,
+        deadlines,
+        deadlines_now: chrono::Utc::now(),
         conflict_findings,
         pipeline,
     })
@@ -383,6 +402,7 @@ fn project_link(
         name: project.name.clone(),
         state,
         next,
+        next_due: String::new(),
     }
 }
 
@@ -561,6 +581,7 @@ fn lawyer_dashboard_body(view: &DashboardView) -> Element {
                 }
             }
             ProjectKpiOverview { view: view.clone() }
+            deadlines::WorkbenchDeadlines { entries: view.deadlines.clone(), now: view.deadlines_now }
             crate::projected_cash::PipelineCard { view: view.pipeline.clone() }
             // The workbench calendar spans every matter the caller can see, and
             // carries the adjacent list's status so re-sorting one control does
@@ -714,6 +735,7 @@ fn ProjectKpiList(view: DashboardView) -> Element {
                                     th { scope: "col", "Name" }
                                     th { scope: "col", "State" }
                                     th { scope: "col", "Next" }
+                                    th { scope: "col", "Next due" }
                                 }
                             }
                             tbody {
@@ -722,6 +744,7 @@ fn ProjectKpiList(view: DashboardView) -> Element {
                                         td { a { href: "/app/projects/{row.code}", "{row.name}" } }
                                         td { "{row.state}" }
                                         td { "{row.next}" }
+                                        td { "{row.next_due}" }
                                     }
                                 }
                             }
@@ -876,6 +899,7 @@ mod tests {
                 name: "Acme contract review".to_string(),
                 state: String::new(),
                 next: String::new(),
+                ..Default::default()
             }],
             status: "open".to_string(),
             page: 1,
@@ -885,6 +909,8 @@ mod tests {
             role: ViewerRole::Lawyer,
             logo: None,
             calendar_events: vec![],
+            deadlines: vec![],
+            deadlines_now: chrono::Utc::now(),
             conflict_findings: vec![],
             pipeline: crate::projected_cash::PipelineCardView::default(),
         }
@@ -984,6 +1010,7 @@ mod tests {
                     name: "Acme contract review".to_string(),
                     state: "The firm is reviewing".to_string(),
                     next: "The firm approves it or asks you for changes. Nothing needed from you right now.".to_string(),
+                    next_due: "2028-05-03".to_string(),
                 },
                 ProjectLink {
                     id: "00000000-0000-0000-0000-000000000002".to_string(),
@@ -991,6 +1018,7 @@ mod tests {
                     name: "No notation yet".to_string(),
                     state: String::new(),
                     next: String::new(),
+                ..Default::default()
                 },
             ],
             ..view()
@@ -1004,12 +1032,14 @@ mod tests {
             ),
             "{html}"
         );
+        assert!(html.contains("<th scope=\"col\">Next due</th>"), "{html}");
+        assert!(html.contains("<td>2028-05-03</td>"), "{html}");
         assert!(html.contains("No notation yet"), "{html}");
         // The empty-state row renders no generic placeholder — the two
         // trailing cells are simply empty.
         assert!(
             html.contains(
-                r#"<a href="/app/projects/no-notation-yet">No notation yet</a></td><td></td><td></td></tr>"#
+                r#"<a href="/app/projects/no-notation-yet">No notation yet</a></td><td></td><td></td><td></td></tr>"#
             ),
             "{html}"
         );
