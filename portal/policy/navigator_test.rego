@@ -1235,6 +1235,18 @@ test_admin_can_reconcile_project_surfaces if {
 	authz.allow with input as {"path": ["app", "api", "project-surfaces", "p1"], "method": "POST", "session": admin_session}
 }
 
+test_admin_can_repair_project_forgejo_mirror if {
+	authz.allow with input as {"path": ["app", "api", "project-forgejo-mirrors", "p1"], "method": "POST", "session": admin_session}
+}
+
+test_lawyer_denied_project_forgejo_mirror_repair if {
+	not authz.allow with input as {"path": ["app", "api", "project-forgejo-mirrors", "p1"], "method": "POST", "session": lawyer_session}
+}
+
+test_client_denied_project_forgejo_mirror_repair if {
+	not authz.allow with input as {"path": ["app", "api", "project-forgejo-mirrors", "p1"], "method": "POST", "session": client_session}
+}
+
 test_lawyer_denied_project_surfaces if {
 	not authz.allow with input as {"path": ["app", "api", "project-surfaces", "p1"], "method": "POST", "session": lawyer_session}
 }

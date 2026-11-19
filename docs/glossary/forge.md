@@ -14,6 +14,10 @@ Which forge a repository sits on is a fact of its `origin` remote, not of the co
 `cli/src/projects/forge.rs` — so its report reads the same on either forge, and each forge's quirks stay in that forge's
 backend (`cli/src/projects/forge_github.rs` for GitHub and `forge_forgejo.rs` for Forgejo).
 
+A GitHub-backed Project may also have a Firm-owned Forgejo mirror. Its GitHub URL remains the source coordinate; the
+mirror URL comes from Forgejo's verified repository response and appears only to a caller allowed to use the Firm's
+integrations. `forgejo_status` distinguishes a verified mirror from a missing or unavailable one.
+
 The report distinguishes a merged review request from the exact commit’s successful deployment run. A missing run
 remains unverified. Forgejo’s generated gate currently covers pull requests; its post-merge source application remains a
 prerequisite to source handover.

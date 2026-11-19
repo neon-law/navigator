@@ -119,12 +119,14 @@ login, never every row in the deployment.
 See [`project-repositories.md`](project-repositories.md#existing-project-setup) for the credential prerequisite, the
 full outcome vocabulary, and how the CLI's exit code follows the typed outcome rather than the HTTP status.
 
-Each provider response is one outcome slug per Project and nothing else. No page id, no channel id, no provider URL:
-those are the Firm-private coordinates this boundary exists to keep on the firm side, and they are recorded on the
-Project row for the surfaces entitled to read them. Setup reports `created` or `adopted` for provider resources and
-`created` or `present` for Drive and GitHub. A deployment missing part of a provider's runtime reports
-`runtime_not_configured` with a `detail` naming the missing variable and the operator step that supplies it, and never
-falls back to a deployment-wide token; a Project can access only credentials its Firm wrote.
+Each integration sweep response is one outcome slug per Project and nothing else. No page id, no channel id, no provider
+URL: those are the Firm-private coordinates this boundary exists to keep on the firm side, and they are recorded on the
+Project row for the surfaces entitled to read them. The Project repository mirror repair is a separate admin operation:
+it returns Forgejo's verified repository URL only to a caller with `use_integrations` on the owning Firm. Setup reports
+`created` or `adopted` for provider resources and `created` or `present` for Drive and GitHub. A deployment missing part
+of a provider's runtime reports `runtime_not_configured` with a `detail` naming the missing variable and the operator
+step that supplies it, and never falls back to a deployment-wide token; a Project can access only credentials its Firm
+wrote.
 
 ### Provisioning the integration runtime
 

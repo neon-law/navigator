@@ -38,6 +38,7 @@ pub mod local_bytes;
 pub mod main_push;
 pub mod manifest;
 pub mod matter;
+pub mod mirror_repair;
 pub mod pages_init;
 pub mod participant;
 pub mod pinned_gate;
