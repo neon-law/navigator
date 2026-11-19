@@ -4702,6 +4702,9 @@ pub async fn projects_in_firm(
     db: &SurrealDb,
     firm_id: Uuid,
 ) -> Result<Vec<ProjectChoice>, InboxError> {
+    if let Some(pg) = inbox_authority().await? {
+        return crate::postgres::inbox::projects_in_firm_on(&pg, firm_id).await;
+    }
     let mut response = db
         .query(
             "SELECT id, code, name, description FROM project \
