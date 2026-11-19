@@ -26,6 +26,38 @@ struct Case {
     _files: tempfile::TempDir,
 }
 
+async fn summary_entity(source: &store::surreal::SurrealDb) -> Uuid {
+    let id = Uuid::new_v4();
+    let jurisdiction = store::jurisdictions::create(
+        source,
+        &store::jurisdictions::NewJurisdiction::new(
+            format!("Synthetic jurisdiction {id}"),
+            id.to_string(),
+            "state",
+        ),
+    )
+    .await
+    .unwrap();
+    let entity_type = store::entity_types::create(source, &format!("Synthetic kind {id}"))
+        .await
+        .unwrap();
+    store::entities::create(
+        source,
+        &store::entities::NewEntity {
+            name: format!("Synthetic entity {id}"),
+            entity_type_id: entity_type.id,
+            jurisdiction_id: jurisdiction.id,
+            phone: None,
+            url: None,
+            xero_id: None,
+            firm_anchor_key: None,
+        },
+    )
+    .await
+    .unwrap()
+    .id
+}
+
 async fn approved_project(source: &store::surreal::SurrealDb) -> (Uuid, Uuid) {
     let admin = store::persons::create(
         source,
@@ -42,7 +74,7 @@ async fn approved_project(source: &store::surreal::SurrealDb) -> (Uuid, Uuid) {
         &store::firms::NewFirm {
             name: "Synthetic Practice".into(),
             status: "active".into(),
-            entity_id: store::test_support::seed_entity(source).await,
+            entity_id: summary_entity(source).await,
             admin_dri_person_id: admin.id,
         },
     )
@@ -56,7 +88,17 @@ async fn approved_project(source: &store::surreal::SurrealDb) -> (Uuid, Uuid) {
             name: "Synthetic Brand".into(),
             key: "summary-test".into(),
             firm_id: Some(firm.id),
+            ..Default::default()
         },
+    )
+    .await
+    .unwrap();
+    store::firms::attach_brand(
+        source,
+        store::persons::Role::Owner,
+        None,
+        firm.id,
+        "summary-test",
     )
     .await
     .unwrap();
@@ -67,7 +109,7 @@ async fn approved_project(source: &store::surreal::SurrealDb) -> (Uuid, Uuid) {
             name: "Synthetic Summary".into(),
             status: "open".into(),
             brand: "summary-test".into(),
-            entity_id: store::test_support::seed_entity(source).await,
+            entity_id: summary_entity(source).await,
             firm_id: Some(firm.id),
             ..Default::default()
         },
