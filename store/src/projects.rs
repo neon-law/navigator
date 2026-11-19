@@ -4050,6 +4050,7 @@ pub async fn delete_project_with_surreal(
         Box::pin(crate::postgres::projects::delete_on(pg, id))
             .await
             .map_err(ProjectStoreError::from)?;
+        return Ok(project);
     }
     surreal
         .query("DELETE $id")
