@@ -170,12 +170,11 @@ pub async fn sync(host: Option<&str>, project: Option<&str>, dry_run: bool) -> E
                 Some(detail) => format!(" — {detail}"),
                 None => String::new(),
             };
-            println!(
-                "{}: {}{}",
-                result["project_code"].as_str().unwrap_or("?"),
-                outcome,
-                line
-            );
+            let code = result["project_code"].as_str().unwrap_or("?");
+            println!("{code}: {outcome}{line}");
+            if let Some(remedy) = sync_remedy(outcome, code) {
+                eprintln!("{code}: {remedy}");
+            }
         }
         anyhow::ensure!(
             accepted,
@@ -191,6 +190,31 @@ pub async fn sync(host: Option<&str>, project: Option<&str>, dry_run: bool) -> E
             ExitCode::FAILURE
         }
     }
+}
+
+/// The next step for a sync outcome that wrote nothing, or not everything.
+/// A retry is always safe: each event carries its Deadline id, so a second
+/// pass patches what the first one wrote instead of duplicating it.
+fn sync_remedy(outcome: &str, code: &str) -> Option<String> {
+    let retry = format!("navigator project deadline sync --project {code}");
+    Some(match outcome {
+        "calendar_unprovisioned" => format!(
+            "the Project has no calendar yet; choose the Firm's Workspace calendar owner and \
+             authorize its calendar delegation (docs/third-party-integrations.md), then `{retry}`"
+        ),
+        "provider_unauthorized" => format!(
+            "Google Workspace refused the Firm's calendar owner; check its domain-wide \
+             delegation for the calendar scope, then `{retry}`"
+        ),
+        "provider_unavailable" | "mirror_incomplete" => {
+            format!("nothing was duplicated; `{retry}` again to finish the writes")
+        }
+        "recorded_resource_missing" => format!(
+            "the recorded calendar is gone; clear it with \
+             `navigator project set {code} --calendar \"\"` or record the right one, then `{retry}`"
+        ),
+        _ => return None,
+    })
 }
 
 fn apply_visibility(

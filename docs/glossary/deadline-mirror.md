@@ -25,3 +25,10 @@ applied pass ensures the matter calendar exists and is shared before mirroring, 
 recorded calendar that has disappeared — a missing calendar is an operator-visible outcome, not a new blank one. The
 nightly workflow is opt-in by deployment setting; live writes against Google Calendar additionally require domain-wide
 delegation for the calendar scope, which is an account fact no repository carries.
+
+Every outcome other than `mirrored` and `skipped_closed` means requested writes did not happen, and the verb exits
+nonzero with the next step. `calendar_unprovisioned` says the matter has no recorded calendar and the provider refused
+to create or adopt one; `provider_unauthorized` says Workspace refused the delegated owner; `provider_unavailable` is a
+failure a retry clears; `mirror_incomplete` lists each refused row. A dry run of a matter with no calendar asks the
+provider first, so a plan the provider would refuse fails the same way. A retry is always safe: each event carries its
+Deadline id, so a second pass patches rather than duplicates.
