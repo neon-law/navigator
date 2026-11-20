@@ -48,6 +48,8 @@ pub const POSTGRES_LANE: &str = "postgres/navigator";
 /// A test pins this
 /// list to the schema, so a new table cannot be left out of the export unnoticed.
 pub const POSTGRES_TABLES: &[&str] = &[
+    "database_origin",
+    "database_origin_upgrade",
     "journal_entry",
     "journal_posting",
     "journal_source_reference",

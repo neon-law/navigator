@@ -642,6 +642,13 @@ pub async fn backfilled(pg: &PostgresDb) -> Result<bool, MirrorError> {
     .await?)
 }
 
+async fn native_owned(pg: &PostgresDb) -> Result<bool, MirrorError> {
+    crate::postgres::native_origin::admits(pg)
+        .await
+        .map_err(crate::postgres_backfill::family::FamilyError::from)
+        .map_err(MirrorError::from)
+}
+
 /// Whether parity compares the tables PostgreSQL holds authoritatively.
 /// After a completed backfill SurrealDB is no evidence for them; before
 /// it, and during the first backfill, it is.
@@ -650,6 +657,9 @@ pub async fn backfilled(pg: &PostgresDb) -> Result<bool, MirrorError> {
 ///
 /// PostgreSQL could not be read.
 pub(crate) async fn compares_authoritative(pg: &PostgresDb) -> Result<bool, MirrorError> {
+    if native_owned(pg).await? {
+        return Ok(false);
+    }
     Ok(initial_copy() || !backfilled(pg).await?)
 }
 
@@ -675,6 +685,9 @@ pub(crate) async fn only_missing(
 ///
 /// PostgreSQL could not be read.
 pub(crate) async fn held_compared(pg: &PostgresDb, held: bool) -> Result<bool, MirrorError> {
+    if native_owned(pg).await? {
+        return Ok(false);
+    }
     Ok(!held || compares_authoritative(pg).await?)
 }
 
@@ -729,6 +742,9 @@ pub(crate) fn social_held() -> bool {
 ///
 /// PostgreSQL could not be read.
 pub(crate) async fn social_compared(pg: &PostgresDb) -> Result<bool, MirrorError> {
+    if native_owned(pg).await? {
+        return Ok(false);
+    }
     Ok(!crate::postgres::social::configured() || compares_authoritative(pg).await?)
 }
 

@@ -29,6 +29,12 @@
 -- server log.
 \set VERBOSITY terse
 \set SHOW_CONTEXT never
+-- Production defaults to its retained database; an owned local creator passes
+-- a separately validated unique identifier to this same role initializer.
+\if :{?navigator_database}
+\else
+\set navigator_database navigator
+\endif
 SET log_min_error_statement = panic;
 SET log_statement = 'none';
 SET password_encryption = 'scram-sha-256';
@@ -52,9 +58,9 @@ ALTER ROLE navigator_backup WITH LOGIN REPLICATION NOSUPERUSER NOCREATEDB NOCREA
 -- The migration login owns the database, so PostgreSQL 15+'s
 -- `pg_database_owner` hands it the `public` schema. Nobody else may connect
 -- or create temporary tables unless granted below.
-ALTER DATABASE navigator OWNER TO navigator_owner;
-REVOKE ALL ON DATABASE navigator FROM PUBLIC;
-GRANT CONNECT ON DATABASE navigator TO navigator_app;
+ALTER DATABASE :"navigator_database" OWNER TO navigator_owner;
+REVOKE ALL ON DATABASE :"navigator_database" FROM PUBLIC;
+GRANT CONNECT ON DATABASE :"navigator_database" TO navigator_app;
 REVOKE ALL ON SCHEMA public FROM PUBLIC;
 GRANT USAGE ON SCHEMA public TO navigator_app;
 
@@ -74,8 +80,8 @@ GRANT SELECT ON ALL TABLES IN SCHEMA ag_catalog TO navigator_owner;
 -- iteration of this file is revoked, so the runtime login holds schema USAGE
 -- only (the least-privilege proof refuses catalog reads to it).
 REVOKE ALL ON ALL TABLES IN SCHEMA ag_catalog FROM navigator_app;
-ALTER ROLE navigator_owner IN DATABASE navigator SET session_preload_libraries = 'age';
-ALTER ROLE navigator_app IN DATABASE navigator SET session_preload_libraries = 'age';
+ALTER ROLE navigator_owner IN DATABASE :"navigator_database" SET session_preload_libraries = 'age';
+ALTER ROLE navigator_app IN DATABASE :"navigator_database" SET session_preload_libraries = 'age';
 
 -- A Person's email is `citext` (case-insensitive equality and uniqueness).
 -- The extension is trusted, so the migration also creates it when absent.
@@ -140,6 +146,16 @@ WHERE relnamespace = 'public'::regnamespace
   AND relname IN ('_sqlx_migrations', 'schema_migrations')
 \gexec
 
+-- Initial authority is metadata, not runtime-writable application data. This
+-- runs after all general and default grants, including role creation after DDL.
+DO $$
+BEGIN
+    IF to_regprocedure('public.protect_database_origin_runtime(regrole)') IS NOT NULL THEN
+        PERFORM public.protect_database_origin_runtime('navigator_app'::regrole);
+    END IF;
+END
+$$;
+
 -- The DBOS login, when its Secret is mounted. `optional: true` on the volume
 -- leaves the file absent otherwise, and an empty password skips this block.
 \set dbos_password `cat /etc/navigator/postgres/dbos/password 2>/dev/null`
@@ -150,7 +166,7 @@ WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'navigator_dbos')
 \gexec
 ALTER ROLE navigator_dbos WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS
   CONNECTION LIMIT 20 PASSWORD :'dbos_password';
-GRANT CONNECT, CREATE ON DATABASE navigator TO navigator_dbos;
+GRANT CONNECT, CREATE ON DATABASE :"navigator_database" TO navigator_dbos;
 CREATE SCHEMA IF NOT EXISTS dbos AUTHORIZATION navigator_dbos;
 ALTER SCHEMA dbos OWNER TO navigator_dbos;
 REVOKE ALL ON SCHEMA dbos FROM PUBLIC;
@@ -174,7 +190,7 @@ WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'navigator_archive')
 ALTER ROLE navigator_archive WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS
   CONNECTION LIMIT 4 PASSWORD :'archive_password';
 GRANT pg_read_all_data TO navigator_archive;
-GRANT CONNECT ON DATABASE navigator TO navigator_archive;
+GRANT CONNECT ON DATABASE :"navigator_database" TO navigator_archive;
 -- Forgejo's database lives on this server. When it exists, the archive reads
 -- it as the same login; `forgejo/database.sql` grants the same right when the
 -- Forgejo database is created after this login.

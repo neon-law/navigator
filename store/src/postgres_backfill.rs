@@ -638,6 +638,7 @@ pub async fn plan(
     pg: &PostgresDb,
     batch_size: usize,
 ) -> Result<Plan, BackfillError> {
+    family::require_capture_target(pg).await?;
     if batch_size == 0 {
         return Err(BackfillError::BatchSize);
     }
@@ -940,6 +941,7 @@ pub async fn start(
     batch_size: usize,
     max_batches: Option<usize>,
 ) -> Result<RunReport, BackfillError> {
+    family::require_capture_target(pg).await?;
     family::require_supported_scopes(pg).await?;
     let size = i32::try_from(batch_size)
         .ok()
@@ -977,6 +979,7 @@ pub async fn resume(
     run_id: Uuid,
     max_batches: Option<usize>,
 ) -> Result<RunReport, BackfillError> {
+    family::require_capture_target(pg).await?;
     family::require_supported_scopes(pg).await?;
     let scope: String = sqlx::query_scalar("SELECT scope FROM mirror_backfill_run WHERE id = $1")
         .bind(run_id)
@@ -1989,6 +1992,7 @@ pub async fn start_family(
     max_batches: Option<usize>,
     activate: bool,
 ) -> Result<RunReport, BackfillError> {
+    family::require_capture_target(pg).await?;
     let size = i32::try_from(batch_size)
         .ok()
         .filter(|size| *size > 0)
@@ -2038,6 +2042,7 @@ pub async fn refresh_family(
     max_batches: Option<usize>,
     activate: bool,
 ) -> Result<RunReport, BackfillError> {
+    family::require_capture_target(pg).await?;
     if family::enrolled_family(pg, run).await? != selected {
         return Err(family::FamilyError::Receipt.into());
     }
@@ -2072,6 +2077,7 @@ pub async fn resume_family(
     max_batches: Option<usize>,
     activate: bool,
 ) -> Result<RunReport, BackfillError> {
+    family::require_capture_target(pg).await?;
     if family::enrolled_family(pg, run).await? != selected {
         return Err(family::FamilyError::Receipt.into());
     }

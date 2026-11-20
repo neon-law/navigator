@@ -17,6 +17,8 @@ pub mod catalog;
 pub mod communications;
 /// PostgreSQL authority for a Person's and an Entity's identity detail.
 pub mod identity;
+/// Authority provenance for an exclusively created application database.
+pub mod native_origin;
 pub mod notation_creation_attempts;
 pub mod people;
 /// PostgreSQL authority for the review surface — review documents and
@@ -277,6 +279,12 @@ impl PostgresDb {
     /// Require the existing global import and every current scoped activation.
     /// Importers connect directly and never use this application admission check.
     pub(crate) async fn require_application_history(&self) -> Result<(), PostgresError> {
+        if native_origin::admits(self)
+            .await
+            .map_err(|_| PostgresError::History)?
+        {
+            return Ok(());
+        }
         if !crate::postgres_mirror::backfilled(self)
             .await
             .map_err(|_| PostgresError::History)?

@@ -41,6 +41,12 @@ hudson ops restate object-handover import \
   --sha256 PRINTED_SHA256
 ```
 
+Applying or activating a handover requires the installation's privileged migration/operator connection. Supply the
+existing `NAVIGATOR_POSTGRES_*` coordinates for `navigator_owner` through the approved private operator environment;
+these commands do not obtain migration credentials or elevate a runtime connection automatically. The ordinary
+`navigator_app` role can read global handover and ownership metadata but cannot write it. Keep that restriction intact.
+Application-history admission still applies to the operator target; a privileged login does not replace those proofs.
+
 Import defaults to a read-only parity preview. Add `--apply --operator-writers-held` to copy the captured rows in one
 transaction. A conflicting native value, missing non-ephemeral Notation parent or unfinished native Notation operation
 refuses the entire transaction. Interruption leaves no partially committed handover; retry the same capture after the
@@ -49,6 +55,10 @@ transaction rolls back. Import never updates or deletes existing native state.
 The component parity receipt contains capture version, identity, digest, row counts and commit status. Its digest binds
 input and target values. It does not authenticate an independently supplied file or prove source quiescence. Preserve
 the private source evidence and operator acceptance independently.
+
+Import with `--apply` and activation use an explicit PostgreSQL operator or migration-role connection. The application
+role can read global handover ownership but cannot insert, update, delete or truncate it. Normal Project creation and
+posting receipts retain their separate runtime grants.
 
 ## Activate and preserve posting evidence
 
@@ -86,6 +96,11 @@ The provider post keeps its existing named DBOS checkpoint and retry contract. A
 delivery after that provider checkpoint. A receipt-write failure therefore retries the receipt, reusing the provider
 checkpoint. Slack's crash window between accepting a post and recording its provider checkpoint retains its existing
 at-least-once limitation; this handover does not claim provider-level exactly-once delivery.
+
+Before activating ownership or deploying the corresponding Restate binding omission, verify that the two object services
+have no pending invocations in either staging or production, including paused or dead-lettered work. In-flight work must
+drain or receive an explicit disposition and restart on DBOS with the same idempotency key. A selector, a PostgreSQL row
+count, or a matching capture digest is not drain evidence. The code does not replay or purge retained work.
 
 ## Recovery acceptance remains separate
 

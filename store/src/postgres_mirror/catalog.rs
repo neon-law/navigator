@@ -728,6 +728,9 @@ pub(super) fn mirror<'a>(
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Mirrored, MirrorError>> + Send + 'a>>
 {
     Box::pin(async move {
+        if !super::source_import_allowed(pg, key.table()).await? {
+            return Ok(Mirrored::Unchanged);
+        }
         if !super::initial_copy() || super::backfilled(pg).await? {
             return Ok(Mirrored::Unchanged);
         }
