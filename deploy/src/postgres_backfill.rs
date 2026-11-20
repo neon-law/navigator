@@ -689,9 +689,8 @@ mod tests {
         ] {
             let args = Cli::try_parse_from(flags).unwrap().args;
             let result = PostgresDb::with_test_db(native.postgres().clone(), execute(&args)).await;
-            let error = match result {
-                Ok(_) => panic!("native target must refuse capture"),
-                Err(error) => error,
+            let Err(error) = result else {
+                panic!("native target must refuse capture");
             };
             assert!(matches!(
                 error.downcast_ref::<store::postgres_backfill::family::FamilyError>(),
