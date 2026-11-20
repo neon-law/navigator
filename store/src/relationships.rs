@@ -691,7 +691,7 @@ mod tests {
     async fn an_age_edge_failure_rolls_back_the_authoritative_relationship_row() {
         crate::test_support::with_postgres(async {
             let db = SurrealDb::uninitialized();
-            let alice = person(&db, "Rollback Alice").await;
+            let alice = person(&db, "Libra Tidewell").await;
             let acme = entity(&db, "Rollback LLC").await;
             let postgres = crate::postgres_graph::graph_authority()
                 .await
