@@ -44,6 +44,7 @@ filter = '''
 binary(/^(project_native_delete|brand_move_mirror|firm_journal|api_reads|postgres_startup|entity_native_delete|practice_preview_native|native_cron_ingress|inbox_native_projects)$/)
 | test(/^dbos_email_summary::recovery::tests::/)
 | test(/^email_receipts::summary_recovery::(tests|interrupted_tests)::/)
+| (binary(=store) & test(=communications::native_tests::a_logged_call_carries_its_direction_and_role_at_the_top_level))
 '''
 test-group = "canonical-postgres-fixtures"
 
