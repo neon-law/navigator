@@ -5038,7 +5038,7 @@ jobs:
 
         fs::write(root.path().join(".gitignore"), ROOT_GITIGNORE).unwrap();
         assert_eq!(layout_findings(root.path()), Vec::<String>::new());
-        assert!(ROOT_GITIGNORE.lines().any(|line| line == "mail/"));
+        assert!(ROOT_GITIGNORE.lines().any(|line| line == "/mail/"));
     }
 
     /// An unknown key, including a retired exemption key, is refused and names
