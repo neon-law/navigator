@@ -4924,6 +4924,16 @@ async fn prefill_from_saved_answers(
     loop {
         let step = fetch_step(client, base, token, notation_id).await?;
         let Some(question) = step.question else {
+            if answered == 0 && !saved.is_empty() {
+                let keys = saved
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(anyhow!(
+                    "no key in the answers file matched a question; unrecognized: {keys}"
+                ));
+            }
             println!(
                 "{} {} questions prefilled from the answers file",
                 palette::dim("prefilled"),
@@ -10330,6 +10340,47 @@ mod tests {
             .iter()
             .all(|request| request.method != "POST"
                 || request.url.path() != format!("/app/lawyer/notations/{notation}/step")));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn fill_names_unrecognized_keys_when_none_match_a_question() {
+        let _lock = CREDENTIALS_ENV_LOCK.lock().await;
+        let server = MockServer::start().await;
+        let uri = server.uri();
+        let _env = CredentialsEnv::new(&uri);
+        let notation = Uuid::new_v4();
+        Mock::given(method("GET"))
+            .and(path(format!("/app/lawyer/notations/{notation}/step")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "complete": true,
+                "question": null
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let dir = tempfile::tempdir().unwrap();
+        let answers = dir.path().join("answers.yaml");
+        std::fs::write(
+            &answers,
+            "custom_single_choice__governing_law: nevada\nstate:\n  nested: true\n",
+        )
+        .unwrap();
+        let error = super::notation_prefill(Some(uri.as_str()), notation, &answers)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("unrecognized"), "{error}");
+        assert!(
+            error.contains("custom_single_choice__governing_law"),
+            "{error}"
+        );
+        assert!(error.contains("state"), "{error}");
+        assert!(server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .all(|request| request.method == "GET"));
     }
 
     impl Drop for CredentialsEnv {
