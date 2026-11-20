@@ -68,9 +68,9 @@ requires Docker, `kubectl`, `kind`, and `openssl` (`deploy/src/devx/orchestrate.
 
 Existing legacy tier descriptors retain their compatibility topology. Their tool gate also requires Helm
 (`deploy/src/devx/orchestrate.rs:43`) for the Restate Operator install (`deploy/src/devx/orchestrate.rs:1102`). The
-native deploy browser gate and standalone quickstart job both pin KIND v0.33.0. The deploy gate provisions through
-the ordinary quickstart CLI and then tests the exact built application image without Source, Restate, or a separate
-workflow worker. The compatibility topology remains explicit in the CLI.
+native deploy browser gate and standalone quickstart job both pin KIND v0.33.0. The deploy gate provisions through the
+ordinary quickstart CLI and then tests the exact built application image without Source, Restate, or a separate workflow
+worker. The compatibility topology remains explicit in the CLI.
 
 Quickstart builds and stages the current checkout's Dioxus client before creating the KIND tier or starting the server
 watcher. It uses the debug profile locally and rebuilds incrementally on each launch; an existing bundle is not treated

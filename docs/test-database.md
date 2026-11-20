@@ -55,13 +55,13 @@ reused; unactivated nonempty or partial history requires explicit recovery rathe
 
 ## Native deploy browser gate
 
-The `.github/workflows/deploy.yml` integration job provisions its native tier through the ordinary quickstart CLI,
-then verifies the exact built application image as nonroot. It requires native admission, role boundaries, physical
-base/WAL recovery with DBOS replay, restart, and all three hydrated browser suites. Its independent practice previews
-use owned PostgreSQL fixtures. It does not provision Source, a Restate broker, or a separate workflow worker.
+The `.github/workflows/deploy.yml` integration job provisions its native tier through the ordinary quickstart CLI, then
+verifies the exact built application image as nonroot. It requires native admission, role boundaries, physical base/WAL
+recovery with DBOS replay, restart, and all three hydrated browser suites. Its independent practice previews use owned
+PostgreSQL fixtures. It does not provision Source, a Restate broker, or a separate workflow worker.
 
-The explicit compatibility suites retain their own fixtures. Passing a focused native test does not establish that
-the full image, browser, recovery, or cold-runner resource gates passed.
+The explicit compatibility suites retain their own fixtures. Passing a focused native test does not establish that the
+full image, browser, recovery, or cold-runner resource gates passed.
 
 ## The embedded SurrealDB harness (deprecated)
 
