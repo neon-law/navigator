@@ -284,7 +284,7 @@ the registry out of the row so this check agrees with what `ops ship` renders:
 ```bash
 REG=$(sed -n 's|^NAVIGATOR_IMAGE_REGISTRY = "\(.*\)"$|\1|p' "$NAVIGATOR_DEPLOYMENTS_DIR/deployments/$ROW/config.toml")
 for img in "$APPLICATION_IMAGE" navigator-workflows-service navigator-archives-trigger \
-           navigator-billing-digest-trigger navigator-surreal-archive \
+           navigator-billing-digest-trigger navigator-ops navigator-surreal-archive \
            navigator-dri-digest-trigger navigator-general-nag navigator-nightly-project-update-trigger \
            navigator-notation-reset-trigger; do
   if gcloud artifacts docker images describe "${REG}/${img}:${TAG}" --format='value(image_summary.digest)' \

@@ -855,7 +855,7 @@ fn postgres_mirror_reconcile_job_runs_once_as_the_runtime_login() {
         let reconcile = container(job, "reconcile");
         assert_eq!(
             reconcile["image"].as_str(),
-            Some("navigator-surreal-archive"),
+            Some("navigator-ops"),
             "the operator pins the release image carrying hudson, the binary with `ops`"
         );
         let args: Vec<&str> = reconcile["args"]
@@ -895,20 +895,58 @@ fn postgres_mirror_reconcile_job_runs_once_as_the_runtime_login() {
     }
 }
 
-/// The mirror reconcile Job, the mirror recovery `CronJob`, and the Surreal
-/// archive `CronJob` all run `ops …` in `navigator-surreal-archive`. `ops`
-/// lives in `hudson`; the lean `navigator` binary rejects it, which failed the
-/// 26.11.13 staging ship.
+/// Normal operator workloads require Hudson from the neutral image; the Source
+/// exporter retains a same-build alias rather than a separate compilation.
 #[test]
-fn surreal_archive_image_carries_the_binary_that_owns_ops() {
-    let workflow = std::fs::read_to_string(workspace().join(".github/workflows/deploy.yml"))
-        .expect("read deploy.yml");
-    let entry = workflow
-        .split("- image: ")
-        .find(|entry| entry.starts_with("navigator-surreal-archive\n"))
-        .expect("deploy.yml builds navigator-surreal-archive");
-    assert!(entry.contains("CRATE=hudson"), "{entry}");
-    assert!(entry.contains("BIN=hudson"), "{entry}");
+fn operator_image_carries_hudson_and_retains_the_explicit_source_alias() {
+    let workflow: Value = serde_yaml::from_str(
+        &std::fs::read_to_string(workspace().join(".github/workflows/deploy.yml")).unwrap(),
+    )
+    .unwrap();
+    let matrix = workflow["jobs"]["publish-triggers"]["strategy"]["matrix"]["include"]
+        .as_sequence()
+        .unwrap();
+    let entry = matrix
+        .iter()
+        .find(|entry| entry["image"] == "navigator-ops")
+        .unwrap();
+    assert_eq!(entry["dockerfile"], "images/Containerfile.trigger");
+    assert_eq!(entry["alias"], "navigator-surreal-archive");
+    let arguments = entry["build-args"].as_str().unwrap();
+    assert!(arguments.lines().any(|line| line == "CRATE=hudson"));
+    assert!(arguments.lines().any(|line| line == "BIN=hudson"));
+    assert!(!matrix
+        .iter()
+        .any(|entry| entry["image"] == "navigator-surreal-archive"));
+    for (path, expected) in [
+        (
+            "k8s/postgres/admission/application-readiness-job.yaml",
+            "image: navigator-ops",
+        ),
+        (
+            "k8s/postgres/mirror/mirror-reconcile-job.yaml",
+            "image: navigator-ops",
+        ),
+        (
+            "k8s/postgres/mirror/recovery/cronjob.yaml",
+            "image: YOUR_IMAGE_REGISTRY/navigator-ops:YY.M.D",
+        ),
+        (
+            "examples/deploy/k8s/gke/forgejo/runner-controller/runner-controller.yaml",
+            "image: YOUR_IMAGE_REGISTRY/navigator-ops:YY.M.D",
+        ),
+        (
+            "examples/deploy/k8s/exports/cron-surreal-archive.yaml",
+            "image: YOUR_IMAGE_REGISTRY/navigator-surreal-archive:YY.M.D",
+        ),
+    ] {
+        assert!(
+            std::fs::read_to_string(workspace().join(path))
+                .unwrap()
+                .contains(expected),
+            "{path}"
+        );
+    }
 }
 
 #[test]

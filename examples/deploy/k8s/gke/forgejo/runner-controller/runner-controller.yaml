@@ -114,7 +114,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: controller
-          image: YOUR_IMAGE_REGISTRY/navigator-surreal-archive:YY.M.D
+          image: YOUR_IMAGE_REGISTRY/navigator-ops:YY.M.D
           args:
             - ops
             - forgejo

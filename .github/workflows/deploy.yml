@@ -2083,7 +2083,7 @@ jobs:
           echo "${GHCR_TOKEN}" | docker login ghcr.io --username "${GHCR_USER}" --password-stdin
           target="${GHCR_REGISTRY}/${{ matrix.image }}"
           for attempt in 1 2 3 4 5; do
-              if docker buildx imagetools create --tag "${target}:${RELEASE_TAG}" --tag "${target}:latest" "${IMAGE_REF}@${IMAGE_DIGEST}" \
+              if docker buildx imagetools create --prefer-index=false --tag "${target}:${RELEASE_TAG}" --tag "${target}:latest" "${IMAGE_REF}@${IMAGE_DIGEST}" \
                   && source_digest="$(docker buildx imagetools inspect --raw "${IMAGE_REF}@${IMAGE_DIGEST}" | sha256sum | cut -d' ' -f1)" \
                   && target_digest="$(docker buildx imagetools inspect --raw "${target}:${RELEASE_TAG}" | sha256sum | cut -d' ' -f1)" \
                   && [ "${source_digest}" = "${target_digest}" ] \
@@ -2195,17 +2195,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Trigger images: shared Containerfile.trigger, one per CronJob,
-          # selected by CRATE (workspace crate) + BIN (its trigger binary).
+          # Scheduled and operator images share Containerfile.trigger; CRATE
+          # and BIN select the executable. Compatibility aliases reuse its digest.
           - image: navigator-archives-trigger
             dockerfile: images/Containerfile.trigger
             runner: blacksmith-4vcpu-ubuntu-2404
             build-args: |
               CRATE=archives
               BIN=trigger
-          - image: navigator-surreal-archive
+          - image: navigator-ops
+            alias: navigator-surreal-archive
             dockerfile: images/Containerfile.trigger
-            # Building Hudson links the portal graph and exhausted the 4-vCPU runner's memory.
+            # Hudson links the portal graph and requires the operator build capacity.
             runner: blacksmith-8vcpu-ubuntu-2404
             build-args: |
               CRATE=hudson
@@ -2427,6 +2428,28 @@ jobs:
           echo "digest=${IMAGE_DIGEST}" >> "$GITHUB_OUTPUT"
       - uses: ./.github/actions/slack-progress
         timeout-minutes: 90
+        if: matrix.image == 'navigator-ops'
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          tag: "${{ needs.release-version.outputs.tag }}"
+          stage: "publish-triggers ${{ matrix.image }}"
+          step: "verify operator image commands"
+      - name: verify operator image commands
+        timeout-minutes: 5
+        if: matrix.image == 'navigator-ops'
+        env:
+          IMAGE_REF: ${{ steps.img.outputs.name }}
+          IMAGE_DIGEST: ${{ steps.digest.outputs.digest }}
+        run: |
+          set -euo pipefail
+          image="${IMAGE_REF}@${IMAGE_DIGEST}"
+          docker run --rm "$image" --version
+          docker run --rm "$image" ops postgres ready --help
+          docker run --rm "$image" ops postgres mirror reconcile --help
+          docker run --rm "$image" ops forgejo runner-controller --help
+          docker run --rm "$image" ops surreal-archive export --help
+      - uses: ./.github/actions/slack-progress
+        timeout-minutes: 90
         with:
           webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
           tag: "${{ needs.release-version.outputs.tag }}"
@@ -2446,7 +2469,7 @@ jobs:
           echo "${GHCR_TOKEN}" | docker login ghcr.io --username "${GHCR_USER}" --password-stdin
           target="${GHCR_REGISTRY}/${{ matrix.image }}"
           for attempt in 1 2 3 4 5; do
-              if docker buildx imagetools create --tag "${target}:${RELEASE_TAG}" --tag "${target}:latest" "${IMAGE_REF}@${IMAGE_DIGEST}" \
+              if docker buildx imagetools create --prefer-index=false --tag "${target}:${RELEASE_TAG}" --tag "${target}:latest" "${IMAGE_REF}@${IMAGE_DIGEST}" \
                   && source_digest="$(docker buildx imagetools inspect --raw "${IMAGE_REF}@${IMAGE_DIGEST}" | sha256sum | cut -d' ' -f1)" \
                   && target_digest="$(docker buildx imagetools inspect --raw "${target}:${RELEASE_TAG}" | sha256sum | cut -d' ' -f1)" \
                   && [ "${source_digest}" = "${target_digest}" ] \
@@ -2457,6 +2480,43 @@ jobs:
           done
           echo "::error::GHCR mirror of ${target}:${RELEASE_TAG} failed after retries"
           exit 1
+      # The retained Source exporter uses an explicit compatibility repository.
+      # Copy this build's digest, verify the copied bytes, and sign each registry
+      # identity instead of compiling Hudson twice or falling back to an old tag.
+      - uses: ./.github/actions/slack-progress
+        timeout-minutes: 90
+        if: matrix.alias != ''
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          tag: "${{ needs.release-version.outputs.tag }}"
+          stage: "publish-triggers ${{ matrix.image }}"
+          step: "publish retained Source operator alias"
+      - name: publish retained Source operator alias
+        timeout-minutes: 5
+        if: matrix.alias != ''
+        env:
+          ALIAS: ${{ matrix.alias }}
+          IMAGE_REF: ${{ steps.img.outputs.name }}
+          IMAGE_DIGEST: ${{ steps.digest.outputs.digest }}
+          GHCR_REGISTRY: ghcr.io/${{ github.repository_owner }}/navigator
+          RELEASE_TAG: ${{ needs.release-version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          test -n "${ALIAS}"
+          for target in "${IMAGE_REF%/*}/${ALIAS}" "${GHCR_REGISTRY}/${ALIAS}"; do
+              copied=false
+              for attempt in 1 2 3 4 5; do
+                  if docker buildx imagetools create --prefer-index=false --tag "${target}:${RELEASE_TAG}" --tag "${target}:latest" "${IMAGE_REF}@${IMAGE_DIGEST}" \
+                      && target_digest="$(docker buildx imagetools inspect --raw "${target}:${RELEASE_TAG}" | sha256sum | cut -d' ' -f1)" \
+                      && [ "sha256:${target_digest}" = "${IMAGE_DIGEST}" ]; then
+                      copied=true
+                      break
+                  fi
+                  sleep "$((attempt * 2))"
+              done
+              test "${copied}" = true
+              scripts/cosign-sign.sh "${target}@${IMAGE_DIGEST}"
+          done
       - uses: ./.github/actions/slack-progress
         timeout-minutes: 90
         with:
@@ -2468,8 +2528,10 @@ jobs:
         env:
           IMAGE_NAME: ${{ matrix.image }}
           IMAGE_DIGEST: ${{ steps.digest.outputs.digest }}
+          ALIAS: ${{ matrix.alias }}
         run: |
-          jq -n --arg image "${IMAGE_NAME}" --arg digest "${IMAGE_DIGEST}" '{($image): $digest}' > image-digest.json
+          jq -n --arg image "${IMAGE_NAME}" --arg digest "${IMAGE_DIGEST}" --arg alias "${ALIAS}" \
+            'if $alias == "" then {($image): $digest} else {($image): $digest, ($alias): $digest} end' > image-digest.json
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: image-digest-${{ matrix.image }}
@@ -2524,8 +2586,7 @@ jobs:
     # from its cache, so a glibc binary exits 127 there with "required file
     # not found". A static-pie binary runs on Alpine and on `ubuntu-latest`
     # alike, and the `FROM scratch` CLI image below needs one too. The
-    # surreal-archive trigger image already builds this same `cli` crate for
-    # musl with nothing beyond `musl-tools`.
+    # operator image uses the same shared static-musl build recipe.
     timeout-minutes: 90
     permissions:
       contents: read
@@ -4056,7 +4117,7 @@ jobs:
           • \`navigator-web\` — alias tag, byte-identical to \`neon-server\`; retires with #796
 
           *Scheduled-job images*
-          • \`navigator-archives-trigger\`, \`navigator-surreal-archive\`,
+          • \`navigator-archives-trigger\`, \`navigator-ops\` (with the retained \`navigator-surreal-archive\` alias),
           \`navigator-billing-digest-trigger\`, \`navigator-dri-digest-trigger\`,
           \`navigator-general-nag\`, \`navigator-nightly-project-update-trigger\`
 
@@ -4238,7 +4299,7 @@ jobs:
           echo "${GHCR_TOKEN}" | docker login ghcr.io --username "${GHCR_USER}" --password-stdin
           target="${GHCR_REGISTRY}/navigator-cli"
           for attempt in 1 2 3 4 5; do
-              if docker buildx imagetools create --tag "${target}:${RELEASE_TAG}" --tag "${target}:latest" "${IMAGE_REF}@${IMAGE_DIGEST}" \
+              if docker buildx imagetools create --prefer-index=false --tag "${target}:${RELEASE_TAG}" --tag "${target}:latest" "${IMAGE_REF}@${IMAGE_DIGEST}" \
                   && source_digest="$(docker buildx imagetools inspect --raw "${IMAGE_REF}@${IMAGE_DIGEST}" | sha256sum | cut -d' ' -f1)" \
                   && target_digest="$(docker buildx imagetools inspect --raw "${target}:${RELEASE_TAG}" | sha256sum | cut -d' ' -f1)" \
                   && [ "${source_digest}" = "${target_digest}" ] \

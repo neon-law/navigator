@@ -91,7 +91,7 @@ COPY vendor/legal-aid-plugin vendor/legal-aid-plugin
 # dir, so `docs` must be staged explicitly or the builder fails to resolve
 # the include paths.
 COPY docs              docs
-# The `cli` crate (the surreal-archive trigger's CRATE) additionally
+# The Hudson operator package additionally
 # embeds the deployment manifests with include_dir!: `k8s/base`,
 # `k8s/components`, `k8s/overlays`, and `examples/deploy/k8s/*` all
 # resolve at compile time (deploy run 142339796 failed on the first

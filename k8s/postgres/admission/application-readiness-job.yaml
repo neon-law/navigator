@@ -26,7 +26,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: admission
-          image: navigator-surreal-archive # pin-exempt: placeholder the operator replaces with the release image
+          image: navigator-ops # pin-exempt: placeholder the operator replaces with the release image
           imagePullPolicy: IfNotPresent
           args:
             - ops

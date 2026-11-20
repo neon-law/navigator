@@ -18,3 +18,9 @@ application work belongs in Navigator. The public Project toolchain never requir
 
 `scorpio` is the separate [Ephemeris](ephemeris.md) CLI. From a checkout, run the operator with `cargo run -p hudson --
 <verb>`.
+
+The `navigator-ops` release image carries Hudson for PostgreSQL admission and recovery and the Forgejo runner
+controller. `deploy.yml` builds it once and signs its immutable digest in both registries. The explicit SurrealDB export
+CronJob uses the `navigator-surreal-archive` compatibility alias of that same digest. Ordinary operator jobs require the
+`navigator-ops` digest; an older alias-only release map cannot supply it. Retire the alias only after retained Source
+export and recovery consumers have an accepted replacement and their owned retirement is verified.

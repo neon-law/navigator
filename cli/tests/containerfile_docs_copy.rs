@@ -1131,13 +1131,9 @@ fn every_containerfile_that_stages_rules_also_copies_project_skills() {
     assert!(checked > 0);
 }
 
-/// The trigger images build a static `x86_64-unknown-linux-musl` binary
-/// (`Containerfile.trigger`, `navigator-surreal-archive` among them), and
-/// `openssl-sys` cannot link there: there is no musl OpenSSL to find. Every
-/// HTTP and TLS client in the workspace takes rustls instead. `fantoccini` came
-/// in with its default `native-tls` and failed the 26.10.31 publish (deploy run
-/// 41234833205) while every PR check stayed green, because no PR builds an
-/// image. The lockfile is the one place that sees every edge, so hold it there.
+/// Static musl trigger and operator images have no musl OpenSSL to link.
+/// Every HTTP and TLS client uses rustls. The lockfile sees the full transitive
+/// graph, so this guard also covers clients outside the image's direct crate.
 #[test]
 fn no_crate_links_openssl_so_the_musl_images_can_build() {
     let graph = lockfile_dependency_graph();
