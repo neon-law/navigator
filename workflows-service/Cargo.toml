@@ -27,6 +27,8 @@ path = "src/lib.rs"
 [features]
 default = []
 restate-compatibility = ["dep:restate-sdk", "archives/restate-compatibility", "billing-workflows/restate-compatibility"]
+# Requires an already verified, drained, private native KIND tier; never self-skips.
+native-kind-acceptance = []
 # Reproduce JWT provider ambiguity without enabling an embedded database.
 jwt-provider-regression = ["restate-jwt/aws_lc_rs"]
 
@@ -67,6 +69,8 @@ workflows = { workspace = true, features = ["dbos"] }
 views.workspace = true
 
 [dev-dependencies]
+base64.workspace = true
+nix = { workspace = true, features = ["signal", "process"] }
 bs58.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true

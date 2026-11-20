@@ -34,6 +34,12 @@ default-filter = "not package(features)"
 platform-certs = { max-threads = 2 }
 # Fresh canonical schemas compete for PostgreSQL shared DDL locks.
 canonical-postgres-fixtures = { max-threads = 2 }
+# Serialize the opt-in role cases and the forced-cleanup regression.
+native-kind-role-acceptance = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'binary(=object_handover) & test(/^native_kind_roles::(canonical_fixed_roles_preserve_operator_and_runtime_boundaries|lifecycle::failed_independent_cleanup_retains_the_original_login_error_and_closes_both_safe_targets|process::tests::forced_cleanup_never_reports_natural_command_success|lifecycle::physical::base_and_wal_restore_resumes_checkpointed_effects)$/)'
+test-group = "native-kind-role-acceptance"
 
 [[profile.default.overrides]]
 filter = "package(cloud)"
@@ -66,6 +72,7 @@ binary(/^(mail_signatures|project_drive_folder_id|project_repository_url|project
 | (binary(=workflows) & test(=dbos_engine::dri_digest::tests::native_source_keeps_all_projects_and_both_dri_sides))
 | (binary(=store) & test(/^(entity_roles|relationships)::tests::/))
 | binary(=sandbox_usage_ledger)
+| (binary(=hudson) & test(=postgres_admission::tests::selected_application_database_must_match_the_verified_target))
 '''
 test-group = "canonical-postgres-fixtures"
 
@@ -88,6 +95,10 @@ final-status-level = "flaky"
 # slowest passing test takes about 210 s. deploy.yml's browser suites in
 # `features` share the ci profile and legitimately run longer, so they are
 # left out.
+[[profile.ci.overrides]]
+filter = 'binary(=object_handover) & test(/^native_kind_roles::(canonical_fixed_roles_preserve_operator_and_runtime_boundaries|lifecycle::failed_independent_cleanup_retains_the_original_login_error_and_closes_both_safe_targets|process::tests::forced_cleanup_never_reports_natural_command_success|lifecycle::physical::base_and_wal_restore_resumes_checkpointed_effects)$/)'
+test-group = "native-kind-role-acceptance"
+
 [[profile.ci.overrides]]
 filter = "not package(features)"
 slow-timeout = { period = "60s", terminate-after = 5 }

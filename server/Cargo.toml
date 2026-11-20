@@ -63,6 +63,7 @@ workflows.workspace = true
 zip.workspace = true
 
 [dev-dependencies]
+futures.workspace = true
 base64.workspace = true
 fantoccini.workspace = true
 features = { workspace = true, features = ["webdriver"] }

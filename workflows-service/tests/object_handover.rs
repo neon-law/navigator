@@ -775,3 +775,7 @@ fn sdk_wire_codec_matches_native_capture_fixture() {
         restate_sdk::serde::Serialize::serialize(&restate_sdk::serde::Json(seen.clone())).unwrap();
     assert_eq!(sdk.as_ref(), serde_json::to_vec(&seen).unwrap());
 }
+// This explicit opt-in never self-skips and is mandatory in the native KIND gate.
+#[cfg(feature = "native-kind-acceptance")]
+#[path = "object_handover/native_kind_roles.rs"]
+mod native_kind_roles;
