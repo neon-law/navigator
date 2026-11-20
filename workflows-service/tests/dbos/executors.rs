@@ -40,14 +40,16 @@ async fn worker_refuses_launch_before_scope_activation() {
     ));
 
     let name: String = sqlx::query_scalar("SELECT current_database()::text")
-        .fetch_one(&database.pool)
+        .fetch_one(database.store().await.pool())
         .await
         .unwrap();
     let admin_database =
         std::env::var("NAVIGATOR_TEST_POSTGRES_DATABASE").unwrap_or_else(|_| "smoke".into());
     let admin = sqlx::PgPool::connect_with(
         database
-            .pool
+            .store()
+            .await
+            .pool()
             .connect_options()
             .as_ref()
             .clone()
@@ -56,7 +58,7 @@ async fn worker_refuses_launch_before_scope_activation() {
     .await
     .unwrap();
     postgres.pool().close().await;
-    database.pool.close().await;
+    database.store().await.pool().close().await;
     sqlx::query(sqlx::AssertSqlSafe(format!("DROP DATABASE {name}")))
         .execute(&admin)
         .await
@@ -80,7 +82,7 @@ fn counting_clock(reads: &Arc<AtomicU32>) -> Clock {
 async fn statuses(db: &TestDatabase) -> Vec<(String, String)> {
     sqlx::query_as("SELECT workflow_uuid, status FROM dbos.workflow_status WHERE name = $1")
         .bind(heartbeat::WORKFLOW)
-        .fetch_all(&db.pool)
+        .fetch_all(db.store().await.pool())
         .await
         .expect("read the heartbeat runs")
 }
@@ -253,7 +255,7 @@ async fn the_next_launch_of_the_same_version_recovers_a_cut_off_run() {
     let pending: String =
         sqlx::query_scalar("SELECT status FROM dbos.workflow_status WHERE workflow_uuid = $1")
             .bind(id)
-            .fetch_one(&db.pool)
+            .fetch_one(db.store().await.pool())
             .await
             .expect("read the cut-off run");
     assert_eq!(pending, "PENDING", "another version does not recover it");
@@ -276,7 +278,7 @@ async fn the_next_launch_of_the_same_version_recovers_a_cut_off_run() {
         let status: String =
             sqlx::query_scalar("SELECT status FROM dbos.workflow_status WHERE workflow_uuid = $1")
                 .bind(id)
-                .fetch_one(&db.pool)
+                .fetch_one(db.store().await.pool())
                 .await
                 .expect("read the recovered run");
         status == "SUCCESS"
@@ -291,7 +293,7 @@ async fn the_next_launch_of_the_same_version_recovers_a_cut_off_run() {
          ORDER BY function_id",
     )
     .bind(id)
-    .fetch_all(&db.pool)
+    .fetch_all(db.store().await.pool())
     .await
     .expect("read checkpoints");
     assert_eq!(steps, ["beat", "notify"], "beat replayed, notify completed");

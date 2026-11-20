@@ -264,7 +264,7 @@ async fn recovery_reuses_the_first_notice_checkpoint_and_finishes_the_counts_pos
          ORDER BY function_id",
     )
     .bind(&id)
-    .fetch_all(&db.pool)
+    .fetch_all(db.store().await.pool())
     .await
     .expect("read GeneralNag checkpoints");
     assert_eq!(

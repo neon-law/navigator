@@ -21,7 +21,30 @@ use workflows_service::project_slack::{CiOutcome, LaneError, MainPushRequest};
 
 #[path = "support/native_project.rs"]
 mod native_project;
-use native_project::{matter, new_project, Matter};
+struct Matter {
+    project: Uuid,
+    firm: Uuid,
+    admin: Uuid,
+    brand: String,
+    entity: Uuid,
+}
+
+async fn matter(db: &SurrealDb) -> Matter {
+    let (project, admin) = native_project::matter(db).await;
+    Matter {
+        project: project.id,
+        firm: project.firm_id.expect("native fixture Project has a Firm"),
+        admin,
+        brand: project.brand,
+        entity: project.entity_id,
+    }
+}
+
+async fn new_project(db: &SurrealDb, firm: Uuid, brand: &str, entity: Uuid) -> Uuid {
+    native_project::new_project(db, firm, brand, entity)
+        .await
+        .id
+}
 
 const SPEC: &str = "BEGIN:\n  _: END\nEND: {}\n";
 

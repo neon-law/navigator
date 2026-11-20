@@ -6,7 +6,8 @@ use workflows::{MachineKind, StateMachineRuntime};
 use workflows_service::dbos_ingress::{NotationIngress, WorkerIngress};
 use workflows_service::dbos_notation::{self, Context};
 
-use crate::support::{database, APP_VERSION, DEADLINE};
+use crate::support::{database, APP_VERSION};
+use crate::DEADLINE;
 
 async fn fork_from_last_failure(
     worker: &dbos::DBOS,
@@ -584,7 +585,7 @@ async fn invalid_preflight_does_not_leave_a_pending_owner_or_cached_machine_read
             "SELECT COUNT(*) FROM notation_transition WHERE notation_id=$1 AND result IS NULL",
         )
         .bind(fixture.id)
-        .fetch_one(&fixture.database.pool)
+        .fetch_one(fixture.database.store().await.pool())
         .await
         .unwrap();
         assert_eq!(pending, 0);
@@ -609,7 +610,7 @@ async fn invalid_preflight_does_not_leave_a_pending_owner_or_cached_machine_read
             "SELECT COUNT(*) FROM notation_transition WHERE notation_id=$1 AND result IS NULL",
         )
         .bind(fixture.id)
-        .fetch_one(&fixture.database.pool)
+        .fetch_one(fixture.database.store().await.pool())
         .await
         .unwrap();
         assert_eq!(pending, 0);
@@ -629,7 +630,7 @@ async fn a_live_preflight_failure_repairs_under_the_original_operation_identity(
             sqlx::query(
             "ALTER TABLE notation_transition ADD CONSTRAINT synthetic_mark_denied CHECK (NOT started)",
         )
-        .execute(&fixture.database.pool)
+        .execute(fixture.database.store().await.pool())
         .await
         .unwrap();
             let logical = format!("preflight-failure-{}", fixture.id);
@@ -659,11 +660,11 @@ async fn a_live_preflight_failure_repairs_under_the_original_operation_identity(
                 "SELECT id FROM notation_transition WHERE notation_id=$1 AND result IS NULL",
             )
             .bind(fixture.id)
-            .fetch_one(&fixture.database.pool)
+            .fetch_one(fixture.database.store().await.pool())
             .await
             .unwrap();
             sqlx::query("ALTER TABLE notation_transition DROP CONSTRAINT synthetic_mark_denied")
-                .execute(&fixture.database.pool)
+                .execute(fixture.database.store().await.pool())
                 .await
                 .unwrap();
             let repaired = fork_from_last_failure(&fixture.worker, &logical).await;
@@ -678,14 +679,14 @@ async fn a_live_preflight_failure_repairs_under_the_original_operation_identity(
             let rows: i64 =
                 sqlx::query_scalar("SELECT COUNT(*) FROM notation_transition WHERE notation_id=$1")
                     .bind(fixture.id)
-                    .fetch_one(&fixture.database.pool)
+                    .fetch_one(fixture.database.store().await.pool())
                     .await
                     .unwrap();
             assert_eq!(rows, 1);
             let finished: bool =
                 sqlx::query_scalar("SELECT result IS NOT NULL FROM notation_transition WHERE id=$1")
                     .bind(original)
-                    .fetch_one(&fixture.database.pool)
+                    .fetch_one(fixture.database.store().await.pool())
                     .await
                     .unwrap();
             assert!(finished);
@@ -831,7 +832,7 @@ async fn a_signal_without_a_machine_fails_without_a_journal_or_send() {
             "SELECT count(*) FROM notation_machine_state WHERE notation_id = $1",
         )
         .bind(fixture.id)
-        .fetch_one(&fixture.database.pool)
+        .fetch_one(fixture.database.store().await.pool())
         .await
         .unwrap();
         assert_eq!(count, 0);

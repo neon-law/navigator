@@ -12,16 +12,16 @@ const BODY: &str = "---\nkind: letter\ntitle: Synthetic notation\nrespondent_typ
 pub async fn seed(pg: &PostgresDb, storage: Arc<dyn cloud::StorageService>) -> (Uuid, Uuid) {
     PostgresDb::with_application_db(pg.clone(), async {
         let source = SurrealDb::uninitialized();
-        let parents = native_project::matter(&source).await;
-        let project = store::projects::find_by_id(&source, parents.project)
+        let (parents, admin) = native_project::matter(&source).await;
+        let project = store::projects::find_by_id(&source, parents.id)
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(project.firm_id, Some(parents.firm));
-        assert_eq!(project.entity_id, parents.entity);
+        assert_eq!(project.firm_id, parents.firm_id);
+        assert_eq!(project.entity_id, parents.entity_id);
         assert_eq!(project.brand, parents.brand);
         assert_eq!(
-            store::persons::find_by_id(&source, parents.admin)
+            store::persons::find_by_id(&source, admin)
                 .await
                 .unwrap()
                 .unwrap()
@@ -43,7 +43,7 @@ pub async fn seed(pg: &PostgresDb, storage: Arc<dyn cloud::StorageService>) -> (
             .unwrap();
         store::projects::designate_dri_in_surreal(
             &source,
-            parents.project,
+            parents.id,
             actor.id,
             store::projects::DriSide::Client,
         )
@@ -52,7 +52,7 @@ pub async fn seed(pg: &PostgresDb, storage: Arc<dyn cloud::StorageService>) -> (
         let saved = store::template_source::persist_contents(
             &source,
             &storage,
-            parents.project,
+            parents.id,
             "letter__synthetic",
             BODY.to_owned(),
             "1111111111111111111111111111111111111111".to_owned(),
@@ -61,12 +61,7 @@ pub async fn seed(pg: &PostgresDb, storage: Arc<dyn cloud::StorageService>) -> (
         .unwrap();
         let notation = store::notations::create(
             &source,
-            &store::notations::NewNotation::new(
-                saved.template.id,
-                actor.id,
-                parents.project,
-                "BEGIN",
-            ),
+            &store::notations::NewNotation::new(saved.template.id, actor.id, parents.id, "BEGIN"),
         )
         .await
         .unwrap();

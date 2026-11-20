@@ -5,7 +5,10 @@ use workflows_service::dbos_ingress::{NotationIngress, WorkerIngress};
 use workflows_service::dbos_notation::{self, Context};
 #[path = "support/native_database.rs"]
 mod support;
-use support::{database, APP_VERSION, DEADLINE};
+use support::{database, APP_VERSION};
+
+/// A hung native Notation test must fail rather than hold CI.
+const DEADLINE: std::time::Duration = std::time::Duration::from_mins(1);
 
 async fn assert_read_boundary(origin: &str, notation_id: uuid::Uuid) {
     let current = format!("{origin}/notation/{notation_id}/workflow_current_state");

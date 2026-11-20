@@ -1,5 +1,5 @@
 //! The `project-slack` lanes against a disposable PostgreSQL executor and
-//! synthetic Surreal data: one serialized lane per Project, one Slack post
+//! native Project fixtures: one serialized lane per Project, one Slack post
 //! per relayed event, and different Projects posting without waiting on
 //! each other.
 
@@ -28,9 +28,11 @@ mod native_project;
 async fn firm_matter_on(
     pg: &store::postgres::PostgresDb,
     db: &store::surreal::SurrealDb,
-    _label: &str,
-) -> native_project::Matter {
-    store::postgres::PostgresDb::with_test_db(pg.clone(), native_project::matter(db)).await
+) -> store::projects::Project {
+    store::postgres::PostgresDb::with_test_db(pg.clone(), async {
+        native_project::matter(db).await.0
+    })
+    .await
 }
 
 fn push(short_sha: &str, run_attempt: u32) -> MainPushRequest {
@@ -223,12 +225,12 @@ async fn the_same_projects_main_pushes_post_one_at_a_time() {
         bot.clone(),
     )
     .await;
-    let matter = firm_matter_on(&lane.postgres, &lane.surreal, "SlackLane").await;
+    let matter = firm_matter_on(&lane.postgres, &lane.surreal).await;
     // Two distinct main pushes for ONE Project: both must post, and the
     // lane must hold them to one post at a time — the single-writer
     // guarantee the replaced virtual object gave the GitHub relay.
-    let first = dbos_project_slack::main_push_workflow_id(matter.project, &push("abc1234", 1));
-    let second = dbos_project_slack::main_push_workflow_id(matter.project, &push("def5678", 1));
+    let first = dbos_project_slack::main_push_workflow_id(matter.id, &push("abc1234", 1));
+    let second = dbos_project_slack::main_push_workflow_id(matter.id, &push("def5678", 1));
     let (left, right) = tokio::join!(
         lane.workflow.start_with(
             LaneRequest::MainPush(push("abc1234", 1)),
@@ -275,7 +277,7 @@ async fn the_ingress_posts_one_relayed_event_once() {
         bot.clone(),
     )
     .await;
-    let matter = firm_matter_on(&lane.postgres, &lane.surreal, "SlackRelay").await;
+    let matter = firm_matter_on(&lane.postgres, &lane.surreal).await;
     let ingress = ProjectSlackIngress::new(
         "synthetic-service-token".into(),
         lane.workflow.clone(),
@@ -290,7 +292,7 @@ async fn the_ingress_posts_one_relayed_event_once() {
         },
         None,
     );
-    let id = dbos_project_slack::main_push_workflow_id(matter.project, &push("abc1234", 1));
+    let id = dbos_project_slack::main_push_workflow_id(matter.id, &push("abc1234", 1));
     let payload = serde_json::json!({
         "workflow_id": id,
         "event": push("abc1234", 1),
@@ -335,8 +337,8 @@ async fn a_repeated_client_view_posts_once() {
         bot.clone(),
     )
     .await;
-    let matter = firm_matter_on(&lane.postgres, &lane.surreal, "SlackView").await;
-    let id = dbos_project_slack::client_view_workflow_id(matter.project);
+    let matter = firm_matter_on(&lane.postgres, &lane.surreal).await;
+    let id = dbos_project_slack::client_view_workflow_id(matter.id);
     for attempt in 0..2 {
         let started = lane
             .workflow
@@ -372,10 +374,10 @@ async fn different_projects_post_without_waiting_on_each_other() {
         bot.clone(),
     )
     .await;
-    let first = firm_matter_on(&lane.postgres, &lane.surreal, "SlackOne").await;
-    let second = firm_matter_on(&lane.postgres, &lane.surreal, "SlackTwo").await;
-    let first_id = dbos_project_slack::main_push_workflow_id(first.project, &push("abc1234", 1));
-    let second_id = dbos_project_slack::main_push_workflow_id(second.project, &push("def5678", 1));
+    let first = firm_matter_on(&lane.postgres, &lane.surreal).await;
+    let second = firm_matter_on(&lane.postgres, &lane.surreal).await;
+    let first_id = dbos_project_slack::main_push_workflow_id(first.id, &push("abc1234", 1));
+    let second_id = dbos_project_slack::main_push_workflow_id(second.id, &push("def5678", 1));
     let (left, right) = tokio::join!(
         lane.workflow.start_with(
             LaneRequest::MainPush(push("abc1234", 1)),
@@ -422,7 +424,7 @@ async fn the_ingress_never_rebinds_a_claimed_event_id() {
         bot.clone(),
     )
     .await;
-    let matter = firm_matter_on(&lane.postgres, &lane.surreal, "SlackRebind").await;
+    let matter = firm_matter_on(&lane.postgres, &lane.surreal).await;
     let ingress = ProjectSlackIngress::new(
         "synthetic-service-token".into(),
         lane.workflow.clone(),
@@ -437,7 +439,7 @@ async fn the_ingress_never_rebinds_a_claimed_event_id() {
         },
         None,
     );
-    let id = dbos_project_slack::main_push_workflow_id(matter.project, &push("abc1234", 1));
+    let id = dbos_project_slack::main_push_workflow_id(matter.id, &push("abc1234", 1));
     let deliver = |body: serde_json::Value| {
         Request::builder()
             .method("POST")

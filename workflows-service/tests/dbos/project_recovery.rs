@@ -147,7 +147,7 @@ async fn a_worker_lost_mid_batch_resumes_from_its_checkpoints() {
          ORDER BY function_id",
     )
     .bind(&id)
-    .fetch_all(&db.pool)
+    .fetch_all(db.store().await.pool())
     .await
     .expect("read ProjectRecovery checkpoints");
     assert_eq!(steps, ["unfinished".to_string(), format!("archive-{done}")]);

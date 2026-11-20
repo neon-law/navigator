@@ -209,7 +209,7 @@ async fn recovery_reuses_the_contact_checkpoint_after_notification_accepts_then_
          ORDER BY function_id",
     )
     .bind(&id)
-    .fetch_all(&db.pool)
+    .fetch_all(db.store().await.pool())
     .await
     .expect("read BillingCanary checkpoints");
     assert_eq!(steps, ["xero"], "Xero checkpointed before email began");
@@ -265,7 +265,7 @@ async fn a_provider_effect_before_its_checkpoint_repeats_with_the_same_contact_k
          ORDER BY function_id",
     )
     .bind(&id)
-    .fetch_all(&db.pool)
+    .fetch_all(db.store().await.pool())
     .await
     .expect("read BillingCanary checkpoints");
     assert!(steps.is_empty(), "the provider step did not checkpoint");

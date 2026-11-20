@@ -16,7 +16,9 @@ async fn blocked_start_times_out_and_graceful_shutdown_recovers_the_same_slot_on
     install_start_gate(&db).await;
 
     let mut lock = db
-        .pool
+        .store()
+        .await
+        .pool()
         .begin()
         .await
         .expect("begin advisory-lock transaction");
@@ -33,7 +35,7 @@ async fn blocked_start_times_out_and_graceful_shutdown_recovers_the_same_slot_on
     let executor = Executor::launch(&settings, Arc::new(CapturingNotifier::new()))
         .await
         .expect("launch executor with its real schedule task");
-    wait_for_start_lock(&db.pool).await;
+    wait_for_start_lock(db.store().await.pool()).await;
 
     tokio::time::timeout(Duration::from_secs(10), executor.shutdown())
         .await
@@ -45,7 +47,7 @@ async fn blocked_start_times_out_and_graceful_shutdown_recovers_the_same_slot_on
     let row: Option<String> =
         sqlx::query_scalar("SELECT status FROM dbos.workflow_status WHERE workflow_uuid = $1")
             .bind(&id)
-            .fetch_optional(&db.pool)
+            .fetch_optional(db.store().await.pool())
             .await
             .expect("check whether PostgreSQL accepted the start");
     assert_eq!(
@@ -71,7 +73,7 @@ async fn blocked_start_times_out_and_graceful_shutdown_recovers_the_same_slot_on
     let rows: i64 =
         sqlx::query_scalar("SELECT count(*) FROM dbos.workflow_status WHERE workflow_uuid = $1")
             .bind(&id)
-            .fetch_one(&db.pool)
+            .fetch_one(db.store().await.pool())
             .await
             .expect("count the recovered slot");
     assert_eq!(rows, 1, "the deterministic slot has one recorded run");
@@ -90,7 +92,7 @@ async fn install_start_gate(db: &TestDatabase) {
          IF NEW.name = 'Heartbeat' THEN PERFORM pg_advisory_xact_lock(11561156); END IF; \
          RETURN NEW; END $$",
     )
-    .execute(&db.pool)
+    .execute(db.store().await.pool())
     .await
     .expect("install synthetic start gate");
     sqlx::query(
@@ -98,7 +100,7 @@ async fn install_start_gate(db: &TestDatabase) {
          ON dbos.workflow_status FOR EACH ROW \
          EXECUTE FUNCTION hold_synthetic_heartbeat_start()",
     )
-    .execute(&db.pool)
+    .execute(db.store().await.pool())
     .await
     .expect("attach synthetic start gate");
 }
@@ -123,7 +125,7 @@ async fn assert_start_lock_timeout(db: &TestDatabase, settings: &Settings, id: &
             )
             .await
     });
-    wait_for_start_lock(&db.pool).await;
+    wait_for_start_lock(db.store().await.pool()).await;
     let error = tokio::time::timeout(DEADLINE, start)
         .await
         .expect("system DB lock timeout did not bound start")

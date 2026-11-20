@@ -1,10 +1,5 @@
-use std::time::Duration;
-
 use sqlx::postgres::{PgConnectOptions, PgSslMode};
 use workflows::dbos_engine::{self, Settings};
-
-/// Nothing legitimate here takes this long; a hang fails instead of holding CI.
-pub const DEADLINE: Duration = Duration::from_mins(1);
 
 /// The application version every test launches with, so a relaunch recovers
 /// what the previous launch left pending.
@@ -16,7 +11,6 @@ pub struct TestDatabase {
     pub env: Vec<(&'static str, String)>,
     /// The connection [`Settings`] builds from `env`.
     pub url: String,
-    pub pool: sqlx::PgPool,
     fixture: store::test_support::PostgresFixture,
 }
 
@@ -71,7 +65,6 @@ pub async fn database() -> Option<TestDatabase> {
         .await
         .expect("create exclusively fresh native DBOS fixture");
     let name = fixture.database().to_owned();
-    let pool = fixture.postgres().pool().clone();
     let mut db = TestDatabase {
         env: vec![
             (dbos_engine::HOST_ENV, "127.0.0.1".to_owned()),
@@ -87,7 +80,6 @@ pub async fn database() -> Option<TestDatabase> {
             ),
         ],
         url: String::new(),
-        pool,
         fixture,
     };
     db.url = Settings::from_lookup(db.lookup())

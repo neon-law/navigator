@@ -2,14 +2,6 @@
 use store::surreal::SurrealDb;
 use uuid::Uuid;
 
-pub struct Matter {
-    pub project: Uuid,
-    pub firm: Uuid,
-    pub admin: Uuid,
-    pub brand: String,
-    pub entity: Uuid,
-}
-
 async fn entity(db: &SurrealDb) -> Uuid {
     let id = Uuid::new_v4();
     let jurisdiction = store::jurisdictions::create(
@@ -42,7 +34,7 @@ async fn entity(db: &SurrealDb) -> Uuid {
     .id
 }
 
-pub async fn matter(db: &SurrealDb) -> Matter {
+pub async fn matter(db: &SurrealDb) -> (store::projects::Project, Uuid) {
     let admin = store::persons::create(
         db,
         &store::persons::NewPerson::with_role(
@@ -83,16 +75,15 @@ pub async fn matter(db: &SurrealDb) -> Matter {
         .unwrap();
     let entity = entity(db).await;
     let project = new_project(db, firm.id, &brand, entity).await;
-    Matter {
-        project,
-        firm: firm.id,
-        admin: admin.id,
-        brand,
-        entity,
-    }
+    (project, admin.id)
 }
 
-pub async fn new_project(db: &SurrealDb, firm: Uuid, brand: &str, entity: Uuid) -> Uuid {
+pub async fn new_project(
+    db: &SurrealDb,
+    firm: Uuid,
+    brand: &str,
+    entity: Uuid,
+) -> store::projects::Project {
     store::projects::create(
         db,
         &store::projects::NewProject {
@@ -107,5 +98,4 @@ pub async fn new_project(db: &SurrealDb, firm: Uuid, brand: &str, entity: Uuid) 
     )
     .await
     .unwrap()
-    .id
 }

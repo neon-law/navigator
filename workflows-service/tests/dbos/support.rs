@@ -1,6 +1,9 @@
 #[path = "../support/native_database.rs"]
 mod native_database;
-pub use native_database::{database, TestDatabase, APP_VERSION, DEADLINE};
+pub use native_database::{database, TestDatabase, APP_VERSION};
+
+/// A hung durable test must fail rather than hold CI.
+pub const DEADLINE: std::time::Duration = std::time::Duration::from_mins(1);
 use uuid::Uuid;
 
 /// A synthetic Firm, its admin, and one open Project on it.

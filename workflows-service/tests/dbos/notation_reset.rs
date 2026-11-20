@@ -176,7 +176,7 @@ async fn recovery_keeps_checkpointed_deletes_and_posts_once() {
          ORDER BY function_id",
     )
     .bind(&id)
-    .fetch_all(&db.pool)
+    .fetch_all(db.store().await.pool())
     .await
     .expect("read NotationReset checkpoints");
     assert_eq!(

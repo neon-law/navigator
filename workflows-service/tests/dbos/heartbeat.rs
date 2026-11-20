@@ -112,7 +112,7 @@ async fn recovery_resumes_at_notify_without_a_second_beat() {
          ORDER BY function_id",
     )
     .bind(&id)
-    .fetch_all(&db.pool)
+    .fetch_all(db.store().await.pool())
     .await
     .expect("read checkpoints");
     assert_eq!(steps, ["beat"], "only beat checkpointed before shutdown");
@@ -156,7 +156,7 @@ async fn the_worker_fires_the_current_slot_on_launch() {
                 "SELECT bool_and(status = 'SUCCESS') FROM dbos.workflow_status WHERE name = $1",
             )
             .bind(heartbeat::WORKFLOW)
-            .fetch_one(&db.pool)
+            .fetch_one(db.store().await.pool())
             .await
             .ok()
             .flatten();
@@ -181,7 +181,7 @@ async fn the_worker_fires_the_current_slot_on_launch() {
     let statuses: Vec<String> =
         sqlx::query_scalar("SELECT status FROM dbos.workflow_status WHERE name = $1")
             .bind(heartbeat::WORKFLOW)
-            .fetch_all(&db.pool)
+            .fetch_all(db.store().await.pool())
             .await
             .expect("read the heartbeat runs");
     assert_eq!(statuses, ["SUCCESS"], "one run, for the current slot");
