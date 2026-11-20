@@ -49,7 +49,31 @@ jobs:
           shared-key: gate-cli
           save-if: false
       - name: Install pinned Dioxus CLI
-        run: cargo install dioxus-cli --version 0.7.10 --locked
+        run: |
+          tools="$(mktemp -d "$RUNNER_TEMP/navigator-dx-0.7.10.XXXXXX")"
+          trap 'rm -f "$tools/dx.tar.gz"' EXIT
+          curl --fail --show-error --silent --location --retry 5 --retry-delay 2 --retry-all-errors \
+            https://github.com/DioxusLabs/dioxus/releases/download/v0.7.10/dx-x86_64-unknown-linux-gnu.tar.gz \
+            --output "$tools/dx.tar.gz"
+          echo '4363e4ed2a3f1eb7f4d38d2d59aed59ce43271c44c16b425e92c89a64761fbe7'"  $tools/dx.tar.gz" | sha256sum --check --strict
+          python3 - "$tools" <<'PYTHON'
+          import pathlib, sys, tarfile
+          tools = pathlib.Path(sys.argv[1])
+          with tarfile.open(tools / 'dx.tar.gz', 'r:gz') as archive:
+              members = archive.getmembers()
+              if len(members) != 1 or members[0].name != 'dx' or not members[0].isfile():
+                  raise SystemExit('unexpected Dioxus CLI archive layout')
+              with (tools / 'dx').open('xb') as binary:
+                  binary.write(archive.extractfile(members[0]).read())
+          (tools / 'dx').chmod(0o700)
+          PYTHON
+          version="$("$tools/dx" --version)"
+          test "${version%% (*}" = 'dioxus 0.7.10'
+          "$tools/dx" build --help > "$tools/build-help.txt"
+          grep -Fq -- '--force-sequential' "$tools/build-help.txt"
+          echo "$version"
+          sha256sum "$tools/dx"
+          echo "$tools" >> "$GITHUB_PATH"
       - name: build navigator CLI
         run: cargo build -p hudson --quiet
       - name: hudson quickstart
