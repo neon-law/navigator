@@ -186,7 +186,7 @@ data:
   # The key itself survives a pod restart, because it is re-bootstrapped from
   # this ConfigMap every time the `emptyDir` comes up empty. The provider rows
   # it creates do not — see the note on the `data` volume in
-  # `k8s/staging/rauthy.yaml`.
+  # `k8s/base/rauthy/rauthy.yaml`.
   #
   # A key is required rather than merely convenient. `POST /providers/create`
   # takes `validate_api_key_or_admin_session`, so an admin session is nominally

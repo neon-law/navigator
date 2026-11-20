@@ -7,10 +7,13 @@ description: >-
 
 # KIND-based local development
 
-The `hudson` CLI (`deploy::devx`) drives the host-`web` loop and the full-stack KIND flow; there is no Makefile. Install
-Docker, KIND, `kubectl`, Helm, and the Restate CLI; `docker info` must succeed. Do not add shell-script wrappers or
-substitute one-off local containers for the Kubernetes topology. In-cluster Store specifics are in
-[`docs/test-database.md`](../../../docs/test-database.md); the cluster config and its `extraPortMappings` are in
+The `hudson` CLI (`deploy::devx`) drives the host-`web` loop and KIND dependencies. Fresh KIND tiers use PostgreSQL and
+an embedded DBOS executor, without SurrealDB, a Restate broker, or a separate workflow worker. Install Docker, KIND,
+`kubectl`, and `openssl`; `docker info` must succeed. Helm and the Restate CLI belong to explicit compatibility
+topologies. Do not add shell-script wrappers or substitute one-off containers for the application tier. Focused
+PostgreSQL test fixtures are separate from that tier.
+
+Store fixtures are described in [`docs/test-database.md`](../../../docs/test-database.md); KIND port mappings are in
 [`k8s/kind-config.yaml`](../../../k8s/kind-config.yaml).
 
 ## Worktree-first
@@ -48,16 +51,16 @@ set -a; source .devx/env; set +a
 cargo run -p neon
 ```
 
-- `--runtime kind`: creates or reuses a cluster keyed to the worktree path, applies the SurrealDB schema, assigns a
-  stable port slot, and writes `.devx/env` plus `.devx/worktree.json`.
-- `--runtime native`: each worktree keeps the same descriptor and slot contract for its own Restate and web processes;
-  one host-level registry owns the shared SurrealDB, Rauthy, and SeaweedFS processes. Each worktree gets its own
-  database and SeaweedFS bucket/key set. The registry records process identity and worktree claims, so teardown and
-  sweep never signal a recycled or unrelated live process.
+- `--runtime kind`: a fresh worktree reserves one private creation operation and creates its own PostgreSQL database
+  with native authority. `web` cohosts the selected DBOS workflows. Repeated starts verify the same namespace and
+  database; existing legacy KIND descriptors retain their compatibility topology.
+- `--runtime native`: the host-process compatibility topology, with per-worktree Restate and web processes and shared
+  SurrealDB, Rauthy, and SeaweedFS processes. This runtime name does not select the fresh PostgreSQL/DBOS KIND path. Its
+  registry records process identity and claims so cleanup does not signal unrelated or recycled processes.
 
-Host `web` and its worker share one store and one Restate journal per worktree; parallel worktrees do not. Source
-`.devx/env` before every local command that must target this checkout. It is the complete local application environment;
-a gitignored `.env` holds only optional live third-party sandbox credentials.
+Parallel worktrees keep separate application and durable histories. Source `.devx/env` before every command targeting
+this checkout; it contains the complete private application environment. A gitignored `.env` holds only optional live
+sandbox configuration, which must not be silently substituted into a capture-only native harness.
 
 ```bash
 cargo run -p hudson -- dev worktree-env status --path "$PWD"
@@ -68,21 +71,25 @@ cargo run -p hudson -- dev worktree-env down --path "$PWD"
 touches another worktree's. Run it at handoff: a leftover cluster keeps binding its slot's ports, and a leftover native
 claim keeps its tenant alive until `sweep` finds it orphaned.
 
-## The shared dependency tier
+## Fresh KIND and compatibility tiers
 
-`dev up` owns the dependency tier directly and binds `web` to the default port:
+`dev up` uses the same worktree-owned KIND selection:
 
 ```bash
-cargo run --release -p hudson -- dev up
+cargo run -p hudson -- dev up --path "$PWD"
 set -a; source .devx/env; set +a
 cargo run -p neon
 ```
 
-It deploys PostgreSQL, SurrealDB, Rauthy, SeaweedFS, Restate, `workflows-service`, and telemetry in KIND, restores host
-port-forwards, and writes `.devx/env`. Re-run it after sleep or reboot to re-arm dead port-forwards; it reuses the
-cluster. Restart the compiled `web` process after changing routes, handlers, views, or content.
+Fresh tiers provision PostgreSQL with TLS and application roles, Rauthy, SeaweedFS, ClamAV, and telemetry. `web` hosts
+DBOS on its own allocated listener. Re-run startup to verify and resume the same resource and restore owned transports.
+Unknown or partial authority refuses startup; do not delete an intent or replace retained history to force a fresh
+start. Stop the owned application before an explicit schema upgrade; `--no-deps` does not migrate or rerun role grants.
 
-| Surface | Shared tier port |
+Existing legacy KIND descriptors keep SurrealDB, Restate, and their separate worker until an explicit handover. Their
+shared-tier compatibility ports are listed below; fresh worktrees use their allocated slots from `.devx/env`.
+
+| Compatibility surface | Shared tier port |
 | --- | --- |
 | Restate ingress | `9080` |
 | Restate admin | `9070` |
@@ -102,22 +109,30 @@ application roles through the same fixture seam as Forgejo. `.devx/env` contains
 `verify-full` connection; `.devx/postgres/ca.crt` is the trusted certificate. KIND maps its PostgreSQL NodePort to
 loopback directly so closing one database session cannot interrupt another pooled connection. Keep these files private.
 
-The lifecycle holds web and worker replicas before PostgreSQL enrollment. For a fresh, memory-backed legacy store, it
-verifies an actual strict schema-only export, imports it, and enrolls the required PostgreSQL scopes before normal
-sample seeding. Existing valid enrollment is reused. Nonempty history without enrollment, partial enrollment, or a
-changed namespace identity requires the explicit frozen-source recovery procedure; startup does not reset history or
-replace receipts. An interrupted bootstrap leaves writers held for a safe retry.
+Fresh initialization records the creation-time Database Origin, then seeds through admitted application accessors. It
+does not fabricate a Source receipt or import an empty legacy engine. The complete native development harness uses the
+existing capturing/stub providers under its explicit profile guards; captures prove no external delivery or production
+cutover.
 
-`dev up`, `dev deploy`, and KIND `worktree-env up` use this bridge. The deploy browser gate invokes the same boundary
-before starting its application:
+### Captured compatibility and the deploy browser gate
+
+Captured legacy bootstrap holds web and worker writers, verifies an actual strict Source export, and enrolls the
+required PostgreSQL scopes before seeding. Existing valid enrollment is reused; nonempty or partial history requires
+explicit recovery. It never resets retained history or replaces receipts.
+
+The existing `.github/workflows/deploy.yml` browser gate remains a compatibility lane: it installs the Restate operator
+and CRDs, invokes `postgres-bootstrap`, and forwards Source for retained fixtures. Some browser helpers still start an
+embedded engine. A fresh native local tier or the dedicated quickstart job does not establish that this deploy gate is
+engine-absent.
 
 ```bash
 cargo run -p hudson -- dev postgres-bootstrap --path "$PWD"
 ```
 
-The legacy connection remains in `.devx/env` as `NAVIGATOR_SURREAL_ENDPOINT`, `_NAMESPACE`, and `_DATABASE` for
-remaining compatibility callers. Its idempotent schema is `store/src/schema/navigator.surql` with a `schema_version`
-record. The PostgreSQL image and its pin are in the [`postgres`](../postgres/SKILL.md) skill.
+That command is the captured-bootstrap boundary, not the fresh native creation command. Compatibility environments
+retain `NAVIGATOR_SURREAL_ENDPOINT`, `_NAMESPACE`, and `_DATABASE` and the versioned schema in
+`store/src/schema/navigator.surql`. Fresh native environments omit Source and Restate coordinates. See
+[`postgres`](../postgres/SKILL.md) for the pinned image and admission contracts.
 
 Forgejo is opt-in: `cargo run -p hudson -- dev forgejo up` reuses the retained PostgreSQL server and adds Forgejo and an
 Actions runner to the sourced tier, signing in through Rauthy; `dev forgejo smoke` proves it. See
@@ -126,7 +141,7 @@ Actions runner to the sourced tier, signing in through Rauthy; `dev forgejo smok
 ## Verification
 
 Start `web` with the correct `.devx/env`, then run the browser and accessibility gate. It downloads and caches the
-pinned Chrome for Testing build, starts ChromeDriver on a free port, grants Lawyer, and runs both suites with
+pinned Chrome for Testing build, starts ChromeDriver on a free port, grants Lawyer, and runs all three suites with
 `NAV_REQUIRE_HARNESS=1`. It reads the base URL from the sourced environment; override it only for a topology it did not
 generate.
 
@@ -135,8 +150,13 @@ cargo run -p hudson -- dev browser-e2e
 cargo run -p hudson -- dev browser-e2e --base-url http://localhost:3001
 ```
 
-For a full in-cluster demo from published images, run `cargo run -p hudson -- dev worktree-env up --demo`, optionally
-with `--tag YY.M.D`; the ingress is at `http://localhost:8080`.
+For the explicit in-cluster compatibility demo from published images:
+
+```bash
+cargo run -p hudson -- dev worktree-env up --demo
+```
+
+Optionally add `--tag YY.M.D`; the ingress is at <http://localhost:8080>.
 
 ## Troubleshooting and cleanup
 
@@ -146,10 +166,10 @@ kubectl --namespace navigator describe pod <name>
 kubectl logs --namespace navigator <name> --all-containers --tail=100
 ```
 
-Leave the ordinary `dev up` tier running between sessions. Run `hudson dev worktree-env down` at handoff to remove a
-worktree's task-owned cluster and port-forwards. Never prune Docker volumes without explicit approval. Use `cargo run
---release -p cli -- dev down` only for a deliberate clean rebuild; it deletes the ordinary cluster. See
-[`docs/agent-workflows.md`](../../../docs/agent-workflows.md#resource-cleanup) for cleanup details.
+Keep task-owned resources while the task is active. At handoff, use `hudson dev worktree-env down --path "$PWD"` to
+remove only that worktree's cluster, transports, and state. Never prune Docker volumes without explicit approval. `cargo
+run -p hudson -- dev down --path "$PWD"` is a deliberate teardown, not a way to repair unknown retained authority. See
+[`docs/agent-workflows.md`](../../../docs/agent-workflows.md#resource-cleanup).
 
 On Codex-provisioned macOS worktrees, Gatekeeper may open repeated `Verifying "<binary>"…` windows the first time each
 freshly built executable runs (the sandboxed host stamps `com.apple.provenance` on every executable Cargo writes).
@@ -164,13 +184,12 @@ wrap Cargo in a shell script. Tracked in [navigator#570](https://github.com/neon
   port from `.devx/env`. Follow [web-preview](../web-preview/SKILL.md) to verify automatic refresh and the page.
 - **We standardize on KIND.** Do not install another local-Kubernetes flavor (minikube, k3d, Docker Desktop k8s); the
   manifests, port mappings, and `cli::devx` orchestration all assume KIND.
-- **The in-cluster store is ephemeral.** SurrealDB runs memory-backed, so restarting its pod wipes the database, and
-  SeaweedFS is a disposable single-node store. Every developer starts from the same blank state. Production points
-  `NAVIGATOR_SURREAL_ENDPOINT` at a hosted SurrealDB until the PostgreSQL swap lands. The Postgres overlay is the
-  exception: its 1 GiB PVC survives a pod restart.
-- **`web` reaches the in-cluster store over a host port-forward** (`127.0.0.1:18000`) plus the env block `dev up`
-  writes: `set -a; source .devx/env; set +a`. "Ready cluster but `web` can't connect" almost always means the env was
-  not sourced.
+- **Fresh KIND tiers retain their PostgreSQL origin.** PostgreSQL storage survives pod restarts. Repeated startup
+  verifies the same database and creation evidence; it does not replace an unknown or partial database. Memory-backed
+  SurrealDB belongs to the explicit compatibility topology. SeaweedFS is a disposable single-node store.
+- **`web` uses the task-owned PostgreSQL TLS mapping.** Source the generated environment with
+  `set -a; source .devx/env; set +a`; it carries the owned port, database, application login and CA. Compatibility
+  Source forwarding belongs to its explicit topology, not fresh native KIND.
 - **Screenshots go to `/tmp/navigator-screenshots/`, never the repo** (`mkdir -p` first).
 
 ## Anti-patterns

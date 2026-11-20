@@ -13,7 +13,7 @@ use store::surreal::SurrealDb;
 use tokio::time::{sleep, Duration};
 use workflows::SlackBot;
 
-use billing::XeroBillingProvider;
+use billing::{BillingProvider, XeroBillingProvider};
 use billing_workflows::{reconcile_once, ReconcileReport};
 
 pub const ENABLED_ENV: &str = "NAVIGATOR_DBOS_RECONCILE_INVOICES_ENABLED";
@@ -45,6 +45,25 @@ impl ReconcileRunner for LiveReconcileRunner {
         reconcile_once(&provider, &self.0)
             .await
             .map_err(|_| ReconcileDbosError::Reconcile)
+    }
+}
+
+struct ProviderReconcileRunner {
+    surreal: SurrealDb,
+    postgres: store::postgres::PostgresDb,
+    provider: Arc<dyn BillingProvider>,
+}
+
+#[async_trait::async_trait]
+impl ReconcileRunner for ProviderReconcileRunner {
+    async fn run(&self) -> Result<ReconcileReport, ReconcileDbosError> {
+        store::postgres::PostgresDb::with_application_db(
+            self.postgres.clone(),
+            reconcile_once(self.provider.as_ref(), &self.surreal),
+        )
+        .await
+        .map_err(|_| ReconcileDbosError::Reconcile)?
+        .map_err(|_| ReconcileDbosError::Reconcile)
     }
 }
 
@@ -82,6 +101,27 @@ impl Context {
             simulated,
             schedule_enabled,
         })
+    }
+
+    /// Reuse reconciliation with explicit providers and an owned application store.
+    pub fn with_provider(
+        surreal: SurrealDb,
+        postgres: store::postgres::PostgresDb,
+        provider: Arc<dyn BillingProvider>,
+        slack: Arc<dyn SlackBot>,
+        finance_channel: String,
+        simulated: bool,
+    ) -> Self {
+        Self::with_runner(
+            Arc::new(ProviderReconcileRunner {
+                surreal,
+                postgres,
+                provider,
+            }),
+            slack,
+            finance_channel,
+            simulated,
+        )
     }
 
     pub fn with_runner(

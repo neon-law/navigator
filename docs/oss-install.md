@@ -2,8 +2,9 @@
 
 Neon Law Navigator's canonical build is just **`cargo build` + `docker build`**. Nothing in the workspace's default
 surface assumes a particular cloud account, project ID, OAuth client, or domain. To run it against production traffic
-you assemble three pieces — a runtime (Kubernetes, ECS, or plain Compose), a SurrealDB, and a few SaaS dependencies —
-and wire them together through env vars documented in [`../.env.example`](../.env.example).
+you assemble a runtime (Kubernetes, ECS, or plain Compose), PostgreSQL, and the configured provider integrations.
+Existing deployments retain compatibility services until their verified handover and retained-work disposition are
+complete. Environment variables are documented in [`../.env.example`](../.env.example).
 
 This page walks the end-to-end setup against **GCP**, because the workspace ships a working example overlay for that
 path. The same shape works against EKS, AKS, or self-hosted Kubernetes; see [`multi-cloud.md`](multi-cloud.md) for those
@@ -61,20 +62,39 @@ compile without it.
 
 **To run the local KIND cluster** (`hudson dev up`, and the per-worktree `dev worktree-env up`):
 
-The cluster lane refuses to start unless all five of these are on `PATH` — `deploy/src/devx/orchestrate.rs:43` opens it
-with `require_tools(&["kind", "kubectl", "docker", "helm"])`. Docker and `kubectl` are already above and both arrive
-with Docker Desktop, which is exactly why the remaining tools are easy to miss:
+A fresh tier uses PostgreSQL and DBOS without a SurrealDB server, Restate broker, or separate workflow worker. It
+requires Docker, `kubectl`, `kind`, and `openssl` (`deploy/src/devx/orchestrate.rs:133`); quickstart also uses `git`,
+`ssh-keygen`, Rust, and `cmake`. Its Ubuntu job installs KIND v0.33.0 (`.github/workflows/quickstart.yml:25`).
 
-- **`kind`, at v0.32.0** — the version `.github/workflows/deploy.yml:943` pins for the KIND integration gate, in
-  lockstep with the `kindest/node:v1.36.1` digest pinned at `.github/workflows/deploy.yml:950`. Take that version rather
-  than the latest release: the workflow records that v0.32.0's `kind load` is what understands the containerd config v4
-  the v1.36.1 node writes, and that the two are meant to be bumped together.
-- **`openssl`** — the PostgreSQL fixture uses it to generate the task-owned TLS certificate before the application
-  starts. No plaintext connection exception is needed.
-- **`helm`, any release with OCI registry support** — the lane uses it for one thing, `helm upgrade --install` of the
-  Restate Operator chart from `oci://ghcr.io/restatedev/restate-operator-helm` at `deploy/src/devx/orchestrate.rs:700`.
-  Nothing in this repository pins it and CI takes whatever its runner image ships, so there is no version to cite here
-  the way there is for the tools above; v4.2.4 is known to pull the pinned chart.
+Existing legacy tier descriptors retain their compatibility topology. Their tool gate also requires Helm
+(`deploy/src/devx/orchestrate.rs:43`) for the Restate Operator install (`deploy/src/devx/orchestrate.rs:1102`). The
+compatibility deploy browser gate pins KIND v0.32.0 (`.github/workflows/deploy.yml:943`) with node image v1.36.1
+(`.github/workflows/deploy.yml:950`). These deploy pins describe the retained compatibility gate, not the fresh native
+quickstart job.
+
+Quickstart builds and stages the current checkout's Dioxus client before creating the KIND tier or starting the server
+watcher. It uses the debug profile locally and rebuilds incrementally on each launch; an existing bundle is not treated
+as current. Install the pinned client tool and WebAssembly target first on macOS or Linux:
+
+```bash
+cargo install dioxus-cli --version 0.7.10 --locked
+rustup target add wasm32-unknown-unknown
+```
+
+Client and server compilation run sequentially to bound peak memory. A missing or incompatible `dx` fails before
+quickstart creates dependency resources.
+
+Fresh provisioning reserves one private creation operation in `.devx/postgres/native-origin.json`, creates its unique
+PostgreSQL database, and verifies its Database Origin before seeding through the application role. Repeated starts
+verify the same namespace and database. An unknown or partially initialized database requires explicit owned-resource
+recovery; startup never replaces it with a new empty database. Stop the owned app before a schema upgrade. The
+provisioner records the upgrade operation before migration so an interrupted upgrade resumes that same operation.
+
+The local capture providers require the Dev CI harness, simulated fixtures, embedded hosting, and the complete native
+caller matrix. They retain the actual handler registrations while capturing external effects locally. Explicit live
+provider credentials or destinations conflict with this mode. Billing Canary and Reconcile Invoices timer loops are off
+by default; their manual handlers remain registered. This local setup does not transfer retained production work or
+prove recovery of an existing deployment.
 
 [`kind-local-dev`](../.agents/skills/kind-local-dev/SKILL.md) documents what that lane brings up, the ports it claims,
 and how to tear it down again.
@@ -88,12 +108,11 @@ one, so this can wait until you need it.
 git clone https://github.com/neon-law/navigator.git   # or your fork
 cd navigator
 cargo build --workspace          # pulls dependencies + compiles every crate
-cargo nextest run --workspace    # each test opens its own embedded store
-cargo test -p features           # the cucumber BDD suites (custom harness)
 ```
 
-These commands work without any cloud account, and without a database: each test opens its own embedded, memory-backed
-SurrealDB. No `.env` needed yet.
+Building needs no cloud account. Follow [test database](test-database.md#how-a-contributor-runs-tests) for focused
+PostgreSQL fixtures and the explicit compatibility-inclusive test commands. Database-backed tests require their
+respective fixtures; an unfiltered workspace run includes compatibility tests.
 
 ## 2. Configure your `.env`
 

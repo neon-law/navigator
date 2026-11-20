@@ -31,7 +31,7 @@ use super::{
 /// `dev up [--path <checkout>]`: bring up the tier for `path`, or for the
 /// workspace containing the current directory.
 pub(super) fn up(path: Option<&Path>, cfg: &KindConfig) -> Result<()> {
-    up_in(&checkout_root(path)?, cfg)
+    super::worktree_env::up_kind(&checkout_root(path)?, cfg)
 }
 
 /// Bring up a KIND dependency tier whose state belongs to `root`.
@@ -80,6 +80,388 @@ pub(super) fn up_in(root: &Path, cfg: &KindConfig) -> Result<()> {
     state.write_env(&environment)?;
 
     print_chrome_summary(cfg);
+    Ok(())
+}
+
+/// Verify the exact existing origin before another local service changes a
+/// database-targeted roles Job. This performs no provisioning or restamping.
+pub(super) fn verified_native_database(root: &Path, cfg: &KindConfig) -> Result<String> {
+    use super::forgejo::cluster::Kube;
+    use sqlx::postgres::{PgConnectOptions, PgSslMode};
+    super::worktree_env::verify_postgres_fixture_target(root, cfg)?;
+    let intent = super::native_profile::Intent::read(root)?.context("native intent is missing")?;
+    intent.verify_target(root, cfg)?;
+    verify_fixture_port(cfg)?;
+    let kube = Kube::new(cfg);
+    let namespace: serde_json::Value =
+        serde_json::from_str(&kube.output(&["get", "namespace", &cfg.namespace, "-o", "json"])?)?;
+    let uid = namespace["metadata"]["uid"]
+        .as_str()
+        .context("namespace UID is missing")?
+        .parse()?;
+    let binding = intent.binding(uid)?;
+    let password = kube
+        .secret("navigator-postgres-auth")?
+        .and_then(|mut data| data.remove("password"))
+        .filter(|value| !value.is_empty())
+        .context("native provisioner credential is missing")?;
+    let options = PgConnectOptions::new()
+        .host("127.0.0.1")
+        .port(cfg.postgres_port)
+        .database("postgres")
+        .username("postgres")
+        .password(&password)
+        .ssl_mode(PgSslMode::VerifyFull)
+        .ssl_root_cert(super::postgres_fixture::ca_path(root));
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    Ok(runtime
+        .block_on(store::postgres::native_origin::resume(
+            options,
+            intent.creation,
+            binding,
+        ))?
+        .database())
+}
+
+/// Provision only a genuinely fresh native database, or verify the exact
+/// resource recorded by this worktree. No Source client or Restate CLI is used.
+pub(super) fn up_native_in(root: &Path, cfg: &KindConfig, no_deps: bool) -> Result<()> {
+    use super::native_profile::{self, Intent};
+    use store::postgres::native_origin;
+    require_tools(&["kind", "kubectl", "docker", "openssl"])?;
+    super::worktree_env::verify_postgres_fixture_target(root, cfg)?;
+    let mut intent = Intent::read(root)?.context("native tier creation intent is missing")?;
+    intent.verify_target(root, cfg)?;
+    anyhow::ensure!(
+        !no_deps || intent.was_ready(),
+        "native tier has not completed initialization"
+    );
+    let mut reconcile = !no_deps && !intent.was_ready();
+    let tier = prepare_native_dependencies(root, cfg, &mut intent, reconcile)?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let resumed = runtime.block_on(async {
+        if tier.created.is_some() {
+            native_origin::create(tier.admin.clone(), intent.creation, tier.binding.clone())
+                .await?
+                .initialize()
+                .await
+        } else {
+            native_origin::resume(tier.admin.clone(), intent.creation, tier.binding.clone()).await
+        }
+    });
+    let native = match resumed {
+        Ok(native) => native,
+        Err(_error) if !no_deps && intent.was_ready() => {
+            // A persisted intent authorizes only the canonical schema-only
+            // upgrade API, never replacement of an unknown database.
+            anyhow::ensure!(
+                std::net::TcpStream::connect(("127.0.0.1", cfg.web_port)).is_err()
+                    && std::net::TcpStream::connect(("127.0.0.1", native_profile::dbos_port(cfg)?))
+                        .is_err(),
+                "stop the owned app and durable worker before a native schema upgrade"
+            );
+            let operation = intent.prepare_upgrade(root)?;
+            let upgraded = runtime.block_on(native_origin::upgrade(tier.admin.clone(), intent.creation,
+                tier.binding.clone(), operation)).map_err(|_| anyhow!(
+                    "native origin cannot resume or upgrade; explicit owned-resource recovery is required"
+                ))?;
+            reconcile = true;
+            upgraded
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let NativeEnvironment { state, app, values } =
+        native_role_environment(root, cfg, &intent, &native, &tier, &runtime, reconcile)?;
+    if reconcile {
+        seed_native_application(root, &runtime, &app, &values)?;
+        intent.mark_ready(root, &native)?;
+    }
+    let environment = super::postgres_fixture::render_environment(&values);
+    state.write_env(&environment)?;
+    write_fixture_private(
+        &super::postgres_fixture::environment_path(root),
+        super::postgres_fixture::render_environment(&tier.credentials.environment_for(
+            cfg,
+            root,
+            &native.database(),
+        ))
+        .as_bytes(),
+    )?;
+    Ok(())
+}
+
+struct NativeDependencies {
+    kube: super::forgejo::cluster::Kube,
+    created: Option<CreatedKindCluster>,
+    binding: store::postgres::native_origin::TierBinding,
+    credentials: super::postgres_fixture::Credentials,
+    rendered: String,
+    admin: sqlx::postgres::PgConnectOptions,
+}
+
+fn prepare_native_dependencies(
+    root: &Path,
+    cfg: &KindConfig,
+    intent: &mut super::native_profile::Intent,
+    reconcile: bool,
+) -> Result<NativeDependencies> {
+    use super::forgejo::cluster::{prepare_postgres, Kube};
+    use super::native_profile;
+    use sqlx::postgres::{PgConnectOptions, PgSslMode};
+    let created = if reconcile {
+        kind_platform_steps(root, cfg)?
+    } else {
+        anyhow::ensure!(
+            cluster_exists(&cfg.cluster)?,
+            "native dependency tier does not exist"
+        );
+        configure_worktree_kubeconfig(root, cfg)?;
+        None
+    };
+    let kube = Kube::new(cfg);
+    if created.is_some() {
+        ensure_namespace(&cfg.namespace)?;
+    }
+    let namespace: serde_json::Value =
+        serde_json::from_str(&kube.output(&["get", "namespace", &cfg.namespace, "-o", "json"])?)?;
+    let namespace = namespace["metadata"]["uid"]
+        .as_str()
+        .context("native namespace UID is missing")?
+        .parse()?;
+    if let Some(proof) = created.as_ref() {
+        intent.bind_created_namespace(root, cfg, proof, namespace)?;
+    }
+    let binding = intent.binding(namespace)?;
+    let container = verify_fixture_port(cfg)?;
+    if reconcile {
+        seaweedfs::prepare(&cfg.namespace)?;
+    }
+    let credentials = if reconcile {
+        prepare_postgres(cfg)?
+    } else {
+        let password = |name| -> Result<String> {
+            kube.secret(name)?
+                .and_then(|mut data| data.remove("password"))
+                .filter(|value| !value.is_empty())
+                .context("native PostgreSQL credential is missing")
+        };
+        let tls = kube
+            .secret("navigator-postgres-tls")?
+            .context("native PostgreSQL TLS is missing")?;
+        super::postgres_fixture::Credentials {
+            app_password: password("navigator-postgres-app")?,
+            owner_password: password("navigator-postgres-migrator")?,
+            ca: super::postgres_fixture::trust_anchor(&tls)?.to_owned(),
+        }
+    };
+    write_fixture_private(
+        &super::postgres_fixture::ca_path(root),
+        credentials.ca.as_bytes(),
+    )?;
+    let rendered = super::forgejo::cluster::kustomize(root, native_profile::OVERLAY)?;
+    if reconcile {
+        kube.apply(&native_profile::infrastructure(&rendered)?)?;
+        apply_postgres_host_ingress(cfg, &kube, &container)?;
+        for resource in [
+            "statefulset/navigator-postgres",
+            "statefulset/seaweedfs",
+            "deployment/rauthy",
+            "deployment/clamav",
+            "deployment/openobserve",
+        ] {
+            kube.wait_rollout(resource, "1200s")?;
+        }
+        align_rauthy_public_url(cfg)?;
+    }
+    wait_for_tcp("127.0.0.1", cfg.postgres_port)?;
+    let bootstrap = kube
+        .secret("navigator-postgres-auth")?
+        .and_then(|mut data| data.remove("password"))
+        .filter(|value| !value.is_empty())
+        .context("native database provisioner credential is missing")?;
+    let admin = PgConnectOptions::new()
+        .host("127.0.0.1")
+        .port(cfg.postgres_port)
+        .database("postgres")
+        .username("postgres")
+        .password(&bootstrap)
+        .ssl_mode(PgSslMode::VerifyFull)
+        .ssl_root_cert(super::postgres_fixture::ca_path(root));
+    Ok(NativeDependencies {
+        kube,
+        created,
+        binding,
+        credentials,
+        rendered,
+        admin,
+    })
+}
+
+struct NativeEnvironment {
+    state: StateDir,
+    app: store::postgres::PostgresDb,
+    values: std::collections::BTreeMap<String, String>,
+}
+
+fn native_role_environment(
+    root: &Path,
+    cfg: &KindConfig,
+    intent: &super::native_profile::Intent,
+    native: &store::postgres::native_origin::NativeDatabase,
+    tier: &NativeDependencies,
+    runtime: &tokio::runtime::Runtime,
+    reconcile: bool,
+) -> Result<NativeEnvironment> {
+    use super::forgejo::cluster::secret_manifest;
+    use super::native_profile;
+    // No credential rotation or schema mutation is permitted by --no-deps.
+    let login = |name: &str| -> Result<String> {
+        if let Some(mut data) = tier.kube.secret(name)? {
+            return data
+                .remove("password")
+                .filter(|value| !value.is_empty())
+                .context("existing native login credential is invalid");
+        }
+        anyhow::ensure!(reconcile, "native login credential is missing");
+        let password = seaweedfs::random_hex();
+        tier.kube.apply(&secret_manifest(
+            name,
+            &cfg.namespace,
+            "Opaque",
+            &std::collections::BTreeMap::from([
+                ("password".into(), password.clone()),
+                ("ca.crt".into(), tier.credentials.ca.clone()),
+            ]),
+        )?)?;
+        Ok(password)
+    };
+    let dbos_password = login("navigator-postgres-dbos")?;
+    let archive_password = login("navigator-postgres-archive")?;
+    if reconcile {
+        tier.kube.run(&[
+            "delete",
+            "job",
+            "navigator-postgres-roles",
+            "--ignore-not-found",
+            "--wait=true",
+        ])?;
+        tier.kube.apply(&native_profile::roles_for_database(
+            &tier.rendered,
+            &native.database(),
+        )?)?;
+        tier.kube.wait_job("navigator-postgres-roles")?;
+    }
+    let app = runtime.block_on(async {
+        let pg = store::postgres::PostgresDb::connect(
+            tier.admin
+                .clone()
+                .database(&native.database())
+                .username("navigator_app")
+                .password(&tier.credentials.app_password),
+        )
+        .await?;
+        store::postgres::PostgresDb::with_application_db(pg.clone(), async {}).await?;
+        Ok::<_, anyhow::Error>(pg)
+    })?;
+    let state = StateDir::new(root)?;
+    state.kill_pids();
+    state.write_pids(&[])?;
+    let mut pids = Vec::new();
+    for (service, local, remote) in [
+        ("service/navigator-seaweedfs", cfg.seaweedfs_s3_port, 8333),
+        ("service/clamav", cfg.clamav_port, 3310),
+        ("service/openobserve", cfg.openobserve_port, 5080),
+    ] {
+        pids.push(port_forward(service, local, remote, cfg, &state)?);
+        state.write_pids(&pids)?;
+    }
+    wait_for_tcp("127.0.0.1", cfg.seaweedfs_s3_port)?;
+    let storage = native_storage_credentials(cfg, &tier.kube, reconcile)?;
+    let values = native_profile::environment(
+        root,
+        cfg,
+        intent,
+        tier.credentials
+            .environment_for(cfg, root, &native.database()),
+        native_profile::RolePasswords {
+            dbos: &dbos_password,
+            archive: &archive_password,
+        },
+        &storage,
+        |key| env::var(key).ok(),
+    )?;
+    Ok(NativeEnvironment { state, app, values })
+}
+
+fn native_storage_credentials(
+    cfg: &KindConfig,
+    kube: &super::forgejo::cluster::Kube,
+    reconcile: bool,
+) -> Result<seaweedfs::Credentials> {
+    if reconcile {
+        seaweedfs::provision(&cfg.namespace)
+    } else {
+        let data = kube
+            .secret("navigator-seaweedfs-s3")?
+            .context("native storage credentials are missing")?;
+        let keys = seaweedfs::LANES
+            .iter()
+            .map(|(lane, prefix)| {
+                let read = |suffix| {
+                    data.get(&format!("{prefix}{suffix}"))
+                        .cloned()
+                        .filter(|value| !value.is_empty())
+                        .context("native storage credential is incomplete")
+                };
+                Ok((
+                    (*lane).to_owned(),
+                    seaweedfs::LaneCredentials {
+                        access_key: read("access_key")?,
+                        secret_key: read("secret_key")?,
+                    },
+                ))
+            })
+            .collect::<Result<std::collections::BTreeMap<_, _>>>()?;
+        seaweedfs::credentials(&keys)
+    }
+}
+
+fn seed_native_application(
+    root: &Path,
+    runtime: &tokio::runtime::Runtime,
+    app: &store::postgres::PostgresDb,
+    values: &std::collections::BTreeMap<String, String>,
+) -> Result<()> {
+    // Preserve the same staged sample-source input as the compatibility
+    // bootstrap. The following host boot reads it through its explicit env.
+    super::sample_project::run_for_root(false, root)?;
+    runtime.block_on(async {
+        let pg = (*app).clone();
+        store::clauses::seed(
+            &pg,
+            &rules::clauses::library_clauses().map_err(anyhow::Error::msg)?,
+        )
+        .await?;
+        let storage: std::sync::Arc<dyn cloud::StorageService> =
+            std::sync::Arc::new(cloud::S3Storage::new(cloud::S3StorageConfig::from_lookup(
+                |key| values.get(key).cloned(),
+            )?)?);
+        store::postgres::PostgresDb::with_application_db(pg, async {
+            store::seed::seed_environment(
+                &store::surreal::SurrealDb::uninitialized(),
+                &storage,
+                store::DeploymentEnvironment::Dev,
+                store::seed::BrandSeed::Neon,
+            )
+            .await
+        })
+        .await??;
+        Ok::<(), anyhow::Error>(())
+    })?;
     Ok(())
 }
 
@@ -654,11 +1036,23 @@ fn strip_ingress_controller_host_ports_if_requested() -> Result<()> {
     Ok(())
 }
 
-/// Idempotent cluster bring-up: `kind create cluster` (if missing),
-/// `kubectl apply` the nginx-ingress manifest, then `helm install`
-/// the Restate Operator. Safe to re-invoke.
-fn kind_up_steps(root: &Path, cfg: &KindConfig) -> Result<()> {
+/// Proof that this invocation successfully created this exact KIND cluster.
+/// Existing clusters never receive this capability.
+pub(super) struct CreatedKindCluster {
+    cluster: String,
+}
+impl CreatedKindCluster {
+    pub(super) fn matches(&self, cfg: &KindConfig) -> bool {
+        self.cluster == cfg.cluster
+    }
+}
+
+pub(super) fn kind_platform_steps(
+    root: &Path,
+    cfg: &KindConfig,
+) -> Result<Option<CreatedKindCluster>> {
     let cluster = &cfg.cluster;
+    let mut created = None;
     if cluster_exists(cluster)? {
         eprintln!("==> KIND cluster '{cluster}' already exists, reusing");
     } else {
@@ -673,6 +1067,9 @@ fn kind_up_steps(root: &Path, cfg: &KindConfig) -> Result<()> {
             .arg(worktree_kubeconfig(root))
             .arg("--config")
             .arg(&config_path))?;
+        created = Some(CreatedKindCluster {
+            cluster: cluster.clone(),
+        });
     }
     configure_worktree_kubeconfig(root, cfg)?;
     ensure_kube_proxy_nftables_if_requested()?;
@@ -696,6 +1093,11 @@ fn kind_up_steps(root: &Path, cfg: &KindConfig) -> Result<()> {
         // leave a terminating replica that makes `wait pod` exit NotFound.
         .arg("--timeout=1200s"))?;
 
+    Ok(created)
+}
+
+fn kind_up_steps(root: &Path, cfg: &KindConfig) -> Result<()> {
+    kind_platform_steps(root, cfg)?;
     eprintln!("==> installing Restate Operator (chart v{RESTATE_OPERATOR_VERSION})");
     run(Command::new("helm")
         .arg("upgrade")
@@ -1071,7 +1473,39 @@ pub(super) fn wait_for_selected_pod_ready(namespace: &str, selector: &str) -> Re
 
 /// `dev down [--path <checkout>]`: the inverse of [`up`] for the same root.
 pub(super) fn down(path: Option<&Path>, cfg: &KindConfig) -> Result<()> {
-    down_in(&checkout_root(path)?, cfg)
+    let root = checkout_root(path)?;
+    if super::native_profile::Intent::read(&root)?.is_some()
+        || root.join(".devx/worktree.json").is_file()
+    {
+        super::worktree_env::down(&root, cfg)
+    } else {
+        down_in(&root, cfg)
+    }
+}
+
+/// Physical identity check for explicit native cleanup, including a partially
+/// initialized database. A changed cluster namespace is not an owned target.
+pub(super) fn verify_native_teardown(root: &Path, cfg: &KindConfig) -> Result<()> {
+    let intent = super::native_profile::Intent::read(root)?.context("native intent is missing")?;
+    intent.verify_target(root, cfg)?;
+    if cluster_exists(&cfg.cluster)? {
+        verify_fixture_port(cfg)?;
+        configure_worktree_kubeconfig(root, cfg)?;
+        let kube = super::forgejo::cluster::Kube::new(cfg);
+        let namespace: serde_json::Value = serde_json::from_str(&kube.output(&[
+            "get",
+            "namespace",
+            &cfg.namespace,
+            "-o",
+            "json",
+        ])?)?;
+        let uid = namespace["metadata"]["uid"]
+            .as_str()
+            .context("native namespace UID is missing")?
+            .parse()?;
+        intent.binding(uid)?;
+    }
+    Ok(())
 }
 
 /// Tear down a KIND dependency tier whose port-forward state belongs to
@@ -1859,7 +2293,10 @@ async fn enroll_fixture(
         )
         .fetch_one(pg.pool())
         .await?;
-        anyhow::ensure!(!enrolled, "existing family history needs explicit operator recovery; fixture bootstrap will not replace it");
+        anyhow::ensure!(
+            !enrolled,
+            "existing family history needs explicit operator recovery; fixture bootstrap will not replace it"
+        );
         let config = super::surreal::host_config(cfg, database);
         let source = crate::surreal_archive::connect_http(&config).await?;
         let counts = fixture_source_counts(&source).await?;

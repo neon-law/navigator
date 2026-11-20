@@ -959,7 +959,7 @@ async fn boot(brand: Site, host_dbos: bool) -> anyhow::Result<()> {
     // would 404 its own home page.
     let host_dioxus = (brand.public_dioxus)(&rt.state);
     let lookup = |key: &str| std::env::var(key).ok();
-    let dbos_schedules = dbos_schedules(&rt, host_dbos, lookup).await?;
+    let dbos_schedules = dbos_schedules(&rt, host_dbos, combined, lookup).await?;
     let sent_email_export = sent_email_export_source(host_dbos, lookup).await?;
     // The combined worker registers Archives; this host still supplies Sent Email Export.
     let archives = archives_context(host_dbos && !combined, rt.config.environment, lookup)?;
@@ -1107,24 +1107,36 @@ fn archives_context(
         .context("configure DBOS Archives")
 }
 
-/// Build every optional DBOS schedule this host enabled. Each schedule has its
-/// own flag, resolved before its context so an unused schedule never requires
-/// its credentials or storage.
+/// Evaluate selection even in the combined host, while only the schedule's
+/// owner constructs its provider context. The worker owns these contexts when cohosted.
+fn worker_schedule<T>(
+    combined: bool,
+    selected: anyhow::Result<bool>,
+    build: impl FnOnce() -> anyhow::Result<T>,
+) -> anyhow::Result<Option<T>> {
+    if selected? && !combined {
+        build().map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
+/// Build application-owned schedules, deferring worker contexts when cohosted.
+/// Resolve each flag before context construction so unused schedules require
+/// no credentials or storage.
 async fn dbos_schedules(
     rt: &HostRuntime,
     host_dbos: bool,
+    combined: bool,
     lookup: impl Fn(&str) -> Option<String> + Copy,
 ) -> anyhow::Result<dbos_engine::Schedules> {
-    let general_nag = if should_host_general_nag(host_dbos, lookup)? {
-        Some(general_nag_context(rt).context("configure DBOS GeneralNag")?)
-    } else {
-        None
-    };
-    let dri_digest = if should_host_dri_digest(host_dbos, lookup)? {
-        Some(dri_digest_context(rt, lookup).context("configure DBOS DriDigest")?)
-    } else {
-        None
-    };
+    let general_nag =
+        worker_schedule(combined, should_host_general_nag(host_dbos, lookup), || {
+            general_nag_context(rt).context("configure DBOS GeneralNag")
+        })?;
+    let dri_digest = worker_schedule(combined, should_host_dri_digest(host_dbos, lookup), || {
+        dri_digest_context(rt, lookup).context("configure DBOS DriDigest")
+    })?;
     let project_recovery = if should_host_project_recovery(host_dbos, lookup)? {
         Some(
             project_recovery_context(rt, lookup)
@@ -1163,28 +1175,32 @@ async fn dbos_schedules(
     } else {
         None
     };
-    let billing_canary = if should_host_billing_canary(host_dbos, lookup)? {
-        Some(
+    let billing_canary = worker_schedule(
+        combined,
+        should_host_billing_canary(host_dbos, lookup),
+        || {
             workflows::dbos_engine::billing_canary::Context::from_lookup(lookup)
-                .context("configure DBOS BillingCanary")?,
-        )
-    } else {
-        None
-    };
-    let billing_digest = if should_host_billing_digest(host_dbos, lookup)? {
-        Some(
+                .context("configure DBOS BillingCanary")
+        },
+    )?;
+    let billing_digest = worker_schedule(
+        combined,
+        should_host_billing_digest(host_dbos, lookup),
+        || {
             workflows::dbos_engine::billing_digest::Context::from_lookup(lookup)
-                .context("configure DBOS BillingDigest")?,
-        )
-    } else {
+                .context("configure DBOS BillingDigest")
+        },
+    )?;
+    let notation_reset = worker_schedule(
+        combined,
+        should_host_notation_reset(host_dbos, lookup),
+        || notation_reset_context(rt, lookup).context("configure DBOS NotationReset"),
+    )?;
+    let profit_digest = if combined {
         None
-    };
-    let notation_reset = if should_host_notation_reset(host_dbos, lookup)? {
-        Some(notation_reset_context(rt, lookup).context("configure DBOS NotationReset")?)
     } else {
-        None
+        profit_digest_context(rt, host_dbos, lookup).await?
     };
-    let profit_digest = profit_digest_context(rt, host_dbos, lookup).await?;
     let ceo_digest = ceo_digest_schedule(rt, host_dbos, lookup).await?;
     let linear_backlog = if host_dbos && dbos_engine::enabled(lookup)? {
         dbos_engine::linear_backlog::Context::from_lookup(lookup)?
@@ -1868,5 +1884,43 @@ mod tests {
             _ => None,
         };
         assert!(should_host_billing_canary(true, invalid_billing_canary).is_err());
+    }
+}
+
+#[cfg(test)]
+mod schedule_owner_tests {
+    use super::*;
+
+    #[test]
+    fn combined_boot_defers_worker_providers_but_keeps_selection_and_standalone_strict() {
+        let lookup = |key: &str| match key {
+            dbos_engine::ENABLED_ENV | dbos_engine::general_nag::ENABLED_ENV => Some("true".into()),
+            _ => None,
+        };
+        let build = || {
+            dbos_engine::general_nag::Context::from_lookup(
+                store::surreal::SurrealDb::uninitialized(),
+                true,
+                lookup,
+            )
+            .map_err(anyhow::Error::from)
+        };
+        assert!(
+            worker_schedule(true, should_host_general_nag(true, lookup), build)
+                .unwrap()
+                .is_none()
+        );
+        let error = worker_schedule(false, should_host_general_nag(true, lookup), build)
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("SLACK_GENERAL_CHANNEL_ID"));
+        let invalid = |key: &str| {
+            if key == dbos_engine::general_nag::ENABLED_ENV {
+                Some("invalid".into())
+            } else {
+                lookup(key)
+            }
+        };
+        assert!(worker_schedule(true, should_host_general_nag(true, invalid), build).is_err());
     }
 }

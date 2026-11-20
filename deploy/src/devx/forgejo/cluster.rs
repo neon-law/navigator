@@ -254,6 +254,14 @@ pub(in crate::devx) fn up(cfg: &KindConfig) -> Result<()> {
     ensure_signing_key(&kube)?;
     apply_secrets(cfg, &kube, &seed)?;
 
+    let native_database = if super::super::native_profile::selected(&root, cfg)? {
+        Some(super::super::orchestrate::verified_native_database(
+            &root, cfg,
+        )?)
+    } else {
+        None
+    };
+
     eprintln!("==> applying {OVERLAY}");
     // Completed Jobs are immutable; delete them so a changed spec re-runs.
     kube.run(&[
@@ -265,6 +273,10 @@ pub(in crate::devx) fn up(cfg: &KindConfig) -> Result<()> {
         "--wait=true",
     ])?;
     let rendered = kustomize(&root, OVERLAY)?;
+    let rendered = match native_database {
+        Some(database) => super::super::native_profile::roles_for_database(&rendered, &database)?,
+        None => rendered,
+    };
     let changes = kube.apply(&align_issuer(&rendered, cfg.rauthy_port))?;
     eprint!("{changes}");
 
@@ -540,16 +552,22 @@ fn issue_server_certificate(
 ) -> Result<ServerCertificate> {
     let path = |name: &str| directory.join(name);
     let config = path("ca.cnf");
-    std::fs::write(&config, "[req]\nprompt=no\ndistinguished_name=dn\nx509_extensions=ca\n[dn]\nCN=navigator-postgres-ca\n[ca]\nbasicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,cRLSign\nsubjectKeyIdentifier=hash\n")?;
+    std::fs::write(
+        &config,
+        "[req]\nprompt=no\ndistinguished_name=dn\nx509_extensions=ca\n[dn]\nCN=navigator-postgres-ca\n[ca]\nbasicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,cRLSign\nsubjectKeyIdentifier=hash\n",
+    )?;
     let ca = path("ca.crt");
     let ca_key = path("ca.key");
     let certificate = path("tls.crt");
     let key = path("tls.key");
     let csr = path("tls.csr");
     let extensions = path("server.ext");
-    std::fs::write(&extensions, format!(
-        "basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid,issuer\nsubjectAltName=DNS:navigator-postgres,DNS:navigator-postgres.{namespace}.svc,DNS:navigator-postgres.{namespace}.svc.cluster.local,DNS:localhost,IP:127.0.0.1\n"
-    ))?;
+    std::fs::write(
+        &extensions,
+        format!(
+            "basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid,issuer\nsubjectAltName=DNS:navigator-postgres,DNS:navigator-postgres.{namespace}.svc,DNS:navigator-postgres.{namespace}.svc.cluster.local,DNS:localhost,IP:127.0.0.1\n"
+        ),
+    )?;
     certificate_command(
         Command::new(openssl)
             .args([

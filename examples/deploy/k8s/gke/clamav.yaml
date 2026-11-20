@@ -1,5 +1,5 @@
 # Production copy of the private scanner resource. Keep this byte-for-byte
-# aligned with `k8s/staging/clamav.yaml`; Kustomize does not permit this
+# aligned with `k8s/base/clamav/clamav.yaml`; Kustomize does not permit this
 # example overlay to import a single file above its root.
 apiVersion: v1
 kind: PersistentVolumeClaim

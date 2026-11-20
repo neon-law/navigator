@@ -64,6 +64,33 @@ impl DriDigestSource for SurrealDriDigestSource {
     }
 }
 
+struct ApplicationDriDigestSource {
+    surreal: store::surreal::SurrealDb,
+    postgres: store::postgres::PostgresDb,
+}
+
+#[async_trait::async_trait]
+impl DriDigestSource for ApplicationDriDigestSource {
+    async fn projects(&self) -> Result<Vec<ProjectDriSummary>, DriDigestError> {
+        store::postgres::PostgresDb::with_application_db(
+            self.postgres.clone(),
+            store::projects::dri_digest(&self.surreal),
+        )
+        .await
+        .map_err(|_| DriDigestError::Projects)?
+        .map_err(|_| DriDigestError::Projects)
+    }
+    async fn open_pitch_counts(&self) -> Result<(usize, usize), DriDigestError> {
+        store::postgres::PostgresDb::with_application_db(
+            self.postgres.clone(),
+            store::projects::matter_open_pitch_counts(&self.surreal),
+        )
+        .await
+        .map_err(|_| DriDigestError::Counts)?
+        .map_err(|_| DriDigestError::Counts)
+    }
+}
+
 #[derive(Clone)]
 pub struct Context {
     source: Arc<dyn DriDigestSource>,
@@ -72,7 +99,21 @@ pub struct Context {
 }
 
 impl Context {
-    /// Construct a host context from the same SurrealDB queries used by the
+    /// Inject delivery and an owned store whose admission is checked on each read.
+    pub fn with_store(
+        surreal: store::surreal::SurrealDb,
+        postgres: store::postgres::PostgresDb,
+        notifier: Arc<dyn Notifier>,
+        simulated: bool,
+    ) -> Self {
+        Self::with_source(
+            Arc::new(ApplicationDriDigestSource { surreal, postgres }),
+            notifier,
+            simulated,
+        )
+    }
+
+    /// Construct a host context from the same Project accessors used by the
     /// Restate service. The webhook is required whenever this schedule is
     /// enabled; the generic notifier's capture-only fallback is not delivery.
     pub fn from_lookup<F>(
@@ -255,6 +296,10 @@ pub async fn schedule(workflow: DriDigestWorkflow, clock: Clock, stop: Cancellat
 }
 
 #[cfg(test)]
+#[path = "../../../workflows-service/tests/support/native_project.rs"]
+mod native_project_fixture;
+
+#[cfg(test)]
 mod tests {
     use super::{
         enabled, slot, validate_delivery_config, workflow_id, DriDigestSource, ENABLED_ENV,
@@ -296,70 +341,82 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn surreal_source_keeps_the_existing_all_project_both_sides_query() {
-        use store::persons::{self, NewPerson};
-        use store::projects::{create, designate_dri_in_surreal, DriSide, NewProject};
-
-        let surreal = store::test_support::mem_surreal().await;
-        let lawyer = persons::create(
-            &surreal,
-            &NewPerson::new("Synthetic Lawyer", "dri-lawyer@example.test"),
-        )
-        .await
-        .expect("create synthetic lawyer");
-        let client = persons::create(
-            &surreal,
-            &NewPerson::new("Synthetic Client", "dri-client@example.test"),
-        )
-        .await
-        .expect("create synthetic client");
-        let assigned = create(
-            &surreal,
-            &NewProject {
-                code: "dri-assigned".into(),
-                name: "Private display name".into(),
-                status: "open".into(),
-                entity_id: uuid::Uuid::now_v7(),
-                ..Default::default()
-            },
-        )
-        .await
-        .expect("create assigned project");
-        create(
-            &surreal,
-            &NewProject {
-                code: "dri-unassigned".into(),
-                name: "Another private name".into(),
-                status: "open".into(),
-                entity_id: uuid::Uuid::now_v7(),
-                ..Default::default()
-            },
-        )
-        .await
-        .expect("create unassigned project");
-        designate_dri_in_surreal(&surreal, assigned.id, lawyer.id, DriSide::Lawyer)
+    async fn native_source_keeps_all_projects_and_both_dri_sides() {
+        store::test_support::with_postgres(async {
+            use store::persons::{self, NewPerson, Role};
+            use store::projects::{designate_dri_in_surreal, DriSide};
+            let pg = store::postgres::PostgresDb::application().await.unwrap();
+            let surreal = store::surreal::SurrealDb::uninitialized();
+            let (matter, admin) = super::native_project_fixture::matter(&surreal).await;
+            let firm = matter
+                .firm_id
+                .expect("the native Project fixture has a Firm");
+            let assigned = store::projects::find_by_id(&surreal, matter.id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(assigned.firm_id, Some(firm));
+            assert_eq!(assigned.brand, matter.brand);
+            assert_eq!(assigned.entity_id, matter.entity_id);
+            assert!(persons::find_by_id(&surreal, admin)
+                .await
+                .unwrap()
+                .is_some());
+            let unassigned_project = super::native_project_fixture::new_project(
+                &surreal,
+                firm,
+                &matter.brand,
+                matter.entity_id,
+            )
+            .await;
+            let unassigned = store::projects::find_by_id(&surreal, unassigned_project.id)
+                .await
+                .unwrap()
+                .unwrap();
+            let lawyer = persons::create(
+                &surreal,
+                &NewPerson::with_role("Synthetic Lawyer", "dri-lawyer@example.test", Role::Lawyer),
+            )
             .await
-            .expect("designate lawyer DRI");
-        designate_dri_in_surreal(&surreal, assigned.id, client.id, DriSide::Client)
+            .unwrap();
+            let client = persons::create(
+                &surreal,
+                &NewPerson::new("Synthetic Client", "dri-client@example.test"),
+            )
             .await
-            .expect("designate client DRI");
-
-        let rows = super::SurrealDriDigestSource(surreal)
-            .projects()
-            .await
-            .expect("read project DRI summary");
-        assert_eq!(rows.len(), 2);
-        let assigned = rows
-            .iter()
-            .find(|project| project.code == "dri-assigned")
-            .expect("assigned project is present");
-        assert_eq!(assigned.lawyer_dris, ["Synthetic Lawyer"]);
-        assert_eq!(assigned.client_dris, ["Synthetic Client"]);
-        let unassigned = rows
-            .iter()
-            .find(|project| project.code == "dri-unassigned")
-            .expect("unassigned project is present");
-        assert!(unassigned.lawyer_dris.is_empty());
-        assert!(unassigned.client_dris.is_empty());
+            .unwrap();
+            designate_dri_in_surreal(&surreal, matter.id, lawyer.id, DriSide::Lawyer)
+                .await
+                .unwrap();
+            designate_dri_in_surreal(&surreal, matter.id, client.id, DriSide::Client)
+                .await
+                .unwrap();
+            let source = super::ApplicationDriDigestSource {
+                surreal: surreal.clone(),
+                postgres: pg.clone(),
+            };
+            let rows = source.projects().await.unwrap();
+            assert_eq!(rows.len(), 2);
+            let assigned = rows.iter().find(|row| row.code == assigned.code).unwrap();
+            assert_eq!(assigned.lawyer_dris, ["Synthetic Lawyer"]);
+            assert_eq!(assigned.client_dris, ["Synthetic Client"]);
+            let unassigned = rows.iter().find(|row| row.code == unassigned.code).unwrap();
+            assert!(unassigned.lawyer_dris.is_empty());
+            assert!(unassigned.client_dris.is_empty());
+            assert_eq!(source.open_pitch_counts().await.unwrap(), (0, 0));
+            let strict_source = super::SurrealDriDigestSource(surreal);
+            assert_eq!(strict_source.projects().await.unwrap().len(), 2);
+            assert_eq!(strict_source.open_pitch_counts().await.unwrap(), (0, 0));
+            pg.pool().close().await;
+            assert!(matches!(
+                source.projects().await,
+                Err(super::DriDigestError::Projects)
+            ));
+            assert!(matches!(
+                source.open_pitch_counts().await,
+                Err(super::DriDigestError::Counts)
+            ));
+        })
+        .await;
     }
 }

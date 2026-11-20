@@ -84,7 +84,12 @@ pub struct NativeDatabase {
     tier: TierBinding,
 }
 
-fn database_name(operation: Uuid) -> Result<String, OriginError> {
+/// The deterministic identifier reserved by one valid creation operation.
+/// Computing its name neither creates nor admits an existing database.
+///
+/// # Errors
+/// A nil operation has no reserved resource.
+pub fn database_name(operation: Uuid) -> Result<String, OriginError> {
     if operation.is_nil() {
         return Err(OriginError::Identity);
     }

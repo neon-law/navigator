@@ -1,0 +1,13 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: navigator
+# Host-side neon owns the entire native executor. This tier contains no
+# separate worker, broker, source engine, or legacy trigger workload.
+resources:
+  - ../../base
+  - ../../base/rauthy
+  - ../../base/clamav
+  - ../../base/openobserve
+  - ../kind/rauthy
+  - ../kind/seaweedfs
+  - ../kind/postgres

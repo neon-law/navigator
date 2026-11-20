@@ -3,8 +3,8 @@
 > **New tests run against the PostgreSQL fixture.** The embedded SurrealDB harness is deprecated: its call sites only go
 > down, and `cli/tests/embedded_surreal_ratchet.rs` fails a change that adds one.
 
-The local KIND lifecycle resets staging by deleting its guarded namespace, never by truncating tables; old workflow
-journals cannot survive.
+Task-owned KIND teardown removes only its own resources. Repeated startup verifies the same database and durable history
+rather than truncating it; retained or partially initialized history requires explicit recovery.
 
 ## The PostgreSQL fixture
 
@@ -21,30 +21,42 @@ docker run -d --name test-postgres --shm-size=256m -p 127.0.0.1:25432:5432 \
 docker exec -i test-postgres psql -U postgres -d smoke -v ON_ERROR_STOP=1 < store/postgres/schema.sql
 ```
 
-## The KIND application database
+The shared unit-test server hosts isolated test databases. `PostgresFixture::create` owns a uniquely created database
+with canonical schema and known-empty synthetic test admission before any data. Its consuming cleanup drops only that
+resource. This test seam does not establish a production Database Origin or backfill retained history.
 
-KIND browser tests use the application database, separately from the disposable unit-test fixture above. The normal
-Hudson lifecycle provisions the pinned retained PostgreSQL image with TLS and application roles. It writes a private
-`.devx/postgres/env` and includes it in `.devx/env`, so host fixture helpers and the in-cluster application use the same
-database. In-cluster clients mount the CA certificate; server keys stay with PostgreSQL.
+## Fresh KIND application tiers
 
-KIND adds a separate ingress rule for PostgreSQL port 5432 from its verified control-plane InternalIPv4 `/32`, matched
-to the owned Docker node. NodePort SNAT can represent multiple clients; this rule admits node-facing transport, not an
-exclusive host identity. Verified TLS and database credentials remain required. The labeled-pod policy and hosted
-policies are unchanged.
-
-Before enrollment, Hudson holds web and worker replicas and waits for their pods to stop. A fresh memory-backed legacy
-source is captured with its real strict-export receipt, imported, and enrolled before ordinary sample seeding. A valid
-existing enrollment is reused. Nonempty unactivated history or partial enrollment requires explicit recovery; the
-fixture never fabricates empty receipts or resets retained history. An interrupted attempt keeps writers held.
+The fresh local KIND tier is distinct from the focused unit-test server above. Hudson creates a unique PostgreSQL
+database and records its [Database Origin](glossary/database-origin.md) before seeding through admitted accessors. It
+provisions TLS and application, migration, DBOS, and archive roles. `web` cohosts the selected native workflows; fresh
+dependencies contain no SurrealDB server, Restate broker, or separate workflow worker.
 
 ```bash
 cargo run -p hudson -- dev worktree-env up --runtime kind --path "$PWD"
 set -a; source .devx/env; set +a
 ```
 
-The deploy browser job calls the same `hudson dev postgres-bootstrap` boundary after applying its dependencies, then
-sources the private application-role environment for the app and host browser helpers.
+Private `.devx/postgres/env` and `.devx/env` bind the application and host helpers to that exact database. The CA stays
+in `.devx/postgres/ca.crt`; server keys remain with PostgreSQL. The owned KIND node exposes the TLS NodePort on
+loopback, while its verified node-facing ingress rule and database credentials remain required. Repeated starts verify
+the namespace and database identity. Unknown or partial authority is never relabeled as a fresh database.
+
+The full native development harness uses existing capturing providers only under its guarded embedded Dev, CI, and
+simulated-matter configuration. Those captures neither send external effects nor certify live-provider behavior. A
+successful fixture or local startup is not retained-work handover or recovery acceptance.
+
+## Captured compatibility and the deploy browser gate
+
+Existing legacy KIND descriptors retain captured-source enrollment. Explicit `--runtime native` selects the separate
+host-process compatibility topology, not fresh PostgreSQL authority. Compatibility bootstrap holds web and worker
+writers, captures the actual Source export, and enrolls required scopes before sample seeding. Valid enrollment is
+reused; unactivated nonempty or partial history requires explicit recovery rather than invented receipts.
+
+The existing `.github/workflows/deploy.yml` browser job remains a legacy compatibility gate. It installs the Restate
+operator and CRDs, invokes `hudson dev postgres-bootstrap`, and forwards the in-cluster Source service. Its
+PracticePreview helper also retains an embedded-engine fixture. This gate is separate from fresh local provisioning and
+the dedicated quickstart job; neither establishes that all CI runs without legacy engines.
 
 ## The embedded SurrealDB harness (deprecated)
 
@@ -73,30 +85,36 @@ The existing call sites move to the PostgreSQL fixture crate by crate as each do
 (ENG-1356). The ratchet holds each crate's count: a port that removes call sites lowers that crate's `BASELINE` entry in
 the same change.
 
-## The one exception — a test that spawns `navigator`
+## Explicit Source compatibility subprocess tests
 
-A subprocess cannot reach an in-process engine, so a test that runs the binary needs a real server instead.
-`store::test_support::server_surreal(database)` connects to one and hands back the coordinates to point that process at,
-on a database of the caller's own naming so two such tests cannot collide.
+A Source compatibility subprocess needs a real Source server rather than an in-process engine.
+`store::test_support::server_surreal(database)` supplies that explicit lane with a separate named database. Native
+subprocess tests instead use their actual PostgreSQL target and normal admission; they do not need a Source engine.
 
 - **`NAVIGATOR_SURREAL_ENDPOINT` set** → connect, apply the schema, run.
 - **unset** → return `None`, and the test skips.
 
-`NAV_REQUIRE_SURREAL=1` turns that skip into a failure, which is what keeps CI honest. A half-configured environment (an
-endpoint with no namespace) always panics: that is a mistake, not an opt-out.
+`NAV_REQUIRE_SURREAL=1` turns the compatibility skip into a failure. A half-configured Source environment is an error,
+not an opt-out. The primary coverage lane selects tests without Source using the canonical test inventory.
 
 ## Test tiers
 
-- **Tier 1 — `cargo test` and BDD:** the PostgreSQL fixture, plus the embedded store where it remains; embedded Rego,
-  Rauthy, Restate, storage, vendors, and agent routing use their in-process test seams.
-- **Tier 2 — KIND e2e:** Rauthy, embedded Rego, Restate, SeaweedFS, browser, and accessibility use the real topology.
+- **Focused native tests:** disposable PostgreSQL fixtures and existing provider seams; no application sidecars are
+  needed merely to test a store accessor.
+- **Fresh KIND and quickstart:** the real PostgreSQL/DBOS application topology with Rauthy, storage, and owned services.
+- **Compatibility suites and deploy browser gate:** retained Source/Restate fixtures remain explicit. Full-workspace
+  commands can include them; do not confuse them with the Source-free coverage selection.
 
-Do not pull other sidecars into tier 1. Its trait seams are the contract boundary.
+Do not add application sidecars to focused native tests; use their existing provider seams.
 
 ## How a contributor runs tests
 
+The full compatibility-inclusive workspace command is:
+
 ```sh
-cargo nextest run --workspace && cargo test -p features
+cargo nextest run --workspace \
+  --features store/surreal-compatibility,workflows-service/jwt-provider-regression
+cargo test -p features --features store/surreal-compatibility
 ```
 
 Without the PostgreSQL fixture running, its tests skip. The cucumber BDD suites in `features` keep `cargo test`; their
@@ -114,13 +132,15 @@ wire, which an in-process engine cannot cover — point the harness at a running
 
 ```sh
 set -a; source .devx/env; set +a
-NAV_REQUIRE_SURREAL=1 cargo nextest run --workspace
+NAV_REQUIRE_SURREAL=1 cargo nextest run --workspace \
+  --features store/surreal-compatibility,workflows-service/jwt-provider-regression
 ```
 
 ## How CI runs them
 
-CI does not test SurrealDB. The test job starts the PostgreSQL fixture and sets `NAVIGATOR_TEST_POSTGRES_PORT`. `hudson
-ops surreal-free-tests` leaves out every test in a file that starts a SurrealDB engine, every test binary and cucumber
-runner that reaches one, and leaves every file that names SurrealDB out of the coverage measurement. The job sets
-`NAVIGATOR_FORBID_SURREAL=1`, so a test that starts an engine anyway fails instead of running. KIND e2e covers the real
-stack, browser, and accessibility. Draft pull requests skip the Rust suite; marking one ready runs it.
+The primary Rust coverage job does not start SurrealDB. It starts the PostgreSQL fixture and sets
+`NAVIGATOR_TEST_POSTGRES_PORT`. `hudson ops surreal-free-tests` leaves out every test in a file that starts a SurrealDB
+engine, every test binary and cucumber runner that reaches one, and leaves every file that names SurrealDB out of the
+coverage measurement. The job sets `NAVIGATOR_FORBID_SURREAL=1`, so a test that starts an engine anyway fails instead of
+running. KIND e2e covers the real stack, browser, and accessibility. Draft pull requests skip the Rust suite; marking
+one ready runs it.

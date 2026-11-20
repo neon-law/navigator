@@ -338,7 +338,7 @@ fn kind_rauthy_bootstrap_matches_the_local_login_contract() {
 #[test]
 fn reusable_rauthy_layer_contains_no_kind_credentials() {
     let staging =
-        std::fs::read_to_string(workspace().join("k8s/staging/rauthy.yaml")).expect("Rauthy");
+        std::fs::read_to_string(workspace().join("k8s/base/rauthy/rauthy.yaml")).expect("Rauthy");
     for local_only in [
         "\"Plain\": \"password\"",
         "BOOTSTRAP_ADMIN_PASSWORD_PLAIN: admin",

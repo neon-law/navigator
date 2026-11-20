@@ -14,6 +14,7 @@ jobs:
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_BUILD_JOBS: "2"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: azure/setup-kubectl@bda439f5f36b99b262ebdcd3613869bddb064c8e # v5
@@ -25,18 +26,56 @@ jobs:
           echo 'aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d  /tmp/kind' | sha256sum -c -
           chmod +x /tmp/kind
           sudo mv /tmp/kind /usr/local/bin/kind
-      - name: Install the pinned Restate CLI
-        run: npm install --global @restatedev/restate@1.7.2
+      - name: Refuse legacy engine CLI usage
+        run: |
+          mkdir -p /tmp/navigator-engine-poison
+          for engine in restate surreal surrealdb; do
+            cat > "/tmp/navigator-engine-poison/$engine" <<'SH'
+          #!/usr/bin/env bash
+          touch /tmp/navigator-legacy-engine-invoked
+          echo 'Legacy engine usage is forbidden in native quickstart' >&2
+          exit 99
+          SH
+            chmod +x "/tmp/navigator-engine-poison/$engine"
+          done
+          echo /tmp/navigator-engine-poison >> "$GITHUB_PATH"
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: 1.98.0
+          targets: wasm32-unknown-unknown
       - name: cache the Rust dependencies
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           shared-key: gate-cli
           save-if: false
+      - name: Install pinned Dioxus CLI
+        run: |
+          tools="$(mktemp -d "$RUNNER_TEMP/navigator-dx-0.7.10.XXXXXX")"
+          trap 'rm -f "$tools/dx.tar.gz"' EXIT
+          curl --fail --show-error --silent --location --retry 5 --retry-delay 2 --retry-all-errors \
+            https://github.com/DioxusLabs/dioxus/releases/download/v0.7.10/dx-x86_64-unknown-linux-gnu.tar.gz \
+            --output "$tools/dx.tar.gz"
+          echo '4363e4ed2a3f1eb7f4d38d2d59aed59ce43271c44c16b425e92c89a64761fbe7'"  $tools/dx.tar.gz" | sha256sum --check --strict
+          python3 - "$tools" <<'PYTHON'
+          import pathlib, sys, tarfile
+          tools = pathlib.Path(sys.argv[1])
+          with tarfile.open(tools / 'dx.tar.gz', 'r:gz') as archive:
+              members = archive.getmembers()
+              if len(members) != 1 or members[0].name != 'dx' or not members[0].isfile():
+                  raise SystemExit('unexpected Dioxus CLI archive layout')
+              with (tools / 'dx').open('xb') as binary:
+                  binary.write(archive.extractfile(members[0]).read())
+          (tools / 'dx').chmod(0o700)
+          PYTHON
+          version="$("$tools/dx" --version)"
+          test "${version%% (*}" = 'dioxus 0.7.10'
+          "$tools/dx" build --help > "$tools/build-help.txt"
+          grep -Fq -- '--force-sequential' "$tools/build-help.txt"
+          echo "$version"
+          sha256sum "$tools/dx"
+          echo "$tools" >> "$GITHUB_PATH"
       - name: build navigator CLI
-        run: cargo build -p hudson --quiet
+        run: cargo build --locked -p hudson --quiet
       - name: hudson quickstart
         run: |
           target/debug/hudson quickstart > /tmp/quickstart.log 2>&1 &
@@ -61,10 +100,105 @@ jobs:
           curl -fsS "http://localhost:$PORT/" | grep -q 'Shook PC'
           curl -fsS "http://localhost:$NAVIGATOR_KIND_FORGEJO_PORT/api/healthz"
           timeout 5 bash -c "</dev/tcp/127.0.0.1/$NAVIGATOR_KIND_POSTGRES_PORT"
+          for code in sample-litigation sample-transactional sample-estate; do
+            test -s ".devx/sample-projects/$code/navigator.yaml"
+          done
+          export KUBECONFIG="$PWD/.devx/kubeconfig"
+          kubectl -n navigator exec navigator-postgres-0 -c postgres -- \
+            psql -X -qAt -U postgres -d "$NAVIGATOR_POSTGRES_DATABASE" -v ON_ERROR_STOP=1 -c \
+            "SELECT count(DISTINCT p.code) = 3 FROM project p JOIN matter_page m ON m.project_id = p.id WHERE p.code IN ('sample-litigation','sample-transactional','sample-estate') AND p.firm_id IS NOT NULL" | grep -qx t
+      - name: A native durable operation survives app restart
+        run: |
+          set -a; source .devx/env; set +a
+          export KUBECONFIG="$PWD/.devx/kubeconfig"
+          python3 - <<'PYTHON'
+          import json, os, pathlib, urllib.request, uuid
+          machine = str(uuid.uuid4())
+          pathlib.Path('/tmp/quickstart-machine').write_text(machine)
+          url = os.environ['NAVIGATOR_DBOS_INGRESS_URL'] + '/notation/' + machine + '/workflow_start'
+          request = urllib.request.Request(url, data=json.dumps({
+              'spec_yaml': 'BEGIN:\n  _: END\nEND: {}\n', 'ephemeral': True,
+          }).encode(), headers={'Authorization': 'Bearer ' + os.environ['NAVIGATOR_DBOS_INGRESS_TOKEN'],
+                               'Content-Type': 'application/json'})
+          with urllib.request.urlopen(request, timeout=120) as response:
+              assert json.load(response)['next_state'] == 'BEGIN'
+          PYTHON
+          # Pinned DBOS 0.6 native step serialization encodes the UUID as a JSON string.
+          # Bind that checkpoint to this probe's actual completed transition, not any successful run.
+          kubectl -n navigator exec -i navigator-postgres-0 -c postgres -- \
+            psql -X -qAt -U postgres -d "$NAVIGATOR_POSTGRES_DATABASE" -v ON_ERROR_STOP=1 \
+            --set=machine="$(cat /tmp/quickstart-machine)" <<'SQL' | grep -qx t
+          SELECT count(*) = 1
+          FROM dbos.workflow_status w
+          JOIN dbos.operation_outputs o ON o.workflow_uuid = w.workflow_uuid
+            AND o.function_name = 'notation-operation-id' AND o.error IS NULL
+          JOIN notation_transition t ON t.id::text = (o.output::jsonb #>> '{}')
+          WHERE w.name = 'NotationTransition' AND w.status = 'SUCCESS'
+            AND t.notation_id = :'machine'::uuid AND t.started
+            AND t.result->>'next_state' = 'BEGIN';
+          SQL
+          kill -TERM "$(cat /tmp/quickstart.pid)"
+          for _ in $(seq 1 120); do
+            if ! curl -fsS "http://localhost:$PORT/app/readyz" >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          if curl -fsS "http://localhost:$PORT/app/readyz" >/dev/null 2>&1; then
+            echo '::error::Owned app did not stop for the restart proof'
+            exit 1
+          fi
+          target/debug/neon > /tmp/quickstart-restarted.log 2>&1 &
+          echo $! > /tmp/quickstart-restarted.pid
+          for _ in $(seq 1 300); do
+            kill -0 "$(cat /tmp/quickstart-restarted.pid)"
+            if curl -fsS "http://localhost:$PORT/app/readyz" >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          curl -fsS "http://localhost:$PORT/app/readyz" >/dev/null
+          python3 - <<'PYTHON'
+          import json, os, pathlib, urllib.request
+          base = os.environ['NAVIGATOR_DBOS_INGRESS_URL'] + '/notation/' + pathlib.Path('/tmp/quickstart-machine').read_text()
+          def request(suffix, body=None):
+              headers = {'Authorization': 'Bearer ' + os.environ['NAVIGATOR_DBOS_INGRESS_TOKEN']}
+              data = None
+              if body is not None:
+                  data = json.dumps(body).encode()
+                  headers['Content-Type'] = 'application/json'
+              request = urllib.request.Request(base + suffix, data=data, headers=headers, method='POST')
+              with urllib.request.urlopen(request, timeout=120) as response:
+                  result = json.load(response)
+                  return result['state'] if suffix == '/workflow_current_state' else result['next_state']
+          assert request('/workflow_current_state') == 'BEGIN'
+          assert request('/workflow_signal', {'condition': '_', 'ephemeral': True}) == 'END'
+          assert request('/workflow_current_state') == 'END'
+          PYTHON
+      - name: Legacy engines are absent
+        run: |
+          test ! -e /tmp/navigator-legacy-engine-invoked
+          set -a; source .devx/env; set +a
+          export KUBECONFIG="$PWD/.devx/kubeconfig"
+          kubectl get deployments,statefulsets,pods --all-namespaces -o json > /tmp/quickstart-workloads.json
+          python3 - <<'PY'
+          import json
+          data = json.load(open('/tmp/quickstart-workloads.json'))
+          for item in data['items']:
+              spec = item.get('spec', {})
+              spec = spec.get('template', {}).get('spec', spec)
+              assert not any(word in item['metadata']['name'].lower() for word in ['surreal', 'restate', 'workflows-service'])
+              for container in spec.get('containers', []):
+                  assert not any(word in container['image'].lower() for word in ['surreal', 'restate', 'workflows-service'])
+          PY
+          slot=$((PORT - 20600))
+          for port in "$((20100 + slot))" "$((20200 + slot))" "$((21200 + slot))"; do
+            if timeout 1 bash -c "</dev/tcp/127.0.0.1/$port" 2>/dev/null; then
+              echo '::error::A legacy engine port is listening'
+              exit 1
+            fi
+          done
       - name: Diagnose
         if: failure()
         run: |
           tail -200 /tmp/quickstart.log || true
+          tail -100 /tmp/quickstart-restarted.log || true
           set -a; source .devx/env || true; set +a
           if [ -s "$PWD/.devx/kubeconfig" ]; then
             export KUBECONFIG="$PWD/.devx/kubeconfig"
@@ -78,11 +212,29 @@ jobs:
         if: always()
         run: |
           kill "$(cat /tmp/quickstart.pid)" 2>/dev/null || true
+          kill "$(cat /tmp/quickstart-restarted.pid)" 2>/dev/null || true
           target/debug/hudson dev worktree-env down --path "$PWD" || true
 'on':
   pull_request:
     paths:
       - deploy/src/devx/quickstart.rs
+      - portal/src/hosting.rs
+      - portal/src/hosting/**
+      - workflows-service/src/host.rs
+      - workflows-service/src/host/**
+      - workflows/src/dbos_engine.rs
+      - workflows/src/dbos_engine/**
+      - model/src/workflow_engine.rs
+      - server/tests/postgres_startup.rs
+      - deploy/src/devx/webapp.rs
+      - deploy/src/devx/native_profile.rs
+      - deploy/src/devx/orchestrate.rs
+      - deploy/src/devx/postgres_fixture.rs
+      - k8s/overlays/kind-postgres-dbos-deps/**
+      - k8s/base/rauthy/**
+      - k8s/base/clamav/**
+      - k8s/base/openobserve/**
+      - k8s/postgres/access/**
       - deploy/src/devx/serve.rs
       - deploy/src/devx/worktree_env.rs
       - deploy/src/devx/forgejo/**

@@ -71,7 +71,41 @@ impl CountSource for SurrealCounts {
     }
 }
 
+struct ApplicationCounts {
+    surreal: store::surreal::SurrealDb,
+    postgres: store::postgres::PostgresDb,
+}
+
+#[async_trait::async_trait]
+impl CountSource for ApplicationCounts {
+    async fn read(&self) -> Result<(usize, usize), GeneralNagError> {
+        store::postgres::PostgresDb::with_application_db(
+            self.postgres.clone(),
+            store::projects::matter_open_pitch_counts(&self.surreal),
+        )
+        .await
+        .map_err(|_| GeneralNagError::Counts)?
+        .map_err(|_| GeneralNagError::Counts)
+    }
+}
+
 impl Context {
+    /// Inject delivery and an owned store whose admission is checked on each read.
+    pub fn with_store(
+        surreal: store::surreal::SurrealDb,
+        postgres: store::postgres::PostgresDb,
+        slack: Arc<dyn SlackBot>,
+        channel_id: String,
+        simulated: bool,
+    ) -> Self {
+        Self {
+            slack,
+            channel_id,
+            simulated,
+            counts: Arc::new(ApplicationCounts { surreal, postgres }),
+        }
+    }
+
     /// Resolve the live bot and target only when the GeneralNag schedule is
     /// enabled. A capture-only backend must never count as a successful
     /// production delivery.

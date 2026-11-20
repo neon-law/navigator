@@ -7,12 +7,12 @@ use std::{path::Path, process::Stdio, sync::Arc, time::Duration};
 use store::{postgres::PostgresDb, test_support::PostgresFixture};
 
 const CHILD: &str = "NAVIGATOR_NATIVE_STARTUP_CHILD";
-const TEST: &str = "staged_native_startup_hosts_the_registered_dbos_executor_without_source";
+const TEST: &str = "full_native_profile_replays_staged_data_and_manual_workflows_without_source";
 const TOKEN: &str = "synthetic-native-startup-ingress-token-0123456789";
 const BODY: &str = include_str!("../../templates/notations/neon_law/onboarding__letter.md");
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn staged_native_startup_hosts_the_registered_dbos_executor_without_source() {
+async fn full_native_profile_replays_staged_data_and_manual_workflows_without_source() {
     if std::env::var(CHILD).as_deref() == Ok("1") {
         portal::hosting::run_with_dbos(neon::brand()).await.unwrap();
         return;
@@ -42,6 +42,7 @@ async fn exercise(fixture: &PostgresFixture, postgres_port: &str) -> anyhow::Res
     let root = tempfile::tempdir()?;
     stage(root.path())?;
     let mut identity = None;
+    let manual_key = format!("manual-{}", uuid::Uuid::new_v4());
     for boot in 0..2 {
         let web_port = free_port()?;
         let worker_port = free_port()?;
@@ -58,6 +59,7 @@ async fn exercise(fixture: &PostgresFixture, postgres_port: &str) -> anyhow::Res
         .context("start the real combined host")?;
         let observed = async {
             wait_ready(&mut child, web_port, worker_port).await?;
+            verify_manual_canary(fixture.postgres(), worker_port, &manual_key).await?;
             PostgresDb::with_test_db(fixture.postgres().clone(), verify_native(root.path())).await
         }
         .await;
@@ -115,11 +117,10 @@ fn child_command(
     command.env_clear();
     // The canonical deployment registry owns required coordinates. Synthetic
     // non-integration values are overridden below where a real fixture exists.
-    for requirement in
-        store::deployment::applicable_web_requirements(store::DeploymentEnvironment::Dev, &|key| {
-            (key == store::deployment::CI_HARNESS).then(|| "1".into())
-        })?
-    {
+    for requirement in store::deployment::applicable_web_requirements(
+        store::DeploymentEnvironment::Dev,
+        &native_startup_profile,
+    )? {
         for coordinate in requirement.any_of[0] {
             command.env(coordinate, "synthetic-native-startup");
         }
@@ -140,6 +141,16 @@ fn child_command(
         .env("PORT", web_port.to_string())
         .env("NAVIGATOR_ENVIRONMENT", "dev")
         .env("NAVIGATOR_CI_HARNESS", "1")
+        .env("NAVIGATOR_SIMULATED_MATTERS", "true")
+        .env("NAVIGATOR_STAGING", "false")
+        .env(
+            workflows::flags::BILLING_CANARY_SCHEDULE_ENABLED_ENV,
+            "false",
+        )
+        .env(
+            workflows::flags::RECONCILE_INVOICES_SCHEDULE_ENABLED_ENV,
+            "false",
+        )
         .env(
             "SESSION_SECRET",
             "synthetic-native-startup-session-secret-0123456789",
@@ -153,13 +164,9 @@ fn child_command(
         .env("NAVIGATOR_FAKE_SIGNATURE_DIR", root.join("signatures"))
         .env("NAVIGATOR_SIGNATURE_PROVIDER", "fake")
         .env("NAVIGATOR_EMAIL_BACKEND", "capturing")
-        // A remaining boot requirement, not a running broker or a Source coordinate.
-        .env("RESTATE_BROKER_URL", "http://127.0.0.1:1")
         .env("NAVIGATOR_WORKFLOWS_IN_WEB", "true")
         .env("NAVIGATOR_WORKFLOW_ENGINE", "dbos")
         .env("NAVIGATOR_DBOS_ENABLED", "true")
-        .env("NAVIGATOR_DBOS_NOTATION_ENABLED", "true")
-        .env("NAVIGATOR_DBOS_PROJECT_SLACK_ENABLED", "true")
         .env("NAVIGATOR_RELEASE_TAG", "synthetic-native-startup")
         .env(
             "NAVIGATOR_DBOS_EXECUTOR_ID",
@@ -174,6 +181,17 @@ fn child_command(
             "WORKFLOWS_SERVICE_HEALTH_LISTEN",
             format!("127.0.0.1:{worker_port}"),
         );
+    for workflow in store::workflow_engine::WORKFLOWS {
+        command.env(workflow.flag, "true");
+    }
+    for key in [
+        "RESTATE_BROKER_URL",
+        "RESTATE_AUTH_TOKEN",
+        "RESTATE_ADMIN_URL",
+        "RESTATE_IDENTITY_KEY",
+    ] {
+        command.env_remove(key);
+    }
     for prefix in ["NAVIGATOR_POSTGRES", "NAVIGATOR_DBOS"] {
         command
             .env(format!("{prefix}_HOST"), "127.0.0.1")
@@ -184,6 +202,81 @@ fn child_command(
             .env(format!("{prefix}_SSLMODE"), "disable");
     }
     Ok(command)
+}
+
+fn native_startup_profile(key: &str) -> Option<String> {
+    match key {
+        "NAVIGATOR_CI_HARNESS" => Some("1".into()),
+        "NAVIGATOR_ENVIRONMENT" => Some("dev".into()),
+        "NAVIGATOR_WORKFLOW_ENGINE" => Some("dbos".into()),
+        "NAVIGATOR_SIMULATED_MATTERS" | "NAVIGATOR_WORKFLOWS_IN_WEB" | "NAVIGATOR_DBOS_ENABLED" => {
+            Some("true".into())
+        }
+        "NAVIGATOR_STAGING"
+        | workflows::flags::BILLING_CANARY_SCHEDULE_ENABLED_ENV
+        | workflows::flags::RECONCILE_INVOICES_SCHEDULE_ENABLED_ENV => Some("false".into()),
+        name if store::workflow_engine::WORKFLOWS
+            .iter()
+            .any(|item| item.flag == name) =>
+        {
+            Some("true".into())
+        }
+        _ => None,
+    }
+}
+
+/// Real authenticated dispatch proves the cohost retained the worker's local
+/// provider context and manual registration even with its weekly timer disabled.
+/// The second boot joins these same durable checkpoints instead of sending again.
+async fn verify_manual_canary(pg: &PostgresDb, worker: u16, key: &str) -> anyhow::Result<()> {
+    let http = reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()?;
+    let response = http
+        .post(format!("http://127.0.0.1:{worker}/internal/dbos/schedules"))
+        .bearer_auth(TOKEN)
+        .json(&serde_json::json!({"service":"BillingCanary", "run_key":key}))
+        .send()
+        .await?;
+    ensure!(
+        response.status() == reqwest::StatusCode::ACCEPTED,
+        "manual native BillingCanary is not registered: {}",
+        response.status()
+    );
+    let id = format!("BillingCanary:{key}");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    loop {
+        let status: Option<String> =
+            sqlx::query_scalar("SELECT status FROM dbos.workflow_status WHERE workflow_uuid=$1")
+                .bind(&id)
+                .fetch_optional(pg.pool())
+                .await?;
+        if status.as_deref() == Some("SUCCESS") {
+            break;
+        }
+        ensure!(
+            status.as_deref() != Some("ERROR"),
+            "local BillingCanary failed"
+        );
+        ensure!(
+            tokio::time::Instant::now() < deadline,
+            "local BillingCanary did not finish"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let steps: Vec<String> = sqlx::query_scalar("SELECT function_name FROM dbos.operation_outputs WHERE workflow_uuid=$1 ORDER BY function_id")
+        .bind(&id).fetch_all(pg.pool()).await?;
+    ensure!(
+        steps == ["xero", "email"],
+        "local canary checkpoints changed: {steps:?}"
+    );
+    let automatic: i64 = sqlx::query_scalar("SELECT count(*) FROM dbos.workflow_status WHERE name='BillingCanary' AND workflow_uuid LIKE 'BillingCanary-%'")
+        .fetch_one(pg.pool()).await?;
+    ensure!(
+        automatic == 0,
+        "automatic canary ran despite its disabled timer"
+    );
+    Ok(())
 }
 
 async fn wait_ready(
