@@ -1,3 +1,4 @@
+#![cfg(test)]
 //! Real PostgreSQL extraction and publication across two synthetic owned databases.
 //! This is not a claim about a deployed Forgejo schema or physical recovery.
 use super::*;

@@ -143,6 +143,7 @@ cannot decay the way the old seven-line stub did.
 - [`cronjobs.md`](cronjobs.md) — scheduled jobs (CronJobs) and what runs on them.
 - [`surreal-archives.md`](surreal-archives.md) — SurrealDB operational archives.
 - [`iceberg-archive.md`](iceberg-archive.md) — the Iceberg archive design.
+- [`write-only-iceberg.md`](write-only-iceberg.md) — sealed local generations and create-only offsite copies.
 - [`email-summary.md`](email-summary.md) — the support-email summary lane and its end-to-end proof on KIND.
 - [`email-events-pipeline.md`](email-events-pipeline.md) — the email delivery event stream into BigQuery.
 

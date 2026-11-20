@@ -40,6 +40,9 @@ fn rust_sources(dir: &Path, found: &mut Vec<PathBuf>) {
 /// `cargo test` — a test double implementing delete there is a mock, not
 /// a production deletion path.
 fn non_test_delete_call_sites(body: &str) -> Vec<usize> {
+    if body.lines().any(|line| line.trim() == "#![cfg(test)]") {
+        return Vec::new();
+    }
     let gate = body
         .lines()
         .enumerate()
@@ -53,6 +56,17 @@ fn non_test_delete_call_sites(body: &str) -> Vec<usize> {
         .filter(|(index, line)| *index < gate && line.contains(&needle))
         .map(|(index, _)| index + 1)
         .collect()
+}
+
+#[test]
+fn file_level_test_gate_does_not_exempt_production_or_ungated_files() {
+    let deletion = forbidden();
+    assert_eq!(non_test_delete_call_sites(&deletion), vec![1]);
+    assert!(non_test_delete_call_sites(&format!("#![cfg(test)]\n{deletion}")).is_empty());
+    assert_eq!(
+        non_test_delete_call_sites(&format!("{deletion}\n#[cfg(test)]\nmod tests {{}}")),
+        vec![1]
+    );
 }
 
 #[test]
