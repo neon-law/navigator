@@ -85,9 +85,10 @@ without creating Source or Restate services. Repeated startup verifies the same 
 requires explicit recovery, never synthetic captured receipts or a replacement database.
 
 Existing legacy KIND descriptors and the explicit host-process `--runtime native` topology retain their compatibility
-contracts. Captured bootstrap holds writers, verifies a real export, and enrolls scopes before seeding. The existing
-deploy browser gate still uses that captured boundary and retained Source/Restate fixtures; do not describe it as
-engine-absent. Focused unit fixtures are separate from either application topology.
+contracts. Captured bootstrap holds writers, verifies a real export, and enrolls scopes before seeding. The native
+deploy browser gate provisions through the ordinary quickstart CLI, then requires exact-image nonroot, admission,
+role, physical recovery/DBOS replay, restart and hydrated-browser acceptance without Source or Restate. Focused unit
+fixtures are separate from either application topology and do not certify those complete gates.
 
 See [kind-local-dev](../kind-local-dev/SKILL.md) for profile and retry boundaries. Tear down only your own tier with
 `cargo run -p hudson -- dev worktree-env down --path "$PWD"`. Initialization or passing fixture checks do not certify

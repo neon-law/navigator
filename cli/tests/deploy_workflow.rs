@@ -961,30 +961,21 @@ fn no_readyz_probe_is_one_shot_curled() {
     );
 }
 
-/// NO CLUSTER MANIFEST IS FETCHED AT RUN TIME. Every `kubectl apply` in the
-/// KIND job reads a file this repository vendors.
-///
-/// `raw.githubusercontent.com` rate-limits by runner IP, and `kubectl` turns
-/// its 429 into a hard error rather than a retry: run 32040810491 lost a
-/// release four minutes into the integration job, after an hour of image
-/// builds, because the ingress manifest happened to be unreachable in that
-/// minute. Vendoring is also what makes the version pin real — a URL pinned
-/// to a tag still trusts whatever bytes that tag serves today, while
-/// `cli::devx::ingress_manifest_tests` holds the vendored copy to a recorded
-/// digest.
-///
-/// The assertion is on the shape, not on the two known URLs, because the next
-/// manifest added here would reintroduce the outage silently: the run would go
-/// green on every attempt where the third party happened to answer.
+/// Direct release and native-runner applies use vendored manifests. The CLI
+/// owns stack provisioning and checks the vendored ingress digest beside its
+/// manifest constants.
 #[test]
 fn every_kubectl_apply_reads_a_vendored_manifest() {
     let workflow = deploy_workflow();
+    let runner = include_str!("../../.github/scripts/native-browser-integration.sh");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let orchestration = std::fs::read_to_string(root.join("deploy/src/devx/mod.rs")).unwrap();
 
-    // Backslash continuations are folded first: the Restate CRD apply carries
+    // Backslash continuations are folded first: a manifest apply can carry
     // its `-f` argument on the following line, so a plain line scan sees a
     // `kubectl apply` with no URL and a URL with no `kubectl apply`, and passes
     // while the fetch is still there.
-    let folded = workflow.replace("\\\n", " ");
+    let folded = format!("{workflow}\n{runner}").replace("\\\n", " ");
     let remote: Vec<String> = folded
         .lines()
         .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
@@ -998,22 +989,17 @@ fn every_kubectl_apply_reads_a_vendored_manifest() {
          Found: {remote:#?}"
     );
 
-    // Both vendored roots must be named here, and every artifact must be
-    // present in the tree — otherwise the apply trades a 429 for a missing
-    // file and nothing is gained. The Restate CRDs are applied through a shell
-    // loop, so the directory is what appears literally.
+    // The CLI owns these paths; the native runner delegates provisioning to it.
     for named in [
         "k8s/vendor/ingress-nginx-controller-v1.11.2.yaml",
-        "k8s/vendor/restate-operator-v2.8.1/",
+        "k8s/vendor/restate-operator-v2.8.1",
     ] {
         assert!(
-            workflow.contains(named),
-            "deploy.yml must apply the vendored `{named}`, keeping the KIND job on the same \
-             manifests `dev up` applies locally"
+            orchestration.contains(named),
+            "the CLI must resolve its vendored manifest {named} locally"
         );
     }
 
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     for vendored in [
         "k8s/vendor/ingress-nginx-controller-v1.11.2.yaml",
         "k8s/vendor/restate-operator-v2.8.1/restateclusters.yaml",
@@ -1022,7 +1008,7 @@ fn every_kubectl_apply_reads_a_vendored_manifest() {
     ] {
         assert!(
             root.join(vendored).exists(),
-            "`{vendored}` is named by deploy.yml but is missing from the tree"
+            "the CLI's vendored manifest `{vendored}` is missing from the tree"
         );
     }
 }
