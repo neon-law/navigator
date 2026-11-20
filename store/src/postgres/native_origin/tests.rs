@@ -104,11 +104,10 @@ async fn concurrent_creators_never_adopt_an_existing_empty_resource() {
         right.is_ok(),
         "only successful CREATE mints a capability"
     );
-    let created = match (left, right) {
-        (Ok(created), Err(OriginError::Creation)) | (Err(OriginError::Creation), Ok(created)) => {
-            created
-        }
-        _ => panic!("one unique creation and one refused duplicate required"),
+    let ((Ok(created), Err(OriginError::Creation)) | (Err(OriginError::Creation), Ok(created))) =
+        (left, right)
+    else {
+        panic!("one unique creation and one refused duplicate required");
     };
     assert!(matches!(
         resume(options.clone(), operation, binding.clone()).await,
@@ -198,6 +197,111 @@ async fn restoring_only_origin_rows_cannot_attest_another_database() {
     cleanup(options, source.postgres, source_operation).await;
 }
 
+async fn assert_runtime_metadata_read_only(runtime: &PostgresDb) {
+    for statement in [
+        "INSERT INTO database_origin SELECT * FROM database_origin WHERE false",
+        "UPDATE database_origin SET format_version=format_version WHERE false",
+        "DELETE FROM database_origin WHERE false",
+        "TRUNCATE database_origin",
+        "INSERT INTO database_origin_upgrade SELECT * FROM database_origin_upgrade WHERE false",
+        "UPDATE database_origin_upgrade SET completed_at=now() WHERE false",
+        "DELETE FROM database_origin_upgrade WHERE false",
+        "TRUNCATE database_origin_upgrade",
+        "INSERT INTO durable_object_handover SELECT * FROM durable_object_handover WHERE false",
+        "UPDATE durable_object_handover SET capture_version=capture_version WHERE false",
+        "DELETE FROM durable_object_handover WHERE false",
+        "TRUNCATE durable_object_handover",
+        "INSERT INTO durable_object_ownership SELECT * FROM durable_object_ownership WHERE false",
+        "UPDATE durable_object_ownership SET ownership_epoch=ownership_epoch WHERE false",
+        "DELETE FROM durable_object_ownership WHERE false",
+        "TRUNCATE durable_object_ownership",
+        "SELECT public.protect_database_origin_runtime(current_user::regrole)",
+    ] {
+        let error = sqlx::query(statement)
+            .execute(runtime.pool())
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error
+                .as_database_error()
+                .and_then(sqlx::error::DatabaseError::code)
+                .as_deref(),
+            Some("42501"),
+            "runtime privileges must refuse before a trigger or row constraint"
+        );
+    }
+}
+
+async fn assert_runtime_project_delivery(pg: &PostgresDb, runtime: &PostgresDb) {
+    let kind = Uuid::new_v4();
+    let jurisdiction = Uuid::new_v4();
+    let entity = Uuid::new_v4();
+    sqlx::query("INSERT INTO entity_type(id,name) VALUES($1,$2)")
+        .bind(kind)
+        .bind(kind.to_string())
+        .execute(pg.pool())
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO jurisdiction(id,name) VALUES($1,$2)")
+        .bind(jurisdiction)
+        .bind(jurisdiction.to_string())
+        .execute(pg.pool())
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO entity(id,name,entity_type_id,jurisdiction_id) VALUES($1,'Synthetic native client',$2,$3)")
+        .bind(entity).bind(kind).bind(jurisdiction).execute(pg.pool()).await.unwrap();
+    let brand = format!("synthetic-{}", Uuid::new_v4().simple());
+    sqlx::query("INSERT INTO brand(brand_key,name) VALUES($1,$2)")
+        .bind(&brand)
+        .bind(&brand)
+        .execute(pg.pool())
+        .await
+        .unwrap();
+    let source = crate::surreal::SurrealDb::uninitialized();
+    let input = crate::projects::NewProject {
+        code: format!("synthetic-{}", Uuid::new_v4().simple()),
+        name: "Synthetic native matter".into(),
+        status: "open".into(),
+        entity_id: entity,
+        brand,
+        ..Default::default()
+    };
+    let project =
+        PostgresDb::with_test_db(runtime.clone(), crate::projects::create(&source, &input))
+            .await
+            .unwrap();
+    assert!(matches!(
+        crate::project_slack_deliveries::admission(
+            runtime,
+            project.id,
+            "client_view",
+            "client-view"
+        )
+        .await
+        .unwrap(),
+        crate::project_slack_deliveries::Admission::Allowed
+    ));
+    crate::project_slack_deliveries::record_posted(
+        runtime,
+        project.id,
+        "client_view",
+        "client-view",
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        crate::project_slack_deliveries::admission(
+            runtime,
+            project.id,
+            "client_view",
+            "client-view"
+        )
+        .await
+        .unwrap(),
+        crate::project_slack_deliveries::Admission::Posted
+    ));
+}
+
 #[tokio::test]
 async fn actual_runtime_login_admits_without_ledger_read_or_origin_write_rights() {
     let Some(options) = options() else { return };
@@ -257,107 +361,10 @@ async fn actual_runtime_login_admits_without_ledger_read_or_origin_write_rights(
         .fetch_all(runtime.pool())
         .await
         .is_err());
-    for statement in [
-        "INSERT INTO database_origin SELECT * FROM database_origin WHERE false",
-        "UPDATE database_origin SET format_version=format_version WHERE false",
-        "DELETE FROM database_origin WHERE false",
-        "TRUNCATE database_origin",
-        "INSERT INTO database_origin_upgrade SELECT * FROM database_origin_upgrade WHERE false",
-        "UPDATE database_origin_upgrade SET completed_at=now() WHERE false",
-        "DELETE FROM database_origin_upgrade WHERE false",
-        "TRUNCATE database_origin_upgrade",
-        "INSERT INTO durable_object_handover SELECT * FROM durable_object_handover WHERE false",
-        "UPDATE durable_object_handover SET capture_version=capture_version WHERE false",
-        "DELETE FROM durable_object_handover WHERE false",
-        "TRUNCATE durable_object_handover",
-        "INSERT INTO durable_object_ownership SELECT * FROM durable_object_ownership WHERE false",
-        "UPDATE durable_object_ownership SET ownership_epoch=ownership_epoch WHERE false",
-        "DELETE FROM durable_object_ownership WHERE false",
-        "TRUNCATE durable_object_ownership",
-        "SELECT public.protect_database_origin_runtime(current_user::regrole)",
-    ] {
-        let error = sqlx::query(statement)
-            .execute(runtime.pool())
-            .await
-            .unwrap_err();
-        assert_eq!(
-            error
-                .as_database_error()
-                .and_then(|error| error.code())
-                .as_deref(),
-            Some("42501"),
-            "runtime privileges must refuse before a trigger or row constraint"
-        );
-    }
+    assert_runtime_metadata_read_only(&runtime).await;
     // The normal Project path still initializes its own per-Project evidence,
     // and a native receipt still records a post without changing global ownership.
-    let kind = Uuid::new_v4();
-    let jurisdiction = Uuid::new_v4();
-    let entity = Uuid::new_v4();
-    sqlx::query("INSERT INTO entity_type(id,name) VALUES($1,$2)")
-        .bind(kind)
-        .bind(kind.to_string())
-        .execute(pg.pool())
-        .await
-        .unwrap();
-    sqlx::query("INSERT INTO jurisdiction(id,name) VALUES($1,$2)")
-        .bind(jurisdiction)
-        .bind(jurisdiction.to_string())
-        .execute(pg.pool())
-        .await
-        .unwrap();
-    sqlx::query("INSERT INTO entity(id,name,entity_type_id,jurisdiction_id) VALUES($1,'Synthetic native client',$2,$3)")
-        .bind(entity).bind(kind).bind(jurisdiction).execute(pg.pool()).await.unwrap();
-    let brand = format!("synthetic-{}", Uuid::new_v4().simple());
-    sqlx::query("INSERT INTO brand(brand_key,name) VALUES($1,$2)")
-        .bind(&brand)
-        .bind(&brand)
-        .execute(pg.pool())
-        .await
-        .unwrap();
-    let source = crate::surreal::SurrealDb::uninitialized();
-    let input = crate::projects::NewProject {
-        code: format!("synthetic-{}", Uuid::new_v4().simple()),
-        name: "Synthetic native matter".into(),
-        status: "open".into(),
-        entity_id: entity,
-        brand,
-        ..Default::default()
-    };
-    let project =
-        PostgresDb::with_test_db(runtime.clone(), crate::projects::create(&source, &input))
-            .await
-            .unwrap();
-    assert!(matches!(
-        crate::project_slack_deliveries::admission(
-            &runtime,
-            project.id,
-            "client_view",
-            "client-view"
-        )
-        .await
-        .unwrap(),
-        crate::project_slack_deliveries::Admission::Allowed
-    ));
-    crate::project_slack_deliveries::record_posted(
-        &runtime,
-        project.id,
-        "client_view",
-        "client-view",
-    )
-    .await
-    .unwrap();
-    assert!(matches!(
-        crate::project_slack_deliveries::admission(
-            &runtime,
-            project.id,
-            "client_view",
-            "client-view"
-        )
-        .await
-        .unwrap(),
-        crate::project_slack_deliveries::Admission::Posted
-    ));
+    assert_runtime_project_delivery(pg, &runtime).await;
     sqlx::query("UPDATE _sqlx_migrations SET success=false WHERE version=(SELECT max(version) FROM _sqlx_migrations)")
         .execute(pg.pool()).await.unwrap();
     assert!(runtime.require_application_history().await.is_err());
@@ -423,7 +430,7 @@ async fn raw_canonical_schema_accepts_origin_attestation_without_a_sqlx_ledger()
     assert_eq!(
         unattested
             .as_database_error()
-            .and_then(|error| error.code())
+            .and_then(sqlx::error::DatabaseError::code)
             .as_deref(),
         Some("42P01")
     );
