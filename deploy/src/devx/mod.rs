@@ -53,9 +53,11 @@ mod observability;
 mod orchestrate;
 mod postgres_fixture;
 mod postgres_volume;
+pub(crate) mod project_slack_reconcile;
 mod quickstart;
 pub(crate) mod registry;
 mod restate_handover;
+mod restate_object_handover;
 mod runtime;
 pub(crate) mod same_day;
 mod sample_project;
@@ -921,6 +923,11 @@ pub enum IapCmd {
 
 #[derive(Subcommand)]
 pub enum RestateCmd {
+    /// Capture, check, import and activate retained Notation/Project Slack objects.
+    ObjectHandover {
+        #[command(subcommand)]
+        operation: restate_object_handover::Operation,
+    },
     /// Report aggregate Restate preservation obligations without reading payloads.
     HandoverAudit {
         /// Explicit Restate CLI environment to inspect; ambient defaults are refused.
@@ -1303,6 +1310,9 @@ fn dispatch_with_dns_provider(
             member,
             service,
         }))) => gcp_iap_grant(&project_id, &service, &member),
+        crate::Command::Ops(crate::OpsCmd::Restate(RestateCmd::ObjectHandover { operation })) => {
+            restate_object_handover::run(operation)
+        }
         crate::Command::Ops(crate::OpsCmd::Restate(RestateCmd::HandoverAudit { environment })) => {
             restate_handover::run(&environment)
         }
@@ -1432,6 +1442,9 @@ fn dispatch_with_dns_provider(
             } else {
                 deployments::apply(&root, &deployment, dry_run)
             }
+        }
+        crate::Command::Ops(crate::OpsCmd::ProjectSlack(operation)) => {
+            project_slack_reconcile::run(operation)
         }
         crate::Command::Ops(crate::OpsCmd::EmailSummary(crate::EmailSummaryCmd::Redrive {
             receipt,

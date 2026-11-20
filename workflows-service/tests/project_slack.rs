@@ -1,5 +1,5 @@
 //! The `project-slack` lanes against a disposable PostgreSQL executor and
-//! synthetic Surreal data: one serialized lane per Project, one Slack post
+//! native Project fixtures: one serialized lane per Project, one Slack post
 //! per relayed event, and different Projects posting without waiting on
 //! each other.
 
@@ -18,7 +18,22 @@ use workflows_service::dbos_project_slack::{
 };
 use workflows_service::project_slack::{CiOutcome, LaneError, MainPushRequest};
 
-use crate::support::{database, firm_matter, APP_VERSION};
+#[path = "support/native_database.rs"]
+mod support;
+use support::{database, APP_VERSION};
+
+#[path = "support/native_project.rs"]
+mod native_project;
+
+async fn firm_matter_on(
+    pg: &store::postgres::PostgresDb,
+    db: &store::surreal::SurrealDb,
+) -> store::projects::Project {
+    store::postgres::PostgresDb::with_test_db(pg.clone(), async {
+        native_project::matter(db).await.0
+    })
+    .await
+}
 
 fn push(short_sha: &str, run_attempt: u32) -> MainPushRequest {
     MainPushRequest {
@@ -163,7 +178,7 @@ async fn foreign_session(url: &str) -> sqlx::PgPool {
 #[tokio::test]
 async fn a_project_lane_lock_excludes_every_other_session() {
     let Some(db) = database().await else { return };
-    let postgres = db.store().await;
+    let postgres = db.store();
     let project = uuid::Uuid::now_v7();
     let lane = ProjectSlackLane::acquire(&postgres, project)
         .await
@@ -196,6 +211,7 @@ async fn a_project_lane_lock_excludes_every_other_session() {
         .expect("re-probe the released lane");
     assert!(free, "the lane never became free");
     outsider.close().await;
+    db.close().await;
 }
 
 #[tokio::test]
@@ -204,17 +220,17 @@ async fn the_same_projects_main_pushes_post_one_at_a_time() {
     let bot = Arc::new(LaneSlackBot::serial(Duration::from_millis(250)));
     let lane = launch_lane(
         &db.url,
-        db.store().await,
-        store::test_support::mem_surreal().await,
+        db.store(),
+        store::surreal::SurrealDb::uninitialized(),
         bot.clone(),
     )
     .await;
-    let matter = firm_matter(&lane.surreal, "SlackLane").await;
+    let matter = firm_matter_on(&lane.postgres, &lane.surreal).await;
     // Two distinct main pushes for ONE Project: both must post, and the
     // lane must hold them to one post at a time — the single-writer
     // guarantee the replaced virtual object gave the GitHub relay.
-    let first = dbos_project_slack::main_push_workflow_id(matter.project, &push("abc1234", 1));
-    let second = dbos_project_slack::main_push_workflow_id(matter.project, &push("def5678", 1));
+    let first = dbos_project_slack::main_push_workflow_id(matter.id, &push("abc1234", 1));
+    let second = dbos_project_slack::main_push_workflow_id(matter.id, &push("def5678", 1));
     let (left, right) = tokio::join!(
         lane.workflow.start_with(
             LaneRequest::MainPush(push("abc1234", 1)),
@@ -247,6 +263,7 @@ async fn the_same_projects_main_pushes_post_one_at_a_time() {
         "one Project's posts never overlap"
     );
     lane.executor.shutdown().await;
+    db.close().await;
 }
 
 #[tokio::test]
@@ -255,12 +272,12 @@ async fn the_ingress_posts_one_relayed_event_once() {
     let bot = Arc::new(LaneSlackBot::serial(Duration::from_millis(50)));
     let lane = launch_lane(
         &db.url,
-        db.store().await,
-        store::test_support::mem_surreal().await,
+        db.store(),
+        store::surreal::SurrealDb::uninitialized(),
         bot.clone(),
     )
     .await;
-    let matter = firm_matter(&lane.surreal, "SlackRelay").await;
+    let matter = firm_matter_on(&lane.postgres, &lane.surreal).await;
     let ingress = ProjectSlackIngress::new(
         "synthetic-service-token".into(),
         lane.workflow.clone(),
@@ -275,7 +292,7 @@ async fn the_ingress_posts_one_relayed_event_once() {
         },
         None,
     );
-    let id = dbos_project_slack::main_push_workflow_id(matter.project, &push("abc1234", 1));
+    let id = dbos_project_slack::main_push_workflow_id(matter.id, &push("abc1234", 1));
     let payload = serde_json::json!({
         "workflow_id": id,
         "event": push("abc1234", 1),
@@ -306,6 +323,7 @@ async fn the_ingress_posts_one_relayed_event_once() {
     );
     assert_eq!(lane.bot.max_active.load(Ordering::SeqCst), 1);
     lane.executor.shutdown().await;
+    db.close().await;
 }
 
 #[tokio::test]
@@ -314,13 +332,13 @@ async fn a_repeated_client_view_posts_once() {
     let bot = Arc::new(LaneSlackBot::serial(Duration::from_millis(50)));
     let lane = launch_lane(
         &db.url,
-        db.store().await,
-        store::test_support::mem_surreal().await,
+        db.store(),
+        store::surreal::SurrealDb::uninitialized(),
         bot.clone(),
     )
     .await;
-    let matter = firm_matter(&lane.surreal, "SlackView").await;
-    let id = dbos_project_slack::client_view_workflow_id(matter.project);
+    let matter = firm_matter_on(&lane.postgres, &lane.surreal).await;
+    let id = dbos_project_slack::client_view_workflow_id(matter.id);
     for attempt in 0..2 {
         let started = lane
             .workflow
@@ -342,6 +360,7 @@ async fn a_repeated_client_view_posts_once() {
         lane.bot.posted()
     );
     lane.executor.shutdown().await;
+    db.close().await;
 }
 
 #[tokio::test]
@@ -350,15 +369,15 @@ async fn different_projects_post_without_waiting_on_each_other() {
     let bot = Arc::new(LaneSlackBot::synchronized(Duration::from_millis(200), 2));
     let lane = launch_lane(
         &db.url,
-        db.store().await,
-        store::test_support::mem_surreal().await,
+        db.store(),
+        store::surreal::SurrealDb::uninitialized(),
         bot.clone(),
     )
     .await;
-    let first = firm_matter(&lane.surreal, "SlackOne").await;
-    let second = firm_matter(&lane.surreal, "SlackTwo").await;
-    let first_id = dbos_project_slack::main_push_workflow_id(first.project, &push("abc1234", 1));
-    let second_id = dbos_project_slack::main_push_workflow_id(second.project, &push("def5678", 1));
+    let first = firm_matter_on(&lane.postgres, &lane.surreal).await;
+    let second = firm_matter_on(&lane.postgres, &lane.surreal).await;
+    let first_id = dbos_project_slack::main_push_workflow_id(first.id, &push("abc1234", 1));
+    let second_id = dbos_project_slack::main_push_workflow_id(second.id, &push("def5678", 1));
     let (left, right) = tokio::join!(
         lane.workflow.start_with(
             LaneRequest::MainPush(push("abc1234", 1)),
@@ -391,6 +410,7 @@ async fn different_projects_post_without_waiting_on_each_other() {
         "different Projects' posts must overlap"
     );
     lane.executor.shutdown().await;
+    db.close().await;
 }
 
 #[tokio::test]
@@ -399,12 +419,12 @@ async fn the_ingress_never_rebinds_a_claimed_event_id() {
     let bot = Arc::new(LaneSlackBot::serial(Duration::from_millis(50)));
     let lane = launch_lane(
         &db.url,
-        db.store().await,
-        store::test_support::mem_surreal().await,
+        db.store(),
+        store::surreal::SurrealDb::uninitialized(),
         bot.clone(),
     )
     .await;
-    let matter = firm_matter(&lane.surreal, "SlackRebind").await;
+    let matter = firm_matter_on(&lane.postgres, &lane.surreal).await;
     let ingress = ProjectSlackIngress::new(
         "synthetic-service-token".into(),
         lane.workflow.clone(),
@@ -419,7 +439,7 @@ async fn the_ingress_never_rebinds_a_claimed_event_id() {
         },
         None,
     );
-    let id = dbos_project_slack::main_push_workflow_id(matter.project, &push("abc1234", 1));
+    let id = dbos_project_slack::main_push_workflow_id(matter.id, &push("abc1234", 1));
     let deliver = |body: serde_json::Value| {
         Request::builder()
             .method("POST")
@@ -462,4 +482,5 @@ async fn the_ingress_never_rebinds_a_claimed_event_id() {
     let response = router.oneshot(deliver(missing)).await.unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
     lane.executor.shutdown().await;
+    db.close().await;
 }

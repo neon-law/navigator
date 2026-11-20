@@ -2762,6 +2762,50 @@ pub async fn set_internal_slack_channel_url(
     Ok(mirrored(surreal, updated.and_then(ProjectRow::into_project)).await?)
 }
 
+fn validate_internal_slack_channel<'a>(
+    channel_id: &'a str,
+    channel_url: &'a str,
+) -> Result<(&'a str, &'a str), ProjectCommandError> {
+    let channel_id = channel_id.trim();
+    if channel_id.is_empty() || !channel_id.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
+        return Err(ProjectCommandError::Invalid(SLACK_CHANNEL_ID_INVALID));
+    }
+    let channel_url = channel_url.trim();
+    if channel_url.is_empty() || !is_valid_resource_url(channel_url) {
+        return Err(ProjectCommandError::Invalid(SLACK_CHANNEL_URL_INVALID));
+    }
+    Ok((channel_id, channel_url))
+}
+
+/// Record the same validated provider coordinate on an explicitly admitted pool.
+///
+/// # Errors
+/// Refuses invalid coordinates, incomplete application history or storage failures.
+pub async fn set_internal_slack_channel_on(
+    pg: &PostgresDb,
+    project_id: Uuid,
+    channel_id: &str,
+    channel_url: &str,
+) -> Result<Option<Project>, ProjectCommandError> {
+    let (channel_id, channel_url) = validate_internal_slack_channel(channel_id, channel_url)?;
+    pg.require_application_history()
+        .await
+        .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
+    crate::postgres::projects::update_on(
+        pg,
+        project_id,
+        &[
+            crate::postgres::projects::Column::Text("internal_slack_channel_id", Some(channel_id)),
+            crate::postgres::projects::Column::Text(
+                "internal_slack_channel_url",
+                Some(channel_url),
+            ),
+        ],
+        None,
+    )
+    .await
+    .map_err(|error| ProjectCommandError::Db(error.to_string()))
+}
 /// Record the Slack channel's id and canonical URL in one database update.
 /// These two columns are one provider coordinate: exposing a row with only
 /// one half would make a retry choose between posting and rendering a stale
@@ -2772,28 +2816,9 @@ pub async fn set_internal_slack_channel(
     channel_id: &str,
     channel_url: &str,
 ) -> Result<Option<Project>, ProjectCommandError> {
-    let channel_id = channel_id.trim();
-    if channel_id.is_empty() || !channel_id.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
-        return Err(ProjectCommandError::Invalid(SLACK_CHANNEL_ID_INVALID));
-    }
-    let channel_url = channel_url.trim();
-    if channel_url.is_empty() || !is_valid_resource_url(channel_url) {
-        return Err(ProjectCommandError::Invalid(SLACK_CHANNEL_URL_INVALID));
-    }
-    if let Some(patched) = patch_under_authority(
-        surreal,
-        project_id,
-        &[
-            crate::postgres::projects::Column::Text("internal_slack_channel_id", Some(channel_id)),
-            crate::postgres::projects::Column::Text(
-                "internal_slack_channel_url",
-                Some(channel_url),
-            ),
-        ],
-    )
-    .await?
-    {
-        return Ok(patched);
+    let (channel_id, channel_url) = validate_internal_slack_channel(channel_id, channel_url)?;
+    if let Some(pg) = authority().await? {
+        return set_internal_slack_channel_on(&pg, project_id, channel_id, channel_url).await;
     }
     if find_by_id(surreal, project_id)
         .await
@@ -4684,12 +4709,12 @@ impl OnboardingStatus {
 ///
 /// # Errors
 ///
-/// PostgreSQL configuration and query failures are returned to the caller.
+/// PostgreSQL configuration, application admission, and query failures are returned to the caller.
 pub async fn onboarding_status(
     _surreal: &crate::surreal::SurrealDb,
     project_id: Uuid,
 ) -> Result<OnboardingStatus, String> {
-    let pg = crate::postgres::PostgresDb::from_env()
+    let pg = crate::postgres::PostgresDb::application()
         .await
         .map_err(|error| error.to_string())?;
     let official = crate::onboarding::official_projects(&pg, &[project_id])
@@ -4715,12 +4740,12 @@ pub fn execution_lifecycle_label(status: &str, official: bool) -> &'static str {
 ///
 /// # Errors
 ///
-/// PostgreSQL configuration and query failures are returned to the caller.
+/// PostgreSQL configuration, application admission, and query failures are returned to the caller.
 pub async fn onboarding_official_sets(
     _surreal: &crate::surreal::SurrealDb,
     projects: &[Project],
 ) -> Result<std::collections::HashSet<Uuid>, String> {
-    let pg = crate::postgres::PostgresDb::from_env()
+    let pg = crate::postgres::PostgresDb::application()
         .await
         .map_err(|error| error.to_string())?;
     let ids: Vec<_> = projects.iter().map(|project| project.id).collect();
@@ -4733,12 +4758,12 @@ pub async fn onboarding_official_sets(
 ///
 /// # Errors
 ///
-/// PostgreSQL configuration and query failures are returned to the caller.
+/// PostgreSQL configuration, application admission, and query failures are returned to the caller.
 pub async fn onboarding_esign_pending(
     _surreal: &crate::surreal::SurrealDb,
     projects: &[Project],
 ) -> Result<std::collections::HashMap<Uuid, crate::onboarding::EsignSummary>, String> {
-    let pg = crate::postgres::PostgresDb::from_env()
+    let pg = crate::postgres::PostgresDb::application()
         .await
         .map_err(|error| error.to_string())?;
     let ids: Vec<_> = projects.iter().map(|project| project.id).collect();
@@ -4755,7 +4780,7 @@ pub async fn onboarding_esign_pending(
 ///
 /// # Errors
 ///
-/// PostgreSQL configuration and query failures are returned to the caller.
+/// PostgreSQL configuration, application admission, and query failures are returned to the caller.
 pub async fn matter_lifecycle_sets(
     _surreal: &crate::surreal::SurrealDb,
     projects: &[Project],
@@ -4766,7 +4791,7 @@ pub async fn matter_lifecycle_sets(
     ),
     String,
 > {
-    let pg = crate::postgres::PostgresDb::from_env()
+    let pg = crate::postgres::PostgresDb::application()
         .await
         .map_err(|error| error.to_string())?;
     let ids: Vec<_> = projects.iter().map(|project| project.id).collect();

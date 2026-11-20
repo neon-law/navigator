@@ -104,7 +104,7 @@ async fn manual_schedule_retries_join_and_distinct_clicks_run_separately() {
                     "SELECT status FROM dbos.workflow_status WHERE workflow_uuid=$1",
                 )
                 .bind(&id)
-                .fetch_optional(&database.pool)
+                .fetch_optional(database.store().pool())
                 .await
                 .unwrap();
                 if status.as_deref() == Some("SUCCESS") {
@@ -128,11 +128,11 @@ async fn manual_schedule_retries_join_and_distinct_clicks_run_separately() {
         );
     }
     let automatic: i64 = sqlx::query_scalar("SELECT count(*) FROM dbos.workflow_status WHERE name='BillingCanary' AND workflow_uuid LIKE 'BillingCanary-%'")
-        .fetch_one(&database.pool).await.unwrap();
+        .fetch_one(database.store().pool()).await.unwrap();
     assert_eq!(
         automatic, 0,
         "manual DBOS starts remain usable without an automatic weekly run"
     );
     executor.shutdown().await;
-    database.pool.close().await;
+    database.store().pool().close().await;
 }

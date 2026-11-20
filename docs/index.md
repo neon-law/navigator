@@ -41,6 +41,9 @@ cannot decay the way the old seven-line stub did.
   and restore.
 - [DBOS durability](dbos-durability.md) — DBOS system schema, the effect-key rule, and the Restate port order.
 - [DBOS cutover matrix](dbos-cutover-matrix.md) — which Restate services, CronJobs, and callers have switched to DBOS.
+- [Durable object handover](durable-object-handover.md) — capture, parity, import, and native object ownership.
+- [Project Slack reconciliation](project-slack-reconciliation.md) — attributed decisions for unresolved delivery
+  evidence.
 - [`forgejo-deployment.md`](forgejo-deployment.md) — the Forgejo deployment foundation and account-admission gates.
 - [`forgejo-kind.md`](forgejo-kind.md) — Forgejo, its Actions runner, and its smoke in the local KIND tier and CI.
 - [`manual-roll.md`](manual-roll.md) — rolling, verifying, and rolling back one deployment by hand.

@@ -183,7 +183,7 @@ async fn wait_for_status(db: &TestDatabase, workflow_id: &str, status: &str) {
                 "SELECT status FROM dbos.workflow_status WHERE workflow_uuid = $1",
             )
             .bind(workflow_id)
-            .fetch_optional(&db.pool)
+            .fetch_optional(db.store().pool())
             .await
             .expect("read the workflow status");
             if current.as_deref() == Some(status) {
@@ -330,7 +330,7 @@ async fn a_confirmed_publication_never_publishes_twice() {
         "a confirmed publication is never written to a provider again"
     );
     let runs: i64 = sqlx::query_scalar("SELECT count(*) FROM dbos.workflow_status")
-        .fetch_one(&db.pool)
+        .fetch_one(db.store().pool())
         .await
         .expect("count the workflow rows");
     assert_eq!(runs, 1, "re-firing the deterministic id starts no new run");
@@ -429,7 +429,7 @@ async fn a_stopped_reconciler_schedule_starts_nothing() {
     worker.shutdown().await;
 
     let started: i64 = sqlx::query_scalar("SELECT count(*) FROM dbos.workflow_status")
-        .fetch_one(&db.pool)
+        .fetch_one(db.store().pool())
         .await
         .expect("count the workflow rows");
     assert_eq!(

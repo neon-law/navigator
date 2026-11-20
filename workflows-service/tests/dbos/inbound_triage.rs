@@ -60,7 +60,7 @@ async fn inbound_triage_preserves_replay_and_confines_classifier_evidence() {
     let Some(db) = database().await else {
         return;
     };
-    let _attachment_filing_store = db.store().await;
+    let _attachment_filing_store = db.store();
     let surreal = store::test_support::mem_surreal().await;
     let firm_id = store::test_support::seed_firm_with_brand(&surreal, "neon").await;
     let message_id = seed_message(&surreal, firm_id, "triage-replay").await;

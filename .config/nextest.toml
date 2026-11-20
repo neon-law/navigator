@@ -41,10 +41,13 @@ test-group = "platform-certs"
 
 [[profile.default.overrides]]
 filter = '''
-binary(/^(project_native_delete|brand_move_mirror|firm_journal|api_reads|postgres_startup|entity_native_delete|practice_preview_native|native_cron_ingress|inbox_native_projects)$/)
+binary(/^(project_native_delete|brand_move_mirror|firm_journal|api_reads|postgres_startup|entity_native_delete|practice_preview_native|native_cron_ingress|inbox_native_projects|object_handover|notation_native|project_slack|coverage_postgres)$/)
 | test(/^dbos_email_summary::recovery::tests::/)
 | test(/^email_receipts::summary_recovery::(tests|interrupted_tests)::/)
 | (binary(=store) & test(=communications::native_tests::a_logged_call_carries_its_direction_and_role_at_the_top_level))
+| test(/^postgres::application_scope_tests::/)
+| test(/^project_slack_deliveries::reconciliation::tests::/)
+| (binary(=coverage_manifest) & test(=the_navigator_manifest_names_every_relation_this_release_creates))
 '''
 test-group = "canonical-postgres-fixtures"
 

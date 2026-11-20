@@ -330,9 +330,24 @@ pub(crate) async fn ensure_channel(
     project: &store::projects::Project,
     simulated: bool,
 ) -> Result<ChannelOutcome, LaneError> {
+    ensure_channel_using(ChannelStore::Facade(surreal), slack, project, simulated).await
+}
+
+#[derive(Clone, Copy)]
+enum ChannelStore<'a> {
+    Facade(&'a store::surreal::SurrealDb),
+    Postgres(&'a store::postgres::PostgresDb),
+}
+
+async fn ensure_channel_using(
+    storage: ChannelStore<'_>,
+    slack: &Arc<dyn SlackBot>,
+    project: &store::projects::Project,
+    simulated: bool,
+) -> Result<ChannelOutcome, LaneError> {
     if let Some(channel_id) = &project.internal_slack_channel_id {
         if project.internal_slack_channel_url.is_none() {
-            record_channel(surreal, project.id, channel_id).await?;
+            record_channel(storage, project.id, channel_id).await?;
         }
         return Ok(ChannelOutcome::Existing(channel_id.clone()));
     }
@@ -357,7 +372,7 @@ pub(crate) async fn ensure_channel(
             Err(error) => return Err(LaneError::Slack(error.to_string())),
         }
     };
-    record_channel(surreal, project.id, &channel.id).await?;
+    record_channel(storage, project.id, &channel.id).await?;
     Ok(if adopted {
         ChannelOutcome::Adopted(channel.id)
     } else {
@@ -368,17 +383,19 @@ pub(crate) async fn ensure_channel(
 /// Write the channel id and its canonical `https://slack.com/archives/{id}`
 /// URL as one Project-row update.
 async fn record_channel(
-    surreal: &store::surreal::SurrealDb,
+    storage: ChannelStore<'_>,
     project_id: uuid::Uuid,
     channel_id: &str,
 ) -> Result<(), LaneError> {
-    store::projects::set_internal_slack_channel(
-        surreal,
-        project_id,
-        channel_id,
-        &cloud::slack_channel_url(channel_id),
-    )
-    .await
+    let url = cloud::slack_channel_url(channel_id);
+    match storage {
+        ChannelStore::Facade(surreal) => {
+            store::projects::set_internal_slack_channel(surreal, project_id, channel_id, &url).await
+        }
+        ChannelStore::Postgres(pg) => {
+            store::projects::set_internal_slack_channel_on(pg, project_id, channel_id, &url).await
+        }
+    }
     .map_err(|error| project_command_error(&error))?
     .ok_or_else(|| {
         LaneError::ProjectGone("Project disappeared while saving Slack channel".to_string())
@@ -439,6 +456,27 @@ pub(crate) async fn main_push_destination(
     let channel = ensure_channel(surreal, slack, &project, simulated).await?;
     Ok(MainPushDestination {
         channel_id: channel.channel_id().to_string(),
+        repository_url: project.repository_url,
+    })
+}
+
+/// Native execution uses its explicit pool for both lookup and channel persistence.
+pub(crate) async fn main_push_destination_on(
+    pg: &store::postgres::PostgresDb,
+    slack: &Arc<dyn SlackBot>,
+    project_id: uuid::Uuid,
+    simulated: bool,
+) -> Result<MainPushDestination, LaneError> {
+    let project = store::postgres::projects::find_by_id_on(pg, project_id)
+        .await
+        .map_err(|_| LaneError::Store("Project Slack lookup unavailable".to_owned()))?
+        .ok_or_else(|| {
+            LaneError::ProjectGone("Project no longer exists for Slack notice".to_owned())
+        })?;
+    let channel =
+        ensure_channel_using(ChannelStore::Postgres(pg), slack, &project, simulated).await?;
+    Ok(MainPushDestination {
+        channel_id: channel.channel_id().to_owned(),
         repository_url: project.repository_url,
     })
 }

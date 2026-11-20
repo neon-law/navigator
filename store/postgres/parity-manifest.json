@@ -303,6 +303,20 @@
     },
     {
       "extra_column": null,
+      "extra_table": "durable_object_handover",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "durable_object_ownership",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
       "extra_table": "evidence_share",
       "missing_column": null,
       "missing_table": null,
@@ -563,6 +577,27 @@
     {
       "extra_column": null,
       "extra_table": "project_pull_request_notice",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "project_slack_delivery",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "project_slack_delivery_reconciliation",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "project_slack_handover",
       "missing_column": null,
       "missing_table": null,
       "table": null
@@ -2130,7 +2165,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 177,
+    "table_count": 182,
     "tables": {
       "address": {
         "columns": {
@@ -2932,6 +2967,40 @@
         "name": "docusign_completion_cursor",
         "references": [
           "firm"
+        ]
+      },
+      "durable_object_handover": {
+        "columns": {
+          "capture_id": "UUID",
+          "capture_sha256": "TEXT",
+          "capture_version": "INTEGER",
+          "inserted_at": "TIMESTAMPTZ",
+          "notation_machines": "INTEGER",
+          "origin": "TEXT",
+          "slack_posted_events": "INTEGER",
+          "slack_projects": "INTEGER",
+          "source_environment": "TEXT"
+        },
+        "foreign_keys": [],
+        "name": "durable_object_handover",
+        "references": []
+      },
+      "durable_object_ownership": {
+        "columns": {
+          "activated_at": "TIMESTAMPTZ",
+          "capture_id": "UUID",
+          "ownership_epoch": "UUID",
+          "singleton": "BOOLEAN"
+        },
+        "foreign_keys": [
+          [
+            "capture_id",
+            "durable_object_handover"
+          ]
+        ],
+        "name": "durable_object_ownership",
+        "references": [
+          "durable_object_handover"
         ]
       },
       "efiling_transactions": {
@@ -5584,6 +5653,75 @@
           "person",
           "project",
           "sent_email"
+        ]
+      },
+      "project_slack_delivery": {
+        "columns": {
+          "event_key": "TEXT",
+          "event_kind": "TEXT",
+          "inserted_at": "TIMESTAMPTZ",
+          "project_id": "UUID"
+        },
+        "foreign_keys": [
+          [
+            "project_id",
+            "project_slack_handover"
+          ]
+        ],
+        "name": "project_slack_delivery",
+        "references": [
+          "project_slack_handover"
+        ]
+      },
+      "project_slack_delivery_reconciliation": {
+        "columns": {
+          "actor_person_id": "UUID",
+          "decision": "TEXT",
+          "evidence_reference": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "operation_id": "UUID",
+          "ownership_epoch": "UUID",
+          "project_id": "UUID"
+        },
+        "foreign_keys": [
+          [
+            "actor_person_id",
+            "person"
+          ],
+          [
+            "ownership_epoch",
+            "durable_object_ownership"
+          ]
+        ],
+        "name": "project_slack_delivery_reconciliation",
+        "references": [
+          "durable_object_ownership",
+          "person"
+        ]
+      },
+      "project_slack_handover": {
+        "columns": {
+          "capture_id": "UUID",
+          "client_view_disposition": "TEXT",
+          "inserted_at": "TIMESTAMPTZ",
+          "native_active": "BOOLEAN",
+          "ownership_epoch": "UUID",
+          "project_id": "UUID"
+        },
+        "foreign_keys": [
+          [
+            "capture_id",
+            "durable_object_handover"
+          ],
+          [
+            "project_id",
+            "project"
+          ]
+        ],
+        "name": "project_slack_handover",
+        "references": [
+          "durable_object_handover",
+          "project"
         ]
       },
       "project_source_import": {

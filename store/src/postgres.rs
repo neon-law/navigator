@@ -129,6 +129,9 @@ pub fn embedded_migrator() -> Migrator {
 #[cfg(any(test, feature = "test-support"))]
 tokio::task_local! { static TEST_POSTGRES: PostgresDb; }
 
+// Application callbacks carry their existing owning pool across executor task boundaries.
+tokio::task_local! { static APPLICATION_POSTGRES: PostgresDb; }
+
 #[derive(Clone)]
 pub struct PostgresDb(pub(crate) PgPool);
 impl std::fmt::Debug for PostgresDb {
@@ -155,6 +158,22 @@ impl PostgresDb {
         future: impl std::future::Future<Output = T>,
     ) -> impl std::future::Future<Output = T> {
         Box::pin(TEST_POSTGRES.scope(pg, future))
+    }
+
+    /// Bind an owned application pool inside the callback that performs its work.
+    /// The scope never enrolls a database or changes raw operator/environment resolution.
+    /// Spawned tasks must enter their own scope; application access rechecks history.
+    ///
+    /// # Errors
+    /// Refuses before running the body unless normal application history is complete.
+    pub fn with_application_db<T>(
+        pg: Self,
+        future: impl std::future::Future<Output = T>,
+    ) -> impl std::future::Future<Output = Result<T, PostgresError>> {
+        Box::pin(async move {
+            pg.require_application_history().await?;
+            Ok(APPLICATION_POSTGRES.scope(pg, future).await)
+        })
     }
 
     /// The bounded pool, for read-only consumers such as the archive export.
@@ -247,7 +266,10 @@ impl PostgresDb {
     /// Connect an application only after its complete historical enrollment.
     /// Operators and migrations use `from_env` before activation instead.
     pub async fn application() -> Result<Self, PostgresError> {
-        let pg = Self::from_env().await?;
+        let pg = match APPLICATION_POSTGRES.try_with(Clone::clone) {
+            Ok(pg) => pg,
+            Err(_) => Self::from_env().await?,
+        };
         Box::pin(pg.require_application_history()).await?;
         Ok(pg)
     }
@@ -654,3 +676,6 @@ pub(crate) mod notation_document_comments;
 
 /// Project-scoped native manifest persistence.
 pub(crate) mod matter_pages;
+
+#[cfg(test)]
+mod application_scope_tests;

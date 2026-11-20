@@ -802,6 +802,12 @@ pub async fn resolve_project_credential(
     kind: IntegrationSecretKind,
     kms: &dyn RuntimeKms,
 ) -> Result<ResolvedCredential, SecretStoreError> {
+    if let Some(pg) = crate::postgres::PostgresDb::configured()
+        .await
+        .map_err(|_| SecretStoreError::Postgres)?
+    {
+        return resolve_project_credential_on(&pg, project_id, provider, kind, kms).await;
+    }
     validate_kind(provider, kind)?;
     let project = crate::projects::find_by_id(surreal, project_id)
         .await
@@ -825,10 +831,7 @@ pub async fn resolve_firm_credential(
         .await
         .map_err(|_| SecretStoreError::Postgres)?
     {
-        let row = sqlx::query("SELECT * FROM firm_integration_secret WHERE firm_id=$1 AND provider=$2 AND kind=$3 AND status='active' ORDER BY version DESC LIMIT 1")
-            .bind(firm_id).bind(provider.as_str()).bind(kind.as_str()).fetch_optional(pg.pool()).await.map_err(|_| SecretStoreError::Postgres)?
-            .ok_or_else(|| not_configured(provider,kind))?;
-        secret_from_pg(&row)?
+        return resolve_firm_credential_on(&pg, firm_id, provider, kind, kms).await;
     } else {
         let mut response = surreal
         .query(format!(
@@ -847,6 +850,61 @@ pub async fn resolve_firm_credential(
             .next()
             .ok_or_else(|| not_configured(provider, kind))?
     };
+    unseal_credential(row, firm_id, provider, kind, kms).await
+}
+
+/// Resolve the Project's own Firm credential through an explicitly admitted pool.
+///
+/// # Errors
+/// Preserves current kind, ownership, active-version, AAD and KMS validation.
+pub async fn resolve_project_credential_on(
+    pg: &crate::postgres::PostgresDb,
+    project_id: Uuid,
+    provider: IntegrationProvider,
+    kind: IntegrationSecretKind,
+    kms: &dyn RuntimeKms,
+) -> Result<ResolvedCredential, SecretStoreError> {
+    validate_kind(provider, kind)?;
+    pg.require_application_history()
+        .await
+        .map_err(|_| SecretStoreError::Postgres)?;
+    let project = crate::postgres::projects::find_by_id_on(pg, project_id)
+        .await
+        .map_err(|_| SecretStoreError::Postgres)?
+        .ok_or(SecretStoreError::NoSuchProject(project_id))?;
+    let firm = project.firm_id.ok_or(SecretStoreError::ProjectHasNoFirm)?;
+    resolve_firm_credential_on(pg, firm, provider, kind, kms).await
+}
+
+/// Runtime credential resolution on one explicit native pool. Callers establish
+/// authorization or verify the ingress signature before using this seam.
+///
+/// # Errors
+/// Invalid kind, missing active credential, wrong context or KMS/storage failure.
+pub async fn resolve_firm_credential_on(
+    pg: &crate::postgres::PostgresDb,
+    firm_id: Uuid,
+    provider: IntegrationProvider,
+    kind: IntegrationSecretKind,
+    kms: &dyn RuntimeKms,
+) -> Result<ResolvedCredential, SecretStoreError> {
+    validate_kind(provider, kind)?;
+    pg.require_application_history()
+        .await
+        .map_err(|_| SecretStoreError::Postgres)?;
+    let row=sqlx::query("SELECT * FROM firm_integration_secret WHERE firm_id=$1 AND provider=$2 AND kind=$3 AND status='active' ORDER BY version DESC LIMIT 1")
+        .bind(firm_id).bind(provider.as_str()).bind(kind.as_str()).fetch_optional(pg.pool()).await.map_err(|_|SecretStoreError::Postgres)?
+        .ok_or_else(||not_configured(provider,kind))?;
+    unseal_credential(secret_from_pg(&row)?, firm_id, provider, kind, kms).await
+}
+
+async fn unseal_credential(
+    row: SecretRow,
+    firm_id: Uuid,
+    provider: IntegrationProvider,
+    kind: IntegrationSecretKind,
+    kms: &dyn RuntimeKms,
+) -> Result<ResolvedCredential, SecretStoreError> {
     let context = KmsContext::new(firm_id, provider.as_str(), kind.as_str());
     if row.kms_context != context.aad() {
         return Err(SecretStoreError::Kms(KmsError::ContextMismatch));
@@ -877,7 +935,6 @@ pub async fn resolve_firm_credential(
         })
         .map_err(|_| SecretStoreError::InvalidValue)
 }
-
 /// Resolve the exact credential version a registry row pins, addressed by
 /// the secret record's UUID, as `(token, owning Firm)`. The webhook
 /// resolution spine passes each registered number's `auth_token_secret_ref`

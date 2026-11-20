@@ -79,10 +79,9 @@ pub const WORKFLOW: &str = "NotationTransition";
 /// fails honestly when the store stays down, and the ingress surfaces it.
 const STEP_MAX_ATTEMPTS: u32 = 3;
 
-/// Store handles the transition steps need: the `SurrealDB` domain store the
-/// journal, funnel, and notification logic read; the PostgreSQL pool backing
-/// machine state, lanes, and DBOS itself; and the email/storage services the
-/// `email_send__*` / `generate_pdf__*` steps dispatch through.
+/// The owning PostgreSQL pool for machine state and business accessors, a
+/// compatibility-shaped store handle, and checkpointed email/storage services.
+/// Each workflow callback binds its admitted application pool; inline steps inherit it.
 #[derive(Clone)]
 pub struct Context {
     surreal: SurrealDb,
@@ -287,7 +286,17 @@ pub type NotationTransitionWorkflow =
 pub fn register(dbos: &dbos::DBOS, context: Context) -> dbos::Result<NotationTransitionWorkflow> {
     dbos.register_workflow(WORKFLOW, move |request: TransitionRequest| {
         let context = context.clone();
-        async move { transition(context, request).await }
+        // The SDK detaches workflow execution, but awaits step bodies inline.
+        // Bind the owning pool here; ordinary application accessors recheck history.
+        Box::pin(async move {
+            PostgresDb::with_application_db(context.postgres.clone(), transition(context, request))
+                .await
+                .map_err(|_| {
+                    dbos::Error::Application(NotationTransitionError::Store(
+                        "PostgreSQL application admission unavailable".to_owned(),
+                    ))
+                })?
+        })
     })
 }
 
@@ -300,6 +309,13 @@ async fn transition(
     request: TransitionRequest,
 ) -> dbos::Result<TransitionReport, NotationTransitionError> {
     let notation_id = request.notation_id;
+    store::durable_object_handover::require_native_ownership(&context.postgres)
+        .await
+        .map_err(|_| {
+            dbos::Error::Application(NotationTransitionError::Terminal(
+                "Retained object handover is not active".to_owned(),
+            ))
+        })?;
 
     // The lane: one advisory lock per notation, held across the whole
     // transition. Re-acquired on recovery; the guard's rollback releases it

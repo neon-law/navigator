@@ -1003,7 +1003,7 @@ async fn run_host(
                     }
                     if let Some((surreal, postgres)) = dbos_notation_stores.clone() {
                         let context = crate::dbos_notation::Context::new(
-                            surreal.clone(),
+                            surreal,
                             postgres.clone(),
                             Arc::clone(&dbos_notation_email),
                             Arc::clone(&dbos_notation_storage),
@@ -1014,7 +1014,6 @@ async fn run_host(
                                 Some(crate::dbos_ingress::NotationIngress::new(
                                     token,
                                     dbos.clone(),
-                                    surreal,
                                     postgres,
                                     workflow,
                                 ));

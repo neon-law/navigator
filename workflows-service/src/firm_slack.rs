@@ -35,6 +35,17 @@ pub trait ProjectSlackBots: Send + Sync {
         surreal: &SurrealDb,
         project_id: Uuid,
     ) -> Result<Arc<dyn SlackBot>, LaneError>;
+
+    /// Native workers resolve credentials against their own explicit pool.
+    /// Fakes may share the existing provider-only implementation.
+    async fn for_project_on(
+        &self,
+        _pg: &store::postgres::PostgresDb,
+        surreal: &SurrealDb,
+        project_id: Uuid,
+    ) -> Result<Arc<dyn SlackBot>, LaneError> {
+        self.for_project(surreal, project_id).await
+    }
 }
 
 /// The production resolver: the Firm's `slack_bot_token`, unsealed with the
@@ -59,6 +70,26 @@ impl ProjectSlackBots for FirmSlackBots {
     ) -> Result<Arc<dyn SlackBot>, LaneError> {
         let credential = store::firm_secrets::resolve_project_credential(
             surreal,
+            project_id,
+            IntegrationProvider::Slack,
+            IntegrationSecretKind::SlackBotToken,
+            self.kms.as_ref(),
+        )
+        .await
+        .map_err(|error| credential_error(project_id, &error))?;
+        Ok(Arc::new(SlackBotClient::new(
+            credential.expose_for_provider_call(),
+        )))
+    }
+
+    async fn for_project_on(
+        &self,
+        pg: &store::postgres::PostgresDb,
+        _surreal: &SurrealDb,
+        project_id: Uuid,
+    ) -> Result<Arc<dyn SlackBot>, LaneError> {
+        let credential = store::firm_secrets::resolve_project_credential_on(
+            pg,
             project_id,
             IntegrationProvider::Slack,
             IntegrationSecretKind::SlackBotToken,

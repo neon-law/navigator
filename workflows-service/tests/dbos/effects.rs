@@ -51,7 +51,7 @@ async fn a_keyed_write_lands_once_when_recovery_repeats_its_step() {
         return;
     };
     sqlx::query("CREATE TABLE synthetic_effect (effect_key text PRIMARY KEY)")
-        .execute(&db.pool)
+        .execute(db.store().pool())
         .await
         .expect("create the synthetic effect table");
 
@@ -59,7 +59,7 @@ async fn a_keyed_write_lands_once_when_recovery_repeats_its_step() {
         attempts: Arc::new(AtomicU32::new(0)),
         keys: Arc::new(Mutex::new(Vec::new())),
         reached: Arc::new(Notify::new()),
-        pool: db.pool.clone(),
+        pool: db.store().pool().clone(),
     };
 
     let dbos = dbos::DBOS::new(dbos_engine::config(&db.url, APP_VERSION));
@@ -127,7 +127,7 @@ async fn a_keyed_write_lands_once_when_recovery_repeats_its_step() {
         keys[0]
     );
     let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM synthetic_effect")
-        .fetch_one(&db.pool)
+        .fetch_one(db.store().pool())
         .await
         .expect("count keyed writes");
     assert_eq!(rows, 1, "the keyed write lands once");

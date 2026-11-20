@@ -357,6 +357,20 @@ pub async fn for_notation(
     many(response)
 }
 
+/// Read the canonical event ordering from the native runtime's explicit pool.
+///
+/// # Errors
+/// Refuses incomplete application history and propagates native read failures.
+pub async fn for_notation_on(
+    pg: &crate::postgres::PostgresDb,
+    notation_id: Uuid,
+) -> Result<Vec<NotationEvent>, NotationEventError> {
+    pg.require_application_history()
+        .await
+        .map_err(|_| matter::MatterAuthorityError::Unavailable)?;
+    Ok(matter::select(pg, TABLE, json!({"notation_id":notation_id}), &["id"]).await?)
+}
+
 /// Resolve the Person a transition is attributed to when no
 /// `acting_person_id` is supplied.
 ///

@@ -46,6 +46,7 @@ use crate::postgres::PostgresDb;
 /// One machine's durable state: the spec it runs on and the state
 /// it is in — the two K/V values Restate keyed per machine, in one row.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MachineState {
     pub notation_id: Uuid,
     pub machine_kind: String,

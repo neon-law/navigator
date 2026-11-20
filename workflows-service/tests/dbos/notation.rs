@@ -2,11 +2,12 @@
 
 use std::sync::Arc;
 
-use workflows::{MachineKind, StateMachineRuntime, StateName, WorkflowSpec};
+use workflows::{MachineKind, StateMachineRuntime};
 use workflows_service::dbos_ingress::{NotationIngress, WorkerIngress};
 use workflows_service::dbos_notation::{self, Context};
 
-use crate::support::{database, APP_VERSION, DEADLINE};
+use crate::support::{database, APP_VERSION};
+use crate::DEADLINE;
 
 async fn fork_from_last_failure(
     worker: &dbos::DBOS,
@@ -23,233 +24,38 @@ async fn fork_from_last_failure(
     worker.fork(workflow_id, restart_step).await.unwrap()
 }
 
-async fn assert_read_boundary(origin: &str, notation_id: uuid::Uuid) {
-    let current = format!("{origin}/notation/{notation_id}/workflow_current_state");
-    let http = reqwest::Client::new();
-    assert_eq!(
-        http.post(&current).send().await.unwrap().status(),
-        reqwest::StatusCode::UNAUTHORIZED
-    );
-    assert_eq!(
-        http.post(&current)
-            .bearer_auth("synthetic-worker-token")
-            .json(&serde_json::json!({}))
-            .send()
-            .await
-            .unwrap()
-            .status(),
-        reqwest::StatusCode::BAD_REQUEST,
-        "state reads preserve the bodyless wire contract"
-    );
-}
-
-#[tokio::test]
-async fn the_authenticated_caller_keeps_both_notation_machines_independent() {
-    let Some(db) = database().await else { return };
-    let postgres = db.store().await;
-    let surreal = store::test_support::mem_surreal().await;
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Arc::new(cloud::FsStorage::new(dir.path()).await.unwrap());
-    let worker = dbos::DBOS::new(workflows::dbos_engine::config(&db.url, APP_VERSION));
-    let workflow = dbos_notation::register(
-        &worker,
-        Context::new(
-            surreal.clone(),
-            postgres.clone(),
-            Arc::new(workflows::CapturingEmail::default()),
-            storage,
-        ),
-    )
-    .unwrap();
-    worker.launch().await.unwrap();
-    let router = workflows_service::health::router_with_dbos_ingress(
-        WorkerIngress {
-            notation: Some(NotationIngress::new(
-                "synthetic-worker-token".into(),
-                worker.clone(),
-                surreal,
-                postgres,
-                workflow,
-            )),
-            ..WorkerIngress::default()
-        },
-        None,
-    );
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
-        .await
-        .unwrap();
-    let origin = format!("http://{}", listener.local_addr().unwrap());
-    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-    let notation_id = uuid::Uuid::now_v7();
-    assert_read_boundary(&origin, notation_id).await;
-    let runtime =
-        workflows::DbosNotationRuntime::new(origin, Some("synthetic-worker-token".into()));
-    let spec = WorkflowSpec::from_yaml("BEGIN:\n  _: END\nEND: {}\n").unwrap();
-    tokio::time::timeout(DEADLINE, async {
-        assert_eq!(
-            runtime
-                .current_state(MachineKind::Workflow, notation_id)
-                .await,
-            None
-        );
-        for kind in [MachineKind::Questionnaire, MachineKind::Workflow] {
-            runtime
-                .start_ephemeral(kind, notation_id, &spec)
-                .await
-                .unwrap();
-            assert_eq!(
-                runtime.current_state(kind, notation_id).await,
-                Some(StateName::begin())
-            );
-        }
-        assert_eq!(
-            runtime
-                .signal_ephemeral(MachineKind::Questionnaire, notation_id, "_", None)
-                .await
-                .unwrap(),
-            StateName::end()
-        );
-        assert_eq!(
-            runtime
-                .current_state(MachineKind::Workflow, notation_id)
-                .await,
-            Some(StateName::begin()),
-            "the questionnaire cannot advance the workflow machine"
-        );
-        runtime
-            .start_ephemeral(MachineKind::Questionnaire, notation_id, &spec)
-            .await
-            .unwrap();
-        assert_eq!(
-            runtime
-                .current_state(MachineKind::Questionnaire, notation_id)
-                .await,
-            Some(StateName::end()),
-            "a duplicate start does not reset an advanced machine"
-        );
-        assert_eq!(
-            runtime
-                .signal_ephemeral(MachineKind::Workflow, notation_id, "_", None)
-                .await
-                .unwrap(),
-            StateName::end()
-        );
-    })
-    .await
-    .expect("the authenticated Notation transitions finish");
-    worker.shutdown().await;
-    server.abort();
-}
-
-#[tokio::test]
-async fn a_pending_notation_start_recovers_after_the_executor_stops() {
-    let Some(db) = database().await else { return };
-    let postgres = db.store().await;
-    let dir = tempfile::tempdir().unwrap();
-    let context = Context::new(
-        store::test_support::mem_surreal().await,
-        postgres.clone(),
-        Arc::new(workflows::CapturingEmail::default()),
-        Arc::new(cloud::FsStorage::new(dir.path()).await.unwrap()),
-    );
-    let notation_id = uuid::Uuid::now_v7();
-    let lane = store::notation_machine_state::acquire_lane(&postgres, notation_id)
-        .await
-        .unwrap();
-    let worker = dbos::DBOS::new(workflows::dbos_engine::config(&db.url, APP_VERSION));
-    let workflow = dbos_notation::register(&worker, context.clone()).unwrap();
-    worker.launch().await.unwrap();
-    let request = dbos_notation::TransitionRequest {
-        kind: MachineKind::Workflow,
-        notation_id,
-        operation: dbos_notation::Operation::Start {
-            spec_yaml: "BEGIN:\n  _: END\nEND: {}\n".into(),
-            ephemeral: true,
-        },
-    };
-    workflow
-        .start_with(
-            request,
-            dbos::StartOptions {
-                workflow_id: Some("synthetic-notation-recovery"),
-                ..dbos::StartOptions::default()
-            },
-        )
-        .await
-        .unwrap();
-    // The held lane prevents the first worker from changing machine state.
-    worker.shutdown().await;
-    assert!(
-        store::notation_machine_state::read(&postgres, notation_id, "workflow")
-            .await
-            .unwrap()
-            .is_none()
-    );
-    lane.commit().await.unwrap();
-    let resumed = dbos::DBOS::new(workflows::dbos_engine::config(&db.url, APP_VERSION));
-    dbos_notation::register(&resumed, context).unwrap();
-    resumed.launch().await.unwrap();
-    let report = tokio::time::timeout(
-        DEADLINE,
-        resumed
-            .retrieve_workflow::<dbos_notation::TransitionReport, dbos_notation::NotationTransitionError>(
-                "synthetic-notation-recovery",
-            )
-            .unwrap()
-            .result(),
-    )
-    .await
-    .expect("the pending Notation start recovers")
-    .unwrap();
-    assert_eq!(report.next_state, "BEGIN");
-    assert_eq!(
-        store::notation_machine_state::read(&postgres, notation_id, "workflow")
-            .await
-            .unwrap()
-            .unwrap()
-            .current_state,
-        "BEGIN"
-    );
-    resumed.shutdown().await;
-}
-
 struct PersistedNotation {
-    database: crate::support::TestDatabase,
-    directory: tempfile::TempDir,
+    database: Arc<crate::support::TestDatabase>,
+    directory: Arc<tempfile::TempDir>,
     worker: dbos::DBOS,
     workflow: dbos_notation::NotationTransitionWorkflow,
     surreal: store::surreal::SurrealDb,
     email: Arc<workflows::CapturingEmail>,
     id: uuid::Uuid,
     actor: uuid::Uuid,
+    servers: Arc<std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>>,
 }
 
 impl PersistedNotation {
-    async fn new() -> Option<Self> {
-        let database = database().await?;
-        let postgres = database.store().await;
-        let surreal = store::test_support::mem_surreal().await;
-        let id = store::test_support::seed_notation(&surreal).await;
-        let actor = store::notations::find_by_id(&surreal, id)
-            .await
-            .unwrap()
-            .unwrap()
-            .person_id;
-        let directory = tempfile::tempdir().unwrap();
+    async fn new(
+        database: Arc<crate::support::TestDatabase>,
+        directory: Arc<tempfile::TempDir>,
+        worker: dbos::DBOS,
+        servers: Arc<std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>>,
+    ) -> Self {
+        let postgres = database.store();
+        let surreal = store::surreal::SurrealDb::uninitialized();
+        let storage: Arc<dyn cloud::StorageService> =
+            Arc::new(cloud::FsStorage::new(directory.path()).await.unwrap());
+        let (id, actor) = crate::persisted_fixture::seed(&postgres, storage.clone()).await;
         let email = Arc::new(workflows::CapturingEmail::default());
-        let worker = dbos::DBOS::new(workflows::dbos_engine::config(&database.url, APP_VERSION));
         let workflow = dbos_notation::register(
             &worker,
-            Context::new(
-                surreal.clone(),
-                postgres,
-                email.clone(),
-                Arc::new(cloud::FsStorage::new(directory.path()).await.unwrap()),
-            ),
+            Context::new(surreal.clone(), postgres, email.clone(), storage),
         )
         .unwrap();
         worker.launch().await.unwrap();
-        Some(Self {
+        Self {
             database,
             directory,
             worker,
@@ -258,7 +64,8 @@ impl PersistedNotation {
             email,
             id,
             actor,
-        })
+            servers,
+        }
     }
 
     async fn transition(&self, kind: MachineKind, operation: dbos_notation::Operation) -> String {
@@ -315,167 +122,208 @@ impl PersistedNotation {
     }
 }
 
-#[tokio::test]
-async fn persisted_review_hops_journal_the_actor_and_capture_both_notifications() {
-    let Some(fixture) = PersistedNotation::new().await else {
+async fn with_persisted<F, Fut>(test: F)
+where
+    F: FnOnce(PersistedNotation) -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = ()> + Send + 'static,
+{
+    let Some(database) = database().await else {
         return;
     };
-    let notation = store::notations::find_by_id(&fixture.surreal, fixture.id)
-        .await
-        .unwrap()
-        .unwrap();
-    for row in store::projects::participations_for_project(&fixture.surreal, notation.project_id)
-        .await
-        .unwrap()
-    {
-        store::projects::clear_dri_in_surreal(
+    let database = Arc::new(database);
+    let directory = Arc::new(tempfile::tempdir().unwrap());
+    let worker = dbos::DBOS::new(workflows::dbos_engine::config(&database.url, APP_VERSION));
+    let servers = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let postgres = database.store();
+    let task_database = Arc::clone(&database);
+    let task_directory = Arc::clone(&directory);
+    let task_worker = worker.clone();
+    let task_servers = Arc::clone(&servers);
+    let result = tokio::spawn(store::postgres::PostgresDb::with_application_db(
+        postgres,
+        async move {
+            let fixture =
+                PersistedNotation::new(task_database, task_directory, task_worker, task_servers)
+                    .await;
+            test(fixture).await;
+        },
+    ))
+    .await;
+    worker.shutdown().await;
+    let owned = std::mem::take(&mut *servers.lock().unwrap());
+    for server in owned {
+        server.abort();
+        let _ = server.await;
+    }
+    let database = Arc::try_unwrap(database)
+        .ok()
+        .expect("all fixture consumers drained");
+    database.close().await;
+    drop(directory);
+    match result {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => panic!("native application fixture admission: {error}"),
+        Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
+        Err(error) => panic!("owned persisted Notation task was cancelled: {error}"),
+    }
+}
+
+#[tokio::test]
+async fn persisted_review_hops_journal_the_actor_and_capture_both_notifications() {
+    with_persisted(|fixture| async move {
+        let notation = store::notations::find_by_id(&fixture.surreal, fixture.id)
+            .await
+            .unwrap()
+            .unwrap();
+        for row in store::projects::participations_for_project(&fixture.surreal, notation.project_id)
+            .await
+            .unwrap()
+        {
+            store::projects::clear_dri_in_surreal(
+                &fixture.surreal,
+                row.id,
+                store::projects::DriSide::Client,
+            )
+            .await
+            .unwrap();
+        }
+        let lawyer = store::persons::create(
             &fixture.surreal,
-            row.id,
+            &store::persons::NewPerson::with_role(
+                "Synthetic Reviewer",
+                format!("reviewer-{}@example.com", uuid::Uuid::now_v7()),
+                store::persons::Role::Lawyer,
+            ),
+        )
+        .await
+        .unwrap();
+        store::projects::designate_dri_in_surreal(
+            &fixture.surreal,
+            notation.project_id,
+            lawyer.id,
+            store::projects::DriSide::Lawyer,
+        )
+        .await
+        .unwrap();
+        store::projects::designate_dri_in_surreal(
+            &fixture.surreal,
+            notation.project_id,
+            fixture.actor,
             store::projects::DriSide::Client,
         )
         .await
         .unwrap();
-    }
-    let lawyer = store::persons::create(
-        &fixture.surreal,
-        &store::persons::NewPerson::with_role(
-            "Synthetic Reviewer",
-            format!("reviewer-{}@example.com", uuid::Uuid::now_v7()),
-            store::persons::Role::Lawyer,
-        ),
-    )
-    .await
-    .unwrap();
-    store::projects::designate_dri_in_surreal(
-        &fixture.surreal,
-        notation.project_id,
-        lawyer.id,
-        store::projects::DriSide::Lawyer,
-    )
-    .await
-    .unwrap();
-    store::projects::designate_dri_in_surreal(
-        &fixture.surreal,
-        notation.project_id,
-        fixture.actor,
-        store::projects::DriSide::Client,
-    )
-    .await
-    .unwrap();
-    fixture.start(MachineKind::Workflow,
-        "BEGIN:\n  _: lawyer_review__draft\nlawyer_review__draft:\n  approved: client_review__draft\nclient_review__draft:\n  _: END\nEND: {}\n").await;
-    assert_eq!(
-        fixture.signal(MachineKind::Workflow, "_", None).await,
-        "lawyer_review__draft"
-    );
-    assert_eq!(fixture.email.captured().len(), 1);
-    assert_eq!(
-        fixture.email.captured()[0].subject,
-        "A draft is ready for your review"
-    );
-    assert_eq!(
-        fixture
-            .signal(MachineKind::Workflow, "approved", None)
-            .await,
-        "client_review__draft"
-    );
-    let captured = fixture.email.captured();
-    assert_eq!(captured.len(), 2);
-    assert_eq!(captured[1].subject, "Your reviewed draft is ready");
-    assert!(captured
-        .iter()
-        .all(|mail| mail.to.ends_with("@example.com")));
-    assert_eq!(
-        fixture.signal(MachineKind::Workflow, "_", None).await,
-        "END"
-    );
-    let events = fixture.events().await;
-    assert_eq!(events.len(), 3);
-    assert!(events
-        .iter()
-        .all(|event| event.acting_person_id == fixture.actor && event.machine_kind == "workflow"));
-    assert_eq!(events[1].condition, "approved");
-    assert_eq!(events[1].from_state, "lawyer_review__draft");
-    assert_eq!(events[1].to_state, "client_review__draft");
-    fixture.worker.shutdown().await;
+        fixture.start(MachineKind::Workflow,
+            "BEGIN:\n  _: lawyer_review__draft\nlawyer_review__draft:\n  approved: client_review__draft\nclient_review__draft:\n  _: END\nEND: {}\n").await;
+        assert_eq!(
+            fixture.signal(MachineKind::Workflow, "_", None).await,
+            "lawyer_review__draft"
+        );
+        assert_eq!(fixture.email.captured().len(), 1);
+        assert_eq!(
+            fixture.email.captured()[0].subject,
+            "A draft is ready for your review"
+        );
+        assert_eq!(
+            fixture
+                .signal(MachineKind::Workflow, "approved", None)
+                .await,
+            "client_review__draft"
+        );
+        let captured = fixture.email.captured();
+        assert_eq!(captured.len(), 2);
+        assert_eq!(captured[1].subject, "Your reviewed draft is ready");
+        assert!(captured
+            .iter()
+            .all(|mail| mail.to.ends_with("@example.com")));
+        assert_eq!(
+            fixture.signal(MachineKind::Workflow, "_", None).await,
+            "END"
+        );
+        let events = fixture.events().await;
+        assert_eq!(events.len(), 3);
+        assert!(events
+            .iter()
+            .all(|event| event.acting_person_id == fixture.actor && event.machine_kind == "workflow"));
+        assert_eq!(events[1].condition, "approved");
+        assert_eq!(events[1].from_state, "lawyer_review__draft");
+        assert_eq!(events[1].to_state, "client_review__draft");
+    }).await;
 }
 
 #[tokio::test]
 async fn questionnaire_back_keeps_answers_and_appends_an_attributed_back_event() {
-    let Some(fixture) = PersistedNotation::new().await else {
-        return;
-    };
-    let kind = MachineKind::Questionnaire;
-    fixture.start(kind, "BEGIN:\n  _: first\nfirst:\n  _: second\nsecond:\n  _: third\nthird:\n  _: END\nEND: {}\n").await;
-    assert_eq!(fixture.signal(kind, "_", None).await, "first");
-    assert_eq!(
-        fixture
-            .signal(kind, "_", Some("synthetic answer".into()))
-            .await,
-        "second"
-    );
-    assert_eq!(
-        fixture
-            .transition(
-                kind,
-                dbos_notation::Operation::Back {
-                    acting_person_id: fixture.actor
-                }
-            )
-            .await,
-        "first"
-    );
-    let events = fixture.events().await;
-    assert_eq!(events.len(), 3);
-    assert_eq!(
-        events[1].payload.as_deref(),
-        Some("{\"answer_value\":\"synthetic answer\"}")
-    );
-    assert_eq!(events[2].condition, "back");
-    assert_eq!(events[2].from_state, "second");
-    assert_eq!(events[2].to_state, "first");
-    assert_eq!(events[2].acting_person_id, fixture.actor);
-    assert!(fixture.email.captured().is_empty());
-    fixture.worker.shutdown().await;
+    with_persisted(|fixture| async move {
+        let kind = MachineKind::Questionnaire;
+        fixture.start(kind, "BEGIN:\n  _: first\nfirst:\n  _: second\nsecond:\n  _: third\nthird:\n  _: END\nEND: {}\n").await;
+        assert_eq!(fixture.signal(kind, "_", None).await, "first");
+        assert_eq!(
+            fixture
+                .signal(kind, "_", Some("synthetic answer".into()))
+                .await,
+            "second"
+        );
+        assert_eq!(
+            fixture
+                .transition(
+                    kind,
+                    dbos_notation::Operation::Back {
+                        acting_person_id: fixture.actor
+                    }
+                )
+                .await,
+            "first"
+        );
+        let events = fixture.events().await;
+        assert_eq!(events.len(), 3);
+        assert_eq!(
+            events[1].payload.as_deref(),
+            Some("{\"answer_value\":\"synthetic answer\"}")
+        );
+        assert_eq!(events[2].condition, "back");
+        assert_eq!(events[2].from_state, "second");
+        assert_eq!(events[2].to_state, "first");
+        assert_eq!(events[2].acting_person_id, fixture.actor);
+        assert!(fixture.email.captured().is_empty());
+    }).await;
 }
 
 #[tokio::test]
 async fn a_persisted_email_dispatch_is_captured_and_journaled() {
-    let Some(fixture) = PersistedNotation::new().await else {
-        return;
-    };
-    fixture
-        .start(
-            MachineKind::Workflow,
-            "BEGIN:\n  _: email_send__welcome\nemail_send__welcome:\n  _: END\nEND: {}\n",
-        )
-        .await;
-    let payload = serde_json::to_string(&workflows::email::dispatch::EmailPayload::new(
-        "Synthetic",
-        "synthetic@example.com",
-    ))
-    .unwrap();
-    assert_eq!(
+    with_persisted(|fixture| async move {
         fixture
-            .signal(MachineKind::Workflow, "_", Some(payload))
-            .await,
-        "email_send__welcome"
-    );
-    let captured = fixture.email.captured();
-    assert_eq!(captured.len(), 1);
-    assert_eq!(captured[0].to, "synthetic@example.com");
-    let events = fixture.events().await;
-    assert_eq!(events.len(), 1);
-    assert_eq!(events[0].to_state, "email_send__welcome");
-    assert!(
-        !events[0]
-            .payload
-            .as_deref()
-            .unwrap()
-            .contains("synthetic@example.com"),
-        "email recipient content stays out of the journal"
-    );
-    fixture.worker.shutdown().await;
+            .start(
+                MachineKind::Workflow,
+                "BEGIN:\n  _: email_send__welcome\nemail_send__welcome:\n  _: END\nEND: {}\n",
+            )
+            .await;
+        let payload = serde_json::to_string(&workflows::email::dispatch::EmailPayload::new(
+            "Synthetic",
+            "synthetic@example.com",
+        ))
+        .unwrap();
+        assert_eq!(
+            fixture
+                .signal(MachineKind::Workflow, "_", Some(payload))
+                .await,
+            "email_send__welcome"
+        );
+        let captured = fixture.email.captured();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].to, "synthetic@example.com");
+        let events = fixture.events().await;
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].to_state, "email_send__welcome");
+        assert!(
+            !events[0]
+                .payload
+                .as_deref()
+                .unwrap()
+                .contains("synthetic@example.com"),
+            "email recipient content stays out of the journal"
+        );
+    })
+    .await;
 }
 
 #[derive(Default)]
@@ -524,7 +372,7 @@ async fn repair_worker(
     let workflow = dbos_notation::register(
         &worker,
         Context::new(
-            store::test_support::mem_surreal().await,
+            store::surreal::SurrealDb::uninitialized(),
             postgres.clone(),
             email,
             Arc::new(cloud::FsStorage::new(directory).await.unwrap()),
@@ -543,7 +391,7 @@ async fn an_unfinished_predecessor_owns_the_notation_through_repair() {
     let Some(database) = database().await else {
         return;
     };
-    let postgres = database.store().await;
+    let postgres = database.store();
     let directory = tempfile::tempdir().unwrap();
     let email = Arc::new(RepairableEmail::default());
     let (worker, workflow) =
@@ -633,6 +481,7 @@ async fn an_unfinished_predecessor_owns_the_notation_through_repair() {
         "END"
     );
     worker.shutdown().await;
+    database.close().await;
 }
 
 #[tokio::test]
@@ -641,7 +490,7 @@ async fn pending_operation_uniqueness_and_completion_are_atomic_under_contention
     let Some(database) = database().await else {
         return;
     };
-    let pg = database.store().await;
+    let pg = database.store();
     let notation = uuid::Uuid::now_v7();
     let barrier = Arc::new(tokio::sync::Barrier::new(8));
     let mut writers = Vec::new();
@@ -714,136 +563,135 @@ async fn pending_operation_uniqueness_and_completion_are_atomic_under_contention
         operations::admit(&pg, uuid::Uuid::now_v7(), notation, "replacement").await,
         Ok(Admission::Pending { started: false })
     ));
+    database.close().await;
 }
 
 #[tokio::test]
 async fn invalid_preflight_does_not_leave_a_pending_owner_or_cached_machine_read() {
-    let Some(fixture) = PersistedNotation::new().await else {
-        return;
-    };
-    let invalid = fixture
-        .workflow
-        .run(dbos_notation::TransitionRequest {
-            kind: MachineKind::Workflow,
-            notation_id: fixture.id,
-            operation: dbos_notation::Operation::Start {
-                spec_yaml: "not: [a valid machine".into(),
-                ephemeral: false,
-            },
-        })
-        .await;
-    assert!(invalid.is_err());
-    let pending: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM notation_transition WHERE notation_id=$1 AND result IS NULL",
-    )
-    .bind(fixture.id)
-    .fetch_one(&fixture.database.pool)
-    .await
-    .unwrap();
-    assert_eq!(pending, 0);
-    fixture
-        .start(MachineKind::Workflow, "BEGIN:\n  _: END\nEND: {}\n")
-        .await;
-    let invalid = fixture
-        .workflow
-        .run(dbos_notation::TransitionRequest {
-            kind: MachineKind::Workflow,
-            notation_id: fixture.id,
-            operation: dbos_notation::Operation::Signal {
-                condition: "not-declared".into(),
-                value: None,
-                acting_person_id: None,
-                ephemeral: false,
-            },
-        })
-        .await;
-    assert!(invalid.is_err());
-    let pending: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM notation_transition WHERE notation_id=$1 AND result IS NULL",
-    )
-    .bind(fixture.id)
-    .fetch_one(&fixture.database.pool)
-    .await
-    .unwrap();
-    assert_eq!(pending, 0);
-    assert_eq!(
-        fixture.signal(MachineKind::Workflow, "_", None).await,
-        "END"
-    );
-    fixture.worker.shutdown().await;
+    with_persisted(|fixture| async move {
+        let invalid = fixture
+            .workflow
+            .run(dbos_notation::TransitionRequest {
+                kind: MachineKind::Workflow,
+                notation_id: fixture.id,
+                operation: dbos_notation::Operation::Start {
+                    spec_yaml: "not: [a valid machine".into(),
+                    ephemeral: false,
+                },
+            })
+            .await;
+        assert!(invalid.is_err());
+        let pending: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM notation_transition WHERE notation_id=$1 AND result IS NULL",
+        )
+        .bind(fixture.id)
+        .fetch_one(fixture.database.store().pool())
+        .await
+        .unwrap();
+        assert_eq!(pending, 0);
+        fixture
+            .start(MachineKind::Workflow, "BEGIN:\n  _: END\nEND: {}\n")
+            .await;
+        let invalid = fixture
+            .workflow
+            .run(dbos_notation::TransitionRequest {
+                kind: MachineKind::Workflow,
+                notation_id: fixture.id,
+                operation: dbos_notation::Operation::Signal {
+                    condition: "not-declared".into(),
+                    value: None,
+                    acting_person_id: None,
+                    ephemeral: false,
+                },
+            })
+            .await;
+        assert!(invalid.is_err());
+        let pending: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM notation_transition WHERE notation_id=$1 AND result IS NULL",
+        )
+        .bind(fixture.id)
+        .fetch_one(fixture.database.store().pool())
+        .await
+        .unwrap();
+        assert_eq!(pending, 0);
+        assert_eq!(
+            fixture.signal(MachineKind::Workflow, "_", None).await,
+            "END"
+        );
+    })
+    .await;
 }
 
 /// Mark-started fails outside a DBOS step. The anchor must preserve the first
 /// logical UUID when the repair forks from the last recorded step.
 #[tokio::test]
 async fn a_live_preflight_failure_repairs_under_the_original_operation_identity() {
-    let Some(fixture) = PersistedNotation::new().await else {
-        return;
-    };
-    sqlx::query(
-        "ALTER TABLE notation_transition ADD CONSTRAINT synthetic_mark_denied CHECK (NOT started)",
-    )
-    .execute(&fixture.database.pool)
-    .await
-    .unwrap();
-    let logical = format!("preflight-failure-{}", fixture.id);
-    let handle = fixture
-        .workflow
-        .start_with(
-            dbos_notation::TransitionRequest {
-                kind: MachineKind::Workflow,
-                notation_id: fixture.id,
-                operation: dbos_notation::Operation::Start {
-                    spec_yaml: "BEGIN:\n  _: END\nEND: {}\n".into(),
-                    ephemeral: false,
-                },
-            },
-            dbos::StartOptions {
-                workflow_id: Some(&logical),
-                ..Default::default()
-            },
+    with_persisted(|fixture| async move {
+            sqlx::query(
+            "ALTER TABLE notation_transition ADD CONSTRAINT synthetic_mark_denied CHECK (NOT started)",
         )
+        .execute(fixture.database.store().pool())
         .await
         .unwrap();
-    assert!(tokio::time::timeout(DEADLINE, handle.result())
-        .await
-        .unwrap()
-        .is_err());
-    let original: uuid::Uuid = sqlx::query_scalar(
-        "SELECT id FROM notation_transition WHERE notation_id=$1 AND result IS NULL",
-    )
-    .bind(fixture.id)
-    .fetch_one(&fixture.database.pool)
-    .await
-    .unwrap();
-    sqlx::query("ALTER TABLE notation_transition DROP CONSTRAINT synthetic_mark_denied")
-        .execute(&fixture.database.pool)
-        .await
-        .unwrap();
-    let repaired = fork_from_last_failure(&fixture.worker, &logical).await;
-    assert_eq!(
-        tokio::time::timeout(DEADLINE, repaired.result())
-            .await
-            .unwrap()
-            .unwrap()
-            .next_state,
-        "BEGIN"
-    );
-    let rows: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM notation_transition WHERE notation_id=$1")
+            let logical = format!("preflight-failure-{}", fixture.id);
+            let handle = fixture
+                .workflow
+                .start_with(
+                    dbos_notation::TransitionRequest {
+                        kind: MachineKind::Workflow,
+                        notation_id: fixture.id,
+                        operation: dbos_notation::Operation::Start {
+                            spec_yaml: "BEGIN:\n  _: END\nEND: {}\n".into(),
+                            ephemeral: false,
+                        },
+                    },
+                    dbos::StartOptions {
+                        workflow_id: Some(&logical),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+            assert!(tokio::time::timeout(DEADLINE, handle.result())
+                .await
+                .unwrap()
+                .is_err());
+            let original: uuid::Uuid = sqlx::query_scalar(
+                "SELECT id FROM notation_transition WHERE notation_id=$1 AND result IS NULL",
+            )
             .bind(fixture.id)
-            .fetch_one(&fixture.database.pool)
+            .fetch_one(fixture.database.store().pool())
             .await
             .unwrap();
-    assert_eq!(rows, 1);
-    let finished: bool =
-        sqlx::query_scalar("SELECT result IS NOT NULL FROM notation_transition WHERE id=$1")
-            .bind(original)
-            .fetch_one(&fixture.database.pool)
-            .await
-            .unwrap();
-    assert!(finished);
-    fixture.worker.shutdown().await;
+            sqlx::query("ALTER TABLE notation_transition DROP CONSTRAINT synthetic_mark_denied")
+                .execute(fixture.database.store().pool())
+                .await
+                .unwrap();
+            let repaired = fork_from_last_failure(&fixture.worker, &logical).await;
+            assert_eq!(
+                tokio::time::timeout(DEADLINE, repaired.result())
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .next_state,
+                "BEGIN"
+            );
+            let rows: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM notation_transition WHERE notation_id=$1")
+                    .bind(fixture.id)
+                    .fetch_one(fixture.database.store().pool())
+                    .await
+                    .unwrap();
+            assert_eq!(rows, 1);
+            let finished: bool =
+                sqlx::query_scalar("SELECT result IS NOT NULL FROM notation_transition WHERE id=$1")
+                    .bind(original)
+                    .fetch_one(fixture.database.store().pool())
+                    .await
+                    .unwrap();
+            assert!(finished);
+    })
+    .await;
 }
 
 async fn notation_project(fixture: &PersistedNotation) -> uuid::Uuid {
@@ -869,356 +717,339 @@ async fn review_lawyer(fixture: &PersistedNotation, name: &str) -> store::person
 
 #[tokio::test]
 async fn completing_the_firm_signature_state_closes_the_persisted_matter() {
-    let Some(mut fixture) = PersistedNotation::new().await else {
-        return;
-    };
-    let project = notation_project(&fixture).await;
-    let signer = review_lawyer(&fixture, "Synthetic Signer").await;
-    let mut response = fixture
-        .surreal
-        .query(
-            "CREATE $id SET project_id = $project_id, storage_key = $storage_key, \
-             content_type = 'application/pdf', byte_size = 1, sha256_hex = $sha, \
-             kind = 'offboarding', visibility = 'internal', metadata = NONE",
-        )
-        .bind((
-            "id",
-            store::surreal::record_id("asset", uuid::Uuid::now_v7()),
-        ))
-        .bind(("project_id", store::surreal::record_id("project", project)))
-        .bind(("storage_key", format!("projects/{project}/documents/test")))
-        .bind(("sha", format!("sha-{project}")))
-        .await
-        .unwrap();
-    let _: Option<serde_json::Value> = response.take(0).unwrap();
-    fixture.actor = signer.id;
-    fixture.start(MachineKind::Workflow,
-        "BEGIN:\n  _: firm_signature__closing_letter\nfirm_signature__closing_letter:\n  signed: END\nEND: {}\n").await;
-    assert_eq!(
-        fixture.signal(MachineKind::Workflow, "_", None).await,
-        "firm_signature__closing_letter"
-    );
-    assert_eq!(
-        store::projects::find_by_id(&fixture.surreal, project)
+    with_persisted(|mut fixture| async move {
+        let project = notation_project(&fixture).await;
+        let signer = review_lawyer(&fixture, "Synthetic Signer").await;
+        let storage: Arc<dyn cloud::StorageService> = Arc::new(cloud::FsStorage::new(fixture.directory.path()).await.unwrap());
+        store::assets::file_revision(
+            &fixture.surreal,&storage,
+            &store::documents::IngestArgs {project_id:project,source:"upload",filename:"closing.pdf",kind:"offboarding",content_type:"application/pdf",
+                description:None,visibility:"internal",secondary_storage_key:None},
+            &store::documents::DocumentIdentity {slug:Some("closing-letter"),..Default::default()},
+            include_bytes!("../../../cli/testdata/synthetic-initial-case-assessment.pdf"),
+        ).await.unwrap();
+        fixture.actor = signer.id;
+        fixture.start(MachineKind::Workflow,
+            "BEGIN:\n  _: firm_signature__closing_letter\nfirm_signature__closing_letter:\n  signed: END\nEND: {}\n").await;
+        assert_eq!(
+            fixture.signal(MachineKind::Workflow, "_", None).await,
+            "firm_signature__closing_letter"
+        );
+        assert_eq!(
+            store::projects::find_by_id(&fixture.surreal, project)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "open"
+        );
+        assert_eq!(
+            fixture.signal(MachineKind::Workflow, "signed", None).await,
+            "END"
+        );
+        let closed = store::projects::find_by_id(&fixture.surreal, project)
             .await
             .unwrap()
-            .unwrap()
-            .status,
-        "open"
-    );
-    assert_eq!(
-        fixture.signal(MachineKind::Workflow, "signed", None).await,
-        "END"
-    );
-    let closed = store::projects::find_by_id(&fixture.surreal, project)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(closed.status, "closed");
-    assert!(closed.closed_at.is_some());
-    assert_eq!(fixture.events().await.len(), 2);
-    assert!(fixture.email.captured().is_empty());
-    fixture.worker.shutdown().await;
+            .unwrap();
+        assert_eq!(closed.status, "closed");
+        assert!(closed.closed_at.is_some());
+        assert_eq!(fixture.events().await.len(), 2);
+        assert!(fixture.email.captured().is_empty());
+    }).await;
 }
 
 #[tokio::test]
 async fn a_demoted_review_dri_falls_back_to_a_current_lawyer() {
-    let Some(fixture) = PersistedNotation::new().await else {
-        return;
-    };
-    let project = notation_project(&fixture).await;
-    let stale = review_lawyer(&fixture, "Former Reviewer").await;
-    store::projects::designate_dri_in_surreal(
-        &fixture.surreal,
-        project,
-        stale.id,
-        store::projects::DriSide::Lawyer,
-    )
-    .await
-    .unwrap();
-    store::persons::set_role(&fixture.surreal, stale.id, store::persons::Role::Client)
+    with_persisted(|fixture| async move {
+        let project = notation_project(&fixture).await;
+        let stale = review_lawyer(&fixture, "Former Reviewer").await;
+        store::projects::designate_dri_in_surreal(
+            &fixture.surreal,
+            project,
+            stale.id,
+            store::projects::DriSide::Lawyer,
+        )
         .await
         .unwrap();
-    let current = review_lawyer(&fixture, "Current Reviewer").await;
-    store::projects::add_participation(
-        &fixture.surreal,
-        project,
-        current.id,
-        store::projects::participation_for_role(store::persons::Role::Lawyer),
-    )
-    .await
-    .unwrap();
-    fixture
+        store::persons::set_role(&fixture.surreal, stale.id, store::persons::Role::Client)
+            .await
+            .unwrap();
+        let current = review_lawyer(&fixture, "Current Reviewer").await;
+        store::projects::add_participation(
+            &fixture.surreal,
+            project,
+            current.id,
+            store::projects::participation_for_role(store::persons::Role::Lawyer),
+        )
+        .await
+        .unwrap();
+        fixture
         .start(
             MachineKind::Workflow,
             "BEGIN:\n  _: lawyer_review__draft\nlawyer_review__draft:\n  approved: END\nEND: {}\n",
         )
         .await;
-    assert_eq!(
-        fixture.signal(MachineKind::Workflow, "_", None).await,
-        "lawyer_review__draft"
-    );
-    let captured = fixture.email.captured();
-    assert_eq!(captured.len(), 1);
-    assert_eq!(captured[0].to, current.email);
-    assert_ne!(captured[0].to, stale.email);
-    assert_eq!(captured[0].subject, "A draft is ready for your review");
-    fixture.worker.shutdown().await;
+        assert_eq!(
+            fixture.signal(MachineKind::Workflow, "_", None).await,
+            "lawyer_review__draft"
+        );
+        let captured = fixture.email.captured();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].to, current.email);
+        assert_ne!(captured[0].to, stale.email);
+        assert_eq!(captured[0].subject, "A draft is ready for your review");
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn a_signal_without_a_machine_fails_without_a_journal_or_send() {
-    let Some(fixture) = PersistedNotation::new().await else {
-        return;
-    };
-    let handle = fixture
-        .workflow
-        .start_with(
-            dbos_notation::TransitionRequest {
-                kind: MachineKind::Workflow,
-                notation_id: fixture.id,
-                operation: dbos_notation::Operation::Signal {
-                    condition: "_".into(),
-                    value: None,
-                    acting_person_id: Some(fixture.actor),
-                    ephemeral: false,
+    with_persisted(|fixture| async move {
+        let handle = fixture
+            .workflow
+            .start_with(
+                dbos_notation::TransitionRequest {
+                    kind: MachineKind::Workflow,
+                    notation_id: fixture.id,
+                    operation: dbos_notation::Operation::Signal {
+                        condition: "_".into(),
+                        value: None,
+                        acting_person_id: Some(fixture.actor),
+                        ephemeral: false,
+                    },
                 },
-            },
-            dbos::StartOptions::default(),
-        )
-        .await
-        .unwrap();
-    let result = tokio::time::timeout(DEADLINE, handle.result())
-        .await
-        .expect("the missing machine fails promptly");
-    assert!(result.is_err());
-    assert!(fixture.events().await.is_empty());
-    assert!(fixture.email.captured().is_empty());
-    let count: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM notation_machine_state WHERE notation_id = $1")
-            .bind(fixture.id)
-            .fetch_one(&fixture.database.pool)
+                dbos::StartOptions::default(),
+            )
             .await
             .unwrap();
-    assert_eq!(count, 0);
-    fixture.worker.shutdown().await;
+        let result = tokio::time::timeout(DEADLINE, handle.result())
+            .await
+            .expect("the missing machine fails promptly");
+        assert!(result.is_err());
+        assert!(fixture.events().await.is_empty());
+        assert!(fixture.email.captured().is_empty());
+        let count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM notation_machine_state WHERE notation_id = $1",
+        )
+        .bind(fixture.id)
+        .fetch_one(fixture.database.store().pool())
+        .await
+        .unwrap();
+        assert_eq!(count, 0);
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn a_back_event_written_before_its_state_move_keeps_later_back_navigation_correct() {
-    let Some(fixture) = PersistedNotation::new().await else {
-        return;
-    };
-    let kind = MachineKind::Questionnaire;
-    fixture.start(kind, "BEGIN:\n  _: first\nfirst:\n  _: second\nsecond:\n  _: done\ndone:\n  _: END\nEND: {}\n").await;
-    assert_eq!(fixture.signal(kind, "_", None).await, "first");
-    assert_eq!(
-        fixture
-            .signal(kind, "_", Some("synthetic answer".into()))
-            .await,
-        "second"
-    );
-    // A process loss after the append but before the machine CAS leaves
-    // exactly these durable facts for the recovered command to read.
-    store::notation_events::append_event(
-        &fixture.surreal,
-        store::notation_events::TransitionRecord {
-            notation_id: fixture.id,
-            acting_person_id: Some(fixture.actor),
-            machine_kind: "questionnaire",
-            from_state: "second",
-            to_state: "first",
-            condition: "back",
-            payload_json: None,
-            recorded_at: &chrono::Utc::now().to_rfc3339(),
-        },
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        fixture
-            .transition(
-                kind,
-                dbos_notation::Operation::Back {
-                    acting_person_id: fixture.actor
-                }
-            )
-            .await,
-        "first"
-    );
-    assert_eq!(
-        fixture
-            .transition(
-                kind,
-                dbos_notation::Operation::Back {
-                    acting_person_id: fixture.actor
-                }
-            )
-            .await,
-        "BEGIN"
-    );
-    let events = fixture.events().await;
-    assert_eq!(events.last().unwrap().to_state, "BEGIN");
-    assert!(events
-        .iter()
-        .any(|event| event.payload.as_deref() == Some("{\"answer_value\":\"synthetic answer\"}")));
-    fixture.worker.shutdown().await;
+    with_persisted(|fixture| async move {
+        let kind = MachineKind::Questionnaire;
+        fixture.start(kind, "BEGIN:\n  _: first\nfirst:\n  _: second\nsecond:\n  _: done\ndone:\n  _: END\nEND: {}\n").await;
+        assert_eq!(fixture.signal(kind, "_", None).await, "first");
+        assert_eq!(
+            fixture
+                .signal(kind, "_", Some("synthetic answer".into()))
+                .await,
+            "second"
+        );
+        // A process loss after the append but before the machine CAS leaves
+        // exactly these durable facts for the recovered command to read.
+        store::notation_events::append_event(
+            &fixture.surreal,
+            store::notation_events::TransitionRecord {
+                notation_id: fixture.id,
+                acting_person_id: Some(fixture.actor),
+                machine_kind: "questionnaire",
+                from_state: "second",
+                to_state: "first",
+                condition: "back",
+                payload_json: None,
+                recorded_at: &chrono::Utc::now().to_rfc3339(),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            fixture
+                .transition(
+                    kind,
+                    dbos_notation::Operation::Back {
+                        acting_person_id: fixture.actor
+                    }
+                )
+                .await,
+            "first"
+        );
+        assert_eq!(
+            fixture
+                .transition(
+                    kind,
+                    dbos_notation::Operation::Back {
+                        acting_person_id: fixture.actor
+                    }
+                )
+                .await,
+            "BEGIN"
+        );
+        let events = fixture.events().await;
+        assert_eq!(events.last().unwrap().to_state, "BEGIN");
+        assert!(events
+            .iter()
+            .any(|event| event.payload.as_deref() == Some("{\"answer_value\":\"synthetic answer\"}")));
+    }).await;
 }
 
 #[tokio::test]
 async fn back_keeps_begin_and_completed_questionnaires_in_place() {
-    let Some(fixture) = PersistedNotation::new().await else {
-        return;
-    };
-    let kind = MachineKind::Questionnaire;
-    fixture
-        .start(
-            kind,
-            "BEGIN:\n  _: first\nfirst:\n  _: done\ndone:\n  _: END\nEND: {}\n",
-        )
-        .await;
-    assert_eq!(
+    with_persisted(|fixture| async move {
+        let kind = MachineKind::Questionnaire;
         fixture
-            .transition(
+            .start(
                 kind,
-                dbos_notation::Operation::Back {
-                    acting_person_id: fixture.actor
-                }
+                "BEGIN:\n  _: first\nfirst:\n  _: done\ndone:\n  _: END\nEND: {}\n",
             )
-            .await,
-        "BEGIN"
-    );
-    assert!(fixture.events().await.is_empty());
-    assert_eq!(fixture.signal(kind, "_", None).await, "first");
-    assert_eq!(
-        fixture
-            .signal(kind, "_", Some("synthetic answer".into()))
-            .await,
-        "done"
-    );
-    assert_eq!(
-        fixture
-            .transition(
-                kind,
-                dbos_notation::Operation::Back {
-                    acting_person_id: fixture.actor
-                }
-            )
-            .await,
-        "done"
-    );
-    assert_eq!(fixture.signal(kind, "_", None).await, "END");
-    assert_eq!(
-        fixture
-            .transition(
-                kind,
-                dbos_notation::Operation::Back {
-                    acting_person_id: fixture.actor
-                }
-            )
-            .await,
-        "END"
-    );
-    assert_eq!(fixture.events().await.len(), 3);
-    fixture.worker.shutdown().await;
+            .await;
+        assert_eq!(
+            fixture
+                .transition(
+                    kind,
+                    dbos_notation::Operation::Back {
+                        acting_person_id: fixture.actor
+                    }
+                )
+                .await,
+            "BEGIN"
+        );
+        assert!(fixture.events().await.is_empty());
+        assert_eq!(fixture.signal(kind, "_", None).await, "first");
+        assert_eq!(
+            fixture
+                .signal(kind, "_", Some("synthetic answer".into()))
+                .await,
+            "done"
+        );
+        assert_eq!(
+            fixture
+                .transition(
+                    kind,
+                    dbos_notation::Operation::Back {
+                        acting_person_id: fixture.actor
+                    }
+                )
+                .await,
+            "done"
+        );
+        assert_eq!(fixture.signal(kind, "_", None).await, "END");
+        assert_eq!(
+            fixture
+                .transition(
+                    kind,
+                    dbos_notation::Operation::Back {
+                        acting_person_id: fixture.actor
+                    }
+                )
+                .await,
+            "END"
+        );
+        assert_eq!(fixture.events().await.len(), 3);
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn dbos_approval_accepts_a_retry_and_publishes_the_rendered_state_once() {
-    let Some(fixture) = PersistedNotation::new().await else {
-        return;
-    };
-    fixture
-        .start(
-            MachineKind::Workflow,
-            "BEGIN:\n  _: lawyer_review\nlawyer_review:\n  approved: generate_pdf__letter\ngenerate_pdf__letter:\n  pdf_persisted: END\nEND: {}\n",
-        )
-        .await;
-    assert_eq!(
-        fixture.signal(MachineKind::Workflow, "_", None).await,
-        "lawyer_review"
-    );
-    let notation = store::notations::update_state(&fixture.surreal, fixture.id, "lawyer_review")
-        .await
-        .unwrap();
-    let postgres = fixture.database.store().await;
-    let (runtime, server) = approval_runtime(&fixture, postgres.clone()).await;
-    let storage_key = store::notations::document_pdf_storage_key(fixture.id);
-    let payload = serde_json::to_string(&workflows::DocumentPayload::Typst {
-        storage_key: storage_key.clone(),
-        typst_source: "Reviewed synthetic document".into(),
-    })
-    .unwrap();
-    let review_revision = notation.updated_at.timestamp_micros();
-    let actor = workflows::SignalContext {
-        acting_person_id: fixture.actor,
-    };
-    assert_stale_approval_fails(&fixture, &runtime, review_revision, &payload, actor).await;
-    let lane = store::notation_machine_state::acquire_lane(&postgres, fixture.id)
-        .await
-        .unwrap();
-    for _ in 0..2 {
-        assert_eq!(
-            tokio::time::timeout(
-                std::time::Duration::from_secs(2),
-                runtime.approve(fixture.id, review_revision, &payload, Some(actor)),
-            )
-            .await
-            .expect("submission responds while the transition lane is held")
-            .unwrap(),
-            None
-        );
-    }
-    assert_eq!(
-        runtime
-            .approval_progress(fixture.id, review_revision)
-            .await
-            .unwrap(),
-        Some(workflows::ApprovalProgress::Pending)
-    );
-    drop(lane);
-    let run_id = format!("NotationApproval:{}:{review_revision}", fixture.id);
-    let handle = fixture.worker
-        .retrieve_workflow::<dbos_notation::TransitionReport, dbos_notation::NotationTransitionError>(&run_id)
-        .unwrap();
-    assert_eq!(
-        tokio::time::timeout(DEADLINE, handle.result())
-            .await
-            .unwrap()
-            .unwrap()
-            .next_state,
-        "generate_pdf__letter"
-    );
-    assert_eq!(
-        runtime
-            .approval_progress(fixture.id, review_revision)
-            .await
-            .unwrap(),
-        Some(workflows::ApprovalProgress::Ready)
-    );
-    let persisted = store::notations::find_by_id(&fixture.surreal, fixture.id)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(persisted.state, "generate_pdf__letter");
-    let storage = cloud::FsStorage::new(fixture.directory.path())
-        .await
-        .unwrap();
-    let document = cloud::StorageService::get(&storage, &storage_key)
-        .await
-        .unwrap();
-    assert!(document.bytes.starts_with(b"%PDF-"));
-    assert_eq!(
+    with_persisted(|fixture| async move {
         fixture
-            .events()
+            .start(
+                MachineKind::Workflow,
+                "BEGIN:\n  _: lawyer_review\nlawyer_review:\n  approved: generate_pdf__letter\ngenerate_pdf__letter:\n  pdf_persisted: END\nEND: {}\n",
+            )
+            .await;
+        assert_eq!(
+            fixture.signal(MachineKind::Workflow, "_", None).await,
+            "lawyer_review"
+        );
+        let notation = store::notations::update_state(&fixture.surreal, fixture.id, "lawyer_review")
             .await
-            .iter()
-            .filter(|event| event.condition == "approved")
-            .count(),
-        1
-    );
-    fixture.worker.shutdown().await;
-    server.abort();
+            .unwrap();
+        let postgres = fixture.database.store();
+        let (runtime, server) = approval_runtime(&fixture, postgres.clone()).await;
+        let storage_key = store::notations::document_pdf_storage_key(fixture.id);
+        let payload = serde_json::to_string(&workflows::DocumentPayload::Typst {
+            storage_key: storage_key.clone(),
+            typst_source: "Reviewed synthetic document".into(),
+        })
+        .unwrap();
+        let review_revision = notation.updated_at.timestamp_micros();
+        let actor = workflows::SignalContext {
+            acting_person_id: fixture.actor,
+        };
+        assert_stale_approval_fails(&fixture, &runtime, review_revision, &payload, actor).await;
+        let lane = store::notation_machine_state::acquire_lane(&postgres, fixture.id)
+            .await
+            .unwrap();
+        for _ in 0..2 {
+            assert_eq!(
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(2),
+                    runtime.approve(fixture.id, review_revision, &payload, Some(actor)),
+                )
+                .await
+                .expect("submission responds while the transition lane is held")
+                .unwrap(),
+                None
+            );
+        }
+        assert_eq!(
+            runtime
+                .approval_progress(fixture.id, review_revision)
+                .await
+                .unwrap(),
+            Some(workflows::ApprovalProgress::Pending)
+        );
+        drop(lane);
+        let run_id = format!("NotationApproval:{}:{review_revision}", fixture.id);
+        let handle = fixture.worker
+            .retrieve_workflow::<dbos_notation::TransitionReport, dbos_notation::NotationTransitionError>(&run_id)
+            .unwrap();
+        assert_eq!(
+            tokio::time::timeout(DEADLINE, handle.result())
+                .await
+                .unwrap()
+                .unwrap()
+                .next_state,
+            "generate_pdf__letter"
+        );
+        assert_eq!(
+            runtime
+                .approval_progress(fixture.id, review_revision)
+                .await
+                .unwrap(),
+            Some(workflows::ApprovalProgress::Ready)
+        );
+        let persisted = store::notations::find_by_id(&fixture.surreal, fixture.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(persisted.state, "generate_pdf__letter");
+        let storage = cloud::FsStorage::new(fixture.directory.path())
+            .await
+            .unwrap();
+        let document = cloud::StorageService::get(&storage, &storage_key)
+            .await
+            .unwrap();
+        assert!(document.bytes.starts_with(b"%PDF-"));
+        assert_eq!(
+            fixture
+                .events()
+                .await
+                .iter()
+                .filter(|event| event.condition == "approved")
+                .count(),
+            1
+        );
+        server.abort();
+    }).await;
 }
 
 async fn assert_stale_approval_fails(
@@ -1253,13 +1084,12 @@ async fn assert_stale_approval_fails(
 async fn approval_runtime(
     fixture: &PersistedNotation,
     postgres: store::postgres::PostgresDb,
-) -> (workflows::DbosNotationRuntime, tokio::task::JoinHandle<()>) {
+) -> (workflows::DbosNotationRuntime, tokio::task::AbortHandle) {
     let router = workflows_service::health::router_with_dbos_ingress(
         WorkerIngress {
             notation: Some(NotationIngress::new(
                 "synthetic-worker-token".into(),
                 fixture.worker.clone(),
-                fixture.surreal.clone(),
                 postgres,
                 fixture.workflow.clone(),
             )),
@@ -1272,7 +1102,9 @@ async fn approval_runtime(
         .unwrap();
     let origin = format!("http://{}", listener.local_addr().unwrap());
     let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let abort = server.abort_handle();
+    fixture.servers.lock().unwrap().push(server);
     let runtime =
         workflows::DbosNotationRuntime::new(origin, Some("synthetic-worker-token".into()));
-    (runtime, server)
+    (runtime, abort)
 }

@@ -438,6 +438,23 @@ erDiagram
         datetime checked_through
         uuid firm_id
     }
+    durable_object_handover {
+        uuid capture_id
+        string capture_sha256
+        int capture_version
+        datetime inserted_at
+        int notation_machines
+        string origin
+        int slack_posted_events
+        int slack_projects
+        string source_environment
+    }
+    durable_object_ownership {
+        datetime activated_at
+        uuid capture_id
+        uuid ownership_epoch
+        boolean singleton
+    }
     efiling_transactions {
         string accepted_on
         string case_number
@@ -1728,6 +1745,29 @@ erDiagram
         datetime served_on
         datetime updated_at
     }
+    project_slack_delivery {
+        string event_key
+        string event_kind
+        datetime inserted_at
+        uuid project_id
+    }
+    project_slack_delivery_reconciliation {
+        uuid actor_person_id
+        string decision
+        uuid evidence_reference
+        datetime inserted_at
+        uuid operation_id
+        uuid ownership_epoch
+        uuid project_id
+    }
+    project_slack_handover {
+        uuid capture_id
+        string client_view_disposition
+        datetime inserted_at
+        boolean native_active
+        uuid ownership_epoch
+        uuid project_id
+    }
     project_source_import {
         int attempts
         string canonical_zip
@@ -2167,6 +2207,7 @@ erDiagram
     firm }o--|| docusign_completion : references
     project }o--|| docusign_completion : references
     firm }o--|| docusign_completion_cursor : references
+    durable_object_handover }o--|| durable_object_ownership : references
     firm }o--|| email_conversation : references
     notation }o--|| email_conversation : references
     person }o--|| email_conversation : references
@@ -2302,6 +2343,11 @@ erDiagram
     person }o--|| project_service : references
     project }o--|| project_service : references
     sent_email }o--|| project_service : references
+    project_slack_handover }o--|| project_slack_delivery : references
+    durable_object_ownership }o--|| project_slack_delivery_reconciliation : references
+    person }o--|| project_slack_delivery_reconciliation : references
+    durable_object_handover }o--|| project_slack_handover : references
+    project }o--|| project_slack_handover : references
     project }o--|| project_status_transition : references
     person_project_role }o--|| project_task : references
     project }o--|| project_task : references
