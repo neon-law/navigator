@@ -49,6 +49,9 @@ binary(/^(project_native_delete|brand_move_mirror|firm_journal|api_reads|postgre
 | test(/^project_slack_deliveries::reconciliation::tests::/)
 | (binary(=coverage_manifest) & test(=the_navigator_manifest_names_every_relation_this_release_creates))
 | (binary(=store) & test(/^postgres::inbox_tests::(fi_history_is_native_idempotent_metadata_and_cannot_queue_or_dispatch|raced_fi_native_id_payloads_cannot_split_across_channels_or_replace_the_winner|identical_fi_replays_preserve_reviewed_history_and_new_events_reopen_it|fi_import_lock_prevents_assignment_until_destination_verification_finishes|fi_project_destination_is_reserved_before_any_history_commit|native_call_and_fi_triage_preserve_roles_billing_and_attribution)$/))
+| (binary(=store) & test(/^postgres::native_origin::tests::/) & not test(=postgres::native_origin::tests::invalid_tier_and_nil_operation_fail_before_connecting))
+| (binary(=hudson) & test(=postgres_backfill::tests::native_target_refuses_dry_run_and_family_before_source_configuration_or_capture_files))
+| (binary(=workflows_service) & test(=host::host_mode_tests::verified_object_activation_removes_only_the_two_legacy_sdk_http_services))
 '''
 test-group = "canonical-postgres-fixtures"
 

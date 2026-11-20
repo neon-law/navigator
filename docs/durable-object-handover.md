@@ -41,6 +41,8 @@ hudson ops restate object-handover import \
   --sha256 PRINTED_SHA256
 ```
 
+## Operator database role
+
 Applying or activating a handover requires the installation's privileged migration/operator connection. Supply the
 existing `NAVIGATOR_POSTGRES_*` coordinates for `navigator_owner` through the approved private operator environment;
 these commands do not obtain migration credentials or elevate a runtime connection automatically. The ordinary

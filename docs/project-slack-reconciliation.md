@@ -13,10 +13,11 @@ Use `hudson ops project-slack reconcile-client-view` with these required argumen
 - `--evidence-reference`: an opaque UUID pointing to the private evidence the operator reviewed.
 - `--decision posted` or `--decision verified-not-posted`: the explicit verified conclusion.
 
-The privileged PostgreSQL connection authorizes this infrastructure command. Supplying a Person UUID does not log in as
-that Person. The store independently checks the attributed Person is admitted and has the existing Firm-management
-permission: Owner, or Admin with an admin membership in the Project's active Firm. Keep the underlying evidence in its
-approved private store; the command neither retrieves nor verifies the evidence pointer's contents.
+Use the [operator database connection](durable-object-handover.md#operator-database-role) for this command as well as
+handover writes. Supplying a Person UUID does not log in as that Person. The store independently checks the attributed
+Person is admitted and has the existing Firm-management permission: Owner, or Admin with an admin membership in the
+Project's active Firm. Keep the underlying evidence in its approved private store; the command neither retrieves nor
+verifies the evidence pointer's contents.
 
 `posted` records a posted-event receipt so native replay skips that notice. `verified-not-posted` records no posted
 receipt and permits the ordinary native workflow to post later. Neither decision starts a workflow. Both append an
