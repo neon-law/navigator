@@ -1917,6 +1917,7 @@ fn run_retained_operator_alias(
     stale_public: bool,
 ) -> (bool, Vec<String>, Vec<String>) {
     use sha2::Digest;
+    use std::fmt::Write as _;
     use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();
     let bin = dir.path().join("bin");
@@ -1965,13 +1966,10 @@ printf '%s\n' "$3" >> "$SIGNED"
         .iter()
         .find(|step| step["name"] == "publish retained Source operator alias")
         .unwrap();
-    let digest = format!(
-        "sha256:{}",
-        sha2::Sha256::digest(format!("{format} manifest").as_bytes())
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>()
-    );
+    let mut digest = String::from("sha256:");
+    for byte in sha2::Sha256::digest(format!("{format} manifest").as_bytes()) {
+        write!(digest, "{byte:02x}").unwrap();
+    }
     let output = std::process::Command::new("bash")
         .args(["-c", step["run"].as_str().unwrap()])
         .current_dir(dir.path())
