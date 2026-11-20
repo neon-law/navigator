@@ -960,7 +960,8 @@ checked-in policy rule. The Regorus version and policy source ship together in t
 deliberate, tested change.
 
 - **Images** (`image:`, `FROM`): pin an explicit version tag, never `latest` or another rolling tag, and confirm the tag
-  still exists on the registry we pull from before pinning.
+  still exists on the registry we pull from before pinning. A `FROM` reference to a previously declared local build
+  stage is allowed without an image tag.
 - **Installer binaries** (a workflow step's `version:`): pin the version, never `latest` — `latest` also round-trips a
   release API that has 500'd and killed a job. The one exception is `release-version`'s own checker, which must follow
   the newest release to be useful at all; see [One workflow owns publishing](#one-workflow-owns-publishing--deployyml).
