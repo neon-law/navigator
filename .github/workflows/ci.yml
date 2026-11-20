@@ -889,9 +889,19 @@ jobs:
           # Tee the suite so a red run still has the panic after the log
           # stream is gone; the step after this one uploads the JUnit on every
           # outcome and the tee file on failure.
-          # Every test that starts no SurrealDB engine (selected above).
+          # Keep the primary selection and add six verified native Fi boundaries.
+          # Their original module retains legacy fixtures and its coverage exclusion.
+          native_fi='binary(=store) & test(/^postgres::inbox_tests::('
+          native_fi+='fi_history_is_native_idempotent_metadata_and_cannot_queue_or_dispatch|'
+          native_fi+='raced_fi_native_id_payloads_cannot_split_across_channels_or_replace_the_winner|'
+          native_fi+='identical_fi_replays_preserve_reviewed_history_and_new_events_reopen_it|'
+          native_fi+='fi_import_lock_prevents_assignment_until_destination_verification_finishes|'
+          native_fi+='fi_project_destination_is_reserved_before_any_history_commit|'
+          native_fi+='native_call_and_fi_triage_preserve_roles_billing_and_attribution'
+          native_fi+=')$/)'
           cargo nextest run --workspace --no-fail-fast --profile ci \
-              -E "$(cat /tmp/surreal-free/nextest-filter)" 2>&1 | tee /tmp/navigator-workspace-tests.log
+              -E "($(cat /tmp/surreal-free/nextest-filter)) | ($native_fi)" \
+              2>&1 | tee /tmp/navigator-workspace-tests.log
           # The two lanes nextest does not run, kept so this gate stays exactly
           # as wide as the `cargo test --workspace` it replaces — and so the
           # coverage number keeps measuring the same test set.
