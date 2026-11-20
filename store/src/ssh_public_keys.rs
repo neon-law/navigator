@@ -557,7 +557,7 @@ pub async fn after_membership_removed(surreal: &SurrealDb, person_id: Uuid) {
             return;
         }
     };
-    let Ok(pg) = PostgresDb::from_env().await else {
+    let Ok(pg) = PostgresDb::application().await else {
         return;
     };
     if let Err(error) = sync_person(surreal, &pg, Some(&client), person_id, false).await {

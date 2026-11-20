@@ -1789,7 +1789,7 @@ pub async fn assign(
         || (conversation.channel == channel::SMS
             && crate::fi_import::is_account(&conversation.provider_account))
     {
-        let pg = crate::postgres::PostgresDb::from_env()
+        let pg = crate::postgres::PostgresDb::application()
             .await
             .map_err(|error| InboxError::Db(error.to_string()))?;
         return Box::pin(crate::billed_calls::assign_conversation(
@@ -1870,7 +1870,7 @@ pub(crate) async fn assign_for_triage_review(
         || (conversation.channel == channel::SMS
             && crate::fi_import::is_account(&conversation.provider_account))
     {
-        let pg = crate::postgres::PostgresDb::from_env()
+        let pg = crate::postgres::PostgresDb::application()
             .await
             .map_err(|error| InboxError::Db(error.to_string()))?;
         return Box::pin(crate::billed_calls::assign_conversation_for_triage_review(
