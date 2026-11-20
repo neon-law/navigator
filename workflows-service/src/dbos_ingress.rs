@@ -383,7 +383,6 @@ impl SocialReconcilerIngress {
 pub struct NotationIngress {
     token: Arc<str>,
     dbos: dbos::DBOS,
-    surreal: SurrealDb,
     postgres: store::postgres::PostgresDb,
     workflow: crate::dbos_notation::NotationTransitionWorkflow,
 }
@@ -395,14 +394,12 @@ impl NotationIngress {
     pub fn new(
         token: String,
         dbos: dbos::DBOS,
-        surreal: SurrealDb,
         postgres: store::postgres::PostgresDb,
         workflow: crate::dbos_notation::NotationTransitionWorkflow,
     ) -> Self {
         Self {
             token: Arc::from(token),
             dbos,
-            surreal,
             postgres,
             workflow,
         }

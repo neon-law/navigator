@@ -38,7 +38,7 @@ async fn the_authenticated_caller_keeps_both_notation_machines_independent() {
     let workflow = dbos_notation::register(
         &worker,
         Context::new(
-            surreal.clone(),
+            surreal,
             postgres.clone(),
             Arc::new(workflows::CapturingEmail::default()),
             storage,
@@ -51,7 +51,6 @@ async fn the_authenticated_caller_keeps_both_notation_machines_independent() {
             notation: Some(NotationIngress::new(
                 "synthetic-worker-token".into(),
                 worker.clone(),
-                surreal,
                 postgres,
                 workflow,
             )),

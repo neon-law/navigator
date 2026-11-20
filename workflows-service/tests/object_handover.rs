@@ -286,7 +286,7 @@ async fn captured_objects_activate_only_after_parity_and_run_native_without_sour
         let directory=tempfile::tempdir().unwrap();let storage=Arc::new(cloud::FsStorage::new(directory.path()).await.unwrap());
         let notation_workflow=dbos_notation::register(&worker,dbos_notation::Context::new(db.clone(),pg.clone(),Arc::new(workflows::CapturingEmail::default()),storage)).unwrap();
         worker.launch().await.unwrap();
-        let router=workflows_service::health::router_with_dbos_ingress(WorkerIngress {notation:Some(NotationIngress::new("synthetic-token".to_owned(),worker.clone(),db.clone(),pg.clone(),notation_workflow.clone())),project_slack:Some(ProjectSlackIngress::new("synthetic-token".to_owned(),slack.clone(),worker.clone(),db.clone(),pg.clone())),..Default::default()},None);
+        let router=workflows_service::health::router_with_dbos_ingress(WorkerIngress {notation:Some(NotationIngress::new("synthetic-token".to_owned(),worker.clone(),pg.clone(),notation_workflow.clone())),project_slack:Some(ProjectSlackIngress::new("synthetic-token".to_owned(),slack.clone(),worker.clone(),db.clone(),pg.clone())),..Default::default()},None);
         for door in ["workflow_current_state","workflow_events"] {assert_eq!(state_status(&router,notation,door).await,StatusCode::SERVICE_UNAVAILABLE);}
         let stable_client=dbos_project_slack::client_view_workflow_id(first.project);
         assert_eq!(slack_status(&router,&stable_client).await,StatusCode::SERVICE_UNAVAILABLE);

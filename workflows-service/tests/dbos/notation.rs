@@ -1089,7 +1089,6 @@ async fn approval_runtime(
             notation: Some(NotationIngress::new(
                 "synthetic-worker-token".into(),
                 fixture.worker.clone(),
-                fixture.surreal.clone(),
                 postgres,
                 fixture.workflow.clone(),
             )),
