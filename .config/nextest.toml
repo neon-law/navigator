@@ -54,6 +54,7 @@ binary(/^(mail_signatures|project_drive_folder_id|project_repository_url|project
 | (binary(=workflows_service) & test(=host::host_mode_tests::verified_object_activation_removes_only_the_two_legacy_sdk_http_services))
 | (binary(=workflows_service) & test(/^host::local_providers::tests::(detached_native_handlers_use_captured_effects_and_the_owned_postgres_store|injected_store_refuses_damaged_history_and_closed_pool_without_fallback|native_billing_digest_without_exports_registers_without_provider_effects)$/))
 | (binary(=workflows) & test(=dbos_engine::dri_digest::tests::native_source_keeps_all_projects_and_both_dri_sides))
+| (binary(=store) & test(/^(entity_roles|relationships)::tests::/))
 '''
 test-group = "canonical-postgres-fixtures"
 

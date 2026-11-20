@@ -282,21 +282,19 @@ pub(crate) async fn record_in_surreal(
         .ok_or(RelationshipError::WriteReturnedNothing)
 }
 
-/// The authoritative write: the relational row first (the store of
-/// record), then the graph's `RELATIONSHIP` edge, whose vertices the
-/// write ensures before loading. The id is a fresh UUID string — the
-/// relational table's text key, in the shape the fixtures and the
-/// parity pass read. The Surreal graph table is retired from this path:
-/// under the `age` engine it receives nothing, which is the retirement.
-///
-/// The display names travel from SurrealDB, the store that still mints
-/// persons and entities; the vertex-ensure function falls back to the
-/// relational row's own name for a `None`.
+/// Commit the authoritative relational row and its AGE edge together.
+/// Names resolve through the endpoint accessors; a missing name keeps the
+/// existing vertex fallback, while a lookup or graph error leaves no committed row.
 async fn record_in_postgres(
     db: &SurrealDb,
     postgres: &PostgresDb,
     input: &NewRelationship,
 ) -> Result<Relationship, RelationshipError> {
+    // Resolve names before reserving the write connection so a saturated
+    // pool cannot deadlock on a second connection for an endpoint lookup.
+    let from_name = endpoint_name(db, input.from, input.from_id).await?;
+    let to_name = endpoint_name(db, input.to, input.to_id).await?;
+    let mut transaction = postgres.pool().begin().await?;
     let inserted = sqlx::query(
         "INSERT INTO \"relationship\" (id, \"in\", \"out\", kind, confidence_pct, \
          source_kind, source_id, detail, inserted_at, updated_at) \
@@ -315,7 +313,7 @@ async fn record_in_postgres(
             .map(|id| serde_json::json!(id.to_string()).to_string()),
     )
     .bind(&input.detail)
-    .fetch_one(&postgres.0)
+    .fetch_one(&mut *transaction)
     .await?;
 
     let relationship = Relationship {
@@ -332,7 +330,8 @@ async fn record_in_postgres(
         updated_at: inserted.try_get("updated_at")?,
     };
 
-    write_edge_with_names(db, postgres, input).await?;
+    write_edge(&mut transaction, input, from_name, to_name).await?;
+    transaction.commit().await?;
     Ok(relationship)
 }
 
@@ -343,21 +342,28 @@ fn record_link_json(table: &str, id: Uuid) -> serde_json::Value {
     serde_json::json!({"tb": table, "id": {"Uuid": id.to_string()}})
 }
 
-/// Resolve the endpoints' display names from SurrealDB and land the
-/// edge. A name lookup that fails fails the write: the row above is
-/// not yet visible to the graph when this runs, so a retry re-walks
-/// the whole path and lands one row, one edge.
-async fn write_edge_with_names(
-    db: &SurrealDb,
-    postgres: &PostgresDb,
+/// Load resolved vertices and the edge in the caller's transaction.
+/// Any error leaves no committed relational row.
+async fn write_edge(
+    connection: &mut sqlx::PgConnection,
     input: &NewRelationship,
+    from_name: Option<String>,
+    to_name: Option<String>,
 ) -> Result<(), RelationshipError> {
-    let from_name = endpoint_name(db, input.from, input.from_id).await?;
-    let to_name = endpoint_name(db, input.to, input.to_id).await?;
-    ensure_vertices(postgres, input.from.table(), &[(input.from_id, from_name)]).await?;
-    ensure_vertices(postgres, input.to.table(), &[(input.to_id, to_name)]).await?;
+    ensure_vertices(
+        &mut *connection,
+        input.from.table(),
+        &[(input.from_id, from_name)],
+    )
+    .await?;
+    ensure_vertices(
+        &mut *connection,
+        input.to.table(),
+        &[(input.to_id, to_name)],
+    )
+    .await?;
     load_edge(
-        postgres,
+        &mut *connection,
         "relationship",
         serde_json::json!({
             "from_id": input.from_id.to_string(),
@@ -373,7 +379,7 @@ async fn write_edge_with_names(
     Ok(())
 }
 
-/// One endpoint's display name, read from SurrealDB. A row that is
+/// One endpoint's display name, read through its admitted accessor. A row that is
 /// gone reads as `None`, and the vertex projects with no name — the
 /// explanation falls back to the id until the next rebuild.
 async fn endpoint_name(
@@ -473,7 +479,6 @@ mod tests {
     use super::{
         all, record, Endpoint, NewRelationship, KIND_ADVERSE_TO, SOURCE_LLM, SOURCE_MANUAL,
     };
-    use crate::surreal::test_support::mem;
     use crate::surreal::SurrealDb;
     use uuid::Uuid;
 
@@ -488,12 +493,25 @@ mod tests {
     }
 
     async fn entity(db: &SurrealDb, name: &str) -> Uuid {
+        let kind = crate::entity_types::find_or_create(db, "Synthetic relationship entity")
+            .await
+            .unwrap();
+        let jurisdiction = crate::jurisdictions::find_or_create(
+            db,
+            &crate::jurisdictions::NewJurisdiction::new(
+                "Synthetic relationship state",
+                "SY",
+                "state",
+            ),
+        )
+        .await
+        .unwrap();
         crate::entities::create(
             db,
             &crate::entities::NewEntity {
                 name: name.into(),
-                entity_type_id: Uuid::now_v7(),
-                jurisdiction_id: Uuid::now_v7(),
+                entity_type_id: kind.id,
+                jurisdiction_id: jurisdiction.id,
                 phone: None,
                 url: None,
                 xero_id: None,
@@ -521,137 +539,187 @@ mod tests {
 
     #[tokio::test]
     async fn a_recorded_edge_reads_back_with_both_endpoints_typed() {
-        let db = mem().await;
-        let alice = person(&db, "Alice").await;
-        let acme = entity(&db, "Acme LLC").await;
+        crate::test_support::with_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let alice = person(&db, "Alice").await;
+            let acme = entity(&db, "Acme LLC").await;
 
-        let written = record(&db, &edge(Endpoint::Person, alice, Endpoint::Entity, acme))
-            .await
-            .unwrap();
+            let written = record(&db, &edge(Endpoint::Person, alice, Endpoint::Entity, acme))
+                .await
+                .unwrap();
 
-        assert_eq!(written.from, Endpoint::Person);
-        assert_eq!(written.from_id, alice);
-        assert_eq!(written.to, Endpoint::Entity);
-        assert_eq!(written.to_id, acme);
-        assert_eq!(written.kind, KIND_ADVERSE_TO);
-        assert_eq!(all(&db).await.unwrap(), vec![written]);
+            assert_eq!(written.from, Endpoint::Person);
+            assert_eq!(written.from_id, alice);
+            assert_eq!(written.to, Endpoint::Entity);
+            assert_eq!(written.to_id, acme);
+            assert_eq!(written.kind, KIND_ADVERSE_TO);
+            assert_eq!(all(&db).await.unwrap(), vec![written]);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn provenance_and_detail_travel_with_the_edge() {
-        let db = mem().await;
-        let alice = person(&db, "Parsed Alice").await;
-        let bob = person(&db, "Parsed Bob").await;
-        let source = Uuid::now_v7();
+        crate::test_support::with_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let alice = person(&db, "Parsed Alice").await;
+            let bob = person(&db, "Parsed Bob").await;
+            let source = Uuid::now_v7();
 
-        let written = record(
-            &db,
-            &NewRelationship {
-                confidence_pct: 40,
-                source_kind: SOURCE_LLM.into(),
-                source_id: Some(source),
-                detail: Some("parsed from a log entry".into()),
-                ..edge(Endpoint::Person, alice, Endpoint::Person, bob)
-            },
-        )
-        .await
-        .unwrap();
+            let written = record(
+                &db,
+                &NewRelationship {
+                    confidence_pct: 40,
+                    source_kind: SOURCE_LLM.into(),
+                    source_id: Some(source),
+                    detail: Some("parsed from a log entry".into()),
+                    ..edge(Endpoint::Person, alice, Endpoint::Person, bob)
+                },
+            )
+            .await
+            .unwrap();
 
-        assert_eq!(written.confidence_pct, 40);
-        assert_eq!(written.source_kind, SOURCE_LLM);
-        assert_eq!(written.source_id, Some(source));
-        assert_eq!(written.detail.as_deref(), Some("parsed from a log entry"));
+            assert_eq!(written.confidence_pct, 40);
+            assert_eq!(written.source_kind, SOURCE_LLM);
+            assert_eq!(written.source_id, Some(source));
+            assert_eq!(written.detail.as_deref(), Some("parsed from a log entry"));
+        })
+        .await;
     }
 
-    /// A schema ASSERT bounds the confidence, so a bad one is refused by
-    /// the engine rather than by whichever caller remembers to look.
+    /// The canonical relationship validator rejects invalid confidence
+    /// before the PostgreSQL row or AGE edge is written.
     #[tokio::test]
     async fn an_out_of_range_confidence_is_refused() {
-        let db = mem().await;
-        let alice = person(&db, "Over Confident").await;
-        let acme = entity(&db, "Over LLC").await;
+        crate::test_support::with_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let alice = person(&db, "Over Confident").await;
+            let acme = entity(&db, "Over LLC").await;
 
-        let rejected = record(
-            &db,
-            &NewRelationship {
-                confidence_pct: 101,
-                ..edge(Endpoint::Person, alice, Endpoint::Entity, acme)
-            },
-        )
+            let rejected = record(
+                &db,
+                &NewRelationship {
+                    confidence_pct: 101,
+                    ..edge(Endpoint::Person, alice, Endpoint::Entity, acme)
+                },
+            )
+            .await;
+            assert!(rejected.is_err(), "the engine accepted confidence_pct 101");
+        })
         .await;
-        assert!(rejected.is_err(), "the engine accepted confidence_pct 101");
     }
 
-    /// The ASSERT closes the provenance set, so a typo fails the write
-    /// instead of silently landing an edge no finding can explain.
+    /// The canonical validator closes provenance before persistence,
+    /// so an unexplained source cannot enter the conflict graph.
     #[tokio::test]
     async fn an_unknown_source_kind_is_refused() {
-        let db = mem().await;
-        let alice = person(&db, "Bad Source").await;
-        let acme = entity(&db, "Bad Source LLC").await;
+        crate::test_support::with_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let alice = person(&db, "Bad Source").await;
+            let acme = entity(&db, "Bad Source LLC").await;
 
-        let rejected = record(
-            &db,
-            &NewRelationship {
-                source_kind: "guesswork".into(),
-                ..edge(Endpoint::Person, alice, Endpoint::Entity, acme)
-            },
-        )
+            let rejected = record(
+                &db,
+                &NewRelationship {
+                    source_kind: "guesswork".into(),
+                    ..edge(Endpoint::Person, alice, Endpoint::Entity, acme)
+                },
+            )
+            .await;
+            assert!(
+                rejected.is_err(),
+                "the engine accepted an unknown source_kind"
+            );
+        })
         .await;
-        assert!(
-            rejected.is_err(),
-            "the engine accepted an unknown source_kind"
-        );
     }
 
-    /// The AGE-engine write: the relational row lands, the endpoints'
-    /// display names resolve from SurrealDB, and the graph takes the
-    /// RELATIONSHIP edge with the payload. Skips without the Postgres
-    /// fixture; the covered CI lane provides one.
+    /// The native PostgreSQL write persists its relational row and actual
+    /// AGE edge with the same endpoint identities.
     #[tokio::test]
     async fn an_age_engine_write_lands_the_row_and_the_graph_edge() {
-        use crate::postgres_mirror::tests::{connect, fresh_schema};
-        use sqlx::Row;
-        let Some((options, database)) = fresh_schema().await else {
-            return;
-        };
-        let postgres = connect(&options, &database).await;
-        let db = mem().await;
-        let alice = person(&db, "Libra Tidewell").await;
-        let acme = entity(&db, "Acme Age LLC").await;
+        crate::test_support::with_postgres(async {
+            use sqlx::Row;
+            let postgres = crate::postgres_graph::graph_authority()
+                .await
+                .unwrap()
+                .unwrap();
+            let db = SurrealDb::uninitialized();
+            let alice = person(&db, "Libra Tidewell").await;
+            let acme = entity(&db, "Acme Age LLC").await;
 
-        let written = super::record_in_postgres(
-            &db,
-            &postgres,
-            &edge(Endpoint::Person, alice, Endpoint::Entity, acme),
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(written.from, Endpoint::Person);
-        assert_eq!(written.from_id, alice);
-        assert_eq!(written.to, Endpoint::Entity);
-        assert_eq!(written.to_id, acme);
-
-        // The relational row landed exactly once.
-        let landed = sqlx::query("SELECT count(*) AS n FROM \"relationship\"")
-            .fetch_one(&postgres.0)
+            let written = super::record_in_postgres(
+                &db,
+                &postgres,
+                &edge(Endpoint::Person, alice, Endpoint::Entity, acme),
+            )
             .await
             .unwrap();
-        assert_eq!(landed.get::<i64, _>("n"), 1, "the relational row landed");
 
-        // And the graph took the edge, endpoints included: read it back
-        // through the same parity reader the conflict walk uses.
-        let rows = sqlx::query("SELECT t.v::text FROM graph_conflict_edges($1) AS t(v)")
-            .bind(serde_json::json!([alice.to_string()]).to_string())
-            .fetch_all(&postgres.0)
+            assert_eq!(written.from, Endpoint::Person);
+            assert_eq!(written.from_id, alice);
+            assert_eq!(written.to, Endpoint::Entity);
+            assert_eq!(written.to_id, acme);
+
+            // The relational row landed exactly once.
+            let landed = sqlx::query("SELECT count(*) AS n FROM \"relationship\"")
+                .fetch_one(&postgres.0)
+                .await
+                .unwrap();
+            assert_eq!(landed.get::<i64, _>("n"), 1, "the relational row landed");
+
+            // And the graph took the edge, endpoints included: read it back
+            // through the same parity reader the conflict walk uses.
+            let rows = sqlx::query("SELECT t.v::text FROM graph_conflict_edges($1) AS t(v)")
+                .bind(serde_json::json!([alice.to_string()]).to_string())
+                .fetch_all(&postgres.0)
+                .await
+                .unwrap();
+            assert_eq!(rows.len(), 1, "the graph took one edge");
+            let edge = rows[0].get::<String, _>("v");
+            assert!(
+                edge.contains(&alice.to_string()) && edge.contains(&acme.to_string()),
+                "the graph edge lost an endpoint: {edge}"
+            );
+        })
+        .await;
+    }
+
+    /// A PostgreSQL row and its conflict edge are one accepted write. A real
+    /// AGE-table failure must leave neither representation committed.
+    #[tokio::test]
+    async fn an_age_edge_failure_rolls_back_the_authoritative_relationship_row() {
+        crate::test_support::with_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let alice = person(&db, "Rollback Alice").await;
+            let acme = entity(&db, "Rollback LLC").await;
+            let postgres = crate::postgres_graph::graph_authority()
+                .await
+                .unwrap()
+                .unwrap();
+            crate::postgres_graph::fail_after_loading_edge(&postgres).await;
+            let rejected =
+                record(&db, &edge(Endpoint::Person, alice, Endpoint::Entity, acme)).await;
+            assert!(rejected.is_err(), "the actual AGE insertion must fail");
+            let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM relationship")
+                .fetch_one(postgres.pool())
+                .await
+                .unwrap();
+            assert_eq!(
+                rows, 0,
+                "a failed AGE edge cannot leave an authoritative row committed"
+            );
+            let edges = crate::postgres_graph::conflict_traversal(
+                &postgres,
+                &[crate::conflicts::NodeRef::person(alice)],
+            )
             .await
             .unwrap();
-        assert_eq!(rows.len(), 1, "the graph took one edge");
-        let edge = rows[0].get::<String, _>("v");
-        assert!(
-            edge.contains(&alice.to_string()) && edge.contains(&acme.to_string()),
-            "the graph edge lost an endpoint: {edge}"
-        );
+            assert!(
+                edges.is_empty(),
+                "the rejected edge must not enter the conflict graph"
+            );
+        })
+        .await;
     }
 }
