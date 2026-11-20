@@ -545,9 +545,9 @@ pub struct Conversation {
     pub promotional_opt_in: bool,
     pub promotional_opt_out: bool,
     pub email_conversation_id: Option<Uuid>,
-    /// The Person the inbound email sender resolves to — persisted at
-    /// ingest (primary or `person_mailbox` alias match). A lawyer- or
-    /// clerk-tier sender never links here; see `sender_identity`.
+    /// The Person attributed to this conversation. Inbound email resolves
+    /// this at ingest; an SMS link records it after the lawyer confirms the
+    /// sender's number belongs to the Person.
     pub person_id: Option<Uuid>,
     /// When the conversation was moved to the Inbox trash; `None` while it
     /// is in the Inbox. See [`set_trashed`].
@@ -2349,11 +2349,11 @@ pub(crate) async fn sender_identity(
     }
 }
 
-/// Record that this text conversation's number is the direct line of the
-/// Person with `email`, so later texts show whose they are. The same people
-/// who may reply to a text may link it. A number already held by another
-/// Person, or a Person who already has a different phone, is refused rather
-/// than overwritten.
+/// Record that this text conversation's number belongs to the Person with
+/// `email`, so later texts resolve to them and the confirmed number reaches
+/// their structured contact details. The same people who may reply to a text
+/// may link it. A number held by another Person is refused; existing numbers
+/// on the selected Person remain intact.
 ///
 /// # Errors
 ///
@@ -2386,21 +2386,65 @@ pub async fn link_contact_phone(
     let person = persons::find_by_any_email(db, email.trim())
         .await?
         .ok_or_else(|| InboxError::Contact("No person has that email".into()))?;
-    if let Some(holder) = persons::find_by_phone(db, &conversation.external_address).await? {
-        return if holder.id == person.id {
-            Ok(ContactLink::of(&holder))
-        } else {
-            Err(InboxError::Contact(
-                "That number already belongs to another person".into(),
-            ))
-        };
-    }
-    if person.phone.is_some() {
+    if conversation
+        .person_id
+        .is_some_and(|holder| holder != person.id)
+    {
         return Err(InboxError::Contact(
-            "That person already has a different phone recorded".into(),
+            "That conversation is already linked to another person".into(),
         ));
     }
-    let updated = persons::set_phone(db, person.id, Some(&conversation.external_address))
+    let structured_holders =
+        crate::person_phones::person_ids_for_phone(db, &conversation.external_address)
+            .await
+            .map_err(|error| InboxError::Db(error.to_string()))?;
+    if structured_holders.iter().any(|holder| *holder != person.id) {
+        return Err(InboxError::Contact(
+            "That number already belongs to another person".into(),
+        ));
+    }
+    if persons::find_by_phone(db, &conversation.external_address)
+        .await?
+        .is_some_and(|holder| holder.id != person.id)
+    {
+        return Err(InboxError::Contact(
+            "That number already belongs to another person".into(),
+        ));
+    }
+    crate::person_phones::seed_from_legacy_phone(db, person.id)
+        .await
+        .map_err(|error| InboxError::Db(error.to_string()))?;
+    crate::person_phones::set_phone(
+        db,
+        person.id,
+        &conversation.external_address,
+        crate::person_phones::PhoneLabel::Mobile,
+        false,
+    )
+    .await
+    .map_err(|error| InboxError::Db(error.to_string()))?;
+    if person.phone.is_none() {
+        persons::set_phone(db, person.id, Some(&conversation.external_address))
+            .await?
+            .ok_or(InboxError::NotFound)?;
+    }
+    db.query(
+        "UPDATE $id SET person_id = $person, updated_at = time::now() \
+         WHERE person_id IS NONE OR person_id = $person",
+    )
+    .bind(("id", record_id(CONVERSATION, conversation_id)))
+    .bind(("person", record_id("person", person.id)))
+    .await
+    .and_then(surrealdb::IndexedResults::check)?;
+    let updated_conversation = conversation_by_id(db, conversation_id)
+        .await?
+        .ok_or(InboxError::NotFound)?;
+    if updated_conversation.person_id != Some(person.id) {
+        return Err(InboxError::Contact(
+            "That conversation is already linked to another person".into(),
+        ));
+    }
+    let updated = persons::find_by_id(db, person.id)
         .await?
         .ok_or(InboxError::NotFound)?;
     Ok(ContactLink::of(&updated))
@@ -6728,6 +6772,23 @@ mod tests {
             persons::find_by_id(&db, pat).await.unwrap().unwrap().phone,
             Some("+15555550123".to_string())
         );
+        assert_eq!(
+            crate::person_phones::list_phones(&db, pat)
+                .await
+                .unwrap()
+                .iter()
+                .map(|phone| phone.e164.as_str())
+                .collect::<Vec<_>>(),
+            ["+15555550123"]
+        );
+        assert_eq!(
+            conversation_by_id(&db, text.conversation_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .person_id,
+            Some(pat)
+        );
 
         // The punctuation a person typed years ago still matches the E.164 number.
         let detail = intake_detail(&db, world.owner, text.conversation_id)
@@ -6785,16 +6846,21 @@ mod tests {
         persons::set_phone(&db, has_phone, Some("(555) 555-0000"))
             .await
             .unwrap();
-        assert!(matches!(
-            link_contact_phone(
-                &db,
-                world.owner,
-                text.conversation_id,
-                "has.phone@example.com"
-            )
-            .await,
-            Err(InboxError::Contact(_))
-        ));
+        link_contact_phone(
+            &db,
+            world.owner,
+            text.conversation_id,
+            "has.phone@example.com",
+        )
+        .await
+        .unwrap();
+        let saved = persons::find_by_id(&db, has_phone).await.unwrap().unwrap();
+        assert_eq!(saved.phone.as_deref(), Some("(555) 555-0000"));
+        let phones = crate::person_phones::list_phones(&db, has_phone)
+            .await
+            .unwrap();
+        assert_eq!(phones.len(), 2);
+        assert!(phones.iter().any(|phone| phone.e164 == "+15555550199"));
         assert!(matches!(
             link_contact_phone(
                 &db,

@@ -712,7 +712,9 @@ impl From<store::persons::PersonError> for ToolError {
             | E::MicrosoftSubjectTaken
             | E::AppleSubjectTaken => ToolError::Conflict(err.to_string()),
             E::Postgres(_) => ToolError::Internal("PostgreSQL People authority failed".into()),
-            E::Db(_) | E::WriteReturnedNothing => ToolError::Internal(err.to_string()),
+            E::Db(_) | E::WriteReturnedNothing | E::Phone(_) => {
+                ToolError::Internal(err.to_string())
+            }
         }
     }
 }

@@ -795,20 +795,73 @@ async fn native_contact_link_preserves_a_persons_existing_number() {
     )
     .await
     .unwrap();
-    assert!(matches!(
-        pg_inbox::link_contact_phone_on(&f.pg, &f.db, f.owner, sms.conversation_id, &contact.email)
-            .await,
-        Err(InboxError::Contact(_))
-    ));
+    pg_inbox::link_contact_phone_on(&f.pg, &f.db, f.owner, sms.conversation_id, &contact.email)
+        .await
+        .unwrap();
     let saved = persons::find_by_id(&f.db, contact.id)
         .await
         .unwrap()
         .unwrap();
     assert_eq!(saved.phone.as_deref(), Some(original.as_str()));
-    assert!(persons::find_by_phone(&f.db, &incoming)
+    let phones = crate::person_phones::list_phones(&f.db, contact.id)
         .await
-        .unwrap()
-        .is_none());
+        .unwrap();
+    assert_eq!(phones.len(), 2);
+    assert!(phones.iter().any(|phone| phone.e164 == incoming));
+    assert_eq!(
+        persons::find_by_phone(&f.db, &incoming)
+            .await
+            .unwrap()
+            .unwrap()
+            .id,
+        contact.id
+    );
+}
+
+#[tokio::test]
+async fn native_contact_link_records_confirmed_phone_and_conversation_identity() {
+    let Some(f) = fixture().await else { return };
+    let account = format!("+{}", 15_550_100_001_u64);
+    let number = format!("+{}", 15_555_550_127_u64);
+    let sms = pg_inbox::ingest_inbound_on(
+        &f.pg,
+        &f.db,
+        &inbound(
+            f.firm,
+            channel::SMS,
+            &account,
+            "confirmed-contact-link",
+            &number,
+        ),
+    )
+    .await
+    .unwrap();
+    let contact = persons::create(
+        &f.db,
+        &NewPerson::with_role("synthetic contact", "confirmed@example.test", Role::Client),
+    )
+    .await
+    .unwrap();
+    pg_inbox::link_contact_phone_on(&f.pg, &f.db, f.owner, sms.conversation_id, &contact.email)
+        .await
+        .unwrap();
+    assert_eq!(
+        crate::person_phones::list_phones(&f.db, contact.id)
+            .await
+            .unwrap()
+            .iter()
+            .map(|phone| phone.e164.as_str())
+            .collect::<Vec<_>>(),
+        [number.as_str()]
+    );
+    assert_eq!(
+        pg_inbox::conversation_by_id_on(&f.pg, sms.conversation_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .person_id,
+        Some(contact.id)
+    );
 }
 
 #[tokio::test]
@@ -967,6 +1020,23 @@ async fn native_contact_link_is_idempotent_and_refuses_number_takeover() {
     .await
     .unwrap();
     assert_eq!(linked.person_id, contact.id);
+    assert_eq!(
+        crate::person_phones::list_phones(&f.db, contact.id)
+            .await
+            .unwrap()
+            .iter()
+            .map(|phone| phone.e164.as_str())
+            .collect::<Vec<_>>(),
+        [number.as_str()]
+    );
+    assert_eq!(
+        pg_inbox::conversation_by_id_on(&f.pg, sms.conversation_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .person_id,
+        Some(contact.id)
+    );
     let again = pg_inbox::link_contact_phone_on(&f.pg, &f.db, f.owner, sms.conversation_id, email)
         .await
         .unwrap();
