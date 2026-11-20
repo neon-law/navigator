@@ -217,6 +217,30 @@ pub async fn import(
         .bind(i32::try_from(event_count).map_err(|_| HandoverError::InvalidCapture)?)
         .execute(&mut *transaction).await?;
     }
+    import_notation_machines(&mut transaction, capture, apply).await?;
+    import_slack_projects(&mut transaction, capture, apply, already_active).await?;
+    if apply {
+        transaction.commit().await?;
+    } else {
+        transaction.rollback().await?;
+    }
+    Ok(ParityReceipt {
+        format_version: 1,
+        capture_id: capture.capture_id,
+        capture_sha256: digest,
+        notation_machines: capture.notation_machines.len(),
+        slack_projects: capture.slack_projects.len(),
+        slack_posted_events: event_count,
+        committed: apply,
+        native_activation: false,
+    })
+}
+
+async fn import_notation_machines(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    capture: &Capture,
+    apply: bool,
+) -> Result<(), HandoverError> {
     let notations = capture
         .notation_machines
         .iter()
@@ -224,7 +248,7 @@ pub async fn import(
         .collect::<BTreeSet<_>>();
     for notation in notations {
         let pending:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM notation_transition WHERE notation_id=$1 AND result IS NULL)")
-            .bind(notation).fetch_one(&mut *transaction).await?;
+            .bind(notation).fetch_one(&mut **transaction).await?;
         if pending {
             return Err(HandoverError::PendingNativeOperation);
         }
@@ -234,7 +258,7 @@ pub async fn import(
             let exists: bool =
                 sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM notation WHERE id=$1)")
                     .bind(machine.notation_id)
-                    .fetch_one(&mut *transaction)
+                    .fetch_one(&mut **transaction)
                     .await?;
             if !exists {
                 return Err(HandoverError::InvalidCapture);
@@ -243,10 +267,10 @@ pub async fn import(
         if apply {
             sqlx::query("INSERT INTO notation_machine_state (notation_id,machine_kind,spec_yaml,current_state,ephemeral) VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING")
             .bind(machine.notation_id).bind(&machine.machine_kind).bind(&machine.spec_yaml)
-            .bind(&machine.current_state).bind(machine.ephemeral).execute(&mut *transaction).await?;
+            .bind(&machine.current_state).bind(machine.ephemeral).execute(&mut **transaction).await?;
         }
         let row = sqlx::query("SELECT spec_yaml,current_state,ephemeral FROM notation_machine_state WHERE notation_id=$1 AND machine_kind=$2")
-            .bind(machine.notation_id).bind(&machine.machine_kind).fetch_optional(&mut *transaction).await?;
+            .bind(machine.notation_id).bind(&machine.machine_kind).fetch_optional(&mut **transaction).await?;
         if let Some(row) = row {
             if row.try_get::<String, _>("spec_yaml")? != machine.spec_yaml
                 || row.try_get::<String, _>("current_state")? != machine.current_state
@@ -256,14 +280,23 @@ pub async fn import(
             }
         }
     }
+    Ok(())
+}
+
+async fn import_slack_projects(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    capture: &Capture,
+    apply: bool,
+    already_active: bool,
+) -> Result<(), HandoverError> {
     for project in &capture.slack_projects {
         if apply {
             sqlx::query("INSERT INTO project_slack_handover (project_id,ownership_epoch,capture_id,client_view_disposition) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING")
             .bind(project.project_id).bind(capture.ownership_epoch).bind(capture.capture_id)
-            .bind(project.client_view.as_str()).execute(&mut *transaction).await?;
+            .bind(project.client_view.as_str()).execute(&mut **transaction).await?;
         }
         let row = sqlx::query("SELECT ownership_epoch,capture_id,client_view_disposition,native_active FROM project_slack_handover WHERE project_id=$1")
-            .bind(project.project_id).fetch_optional(&mut *transaction).await?;
+            .bind(project.project_id).fetch_optional(&mut **transaction).await?;
         if let Some(row) = row {
             if row.try_get::<Uuid, _>("ownership_epoch")? != capture.ownership_epoch
                 || row.try_get::<Option<Uuid>, _>("capture_id")? != Some(capture.capture_id)
@@ -285,35 +318,21 @@ pub async fn import(
         if apply {
             for (kind, key) in &expected {
                 sqlx::query("INSERT INTO project_slack_delivery (project_id,event_kind,event_key) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING")
-                .bind(project.project_id).bind(kind).bind(key).execute(&mut *transaction).await?;
+                .bind(project.project_id).bind(kind).bind(key).execute(&mut **transaction).await?;
             }
         }
         let actual: Vec<(String, String)> = sqlx::query_as(
             "SELECT event_kind,event_key FROM project_slack_delivery WHERE project_id=$1",
         )
         .bind(project.project_id)
-        .fetch_all(&mut *transaction)
+        .fetch_all(&mut **transaction)
         .await?;
         let actual = actual.into_iter().collect::<BTreeSet<_>>();
         if (apply && actual != expected) || (!apply && !actual.is_subset(&expected)) {
             return Err(HandoverError::Conflict);
         }
     }
-    if apply {
-        transaction.commit().await?;
-    } else {
-        transaction.rollback().await?;
-    }
-    Ok(ParityReceipt {
-        format_version: 1,
-        capture_id: capture.capture_id,
-        capture_sha256: digest,
-        notation_machines: capture.notation_machines.len(),
-        slack_projects: capture.slack_projects.len(),
-        slack_posted_events: event_count,
-        committed: apply,
-        native_activation: false,
-    })
+    Ok(())
 }
 
 /// Serialize Project creation against complete-inventory activation. Call before
@@ -399,6 +418,27 @@ where
     if imported.as_deref() != Some(digest.as_str()) {
         return Err(HandoverError::Conflict);
     }
+    verify_imported_rows(&mut transaction, capture, already_active).await?;
+    sqlx::query("INSERT INTO durable_object_ownership (singleton,ownership_epoch,capture_id) VALUES (true,$1,$2) ON CONFLICT DO NOTHING")
+        .bind(capture.ownership_epoch).bind(capture.capture_id).execute(&mut *transaction).await?;
+    let epoch: Uuid =
+        sqlx::query_scalar("SELECT ownership_epoch FROM durable_object_ownership WHERE singleton")
+            .fetch_one(&mut *transaction)
+            .await?;
+    if epoch != capture.ownership_epoch {
+        return Err(HandoverError::Conflict);
+    }
+    sqlx::query("UPDATE project_slack_handover SET native_active=true WHERE ownership_epoch=$1 AND capture_id=$2")
+        .bind(capture.ownership_epoch).bind(capture.capture_id).execute(&mut *transaction).await?;
+    transaction.commit().await?;
+    Ok(())
+}
+
+async fn verify_imported_rows(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    capture: &Capture,
+    already_active: bool,
+) -> Result<(), HandoverError> {
     let notations = capture
         .notation_machines
         .iter()
@@ -406,7 +446,7 @@ where
         .collect::<BTreeSet<_>>();
     for notation in notations {
         let pending:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM notation_transition WHERE notation_id=$1 AND result IS NULL)")
-            .bind(notation).fetch_one(&mut *transaction).await?;
+            .bind(notation).fetch_one(&mut **transaction).await?;
         if pending {
             return Err(HandoverError::PendingNativeOperation);
         }
@@ -416,14 +456,14 @@ where
             let exists: bool =
                 sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM notation WHERE id=$1)")
                     .bind(machine.notation_id)
-                    .fetch_one(&mut *transaction)
+                    .fetch_one(&mut **transaction)
                     .await?;
             if !exists {
                 return Err(HandoverError::InvalidCapture);
             }
         }
         let row=sqlx::query("SELECT spec_yaml,current_state,ephemeral FROM notation_machine_state WHERE notation_id=$1 AND machine_kind=$2")
-            .bind(machine.notation_id).bind(&machine.machine_kind).fetch_optional(&mut *transaction).await?.ok_or(HandoverError::Conflict)?;
+            .bind(machine.notation_id).bind(&machine.machine_kind).fetch_optional(&mut **transaction).await?.ok_or(HandoverError::Conflict)?;
         if row.try_get::<String, _>("spec_yaml")? != machine.spec_yaml
             || row.try_get::<String, _>("current_state")? != machine.current_state
             || row.try_get::<bool, _>("ephemeral")? != machine.ephemeral
@@ -433,7 +473,7 @@ where
     }
     for project in &capture.slack_projects {
         let row=sqlx::query("SELECT ownership_epoch,capture_id,client_view_disposition,native_active FROM project_slack_handover WHERE project_id=$1")
-            .bind(project.project_id).fetch_optional(&mut *transaction).await?.ok_or(HandoverError::Conflict)?;
+            .bind(project.project_id).fetch_optional(&mut **transaction).await?.ok_or(HandoverError::Conflict)?;
         if row.try_get::<Uuid, _>("ownership_epoch")? != capture.ownership_epoch
             || row.try_get::<Option<Uuid>, _>("capture_id")? != Some(capture.capture_id)
             || row.try_get::<String, _>("client_view_disposition")? != project.client_view.as_str()
@@ -453,24 +493,12 @@ where
             "SELECT event_kind,event_key FROM project_slack_delivery WHERE project_id=$1",
         )
         .bind(project.project_id)
-        .fetch_all(&mut *transaction)
+        .fetch_all(&mut **transaction)
         .await?;
         if actual.into_iter().collect::<BTreeSet<_>>() != expected {
             return Err(HandoverError::Conflict);
         }
     }
-    sqlx::query("INSERT INTO durable_object_ownership (singleton,ownership_epoch,capture_id) VALUES (true,$1,$2) ON CONFLICT DO NOTHING")
-        .bind(capture.ownership_epoch).bind(capture.capture_id).execute(&mut *transaction).await?;
-    let epoch: Uuid =
-        sqlx::query_scalar("SELECT ownership_epoch FROM durable_object_ownership WHERE singleton")
-            .fetch_one(&mut *transaction)
-            .await?;
-    if epoch != capture.ownership_epoch {
-        return Err(HandoverError::Conflict);
-    }
-    sqlx::query("UPDATE project_slack_handover SET native_active=true WHERE ownership_epoch=$1 AND capture_id=$2")
-        .bind(capture.ownership_epoch).bind(capture.capture_id).execute(&mut *transaction).await?;
-    transaction.commit().await?;
     Ok(())
 }
 
