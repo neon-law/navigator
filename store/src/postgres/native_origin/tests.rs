@@ -479,16 +479,24 @@ async fn native_origin_fences_forced_source_replay_without_claiming_captured_his
                 .unwrap(),
             Mirrored::Unchanged
         ));
-        assert!(mirror::parity_all(&source, pg)
-            .await
-            .unwrap()
+        let parity = mirror::parity_all(&source, pg).await.unwrap();
+        assert!(!parity.is_empty());
+        assert!(parity.iter().all(|report| report.report.tables.is_empty()));
+        let reconciled = mirror::reconcile_all(&source, pg).await.unwrap();
+        assert!(!reconciled.is_empty());
+        assert!(reconciled
             .iter()
             .all(|report| report.report.tables.is_empty()));
-        assert!(mirror::reconcile_all(&source, pg)
-            .await
-            .unwrap()
-            .iter()
-            .all(|report| report.report.tables.is_empty()));
+        assert_eq!(
+            parity
+                .iter()
+                .map(|report| report.mirror)
+                .collect::<Vec<_>>(),
+            reconciled
+                .iter()
+                .map(|report| report.mirror)
+                .collect::<Vec<_>>()
+        );
     }))
     .await;
     assert!(matches!(

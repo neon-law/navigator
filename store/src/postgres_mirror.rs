@@ -1659,13 +1659,18 @@ pub async fn parity_all(
     surreal: &SurrealDb,
     pg: &PostgresDb,
 ) -> Result<Vec<MirrorParity>, MirrorError> {
+    let native = native_owned(pg).await?;
     let mut reports = Vec::with_capacity(MIRRORS.len());
     for mirror in MIRRORS {
         reports.push(MirrorParity {
             mirror: mirror.name,
-            report: (mirror.parity)(surreal, pg)
-                .await
-                .map_err(|error| error.at(format!("mirror {}", mirror.name)))?,
+            report: if native {
+                ParityReport { tables: Vec::new() }
+            } else {
+                (mirror.parity)(surreal, pg)
+                    .await
+                    .map_err(|error| error.at(format!("mirror {}", mirror.name)))?
+            },
         });
     }
     Ok(reports)
@@ -1685,6 +1690,9 @@ pub async fn reconcile_all(
     surreal: &SurrealDb,
     pg: &PostgresDb,
 ) -> Result<Vec<MirrorParity>, MirrorError> {
+    if native_owned(pg).await? {
+        return parity_all(surreal, pg).await;
+    }
     crate::postgres_backfill::family::require_supported_scopes(pg).await?;
     for mirror in MIRRORS {
         (mirror.reconcile)(surreal, pg)
