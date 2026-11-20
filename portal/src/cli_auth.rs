@@ -1,6 +1,6 @@
 //! Loopback-OAuth endpoints for the `navigator` CLI.
 //!
-//! These two routes let the CLI obtain a short-lived bearer credential
+//! These two routes let the CLI obtain a bounded bearer credential
 //! the same way `gcloud` / `restate` do — open a browser, authenticate
 //! against the existing OIDC session, and land a token on a loopback
 //! listener — without building a second auth system. The token the CLI
@@ -12,8 +12,9 @@
 //! `/auth/*` prefix):
 //!
 //! - `GET /auth/cli/start?redirect=<loopback>&state=<nonce>` — requires
-//!   an authenticated browser session (the cookie). Mints a fresh ~8h
-//!   `SessionData` for that person and 302s to the loopback `redirect`
+//!   an authenticated browser session (the cookie). Mints an eight-hour
+//!   `SessionData` by default; a staging Owner with simulated matters gets a
+//!   30-day token, then it 302s to the loopback `redirect`
 //!   with `?token=…&state=…`. An anonymous caller is bounced through the
 //!   normal `/auth/login` flow first and returns here with a cookie. The
 //!   `redirect` MUST be a `127.0.0.1`/`localhost` loopback URL — anything
@@ -30,10 +31,16 @@ use axum::{Extension, Json, Router};
 use serde::Deserialize;
 use tower_cookies::Cookies;
 
+use store::config::{sample_matters_from, staging_from, DeploymentEnvironment};
+
 use crate::session::{
     now_unix_secs, random_token_32, SessionData, SessionSource, SessionStore, CLI_SESSION_TTL_SECS,
     SESSION_COOKIE_NAME,
 };
+
+/// A staging Owner's stored CLI credential spans test campaigns, while all
+/// other CLI sessions keep the ordinary interactive-login lifetime.
+const STAGING_CLI_SESSION_TTL_SECS: i64 = 30 * 24 * 60 * 60;
 
 /// Query parameters for `GET /auth/cli/start`.
 #[derive(Debug, Deserialize)]
@@ -92,14 +99,15 @@ async fn start_get(
             .into_response();
     };
 
-    // Mint a fresh, SHORT-LIVED (1h) token for the SAME person: same
+    // Mint a fresh token for the SAME person: same
     // subject, email, person_id and role, but a new expiry, CSRF token,
     // and a `Cli` source marker. Carrying `person_id` is what makes a CLI
     // `approve-send` record the same `authored_by` provenance as the UI —
-    // the binding act stays attributable to the lawyer. The tighter TTL
-    // and the source tag bound and label this portable file credential.
+    // the binding act stays attributable to the lawyer. The source tag
+    // labels this portable file credential.
+    let ttl_secs = cli_session_ttl_secs(session.role.as_str() == "owner");
     let token = sessions.encode(&SessionData {
-        exp: now_unix_secs() + CLI_SESSION_TTL_SECS,
+        exp: now_unix_secs() + ttl_secs,
         csrf_token: random_token_32(),
         source: SessionSource::Cli,
         ..session.clone()
@@ -109,8 +117,8 @@ async fn start_get(
         event = "cli.token.minted",
         subject = %session.sub,
         person_id = ?session.person_id,
-        ttl_secs = CLI_SESSION_TTL_SECS,
-        "cli: minted a short-lived CLI bearer token",
+        ttl_secs,
+        "cli: minted a CLI bearer token",
     );
 
     let sep = if q.redirect.contains('?') { '&' } else { '?' };
@@ -121,6 +129,25 @@ async fn start_get(
         urlencode(&q.state),
     );
     Redirect::to(&location).into_response()
+}
+
+/// Extend CLI credentials only for staging deployments that disclose that
+/// their matters are simulated. Local development and production retain the
+/// normal interactive-login lifetime.
+fn cli_session_ttl_secs(is_owner: bool) -> i64 {
+    cli_session_ttl_secs_from(is_owner, |key| std::env::var(key).ok())
+}
+
+fn cli_session_ttl_secs_from<F: Fn(&str) -> Option<String>>(is_owner: bool, get: F) -> i64 {
+    let staging = staging_from(&get).unwrap_or(false);
+    let production = DeploymentEnvironment::from_lookup(&get)
+        .is_ok_and(|environment| environment == DeploymentEnvironment::Production);
+    let simulated = sample_matters_from(DeploymentEnvironment::Production, &get).unwrap_or(false);
+    if is_owner && staging && production && simulated {
+        STAGING_CLI_SESSION_TTL_SECS
+    } else {
+        CLI_SESSION_TTL_SECS
+    }
 }
 
 /// `GET /auth/cli/whoami` — echo the bearer caller's identity so the CLI
@@ -189,7 +216,9 @@ fn urlencode(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::is_loopback_redirect;
+    use super::{cli_session_ttl_secs_from, is_loopback_redirect, STAGING_CLI_SESSION_TTL_SECS};
+    use crate::session::CLI_SESSION_TTL_SECS;
+    use store::config::{NAVIGATOR_ENVIRONMENT, NAVIGATOR_SIMULATED_MATTERS, NAVIGATOR_STAGING};
 
     #[test]
     fn accepts_loopback_hosts() {
@@ -216,5 +245,80 @@ mod tests {
         // Not a URL at all.
         assert!(!is_loopback_redirect("127.0.0.1:54321"));
         assert!(!is_loopback_redirect(""));
+    }
+
+    #[test]
+    fn only_staging_owner_with_simulated_matters_gets_a_long_lived_cli_token() {
+        let cases = [
+            (
+                true,
+                Some("production"),
+                Some("true"),
+                Some("true"),
+                STAGING_CLI_SESSION_TTL_SECS,
+            ),
+            (
+                true,
+                Some("production"),
+                Some("true"),
+                Some("false"),
+                CLI_SESSION_TTL_SECS,
+            ),
+            (
+                true,
+                Some("production"),
+                Some("false"),
+                Some("true"),
+                CLI_SESSION_TTL_SECS,
+            ),
+            (
+                true,
+                Some("dev"),
+                Some("true"),
+                Some("true"),
+                CLI_SESSION_TTL_SECS,
+            ),
+            (
+                true,
+                None,
+                Some("true"),
+                Some("true"),
+                STAGING_CLI_SESSION_TTL_SECS,
+            ),
+            (
+                false,
+                Some("production"),
+                Some("true"),
+                Some("true"),
+                CLI_SESSION_TTL_SECS,
+            ),
+            (
+                true,
+                Some("production"),
+                Some("TRUE"),
+                Some("true"),
+                CLI_SESSION_TTL_SECS,
+            ),
+            (
+                true,
+                Some("production"),
+                Some("true"),
+                Some("TRUE"),
+                CLI_SESSION_TTL_SECS,
+            ),
+        ];
+
+        for (is_owner, environment, staging, simulated, expected) in cases {
+            assert_eq!(
+                cli_session_ttl_secs_from(is_owner, |key| match key {
+                    NAVIGATOR_ENVIRONMENT => environment.map(str::to_owned),
+                    NAVIGATOR_STAGING => staging.map(str::to_owned),
+                    NAVIGATOR_SIMULATED_MATTERS => simulated.map(str::to_owned),
+                    _ => None,
+                }),
+                expected,
+                "owner={is_owner}, environment={environment:?}, staging={staging:?}, simulated={simulated:?}"
+            );
+        }
     }
 }
