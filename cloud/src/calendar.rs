@@ -87,9 +87,9 @@ pub struct CalendarMember {
 
 /// One event on a Project calendar, as Navigator writes it.
 ///
-/// An event written through this API is an instant: its end is its start, the
-/// zero-duration reading an ICS event without a `DTEND` carries, so a
-/// Deadline marks a moment instead of occupying a lawyer's morning.
+/// An event written through this API holds a one-minute block from its start,
+/// so a Deadline stays visible on the calendar without occupying a lawyer's
+/// morning.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CalendarEvent {
     pub summary: String,
@@ -1155,8 +1155,9 @@ struct EventExtendedProperties {
     private: BTreeMap<String, String>,
 }
 
-/// The event body Navigator writes. `end` repeats `start`: an event written
-/// here marks a moment, and the ICS feed it mirrors renders no `DTEND`.
+/// The event body Navigator writes. `end` is one minute after `start`: a
+/// zero-length event vanishes from most calendar views, so every Deadline
+/// holds at least a one-minute block.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct EventBody<'a> {
@@ -1197,6 +1198,7 @@ struct EventReminder {
 
 fn event_body(event: &CalendarEvent) -> EventBody<'_> {
     let start = event.start.to_rfc3339();
+    let end = (event.start + chrono::Duration::minutes(1)).to_rfc3339();
     EventBody {
         summary: &event.summary,
         description: event.description.as_deref(),
@@ -1205,7 +1207,7 @@ fn event_body(event: &CalendarEvent) -> EventBody<'_> {
         start: EventTime {
             date_time: start.clone(),
         },
-        end: EventTime { date_time: start },
+        end: EventTime { date_time: end },
         status: if event.cancelled {
             "cancelled"
         } else {
@@ -2534,7 +2536,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn insert_event_posts_an_instant_event_with_its_identity() {
+    async fn insert_event_posts_a_one_minute_event_with_its_identity() {
         let server = MockServer::start().await;
         let calendar_id = "c_42@group.calendar.example.com";
         Mock::given(method("POST"))
@@ -2544,7 +2546,7 @@ mod tests {
                 "description": "Authority: Order setting briefing",
                 "colorId": "11",
                 "start": { "dateTime": "2026-11-02T17:00:00-08:00" },
-                "end": { "dateTime": "2026-11-02T17:00:00-08:00" },
+                "end": { "dateTime": "2026-11-02T17:01:00-08:00" },
                 "status": "confirmed",
                 "transparency": "transparent",
                 "sequence": 3,

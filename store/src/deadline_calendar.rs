@@ -3,7 +3,7 @@
 //! Every Deadline row renders as one event on the matter's calendar, on the
 //! same field basis as the ICS feed a subscriber already sees: the summary
 //! fallback by calendar role and authority kind, the description's
-//! authority and matter-page lines, the zero-length instant, the cancelled
+//! authority and matter-page lines, the one-minute block, the cancelled
 //! status, and the internal lead days as the only reminder. What the feed
 //! renders for a subscriber, the mirror puts on the calendar.
 //!
