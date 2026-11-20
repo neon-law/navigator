@@ -42,18 +42,8 @@ use workflows::dbos_engine;
 use workflows::{EmailService, SlackOpsDelivery};
 
 macro_rules! bind_common_services {
-    ($endpoint:expr, $surreal:expr, $email:expr, $storage:expr, $assets_storage:expr, $kms:expr, $email_summary:expr, $inbound_triage:expr, $notifier:expr, $ops_delivery:expr, $slack_bot:expr, $project_slack_bots:expr, $general_channel:expr, $finance_channel:expr, $messages_channel:expr, $staging_messages_channel:expr, $slack_bot_enabled:expr, $simulated_matters:expr, $repository_forge:expr, $portal_origin:expr, $environment_label:expr) => {
+    ($endpoint:expr, $surreal:expr, $storage:expr, $assets_storage:expr, $kms:expr, $email_summary:expr, $inbound_triage:expr, $notifier:expr, $ops_delivery:expr, $slack_bot:expr, $project_slack_bots:expr, $general_channel:expr, $finance_channel:expr, $messages_channel:expr, $staging_messages_channel:expr, $slack_bot_enabled:expr, $simulated_matters:expr, $repository_forge:expr, $portal_origin:expr, $environment_label:expr) => {
         $endpoint
-            .bind(NotationService::new(
-                $surreal.clone(),
-                $email.clone(),
-                $storage.clone(),
-            ))
-            .bind(ProjectSlackService::new(
-                $surreal.clone(),
-                $project_slack_bots.clone(),
-                $simulated_matters,
-            ))
             .bind(SocialPublisherService::new(
                 $surreal.clone(),
                 $kms.clone(),
@@ -156,6 +146,15 @@ async fn social_runtime_kms_from_env() -> Arc<dyn cloud::RuntimeKms> {
     };
     Arc::new(cloud::GoogleKms::new(config, Arc::new(tokens)))
 }
+fn bind_legacy_objects(
+    endpoint: restate_sdk::endpoint::Builder,
+    services: Option<(NotationService, ProjectSlackService)>,
+) -> restate_sdk::endpoint::Builder {
+    match services {
+        Some((notation, slack)) => endpoint.bind(notation).bind(slack),
+        None => endpoint,
+    }
+}
 
 /// Run the complete standalone worker with its configured engine.
 pub async fn run(
@@ -231,9 +230,15 @@ async fn run_host(
 ) -> anyhow::Result<()> {
     let environment =
         store::DeploymentEnvironment::from_env().context("parse NAVIGATOR_ENVIRONMENT")?;
-    store::postgres::PostgresDb::application()
+    let postgres = store::postgres::PostgresDb::application()
         .await
         .context("verify PostgreSQL worker authority")?;
+    let object_selection =
+        store::durable_object_handover::require_runtime_selection(&postgres, |key| {
+            std::env::var(key).ok()
+        })
+        .await
+        .context("verify durable object engine ownership")?;
     // Drives `DriDigest` and `GeneralNag` staging disclosure and the
     // production-only open-matters follow-up — the same flag the site-wide
     // "simulated projects" banner reads.
@@ -731,11 +736,21 @@ async fn run_host(
     // registry tests guard against drift (count + PascalCase naming).
     let server = async move {
         if let Some((endpoint_builder, listen)) = endpoint_builder.zip(listen) {
+            let legacy_objects = object_selection.legacy_objects().then(|| {
+                (
+                    NotationService::new(surreal.clone(), email.clone(), storage.clone()),
+                    ProjectSlackService::new(
+                        surreal.clone(),
+                        project_slack_bots.clone(),
+                        simulated_matters,
+                    ),
+                )
+            });
+            let endpoint_builder = bind_legacy_objects(endpoint_builder, legacy_objects);
             HttpServer::new(
                 bind_common_services!(
                     endpoint_builder,
                     surreal,
-                    email,
                     storage,
                     assets_storage,
                     kms,
@@ -1218,29 +1233,4 @@ fn serve_health_listener(
 }
 
 #[cfg(test)]
-mod host_mode_tests {
-    use super::*;
-    #[test]
-    fn embedded_dbos_host_needs_no_restate_identity_configuration() {
-        assert!(restate_endpoint(
-            HostMode::Embedded,
-            store::DeploymentEnvironment::Production,
-            |_| None
-        )
-        .unwrap()
-        .is_none());
-        assert!(restate_endpoint(
-            HostMode::Standalone,
-            store::DeploymentEnvironment::Production,
-            |_| None
-        )
-        .is_err());
-        assert!(restate_endpoint(
-            HostMode::Standalone,
-            store::DeploymentEnvironment::Dev,
-            |_| None
-        )
-        .unwrap()
-        .is_some());
-    }
-}
+mod host_mode_tests;

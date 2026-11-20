@@ -268,6 +268,20 @@
     },
     {
       "extra_column": null,
+      "extra_table": "database_origin",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "database_origin_upgrade",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
       "extra_table": "dbos_workflow_request",
       "missing_column": null,
       "missing_table": null,
@@ -2165,7 +2179,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 182,
+    "table_count": 184,
     "tables": {
       "address": {
         "columns": {
@@ -2753,6 +2767,47 @@
         "references": [
           "jurisdiction",
           "person"
+        ]
+      },
+      "database_origin": {
+        "columns": {
+          "authority_contract": "JSONB",
+          "cluster_name": "TEXT",
+          "creation_operation": "UUID",
+          "database_name": "TEXT",
+          "database_oid": "BIGINT",
+          "format_version": "INTEGER",
+          "inserted_at": "TIMESTAMPTZ",
+          "namespace_uid": "UUID",
+          "origin": "TEXT",
+          "schema_contract": "JSONB",
+          "singleton": "BOOLEAN",
+          "tier_id": "UUID"
+        },
+        "foreign_keys": [],
+        "name": "database_origin",
+        "references": []
+      },
+      "database_origin_upgrade": {
+        "columns": {
+          "authority_contract": "JSONB",
+          "completed_at": "TIMESTAMPTZ",
+          "creation_operation": "UUID",
+          "from_schema_contract": "JSONB",
+          "inserted_at": "TIMESTAMPTZ",
+          "predecessor_operation": "UUID",
+          "to_schema_contract": "JSONB",
+          "upgrade_operation": "UUID"
+        },
+        "foreign_keys": [
+          [
+            "creation_operation",
+            "database_origin"
+          ]
+        ],
+        "name": "database_origin_upgrade",
+        "references": [
+          "database_origin"
         ]
       },
       "dbos_workflow_request": {

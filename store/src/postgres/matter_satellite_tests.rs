@@ -76,7 +76,14 @@ async fn a_closed_postgres_pool_does_not_fall_back_to_the_other_client() {
         let error = expunge_records::for_project(&unavailable, Uuid::new_v4())
             .await
             .expect_err("a configured but closed pool must fail");
-        assert!(error.to_string().contains("PostgreSQL"), "{error}");
+        assert!(matches!(
+            error,
+            expunge_records::ExpungeRecordError::Postgres(MatterAuthorityError::Family(
+                crate::postgres_backfill::family::FamilyError::NativeOrigin(
+                    crate::postgres::native_origin::OriginError::Storage
+                )
+            ))
+        ));
     })
     .await;
 }

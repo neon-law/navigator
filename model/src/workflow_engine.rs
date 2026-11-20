@@ -139,17 +139,63 @@ pub fn missing_dbos_flags(
 /// Returns a malformed engine or boolean selector.
 pub fn dbos_only(get: &impl Fn(&str) -> Option<String>) -> Result<bool, SelectionError> {
     let cohost = enabled(get, COHOST_ENV)?;
+    let executor = dbos_executor(get)?;
+    Ok(cohost && executor && missing_dbos_flags(get)?.is_empty())
+}
+
+/// Whether an actual DBOS executor is selected, without requiring cohosting or
+/// migration of unrelated services. Invalid settings identify only their key.
+///
+/// # Errors
+/// The executor or engine selector is malformed.
+pub fn dbos_executor(get: &impl Fn(&str) -> Option<String>) -> Result<bool, SelectionError> {
     let dbos = enabled(get, DBOS_ENABLED_ENV)?;
     let engine = match get(ENGINE_ENV).as_deref().map(str::trim) {
         None | Some("" | "restate") => false,
         Some("dbos") => true,
         Some(_) => return Err(SelectionError(ENGINE_ENV)),
     };
-    Ok(cohost && dbos && engine && missing_dbos_flags(get)?.is_empty())
+    Ok(dbos && engine)
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn selected_executor_does_not_require_unrelated_service_switches_or_cohosting() {
+        let lookup = |key: &str| match key {
+            super::ENGINE_ENV => Some("dbos".into()),
+            super::DBOS_ENABLED_ENV => Some("true".into()),
+            _ => None,
+        };
+        assert!(super::dbos_executor(&lookup).unwrap());
+        assert!(!super::dbos_only(&lookup).unwrap());
+        for (key, value) in [
+            (super::ENGINE_ENV, None),
+            (super::ENGINE_ENV, Some("restate")),
+            (super::DBOS_ENABLED_ENV, None),
+            (super::DBOS_ENABLED_ENV, Some("false")),
+        ] {
+            assert!(!super::dbos_executor(&|candidate| if candidate == key {
+                value.map(str::to_owned)
+            } else {
+                lookup(candidate)
+            })
+            .unwrap());
+        }
+        for key in [super::ENGINE_ENV, super::DBOS_ENABLED_ENV] {
+            assert_eq!(
+                super::dbos_executor(&|candidate| if candidate == key {
+                    Some("invalid".into())
+                } else {
+                    lookup(candidate)
+                })
+                .unwrap_err()
+                .0,
+                key
+            );
+        }
+    }
+
     use super::*;
     use std::collections::BTreeMap;
 

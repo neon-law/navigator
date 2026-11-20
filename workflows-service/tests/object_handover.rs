@@ -321,6 +321,14 @@ async fn captured_objects_activate_only_after_parity_and_run_native_without_sour
         assert_eq!(approval.status(),StatusCode::SERVICE_UNAVAILABLE);
         assert!(matches!(worker.retrieve_workflow::<dbos_notation::TransitionReport,dbos_notation::NotationTransitionError>(&approval_id).unwrap().status().await,Err(dbos::Error::WorkflowNotFound {..})));
         source.activate(&pg,&capture).await.unwrap();
+        // This is actual controlled captured_source import+activation, not
+        // the fresh-native fixture header. Unrelated services may remain mixed.
+        let owned=durable_object_handover::require_runtime_selection(&pg,|key|match key {
+            "NAVIGATOR_WORKFLOW_ENGINE"=>Some("dbos".into()),
+            "NAVIGATOR_DBOS_ENABLED"|"NAVIGATOR_DBOS_NOTATION_ENABLED"|"NAVIGATOR_DBOS_PROJECT_SLACK_ENABLED"=>Some("true".into()),
+            _=>None,
+        }).await.unwrap();
+        assert!(!owned.legacy_objects());
         assert_eq!(slack_status(&router,&stable_client).await,StatusCode::ACCEPTED);
         worker.retrieve_workflow::<(),LaneError>(&stable_client).unwrap().result().await.unwrap();
         assert_eq!(state_status(&router,notation,"workflow_events").await,StatusCode::OK);

@@ -413,6 +413,9 @@ async fn mirror_jurisdiction(
     pg: &PostgresDb,
     id: Uuid,
 ) -> Result<Mirrored, MirrorError> {
+    if !super::source_import_allowed(pg, "jurisdiction").await? {
+        return Err(MirrorError::MatterAuthority);
+    }
     if !super::initial_copy() || super::backfilled(pg).await? {
         return Err(MirrorError::MatterAuthority);
     }
@@ -441,6 +444,9 @@ async fn mirror_entity_type(
     pg: &PostgresDb,
     id: Uuid,
 ) -> Result<Mirrored, MirrorError> {
+    if !super::source_import_allowed(pg, "entity_type").await? {
+        return Err(MirrorError::MatterAuthority);
+    }
     if !super::initial_copy() || super::backfilled(pg).await? {
         return Err(MirrorError::MatterAuthority);
     }

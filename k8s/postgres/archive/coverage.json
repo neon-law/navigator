@@ -466,6 +466,20 @@
       {
         "action": "export",
         "schema": "public",
+        "name": "database_origin",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "database_origin_upgrade",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
         "name": "dbos_workflow_request",
         "kind": "table",
         "accessible": true

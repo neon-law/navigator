@@ -146,6 +146,12 @@ pub enum ImportMode {
 /// A scoped import is unavailable or its content-free enrollment evidence is incomplete.
 #[derive(Debug, thiserror::Error)]
 pub enum FamilyError {
+    /// A present fresh-native origin must validate independently of captured history.
+    #[error(transparent)]
+    NativeOrigin(#[from] crate::postgres::native_origin::OriginError),
+    /// Fresh-native authority cannot acquire or replay captured-source history.
+    #[error("a fresh-native Database Origin refuses captured-source import")]
+    NativeOwnership,
     /// PostgreSQL could not read or write the ledger.
     #[error("PostgreSQL family enrollment is unavailable")]
     Query(#[from] sqlx::Error),
@@ -187,7 +193,7 @@ fn checkpoint(table: &str) -> String {
     format!("table:{table}")
 }
 
-/// Whether any completed scoped receipt owns this exact table.
+/// Whether fresh-native origin or completed captured history owns this exact table.
 ///
 /// Ownership is looked up by persisted table enrollment, rather than only by the
 /// current family version, so a later registry cannot resurrect deleted rows.
@@ -195,6 +201,9 @@ fn checkpoint(table: &str) -> String {
 /// # Errors
 /// PostgreSQL could not read the existing backfill ledger.
 pub async fn active_for_table(pg: &PostgresDb, table: &str) -> Result<bool, FamilyError> {
+    if crate::postgres::native_origin::admits(pg).await? {
+        return Ok(true);
+    }
     Ok(sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM mirror_backfill_run r \
          JOIN mirror_backfill_checkpoint c ON c.run_id = r.id \
@@ -211,6 +220,9 @@ pub async fn active_for_table(pg: &PostgresDb, table: &str) -> Result<bool, Fami
 /// # Errors
 /// The ledger is unreadable or historical import and activation are incomplete.
 pub async fn require_scope(pg: &PostgresDb, family: Family) -> Result<(), FamilyError> {
+    if crate::postgres::native_origin::admits(pg).await? {
+        return Ok(());
+    }
     validated_scope(pg, family).await.map(|_| ())
 }
 
@@ -220,6 +232,9 @@ pub async fn require_scope(pg: &PostgresDb, family: Family) -> Result<(), Family
 /// # Errors
 /// Any required family is missing, malformed, ambiguous, or PostgreSQL is unavailable.
 pub async fn require_runtime_scopes(pg: &PostgresDb) -> Result<(), FamilyError> {
+    if crate::postgres::native_origin::admits(pg).await? {
+        return Ok(());
+    }
     let completed = validated_completed_scopes(pg).await?;
     if Family::all()
         .iter()
@@ -236,6 +251,9 @@ pub async fn require_runtime_scopes(pg: &PostgresDb) -> Result<(), FamilyError> 
 /// # Errors
 /// A completed scope is unsupported or its existing activation evidence is invalid.
 pub async fn require_supported_scopes(pg: &PostgresDb) -> Result<(), FamilyError> {
+    if crate::postgres::native_origin::admits(pg).await? {
+        return Ok(());
+    }
     validated_completed_scopes(pg).await.map(|_| ())
 }
 
@@ -435,6 +453,18 @@ pub fn import_mode<'a>(
     })
 }
 
+/// Captured-source operators must refuse a fresh-native target before source access
+/// or ledger writes. An invalid present origin never falls back to capture mode.
+///
+/// # Errors
+/// A native origin is active, pending, invalid, or its provenance cannot be read.
+pub async fn require_capture_target(pg: &PostgresDb) -> Result<(), FamilyError> {
+    if crate::postgres::native_origin::admits(pg).await? {
+        return Err(FamilyError::NativeOwnership);
+    }
+    Ok(())
+}
+
 /// Persist exact table enrollment before any source rows are copied.
 /// Caller holds the existing session advisory lock throughout this transaction
 /// and every following import and activation operation.
@@ -445,6 +475,7 @@ pub(super) async fn enroll(
     batch_size: i32,
     source_receipt: VerifiedSourceReceipt,
 ) -> Result<(), FamilyError> {
+    require_capture_target(pg).await?;
     source_receipt.0.validate(family)?;
     let source_receipt =
         serde_json::to_value(source_receipt.0).map_err(|_| FamilyError::Receipt)?;
@@ -848,6 +879,7 @@ pub(super) async fn refresh_capture_with(
     run: Uuid,
     receipt: VerifiedSourceReceipt,
 ) -> Result<(), super::BackfillError> {
+    require_capture_target(pg).await?;
     let family = enrolled_family(pg, run).await?;
     receipt.0.validate(family)?;
     let row = sqlx::query("SELECT status, source_receipt FROM mirror_backfill_run WHERE id = $1")
@@ -898,6 +930,7 @@ pub(super) async fn advance_with(
     max_batches: Option<usize>,
     activate: bool,
 ) -> Result<Advancement, super::BackfillError> {
+    require_capture_target(pg).await?;
     let family = enrolled_family(pg, run).await?;
     let row = sqlx::query(
         "SELECT status, batch_size, source_receipt FROM mirror_backfill_run WHERE id = $1",

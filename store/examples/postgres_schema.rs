@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use store::postgres_schema::{
-    compare_to_surreal, parse_schema, render_erd, render_parity_manifest,
+    assemble_migrations, compare_to_surreal, parse_schema, render_erd, render_parity_manifest,
     render_surreal_source_erd, seed_schema_differences,
 };
 
@@ -24,6 +24,7 @@ fn run() -> anyhow::Result<ExitCode> {
     let schema = store::postgres_schema::canonical_schema();
 
     match command.as_str() {
+        "assemble" => assemble_schema(&root)?,
         "schema" => print!("{schema}"),
         "erd" => {
             let output = render_erd()?;
@@ -109,7 +110,7 @@ fn run() -> anyhow::Result<ExitCode> {
             }
             return Ok(ExitCode::from(1));
         }
-        _ => anyhow::bail!("usage: cargo run -p store --example postgres_schema -- [check|erd|source-erd|manifest|schema] [repository-root]"),
+        _ => anyhow::bail!("usage: cargo run -p store --example postgres_schema -- [assemble|check|erd|source-erd|manifest|schema] [repository-root]"),
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -147,5 +148,32 @@ fn collect_yaml_paths(
             ));
         }
     }
+    Ok(())
+}
+
+fn assemble_schema(root: &Path) -> anyhow::Result<()> {
+    let mut migrations = Vec::new();
+    for entry in fs::read_dir(root.join("store/postgres/migrations"))? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().is_none_or(|extension| extension != "sql") {
+            continue;
+        }
+        let filename = entry.file_name();
+        let name = filename
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("migration filename is not UTF-8"))?
+            .to_owned();
+        migrations.push((name, fs::read_to_string(path)?));
+    }
+    anyhow::ensure!(!migrations.is_empty(), "no SQL migrations to assemble");
+    let borrowed = migrations
+        .iter()
+        .map(|(name, sql)| (name.as_str(), sql.as_str()))
+        .collect::<Vec<_>>();
+    let schema = assemble_migrations(&borrowed)?;
+    let path = root.join("store/postgres/schema.sql");
+    fs::write(&path, schema)?;
+    println!("wrote {}", path.display());
     Ok(())
 }

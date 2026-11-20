@@ -93,9 +93,14 @@ pub async fn build_from_env(brand_seed: store::seed::BrandSeed) -> anyhow::Resul
 
     // Application admission verifies the existing migration and activation history.
     // Legacy imports and schema changes belong to explicit operator commands.
-    store::postgres::PostgresDb::application()
+    let postgres = store::postgres::PostgresDb::application()
         .await
         .context("verify PostgreSQL application authority")?;
+    store::durable_object_handover::require_runtime_selection(&postgres, |key| {
+        std::env::var(key).ok()
+    })
+    .await
+    .context("verify durable object engine ownership")?;
     let surreal = store::surreal::SurrealDb::uninitialized();
 
     // Object storage is created before the seed because template bodies

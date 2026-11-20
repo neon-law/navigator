@@ -1848,6 +1848,8 @@ async fn enroll_fixture(
     }
     let ready = family::require_runtime_scopes(&pg).await;
     if ready.is_err() {
+        // An invalid/pending present origin is not an invitation to capture Source.
+        family::require_capture_target(&pg).await?;
         anyhow::ensure!(
             std::net::TcpStream::connect(("127.0.0.1", cfg.web_port)).is_err(),
             "stop the task host web before capturing PostgreSQL fixture history"

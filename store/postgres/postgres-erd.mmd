@@ -312,6 +312,30 @@ erDiagram
         uuid person_id
         datetime updated_at
     }
+    database_origin {
+        json authority_contract
+        string cluster_name
+        uuid creation_operation
+        string database_name
+        int database_oid
+        int format_version
+        datetime inserted_at
+        uuid namespace_uid
+        string origin
+        json schema_contract
+        boolean singleton
+        uuid tier_id
+    }
+    database_origin_upgrade {
+        json authority_contract
+        datetime completed_at
+        uuid creation_operation
+        json from_schema_contract
+        datetime inserted_at
+        uuid predecessor_operation
+        json to_schema_contract
+        uuid upgrade_operation
+    }
     dbos_workflow_request {
         datetime inserted_at
         string request_fingerprint
@@ -2202,6 +2226,7 @@ erDiagram
     stage_definition }o--|| contingency_term_tier : references
     jurisdiction }o--|| credential : references
     person }o--|| credential : references
+    database_origin }o--|| database_origin_upgrade : references
     document_chain_archive }o--|| document_chain_archive_item : references
     project }o--|| document_upload_session : references
     firm }o--|| docusign_completion : references

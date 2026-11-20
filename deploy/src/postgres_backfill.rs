@@ -137,6 +137,7 @@ async fn execute(args: &BackfillArgs) -> anyhow::Result<Outcome> {
     let pg = PostgresDb::from_env()
         .await
         .map_err(|_| anyhow::anyhow!("PostgreSQL is unavailable"))?;
+    store::postgres_backfill::family::require_capture_target(&pg).await?;
     if let Some(scope) = &args.enrollment.family {
         return execute_family(args, &pg, scope).await.map(Outcome::Run);
     }
@@ -192,6 +193,7 @@ async fn execute_family(
     scope: &str,
 ) -> anyhow::Result<RunReport> {
     use store::postgres_backfill::{self, family::Family};
+    postgres_backfill::family::require_capture_target(pg).await?;
     let family = Family::from_scope(scope)
         .ok_or_else(|| anyhow::anyhow!("unknown immutable family scope"))?;
     if let Some(run) = args.resume {
@@ -635,6 +637,95 @@ mod tests {
     struct Cli {
         #[command(flatten)]
         args: BackfillArgs,
+    }
+
+    #[tokio::test]
+    async fn native_target_refuses_dry_run_and_family_before_source_configuration_or_capture_files()
+    {
+        use sqlx::postgres::{PgConnectOptions, PgSslMode};
+        use store::postgres::native_origin::{self, TierBinding};
+        let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {
+            assert_ne!(std::env::var("NAV_REQUIRE_POSTGRES").as_deref(), Ok("1"));
+            return;
+        };
+        let options = PgConnectOptions::new()
+            .host("127.0.0.1")
+            .port(port.parse().unwrap())
+            .username("postgres")
+            .password("synthetic")
+            .ssl_mode(PgSslMode::Disable)
+            .database(
+                &std::env::var("NAVIGATOR_TEST_POSTGRES_DATABASE")
+                    .unwrap_or_else(|_| "smoke".into()),
+            )
+            .options([("session_preload_libraries", "age")]);
+        let operation = Uuid::new_v4();
+        let native = native_origin::create(
+            options.clone(),
+            operation,
+            TierBinding {
+                tier_id: Uuid::new_v4(),
+                namespace_uid: Uuid::new_v4(),
+                cluster_name: "synthetic-cli-origin".into(),
+            },
+        )
+        .await
+        .unwrap()
+        .initialize()
+        .await
+        .unwrap();
+        for flags in [
+            vec!["backfill"],
+            vec!["backfill", "--dry-run"],
+            vec![
+                "backfill",
+                "--family",
+                "application:1",
+                "--capture",
+                "/missing/private-capture",
+                "--capture-receipt",
+                "/missing/private-receipt",
+            ],
+        ] {
+            let args = Cli::try_parse_from(flags).unwrap().args;
+            let result = PostgresDb::with_test_db(native.postgres().clone(), execute(&args)).await;
+            let Err(error) = result else {
+                panic!("native target must refuse capture");
+            };
+            assert!(matches!(
+                error.downcast_ref::<store::postgres_backfill::family::FamilyError>(),
+                Some(store::postgres_backfill::family::FamilyError::NativeOwnership)
+            ));
+        }
+        let family_args = Cli::try_parse_from([
+            "backfill",
+            "--family",
+            "application:1",
+            "--resume",
+            &Uuid::new_v4().to_string(),
+        ])
+        .unwrap()
+        .args;
+        let error = execute_family(&family_args, native.postgres(), "application:1")
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error.downcast_ref::<store::postgres_backfill::family::FamilyError>(),
+            Some(store::postgres_backfill::family::FamilyError::NativeOwnership)
+        ));
+        let histories: i64 = sqlx::query_scalar("SELECT count(*) FROM mirror_backfill_run")
+            .fetch_one(native.postgres().pool())
+            .await
+            .unwrap();
+        assert_eq!(histories, 0);
+        let name = native.database();
+        native.postgres().pool().close().await;
+        let admin = PostgresDb::connect(options).await.unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!("DROP DATABASE \"{name}\"")))
+            .execute(admin.pool())
+            .await
+            .unwrap();
+        admin.pool().close().await;
     }
 
     #[test]

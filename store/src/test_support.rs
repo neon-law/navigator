@@ -1123,3 +1123,27 @@ pub fn with_postgres(
 
 #[cfg(test)]
 mod postgres_tests;
+
+/// Produce a genuine future upgrade intent stopped after its fixed SQLx migration
+/// commits, before completion. The fixture owns an actual newly created database;
+/// current-release admission must refuse this future metadata during transport tests.
+///
+/// # Errors
+/// Invalid origin, failed migration, missing barrier evidence or interrupted cleanup.
+pub async fn native_upgrade_pending(
+    native: &crate::postgres::native_origin::NativeDatabase,
+) -> Result<Uuid, crate::postgres::native_origin::OriginError> {
+    crate::postgres::native_origin::fixture_upgrade::pending(native).await
+}
+
+/// Complete only the same fixed future transport operation. This does not admit
+/// the future schema under the current release or fabricate a backfill receipt.
+///
+/// # Errors
+/// The operation, origin, intent or applied checksum prefix does not match.
+pub async fn native_upgrade_complete(
+    native: &crate::postgres::native_origin::NativeDatabase,
+    operation: Uuid,
+) -> Result<(), crate::postgres::native_origin::OriginError> {
+    crate::postgres::native_origin::fixture_upgrade::complete(native, operation).await
+}

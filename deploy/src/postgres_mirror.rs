@@ -30,6 +30,15 @@ use store::postgres_mirror::{Drift, MirrorKey, MirrorParity};
 /// `hudson ops postgres`.
 #[derive(Debug, Subcommand)]
 pub enum PostgresCmd {
+    /// Generate or check the compiled native-origin release contract without connecting to any service.
+    NativeOriginContract {
+        /// Canonical restore artifact destination.
+        #[arg(long)]
+        out: std::path::PathBuf,
+        /// Refuse when the existing artifact differs; write nothing.
+        #[arg(long)]
+        check: bool,
+    },
     /// Verify completed application history using PostgreSQL alone; writes nothing.
     Ready {
         /// Print one content-free JSON object.
@@ -148,10 +157,33 @@ impl Report {
         }
     }
 }
+fn native_origin_contract(out: &std::path::Path, check: bool) -> Result<(), &'static str> {
+    let mut bytes = serde_json::to_vec_pretty(&store::postgres::native_origin::release_contract())
+        .map_err(|_| "could not encode native-origin release contract")?;
+    bytes.push(b'\n');
+    if check {
+        let actual = std::fs::read(out).map_err(|_| "native-origin release contract is missing")?;
+        if actual != bytes {
+            return Err("native-origin release contract differs from the current binary");
+        }
+    } else {
+        std::fs::write(out, bytes).map_err(|_| "could not write native-origin release contract")?;
+    }
+    Ok(())
+}
 
 /// Run one `ops postgres` command.
 pub fn run(command: PostgresCmd) -> ExitCode {
     let command = match command {
+        PostgresCmd::NativeOriginContract { out, check } => {
+            return match native_origin_contract(&out, check) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => {
+                    eprintln!("navigator: {error}");
+                    ExitCode::from(UNAVAILABLE)
+                }
+            };
+        }
         PostgresCmd::Ready { json } => return crate::postgres_admission::run(json),
         PostgresCmd::Mirror(command) => command,
         PostgresCmd::Backfill(args) => return crate::postgres_backfill::run(&args),
@@ -518,6 +550,27 @@ fn render_json(report: &Report) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn native_contract_generator_checks_exact_bytes_and_current_builder_values() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("origin.json");
+        assert!(super::native_origin_contract(&path, true).is_err());
+        super::native_origin_contract(&path, false).unwrap();
+        super::native_origin_contract(&path, true).unwrap();
+        let value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(value, store::postgres::native_origin::release_contract());
+        std::fs::write(&path, b"{}\n").unwrap();
+        assert!(super::native_origin_contract(&path, true).is_err());
+    }
+
+    #[test]
+    fn checked_in_origin_contract_matches_the_current_binary() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../k8s/postgres/restore-drill/native-origin-contract.json");
+        super::native_origin_contract(&path, true).unwrap();
+    }
+
     use store::postgres_mirror::{ParityReport, TableParity};
     use uuid::Uuid;
 
