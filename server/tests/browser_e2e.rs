@@ -6194,7 +6194,12 @@ async fn navigator_home_links_to_the_navigator_page_and_back() {
         .click()
         .await
         .unwrap();
-    wait_for_text(&c, "Legal work, with the lawyer in control.", Duration::from_secs(10)).await;
+    wait_for_text(
+        &c,
+        "Legal work, with the lawyer in control.",
+        Duration::from_secs(10),
+    )
+    .await;
     assert_eq!(c.current_url().await.unwrap().path(), "/");
     c.close().await.unwrap();
 }
