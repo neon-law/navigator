@@ -330,6 +330,7 @@ async fn accessible_projects(
 
 /// One facet per distinct brand key among the viewer's matters, labelled with
 /// the brand's resolved display name (the raw key when the registry has none).
+#[cfg(feature = "server")]
 fn brand_facets_from(
     matters: &[store::projects::Project],
     brands: &[store::brands::Brand],

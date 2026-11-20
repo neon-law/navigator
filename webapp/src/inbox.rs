@@ -1116,6 +1116,7 @@ fn sender_line(detail: &store::inbox::IntakeDetail) -> String {
 
 /// The assigned confirmation names the Project when the redirect carried one
 /// of the picker's codes; a stale or foreign code stays verbatim.
+#[cfg(feature = "server")]
 fn assigned_confirmation(projects: &[store::inbox::ProjectChoice], code: String) -> String {
     projects
         .iter()
@@ -1123,6 +1124,7 @@ fn assigned_confirmation(projects: &[store::inbox::ProjectChoice], code: String)
         .map_or_else(|| code, |project| project.name.clone())
 }
 
+#[cfg(feature = "server")]
 async fn firm_thread_page(conversation_id: uuid::Uuid) -> Result<InboxThreadPage, ServerFnError> {
     let role = crate::admin_listing::require_firm_person().await?;
     let surreal = surreal().await;
