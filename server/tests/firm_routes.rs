@@ -214,14 +214,14 @@ async fn no_firm_page_still_markets_the_retired_consumer_plan() {
 }
 
 #[tokio::test]
-async fn the_home_presents_navigator_and_asks_for_a_star() {
+async fn the_home_presents_navigator_and_links_to_its_page() {
     let app = site_app().await;
     let body = body_string(anon_get(&app, "/").await).await;
     assert_eq!(body.matches("<h1").count(), 1);
     for text in [
-        "Exacting agentic lawyering.",
-        "Star the repo",
-        r#"href="https://github.com/neon-law/navigator""#,
+        "Legal work, with the lawyer in control.",
+        "Explore Navigator",
+        r#"href="/navigator""#,
         r#"href="/notations/about""#,
         r#"href="/legal-aid""#,
     ] {

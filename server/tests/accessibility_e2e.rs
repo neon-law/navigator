@@ -1077,8 +1077,8 @@ async fn public_navigation_images_and_collage_dialog_are_accessible() {
         .expect("the home call to action has an href")
         .expect("the home call to action has an href");
     assert_eq!(
-        href, "https://github.com/neon-law/navigator",
-        "the Neon home's call to action stars the repository"
+        href, "/navigator",
+        "the Neon home's call to action opens the Navigator page"
     );
 
     c.goto(&format!("{site_base_url}/blog/thanks-apple"))
