@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 
 /// Embedded-engine call sites per workspace crate.
 const BASELINE: &[(&str, usize)] = &[
-    ("archives", 11),
+    ("archives", 0),
     ("billing-workflows", 16),
     ("cli", 3),
     ("deploy", 19),
