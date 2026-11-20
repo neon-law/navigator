@@ -588,6 +588,21 @@ async fn wait_upgrade_lease_released(pg: &PostgresDb) {
     wait_for(pg, "SELECT NOT EXISTS(SELECT 1 FROM pg_locks WHERE locktype='advisory' AND database=(SELECT oid FROM pg_database WHERE datname=current_database()) AND classid=1869769063 AND objid=1768846704)").await;
 }
 
+async fn assert_completed_upgrade_receipt_and_schema(pg: &PostgresDb) {
+    let receipts: (i64, i64) =
+        sqlx::query_as("SELECT count(*),count(completed_at) FROM database_origin_upgrade")
+            .fetch_one(pg.pool())
+            .await
+            .unwrap();
+    assert_eq!(receipts, (1, 1));
+    let probe: bool =
+        sqlx::query_scalar("SELECT to_regclass('public.native_origin_upgrade_probe') IS NOT NULL")
+            .fetch_one(pg.pool())
+            .await
+            .unwrap();
+    assert!(probe);
+}
+
 #[tokio::test]
 async fn migration_commit_before_upgrade_completion_recovers_only_the_same_bound_operation() {
     let Some(options) = options() else { return };
@@ -681,18 +696,7 @@ async fn migration_commit_before_upgrade_completion_recovers_only_the_same_bound
     upgrade::upgrade_with(pg, creation, &binding, operation, &future_schema(true))
         .await
         .unwrap();
-    let receipts: (i64, i64) =
-        sqlx::query_as("SELECT count(*),count(completed_at) FROM database_origin_upgrade")
-            .fetch_one(pg.pool())
-            .await
-            .unwrap();
-    assert_eq!(receipts, (1, 1));
-    let probe: bool =
-        sqlx::query_scalar("SELECT to_regclass('public.native_origin_upgrade_probe') IS NOT NULL")
-            .fetch_one(pg.pool())
-            .await
-            .unwrap();
-    assert!(probe);
+    assert_completed_upgrade_receipt_and_schema(pg).await;
     cleanup(options, native.postgres, creation).await;
 }
 
