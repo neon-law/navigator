@@ -184,7 +184,7 @@ pub(crate) async fn with_test_authority<T>(
 ///
 /// [`GraphError::Store`] if the ensure fails.
 pub(crate) async fn ensure_vertices(
-    pg: &PostgresDb,
+    connection: &mut sqlx::PgConnection,
     table: &str,
     rows: &[(Uuid, Option<String>)],
 ) -> Result<(), GraphError> {
@@ -196,7 +196,7 @@ pub(crate) async fn ensure_vertices(
     sqlx::query(ENSURE_VERTICES_SQL)
         .bind(table)
         .bind(&payload)
-        .execute(&pg.0)
+        .execute(connection)
         .await?;
     Ok(())
 }
@@ -211,16 +211,36 @@ pub(crate) async fn ensure_vertices(
 ///
 /// [`GraphError::Store`] if the load fails.
 pub(crate) async fn load_edge(
-    pg: &PostgresDb,
+    connection: &mut sqlx::PgConnection,
     edge_kind: &str,
     payload: Value,
 ) -> Result<(), GraphError> {
     sqlx::query(LOAD_EDGES_SQL)
         .bind(edge_kind)
         .bind(json!({"rows": [payload]}).to_string())
-        .execute(&pg.0)
+        .execute(connection)
         .await?;
     Ok(())
+}
+
+/// Inject a real SQL error after the actual AGE loader writes in an owned test database.
+#[cfg(test)]
+pub(crate) async fn fail_after_loading_edge(pg: &PostgresDb) {
+    sqlx::raw_sql(
+        r"
+        ALTER FUNCTION graph_load_edges(text, text) RENAME TO test_original_graph_load_edges;
+        CREATE FUNCTION graph_load_edges(kind text, rows text)
+        RETURNS SETOF ag_catalog.agtype LANGUAGE plpgsql AS $$
+        BEGIN
+            RETURN QUERY SELECT * FROM test_original_graph_load_edges(kind, rows);
+            RAISE EXCEPTION 'synthetic failure after actual AGE edge insertion';
+        END
+        $$;
+    ",
+    )
+    .execute(pg.pool())
+    .await
+    .unwrap();
 }
 
 /// What the graph holds against its sources, after a projection. Counts
