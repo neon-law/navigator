@@ -1065,6 +1065,10 @@ async fn native_contact_link_is_idempotent_and_refuses_number_takeover() {
         .await
         .unwrap();
     assert_eq!(detail.contact.unwrap().person_id, contact.id);
+    assert_email_conversation_cannot_be_linked_as_phone(&f, email).await;
+}
+
+async fn assert_email_conversation_cannot_be_linked_as_phone(f: &Fixture, email: &str) {
     let email_thread = pg_inbox::ingest_inbound_on(
         &f.pg,
         &f.db,
