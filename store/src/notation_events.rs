@@ -344,7 +344,7 @@ pub async fn for_notation(
     notation_id: Uuid,
 ) -> Result<Vec<NotationEvent>, NotationEventError> {
     if let Some(pg) = matter::authority_for(TABLE).await? {
-        return for_notation_on(&pg, notation_id).await;
+        return Ok(matter::select(&pg, TABLE, json!({"notation_id": notation_id}), &["id"]).await?);
     }
 
     let response = db

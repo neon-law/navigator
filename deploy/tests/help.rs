@@ -918,6 +918,7 @@ fn ops_help_lists_operator_members() {
             "observability",
             "postgres",
             "private-terms",
+            "project-slack",
             "public-snapshot",
             "rebrand",
             "release",
