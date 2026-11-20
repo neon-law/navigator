@@ -79,7 +79,7 @@ pub struct ExecutedSignature {
 }
 
 /// Resolve actual Notation states and filed signing records into a compact
-/// onboarding summary. A verified DocuSign completion remains the authority
+/// onboarding summary. A verified `DocuSign` completion remains the authority
 /// for the green, official state.
 #[cfg(feature = "server")]
 #[must_use]
@@ -97,9 +97,10 @@ pub fn onboarding_summary(
         .iter()
         .filter_map(|signature| {
             let provider = store::signatures::SignatureProvider::from_stored(&signature.provider)?;
-            let date = chrono::DateTime::parse_from_rfc3339(&signature.signed_at)
-                .map(|signed_at| signed_at.format("%Y-%m-%d").to_string())
-                .unwrap_or_else(|_| signature.signed_at.clone());
+            let date = chrono::DateTime::parse_from_rfc3339(&signature.signed_at).map_or_else(
+                |_| signature.signed_at.clone(),
+                |signed_at| signed_at.format("%Y-%m-%d").to_string(),
+            );
             Some(format!(
                 "{} · Signed through {} on {date}",
                 signature.title,
@@ -152,7 +153,6 @@ pub fn onboarding_summary(
     } else {
         Vec::new()
     };
-    let mut executed = executed;
     if official && executed.is_empty() {
         executed.push("Onboarding completed through DocuSign".to_string());
     }
