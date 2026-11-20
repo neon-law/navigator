@@ -63,9 +63,14 @@ compile without it.
 **To run the local KIND cluster** (`hudson dev up`, and the per-worktree `dev worktree-env up`):
 
 A fresh tier uses PostgreSQL and DBOS without a SurrealDB server, Restate broker, or separate workflow worker. It
-requires Docker, `kubectl`, `kind`, and `openssl`; quickstart also uses `git`, `ssh-keygen`, Rust, and `cmake`. The
-standard Ubuntu quickstart job pins KIND in [the workflow](../.github/workflows/quickstart.yml). Existing legacy tier
-descriptors retain their compatibility topology and require Helm for the Restate Operator.
+requires Docker, `kubectl`, `kind`, and `openssl` (`deploy/src/devx/orchestrate.rs:133`); quickstart also uses `git`,
+`ssh-keygen`, Rust, and `cmake`. Its Ubuntu job installs KIND v0.33.0 (`.github/workflows/quickstart.yml:25`).
+
+Existing legacy tier descriptors retain their compatibility topology. Their tool gate also requires Helm
+(`deploy/src/devx/orchestrate.rs:43`) for the Restate Operator install (`deploy/src/devx/orchestrate.rs:1102`). The
+compatibility deploy browser gate pins KIND v0.32.0 (`.github/workflows/deploy.yml:943`) with node image v1.36.1
+(`.github/workflows/deploy.yml:950`). These deploy pins describe the retained compatibility gate, not the fresh native
+quickstart job.
 
 Quickstart builds and stages the current checkout's Dioxus client before creating the KIND tier or starting the server
 watcher. It uses the debug profile locally and rebuilds incrementally on each launch; an existing bundle is not treated
