@@ -9,6 +9,10 @@ so every reader, including the [Member Contacts](member-contacts.md) sync, sees 
 country code is read as North American (ten digits, or eleven opening with the US country code); anything else without a
 `+` is refused rather than guessed at.
 
+`site import person` accepts a `phone:` primary-mobile shorthand and a `phones:` list of labeled numbers. For an
+existing Person, an import without `--overwrite` adds only numbers the Person does not already hold and preserves its
+saved numbers and primary designation. `--overwrite` also updates the label and primary flag of a matching number.
+
 `label` is a closed vocabulary — `mobile`, `work`, `home`, `fax`, `other` — validated by the store. `is_primary` marks
 the one number a filing or a callback uses first: at most one row per Person carries it, enforced by store convention
 (`store::person_phones::set_phone` demotes the others in the same transaction and is the only writer). The first number

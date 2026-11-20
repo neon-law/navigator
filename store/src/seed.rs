@@ -445,7 +445,7 @@ pub struct ReconcileRecord {
     /// The natural-key value that identifies this record in the seed model.
     pub key: String,
     pub action: ReconcileAction,
-    /// Fields that `--overwrite` would replace.
+    /// Fields the import adds or, with `--overwrite`, replaces.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub changed_fields: Vec<String>,
     /// The jurisdiction an Entity record resolved to, named explicitly so a
@@ -807,13 +807,31 @@ async fn reconcile_people(
                     })
                     .into_iter()
                     .collect();
-                report.unchanged += 1;
-                report.records.push(ReconcileRecord {
-                    key,
-                    action: ReconcileAction::Unchanged,
-                    warnings,
-                    ..ReconcileRecord::default()
-                });
+                if let Some(project) = scope_project {
+                    authorize_person_project_scope(surreal, existing.id, project).await?;
+                }
+                let additions = additional_phones(surreal, existing.id, &wanted_phones).await?;
+                if additions.is_empty() {
+                    report.unchanged += 1;
+                    report.records.push(ReconcileRecord {
+                        key,
+                        action: ReconcileAction::Unchanged,
+                        warnings,
+                        ..ReconcileRecord::default()
+                    });
+                } else {
+                    report.updated += 1;
+                    report.records.push(ReconcileRecord {
+                        key,
+                        action: ReconcileAction::Changed,
+                        changed_fields: vec!["phones".to_string()],
+                        warnings,
+                        ..ReconcileRecord::default()
+                    });
+                    if !actor.dry_run {
+                        record_phones(surreal, existing.id, &additions).await?;
+                    }
+                }
             }
             Some(existing) => {
                 if let Some(project) = scope_project {
@@ -3518,6 +3536,37 @@ async fn missing_phones(
         .collect())
 }
 
+/// The phone numbers a non-overwriting seed may add, leaving every held
+/// number and its primary designation intact.
+async fn additional_phones(
+    surreal: &SurrealDb,
+    person_id: Uuid,
+    wanted: &[SeedPhone],
+) -> anyhow::Result<Vec<SeedPhone>> {
+    if wanted.is_empty() {
+        return Ok(Vec::new());
+    }
+    let held = crate::person_phones::list_phones(surreal, person_id).await?;
+    let mut has_primary = held.iter().any(|phone| phone.is_primary);
+    let mut has_any = !held.is_empty();
+    let mut additions = Vec::new();
+    for wanted in wanted {
+        if held.iter().any(|phone| phone.e164 == wanted.e164)
+            || additions
+                .iter()
+                .any(|phone: &SeedPhone| phone.e164 == wanted.e164)
+        {
+            continue;
+        }
+        let mut addition = wanted.clone();
+        addition.primary = !has_any || (wanted.primary && !has_primary);
+        has_any = true;
+        has_primary |= addition.primary;
+        additions.push(addition);
+    }
+    Ok(additions)
+}
+
 async fn seed_persons(surreal: &SurrealDb, report: &mut SeedReport) -> anyhow::Result<()> {
     for rec in parse::<PersonRec>(canonical::PERSON, "Person.yaml")? {
         anyhow::ensure!(
@@ -5011,52 +5060,76 @@ records:
 
     #[tokio::test]
     async fn operator_person_seed_imports_phone_numbers() {
-        let surreal = mem_surreal().await;
-        let yaml = moved_person_yaml(
-            "    phone: \"+17025550123\"\n    phones:\n      - number: \"(702) 555-0142\"\n        label: work\n",
-        );
-        reconcile_yaml(
-            &surreal,
-            SeedModel::Person,
-            &yaml,
-            "Firm",
-            false,
-            &unrestricted_actor(),
-        )
-        .await
-        .expect("create with phones");
-        let person = persons::find_by_email_ci(&surreal, "new.firm@example.com")
-            .await
-            .unwrap()
-            .unwrap();
-        let phones = crate::person_phones::list_phones(&surreal, person.id)
+        crate::test_support::with_source_import(async {
+            let surreal = mem_surreal().await;
+            let person = persons::create(
+                &surreal,
+                &NewPerson::new("Stored Client", "new.firm@example.com"),
+            )
             .await
             .unwrap();
-        assert_eq!(
-            phones
-                .iter()
-                .map(|phone| (phone.e164.as_str(), phone.label.as_str(), phone.is_primary))
-                .collect::<Vec<_>>(),
-            vec![
-                ("+17025550123", "mobile", true),
-                ("+17025550142", "work", false)
-            ],
-            "the shorthand is the primary mobile; the list entry normalizes and keeps its label"
-        );
+            crate::person_phones::set_phone(
+                &surreal,
+                person.id,
+                "+17025550142",
+                crate::person_phones::PhoneLabel::Mobile,
+                true,
+            )
+            .await
+            .unwrap();
+            let yaml = moved_person_yaml(
+                "    phone: \"+17025550123\"\n    phones:\n      - number: \"(702) 555-0142\"\n        label: work\n",
+            );
 
-        // Re-running the same document changes nothing.
-        let again = reconcile_yaml(
-            &surreal,
-            SeedModel::Person,
-            &yaml,
-            "Firm",
-            false,
-            &unrestricted_actor(),
-        )
-        .await
-        .expect("rerun");
-        assert_eq!(again.updated, 0);
-        assert_eq!(again.unchanged, 1);
+            let report = reconcile_yaml(
+                &surreal,
+                SeedModel::Person,
+                &yaml,
+                "Firm",
+                false,
+                &unrestricted_actor(),
+            )
+            .await
+            .expect("add the missing phone without overwriting the held one");
+
+            assert_eq!((report.created, report.updated, report.unchanged), (0, 1, 0));
+            assert_eq!(report.records[0].changed_fields, vec!["phones"]);
+            let stored = persons::find_by_email_ci(&surreal, "new.firm@example.com")
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                stored.name, "Stored Client",
+                "without overwrite, the name stays"
+            );
+            let phones = crate::person_phones::list_phones(&surreal, person.id)
+                .await
+                .unwrap();
+            assert_eq!(
+                phones
+                    .iter()
+                    .map(|phone| (phone.e164.as_str(), phone.label.as_str(), phone.is_primary))
+                    .collect::<Vec<_>>(),
+                vec![
+                    ("+17025550142", "mobile", true),
+                    ("+17025550123", "mobile", false)
+                ],
+                "the added number does not replace the held number or its primary flag"
+            );
+
+            let again = reconcile_yaml(
+                &surreal,
+                SeedModel::Person,
+                &yaml,
+                "Firm",
+                false,
+                &unrestricted_actor(),
+            )
+            .await
+            .expect("re-import the same phone");
+            assert_eq!((again.updated, again.unchanged), (0, 1));
+        })
+        .await;
     }
 
     #[tokio::test]
