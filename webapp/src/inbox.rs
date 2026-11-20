@@ -256,6 +256,11 @@ pub struct InboxThreadPage {
     pub trashed: bool,
     pub csrf_token: String,
     pub error: Option<String>,
+    /// The project just assigned from this page — the `?assigned=` flash the
+    /// assign form's success redirect returns with, shown as a confirmation
+    /// while the form stays up.
+    #[serde(default)]
+    pub assigned: Option<String>,
     #[serde(default)]
     pub logo: Option<crate::components::AppLogo>,
     #[serde(default)]
@@ -320,6 +325,21 @@ pub(crate) async fn query_error() -> Option<String> {
         .await
         .ok()
         .and_then(|axum::extract::Query(flash)| flash.error)
+}
+
+/// The project a successful assign just landed on — the `?assigned=` flash the
+/// assign form's redirect returns with.
+#[cfg(feature = "server")]
+async fn query_assigned() -> Option<String> {
+    #[derive(serde::Deserialize, Default)]
+    struct Flash {
+        assigned: Option<String>,
+    }
+    dioxus_fullstack_core::FullstackContext::extract::<axum::extract::Query<Flash>, _>()
+        .await
+        .ok()
+        .and_then(|axum::extract::Query(flash)| flash.assigned)
+        .filter(|code| !code.is_empty())
 }
 
 #[cfg(feature = "server")]
@@ -1079,6 +1099,32 @@ fn contact_href(role: ViewerRole, contact: Option<&store::inbox::ContactLink>) -
 }
 
 #[cfg(feature = "server")]
+/// The thread's sender line: the contact's display label when the address is
+/// linked, else the conversation's own name, else its raw address.
+fn sender_line(detail: &store::inbox::IntakeDetail) -> String {
+    detail.contact.as_ref().map_or_else(
+        || {
+            detail
+                .conversation
+                .external_name
+                .clone()
+                .unwrap_or_else(|| detail.conversation.external_address.clone())
+        },
+        contact_label,
+    )
+}
+
+/// The assigned confirmation names the Project when the redirect carried one
+/// of the picker's codes; a stale or foreign code stays verbatim.
+#[cfg(feature = "server")]
+fn assigned_confirmation(projects: &[store::inbox::ProjectChoice], code: String) -> String {
+    projects
+        .iter()
+        .find(|project| project.code == code)
+        .map_or_else(|| code, |project| project.name.clone())
+}
+
+#[cfg(feature = "server")]
 async fn firm_thread_page(conversation_id: uuid::Uuid) -> Result<InboxThreadPage, ServerFnError> {
     let role = crate::admin_listing::require_firm_person().await?;
     let surreal = surreal().await;
@@ -1096,6 +1142,15 @@ async fn firm_thread_page(conversation_id: uuid::Uuid) -> Result<InboxThreadPage
         &detail.messages,
     )
     .await;
+    // The picker is open-only, but the conversation's current Project still
+    // names itself in the assignee chip even when it is closed or archived.
+    let assigned_project = match detail.conversation.project_id {
+        Some(project_id) => store::projects::find_by_id(&surreal, project_id)
+            .await
+            .ok()
+            .flatten(),
+        None => None,
+    };
     Ok(InboxThreadPage {
         role,
         project_code: None,
@@ -1107,36 +1162,21 @@ async fn firm_thread_page(conversation_id: uuid::Uuid) -> Result<InboxThreadPage
         brand_key: detail.conversation.brand_key.clone(),
         provider_account: detail.conversation.provider_account.clone(),
         source_page: detail.conversation.source_page.clone(),
-        sender: detail.contact.as_ref().map_or_else(
-            || {
-                detail
-                    .conversation
-                    .external_name
-                    .clone()
-                    .unwrap_or_else(|| detail.conversation.external_address.clone())
-            },
-            contact_label,
-        ),
+        sender: sender_line(&detail),
         contact_href: contact_href(role, detail.contact.as_ref()),
         interaction_type: detail.conversation.interaction_type.clone(),
         provider_post_id: detail.conversation.provider_post_id.clone(),
         provider_thread_ref: detail.conversation.provider_thread_ref.clone(),
         channel: detail.conversation.channel.clone(),
         assignee: match detail.conversation.project_id {
-            Some(project_id) => detail
-                .projects
-                .iter()
-                .find(|project| project.id == project_id)
+            Some(_) => assigned_project
+                .as_ref()
                 .map_or_else(|| "Assigned".into(), |project| project.name.clone()),
             None => "Unassigned".into(),
         },
-        project_href: detail.conversation.project_id.and_then(|project_id| {
-            detail
-                .projects
-                .iter()
-                .find(|project| project.id == project_id)
-                .map(|project| format!("/app/projects/{}", project.code))
-        }),
+        project_href: assigned_project
+            .as_ref()
+            .map(|project| format!("/app/projects/{}", project.code)),
         unread: detail.conversation.unread,
         delivery: detail
             .messages
@@ -1174,6 +1214,9 @@ async fn firm_thread_page(conversation_id: uuid::Uuid) -> Result<InboxThreadPage
         trashed: detail.conversation.trashed_at.is_some(),
         csrf_token: csrf_token().await,
         error: query_error().await,
+        assigned: query_assigned()
+            .await
+            .map(|code| assigned_confirmation(&detail.projects, code)),
         logo,
         tokens_href,
         firm_name,
@@ -1418,6 +1461,7 @@ async fn project_thread_page(
         trashed,
         csrf_token: csrf_token().await,
         error: query_error().await,
+        assigned: None,
         logo,
         tokens_href,
         firm_name,
@@ -2165,8 +2209,10 @@ fn facts_list(page: &InboxThreadPage) -> Element {
 
 /// The one-line assign control: a Project picker posting to the
 /// conversation's assign action. The reading pane returns to the inbox
-/// (`to_inbox`); the full thread stays on the conversation. Absent without an
-/// action or a Project to choose.
+/// (`to_inbox`); the full thread stays on the conversation. A `?assigned=`
+/// flash renders a confirmation above the still-open form, so batch triage
+/// keeps assigning without re-navigating. Absent without an action or a
+/// Project to choose.
 fn assign_control(page: &InboxThreadPage, to_inbox: bool) -> Element {
     let Some(action) = page.assign_action.clone() else {
         return rsx! {};
@@ -2180,21 +2226,26 @@ fn assign_control(page: &InboxThreadPage, to_inbox: bool) -> Element {
         "Move to project"
     };
     rsx! {
-        form { class: "inbox-assign", method: "post", action: "{action}",
-            if !page.csrf_token.is_empty() {
-                input { r#type: "hidden", name: "_csrf", value: "{page.csrf_token}" }
+        div { class: "inbox-assign-wrap",
+            if let Some(assigned) = page.assigned.as_ref() {
+                p { class: "nav-muted", role: "status", "Assigned to {assigned}." }
             }
-            if to_inbox {
-                input { r#type: "hidden", name: "next", value: "inbox" }
-            }
-            label { r#for: "inbox-assign-project", class: "inbox-assign__label", "{label}" }
-            select { id: "inbox-assign-project", name: "project_id", class: "nav-input", required: true,
-                option { value: "", "Choose a project…" }
-                for project in page.projects.iter() {
-                    option { key: "{project.id}", value: "{project.id}", "{project.label}" }
+            form { class: "inbox-assign", method: "post", action: "{action}",
+                if !page.csrf_token.is_empty() {
+                    input { r#type: "hidden", name: "_csrf", value: "{page.csrf_token}" }
                 }
+                if to_inbox {
+                    input { r#type: "hidden", name: "next", value: "inbox" }
+                }
+                label { r#for: "inbox-assign-project", class: "inbox-assign__label", "{label}" }
+                select { id: "inbox-assign-project", name: "project_id", class: "nav-input", required: true,
+                    option { value: "", "Choose a project…" }
+                    for project in page.projects.iter() {
+                        option { key: "{project.id}", value: "{project.id}", "{project.label}" }
+                    }
+                }
+                button { class: "nav-btn nav-btn--primary", r#type: "submit", "Assign" }
             }
-            button { class: "nav-btn nav-btn--primary", r#type: "submit", "Assign" }
         }
     }
 }
@@ -2846,6 +2897,7 @@ mod tests {
             trashed: false,
             csrf_token: "token".into(),
             error: None,
+            assigned: None,
             logo: None,
             tokens_href: String::new(),
             firm_name: "Practice".into(),
@@ -2980,6 +3032,28 @@ mod tests {
         no_projects.projects.clear();
         let html = dioxus_ssr::render_element(inbox_pane_body(&no_projects, "/app/inbox/c1"));
         assert!(!html.contains("inbox-assign-project"), "{html}");
+    }
+
+    #[test]
+    fn the_thread_confirms_an_assignment_and_keeps_the_form_up() {
+        let mut page = base_thread();
+        page.assignee = "Alpha".into();
+        page.assigned = Some("Alpha".into());
+        let html = thread(&page);
+        assert!(html.contains("Assigned to Alpha."), "{html}");
+        assert!(html.contains(r#"role="status""#), "{html}");
+        assert!(
+            html.contains(r#"action="/app/owner/inbox/c1/assign""#),
+            "{html}"
+        );
+        assert!(
+            html.contains(r#"<option value="project-1">Alpha (alpha)</option>"#),
+            "{html}"
+        );
+
+        let mut unconfirmed = base_thread();
+        unconfirmed.assigned = None;
+        assert!(!thread(&unconfirmed).contains("Assigned to"));
     }
 
     #[test]

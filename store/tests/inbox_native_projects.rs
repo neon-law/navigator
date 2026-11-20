@@ -124,14 +124,17 @@ async fn project_choices_use_native_firm_filter_order_and_complete_row_shape() {
         let db = SurrealDb::uninitialized();
         let (id, _) = fixture(&db).await;
         let base = projects::find_by_id(&db, id).await.unwrap().unwrap();
+        // Open-only picker: the excluded rows prove archived and closed
+        // matters stay out; alpha carries the description for row shape.
         let alpha = additional_project(
             &db,
             &base,
             "Alpha matter",
-            "archived",
+            "open",
             Some("Synthetic assignment context."),
         )
         .await;
+        additional_project(&db, &base, "Archived matter", "archived", None).await;
         additional_project(
             &db,
             &base,

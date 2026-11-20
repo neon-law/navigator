@@ -451,9 +451,9 @@ pub struct ReplyForm {
 
 /// `POST /app/inbox/{conversation_id}/assign`
 ///
-/// Lands on the Project thread only when the actor may open it. An Owner
-/// assigns across Projects without participating, and the Project thread
-/// refuses a non-participant, so that actor returns to the firm thread.
+/// Returns to the conversation the form came from — the assign form stays up
+/// with an `?assigned=` confirmation — so batch triage never re-navigates.
+/// The reading pane (`next=inbox`) still returns to the firm inbox.
 pub async fn assign_post(
     State(db): State<store::surreal::SurrealDb>,
     session: Option<Extension<SessionData>>,
@@ -470,29 +470,18 @@ pub async fn assign_post(
     match store::inbox::attribute_to_project(&db, actor_id, conversation_id, form.project_id).await
     {
         Ok(_) if form.next.as_deref() == Some("inbox") => Redirect::to(INBOX).into_response(),
-        Ok(assignment) => {
-            let project_id = assignment.to_project_id;
-            let opens_project =
-                store::access::can_see_project(&db, Some(actor_id), session.role, project_id)
-                    .await
-                    .unwrap_or(false);
-            let project = if opens_project {
-                store::projects::find_by_id(&db, project_id)
-                    .await
-                    .ok()
-                    .flatten()
-            } else {
-                None
-            };
-            match project {
-                Some(project) => Redirect::to(&format!(
-                    "/app/projects/{}/inbox/{conversation_id}",
-                    project.code
-                ))
-                .into_response(),
-                None => Redirect::to(&back).into_response(),
-            }
-        }
+        Ok(assignment) => match store::projects::find_by_id(&db, assignment.to_project_id)
+            .await
+            .ok()
+            .flatten()
+        {
+            Some(project) => Redirect::to(&format!(
+                "{back}?assigned={}",
+                crate::admin::encode_query_value(&project.code)
+            ))
+            .into_response(),
+            None => Redirect::to(&back).into_response(),
+        },
         Err(error) => redirect_error(&back, &error.to_string()),
     }
 }
@@ -1968,7 +1957,13 @@ mod tests {
             .get(axum::http::header::LOCATION)
             .and_then(|value| value.to_str().ok())
             .unwrap_or_default();
-        assert_eq!(location, format!("/app/inbox/{}", ingested.conversation_id));
+        assert_eq!(
+            location,
+            format!(
+                "/app/inbox/{}?assigned={}",
+                ingested.conversation_id, project.code
+            )
+        );
 
         let lawyer = store::persons::create(
             &db,
@@ -2003,8 +1998,8 @@ mod tests {
         assert_eq!(
             reassigned.headers()[axum::http::header::LOCATION],
             format!(
-                "/app/projects/{}/inbox/{}",
-                project.code, ingested.conversation_id
+                "/app/inbox/{}?assigned={}",
+                ingested.conversation_id, project.code
             )
         );
         let noted = note_post(
