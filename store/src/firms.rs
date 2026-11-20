@@ -722,7 +722,7 @@ pub async fn set_calendar_owner(
         }
         Some(value)
     };
-    let db = crate::postgres::PostgresDb::from_env()
+    let db = crate::postgres::PostgresDb::application()
         .await
         .map_err(|_| FirmError::CalendarSettingsUnavailable)?;
     sqlx::query(
@@ -1582,7 +1582,7 @@ pub async fn attach_own_brand(
         .firm_id
         .ok_or_else(|| FirmError::BrandHasNoFirm(brand_key.to_string()))?;
     if crate::postgres::tenancy::enabled() {
-        let pg = crate::postgres::PostgresDb::from_env()
+        let pg = crate::postgres::PostgresDb::application()
             .await
             .map_err(crate::postgres::tenancy::TenancyError::from)?;
         Box::pin(crate::postgres::tenancy::authorize_firm_management(
@@ -1610,7 +1610,7 @@ pub async fn detach_brand(
     brand_key: &str,
 ) -> Result<(), FirmError> {
     if crate::postgres::tenancy::enabled() {
-        let pg = crate::postgres::PostgresDb::from_env()
+        let pg = crate::postgres::PostgresDb::application()
             .await
             .map_err(crate::postgres::tenancy::TenancyError::from)?;
         Box::pin(crate::postgres::tenancy::authorize_firm_management(

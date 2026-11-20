@@ -821,12 +821,22 @@ pub async fn reconcile_from_env(
         trusted_organizers: BTreeSet::from([email(&config.delegated_user)]),
     };
     let drive = cloud::drive::GoogleDrive::new(config).await?;
-    let pg = PostgresDb::from_env()
+    reconcile_configured(db, &drive, project_id, &policy).await
+}
+
+// Shared post-provider tail: production owns provider configuration, this path owns the admitted database.
+pub(crate) async fn reconcile_configured(
+    db: &SurrealDb,
+    drive: &dyn DriveService,
+    project_id: Uuid,
+    policy: &FolderProvisioningPolicy,
+) -> Result<Option<FolderReconcileReport>, FolderReconcileError> {
+    let pg = PostgresDb::application()
         .await
         .map_err(|_| FolderReconcileError::PostgresUnavailable)?;
     // Box::pin because the PlanColumns added to Project in ENG-1269 pushed
     // this future just past the 16 KiB `large_futures` lint threshold.
-    Box::pin(reconcile(db, &pg, &drive, project_id, &policy))
+    Box::pin(reconcile(db, &pg, drive, project_id, policy))
         .await
         .map(Some)
 }

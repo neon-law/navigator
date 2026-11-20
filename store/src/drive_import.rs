@@ -180,7 +180,7 @@ pub async fn import_project_files(
     ) {
         return Err(DriveImportError::Unauthorized);
     }
-    let pg = crate::postgres::PostgresDb::from_env()
+    let pg = crate::postgres::PostgresDb::application()
         .await
         .map_err(|_| DriveImportError::FolderStoreUnavailable)?;
     import_project_files_with_folders(db, &pg, storage, drive, screen, project_id, actor_id, args)

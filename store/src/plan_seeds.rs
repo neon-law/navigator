@@ -58,7 +58,7 @@ pub async fn seed_quickstart(surreal: &SurrealDb) -> Result<(), PlanSeedError> {
     let Some(firm) = crate::firms::anchor_firm(surreal).await? else {
         return Ok(());
     };
-    let pg = PostgresDb::from_env()
+    let pg = PostgresDb::application()
         .await
         .map_err(|_| PlanSeedError::PostgresUnavailable)?;
     postgres_mirror::mirror(surreal, &pg, &MirrorKey::Firm(firm.id)).await?;

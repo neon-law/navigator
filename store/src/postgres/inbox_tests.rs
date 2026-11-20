@@ -3,7 +3,8 @@
 //! compiled migrations, skipped silently when no local PostgreSQL is running.
 //!
 //! The mem-Surreal store remains the authorization and Communication-spine
-//! side of every test — that is the slice's contract. Postgres-authoritative
+//! side of the legacy fixture tests. The six native Fi boundaries instead use
+//! owned PostgreSQL and an inert Source handle. Postgres-authoritative
 //! ingest is exercised through the same entry points the dispatcher uses, so
 //! replay semantics (unique `inbox_ingress` key) and threading
 //! (`find_open_thread`'s partition key) are proven against the real SQL.
@@ -90,7 +91,6 @@ async fn native_authority_routes_the_public_inbox_lifecycle_to_postgres() {
     }
     assert_public_native_lifecycle(&f).await;
     assert_public_native_private_triage(&f).await;
-    assert_public_native_call_and_fi_triage_coordination(&f).await;
     assert_historical_email_filing(&f).await;
     assert_public_native_preview_and_person(&f).await;
     assert_project_inbox_reads_postgres_metadata(&f).await;
@@ -3654,7 +3654,7 @@ fn fi_rows(rows: &str) -> Vec<crate::fi_import::Row> {
 
 #[tokio::test]
 async fn fi_history_is_native_idempotent_metadata_and_cannot_queue_or_dispatch() {
-    let Some(f) = fixture().await else { return };
+    with_native_fi_fixture(|f| async move {
     let scope = fi_scope(&f).await;
     let rows=fi_rows("S,O,+15555550456,2026-10-30T18:00:00Z,,sms-one\nC,I,+15555550789,2026-10-30T14:01:00.123456-04:00,61,call-one");
     let mut saved = Vec::new();
@@ -3744,11 +3744,12 @@ async fn fi_history_is_native_idempotent_metadata_and_cannot_queue_or_dispatch()
         .await
         .unwrap();
     assert_eq!(links, 0);
+    }).await;
 }
 
 #[tokio::test]
 async fn raced_fi_native_id_payloads_cannot_split_across_channels_or_replace_the_winner() {
-    let Some(f) = fixture().await else { return };
+    with_native_fi_fixture(|f| async move {
     let scope = fi_scope(&f).await;
     let Some(first) = fi_rows("C,I,+15555550456,2026-10-30T18:00:00Z,61,same-native-id")
         .into_iter()
@@ -3828,11 +3829,12 @@ async fn raced_fi_native_id_payloads_cannot_split_across_channels_or_replace_the
         .await
         .unwrap();
     assert_eq!(count, 1);
+    }).await;
 }
 
 #[tokio::test]
 async fn identical_fi_replays_preserve_reviewed_history_and_new_events_reopen_it() {
-    let Some(f) = fixture().await else { return };
+    with_native_fi_fixture(|f| async move {
     for kind in ["C", "S"] {
         let mut scope = fi_scope(&f).await;
         let duration = if kind == "C" { "61" } else { "" };
@@ -3899,11 +3901,12 @@ async fn identical_fi_replays_preserve_reviewed_history_and_new_events_reopen_it
             "a new event must reopen its thread for review"
         );
     }
+    }).await;
 }
 
 #[tokio::test]
 async fn fi_import_lock_prevents_assignment_until_destination_verification_finishes() {
-    let Some(f) = fixture().await else { return };
+    with_native_fi_fixture(|f| async move {
     let mut scope = fi_scope(&f).await;
     let rows = fi_rows("S,I,+15555550456,2026-10-30T18:00:00Z,,before-assignment\nS,I,+15555550456,2026-10-30T18:01:00Z,,during-import");
     let first = crate::test_support::ingest_fi_message_on(&f.pg, &scope, &rows[0])
@@ -3950,6 +3953,7 @@ async fn fi_import_lock_prevents_assignment_until_destination_verification_finis
             .unwrap(),
         crate::fi_import::Existing::Identical
     );
+    }).await;
 }
 
 #[tokio::test]
@@ -4019,7 +4023,7 @@ async fn assert_public_native_call_and_fi_triage_coordination(f: &Fixture) {
     .await
     .unwrap()
     .id;
-    let other = seed_project(
+    let other = seed_fi_project(
         &f.pg,
         &f.db,
         f.entity,
@@ -4346,20 +4350,19 @@ async fn fi_project_destination_is_reserved_before_any_history_commit() {
         }
         return;
     };
-    let Some(f) = fixture().await else {
-        return;
-    };
-    configure_native_triage_fixture(&f).await;
-    let kind = if case.ends_with("sms") { "S" } else { "C" };
-    if case.starts_with("reviewed") {
-        assert_fi_identical_replay_preserves_reviewed_state(&f, kind).await;
-    } else if case.starts_with("group") {
-        assert_fi_project_batches_reuse_the_selected_thread(&f, kind).await;
-    } else if case.starts_with("race") {
-        assert_fi_assignment_cannot_cross_commit(&f, kind).await;
-    } else {
-        assert_fi_project_is_pinned_before_return(&f, kind, case.starts_with("replay")).await;
-    }
+    with_native_fi_fixture(|f| async move {
+        let kind = if case.ends_with("sms") { "S" } else { "C" };
+        if case.starts_with("reviewed") {
+            assert_fi_identical_replay_preserves_reviewed_state(&f, kind).await;
+        } else if case.starts_with("group") {
+            assert_fi_project_batches_reuse_the_selected_thread(&f, kind).await;
+        } else if case.starts_with("race") {
+            assert_fi_assignment_cannot_cross_commit(&f, kind).await;
+        } else {
+            assert_fi_project_is_pinned_before_return(&f, kind, case.starts_with("replay")).await;
+        }
+    })
+    .await;
 }
 
 async fn assert_fi_project_is_pinned_before_return(f: &Fixture, kind: &str, parked: bool) {
@@ -4404,7 +4407,7 @@ async fn assert_fi_project_is_pinned_before_return(f: &Fixture, kind: &str, park
         .unwrap();
     assert_eq!(saved.message_id, replay.message_id);
     assert!(replay.deduped);
-    let other = seed_project(&f.pg, &f.db, f.entity, f.firm, "fi-other", "Fi other").await;
+    let other = seed_fi_project(&f.pg, &f.db, f.entity, f.firm, "fi-other", "Fi other").await;
     let mut wrong = scope.clone();
     wrong.project = Some(other);
     assert!(
@@ -4481,7 +4484,7 @@ async fn assert_fi_assignment_cannot_cross_commit(f: &Fixture, kind: &str) {
     let first = crate::test_support::ingest_fi_message_on(&f.pg, &scope, &rows[0])
         .await
         .unwrap();
-    let destination = seed_project(
+    let destination = seed_fi_project(
         &f.pg,
         &f.db,
         f.entity,
@@ -4592,7 +4595,7 @@ async fn assert_fi_project_batches_reuse_the_selected_thread(f: &Fixture, kind: 
         parked.conversation_id, first.conversation_id,
         "unscoped new history cannot join a Project thread"
     );
-    let other = seed_project(
+    let other = seed_fi_project(
         &f.pg,
         &f.db,
         f.entity,
@@ -4813,4 +4816,137 @@ async fn a_backfill_links_unassociated_conversations_and_reruns_without_effect()
             .await
             .unwrap();
     assert_eq!(person_rows, 1);
+}
+
+// These six Fi boundaries use only an exclusively owned PostgreSQL fixture.
+// Historical phone/CSV fixtures remain in this original test module.
+async fn with_native_fi_fixture<F, Fut>(test: F)
+where
+    F: FnOnce(Fixture) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    crate::test_support::with_postgres(async {
+        let pg = PostgresDb::application().await.unwrap();
+        let fixture = native_fi_fixture(pg.clone()).await;
+        PostgresDb::with_application_db(pg, test(fixture))
+            .await
+            .unwrap();
+    })
+    .await;
+}
+
+async fn native_fi_fixture(pg: PostgresDb) -> Fixture {
+    let db = SurrealDb::uninitialized();
+    let (_, notation, _) = super::fixtures::workflow_fixture(&pg).await;
+    let (project, entity): (Uuid, Uuid) = sqlx::query_as(
+        "SELECT id,entity_id FROM project WHERE id=(SELECT project_id FROM notation WHERE id=$1)",
+    )
+    .bind(notation)
+    .fetch_one(pg.pool())
+    .await
+    .unwrap();
+    let owner = persons::create(
+        &db,
+        &NewPerson::with_role("Synthetic Owner", "owner@example.test", Role::Owner),
+    )
+    .await
+    .unwrap()
+    .id;
+    let lawyer = persons::create(
+        &db,
+        &NewPerson::with_role("Synthetic Lawyer", "lawyer@example.test", Role::Lawyer),
+    )
+    .await
+    .unwrap()
+    .id;
+    let firm = firms::create(
+        &db,
+        &NewFirm {
+            name: format!("Firm {}", Uuid::new_v4().simple()),
+            status: "active".into(),
+            entity_id: entity,
+            admin_dri_person_id: owner,
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+    let brand = format!("synthetic-{}", Uuid::new_v4().simple());
+    crate::brands::create(
+        &db,
+        Role::Owner,
+        Some(owner),
+        &crate::brands::NewBrand {
+            name: format!("Brand {}", Uuid::new_v4().simple()),
+            key: brand.clone(),
+            firm_id: Some(firm),
+            primary_color: None,
+            accent_color: None,
+            typeface: None,
+        },
+    )
+    .await
+    .unwrap();
+    firms::attach_own_brand(&db, Role::Owner, Some(owner), &brand)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE project SET name='Alpha Matter',firm_id=$1,brand=$2 WHERE id=$3")
+        .bind(firm)
+        .bind(brand)
+        .bind(project)
+        .execute(pg.pool())
+        .await
+        .unwrap();
+    projects::designate_dri_in_surreal(&db, project, lawyer, projects::DriSide::Lawyer)
+        .await
+        .unwrap();
+    Fixture {
+        pg,
+        db,
+        firm,
+        owner,
+        lawyer,
+        project,
+        entity,
+    }
+}
+
+async fn seed_fi_project(
+    pg: &PostgresDb,
+    db: &SurrealDb,
+    entity: Uuid,
+    firm: Uuid,
+    code: &str,
+    name: &str,
+) -> Uuid {
+    let brand: String = sqlx::query_scalar(
+        "SELECT brand_key FROM firm_brand WHERE firm_id=$1 ORDER BY brand_key LIMIT 1",
+    )
+    .bind(firm)
+    .fetch_one(pg.pool())
+    .await
+    .unwrap();
+    projects::create(
+        db,
+        &NewProject {
+            code: code.into(),
+            name: name.into(),
+            status: "open".into(),
+            entity_id: entity,
+            firm_id: Some(firm),
+            brand,
+            ..NewProject::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id
+}
+
+#[tokio::test]
+async fn native_call_and_fi_triage_preserve_roles_billing_and_attribution() {
+    with_native_fi_fixture(|f| async move {
+        assert_public_native_call_and_fi_triage_coordination(&f).await;
+    })
+    .await;
 }
