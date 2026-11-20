@@ -25,6 +25,9 @@ pub struct Row {
     pub new_name: Option<String>,
     /// Why there is no `new_name`.
     pub reason: Option<String>,
+    /// LAW-310: an agency filing in a matter with no court docket can
+    /// never be named by a Docket Entry and keeps its dated C004 name.
+    pub exempt: bool,
 }
 
 /// A committed `di-` filing: its slug and its pointer's asset id.
@@ -32,6 +35,16 @@ pub struct Row {
 pub struct Filing {
     pub slug: String,
     pub asset_id: String,
+    /// LAW-310: a `kind: filing` document in a matter that declares no
+    /// `dockets:` in navigator.yaml keeps its dated C004 filename.
+    pub docket_exempt: bool,
+}
+
+/// A `kind: filing` document is exempt from Docket Entry naming exactly
+/// when the matter declares no court docket: no entry can ever name it.
+/// Pleadings and orders stay strict whatever the manifest says.
+fn is_docket_exempt(kind: &str, dockets: &[String]) -> bool {
+    kind == "filing" && dockets.is_empty()
 }
 
 fn extension(slug: &str) -> &str {
@@ -66,11 +79,17 @@ pub fn manifest(filings: &[Filing], entries: &[Value]) -> Vec<Row> {
                     old_slug: filing.slug.clone(),
                     new_name: Some(new_name),
                     reason: None,
+                    exempt: false,
                 },
                 None => Row {
                     old_slug: filing.slug.clone(),
                     new_name: None,
-                    reason: Some("no Docket Entry links this document".to_string()),
+                    reason: Some(if filing.docket_exempt {
+                        "agency filing; the matter declares no docket".to_string()
+                    } else {
+                        "no Docket Entry links this document".to_string()
+                    }),
+                    exempt: filing.docket_exempt,
                 },
             }
         })
@@ -306,6 +325,12 @@ pub async fn name_linked_document(
 
 /// Every Pointer selecting Docket Filings, including documents awaiting their DKT name.
 pub fn filings(root: &Path) -> Result<Vec<Filing>> {
+    let manifest = crate::projects::manifest::read(root).ok_or_else(|| {
+        anyhow::anyhow!(
+            "navigator.yaml is missing or invalid; the agency-filing \
+             exemption (LAW-310) cannot be evaluated"
+        )
+    })?;
     let mut filings = Vec::new();
     for relative in crate::document_read::discover_pointers(root)? {
         let slash = crate::document_sync::slash_path(&relative)?;
@@ -323,6 +348,7 @@ pub fn filings(root: &Path) -> Result<Vec<Filing>> {
                 filings.push(Filing {
                     slug: slug.to_string(),
                     asset_id: pointer.current_version.asset_id.to_string(),
+                    docket_exempt: is_docket_exempt(&pointer.kind, &manifest.dockets),
                 });
             }
         }
@@ -338,6 +364,12 @@ pub fn render(rows: &[Row]) -> String {
     for row in rows {
         let _ = match (&row.new_name, &row.reason) {
             (Some(new), _) => writeln!(out, "{} -> {new}", row.old_slug),
+            (None, reason) if row.exempt => writeln!(
+                out,
+                "{} -> EXEMPT: {}",
+                row.old_slug,
+                reason.as_deref().unwrap_or("unknown")
+            ),
             (None, reason) => writeln!(
                 out,
                 "{} -> UNRESOLVED: {}",
@@ -346,7 +378,10 @@ pub fn render(rows: &[Row]) -> String {
             ),
         };
     }
-    let unresolved = rows.iter().filter(|row| row.new_name.is_none()).count();
+    let unresolved = rows
+        .iter()
+        .filter(|row| row.new_name.is_none() && !row.exempt)
+        .count();
     let _ = writeln!(
         out,
         "{} filing(s), {unresolved} unresolved; nothing was renamed",
@@ -385,7 +420,9 @@ async fn apply_names(
         );
     }
     anyhow::ensure!(
-        rows.iter().all(|row| row.new_name.is_some()),
+        rows.iter()
+            .filter(|row| !row.exempt)
+            .all(|row| row.new_name.is_some()),
         "unresolved filings; no names changed\n{}",
         render(&rows)
     );
@@ -431,6 +468,7 @@ mod tests {
         Filing {
             slug: slug.into(),
             asset_id: asset.into(),
+            docket_exempt: false,
         }
     }
 
@@ -663,6 +701,11 @@ mod tests {
     #[test]
     fn a_refiled_pleading_needs_folder_agreement_but_no_docket_name() {
         let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("navigator.yaml"),
+            "project: sample\ndockets: []\n",
+        )
+        .unwrap();
         let docs = dir.path().join("blobs");
         std::fs::create_dir_all(&docs).unwrap();
         let asset_id = uuid::Uuid::now_v7();
@@ -722,12 +765,14 @@ mod tests {
                 Row {
                     old_slug: "docket/c/di-29-1-exhibit-a.pdf".into(),
                     new_name: Some("DKT 0029-1 - Exhibit A.pdf".into()),
-                    reason: None
+                    reason: None,
+                    exempt: false
                 },
                 Row {
                     old_slug: "docket/c/di-29-motion.pdf".into(),
                     new_name: Some("DKT 0029 - Motion re- Stay.pdf".into()),
-                    reason: None
+                    reason: None,
+                    exempt: false
                 },
             ]
         );
@@ -782,6 +827,7 @@ mod tests {
             &[Filing {
                 slug: "2026.11.19_irs-receipt.pdf".into(),
                 asset_id: "a".into(),
+                docket_exempt: true,
             }],
             &[],
         );
@@ -819,11 +865,20 @@ mod tests {
             &[Filing {
                 slug: "2026.11.19_irs-receipt.pdf".into(),
                 asset_id: "a".into(),
+                docket_exempt: true,
             }],
             &[],
         )
         .await;
         assert!(result.is_ok(), "an exempt agency filing blocks no rename");
         assert!(server.received_requests().await.unwrap().is_empty());
+    }
+
+    #[test]
+    fn only_filing_documents_in_docketless_matters_are_exempt() {
+        assert!(is_docket_exempt("filing", &[]));
+        assert!(!is_docket_exempt("filing", &["9:26-cv-00042".to_string()]));
+        assert!(!is_docket_exempt("pleading", &[]));
+        assert!(!is_docket_exempt("order", &[]));
     }
 }
