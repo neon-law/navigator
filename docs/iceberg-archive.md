@@ -1,5 +1,9 @@
 # Iceberg archive — design
 
+The [write-only archive mode](write-only-iceberg.md) seals a persistent local Iceberg generation and creates independent
+immutable copies in other projects. Its uploader uses create-only credentials; verification and recovery use separate
+identities and evidence.
+
 The scheduled `Archives` workflow exports reviewed PostgreSQL coverage for Navigator and Forgejo by default. Its
 `iceberg_telemetry` phase promotes `otel_logs`, `otel_traces`, and `otel_metrics` from the `telemetry/` lane. Explicit
 `NAVIGATOR_ARCHIVE_SOURCE=all` compatibility runs also snapshot SurrealDB tables into the `application/` lane. This doc

@@ -34,6 +34,11 @@
 
 use crate::{StorageError, StorageService};
 
+/// Minimum immutable retention for an offsite Iceberg archive: 25 years
+/// (25 × 365.25 days). Provisioning locks this policy only after separate
+/// identity verification; that irreversible operation is never a writer permission.
+pub const OFFSITE_ARCHIVES_RETENTION_SECONDS: u64 = 788_940_000;
+
 /// The optional seam naming the GCP project the Iceberg archive bucket lives
 /// in. Absent by default — setting it turns on the fail-closed verification
 /// in [`verify_archives_project`] and adds the archive project to the Slack

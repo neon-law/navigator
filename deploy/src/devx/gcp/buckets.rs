@@ -221,12 +221,7 @@ pub const POSTGRES_BACKUPS_RETENTION_DAYS: u32 = 30;
 /// bucket any more: Portal publishing is retired.
 pub const APPLICATIONS_RETENTION_DAYS: u32 = 3650;
 
-/// Retention on the offsite Iceberg archive: 25 years, in seconds — the unit
-/// GCS retention policies are expressed in (25 × 365.25 days). Set at bucket
-/// creation and then **locked**: a locked policy cannot be shortened, removed,
-/// or replaced, by the deployment's credential, an operator, or a project
-/// owner. Locking is irreversible, which is the point.
-pub const OFFSITE_ARCHIVES_RETENTION_SECONDS: u64 = 788_940_000;
+pub use cloud::archives_project::OFFSITE_ARCHIVES_RETENTION_SECONDS;
 
 /// Retention on the Git bundle archive: 7 years, in seconds (7 × 365.25
 /// days). Long enough to outlive any matter a repository documents; a locked

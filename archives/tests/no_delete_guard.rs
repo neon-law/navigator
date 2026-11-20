@@ -98,58 +98,78 @@ fn no_non_test_code_under_archives_deletes() {
 /// run performed zero deletes end to end.
 #[tokio::test]
 async fn a_full_archive_run_performs_zero_deletes() {
+    use archives::postgres::{export_generation, POSTGRES_LANE, POSTGRES_TABLES};
     use archives::test_support::CollisionStorage;
-    use archives::{author_iceberg_for_prefix, encode_parquet, PromotionRequest, APPLICATION_LANE};
+    use archives::{author_iceberg_for_prefix, encode_parquet, PromotionRequest};
     use arrow::array::{RecordBatch, StringArray};
     use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
     use cloud::StorageService;
 
-    let db = store::surreal::test_support::mem().await;
-    db.query(
-        "CREATE person:analyst SET \
-         name = 'Analyst', email = 'analyst@example.com', role = 'client'",
-    )
-    .await
-    .unwrap();
-
-    // The snapshot leg: every application table through the panicking
-    // double. `CollisionStorage` panics on `delete` — an undisturbed run
-    // is the proof.
-    let storage = CollisionStorage::locked();
-    let summary = archives::snapshot_all(&db, storage.as_ref(), None).await;
-    assert!(summary.failures.is_empty(), "{:#?}", summary.failures);
-
-    // The promotion leg over a real day of Parquet.
-    let run_date = chrono::NaiveDate::from_ymd_opt(2026, 6, 14).unwrap();
-    let schema = ArrowSchema::new(vec![Field::new("id", DataType::Utf8, false)]);
-    let parquet = encode_parquet(
-        &RecordBatch::try_new(
-            std::sync::Arc::new(schema),
-            vec![std::sync::Arc::new(StringArray::from(vec!["synthetic"]))],
+    store::test_support::with_postgres(async {
+        let pg = store::postgres::PostgresDb::application().await.unwrap();
+        let db = store::surreal::SurrealDb::uninitialized();
+        store::persons::create(
+            &db,
+            &store::persons::NewPerson::with_role(
+                "Synthetic analyst",
+                "analyst@example.com",
+                store::persons::Role::Client,
+            ),
         )
-        .unwrap(),
-    )
-    .unwrap();
-    let data_key = format!("{APPLICATION_LANE}/person/data/dt={run_date}/part-1.parquet");
-    storage
-        .put_immutable(&data_key, &parquet, "application/vnd.apache.parquet")
         .await
         .unwrap();
-    let authored = author_iceberg_for_prefix(
-        storage.as_ref(),
-        PromotionRequest {
-            lane: APPLICATION_LANE,
-            table: "person",
-            location_base: "gs://synthetic-exports",
-            run_date,
-            data_key: None,
-            snapshot_id: 9_001,
-            timestamp_ms: 1_780_000_000_000,
-            expire_before_ms: None,
-        },
-    )
-    .await
-    .unwrap()
-    .unwrap();
-    assert_eq!(authored.version, 1);
+
+        // The snapshot leg: every application table through the panicking
+        // double. `CollisionStorage` panics on `delete` — an undisturbed run
+        // is the proof.
+        let storage = CollisionStorage::locked();
+        let summary = export_generation(pg.pool(), storage.as_ref(), POSTGRES_TABLES, None)
+            .await
+            .unwrap();
+        assert_eq!(summary.tables.len(), POSTGRES_TABLES.len());
+        assert_eq!(
+            summary
+                .tables
+                .iter()
+                .find(|table| table.table == "person")
+                .unwrap()
+                .rows,
+            1
+        );
+
+        // The promotion leg over a real day of Parquet.
+        let run_date = chrono::NaiveDate::from_ymd_opt(2026, 6, 14).unwrap();
+        let schema = ArrowSchema::new(vec![Field::new("id", DataType::Utf8, false)]);
+        let parquet = encode_parquet(
+            &RecordBatch::try_new(
+                std::sync::Arc::new(schema),
+                vec![std::sync::Arc::new(StringArray::from(vec!["synthetic"]))],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let data_key = format!("{POSTGRES_LANE}/person/data/dt={run_date}/part-1.parquet");
+        storage
+            .put_immutable(&data_key, &parquet, "application/vnd.apache.parquet")
+            .await
+            .unwrap();
+        let authored = author_iceberg_for_prefix(
+            storage.as_ref(),
+            PromotionRequest {
+                lane: POSTGRES_LANE,
+                table: "person",
+                location_base: "gs://synthetic-exports",
+                run_date,
+                data_key: None,
+                snapshot_id: 9_001,
+                timestamp_ms: 1_780_000_000_000,
+                expire_before_ms: None,
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(authored.version, 1);
+    })
+    .await;
 }

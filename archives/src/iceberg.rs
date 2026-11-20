@@ -49,8 +49,8 @@ use iceberg::spec::{
 };
 use uuid::Uuid;
 
-const POSTGRES_RELATION_PROPERTY: &str = "navigator.postgres.relation-identity";
-const POSTGRES_FIELD_IDS_PROPERTY: &str = "navigator.postgres.field-ids";
+pub(crate) const POSTGRES_RELATION_PROPERTY: &str = "navigator.postgres.relation-identity";
+pub(crate) const POSTGRES_FIELD_IDS_PROPERTY: &str = "navigator.postgres.field-ids";
 const PARQUET_FIELD_ID_KEY: &str = "PARQUET:field_id";
 
 pub(crate) fn validate_postgres_relation_identity(relation: &str) -> Result<()> {

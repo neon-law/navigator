@@ -63,7 +63,7 @@ use workflows::SlackBot;
 #[cfg(feature = "restate-compatibility")]
 use billing::gcp_cost::CostReport;
 
-use crate::digest::{render_archives_slack, DiagnosticReport};
+use crate::digest::{render_archives_slack_with_failure, DiagnosticReport};
 use crate::postgres::{PostgresExport, POSTGRES_LANE};
 use crate::runner::{cost_phase, open_resources, snapshot_selected, SnapshotSummary};
 use crate::snapshot::{APPLICATION_LANE, TELEMETRY_LANE};
@@ -77,6 +77,8 @@ use cloud::{StorageError, StorageService};
 pub struct RunRequest {
     #[serde(default)]
     pub scheduled_for: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub write_only: Option<crate::write_only::operations::Request>,
 }
 
 /// Summary returned to the caller (and visible in Restate Cloud as
@@ -88,6 +90,8 @@ pub struct RunReport {
     pub tables: usize,
     pub rows: usize,
     pub failures: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub write_only: Option<crate::write_only::operations::Report>,
 }
 
 /// Independent opt-in for the DBOS Archives schedule. Restate remains the
@@ -133,6 +137,15 @@ pub struct ArchivesDbosPhaseError;
 /// touching external services.
 #[async_trait::async_trait]
 pub trait ArchivesDbosPhases: Send + Sync + 'static {
+    /// Native write-only capture enters the real source inside the SDK callback.
+    /// Recovery from a sealed local receipt does not open this source.
+    async fn write_only_postgres(
+        &self,
+    ) -> Result<store::postgres::PostgresDb, ArchivesDbosPhaseError> {
+        store::postgres::PostgresDb::application()
+            .await
+            .map_err(|_| ArchivesDbosPhaseError)
+    }
     async fn snapshot(
         &self,
         scheduled_for: Option<DateTime<Utc>>,
@@ -232,13 +245,41 @@ impl DbosContext {
                 .filter(|value| !value.is_empty())
                 .ok_or_else(|| anyhow::anyhow!("DBOS Archives requires {key}"))
         };
-        for key in DBOS_HOST_REQUIRED {
-            required(key)?;
+        if let Some(path) = lookup("NAVIGATOR_ARCHIVE_WRITE_ONLY_CONFIG") {
+            anyhow::ensure!(
+                dbos_enabled(&lookup).map_err(anyhow::Error::msg)?,
+                "write-only archive scheduling requires selected DBOS"
+            );
+            anyhow::ensure!(
+                lookup("NAVIGATOR_ARCHIVE_SOURCE").is_none_or(|source| source == "postgres"),
+                "write-only archive scheduling accepts only PostgreSQL sources"
+            );
+            let config = crate::write_only::operations::Config::read(std::path::Path::new(&path))?;
+            required("NAVIGATOR_POSTGRES_HOST")?;
+            if matches!(
+                config.capture,
+                crate::write_only::operations::CaptureScope::Paired { .. }
+            ) {
+                for key in [
+                    "NAVIGATOR_ARCHIVE_POSTGRES_USER",
+                    "NAVIGATOR_ARCHIVE_POSTGRES_PASSWORD",
+                    "NAVIGATOR_ARCHIVE_FORGEJO_USER",
+                    "NAVIGATOR_ARCHIVE_FORGEJO_PASSWORD",
+                ] {
+                    required(key)?;
+                }
+            }
+        } else {
+            for key in DBOS_HOST_REQUIRED {
+                required(key)?;
+            }
+            serde_json::from_str::<crate::coverage::ConfiguredCoverage>(&required(
+                "NAVIGATOR_ARCHIVE_COVERAGE",
+            )?)
+            .map_err(|_| {
+                anyhow::anyhow!("NAVIGATOR_ARCHIVE_COVERAGE is not a coverage manifest")
+            })?;
         }
-        serde_json::from_str::<crate::coverage::ConfiguredCoverage>(&required(
-            "NAVIGATOR_ARCHIVE_COVERAGE",
-        )?)
-        .map_err(|_| anyhow::anyhow!("NAVIGATOR_ARCHIVE_COVERAGE is not a coverage manifest"))?;
         let channel_id = required(if simulated {
             "SLACK_STAGING_MESSAGES_CHANNEL_ID"
         } else {
@@ -307,11 +348,17 @@ pub fn register_dbos_with(
     phases: Arc<dyn ArchivesDbosPhases>,
 ) -> dbos::Result<ArchivesDbosWorkflow> {
     telemetry::register_archives();
+    RunRequest::configured(None)
+        .map_err(|_| dbos::Error::Config("invalid write-only archive configuration".into()))?;
     dbos.register_workflow(DBOS_WORKFLOW, move |request: RunRequest| {
         let slack = Arc::clone(&slack);
         let channel_id = channel_id.clone();
         let phases = Arc::clone(&phases);
         async move {
+            if let Some(write_only) = request.write_only {
+                return write_only_dbos::run(write_only, slack, channel_id, slack_enabled, phases)
+                    .await;
+            }
             let scheduled_for = request.scheduled_for;
             let phases_for_snapshot = Arc::clone(&phases);
             let summary = dbos::step("snapshot", move || {
@@ -427,18 +474,21 @@ pub async fn schedule_dbos(workflow: ArchivesDbosWorkflow, stop: CancellationTok
         };
         if target <= now {
             let id = dbos_workflow_id(target);
-            match workflow
-                .start_with(
-                    RunRequest {
-                        scheduled_for: Some(target),
-                    },
-                    dbos::StartOptions {
-                        workflow_id: Some(&id),
-                        ..Default::default()
-                    },
-                )
-                .await
-            {
+            let started = async {
+                workflow
+                    .start_with(
+                        RunRequest::configured(Some(target)).map_err(|_| {
+                            dbos::Error::Config("invalid write-only archive configuration".into())
+                        })?,
+                        dbos::StartOptions {
+                            workflow_id: Some(&id),
+                            ..Default::default()
+                        },
+                    )
+                    .await
+            }
+            .await;
+            match started {
                 Ok(_handle) => {
                     last_started = Some(target);
                 }
@@ -513,7 +563,11 @@ impl ArchivesService {
         ctx: WorkflowContext<'_>,
         req: Json<RunRequest>,
     ) -> Result<Json<RunReport>, HandlerError> {
-        let scheduled_for = req.into_inner().scheduled_for;
+        let request = req.into_inner();
+        if request.write_only.is_some() {
+            return Err(TerminalError::new("write-only archives require DBOS").into());
+        }
+        let scheduled_for = request.scheduled_for;
         let invocation_id = ctx.invocation_id().to_string();
 
         // Join the caller's trace: extract the W3C `traceparent` the trigger
@@ -666,6 +720,7 @@ fn run_report(summary: &SnapshotSummary, invocation_id: &str) -> Result<RunRepor
                 .map(|table| table.rows)
                 .sum::<usize>(),
         failures: summary.failures.len(),
+        write_only: None,
     })
 }
 
@@ -759,7 +814,10 @@ fn digest_message<F: Fn(&str) -> Option<String>>(
     summary: &SnapshotSummary,
     get: F,
 ) -> Result<String, StorageError> {
-    let mut message = render_archives_slack(&build_report(summary, get)?);
+    let mut message = render_archives_slack_with_failure(
+        &build_report(summary, get)?,
+        run_failure(summary).is_some(),
+    );
     match &summary.postgres {
         Some(PostgresExport::Published(generation)) => {
             let _ = write!(
@@ -969,8 +1027,9 @@ mod tests {
     };
     use crate::digest::SnapshotEntry;
     use crate::drift::DriftDecision;
-    use crate::runner::TableFailure;
-    use chrono::NaiveDate;
+    use crate::postgres::PostgresExport;
+    use crate::runner::{snapshot_selected, TableFailure};
+    use chrono::{DateTime, NaiveDate, Utc};
     use std::collections::HashMap;
 
     #[test]
@@ -1049,6 +1108,81 @@ mod tests {
             _ => complete(key),
         });
         assert!(malformed.is_err());
+    }
+
+    #[test]
+    fn write_only_host_admits_its_explicit_registered_configuration() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("archive-config.json");
+        let mut config = crate::write_only::operations::Config {
+            format_version: 1,
+            local_root: root.path().canonicalize().unwrap(),
+            source_project_number: None,
+            source_identity_sha256: "a".repeat(64),
+            capture: crate::write_only::operations::CaptureScope::RegisteredNavigator,
+            destinations: Vec::new(),
+        };
+        std::fs::write(&path, serde_json::to_vec(&config).unwrap()).unwrap();
+        let configured = |key: &str| match key {
+            DBOS_ENABLED_ENV => Some("true".to_owned()),
+            "NAVIGATOR_ARCHIVE_WRITE_ONLY_CONFIG" => Some(path.display().to_string()),
+            "NAVIGATOR_POSTGRES_HOST" | "SLACK_BOT_TOKEN" => Some("synthetic".to_owned()),
+            "SLACK_MESSAGES_CHANNEL_ID" => Some("C-SYNTHETIC".to_owned()),
+            _ => None,
+        };
+        assert_eq!(
+            DbosContext::from_lookup(false, configured)
+                .unwrap()
+                .channel_id,
+            "C-SYNTHETIC"
+        );
+        for (key, value) in [
+            (DBOS_ENABLED_ENV, "false"),
+            ("NAVIGATOR_ARCHIVE_SOURCE", "surreal"),
+        ] {
+            assert!(DbosContext::from_lookup(false, |candidate| {
+                if candidate == key {
+                    Some(value.to_owned())
+                } else {
+                    configured(candidate)
+                }
+            })
+            .is_err());
+        }
+        config.capture = crate::write_only::operations::CaptureScope::Paired {
+            coverage: serde_json::from_str(
+                r#"{"navigator":{"relations":[]},"forgejo":{"relations":[]}}"#,
+            )
+            .unwrap(),
+            forgejo_identity_sha256: "b".repeat(64),
+        };
+        std::fs::write(&path, serde_json::to_vec(&config).unwrap()).unwrap();
+        let readers = [
+            "NAVIGATOR_ARCHIVE_POSTGRES_USER",
+            "NAVIGATOR_ARCHIVE_POSTGRES_PASSWORD",
+            "NAVIGATOR_ARCHIVE_FORGEJO_USER",
+            "NAVIGATOR_ARCHIVE_FORGEJO_PASSWORD",
+        ];
+        let paired = |key: &str| {
+            if readers.contains(&key) {
+                Some("synthetic".to_owned())
+            } else {
+                configured(key)
+            }
+        };
+        assert!(DbosContext::from_lookup(false, paired).is_ok());
+        for missing in readers {
+            assert!(DbosContext::from_lookup(false, |key| {
+                if key == missing {
+                    None
+                } else {
+                    paired(key)
+                }
+            })
+            .is_err());
+        }
+        std::fs::write(&path, b"{}").unwrap();
+        assert!(DbosContext::from_lookup(false, configured).is_err());
     }
 
     #[test]
@@ -1179,76 +1313,121 @@ mod tests {
         use cloud::{FsStorage, StorageService};
         use iceberg::spec::{FormatVersion, ManifestList, TableMetadata};
 
-        let db = store::surreal::test_support::mem().await;
-        db.query("CREATE person:sample SET name = 'Sample', email = 'sample@example.com'")
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let storage = FsStorage::new(dir.path()).await.unwrap();
-        let morning: chrono::DateTime<chrono::Utc> = "2026-10-11T05:55:00Z".parse().unwrap();
-        let evening: chrono::DateTime<chrono::Utc> = "2026-10-11T17:55:00Z".parse().unwrap();
-        for (scheduled, expected_rows, version) in [(morning, 1, 1), (evening, 2, 2)] {
-            if scheduled == evening {
-                db.query("CREATE person:second SET name = 'Second', email = 'second@example.com'")
-                    .await
-                    .unwrap()
-                    .check()
-                    .unwrap();
-            }
-            let summary = crate::snapshot_all(&db, &storage, Some(scheduled)).await;
-            assert!(summary.failures.is_empty(), "{:?}", summary.failures);
-            // A crash after an upload re-extracts into the same generation key.
-            let retry = crate::snapshot_all(&db, &storage, Some(scheduled)).await;
-            let person = summary
-                .entries
-                .iter()
-                .find(|entry| entry.table == "person")
-                .unwrap();
-            let retried = retry
-                .entries
-                .iter()
-                .find(|entry| entry.table == "person")
-                .unwrap();
-            assert_eq!(person.key, retried.key);
-            assert_eq!(person.rows, expected_rows);
-            let generation = person.key.strip_suffix("snapshot.parquet").unwrap();
-            assert_eq!(storage.list(generation).await.unwrap().len(), 1);
-            let lines = promote_iceberg_metadata_over(
-                &storage,
-                "sample-archives",
-                &summary,
-                scheduled.timestamp_millis(),
+        store::test_support::with_postgres(async {
+            let pg = store::postgres::PostgresDb::application().await.unwrap();
+            let db = store::surreal::SurrealDb::uninitialized();
+            store::persons::create(
+                &db,
+                &store::persons::NewPerson::with_role(
+                    "Synthetic analyst",
+                    "analyst@example.com",
+                    store::persons::Role::Client,
+                ),
             )
-            .await;
-            assert!(
-                lines.iter().all(|line| !line.contains("FAILED")),
-                "{lines:?}"
-            );
-            let metadata = storage
-                .get(&format!(
-                    "application/person/metadata/v{version}.metadata.json"
-                ))
+            .await
+            .unwrap();
+            let dir = tempfile::tempdir().unwrap();
+            let storage = FsStorage::new(dir.path()).await.unwrap();
+            let morning: chrono::DateTime<chrono::Utc> = "2026-10-11T05:55:00Z".parse().unwrap();
+            let evening: chrono::DateTime<chrono::Utc> = "2026-10-11T17:55:00Z".parse().unwrap();
+            for (scheduled, expected_rows, version) in [(morning, 1, 1), (evening, 2, 2)] {
+                if scheduled == evening {
+                    store::persons::create(
+                        &db,
+                        &store::persons::NewPerson::with_role(
+                            "Second synthetic analyst",
+                            "second@example.com",
+                            store::persons::Role::Client,
+                        ),
+                    )
+                    .await
+                    .unwrap();
+                }
+                let summary = native_snapshot(&pg, &storage, Some(scheduled)).await;
+                assert!(summary.failures.is_empty(), "{:?}", summary.failures);
+                // A crash after an upload re-extracts into the same generation key.
+                let retry = native_snapshot(&pg, &storage, Some(scheduled)).await;
+                let person = native_tables(&summary)
+                    .iter()
+                    .find(|entry| entry.table == "person")
+                    .unwrap();
+                let retried = native_tables(&retry)
+                    .iter()
+                    .find(|entry| entry.table == "person")
+                    .unwrap();
+                assert_eq!(person.key, retried.key);
+                assert_eq!(person.rows, expected_rows);
+                let generation = person.key.rsplit_once('/').unwrap().0;
+                assert_eq!(storage.list(generation).await.unwrap().len(), 1);
+                let lines = promote_iceberg_metadata_over(
+                    &storage,
+                    "sample-archives",
+                    &summary,
+                    scheduled.timestamp_millis(),
+                )
+                .await;
+                assert!(
+                    lines.iter().all(|line| !line.contains("FAILED")),
+                    "{lines:?}"
+                );
+                let metadata = storage
+                    .get(&format!(
+                        "postgres/navigator/person/metadata/v{version}.metadata.json"
+                    ))
+                    .await
+                    .unwrap();
+                let table: TableMetadata = serde_json::from_slice(&metadata.bytes).unwrap();
+                assert_eq!(table.snapshots().count(), version);
+                let current = table.current_snapshot().unwrap();
+                let list_key = current
+                    .manifest_list()
+                    .strip_prefix("gs://sample-archives/")
+                    .unwrap();
+                let list_bytes = storage.get(list_key).await.unwrap();
+                let list =
+                    ManifestList::parse_with_version(&list_bytes.bytes, FormatVersion::V2).unwrap();
+                // Read the persisted Avro independently of the authoring path.
+                assert_eq!(list.entries().len(), 1);
+                assert_eq!(
+                    list.entries()[0].added_rows_count,
+                    Some(u64::try_from(expected_rows).unwrap())
+                );
+            }
+        })
+        .await;
+    }
+
+    async fn native_snapshot(
+        pg: &store::postgres::PostgresDb,
+        storage: &dyn cloud::StorageService,
+        scheduled: Option<DateTime<Utc>>,
+    ) -> SnapshotSummary {
+        let mut summary = snapshot_selected(None, storage, scheduled).await;
+        summary.postgres = Some(
+            match crate::postgres::export_generation(pg.pool(), storage, &["person"], scheduled)
                 .await
-                .unwrap();
-            let table: TableMetadata = serde_json::from_slice(&metadata.bytes).unwrap();
-            assert_eq!(table.snapshots().count(), version);
-            let current = table.current_snapshot().unwrap();
-            let list_key = current
-                .manifest_list()
-                .strip_prefix("gs://sample-archives/")
-                .unwrap();
-            let list_bytes = storage.get(list_key).await.unwrap();
-            let list =
-                ManifestList::parse_with_version(&list_bytes.bytes, FormatVersion::V2).unwrap();
-            // Read the persisted Avro independently of the authoring path.
-            assert_eq!(list.entries().len(), 1);
-            assert_eq!(
-                list.entries()[0].added_rows_count,
-                Some(u64::try_from(expected_rows).unwrap())
+            {
+                Ok(generation) => PostgresExport::Published(generation),
+                Err(error) => PostgresExport::Failed {
+                    error: format!("{error:#}"),
+                },
+            },
+        );
+        assert!(
+            !matches!(summary.postgres, Some(PostgresExport::Failed { .. })),
+            "{:?}",
+            summary.postgres
+        );
+        summary
+    }
+    fn native_tables(summary: &SnapshotSummary) -> &[crate::postgres::PostgresTableEntry] {
+        let Some(PostgresExport::Published(generation)) = &summary.postgres else {
+            panic!(
+                "real PostgreSQL export did not publish: {:?}",
+                summary.postgres
             );
-        }
+        };
+        &generation.tables
     }
 
     fn generation(key: &str) -> crate::postgres::PostgresGeneration {
@@ -1393,93 +1572,6 @@ mod tests {
         ));
     }
 
-    /// A storage double whose bucket-policy probe is denied, the shape of
-    /// the 2026-11-05 outage: the writer's identity could put objects but
-    /// not read the bucket, so every non-empty table failed to write.
-    struct DeniedProbeStorage(std::sync::Arc<crate::test_support::CollisionStorage>);
-
-    #[async_trait::async_trait]
-    impl cloud::StorageService for DeniedProbeStorage {
-        async fn put(&self, key: &str, bytes: &[u8], ct: &str) -> Result<(), StorageError> {
-            self.0.put(key, bytes, ct).await
-        }
-        async fn get(&self, key: &str) -> Result<cloud::StoredObject, StorageError> {
-            self.0.get(key).await
-        }
-        async fn delete(&self, key: &str) -> Result<(), StorageError> {
-            self.0.delete(key).await
-        }
-        async fn signed_url(
-            &self,
-            key: &str,
-            ttl: std::time::Duration,
-        ) -> Result<String, StorageError> {
-            self.0.signed_url(key, ttl).await
-        }
-        async fn list(&self, prefix: &str) -> Result<Vec<cloud::ObjectListing>, StorageError> {
-            self.0.list(prefix).await
-        }
-        async fn retention_locked(&self) -> Result<bool, StorageError> {
-            Err(StorageError::Gcs {
-                key: "<bucket-policy>".into(),
-                message: "probe the bucket retention policy: 403 storage.buckets.get denied".into(),
-            })
-        }
-    }
-
-    /// ENG-1290: a denied bucket-policy probe fails every table with rows,
-    /// the run ends as a failure naming each of them, and the digest leads
-    /// with the failure instead of reading as a normal export.
-    #[tokio::test]
-    async fn a_denied_bucket_probe_fails_the_run_and_the_digest_names_every_table() {
-        let db = store::surreal::test_support::mem().await;
-        db.query("CREATE person:sample SET name = 'Sample', email = 'sample@example.com'")
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-        let storage = DeniedProbeStorage(crate::test_support::CollisionStorage::unlocked());
-        let slot: chrono::DateTime<chrono::Utc> = "2026-11-05T05:55:00Z".parse().unwrap();
-
-        // Every table with rows fails (the seeded store has more than one);
-        // nothing is written, and each failing table is named downstream.
-        let summary = crate::snapshot_all(&db, &storage, Some(slot)).await;
-        assert!(summary.entries.is_empty(), "{:?}", summary.entries);
-        let failed: Vec<&str> = summary
-            .failures
-            .iter()
-            .map(|failure| failure.table.as_str())
-            .collect();
-        assert!(failed.contains(&"person"), "{failed:?}");
-
-        let Err(failure) = super::run_report(&summary, "synthetic") else {
-            panic!("a run whose tables failed to write must not report success");
-        };
-        let message = failure.to_string();
-        assert!(
-            message.starts_with(&format!("{} table(s) failed to write: ", failed.len())),
-            "{message}"
-        );
-
-        let digest = digest_message(
-            &summary,
-            lookup(&[("NAVIGATOR_ARCHIVES_BUCKET", "proj-archives")]),
-        )
-        .unwrap();
-        assert!(
-            digest.starts_with("⚠️ *Iceberg data export FAILED — 2026-11-05*"),
-            "{digest}"
-        );
-        for table in &failed {
-            assert!(message.contains(table), "{table} missing from {message}");
-            assert!(
-                digest.contains(&format!("• ⚠️ *{table}* — snapshot failed: ")),
-                "{table} missing from {digest}"
-            );
-        }
-        assert!(digest.contains("storage.buckets.get denied"), "{digest}");
-    }
-
     /// ENG-1291: the Dash0 check rules read exactly the series this crate
     /// records, and the stale window is the one the schedule implies.
     #[test]
@@ -1502,29 +1594,6 @@ mod tests {
             "{rules}"
         );
         assert!(rules.contains("workflow: archives"));
-    }
-
-    /// A table that exists but holds no rows is skipped before the bucket is
-    /// probed, so a run with only empty tables still succeeds — even on a
-    /// bucket whose probe would be denied.
-    #[tokio::test]
-    async fn a_run_with_only_empty_tables_still_succeeds() {
-        let db = store::surreal::test_support::mem().await;
-        // Empty every seeded table so each exists with zero rows.
-        for table in crate::tables::source_tables(&db).await.unwrap() {
-            db.query(format!("DELETE {table}"))
-                .await
-                .unwrap()
-                .check()
-                .unwrap();
-        }
-        let storage = DeniedProbeStorage(crate::test_support::CollisionStorage::unlocked());
-
-        let summary = crate::snapshot_all(&db, &storage, None).await;
-        assert!(summary.failures.is_empty(), "{:?}", summary.failures);
-        assert!(summary.entries.is_empty());
-        let report = super::run_report(&summary, "synthetic").unwrap();
-        assert_eq!((report.tables, report.failures), (0, 0));
     }
 
     fn lookup(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
@@ -1699,87 +1768,139 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn promotion_authors_iceberg_metadata_for_a_store_table_and_chains_a_second_run() {
-        use crate::runner::snapshot_all;
         use cloud::{FsStorage, StorageService};
         use iceberg::spec::TableMetadata;
 
-        let db = store::surreal::test_support::mem().await;
-        db.query(
-            "CREATE person:analyst SET \
-             name = 'Analyst', \
-             email = 'analyst@example.com', \
-             inserted_at = d'2026-08-09T00:00:00Z', \
-             updated_at = d'2026-08-09T00:00:00Z'",
-        )
-        .await
-        .unwrap()
-        .check()
-        .unwrap();
-
-        let dir = tempfile::TempDir::new().unwrap();
-        let storage = FsStorage::new(dir.path().to_path_buf()).await.unwrap();
-        // Phase 1: writes `application/person/data/dt=<today>/*.parquet`.
-        let summary = snapshot_all(&db, &storage, None).await;
-        assert!(summary.failures.is_empty(), "{:#?}", summary.failures);
-
-        // Phase 3, first run: author Iceberg metadata over that data file.
-        let now_ms = chrono::Utc::now().timestamp_millis();
-        promote_iceberg_metadata_over(&storage, "exports", &summary, now_ms).await;
-
-        let meta = storage
-            .get("application/person/metadata/v1.metadata.json")
+        store::test_support::with_postgres(async {
+            let pg = store::postgres::PostgresDb::application().await.unwrap();
+            let db = store::surreal::SurrealDb::uninitialized();
+            store::persons::create(
+                &db,
+                &store::persons::NewPerson::with_role(
+                    "Synthetic analyst",
+                    "analyst@example.com",
+                    store::persons::Role::Client,
+                ),
+            )
             .await
             .unwrap();
-        let table_metadata: TableMetadata = serde_json::from_slice(&meta.bytes).unwrap();
-        assert_eq!(
-            table_metadata.snapshots().count(),
-            1,
-            "first run authors exactly one snapshot"
-        );
-        let hint = storage
-            .get("application/person/metadata/version-hint.text")
-            .await
-            .unwrap();
-        assert_eq!(String::from_utf8_lossy(&hint.bytes).trim(), "1");
+            let dir = tempfile::TempDir::new().unwrap();
+            let storage = FsStorage::new(dir.path().to_path_buf()).await.unwrap();
+            // Phase 1: writes `postgres/navigator/person/data/dt=<today>/*.parquet`.
+            let summary = native_snapshot(&pg, &storage, None).await;
+            assert!(summary.failures.is_empty(), "{:#?}", summary.failures);
 
-        // Crash window: the Iceberg metadata has persisted but the DBOS step
-        // checkpoint has not. Replaying the same deterministic slot must
-        // recognize its snapshot id instead of appending a duplicate.
-        promote_iceberg_metadata_over(&storage, "exports", &summary, now_ms).await;
-        let hint = storage
-            .get("application/person/metadata/version-hint.text")
-            .await
-            .unwrap();
-        assert_eq!(String::from_utf8_lossy(&hint.bytes).trim(), "1");
-        let replayed: TableMetadata = serde_json::from_slice(
-            &storage
-                .get("application/person/metadata/v1.metadata.json")
+            // Phase 3, first run: author Iceberg metadata over that data file.
+            let now_ms = chrono::Utc::now().timestamp_millis();
+            promote_iceberg_metadata_over(&storage, "exports", &summary, now_ms).await;
+
+            let meta = storage
+                .get("postgres/navigator/person/metadata/v1.metadata.json")
                 .await
-                .unwrap()
-                .bytes,
-        )
-        .unwrap();
-        assert_eq!(replayed.snapshots().count(), 1);
+                .unwrap();
+            let table_metadata: TableMetadata = serde_json::from_slice(&meta.bytes).unwrap();
+            assert_eq!(
+                table_metadata.snapshots().count(),
+                1,
+                "first run authors exactly one snapshot"
+            );
+            let hint = storage
+                .get("postgres/navigator/person/metadata/version-hint.text")
+                .await
+                .unwrap();
+            assert_eq!(String::from_utf8_lossy(&hint.bytes).trim(), "1");
 
-        // Second run over the same storage and day: chains onto the prior
-        // snapshot log rather than starting a fresh table (store tables never
-        // prune — expire_before_ms is always None for the application lane).
-        promote_iceberg_metadata_over(&storage, "exports", &summary, now_ms + 1000).await;
+            // Crash window: the Iceberg metadata has persisted but the DBOS step
+            // checkpoint has not. Replaying the same deterministic slot must
+            // recognize its snapshot id instead of appending a duplicate.
+            promote_iceberg_metadata_over(&storage, "exports", &summary, now_ms).await;
+            let hint = storage
+                .get("postgres/navigator/person/metadata/version-hint.text")
+                .await
+                .unwrap();
+            assert_eq!(String::from_utf8_lossy(&hint.bytes).trim(), "1");
+            let replayed: TableMetadata = serde_json::from_slice(
+                &storage
+                    .get("postgres/navigator/person/metadata/v1.metadata.json")
+                    .await
+                    .unwrap()
+                    .bytes,
+            )
+            .unwrap();
+            assert_eq!(replayed.snapshots().count(), 1);
 
-        let meta = storage
-            .get("application/person/metadata/v2.metadata.json")
-            .await
-            .unwrap();
-        let table_metadata: TableMetadata = serde_json::from_slice(&meta.bytes).unwrap();
-        assert_eq!(
-            table_metadata.snapshots().count(),
-            2,
-            "second run chains onto the prior log — a two-entry snapshot log"
-        );
-        let hint = storage
-            .get("application/person/metadata/version-hint.text")
-            .await
-            .unwrap();
-        assert_eq!(String::from_utf8_lossy(&hint.bytes).trim(), "2");
+            // Second run over the same storage and day: chains onto the prior
+            // snapshot log rather than starting a fresh table (store tables never
+            // prune — expire_before_ms is always None for the application lane).
+            promote_iceberg_metadata_over(&storage, "exports", &summary, now_ms + 1000).await;
+
+            let meta = storage
+                .get("postgres/navigator/person/metadata/v2.metadata.json")
+                .await
+                .unwrap();
+            let table_metadata: TableMetadata = serde_json::from_slice(&meta.bytes).unwrap();
+            assert_eq!(
+                table_metadata.snapshots().count(),
+                2,
+                "second run chains onto the prior log — a two-entry snapshot log"
+            );
+            let hint = storage
+                .get("postgres/navigator/person/metadata/version-hint.text")
+                .await
+                .unwrap();
+            assert_eq!(String::from_utf8_lossy(&hint.bytes).trim(), "2");
+        })
+        .await;
+    }
+}
+
+#[cfg(test)]
+#[path = "workflow/native_tests.rs"]
+mod native_tests;
+
+mod write_only_dbos;
+
+impl RunRequest {
+    /// Snapshot non-secret destination configuration into immutable workflow input.
+    /// Empty/old requests retain the existing archive implementation.
+    pub fn configured(
+        scheduled_for: Option<DateTime<Utc>>,
+    ) -> Result<Self, crate::write_only::Error> {
+        Self::configured_inner(scheduled_for).map_err(|_| crate::write_only::Error::Configuration)
+    }
+
+    fn configured_inner(scheduled_for: Option<DateTime<Utc>>) -> anyhow::Result<Self> {
+        let write_only = match std::env::var("NAVIGATOR_ARCHIVE_WRITE_ONLY_CONFIG") {
+            Ok(path) => {
+                anyhow::ensure!(
+                    dbos_enabled(|key| std::env::var(key).ok()).map_err(anyhow::Error::msg)?,
+                    "write-only archive scheduling requires selected DBOS"
+                );
+                anyhow::ensure!(
+                    matches!(
+                        std::env::var("NAVIGATOR_ARCHIVE_SOURCE").as_deref(),
+                        Err(std::env::VarError::NotPresent) | Ok("postgres")
+                    ),
+                    "write-only archive scheduling accepts only PostgreSQL sources"
+                );
+                anyhow::ensure!(
+                    !path.trim().is_empty(),
+                    "write-only archive config path is empty"
+                );
+                let config =
+                    crate::write_only::operations::Config::read(std::path::Path::new(&path))?;
+                Some(crate::write_only::operations::Request {
+                    config_sha256: config.digest()?,
+                    config,
+                    reuse_local: None,
+                })
+            }
+            Err(std::env::VarError::NotPresent) => None,
+            Err(error) => return Err(error.into()),
+        };
+        Ok(Self {
+            scheduled_for,
+            write_only,
+        })
     }
 }

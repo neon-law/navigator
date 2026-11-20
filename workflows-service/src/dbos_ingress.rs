@@ -99,9 +99,8 @@ async fn start_manual_schedule(
             .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
         workflow
             .start_with(
-                archives::workflow::RunRequest {
-                    scheduled_for: None,
-                },
+                archives::workflow::RunRequest::configured(None)
+                    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?,
                 dbos::StartOptions {
                     workflow_id: Some(&workflow_id),
                     ..Default::default()

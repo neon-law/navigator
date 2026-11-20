@@ -68,7 +68,16 @@ const GCS_BROWSER_BASE: &str = "https://console.cloud.google.com/storage/browser
 /// first line of its error. Pure and exposed so the formatting is unit-tested.
 #[must_use]
 pub fn render_archives_slack(report: &DiagnosticReport) -> String {
-    let mut out = if report.failures.is_empty() {
+    render_archives_slack_with_failure(report, false)
+}
+
+pub(crate) fn render_archives_slack_with_failure(
+    report: &DiagnosticReport,
+    failed: bool,
+) -> String {
+    let mut out = if failed && report.failures.is_empty() {
+        format!("⚠️ *Iceberg data export FAILED — {}*\n", report.run_date)
+    } else if report.failures.is_empty() {
         format!(
             "🧊 *Iceberg data export — {}*  ({} tables)\n",
             report.run_date,

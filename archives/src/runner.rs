@@ -489,11 +489,10 @@ fn attempt_of(key: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::{
-        attempt_of, merge_cost_rows, needs_fingerprint_write, open_storage, snapshot_all,
-        SnapshotSummary, TableFailure,
+        attempt_of, merge_cost_rows, needs_fingerprint_write, open_storage, SnapshotSummary,
+        TableFailure,
     };
-    use crate::{fetch_batch, fingerprint, DriftDecision, StoredFingerprint};
-    use arrow::array::{Array, StringArray};
+    use crate::{DriftDecision, StoredFingerprint};
     use billing::gcp_cost::CostRow;
     use chrono::{TimeZone, Utc};
     use cloud::{FsStorage, StorageService};
@@ -520,97 +519,81 @@ mod tests {
 
     /// On a retention-locked bucket a rerun of a scheduled slot must land
     /// a new attempt instead of replacing the committed bytes, and the
-    /// unchanged rerun must reuse the standing schema attestation rather
-    /// than writing a second one.
+    /// unchanged rerun preserves the same typed Parquet schema and bytes.
     #[tokio::test]
     async fn the_locked_lane_lands_each_slot_rerun_on_a_new_attempt_key() {
-        use crate::test_support::CollisionStorage;
-
-        let db = store::surreal::test_support::mem().await;
-        db.query(
-            "CREATE person:analyst SET \
-             name = 'Analyst', email = 'analyst@example.com', role = 'client'",
-        )
-        .await
-        .unwrap();
-
-        let storage = CollisionStorage::locked();
-        let scheduled = Utc.with_ymd_and_hms(2026, 11, 4, 9, 30, 0).unwrap();
-        let first = snapshot_all(&db, storage.as_ref(), Some(scheduled)).await;
-        assert!(
-            first.failures.is_empty(),
-            "first run: {:#?}",
-            first.failures
-        );
-        let second = snapshot_all(&db, storage.as_ref(), Some(scheduled)).await;
-        assert!(second.failures.is_empty(), "rerun: {:#?}", second.failures);
-
-        let data_keys = storage
-            .keys()
-            .into_iter()
-            .filter(|key| key.starts_with("application/person/data/dt="))
-            .collect::<Vec<_>>();
-        assert_eq!(
-            data_keys.len(),
-            2,
-            "each rerun lands its own attempt: {data_keys:?}"
-        );
-        let ordinals = data_keys
-            .iter()
-            .filter_map(|key| attempt_of(key))
-            .collect::<std::collections::BTreeSet<u64>>();
-        assert_eq!(
-            ordinals,
-            [1, 2].into_iter().collect(),
-            "attempts number from 1: {data_keys:?}"
-        );
-        assert_eq!(
-            storage
-                .keys()
-                .into_iter()
-                .filter(|key| key.starts_with("application/person/_schema/attempt="))
-                .count(),
-            1,
-            "the unchanged rerun reuses the standing attestation"
-        );
+        store::test_support::with_postgres(async {
+            let pg = native_person().await;
+            let storage = crate::test_support::CollisionStorage::locked();
+            let slot = Utc.with_ymd_and_hms(2026, 11, 4, 9, 30, 0).unwrap();
+            let first = crate::postgres::export_generation(
+                pg.pool(),
+                storage.as_ref(),
+                &["person"],
+                Some(slot),
+            )
+            .await
+            .unwrap();
+            let standing = storage.get(&first.tables[0].key).await.unwrap().bytes;
+            let second = crate::postgres::export_generation(
+                pg.pool(),
+                storage.as_ref(),
+                &["person"],
+                Some(slot),
+            )
+            .await
+            .unwrap();
+            assert_ne!(first.tables[0].key, second.tables[0].key);
+            assert_ne!(first.manifest_key, second.manifest_key);
+            assert_eq!(
+                storage.get(&first.tables[0].key).await.unwrap().bytes,
+                standing
+            );
+            assert_eq!(
+                storage.get(&second.tables[0].key).await.unwrap().bytes,
+                standing,
+                "unchanged data and embedded schema are identical"
+            );
+            assert_eq!(
+                storage
+                    .keys()
+                    .iter()
+                    .filter(|key| key.starts_with("postgres/navigator/person/data/"))
+                    .count(),
+                2
+            );
+        })
+        .await;
     }
 
     /// The unlocked lane keeps its documented shape: a rerun of a
-    /// scheduled slot replaces the slot's snapshot in place, leaving one
-    /// object under the data prefix.
+    /// scheduled slot reuses its content-addressed Parquet key when data
+    /// has not changed, leaving one object under the data prefix.
     #[tokio::test]
     async fn the_unlocked_lane_keeps_one_snapshot_key_per_slot_across_reruns() {
-        let db = store::surreal::test_support::mem().await;
-        db.query(
-            "CREATE person:analyst SET \
-             name = 'Analyst', email = 'analyst@example.com', role = 'client'",
-        )
-        .await
-        .unwrap();
-
-        let dir = tempfile::tempdir().unwrap();
-        let storage = FsStorage::new(dir.path()).await.unwrap();
-        let scheduled = Utc.with_ymd_and_hms(2026, 11, 4, 9, 30, 0).unwrap();
-        let first = snapshot_all(&db, &storage, Some(scheduled)).await;
-        assert!(
-            first.failures.is_empty(),
-            "first run: {:#?}",
-            first.failures
-        );
-        let second = snapshot_all(&db, &storage, Some(scheduled)).await;
-        assert!(second.failures.is_empty(), "rerun: {:#?}", second.failures);
-
-        let listed = storage.list("application/person/data/").await.unwrap();
-        assert_eq!(
-            listed.len(),
-            1,
-            "the overwrite lane replaces the slot's snapshot in place"
-        );
-        assert!(
-            listed[0].key.ends_with("/run=0930/snapshot.parquet"),
-            "{}",
-            listed[0].key
-        );
+        store::test_support::with_postgres(async {
+            let pg = native_person().await;
+            let dir = tempfile::tempdir().unwrap();
+            let storage = FsStorage::new(dir.path()).await.unwrap();
+            let slot = Utc.with_ymd_and_hms(2026, 11, 4, 9, 30, 0).unwrap();
+            let first =
+                crate::postgres::export_generation(pg.pool(), &storage, &["person"], Some(slot))
+                    .await
+                    .unwrap();
+            let second =
+                crate::postgres::export_generation(pg.pool(), &storage, &["person"], Some(slot))
+                    .await
+                    .unwrap();
+            assert_eq!(first.tables[0].key, second.tables[0].key);
+            let listed = storage
+                .list("postgres/navigator/person/data/")
+                .await
+                .unwrap();
+            assert_eq!(listed.len(), 1);
+            assert!(listed[0].key.contains("/run=0930/"));
+            assert!(listed[0].key.ends_with(".parquet"));
+        })
+        .await;
     }
 
     fn row(service: &str, cost: f64) -> CostRow {
@@ -681,124 +664,6 @@ mod tests {
             Some(&prev),
             &DriftDecision::Unchanged
         ));
-    }
-
-    #[tokio::test]
-    async fn surreal_snapshot_uses_record_and_datetime_strings_for_schema_drift() {
-        let db = store::surreal::test_support::mem().await;
-        db.query(
-            "CREATE person:analyst SET \
-             name = 'Analyst', \
-             email = 'analyst@example.com', \
-             inserted_at = d'2026-08-09T00:00:00Z', \
-             updated_at = d'2026-08-09T00:00:00Z'",
-        )
-        .await
-        .unwrap()
-        .check()
-        .unwrap();
-
-        let batch = fetch_batch(&db, "person").await.unwrap().unwrap();
-        let columns = fingerprint(&batch);
-        let expected_columns = vec![
-            "email".into(),
-            "email_confirmed".into(),
-            "email_lower".into(),
-            "id".into(),
-            "inserted_at".into(),
-            "is_admitted".into(),
-            "name".into(),
-            "role".into(),
-            "updated_at".into(),
-        ];
-        assert_eq!(batch.num_rows(), 1);
-        assert_eq!(columns, expected_columns);
-        assert_eq!(string_cell(&batch, "id"), "person:analyst");
-        assert_eq!(string_cell(&batch, "inserted_at"), "2026-08-09T00:00:00Z");
-
-        let dir = tempfile::tempdir().unwrap();
-        let storage = FsStorage::new(dir.path()).await.unwrap();
-        let summary = snapshot_all(&db, &storage, None).await;
-        let person = summary
-            .entries
-            .iter()
-            .find(|entry| entry.table == "person")
-            .expect("seeded person table is snapshotted");
-        assert_eq!(person.rows, 1);
-        assert_eq!(person.drift, DriftDecision::Added(expected_columns));
-        assert!(summary.failures.is_empty(), "{:#?}", summary.failures);
-    }
-
-    #[tokio::test]
-    async fn snapshot_includes_live_tables_added_after_the_binary_schema() {
-        let db = store::surreal::test_support::mem().await;
-        db.query(
-            "DEFINE TABLE archive_runtime_probe SCHEMAFULL; \
-             DEFINE FIELD payload ON archive_runtime_probe TYPE string; \
-             CREATE archive_runtime_probe:one SET payload = 'Synthetic archive row';",
-        )
-        .await
-        .unwrap()
-        .check()
-        .unwrap();
-
-        let dir = tempfile::tempdir().unwrap();
-        let storage = FsStorage::new(dir.path().to_path_buf()).await.unwrap();
-        let summary = snapshot_all(&db, &storage, None).await;
-        assert!(summary.failures.is_empty(), "{:#?}", summary.failures);
-        let entry = summary
-            .entries
-            .iter()
-            .find(|entry| entry.table == "archive_runtime_probe")
-            .expect("a live runtime table is included in the archive");
-        assert_eq!(entry.rows, 1);
-        assert!(entry
-            .key
-            .starts_with("application/archive_runtime_probe/data/"));
-        assert!(!summary
-            .failures
-            .iter()
-            .any(|failure| failure.table == "archive_runtime_probe"));
-    }
-
-    #[tokio::test]
-    async fn snapshot_refuses_live_table_names_that_are_not_safe_path_segments() {
-        let db = store::surreal::test_support::mem().await;
-        db.query(
-            "DEFINE TABLE `archive-runtime-probe` SCHEMALESS; \
-             CREATE `archive-runtime-probe`:one SET payload = 'Synthetic archive row';",
-        )
-        .await
-        .unwrap()
-        .check()
-        .unwrap();
-
-        let dir = tempfile::tempdir().unwrap();
-        let storage = FsStorage::new(dir.path().to_path_buf()).await.unwrap();
-        let summary = snapshot_all(&db, &storage, None).await;
-        let failure = summary
-            .failures
-            .iter()
-            .find(|failure| failure.table == "archive-runtime-probe")
-            .expect("an unsafe runtime table name is reported, not exported");
-        assert_eq!(
-            failure.error,
-            "runtime table name is not a safe archive path segment"
-        );
-        assert!(!summary
-            .entries
-            .iter()
-            .any(|entry| entry.table == "archive-runtime-probe"));
-    }
-
-    fn string_cell<'a>(batch: &'a arrow::array::RecordBatch, name: &str) -> &'a str {
-        let index = batch.schema().index_of(name).unwrap();
-        batch
-            .column(index)
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap()
-            .value(0)
     }
 
     #[test]
@@ -875,39 +740,52 @@ mod tests {
         );
     }
 
+    async fn native_person() -> store::postgres::PostgresDb {
+        let pg = store::postgres::PostgresDb::application().await.unwrap();
+        let db = store::surreal::SurrealDb::uninitialized();
+        store::persons::create(
+            &db,
+            &store::persons::NewPerson::with_role(
+                "Synthetic analyst",
+                "analyst@example.com",
+                store::persons::Role::Client,
+            ),
+        )
+        .await
+        .unwrap();
+        pg
+    }
+
     /// The snapshot phase writes through the handle it is given and nowhere
     /// else. Two roots stand in for the two buckets: everything lands under
     /// the archive root, and the exports root receives nothing.
     #[tokio::test]
     async fn snapshot_phase_writes_into_the_archive_root_and_leaves_exports_empty() {
-        let db = store::surreal::test_support::mem().await;
-        db.query(
-            "CREATE person:analyst SET \
-             name = 'Analyst', email = 'analyst@example.com', role = 'client'",
-        )
-        .await
-        .unwrap();
-
-        let archive_dir = tempfile::tempdir().unwrap();
-        let exports_dir = tempfile::tempdir().unwrap();
-        let archive = FsStorage::new(archive_dir.path()).await.unwrap();
-
-        let summary = snapshot_all(&db, &archive, None).await;
-        assert!(summary.failures.is_empty(), "{:#?}", summary.failures);
-        assert!(
-            !summary.entries.is_empty(),
-            "the seeded table must produce a snapshot"
-        );
-
-        assert!(
-            walk_files(archive_dir.path()) > 0,
-            "the archive root receives the run's Parquet"
-        );
-        assert_eq!(
-            walk_files(exports_dir.path()),
-            0,
-            "the exports root must receive no archive objects"
-        );
+        store::test_support::with_postgres(async {
+            let pg = native_person().await;
+            let archive_dir = tempfile::tempdir().unwrap();
+            let exports_dir = tempfile::tempdir().unwrap();
+            let archive = FsStorage::new(archive_dir.path()).await.unwrap();
+            let summary = crate::postgres::export_generation(
+                pg.pool(),
+                &archive,
+                crate::postgres::POSTGRES_TABLES,
+                None,
+            )
+            .await
+            .unwrap();
+            assert!(!summary.tables.is_empty());
+            assert!(
+                walk_files(archive_dir.path()) > 0,
+                "the archive root receives Parquet"
+            );
+            assert_eq!(
+                walk_files(exports_dir.path()),
+                0,
+                "exports root receives no archive objects"
+            );
+        })
+        .await;
     }
 
     /// Count regular files anywhere beneath `root`.

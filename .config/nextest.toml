@@ -41,7 +41,17 @@ test-group = "platform-certs"
 
 [[profile.default.overrides]]
 filter = '''
-binary(/^(mail_signatures|project_drive_folder_id|project_repository_url|project_resource_links|project_slack_channel|git_repo_schema|project_lifecycle|project_native_delete|brand_move_mirror|firm_journal|api_reads|postgres_startup|entity_native_delete|practice_preview_native|native_cron_ingress|inbox_native_projects|object_handover|notation_native|project_slack|coverage_postgres|native_nightly_membership)$/)
+binary(/^(mail_signatures|project_drive_folder_id|project_repository_url|project_resource_links|project_slack_channel|git_repo_schema|project_lifecycle|project_native_delete|brand_move_mirror|firm_journal|api_reads|postgres_startup|entity_native_delete|practice_preview_native|native_cron_ingress|inbox_native_projects|object_handover|notation_native|project_slack|coverage_postgres|native_nightly_membership|no_delete_guard)$/)
+| test(/^workflow::native_tests::/)
+| test(=runner::tests::the_locked_lane_lands_each_slot_rerun_on_a_new_attempt_key)
+| test(=runner::tests::the_unlocked_lane_keeps_one_snapshot_key_per_slot_across_reruns)
+| test(=runner::tests::snapshot_phase_writes_into_the_archive_root_and_leaves_exports_empty)
+| test(=workflow::tests::two_daily_snapshots_and_a_retry_do_not_mix_full_table_generations)
+| test(=workflow::tests::promotion_authors_iceberg_metadata_for_a_store_table_and_chains_a_second_run)
+| (package(archives) & test(/^(postgres::tests|sent_email_export::tests|source::tests)::/))
+| (package(archives) & test(=write_only::operations::tests::closed_source_reuses_only_sealed_local_rows_and_never_recaptures_missing_or_changed_copy))
+| (package(archives) & test(=write_only::tests::real_pg_snapshot_is_readable_as_raw_local_iceberg_and_hashes_detect_corruption))
+| (package(archives) & test(=write_only::tests::structured_copy_records_real_asset_reference_without_claiming_missing_blob_recovery))
 | test(/^dbos_email_summary::recovery::tests::/)
 | test(/^email_receipts::summary_recovery::(tests|interrupted_tests)::/)
 | (binary(=store) & test(=communications::native_tests::a_logged_call_carries_its_direction_and_role_at_the_top_level))

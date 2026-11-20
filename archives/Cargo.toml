@@ -55,8 +55,9 @@ uuid.workspace = true
 workflows = { workspace = true, features = ["dbos"] }
 iceberg.workspace = true
 
-[dev-dependencies]
 futures.workspace = true
+
+[dev-dependencies]
 arrow_array58.workspace = true
 arrow_cast58.workspace = true
 arrow_schema58.workspace = true
