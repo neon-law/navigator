@@ -1060,7 +1060,8 @@ async fn apply_row(
     run: Uuid,
     key: &crate::postgres_mirror::MirrorKey,
 ) -> Result<(), super::BackfillError> {
-    let written = source.write(pg, key).await.is_ok();
+    let outcome = source.write(pg, key).await;
+    let written = outcome.is_ok();
     sqlx::query(
         "DELETE FROM mirror_backfill_failure WHERE run_id = $1 AND row_table = $2 AND row_id = $3",
     )
@@ -1073,8 +1074,14 @@ async fn apply_row(
         sqlx::query("UPDATE mirror_backfill_checkpoint SET applied = applied + 1, updated_at = now() WHERE run_id = $1 AND mirror = $2")
             .bind(run).bind(checkpoint(key.table())).execute(&pg.0).await?;
     } else {
-        sqlx::query("INSERT INTO mirror_backfill_failure (id, run_id, mirror, row_table, row_id, reason) VALUES ($1,$2,$3,$4,$5,'family row import failed')")
-            .bind(Uuid::new_v4()).bind(run).bind(checkpoint(key.table())).bind(key.table()).bind(key.report_id()).execute(&pg.0).await?;
+        // `BackfillError` carries no row values, so its message names the failing
+        // step for the operator without leaking the row.
+        let reason = outcome.err().map_or_else(
+            || "family row import failed".to_owned(),
+            |error| format!("family row import failed: {error}"),
+        );
+        sqlx::query("INSERT INTO mirror_backfill_failure (id, run_id, mirror, row_table, row_id, reason) VALUES ($1,$2,$3,$4,$5,$6)")
+            .bind(Uuid::new_v4()).bind(run).bind(checkpoint(key.table())).bind(key.table()).bind(key.report_id()).bind(reason).execute(&pg.0).await?;
     }
     sqlx::query("UPDATE mirror_backfill_checkpoint SET failed = (SELECT count(*)::integer FROM mirror_backfill_failure WHERE run_id = $1 AND mirror = $2), updated_at = now() WHERE run_id = $1 AND mirror = $2")
         .bind(run).bind(checkpoint(key.table())).execute(&pg.0).await?;

@@ -278,6 +278,17 @@ async fn scoped_import_repairs_sql_null_then_retries_failure_without_replaying_a
             .await
             .unwrap();
     assert_eq!(failures, 1);
+    // The recorded reason names the failing step, not just that one failed.
+    let reason: String =
+        sqlx::query_scalar("SELECT reason FROM mirror_backfill_failure WHERE run_id = $1")
+            .bind(run)
+            .fetch_one(pg.pool())
+            .await
+            .unwrap();
+    assert!(
+        reason.starts_with("family row import failed: ") && reason.len() > 26,
+        "{reason}"
+    );
     assert!(super::require_scope(&pg, Family::Satellites).await.is_err());
     advance(&pg, &source, run, None, true).await.unwrap();
     super::require_scope(&pg, Family::Satellites).await.unwrap();
