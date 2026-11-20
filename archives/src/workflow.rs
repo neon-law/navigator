@@ -8,7 +8,8 @@
 //! PostgreSQL connection, so those runs also export the paired coverage
 //! generation.
 //!
-//! One invocation == one scheduled export. Four durable steps:
+//! A standard request runs four durable steps. Explicit write-only requests
+//! use sealed local capture and create-only attempts ([`write_only_dbos`]).
 //!
 //! 1. `ctx.run("snapshot", …)` — open the database + object storage,
 //!    snapshot every registered table to Parquet on GCS, return a
@@ -233,8 +234,8 @@ impl DbosContext {
     ///
     /// # Errors
     ///
-    /// A missing Slack token, messages channel, or [`DBOS_HOST_REQUIRED`]
-    /// setting, or a coverage manifest that does not decode.
+    /// Missing Slack or source credentials, an invalid coverage manifest,
+    /// or an invalid explicit write-only configuration.
     pub fn from_lookup(
         simulated: bool,
         lookup: impl Fn(&str) -> Option<String>,
