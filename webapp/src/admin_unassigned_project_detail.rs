@@ -209,10 +209,12 @@ pub fn AdminUnassignedProjectDetail() -> Element {
         }
         main { id: "admin-unassigned-project", class: "nav-theme lawyer-detail",
             header { class: "page-header",
-                h1 { "{view.name}" }
+                h1 { class: "matter-heading",
+                    span { "{view.name}" }
+                    span { class: "matter-heading__code", "{view.code}" }
+                }
                 p { class: "nav-muted",
-                    "Code: " code { "{view.code}" }
-                    " · Status: {view.status}"
+                    "Status: {view.status}"
                     " · Entity: {entity_disp}"
                     if let Some(entity_id) = view.entity_id.as_ref() {
                         " · "

@@ -237,6 +237,7 @@ pub async fn get_clerk_project() -> Result<ClerkProjectDetailView, ServerFnError
             &crate::project_resources::ProjectResourceLinks {
                 client_submissions_folder_id: None,
                 private_slack_channel_url: project.internal_slack_channel_url.clone(),
+                private_slack_channel_id: project.internal_slack_channel_id.clone(),
                 private_notion_page_url: project.private_notion_page_url.clone(),
                 drive_folder_id: None,
                 shared_slack_channel_url: project.external_slack_channel_url.clone(),
@@ -391,7 +392,10 @@ pub fn ClerkProjectDetail() -> Element {
             match view.project.as_ref() {
                 Some(project) => rsx! {
                     p { class: "portal-detail__back", a { href: "/app/projects", "← Projects" } }
-                    h1 { "{project.name}" }
+                    h1 { class: "matter-heading",
+                        span { "{project.name}" }
+                        span { class: "matter-heading__code", "{project.code}" }
+                    }
                     crate::sections::page::CaseNav {
                         tabs: view.page_tabs.clone(),
                         current: format!("/app/projects/{}", project.code),

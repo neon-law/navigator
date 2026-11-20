@@ -62,6 +62,103 @@ pub struct EngagementLetterView {
     pub draft: PageDraft,
 }
 
+/// Compact status for the Project's Onboarding tab.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OnboardingSummary {
+    pub proposed: Vec<String>,
+    pub executed: Vec<String>,
+}
+
+/// A completed provider signature on one Onboarding Notation.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ExecutedSignature {
+    pub notation_id: uuid::Uuid,
+    pub title: String,
+    pub provider: String,
+    pub signed_at: String,
+}
+
+/// Resolve actual Notation states and filed signing records into a compact
+/// onboarding summary. A verified DocuSign completion remains the authority
+/// for the green, official state.
+#[cfg(feature = "server")]
+#[must_use]
+pub fn onboarding_summary(
+    runs: &[OnboardingRun],
+    assets: &[store::assets::Asset],
+    signatures: &[ExecutedSignature],
+    official: bool,
+) -> OnboardingSummary {
+    let signed_notations: std::collections::HashSet<_> = signatures
+        .iter()
+        .map(|signature| signature.notation_id)
+        .collect();
+    let mut executed = signatures
+        .iter()
+        .filter_map(|signature| {
+            let provider = store::signatures::SignatureProvider::from_stored(&signature.provider)?;
+            let date = chrono::DateTime::parse_from_rfc3339(&signature.signed_at)
+                .map(|signed_at| signed_at.format("%Y-%m-%d").to_string())
+                .unwrap_or_else(|_| signature.signed_at.clone());
+            Some(format!(
+                "{} · Signed through {} on {date}",
+                signature.title,
+                provider.label()
+            ))
+        })
+        .collect::<Vec<_>>();
+    executed.extend(
+        assets
+            .iter()
+            .filter(|asset| {
+                asset
+                    .kind
+                    .as_deref()
+                    .is_some_and(|kind| store::projects::template_opens_a_matter(Some(kind)))
+                    || runs
+                        .iter()
+                        .any(|run| filing_run(asset, std::slice::from_ref(run)).is_some())
+            })
+            .filter_map(|asset| {
+                if runs.iter().any(|run| {
+                    signed_notations.contains(&run.notation_id)
+                        && filing_run(asset, std::slice::from_ref(run)).is_some()
+                }) {
+                    return None;
+                }
+                asset.signing.map(|signing| {
+                    let method = match signing.method {
+                        store::documents::SigningMethod::WetInk => "wet ink",
+                        store::documents::SigningMethod::Docusign => "DocuSign",
+                    };
+                    format!(
+                        "{} · Signed in {method} on {}",
+                        asset.filename.as_deref().unwrap_or("Onboarding document"),
+                        signing.signed_on.format("%Y-%m-%d")
+                    )
+                })
+            }),
+    );
+    let proposed = if executed.is_empty() && !official {
+        runs.iter()
+            .map(|run| {
+                format!(
+                    "{} · {}",
+                    run.title,
+                    workflows::client_phrase_for(&run.state).where_this_is
+                )
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let mut executed = executed;
+    if official && executed.is_empty() {
+        executed.push("Onboarding completed through DocuSign".to_string());
+    }
+    OnboardingSummary { proposed, executed }
+}
+
 impl EngagementLetterView {
     /// The view for a lens: the letters it may open, else the draft — but
     /// only when no letter is filed at all. A letter filed for the lawyer
@@ -367,6 +464,32 @@ mod tests {
     use crate::components::NotationDocumentData;
     use crate::sections::tests::render;
     use crate::sections::SectionView;
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn onboarding_summary_names_the_provider_of_a_completed_signature() {
+        let notation_id = uuid::Uuid::new_v4();
+        let summary = super::onboarding_summary(
+            &[super::OnboardingRun {
+                notation_id,
+                title: "Sample onboarding letter".into(),
+                state: "END".into(),
+            }],
+            &[],
+            &[super::ExecutedSignature {
+                notation_id,
+                title: "Sample onboarding letter".into(),
+                provider: "dropbox_sign".into(),
+                signed_at: "2026-11-19T12:00:00Z".into(),
+            }],
+            true,
+        );
+        assert!(summary.proposed.is_empty());
+        assert_eq!(
+            summary.executed,
+            ["Sample onboarding letter · Signed through Dropbox Sign on 2026-11-19"]
+        );
+    }
 
     fn outline() -> NotationDocumentData {
         NotationDocumentData {

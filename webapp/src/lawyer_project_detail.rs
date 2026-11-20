@@ -173,6 +173,8 @@ pub struct LawyerDetailView {
     /// The matter's one tab strip: Overview, its synced `pages:` through the
     /// lawyer lens, then the workbench built-ins.
     pub page_tabs: Vec<crate::sections::page::PageTab>,
+    #[serde(default)]
+    pub onboarding: crate::sections::engagement::OnboardingSummary,
     pub id: String,
     pub code: String,
     pub name: String,
@@ -550,6 +552,37 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
     let onboarding_status = store::projects::onboarding_status(&surreal, id)
         .await
         .map_err(server_error)?;
+    let onboarding_runs = crate::sections::engagement::onboarding_runs(&surreal, id)
+        .await
+        .map_err(server_error)?;
+    let onboarding_files = store::assets::for_project(&surreal, id)
+        .await
+        .map_err(server_error)?;
+    let onboarding_notation_ids: Vec<_> =
+        onboarding_runs.iter().map(|run| run.notation_id).collect();
+    let completed_signatures =
+        store::signatures::completed_for_notations(&surreal, &onboarding_notation_ids)
+            .await
+            .map_err(|error| server_error(error.to_string()))?
+            .into_iter()
+            .filter_map(|signature| {
+                let run = onboarding_runs
+                    .iter()
+                    .find(|run| run.notation_id == signature.notation_id)?;
+                Some(crate::sections::engagement::ExecutedSignature {
+                    notation_id: signature.notation_id,
+                    title: run.title.clone(),
+                    provider: signature.provider,
+                    signed_at: signature.signed_at.unwrap_or_default(),
+                })
+            })
+            .collect::<Vec<_>>();
+    let onboarding = crate::sections::engagement::onboarding_summary(
+        &onboarding_runs,
+        &onboarding_files,
+        &completed_signatures,
+        onboarding_status == store::projects::OnboardingStatus::Official,
+    );
     let (has_engagement, has_closing) =
         store::projects::matter_lifecycle_sets(&surreal, std::slice::from_ref(&project))
             .await
@@ -840,6 +873,7 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
 
     Ok(LawyerDetailView {
         page_tabs,
+        onboarding,
         id: project.id.to_string(),
         code: project.code,
         name: project.name,
@@ -862,6 +896,7 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
                 &crate::project_resources::ProjectResourceLinks {
                     client_submissions_folder_id: verified_submissions,
                     private_slack_channel_url: project.internal_slack_channel_url,
+                    private_slack_channel_id: project.internal_slack_channel_id,
                     private_notion_page_url: project.private_notion_page_url,
                     drive_folder_id: verified_drive_root,
                     shared_slack_channel_url: project.external_slack_channel_url,
@@ -1028,12 +1063,12 @@ pub fn LawyerProjectDetail() -> Element {
             header { class: "page-header",
                 crate::sections::page::MatterHeading {
                     name: view.name.clone(),
+                    code: view.code.clone(),
                     tabs: view.page_tabs.clone(),
                     current: view.active_tab.href(&view.code),
                 }
                 p { class: "nav-muted",
-                    "Code: " code { "{view.code}" }
-                    " · Status: {view.status}"
+                    "Status: {view.status}"
                     StageChip { current: view.stage.current.as_ref().map(|row| row.label.clone()) }
                     " · Brand: {brand_disp}"
                     " · Entity: {entity_disp}"
@@ -1059,12 +1094,13 @@ pub fn LawyerProjectDetail() -> Element {
                 // above it: a reader scanning the facts never has to pick the
                 // links out of the prose.
                 nav { class: "lawyer-detail__actions", "aria-label": "Project actions",
-                    a { class: "nav-btn nav-btn--primary", href: "/app/projects/{view.code}/notations/new", "New notation" }
-                    a { class: "nav-btn nav-btn--secondary", href: "/app/projects/{view.code}/edit", "Edit project" }
-                    for kind in [
-                        crate::project_resources::ResourceKind::ProjectCalendar,
-                        crate::project_resources::ResourceKind::PrivateSlackChannel,
-                    ] {
+                    a { class: "nav-btn nav-btn--primary lawyer-detail__resource-action", href: "/app/projects/{view.code}/notations/new", title: "New notation", aria_label: "New notation",
+                        crate::components::resource_mark::ClipboardPlusGlyph { class: "project-resources__mark".to_string() }
+                    }
+                    a { class: "nav-btn nav-btn--secondary lawyer-detail__resource-action", href: "/app/projects/{view.code}/edit", title: "Project settings", aria_label: "Project settings",
+                        crate::components::resource_mark::GearGlyph { class: "project-resources__mark".to_string() }
+                    }
+                    for kind in [crate::project_resources::ResourceKind::PrivateSlackChannel] {
                         if let Some(resource) = view.resources.resources.iter().find(|resource| resource.kind == kind) {
                             a {
                                 key: "{kind.name()}",
@@ -1083,27 +1119,41 @@ pub fn LawyerProjectDetail() -> Element {
                     }
                     if let Some(url) = view.repository_url.as_ref() {
                         a {
-                            class: "nav-btn nav-btn--secondary",
+                            class: "nav-btn nav-btn--secondary lawyer-detail__resource-action",
                             href: "{url}",
                             target: "_blank",
                             rel: "noopener noreferrer",
-                            "Source repository"
+                            title: "Source repository",
+                            aria_label: "Source repository",
+                            crate::components::resource_mark::GitRepositoryGlyph {
+                                class: "project-resources__mark".to_string(),
+                            }
                         }
                     }
                     if let Some(entity_id) = view.entity_id.as_ref() {
-                        a { class: "nav-btn nav-btn--secondary", href: "/app/admin/entities/{entity_id}/edit", "Edit entity" }
+                        a { class: "nav-btn nav-btn--secondary lawyer-detail__resource-action", href: "/app/admin/entities/{entity_id}/edit", title: "Edit entity", aria_label: "Edit entity",
+                            crate::components::resource_mark::PencilGlyph { class: "project-resources__mark".to_string() }
+                        }
                     }
                     if view.role.is_lawyer_tier() {
                         // The conflict check, made visible: the matter's
                         // relationship-graph page, fed by the read-only
                         // graph door.
-                        a { class: "nav-btn nav-btn--secondary", href: "/app/projects/{view.code}/graph", "Relationship graph" }
+                        a {
+                            class: "nav-btn nav-btn--secondary lawyer-detail__resource-action",
+                            href: "/app/projects/{view.code}/graph",
+                            title: "Relationship graph",
+                            aria_label: "Relationship graph",
+                            crate::components::resource_mark::WebGraphGlyph {
+                                class: "project-resources__mark".to_string(),
+                            }
+                        }
                     }
-                    form {
-                        method: "post",
-                        action: "/app/projects/{view.code}/view-as-client",
+                    form { class: "lawyer-detail__resource-action-form", method: "post", action: "/app/projects/{view.code}/view-as-client",
                         input { r#type: "hidden", name: "_csrf", value: "{csrf}" }
-                        button { class: "nav-btn nav-btn--secondary", r#type: "submit", "View as Client" }
+                        button { class: "nav-btn nav-btn--secondary lawyer-detail__resource-action", title: "View as Client", aria_label: "View as Client", r#type: "submit",
+                            crate::components::resource_mark::UserGlyph { class: "project-resources__mark".to_string() }
+                        }
                     }
                 }
                 // The reader's open Timer — on every tab, because time runs
@@ -1234,6 +1284,33 @@ pub fn LawyerProjectDetail() -> Element {
                                     }
                                 }
                             }
+                        }
+                    },
+                    MatterTab::Onboarding => rsx! {
+                        section { class: "lawyer-detail__section project-onboarding",
+                            h2 { "Onboarding" }
+                            if !view.onboarding.proposed.is_empty() {
+                                div { class: "project-onboarding__state project-onboarding__state--proposed",
+                                    strong { "Proposed" }
+                                    for item in view.onboarding.proposed.iter() { p { "{item}" } }
+                                }
+                            }
+                            if !view.onboarding.executed.is_empty() {
+                                div { class: "project-onboarding__state project-onboarding__state--executed",
+                                    strong { "Onboarded" }
+                                    for item in view.onboarding.executed.iter() { p { "{item}" } }
+                                }
+                            }
+                            if view.onboarding.proposed.is_empty() && view.onboarding.executed.is_empty() {
+                                p { "No onboarding Notation or executed onboarding document is recorded." }
+                            }
+                        }
+                    },
+                    MatterTab::Deadlines => rsx! {
+                        crate::project_deadlines::ProjectDeadlinesPanel {
+                            section_class: "lawyer-detail__section".to_string(),
+                            rows: view.deadlines.clone(),
+                            past: view.past_deadlines.clone(),
                         }
                     },
                     MatterTab::Tasks => rsx! {

@@ -10,10 +10,10 @@
 //! that a matter or a page exists.
 //!
 //! The pages come from the Project's synced `matter_page` rows, never from
-//! git. The tab strip ([`CaseNav`]) is generated from the same rows: the show
-//! page is always the first tab, then each page that has a face for this
-//! reader, in declared order, then the reader's built-in [`MatterTab`]s. One
-//! strip serves the show page, its built-in sections, and every declared page.
+//! git. The tab strip ([`CaseNav`]) starts with Overview and the core tabs the
+//! reader may open, then lists each declared page with a face for this reader
+//! in declared order. One strip serves the show page, its built-in sections,
+//! and every declared page.
 
 #[cfg(feature = "server")]
 use std::collections::BTreeMap;
@@ -134,6 +134,8 @@ pub fn lens_for_viewer(viewer: store::access::MatterViewer) -> PageLens {
 pub enum MatterTab {
     #[default]
     Overview,
+    Onboarding,
+    Deadlines,
     Tasks,
     Communications,
     Documents,
@@ -144,7 +146,9 @@ pub enum MatterTab {
 
 impl MatterTab {
     /// Every built-in with its own path, which the show-page mount routes.
-    pub const ROUTED: [Self; 6] = [
+    pub const ROUTED: [Self; 8] = [
+        Self::Onboarding,
+        Self::Deadlines,
         Self::Tasks,
         Self::Communications,
         Self::Documents,
@@ -155,7 +159,9 @@ impl MatterTab {
 
     /// The firm workbench's built-ins, in strip order after the declared
     /// pages.
-    pub const WORKBENCH: [Self; 5] = [
+    pub const WORKBENCH: [Self; 7] = [
+        Self::Onboarding,
+        Self::Deadlines,
         Self::Tasks,
         Self::Communications,
         Self::Documents,
@@ -168,6 +174,8 @@ impl MatterTab {
     pub const fn segment(self) -> &'static str {
         match self {
             Self::Overview => "",
+            Self::Onboarding => "onboarding",
+            Self::Deadlines => "deadlines",
             Self::Tasks => "tasks",
             Self::Communications => "communications",
             Self::Documents => "documents",
@@ -183,6 +191,8 @@ impl MatterTab {
             // `rules::pages::SHOW_PAGE_TITLE`, which `Y021` keeps a declared
             // page from repeating; `rules` is server-only, so a test pins it.
             Self::Overview => "Overview",
+            Self::Onboarding => "Onboarding",
+            Self::Deadlines => "Deadlines",
             Self::Tasks => "Tasks",
             Self::Communications => "Communications",
             Self::Documents => "Documents",
@@ -197,6 +207,8 @@ impl MatterTab {
     pub fn href(self, code: &str) -> String {
         match self {
             Self::Overview => format!("/app/projects/{code}"),
+            Self::Onboarding => format!("/app/projects/{code}/onboarding"),
+            Self::Deadlines => format!("/app/projects/{code}/deadlines"),
             tab => format!("/app/projects/{code}/{}", tab.segment()),
         }
     }
@@ -239,21 +251,21 @@ pub async fn request_tab() -> Option<MatterTab> {
         .and_then(|uri| MatterTab::from_path(uri.path()))
 }
 
-/// The built-in tabs `viewer` reads after the declared pages. Lawyers have
-/// the workbench and the Project Inbox. Clerks have the Project Inbox, and
-/// the client DRI has the testimonial.
+/// The core tabs `viewer` reads after Overview. Lawyers have Onboarding,
+/// Deadlines, and Billing; Clerks have the Project Inbox, and the client DRI
+/// has the testimonial.
 #[cfg(feature = "server")]
 #[must_use]
 pub fn builtin_tabs(code: &str, viewer: store::access::MatterViewer) -> Vec<PageTab> {
     use store::access::MatterViewer;
     match viewer {
-        MatterViewer::Lawyer | MatterViewer::LawyerDri => MatterTab::WORKBENCH
-            .iter()
-            .map(|tab| match tab {
-                MatterTab::Communications => project_communications_tab(code),
-                tab => tab.page_tab(code),
-            })
-            .collect(),
+        MatterViewer::Lawyer | MatterViewer::LawyerDri => {
+            vec![
+                MatterTab::Onboarding.page_tab(code),
+                MatterTab::Deadlines.page_tab(code),
+                MatterTab::Billing.page_tab(code),
+            ]
+        }
         MatterViewer::Clerk => vec![project_communications_tab(code)],
         MatterViewer::ClientDri => vec![MatterTab::Testimonial.page_tab(code)],
         MatterViewer::Client => Vec::new(),
@@ -268,8 +280,8 @@ fn project_communications_tab(code: &str) -> PageTab {
     }
 }
 
-/// The one strip every matter surface renders: Overview, each declared page
-/// with a face for this reader, then the reader's built-ins.
+/// The one strip every matter surface renders: Overview, the reader's core
+/// tabs, then declared pages with a face for this reader.
 #[cfg(feature = "server")]
 #[must_use]
 pub fn matter_tabs(
@@ -277,8 +289,9 @@ pub fn matter_tabs(
     pages: &[rules::pages::PageEntry],
     viewer: store::access::MatterViewer,
 ) -> Vec<PageTab> {
-    let mut tabs = page_tabs(code, pages, lens_for_viewer(viewer));
+    let mut tabs = vec![MatterTab::Overview.page_tab(code)];
     tabs.extend(builtin_tabs(code, viewer));
+    tabs.extend(page_links(code, pages, lens_for_viewer(viewer)));
     tabs
 }
 
@@ -1002,9 +1015,12 @@ pub fn CaseNav(tabs: Vec<PageTab>, current: String) -> Element {
 
 /// Project title and shared navigation used by built-in and declared pages.
 #[component]
-pub fn MatterHeading(name: String, tabs: Vec<PageTab>, current: String) -> Element {
+pub fn MatterHeading(name: String, code: String, tabs: Vec<PageTab>, current: String) -> Element {
     rsx! {
-        h1 { "{name}" }
+        h1 { class: "matter-heading",
+            span { "{name}" }
+            span { class: "matter-heading__code", "{code}" }
+        }
         CaseNav { tabs, current }
     }
 }
@@ -1065,7 +1081,7 @@ pub fn MatterPageBody(view: MatterPageView) -> Element {
             "data-lens": view.lens.as_str(),
             crate::components::ClientDriViewBanner { view: view.viewing_as_dri.clone() }
             header { class: "page-header",
-                MatterHeading { name: view.matter_name.clone(), tabs: view.tabs.clone(), current }
+                MatterHeading { name: view.matter_name.clone(), code: view.code.clone(), tabs: view.tabs.clone(), current }
             }
             h2 { "{view.title}" }
             for section in view.sections.iter() {
@@ -1356,7 +1372,7 @@ mod tests {
         }
 
         #[test]
-        fn one_strip_leads_with_overview_then_pages_then_each_viewers_builtins() {
+        fn one_strip_leads_with_core_tabs_then_custom_pages() {
             use super::super::matter_tabs;
             use store::access::MatterViewer;
             let hrefs = |viewer| -> Vec<String> {
@@ -1367,13 +1383,11 @@ mod tests {
             };
             let workbench = [
                 "/app/projects/m",
+                "/app/projects/m/onboarding",
+                "/app/projects/m/deadlines",
+                "/app/projects/m/billing",
                 "/app/projects/m/timeline",
                 "/app/projects/m/engagement",
-                "/app/projects/m/tasks",
-                "/app/projects/m/inbox",
-                "/app/projects/m/documents",
-                "/app/projects/m/billing",
-                "/app/projects/m/participants",
             ];
             assert_eq!(hrefs(MatterViewer::Lawyer), workbench);
             assert_eq!(hrefs(MatterViewer::LawyerDri), workbench);
@@ -1386,8 +1400,8 @@ mod tests {
                 hrefs(MatterViewer::ClientDri),
                 [
                     "/app/projects/m",
-                    "/app/projects/m/timeline",
-                    "/app/projects/m/testimonial"
+                    "/app/projects/m/testimonial",
+                    "/app/projects/m/timeline"
                 ]
             );
             assert_eq!(

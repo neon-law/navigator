@@ -48,6 +48,7 @@ const DRIVE_FOLDER_PREFIX: &str = "https://drive.google.com/drive/folders/";
 /// Opens a calendar by id in Google Calendar, adding it to the reader's list
 /// when they have been shared it.
 const CALENDAR_PREFIX: &str = "https://calendar.google.com/calendar/r?cid=";
+const SLACK_CHANNEL_PREFIX: &str = "https://slack.com/archives/";
 
 /// Who a resource may be shown to.
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
@@ -186,6 +187,7 @@ impl ResourceKind {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ProjectResourceLinks {
     pub private_slack_channel_url: Option<String>,
+    pub private_slack_channel_id: Option<String>,
     pub private_notion_page_url: Option<String>,
     /// The Drive **folder id**, not a URL — the browser address is derived from
     /// it, because the id is the folder's actual coordinate and the address is
@@ -241,7 +243,8 @@ pub fn visible_resources(links: &ProjectResourceLinks, role: ViewerRole) -> Vec<
         .filter_map(|kind| {
             let url = match kind {
                 ResourceKind::PrivateSlackChannel => {
-                    configured(links.private_slack_channel_url.as_ref())
+                    configured(links.private_slack_channel_id.as_ref())
+                        .map(|id| format!("{SLACK_CHANNEL_PREFIX}{id}"))
                 }
                 ResourceKind::PrivateNotionPage => {
                     configured(links.private_notion_page_url.as_ref())
@@ -346,6 +349,7 @@ mod tests {
             private_slack_channel_url: Some(
                 "https://neonlaw.slack.com/archives/C0PRIVATE".to_string(),
             ),
+            private_slack_channel_id: Some("C0PRIVATE".to_string()),
             private_notion_page_url: Some(
                 "https://www.notion.so/neonlaw/Private-abc123".to_string(),
             ),

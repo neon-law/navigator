@@ -166,7 +166,14 @@ pub async fn matter_viewer_kind() -> Result<MatterViewerKind, ServerFnError> {
 #[must_use]
 pub fn serves(kind: MatterViewerKind, tab: MatterTab) -> bool {
     match kind {
-        _ if tab == MatterTab::Overview => kind != MatterViewerKind::None,
+        _ if matches!(tab, MatterTab::Overview | MatterTab::Onboarding) => {
+            kind != MatterViewerKind::None
+        }
+        MatterViewerKind::Lawyer | MatterViewerKind::LawyerDri
+            if matches!(tab, MatterTab::Deadlines | MatterTab::Billing) =>
+        {
+            true
+        }
         MatterViewerKind::Lawyer | MatterViewerKind::LawyerDri => {
             MatterTab::WORKBENCH.contains(&tab)
         }
