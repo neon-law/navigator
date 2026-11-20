@@ -3,6 +3,25 @@ use super::*;
 async fn fixture(pg: &PostgresDb) -> Request {
     let (actor, notation, _) = crate::postgres::fixtures::workflow_fixture(pg).await;
     let (firm, project) = crate::postgres::fixtures::firm_for_notation(pg, notation).await;
+    let brand = format!("synthetic-{}", Uuid::now_v7());
+    sqlx::query("INSERT INTO brand(name,brand_key,firm_id) VALUES($1,$1,$2)")
+        .bind(&brand)
+        .bind(firm)
+        .execute(pg.pool())
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO firm_brand(firm_id,brand_key) VALUES($1,$2)")
+        .bind(firm)
+        .bind(&brand)
+        .execute(pg.pool())
+        .await
+        .unwrap();
+    sqlx::query("UPDATE project SET brand=$2 WHERE id=$1")
+        .bind(project)
+        .bind(&brand)
+        .execute(pg.pool())
+        .await
+        .unwrap();
     sqlx::query("UPDATE person SET role='admin' WHERE id=$1")
         .bind(actor)
         .execute(pg.pool())
@@ -156,7 +175,7 @@ async fn reconciliation_refuses_unadmitted_or_wrong_firm_actors_and_inactive_epo
             reconcile(&pg, stale).await,
             Err(ReconciliationError::Inactive)
         ));
-        sqlx::query("UPDATE project_slack_handover SET native_active=false WHERE project_id=$1")
+        sqlx::query("UPDATE project_slack_handover SET native_active=false,capture_id=(SELECT capture_id FROM durable_object_ownership WHERE singleton) WHERE project_id=$1")
             .bind(request.project_id)
             .execute(pg.pool())
             .await
@@ -240,8 +259,8 @@ async fn canonical_project_deletion_preserves_audit_without_bypassing_protected_
         let pg=PostgresDb::application().await.unwrap();let request=fixture(&pg).await;
         reconcile(&pg,request).await.unwrap();
         let source=crate::surreal::SurrealDb::uninitialized();
-        assert!(matches!(crate::projects::delete_project_with_surreal(&source,request.project_id).await,
-            Err(crate::projects::ProjectCommandError::Referenced(_))));
+        let protected = crate::projects::delete_project_with_surreal(&source, request.project_id).await;
+        assert!(matches!(protected, Err(crate::projects::ProjectCommandError::Referenced(_))), "protected Project deletion returned {protected:?}");
         assert!(crate::projects::find_by_id(&source,request.project_id).await.unwrap().is_some());
         // Remove only this fixture's protected document to exercise the empty case.
         sqlx::query("DELETE FROM notation WHERE project_id=$1").bind(request.project_id).execute(pg.pool()).await.unwrap();

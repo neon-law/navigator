@@ -62,7 +62,7 @@ pub async fn matter(db: &SurrealDb) -> (store::projects::Project, Uuid) {
         store::persons::Role::Admin,
         Some(admin.id),
         &store::brands::NewBrand {
-            name: "Synthetic brand".to_owned(),
+            name: brand.clone(),
             key: brand.clone(),
             firm_id: Some(firm.id),
             ..Default::default()
