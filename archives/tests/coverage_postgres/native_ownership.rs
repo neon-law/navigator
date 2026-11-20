@@ -1,5 +1,5 @@
 //! Domain-linked recovery over the actual canonical schema and SDK-created history.
-//! This SDK probe exercises native receipt admission, not the EmailSummary controller.
+//! This SDK probe exercises native receipt admission, not the `EmailSummary` controller.
 
 use super::*;
 use futures::FutureExt as _;

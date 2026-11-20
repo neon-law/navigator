@@ -43,7 +43,7 @@ impl PersistedNotation {
         worker: dbos::DBOS,
         servers: Arc<std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>>,
     ) -> Self {
-        let postgres = database.store().await;
+        let postgres = database.store();
         let surreal = store::surreal::SurrealDb::uninitialized();
         let storage: Arc<dyn cloud::StorageService> =
             Arc::new(cloud::FsStorage::new(directory.path()).await.unwrap());
@@ -134,7 +134,7 @@ where
     let directory = Arc::new(tempfile::tempdir().unwrap());
     let worker = dbos::DBOS::new(workflows::dbos_engine::config(&database.url, APP_VERSION));
     let servers = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let postgres = database.store().await;
+    let postgres = database.store();
     let task_database = Arc::clone(&database);
     let task_directory = Arc::clone(&directory);
     let task_worker = worker.clone();
@@ -164,7 +164,7 @@ where
         Ok(Ok(())) => {}
         Ok(Err(error)) => panic!("native application fixture admission: {error}"),
         Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
-        Err(_) => panic!("owned persisted Notation task was cancelled"),
+        Err(error) => panic!("owned persisted Notation task was cancelled: {error}"),
     }
 }
 
@@ -391,7 +391,7 @@ async fn an_unfinished_predecessor_owns_the_notation_through_repair() {
     let Some(database) = database().await else {
         return;
     };
-    let postgres = database.store().await;
+    let postgres = database.store();
     let directory = tempfile::tempdir().unwrap();
     let email = Arc::new(RepairableEmail::default());
     let (worker, workflow) =
@@ -490,7 +490,7 @@ async fn pending_operation_uniqueness_and_completion_are_atomic_under_contention
     let Some(database) = database().await else {
         return;
     };
-    let pg = database.store().await;
+    let pg = database.store();
     let notation = uuid::Uuid::now_v7();
     let barrier = Arc::new(tokio::sync::Barrier::new(8));
     let mut writers = Vec::new();
@@ -585,7 +585,7 @@ async fn invalid_preflight_does_not_leave_a_pending_owner_or_cached_machine_read
             "SELECT COUNT(*) FROM notation_transition WHERE notation_id=$1 AND result IS NULL",
         )
         .bind(fixture.id)
-        .fetch_one(fixture.database.store().await.pool())
+        .fetch_one(fixture.database.store().pool())
         .await
         .unwrap();
         assert_eq!(pending, 0);
@@ -610,7 +610,7 @@ async fn invalid_preflight_does_not_leave_a_pending_owner_or_cached_machine_read
             "SELECT COUNT(*) FROM notation_transition WHERE notation_id=$1 AND result IS NULL",
         )
         .bind(fixture.id)
-        .fetch_one(fixture.database.store().await.pool())
+        .fetch_one(fixture.database.store().pool())
         .await
         .unwrap();
         assert_eq!(pending, 0);
@@ -630,7 +630,7 @@ async fn a_live_preflight_failure_repairs_under_the_original_operation_identity(
             sqlx::query(
             "ALTER TABLE notation_transition ADD CONSTRAINT synthetic_mark_denied CHECK (NOT started)",
         )
-        .execute(fixture.database.store().await.pool())
+        .execute(fixture.database.store().pool())
         .await
         .unwrap();
             let logical = format!("preflight-failure-{}", fixture.id);
@@ -660,11 +660,11 @@ async fn a_live_preflight_failure_repairs_under_the_original_operation_identity(
                 "SELECT id FROM notation_transition WHERE notation_id=$1 AND result IS NULL",
             )
             .bind(fixture.id)
-            .fetch_one(fixture.database.store().await.pool())
+            .fetch_one(fixture.database.store().pool())
             .await
             .unwrap();
             sqlx::query("ALTER TABLE notation_transition DROP CONSTRAINT synthetic_mark_denied")
-                .execute(fixture.database.store().await.pool())
+                .execute(fixture.database.store().pool())
                 .await
                 .unwrap();
             let repaired = fork_from_last_failure(&fixture.worker, &logical).await;
@@ -679,14 +679,14 @@ async fn a_live_preflight_failure_repairs_under_the_original_operation_identity(
             let rows: i64 =
                 sqlx::query_scalar("SELECT COUNT(*) FROM notation_transition WHERE notation_id=$1")
                     .bind(fixture.id)
-                    .fetch_one(fixture.database.store().await.pool())
+                    .fetch_one(fixture.database.store().pool())
                     .await
                     .unwrap();
             assert_eq!(rows, 1);
             let finished: bool =
                 sqlx::query_scalar("SELECT result IS NOT NULL FROM notation_transition WHERE id=$1")
                     .bind(original)
-                    .fetch_one(fixture.database.store().await.pool())
+                    .fetch_one(fixture.database.store().pool())
                     .await
                     .unwrap();
             assert!(finished);
@@ -832,7 +832,7 @@ async fn a_signal_without_a_machine_fails_without_a_journal_or_send() {
             "SELECT count(*) FROM notation_machine_state WHERE notation_id = $1",
         )
         .bind(fixture.id)
-        .fetch_one(fixture.database.store().await.pool())
+        .fetch_one(fixture.database.store().pool())
         .await
         .unwrap();
         assert_eq!(count, 0);
@@ -972,7 +972,7 @@ async fn dbos_approval_accepts_a_retry_and_publishes_the_rendered_state_once() {
         let notation = store::notations::update_state(&fixture.surreal, fixture.id, "lawyer_review")
             .await
             .unwrap();
-        let postgres = fixture.database.store().await;
+        let postgres = fixture.database.store();
         let (runtime, server) = approval_runtime(&fixture, postgres.clone()).await;
         let storage_key = store::notations::document_pdf_storage_key(fixture.id);
         let payload = serde_json::to_string(&workflows::DocumentPayload::Typst {

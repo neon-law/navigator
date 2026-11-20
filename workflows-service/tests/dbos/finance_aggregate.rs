@@ -42,7 +42,7 @@ async fn registered_finance_workflow_joins_duplicate_manual_run_id() {
         )
         .await
         .expect("write synthetic input");
-    let postgres = db.store().await;
+    let postgres = db.store();
     let settings = dbos_engine::config(&db.url, APP_VERSION);
     let executor = dbos::DBOS::new(settings.clone());
     let workflow =
@@ -246,7 +246,7 @@ async fn registered_finance_workflow_joins_duplicate_manual_run_id() {
     let retry_rows: i64 =
         sqlx::query_scalar("SELECT count(*) FROM dbos.workflow_status WHERE workflow_uuid = $1")
             .bind(retry_id)
-            .fetch_one(db.store().await.pool())
+            .fetch_one(db.store().pool())
             .await
             .expect("count the one same-payload retry workflow");
     assert_eq!(retry_rows, 1);
@@ -334,7 +334,7 @@ async fn registered_finance_workflow_joins_duplicate_manual_run_id() {
     let workflow_rows: i64 =
         sqlx::query_scalar("SELECT count(*) FROM dbos.workflow_status WHERE workflow_uuid = $1")
             .bind(&id)
-            .fetch_one(db.store().await.pool())
+            .fetch_one(db.store().pool())
             .await
             .expect("count the single global workflow row");
     assert_eq!(workflow_rows, 1);

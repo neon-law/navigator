@@ -197,7 +197,7 @@ async fn before_slot_a_stopped_schedule_does_not_start_the_daily_run() {
     let started: i64 =
         sqlx::query_scalar("SELECT count(*) FROM dbos.workflow_status WHERE workflow_uuid = $1")
             .bind(dri_digest::workflow_id(slot()))
-            .fetch_one(db.store().await.pool())
+            .fetch_one(db.store().pool())
             .await
             .expect("check the current slot");
     worker.shutdown().await;
@@ -260,7 +260,7 @@ async fn recovery_reuses_the_project_and_digest_checkpoints_before_counts() {
          ORDER BY function_id",
     )
     .bind(&id)
-    .fetch_all(db.store().await.pool())
+    .fetch_all(db.store().pool())
     .await
     .expect("read DriDigest checkpoints");
     assert_eq!(steps, ["query", "notify"]);
@@ -316,7 +316,7 @@ async fn enabled_digest_schedule_registers_and_stops_with_the_dbos_executor() {
                     "SELECT status FROM dbos.workflow_status WHERE workflow_uuid = $1",
                 )
                 .bind(&id)
-                .fetch_optional(db.store().await.pool())
+                .fetch_optional(db.store().pool())
                 .await
                 .expect("read scheduled DriDigest status");
                 if status.as_deref() == Some("SUCCESS") {

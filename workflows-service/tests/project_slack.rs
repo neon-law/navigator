@@ -178,7 +178,7 @@ async fn foreign_session(url: &str) -> sqlx::PgPool {
 #[tokio::test]
 async fn a_project_lane_lock_excludes_every_other_session() {
     let Some(db) = database().await else { return };
-    let postgres = db.store().await;
+    let postgres = db.store();
     let project = uuid::Uuid::now_v7();
     let lane = ProjectSlackLane::acquire(&postgres, project)
         .await
@@ -220,7 +220,7 @@ async fn the_same_projects_main_pushes_post_one_at_a_time() {
     let bot = Arc::new(LaneSlackBot::serial(Duration::from_millis(250)));
     let lane = launch_lane(
         &db.url,
-        db.store().await,
+        db.store(),
         store::surreal::SurrealDb::uninitialized(),
         bot.clone(),
     )
@@ -272,7 +272,7 @@ async fn the_ingress_posts_one_relayed_event_once() {
     let bot = Arc::new(LaneSlackBot::serial(Duration::from_millis(50)));
     let lane = launch_lane(
         &db.url,
-        db.store().await,
+        db.store(),
         store::surreal::SurrealDb::uninitialized(),
         bot.clone(),
     )
@@ -332,7 +332,7 @@ async fn a_repeated_client_view_posts_once() {
     let bot = Arc::new(LaneSlackBot::serial(Duration::from_millis(50)));
     let lane = launch_lane(
         &db.url,
-        db.store().await,
+        db.store(),
         store::surreal::SurrealDb::uninitialized(),
         bot.clone(),
     )
@@ -369,7 +369,7 @@ async fn different_projects_post_without_waiting_on_each_other() {
     let bot = Arc::new(LaneSlackBot::synchronized(Duration::from_millis(200), 2));
     let lane = launch_lane(
         &db.url,
-        db.store().await,
+        db.store(),
         store::surreal::SurrealDb::uninitialized(),
         bot.clone(),
     )
@@ -419,7 +419,7 @@ async fn the_ingress_never_rebinds_a_claimed_event_id() {
     let bot = Arc::new(LaneSlackBot::serial(Duration::from_millis(50)));
     let lane = launch_lane(
         &db.url,
-        db.store().await,
+        db.store(),
         store::surreal::SurrealDb::uninitialized(),
         bot.clone(),
     )

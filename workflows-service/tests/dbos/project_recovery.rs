@@ -147,7 +147,7 @@ async fn a_worker_lost_mid_batch_resumes_from_its_checkpoints() {
          ORDER BY function_id",
     )
     .bind(&id)
-    .fetch_all(db.store().await.pool())
+    .fetch_all(db.store().pool())
     .await
     .expect("read ProjectRecovery checkpoints");
     assert_eq!(steps, ["unfinished".to_string(), format!("archive-{done}")]);
@@ -305,7 +305,7 @@ async fn the_store_source_drives_a_recorded_generation_to_commit() {
     let Some(db) = database().await else {
         return;
     };
-    let pg = db.store().await;
+    let pg = db.store();
     let surreal = store::test_support::mem_surreal().await;
     let matter = firm_matter(&surreal, "Recovery").await;
     let documents: Arc<dyn cloud::StorageService> =

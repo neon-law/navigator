@@ -16,14 +16,14 @@ use workflows::dbos_engine::{self, Executor, Settings, RELEASE_ENV};
 use workflows::heartbeat::HeartbeatReport;
 use workflows::{CapturingNotifier, Notifier, NotifyError};
 
-use crate::support::{database, TestDatabase, APP_VERSION, DEADLINE};
+use crate::support::{database, database_with_activation, TestDatabase, APP_VERSION, DEADLINE};
 
 #[tokio::test]
 async fn worker_refuses_launch_before_scope_activation() {
-    let Some(database) = database().await else {
+    let Some(database) = database_with_activation(false).await else {
         return;
     };
-    let postgres = database.store().await;
+    let postgres = database.store();
     let result = Box::pin(tokio::time::timeout(
         DEADLINE,
         store::postgres::PostgresDb::with_test_db(
@@ -31,39 +31,14 @@ async fn worker_refuses_launch_before_scope_activation() {
             workflows_service::host::run(std::future::pending()),
         ),
     ))
-    .await
-    .expect("missing activation must fail before worker startup");
+    .await;
+    database.close().await;
+    let result = result.expect("missing activation must fail before worker startup");
     let error = result.expect_err("an unactivated PostgreSQL fixture cannot launch a worker");
     assert!(matches!(
-        error.downcast_ref::<store::postgres_backfill::family::FamilyError>(),
-        Some(store::postgres_backfill::family::FamilyError::NotActive)
+        error.downcast_ref::<store::postgres::PostgresError>(),
+        Some(store::postgres::PostgresError::History)
     ));
-
-    let name: String = sqlx::query_scalar("SELECT current_database()::text")
-        .fetch_one(database.store().await.pool())
-        .await
-        .unwrap();
-    let admin_database =
-        std::env::var("NAVIGATOR_TEST_POSTGRES_DATABASE").unwrap_or_else(|_| "smoke".into());
-    let admin = sqlx::PgPool::connect_with(
-        database
-            .store()
-            .await
-            .pool()
-            .connect_options()
-            .as_ref()
-            .clone()
-            .database(&admin_database),
-    )
-    .await
-    .unwrap();
-    postgres.pool().close().await;
-    database.store().await.pool().close().await;
-    sqlx::query(sqlx::AssertSqlSafe(format!("DROP DATABASE {name}")))
-        .execute(&admin)
-        .await
-        .unwrap();
-    admin.close().await;
 }
 
 fn beat_instant() -> DateTime<Utc> {
@@ -82,7 +57,7 @@ fn counting_clock(reads: &Arc<AtomicU32>) -> Clock {
 async fn statuses(db: &TestDatabase) -> Vec<(String, String)> {
     sqlx::query_as("SELECT workflow_uuid, status FROM dbos.workflow_status WHERE name = $1")
         .bind(heartbeat::WORKFLOW)
-        .fetch_all(db.store().await.pool())
+        .fetch_all(db.store().pool())
         .await
         .expect("read the heartbeat runs")
 }
@@ -255,7 +230,7 @@ async fn the_next_launch_of_the_same_version_recovers_a_cut_off_run() {
     let pending: String =
         sqlx::query_scalar("SELECT status FROM dbos.workflow_status WHERE workflow_uuid = $1")
             .bind(id)
-            .fetch_one(db.store().await.pool())
+            .fetch_one(db.store().pool())
             .await
             .expect("read the cut-off run");
     assert_eq!(pending, "PENDING", "another version does not recover it");
@@ -278,7 +253,7 @@ async fn the_next_launch_of_the_same_version_recovers_a_cut_off_run() {
         let status: String =
             sqlx::query_scalar("SELECT status FROM dbos.workflow_status WHERE workflow_uuid = $1")
                 .bind(id)
-                .fetch_one(db.store().await.pool())
+                .fetch_one(db.store().pool())
                 .await
                 .expect("read the recovered run");
         status == "SUCCESS"
@@ -293,7 +268,7 @@ async fn the_next_launch_of_the_same_version_recovers_a_cut_off_run() {
          ORDER BY function_id",
     )
     .bind(id)
-    .fetch_all(db.store().await.pool())
+    .fetch_all(db.store().pool())
     .await
     .expect("read checkpoints");
     assert_eq!(steps, ["beat", "notify"], "beat replayed, notify completed");

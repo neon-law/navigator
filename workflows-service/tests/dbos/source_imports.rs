@@ -158,7 +158,7 @@ async fn the_store_source_reads_pending_imports_and_reports_why_one_stops() {
     let Some(db) = database().await else {
         return;
     };
-    let pg = db.store().await;
+    let pg = db.store();
     let surreal = store::test_support::mem_surreal().await;
     let matter = firm_matter(&surreal, "Import").await;
     let source = StoreImportSource::new(surreal, pg.clone(), Arc::new(cloud::NoRuntimeKms));

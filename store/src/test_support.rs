@@ -901,13 +901,20 @@ pub async fn ingest_fi_message_on(
 
 /// An exclusively owned, freshly created synthetic PostgreSQL database.
 ///
-/// Canonical schema and empty-history receipts are installed before any fixture
-/// data. Construction never accepts an existing target database. Call `close`
+/// Default construction installs canonical schema and empty-history receipts
+/// before fixture data; `create_unactivated` leaves history absent for admission tests.
+/// Construction never accepts an existing target database. Call `close`
 /// after all consumers have drained; it drops only this resource's minted name.
 pub struct PostgresFixture {
     admin: crate::postgres::PostgresDb,
     pg: crate::postgres::PostgresDb,
     database: String,
+}
+
+enum FixtureInitialization {
+    Native,
+    CaptureTarget,
+    SchemaOnly,
 }
 
 impl PostgresFixture {
@@ -930,7 +937,12 @@ impl PostgresFixture {
         admin_options: sqlx::postgres::PgConnectOptions,
         fixture_options: sqlx::postgres::PgConnectOptions,
     ) -> anyhow::Result<Self> {
-        Self::create_owned(admin_options, fixture_options, true).await
+        Self::create_owned(
+            admin_options,
+            fixture_options,
+            FixtureInitialization::Native,
+        )
+        .await
     }
 
     /// Create a fresh application fixture without native object ownership, for
@@ -941,13 +953,31 @@ impl PostgresFixture {
     pub async fn create_capture_target(
         options: sqlx::postgres::PgConnectOptions,
     ) -> anyhow::Result<Self> {
-        Self::create_owned(options.clone(), options, false).await
+        Self::create_owned(
+            options.clone(),
+            options,
+            FixtureInitialization::CaptureTarget,
+        )
+        .await
+    }
+
+    /// Create an exclusively owned canonical schema without application enrollment.
+    ///
+    /// This fixture exercises admission refusal before any global, family, or
+    /// native object history has been installed.
+    ///
+    /// # Errors
+    /// Returns exclusive resource construction or canonical schema failures.
+    pub async fn create_unactivated(
+        options: sqlx::postgres::PgConnectOptions,
+    ) -> anyhow::Result<Self> {
+        Self::create_owned(options.clone(), options, FixtureInitialization::SchemaOnly).await
     }
 
     async fn create_owned(
         admin_options: sqlx::postgres::PgConnectOptions,
         fixture_options: sqlx::postgres::PgConnectOptions,
-        native_objects: bool,
+        initialization: FixtureInitialization,
     ) -> anyhow::Result<Self> {
         let admin = crate::postgres::PostgresDb::connect(admin_options)
             .await
@@ -958,7 +988,7 @@ impl PostgresFixture {
             .await
             .context("create owned synthetic fixture database")?;
         let prepared =
-            prepare_postgres_fixture(fixture_options.database(&database), native_objects)
+            prepare_postgres_fixture(fixture_options.database(&database), initialization)
                 .await
                 .with_context(|| format!("initialize owned synthetic fixture {database}"));
         match prepared {
@@ -1022,7 +1052,7 @@ async fn drop_postgres_fixture(
 
 async fn prepare_postgres_fixture(
     options: sqlx::postgres::PgConnectOptions,
-    native_objects: bool,
+    initialization: FixtureInitialization,
 ) -> anyhow::Result<crate::postgres::PostgresDb> {
     let pg = crate::postgres::PostgresDb::connect(options)
         .await
@@ -1032,7 +1062,10 @@ async fn prepare_postgres_fixture(
             .execute(pg.pool()).await.context("initialize synthetic fixture AGE extension")?;
         sqlx::raw_sql(crate::postgres_schema::canonical_schema())
             .execute(pg.pool()).await.context("apply synthetic fixture canonical schema")?;
-        if native_objects {
+        if matches!(initialization, FixtureInitialization::SchemaOnly) {
+            return anyhow::Ok(());
+        }
+        if matches!(initialization, FixtureInitialization::Native) {
             crate::durable_object_handover::initialize_fresh_native(&pg).await
                 .context("initialize exclusively fresh native object ownership")?;
         }

@@ -165,7 +165,7 @@ async fn relaunch_reuses_the_checkpointed_query_without_rescanning() {
         .expect("email step reached");
     first.shutdown().await;
     let steps = sqlx::query_scalar::<_, String>("SELECT function_name FROM dbos.operation_outputs WHERE workflow_uuid = $1 ORDER BY function_id")
-        .bind(&id).fetch_all(db.store().await.pool()).await.expect("read checkpoints");
+        .bind(&id).fetch_all(db.store().pool()).await.expect("read checkpoints");
     assert_eq!(steps, ["query"]);
 
     let recovered = dbos::DBOS::new(dbos_engine::config(&db.url, APP_VERSION));

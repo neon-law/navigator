@@ -33,7 +33,7 @@ async fn assert_read_boundary(origin: &str, notation_id: uuid::Uuid) {
 #[tokio::test]
 async fn the_authenticated_caller_keeps_both_notation_machines_independent() {
     let Some(db) = database().await else { return };
-    let postgres = db.store().await;
+    let postgres = db.store();
     let surreal = store::surreal::SurrealDb::uninitialized();
     let dir = tempfile::tempdir().unwrap();
     let storage = Arc::new(cloud::FsStorage::new(dir.path()).await.unwrap());
@@ -132,7 +132,7 @@ async fn the_authenticated_caller_keeps_both_notation_machines_independent() {
 #[tokio::test]
 async fn a_pending_notation_start_recovers_after_the_executor_stops() {
     let Some(db) = database().await else { return };
-    let postgres = db.store().await;
+    let postgres = db.store();
     let dir = tempfile::tempdir().unwrap();
     let context = Context::new(
         store::surreal::SurrealDb::uninitialized(),

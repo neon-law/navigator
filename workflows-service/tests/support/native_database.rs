@@ -17,7 +17,7 @@ pub struct TestDatabase {
 impl TestDatabase {
     /// The store's own PostgreSQL handle on this database, migrated, for the
     /// production work sources that read the durable queues.
-    pub async fn store(&self) -> store::postgres::PostgresDb {
+    pub fn store(&self) -> store::postgres::PostgresDb {
         self.fixture.postgres().clone()
     }
 
@@ -41,6 +41,11 @@ impl TestDatabase {
 
 /// Create a fresh database, or `None` when no test PostgreSQL is configured.
 pub async fn database() -> Option<TestDatabase> {
+    database_with_activation(true).await
+}
+
+/// Create the same owned fixture with or without application enrollment.
+pub async fn database_with_activation(activated: bool) -> Option<TestDatabase> {
     let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {
         assert!(
             std::env::var("NAV_REQUIRE_POSTGRES").as_deref() != Ok("1"),
@@ -61,9 +66,12 @@ pub async fn database() -> Option<TestDatabase> {
         )
         .ssl_mode(PgSslMode::Disable)
         .options([("session_preload_libraries", "age")]);
-    let fixture = store::test_support::PostgresFixture::create(options)
-        .await
-        .expect("create exclusively fresh native DBOS fixture");
+    let fixture = if activated {
+        store::test_support::PostgresFixture::create(options).await
+    } else {
+        store::test_support::PostgresFixture::create_unactivated(options).await
+    }
+    .expect("create exclusively fresh DBOS fixture");
     let name = fixture.database().to_owned();
     let mut db = TestDatabase {
         env: vec![

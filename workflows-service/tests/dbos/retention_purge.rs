@@ -177,7 +177,7 @@ async fn before_its_slot_a_stopped_schedule_waits_without_firing() {
     let started: i64 =
         sqlx::query_scalar("SELECT count(*) FROM dbos.workflow_status WHERE workflow_uuid = $1")
             .bind(retention_purge::workflow_id(slot()))
-            .fetch_one(db.store().await.pool())
+            .fetch_one(db.store().pool())
             .await
             .unwrap();
     worker.shutdown().await;

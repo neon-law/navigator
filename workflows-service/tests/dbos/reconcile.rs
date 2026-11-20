@@ -322,7 +322,7 @@ async fn executor_restart_reuses_reconcile_checkpoint_and_finance_receipt() {
         "SELECT function_name FROM dbos.operation_outputs WHERE workflow_uuid = $1 ORDER BY function_id",
     )
     .bind(&id)
-    .fetch_all(db.store().await.pool())
+    .fetch_all(db.store().pool())
     .await
     .expect("read workflow checkpoints");
     assert_eq!(checkpoints, ["reconcile"]);
