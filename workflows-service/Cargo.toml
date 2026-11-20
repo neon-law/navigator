@@ -22,6 +22,10 @@ path = "src/bin/social-publish-reconciler-trigger.rs"
 [lib]
 path = "src/lib.rs"
 
+[features]
+# Reproduce JWT provider ambiguity without enabling an embedded database.
+jwt-provider-regression = ["restate-jwt/aws_lc_rs"]
+
 [dependencies]
 billing.workspace = true
 anyhow.workspace = true
@@ -34,13 +38,8 @@ chrono.workspace = true
 cloud.workspace = true
 dotenvy.workspace = true
 restate-sdk.workspace = true
-# `restate-jwt` is `restate-sdk-shared-core`'s own `jsonwebtoken` dependency
-# (feature = "rust_crypto"). Pinning the process-level `CryptoProvider` to it
-# in `main()` (see `request_identity::install_crypto_provider`) needs this in
-# the shipped binary, not just in tests — `store`'s `surrealdb-core`
-# dependency compiles the same `jsonwebtoken` version with `aws_lc_rs`, and
-# the two features being unified into one build is otherwise ambiguous
-# (ENG-550).
+# Match the Restate SDK's JWT instance so startup can pin its provider even
+# when optional compatibility features enable another backend (ENG-550).
 restate-jwt.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -53,6 +53,22 @@ starts an embedded `kv-mem` SurrealDB engine inside the test process. It costs a
 the workspace suite's time, and the embedded SurrealDB 4 engine intermittently hangs. The CI nextest profile kills any
 test after five minutes so its retries run it again.
 
+The embedded engine is an explicit build capability, separate from `store/test-support`. Primary CI keeps its
+Surreal-free test selection and does not enable `store/surreal-compatibility`. An unfiltered workspace run includes
+embedded compatibility tests, so request that capability explicitly:
+
+```bash
+cargo test --workspace \
+  --features store/surreal-compatibility,workflows-service/jwt-provider-regression
+```
+
+The JWT regression feature tests an unpinned two-provider process separately from startup pinning before the first
+health probe. Provider selection lasts for the process lifetime; pinning cannot repair a process that already selected
+an ambiguous provider. The compatibility run needs its documented PostgreSQL and Source fixtures. The embedded engine
+feature does not disable `NAVIGATOR_FORBID_SURREAL`: a primary-lane environment still refuses an attempted engine start.
+Without the feature, calling an embedded fixture fails rather than silently skipping it. Remote HTTP/WebSocket
+compatibility clients remain available without the embedded engine.
+
 The existing call sites move to the PostgreSQL fixture crate by crate as each domain's PostgreSQL authority lands
 (ENG-1356). The ratchet holds each crate's count: a port that removes call sites lowers that crate's `BASELINE` entry in
 the same change.

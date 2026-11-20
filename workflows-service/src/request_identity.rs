@@ -7,17 +7,9 @@ pub const RESTATE_IDENTITY_KEY: &str = "RESTATE_IDENTITY_KEY";
 
 /// Pins `jsonwebtoken`'s process-level `CryptoProvider` to `rust_crypto`.
 ///
-/// `store`'s `surrealdb-core` dependency compiles `jsonwebtoken` 10.4.0 with
-/// its `aws_lc_rs` feature on every native target, unconditionally — this
-/// crate's own `restate-jwt` dependency (feeding `restate-sdk-shared-core`)
-/// compiles the same crate version with `rust_crypto`. Cargo unifies both
-/// into the one `jsonwebtoken` instance this binary links, so
-/// `CryptoProvider::from_crate_features` sees two providers and panics the
-/// first time a real request is verified (ENG-550) instead of never being
-/// ambiguous. Neither dependency exposes a feature to turn the other back
-/// off, so the ambiguity must be resolved at runtime: call this once, before
-/// the server starts accepting requests, to make the choice deterministic
-/// regardless of what Cargo resolves.
+/// Optional dependency features can enable multiple JWT backends in the same
+/// process. Install one explicitly before the first token operation or health
+/// probe so request identity stays deterministic for the process lifetime.
 pub fn install_crypto_provider() {
     let _ = restate_jwt::crypto::rust_crypto::DEFAULT_PROVIDER.install_default();
 }
@@ -29,9 +21,9 @@ struct HealthCheckClaims {
 
 /// Round-trips a throwaway HMAC-signed token through the exact
 /// `jsonwebtoken` sign/verify path Restate Cloud's request-identity
-/// signatures use, proving the process-level `CryptoProvider` pinned by
-/// [`install_crypto_provider`] is still deterministic instead of ambiguous
-/// (ENG-550). `catch_unwind` turns a regression back into a `bool` a health
+/// signatures use, proving the process can select and use a deterministic
+/// provider. This checks usable crypto, not whether the startup hook was called.
+/// `catch_unwind` turns an ambiguous-provider regression into a `bool` a health
 /// probe can act on, rather than a panic that would also take the probe
 /// down (ENG-551).
 #[must_use]

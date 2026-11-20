@@ -78,19 +78,11 @@ pub fn bearer_header_with_person(role: store::persons::Role, person_id: uuid::Uu
 /// update syntax — see the module docs.
 /// A private in-memory SurrealDB with the schema applied.
 ///
-/// Deliberately *not* `store::surreal::test_support::mem()`, which is
-/// the same thing behind `store`'s `test-support` feature. This module
-/// is always compiled (see the module docs), so reaching for that
-/// feature would put it — and `testcontainers` with it — in the build
-/// graph of every `web` binary, which is exactly what `store`'s
-/// `[features]` comment says the gate exists to prevent.
-///
-/// `connect`, `SurrealConfig`, and `schema::apply` are ungated public
-/// API and `kv-mem` is a non-optional `store` dependency, so this costs
-/// nothing extra to build.
+/// This public fixture uses the generic compatibility client. Starting it
+/// requires the explicit `store/surreal-compatibility` Cargo feature; native
+/// PostgreSQL fixtures do not enable the embedded engine.
 pub async fn embedded_surreal() -> store::surreal::SurrealDb {
-    // `store::surreal::test_support::refuse_when_forbidden`, inlined: that
-    // module sits behind the feature this one avoids (see above).
+    // Keep the same Source-forbidden fence as the store's fixture helpers.
     assert!(
         std::env::var("NAVIGATOR_FORBID_SURREAL").as_deref() != Ok("1"),
         "this test starts SurrealDB, which CI no longer tests; \

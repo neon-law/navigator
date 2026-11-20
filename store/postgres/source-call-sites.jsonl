@@ -113,7 +113,7 @@
 {"file":"cli/src/answers_file.rs","line":169,"function":"pdf_fields","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/answers_file.rs","line":178,"function":"pdf_fields","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/assumptions.rs","line":40,"function":"run","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
-{"file":"cli/src/commands.rs","line":4958,"function":"parse_notarization","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/commands.rs","line":5102,"function":"parse_notarization","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/credentials.rs","line":74,"function":"set","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/credentials.rs","line":206,"function":"write_with_mode_0600","operation":"create","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/document_deletion.rs","line":58,"function":"record_actioned","operation":"create","sql_operations":[],"tables":[],"transaction":false}
@@ -122,6 +122,15 @@
 {"file":"cli/src/document_sync.rs","line":1211,"function":"project_sync_plans_scoped","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/document_sync.rs","line":2854,"function":"ensure_pull_batch_targets_are_distinct","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/downloads.rs","line":314,"function":"file_sha256","operation":"update","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/forgejo_release.rs","line":225,"function":"upload","operation":"update","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/github_setup.rs","line":1207,"function":"from_env","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/github_setup.rs","line":1211,"function":"from_env","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/github_setup.rs","line":1215,"function":"from_env","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/github_setup.rs","line":2104,"function":"read_live_rulesets","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/github_setup.rs","line":2122,"function":"read_live_rulesets","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/github_setup.rs","line":2393,"function":"apply","operation":"delete","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/github_setup.rs","line":4869,"function":"test_client","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/github_setup/deploy_environments.rs","line":188,"function":"apply","operation":"delete","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/mail.rs","line":425,"function":"call","operation":"query","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/mail.rs","line":476,"function":"list_threads","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/mail.rs","line":481,"function":"list_threads","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
@@ -208,6 +217,7 @@
 {"file":"cli/src/projects/source_import.rs","line":98,"function":"import_tree","operation":"query","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/projects/watch.rs","line":520,"function":"hydrate","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/projects/watch.rs","line":562,"function":"hydrate","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/release_check.rs","line":237,"function":"write_github_output","operation":"create","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/remote.rs","line":770,"function":"actions_oidc_token","operation":"query","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/remote.rs","line":1259,"function":"add_to","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/remote.rs","line":1505,"function":"list_revisions","operation":"query","sql_operations":[],"tables":[],"transaction":false}
@@ -441,7 +451,6 @@
 {"file":"deploy/src/devx/forgejo/mod.rs","line":338,"function":"store","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"deploy/src/devx/forgejo/mod.rs","line":381,"function":"path_and_query","operation":"query","sql_operations":[],"tables":[],"transaction":false}
 {"file":"deploy/src/devx/forgejo/mod.rs","line":733,"function":"an_incomplete_seed_is_refused_by_name","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"deploy/src/devx/forgejo/release.rs","line":225,"function":"upload","operation":"update","sql_operations":[],"tables":[],"transaction":false}
 {"file":"deploy/src/devx/forgejo/runner.rs","line":319,"function":"remove","operation":"delete","sql_operations":[],"tables":[],"transaction":false}
 {"file":"deploy/src/devx/forgejo/runner.rs","line":556,"function":"execute","operation":"create","sql_operations":[],"tables":[],"transaction":false}
 {"file":"deploy/src/devx/forgejo/runner.rs","line":568,"function":"execute","operation":"create","sql_operations":[],"tables":[],"transaction":false}
@@ -465,14 +474,6 @@
 {"file":"deploy/src/devx/gcp/buckets.rs","line":839,"function":"assets_font_cors_rule","operation":"query","sql_operations":[],"tables":[],"transaction":false}
 {"file":"deploy/src/devx/gcp/client.rs","line":153,"function":"with_base_url","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"deploy/src/devx/gcp/services.rs","line":137,"function":"missing","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"deploy/src/devx/github_setup.rs","line":1206,"function":"from_env","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"deploy/src/devx/github_setup.rs","line":1210,"function":"from_env","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"deploy/src/devx/github_setup.rs","line":1214,"function":"from_env","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"deploy/src/devx/github_setup.rs","line":2101,"function":"read_live_rulesets","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"deploy/src/devx/github_setup.rs","line":2119,"function":"read_live_rulesets","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"deploy/src/devx/github_setup.rs","line":2390,"function":"apply","operation":"delete","sql_operations":[],"tables":[],"transaction":false}
-{"file":"deploy/src/devx/github_setup.rs","line":4866,"function":"test_client","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"deploy/src/devx/github_setup/deploy_environments.rs","line":188,"function":"apply","operation":"delete","sql_operations":[],"tables":[],"transaction":false}
 {"file":"deploy/src/devx/lifecycle.rs","line":591,"function":"reset_rejects_a_blank_context_and_a_blank_environment_id","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"deploy/src/devx/mod.rs","line":1656,"function":"assignments","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"deploy/src/devx/mod.rs","line":3182,"function":"published_registration_uses_only_the_rows_own_worker_url","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
@@ -568,7 +569,6 @@
 {"file":"deploy/src/postgres_admission.rs","line":50,"function":"admission_requires_every_current_scope_without_source_access","operation":"query","sql_operations":["SELECT","DELETE"],"tables":[],"transaction":false}
 {"file":"deploy/src/postgres_backfill.rs","line":97,"function":"run","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
 {"file":"deploy/src/project_preview.rs","line":853,"function":"respond","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"deploy/src/release_check.rs","line":236,"function":"write_github_output","operation":"create","sql_operations":[],"tables":[],"transaction":false}
 {"file":"deploy/src/scraper/adapters/la_superior.rs","line":185,"function":"notices","operation":"insert","sql_operations":[],"tables":["case"],"transaction":false}
 {"file":"deploy/src/scraper/adapters/pacer.rs","line":319,"function":"parse_docket","operation":"select","sql_operations":[],"tables":[],"transaction":false}
 {"file":"deploy/src/scraper/adapters/pacer.rs","line":332,"function":"parse_docket","operation":"select","sql_operations":[],"tables":[],"transaction":false}

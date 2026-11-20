@@ -221,8 +221,8 @@ typesafe = { path = "typesafe" }
 # compiler-maintained, so a variant added without a matching token is a
 # build failure rather than a silently narrowed questionnaire vocabulary.
 strum = { version = "0.28", features = ["derive"] }
-# Remote protocols for legacy SurrealDB compatibility. The store crate also
-# enables kv-mem unconditionally for compatibility fixtures.
+# Remote protocols for SurrealDB compatibility. Embedded fixtures additionally
+# require the store crate's explicit surreal-compatibility feature.
 surrealdb = { version = "4.0.1", default-features = false, features = ["protocol-http", "protocol-ws", "rustls"] }
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "net", "process"] }
