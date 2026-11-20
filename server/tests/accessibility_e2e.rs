@@ -778,6 +778,12 @@ mod practice_preview;
 /// Audit prepared brands on their own HTTP hosts, including their calendar navigation.
 #[tokio::test]
 async fn prepared_practice_brands_pass_axe_in_light_and_dark_schemes() {
+    // Take the browser first, as the sibling browser tests do: without a
+    // WebDriver the run skips before the preview asks for PostgreSQL.
+    let Some(gate) = new_client_or_skip_in_scheme(ColorScheme::Light).await else {
+        return;
+    };
+    gate.close().await.unwrap();
     let preview = practice_preview::PracticePreview::start().await;
     for (key, origin) in &preview.sites {
         for scheme in ColorScheme::both() {
