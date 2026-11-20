@@ -434,7 +434,6 @@ fn up_dev(root: &Path, no_deps: bool, runtime: Runtime, base_cfg: &KindConfig) -
                 .and_then(|descriptor| descriptor.db_name.as_deref()),
         )?;
     }
-    let mut sample_project_refreshed = false;
     match runtime {
         Runtime::Kind => eprintln!(
             "==> worktree-env up (dev, kind): slug={slug} cluster={} database={db_name}",
@@ -475,46 +474,8 @@ fn up_dev(root: &Path, no_deps: bool, runtime: Runtime, base_cfg: &KindConfig) -
         return Ok(());
     }
 
-    // Provision the tier. Everything below this block is lane-neutral:
-    // both lanes leave the same ports listening, so the migration, the
-    // schema apply, and the rendered environment are identical work.
-    match runtime {
-        Runtime::Kind => {
-            if !no_deps && !kind_fixture_ready(root, &cfg) {
-                eprintln!(
-                    "==> isolated deps need reconciliation for {}; applying its KIND fixture",
-                    cfg.cluster
-                );
-                super::up_in(root, &cfg)?;
-                sample_project_refreshed = true;
-            }
-            // Pin this worktree's isolated KIND context before touching the cluster.
-            // The fresh-boot branch above reaches it through `up_in` →
-            // `configure_worktree_kubeconfig`, but a reused cluster skips `up_in`
-            // entirely — and `hydrate_seaweedfs_environment` then execs `seaweedfs-0` over
-            // bare `kubectl`, inheriting whatever context is ambient. On an operator
-            // pointed at prod that is a `kubectl exec` in the production cluster, so
-            // the pin is unconditional here rather than gated on the boot branch.
-            ensure_kind_transports(root, &cfg, no_deps)?;
-            // Unconditional for the same reason as the kubeconfig pin above: the
-            // fresh-boot branch aligns Rauthy inside `up_in`, but a *reused* cluster
-            // skips `up_in` entirely. Re-applying an unchanged public URL starts no
-            // rollout, so the reused path pays nothing.
-            super::align_rauthy_public_url(&cfg)?;
-            super::hydrate_seaweedfs_environment(&cfg)?;
-        }
-        Runtime::Native => {
-            // `--no-deps` means the same thing on both lanes: the tier is
-            // already up, so don't provision it. The readiness gate still
-            // runs, because "already up" is a claim worth checking.
-            if !no_deps {
-                super::native::up(root, slot, &cfg, &db_name)?;
-            }
-            if no_deps {
-                super::native::restore_environment(root)?;
-            }
-        }
-    }
+    let sample_project_refreshed =
+        provision_compatibility_tier(root, slot, &cfg, &db_name, runtime, no_deps)?;
 
     // The schema is applied, not migrated: one idempotent DEFINE file
     // re-applied on every `up` (#1093). Unconditional, because a reused
@@ -546,6 +507,57 @@ fn up_dev(root: &Path, no_deps: bool, runtime: Runtime, base_cfg: &KindConfig) -
 
     print_dev_summary(&slug, &db_name, runtime, &cfg);
     Ok(())
+}
+
+/// Provision or restore the explicitly selected compatibility topology.
+fn provision_compatibility_tier(
+    root: &Path,
+    slot: u16,
+    cfg: &KindConfig,
+    db_name: &str,
+    runtime: Runtime,
+    no_deps: bool,
+) -> Result<bool> {
+    let mut sample_project_refreshed = false;
+    match runtime {
+        Runtime::Kind => {
+            if !no_deps && !kind_fixture_ready(root, cfg) {
+                eprintln!(
+                    "==> isolated deps need reconciliation for {}; applying its KIND fixture",
+                    cfg.cluster
+                );
+                super::up_in(root, cfg)?;
+                sample_project_refreshed = true;
+            }
+            // Pin this worktree's isolated KIND context before touching the cluster.
+            // The fresh-boot branch above reaches it through `up_in` →
+            // `configure_worktree_kubeconfig`, but a reused cluster skips `up_in`
+            // entirely — and `hydrate_seaweedfs_environment` then execs `seaweedfs-0` over
+            // bare `kubectl`, inheriting whatever context is ambient. On an operator
+            // pointed at prod that is a `kubectl exec` in the production cluster, so
+            // the pin is unconditional here rather than gated on the boot branch.
+            ensure_kind_transports(root, cfg, no_deps)?;
+            // Unconditional for the same reason as the kubeconfig pin above: the
+            // fresh-boot branch aligns Rauthy inside `up_in`, but a *reused* cluster
+            // skips `up_in` entirely. Re-applying an unchanged public URL starts no
+            // rollout, so the reused path pays nothing.
+            super::align_rauthy_public_url(cfg)?;
+            super::hydrate_seaweedfs_environment(cfg)?;
+        }
+        Runtime::Native => {
+            // `--no-deps` means the same thing on both lanes: the tier is
+            // already up, so don't provision it. The readiness gate still
+            // runs, because "already up" is a claim worth checking.
+            if !no_deps {
+                super::native::up(root, slot, cfg, db_name)?;
+            }
+            if no_deps {
+                super::native::restore_environment(root)?;
+            }
+        }
+    }
+
+    Ok(sample_project_refreshed)
 }
 
 /// Missing or foreign native state never falls through to legacy cleanup.
@@ -1094,18 +1106,18 @@ pub(super) fn verify_postgres_fixture_target(root: &Path, cfg: &KindConfig) -> R
             .db_name
             .as_deref()
             .context("fixture database is missing")?;
-        if database != "navigator" {
+        if database == "navigator" {
+            anyhow::ensure!(
+                super::native_profile::Intent::read(root)?.is_none(),
+                "legacy fixture conflicts with native creation intent"
+            );
+        } else {
             let intent = super::native_profile::Intent::read(root)?
                 .context("native fixture creation intent is missing")?;
             intent.verify_target(root, cfg)?;
             anyhow::ensure!(
                 intent.database()? == database,
                 "native fixture database differs from its creation operation"
-            );
-        } else {
-            anyhow::ensure!(
-                super::native_profile::Intent::read(root)?.is_none(),
-                "legacy fixture conflicts with native creation intent"
             );
         }
         let expected = worktree_kind_config(cfg, root, slot);

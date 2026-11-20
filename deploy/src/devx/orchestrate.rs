@@ -128,9 +128,7 @@ pub(super) fn verified_native_database(root: &Path, cfg: &KindConfig) -> Result<
 /// Provision only a genuinely fresh native database, or verify the exact
 /// resource recorded by this worktree. No Source client or Restate CLI is used.
 pub(super) fn up_native_in(root: &Path, cfg: &KindConfig, no_deps: bool) -> Result<()> {
-    use super::forgejo::cluster::{prepare_postgres, secret_manifest, Kube};
     use super::native_profile::{self, Intent};
-    use sqlx::postgres::{PgConnectOptions, PgSslMode};
     use store::postgres::native_origin;
     require_tools(&["kind", "kubectl", "docker", "openssl"])?;
     super::worktree_env::verify_postgres_fixture_target(root, cfg)?;
@@ -141,15 +139,88 @@ pub(super) fn up_native_in(root: &Path, cfg: &KindConfig, no_deps: bool) -> Resu
         "native tier has not completed initialization"
     );
     let mut reconcile = !no_deps && !intent.was_ready();
-    let created = if !reconcile {
+    let tier = prepare_native_dependencies(root, cfg, &mut intent, reconcile)?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let resumed = runtime.block_on(async {
+        if tier.created.is_some() {
+            native_origin::create(tier.admin.clone(), intent.creation, tier.binding.clone())
+                .await?
+                .initialize()
+                .await
+        } else {
+            native_origin::resume(tier.admin.clone(), intent.creation, tier.binding.clone()).await
+        }
+    });
+    let native = match resumed {
+        Ok(native) => native,
+        Err(_error) if !no_deps && intent.was_ready() => {
+            // A persisted intent authorizes only the canonical schema-only
+            // upgrade API, never replacement of an unknown database.
+            anyhow::ensure!(
+                std::net::TcpStream::connect(("127.0.0.1", cfg.web_port)).is_err()
+                    && std::net::TcpStream::connect(("127.0.0.1", native_profile::dbos_port(cfg)?))
+                        .is_err(),
+                "stop the owned app and durable worker before a native schema upgrade"
+            );
+            let operation = intent.prepare_upgrade(root)?;
+            let upgraded = runtime.block_on(native_origin::upgrade(tier.admin.clone(), intent.creation,
+                tier.binding.clone(), operation)).map_err(|_| anyhow!(
+                    "native origin cannot resume or upgrade; explicit owned-resource recovery is required"
+                ))?;
+            reconcile = true;
+            upgraded
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let NativeEnvironment { state, app, values } =
+        native_role_environment(root, cfg, &intent, &native, &tier, &runtime, reconcile)?;
+    if reconcile {
+        seed_native_application(root, &runtime, &app, &values)?;
+        intent.mark_ready(root, &native)?;
+    }
+    let environment = super::postgres_fixture::render_environment(&values);
+    state.write_env(&environment)?;
+    write_fixture_private(
+        &super::postgres_fixture::environment_path(root),
+        super::postgres_fixture::render_environment(&tier.credentials.environment_for(
+            cfg,
+            root,
+            &native.database(),
+        ))
+        .as_bytes(),
+    )?;
+    Ok(())
+}
+
+struct NativeDependencies {
+    kube: super::forgejo::cluster::Kube,
+    created: Option<CreatedKindCluster>,
+    binding: store::postgres::native_origin::TierBinding,
+    credentials: super::postgres_fixture::Credentials,
+    rendered: String,
+    admin: sqlx::postgres::PgConnectOptions,
+}
+
+fn prepare_native_dependencies(
+    root: &Path,
+    cfg: &KindConfig,
+    intent: &mut super::native_profile::Intent,
+    reconcile: bool,
+) -> Result<NativeDependencies> {
+    use super::forgejo::cluster::{prepare_postgres, Kube};
+    use super::native_profile;
+    use sqlx::postgres::{PgConnectOptions, PgSslMode};
+    let created = if reconcile {
+        kind_platform_steps(root, cfg)?
+    } else {
         anyhow::ensure!(
             cluster_exists(&cfg.cluster)?,
             "native dependency tier does not exist"
         );
         configure_worktree_kubeconfig(root, cfg)?;
         None
-    } else {
-        kind_platform_steps(root, cfg)?
     };
     let kube = Kube::new(cfg);
     if created.is_some() {
@@ -169,7 +240,9 @@ pub(super) fn up_native_in(root: &Path, cfg: &KindConfig, no_deps: bool) -> Resu
     if reconcile {
         seaweedfs::prepare(&cfg.namespace)?;
     }
-    let credentials = if !reconcile {
+    let credentials = if reconcile {
+        prepare_postgres(cfg)?
+    } else {
         let password = |name| -> Result<String> {
             kube.secret(name)?
                 .and_then(|mut data| data.remove("password"))
@@ -184,8 +257,6 @@ pub(super) fn up_native_in(root: &Path, cfg: &KindConfig, no_deps: bool) -> Resu
             owner_password: password("navigator-postgres-migrator")?,
             ca: super::postgres_fixture::trust_anchor(&tls)?.to_owned(),
         }
-    } else {
-        prepare_postgres(cfg)?
     };
     write_fixture_private(
         &super::postgres_fixture::ca_path(root),
@@ -220,43 +291,36 @@ pub(super) fn up_native_in(root: &Path, cfg: &KindConfig, no_deps: bool) -> Resu
         .password(&bootstrap)
         .ssl_mode(PgSslMode::VerifyFull)
         .ssl_root_cert(super::postgres_fixture::ca_path(root));
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
-    let resumed = runtime.block_on(async {
-        if created.is_some() {
-            native_origin::create(admin.clone(), intent.creation, binding.clone())
-                .await?
-                .initialize()
-                .await
-        } else {
-            native_origin::resume(admin.clone(), intent.creation, binding.clone()).await
-        }
-    });
-    let native = match resumed {
-        Ok(native) => native,
-        Err(_error) if !no_deps && intent.was_ready() => {
-            // A persisted intent authorizes only the canonical schema-only
-            // upgrade API, never replacement of an unknown database.
-            anyhow::ensure!(
-                std::net::TcpStream::connect(("127.0.0.1", cfg.web_port)).is_err()
-                    && std::net::TcpStream::connect(("127.0.0.1", native_profile::dbos_port(cfg)?))
-                        .is_err(),
-                "stop the owned app and durable worker before a native schema upgrade"
-            );
-            let operation = intent.prepare_upgrade(root)?;
-            let upgraded = runtime.block_on(native_origin::upgrade(admin.clone(), intent.creation,
-                binding.clone(), operation)).map_err(|_| anyhow!(
-                    "native origin cannot resume or upgrade; explicit owned-resource recovery is required"
-                ))?;
-            reconcile = true;
-            upgraded
-        }
-        Err(error) => return Err(error.into()),
-    };
+    Ok(NativeDependencies {
+        kube,
+        created,
+        binding,
+        credentials,
+        rendered,
+        admin,
+    })
+}
+
+struct NativeEnvironment {
+    state: StateDir,
+    app: store::postgres::PostgresDb,
+    values: std::collections::BTreeMap<String, String>,
+}
+
+fn native_role_environment(
+    root: &Path,
+    cfg: &KindConfig,
+    intent: &super::native_profile::Intent,
+    native: &store::postgres::native_origin::NativeDatabase,
+    tier: &NativeDependencies,
+    runtime: &tokio::runtime::Runtime,
+    reconcile: bool,
+) -> Result<NativeEnvironment> {
+    use super::forgejo::cluster::secret_manifest;
+    use super::native_profile;
     // No credential rotation or schema mutation is permitted by --no-deps.
     let login = |name: &str| -> Result<String> {
-        if let Some(mut data) = kube.secret(name)? {
+        if let Some(mut data) = tier.kube.secret(name)? {
             return data
                 .remove("password")
                 .filter(|value| !value.is_empty())
@@ -264,13 +328,13 @@ pub(super) fn up_native_in(root: &Path, cfg: &KindConfig, no_deps: bool) -> Resu
         }
         anyhow::ensure!(reconcile, "native login credential is missing");
         let password = seaweedfs::random_hex();
-        kube.apply(&secret_manifest(
+        tier.kube.apply(&secret_manifest(
             name,
             &cfg.namespace,
             "Opaque",
             &std::collections::BTreeMap::from([
                 ("password".into(), password.clone()),
-                ("ca.crt".into(), credentials.ca.clone()),
+                ("ca.crt".into(), tier.credentials.ca.clone()),
             ]),
         )?)?;
         Ok(password)
@@ -278,26 +342,26 @@ pub(super) fn up_native_in(root: &Path, cfg: &KindConfig, no_deps: bool) -> Resu
     let dbos_password = login("navigator-postgres-dbos")?;
     let archive_password = login("navigator-postgres-archive")?;
     if reconcile {
-        kube.run(&[
+        tier.kube.run(&[
             "delete",
             "job",
             "navigator-postgres-roles",
             "--ignore-not-found",
             "--wait=true",
         ])?;
-        kube.apply(&native_profile::roles_for_database(
-            &rendered,
+        tier.kube.apply(&native_profile::roles_for_database(
+            &tier.rendered,
             &native.database(),
         )?)?;
-        kube.wait_job("navigator-postgres-roles")?;
+        tier.kube.wait_job("navigator-postgres-roles")?;
     }
     let app = runtime.block_on(async {
         let pg = store::postgres::PostgresDb::connect(
-            admin
+            tier.admin
                 .clone()
                 .database(&native.database())
                 .username("navigator_app")
-                .password(&credentials.app_password),
+                .password(&tier.credentials.app_password),
         )
         .await?;
         store::postgres::PostgresDb::with_application_db(pg.clone(), async {}).await?;
@@ -316,8 +380,30 @@ pub(super) fn up_native_in(root: &Path, cfg: &KindConfig, no_deps: bool) -> Resu
         state.write_pids(&pids)?;
     }
     wait_for_tcp("127.0.0.1", cfg.seaweedfs_s3_port)?;
-    let storage = if reconcile {
-        seaweedfs::provision(&cfg.namespace)?
+    let storage = native_storage_credentials(cfg, &tier.kube, reconcile)?;
+    let values = native_profile::environment(
+        root,
+        cfg,
+        intent,
+        tier.credentials
+            .environment_for(cfg, root, &native.database()),
+        native_profile::RolePasswords {
+            dbos: &dbos_password,
+            archive: &archive_password,
+        },
+        &storage,
+        |key| env::var(key).ok(),
+    )?;
+    Ok(NativeEnvironment { state, app, values })
+}
+
+fn native_storage_credentials(
+    cfg: &KindConfig,
+    kube: &super::forgejo::cluster::Kube,
+    reconcile: bool,
+) -> Result<seaweedfs::Credentials> {
+    if reconcile {
+        seaweedfs::provision(&cfg.namespace)
     } else {
         let data = kube
             .secret("navigator-seaweedfs-s3")?
@@ -340,60 +426,42 @@ pub(super) fn up_native_in(root: &Path, cfg: &KindConfig, no_deps: bool) -> Resu
                 ))
             })
             .collect::<Result<std::collections::BTreeMap<_, _>>>()?;
-        seaweedfs::credentials(&keys)?
-    };
-    let values = native_profile::environment(
-        root,
-        cfg,
-        &intent,
-        credentials.environment_for(cfg, root, &native.database()),
-        native_profile::RolePasswords {
-            dbos: &dbos_password,
-            archive: &archive_password,
-        },
-        &storage,
-        |key| env::var(key).ok(),
-    )?;
-    if reconcile {
-        // Preserve the same staged sample-source input as the compatibility
-        // bootstrap. The following host boot reads it through its explicit env.
-        super::sample_project::run_for_root(false, root)?;
-        runtime.block_on(async {
-            let pg = app.clone();
-            store::clauses::seed(
-                &pg,
-                &rules::clauses::library_clauses().map_err(anyhow::Error::msg)?,
-            )
-            .await?;
-            let storage: std::sync::Arc<dyn cloud::StorageService> =
-                std::sync::Arc::new(cloud::S3Storage::new(cloud::S3StorageConfig::from_lookup(
-                    |key| values.get(key).cloned(),
-                )?)?);
-            store::postgres::PostgresDb::with_application_db(pg, async {
-                store::seed::seed_environment(
-                    &store::surreal::SurrealDb::uninitialized(),
-                    &storage,
-                    store::DeploymentEnvironment::Dev,
-                    store::seed::BrandSeed::Neon,
-                )
-                .await
-            })
-            .await??;
-            Ok::<(), anyhow::Error>(())
-        })?;
-        intent.mark_ready(root, &native)?;
+        seaweedfs::credentials(&keys)
     }
-    let environment = super::postgres_fixture::render_environment(&values);
-    state.write_env(&environment)?;
-    write_fixture_private(
-        &super::postgres_fixture::environment_path(root),
-        super::postgres_fixture::render_environment(&credentials.environment_for(
-            cfg,
-            root,
-            &native.database(),
-        ))
-        .as_bytes(),
-    )?;
+}
+
+fn seed_native_application(
+    root: &Path,
+    runtime: &tokio::runtime::Runtime,
+    app: &store::postgres::PostgresDb,
+    values: &std::collections::BTreeMap<String, String>,
+) -> Result<()> {
+    // Preserve the same staged sample-source input as the compatibility
+    // bootstrap. The following host boot reads it through its explicit env.
+    super::sample_project::run_for_root(false, root)?;
+    runtime.block_on(async {
+        let pg = (*app).clone();
+        store::clauses::seed(
+            &pg,
+            &rules::clauses::library_clauses().map_err(anyhow::Error::msg)?,
+        )
+        .await?;
+        let storage: std::sync::Arc<dyn cloud::StorageService> =
+            std::sync::Arc::new(cloud::S3Storage::new(cloud::S3StorageConfig::from_lookup(
+                |key| values.get(key).cloned(),
+            )?)?);
+        store::postgres::PostgresDb::with_application_db(pg, async {
+            store::seed::seed_environment(
+                &store::surreal::SurrealDb::uninitialized(),
+                &storage,
+                store::DeploymentEnvironment::Dev,
+                store::seed::BrandSeed::Neon,
+            )
+            .await
+        })
+        .await??;
+        Ok::<(), anyhow::Error>(())
+    })?;
     Ok(())
 }
 

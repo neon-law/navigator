@@ -61,7 +61,7 @@ impl Intent {
         };
         ensure!(
             metadata.is_file()
-                && metadata.permissions().mode() & 0o077 == 0
+                && metadata.permissions().mode().trailing_zeros() >= 6
                 && metadata.len() <= 32768,
             "native tier intent must be a bounded private regular file"
         );
@@ -94,7 +94,7 @@ impl Intent {
             .map_err(|_| anyhow!("could not encode native tier intent"))?;
         file.as_file_mut().flush()?;
         file.as_file().sync_all()?;
-        file.persist(path)
+        file.persist(&path)
             .map_err(|_| anyhow!("could not persist native tier intent"))?;
         fs::File::open(directory)?.sync_all()?;
         Ok(())
@@ -211,6 +211,7 @@ fn native_flags(get: &impl Fn(&str) -> Option<String>) -> Result<BTreeMap<String
     Ok(values)
 }
 
+#[derive(Clone, Copy)]
 pub(super) struct RolePasswords<'a> {
     pub dbos: &'a str,
     pub archive: &'a str,
@@ -283,28 +284,7 @@ pub(super) fn environment(
         "NAVIGATOR_ARCHIVE_POSTGRES_PASSWORD".into(),
         passwords.archive.into(),
     );
-    for (key, value) in super::seaweedfs::credential_env(storage) {
-        values.insert(key.into(), value.into());
-    }
-    for (prefix, credentials) in [
-        ("NAVIGATOR_STORAGE", &storage.documents),
-        ("NAVIGATOR_ASSETS", &storage.assets),
-        ("NAVIGATOR_APPLICATIONS", &storage.applications),
-        ("NAVIGATOR_ARCHIVES", &storage.archives),
-        ("NAVIGATOR_LFS", &storage.lfs),
-        ("NAVIGATOR_EXPORTS", &storage.exports),
-        ("NAVIGATOR_TELEMETRY", &storage.telemetry),
-        ("NAVIGATOR_ARCHIVED_PROJECTS", &storage.archived_projects),
-    ] {
-        values.insert(
-            format!("{prefix}_ACCESS_KEY"),
-            credentials.access_key.clone(),
-        );
-        values.insert(
-            format!("{prefix}_SECRET_KEY"),
-            credentials.secret_key.clone(),
-        );
-    }
+    storage_environment(&mut values, storage);
     values.insert(
         "NAVIGATOR_ARCHIVE_FORGEJO_USER".into(),
         "navigator_archive".into(),
@@ -332,6 +312,152 @@ pub(super) fn environment(
         format!("http://localhost:{}", cfg.forgejo_port),
     );
     Ok(values)
+}
+
+fn storage_environment(
+    values: &mut BTreeMap<String, String>,
+    storage: &super::seaweedfs::Credentials,
+) {
+    for (key, value) in super::seaweedfs::credential_env(storage) {
+        values.insert(key.into(), value.into());
+    }
+    for (prefix, credentials) in [
+        ("NAVIGATOR_STORAGE", &storage.documents),
+        ("NAVIGATOR_ASSETS", &storage.assets),
+        ("NAVIGATOR_APPLICATIONS", &storage.applications),
+        ("NAVIGATOR_ARCHIVES", &storage.archives),
+        ("NAVIGATOR_LFS", &storage.lfs),
+        ("NAVIGATOR_EXPORTS", &storage.exports),
+        ("NAVIGATOR_TELEMETRY", &storage.telemetry),
+        ("NAVIGATOR_ARCHIVED_PROJECTS", &storage.archived_projects),
+    ] {
+        values.insert(
+            format!("{prefix}_ACCESS_KEY"),
+            credentials.access_key.clone(),
+        );
+        values.insert(
+            format!("{prefix}_SECRET_KEY"),
+            credentials.secret_key.clone(),
+        );
+    }
+}
+
+pub(super) fn select_database(
+    root: &Path,
+    cfg: &KindConfig,
+    existing: Option<&str>,
+) -> Result<String> {
+    if let Some(database) = existing {
+        if database == "navigator" {
+            ensure!(
+                Intent::read(root)?.is_none(),
+                "legacy descriptor conflicts with native creation intent"
+            );
+            return Ok(database.into());
+        }
+        let intent = Intent::read(root)?
+            .ok_or_else(|| anyhow!("native descriptor lacks its reserved creation intent"))?;
+        intent.verify_target(root, cfg)?;
+        ensure!(
+            intent.database()? == database,
+            "native descriptor names another database"
+        );
+        return Ok(database.into());
+    }
+    ensure!(
+        !root.join(".devx/env").exists() || Intent::read(root)?.is_some(),
+        "an untracked environment requires explicit recovery before a new native tier"
+    );
+    Intent::prepare(root, cfg)?.database()
+}
+
+pub(super) fn selected(root: &Path, cfg: &KindConfig) -> Result<bool> {
+    match Intent::read(root)? {
+        Some(intent) => {
+            intent.verify_target(root, cfg)?;
+            Ok(true)
+        }
+        None => Ok(false),
+    }
+}
+
+pub(super) fn roles_for_database(rendered: &str, database: &str) -> Result<String> {
+    let operation = database
+        .strip_prefix("navigator_native_")
+        .and_then(|text| Uuid::parse_str(text).ok())
+        .ok_or_else(|| anyhow!("role target is not a native creation identifier"))?;
+    ensure!(
+        native_origin::database_name(operation)? == database,
+        "role target differs from its creation operation"
+    );
+    let mut output = String::new();
+    let mut roles = 0;
+    for doc in serde_yaml::Deserializer::from_str(rendered) {
+        let mut value = serde_yaml::Value::deserialize(doc)?;
+        if value["kind"].as_str() == Some("Job")
+            && value["metadata"]["name"].as_str() == Some("navigator-postgres-roles")
+        {
+            let container = &mut value["spec"]["template"]["spec"]["containers"][0];
+            container["command"]
+                .as_sequence_mut()
+                .ok_or_else(|| anyhow!("roles command is missing"))?
+                .push(serde_yaml::Value::String(format!(
+                    "--set=navigator_database={database}"
+                )));
+            let env = container["env"]
+                .as_sequence_mut()
+                .ok_or_else(|| anyhow!("roles environment is missing"))?;
+            let database_env = env
+                .iter_mut()
+                .find(|entry| entry["name"].as_str() == Some("PGDATABASE"))
+                .ok_or_else(|| anyhow!("roles database setting is missing"))?;
+            *database_env =
+                serde_yaml::to_value(serde_json::json!({"name":"PGDATABASE","value":database}))?;
+            roles += 1;
+        }
+        output.push_str("---\n");
+        output.push_str(&serde_yaml::to_string(&value)?);
+    }
+    ensure!(
+        roles == 1,
+        "native role overlay must contain exactly one role initializer"
+    );
+    Ok(output)
+}
+
+/// Initial infrastructure does not run role grants against an unmigrated database.
+/// The same initializer is applied separately after the origin transaction commits.
+pub(super) fn infrastructure(rendered: &str) -> Result<String> {
+    let mut output = String::new();
+    let mut jobs = 0;
+    for doc in serde_yaml::Deserializer::from_str(rendered) {
+        let value = serde_yaml::Value::deserialize(doc)?;
+        if value["kind"].as_str() == Some("Job")
+            && value["metadata"]["name"].as_str() == Some("navigator-postgres-roles")
+        {
+            jobs += 1;
+            continue;
+        }
+        ensure!(
+            value["kind"].as_str() != Some("RestateDeployment"),
+            "native dependencies cannot register a Restate workload"
+        );
+        let name = value["metadata"]["name"].as_str().unwrap_or_default();
+        ensure!(
+            !matches!(
+                name,
+                "surreal" | "navigator-surreal" | "restate" | "workflows-service"
+            ),
+            "native dependencies contain a legacy engine workload"
+        );
+        output.push_str("---\n");
+        output.push_str(&serde_yaml::to_string(&value)?);
+    }
+    ensure!(
+        jobs == 1,
+        "native dependencies require exactly one deferred role initializer"
+    );
+    Ok(output)
 }
 
 #[cfg(test)]
@@ -535,7 +661,7 @@ mod tests {
     #[test]
     fn native_role_target_replaces_the_old_database_reference() {
         let database = native_origin::database_name(Uuid::new_v4()).unwrap();
-        let source = r#"apiVersion: batch/v1
+        let source = r"apiVersion: batch/v1
 kind: Job
 metadata:
   name: navigator-postgres-roles
@@ -548,7 +674,7 @@ spec:
             - name: PGDATABASE
               valueFrom:
                 secretKeyRef: {name: old, key: database}
-"#;
+";
         let rendered = roles_for_database(source, &database).unwrap();
         let value: serde_yaml::Value = serde_yaml::from_str(&rendered).unwrap();
         let container = &value["spec"]["template"]["spec"]["containers"][0];
@@ -576,122 +702,4 @@ spec:
         cfg.web_port = u16::MAX;
         assert!(dbos_port(&cfg).is_err());
     }
-}
-
-pub(super) fn select_database(
-    root: &Path,
-    cfg: &KindConfig,
-    existing: Option<&str>,
-) -> Result<String> {
-    if let Some(database) = existing {
-        if database == "navigator" {
-            ensure!(
-                Intent::read(root)?.is_none(),
-                "legacy descriptor conflicts with native creation intent"
-            );
-            return Ok(database.into());
-        }
-        let intent = Intent::read(root)?
-            .ok_or_else(|| anyhow!("native descriptor lacks its reserved creation intent"))?;
-        intent.verify_target(root, cfg)?;
-        ensure!(
-            intent.database()? == database,
-            "native descriptor names another database"
-        );
-        return Ok(database.into());
-    }
-    ensure!(
-        !root.join(".devx/env").exists() || Intent::read(root)?.is_some(),
-        "an untracked environment requires explicit recovery before a new native tier"
-    );
-    Intent::prepare(root, cfg)?.database()
-}
-
-pub(super) fn selected(root: &Path, cfg: &KindConfig) -> Result<bool> {
-    match Intent::read(root)? {
-        Some(intent) => {
-            intent.verify_target(root, cfg)?;
-            Ok(true)
-        }
-        None => Ok(false),
-    }
-}
-
-pub(super) fn roles_for_database(rendered: &str, database: &str) -> Result<String> {
-    let operation = database
-        .strip_prefix("navigator_native_")
-        .and_then(|text| Uuid::parse_str(text).ok())
-        .ok_or_else(|| anyhow!("role target is not a native creation identifier"))?;
-    ensure!(
-        native_origin::database_name(operation)? == database,
-        "role target differs from its creation operation"
-    );
-    let mut output = String::new();
-    let mut roles = 0;
-    for doc in serde_yaml::Deserializer::from_str(rendered) {
-        let mut value = serde_yaml::Value::deserialize(doc)?;
-        if value["kind"].as_str() == Some("Job")
-            && value["metadata"]["name"].as_str() == Some("navigator-postgres-roles")
-        {
-            let container = &mut value["spec"]["template"]["spec"]["containers"][0];
-            container["command"]
-                .as_sequence_mut()
-                .ok_or_else(|| anyhow!("roles command is missing"))?
-                .push(serde_yaml::Value::String(format!(
-                    "--set=navigator_database={database}"
-                )));
-            let env = container["env"]
-                .as_sequence_mut()
-                .ok_or_else(|| anyhow!("roles environment is missing"))?;
-            let database_env = env
-                .iter_mut()
-                .find(|entry| entry["name"].as_str() == Some("PGDATABASE"))
-                .ok_or_else(|| anyhow!("roles database setting is missing"))?;
-            *database_env =
-                serde_yaml::to_value(serde_json::json!({"name":"PGDATABASE","value":database}))?;
-            roles += 1;
-        }
-        output.push_str("---\n");
-        output.push_str(&serde_yaml::to_string(&value)?);
-    }
-    ensure!(
-        roles == 1,
-        "native role overlay must contain exactly one role initializer"
-    );
-    Ok(output)
-}
-
-/// Initial infrastructure does not run role grants against an unmigrated database.
-/// The same initializer is applied separately after the origin transaction commits.
-pub(super) fn infrastructure(rendered: &str) -> Result<String> {
-    let mut output = String::new();
-    let mut jobs = 0;
-    for doc in serde_yaml::Deserializer::from_str(rendered) {
-        let value = serde_yaml::Value::deserialize(doc)?;
-        if value["kind"].as_str() == Some("Job")
-            && value["metadata"]["name"].as_str() == Some("navigator-postgres-roles")
-        {
-            jobs += 1;
-            continue;
-        }
-        ensure!(
-            value["kind"].as_str() != Some("RestateDeployment"),
-            "native dependencies cannot register a Restate workload"
-        );
-        let name = value["metadata"]["name"].as_str().unwrap_or_default();
-        ensure!(
-            !matches!(
-                name,
-                "surreal" | "navigator-surreal" | "restate" | "workflows-service"
-            ),
-            "native dependencies contain a legacy engine workload"
-        );
-        output.push_str("---\n");
-        output.push_str(&serde_yaml::to_string(&value)?);
-    }
-    ensure!(
-        jobs == 1,
-        "native dependencies require exactly one deferred role initializer"
-    );
-    Ok(output)
 }

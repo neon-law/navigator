@@ -347,26 +347,29 @@ mod tests {
             use store::projects::{designate_dri_in_surreal, DriSide};
             let pg = store::postgres::PostgresDb::application().await.unwrap();
             let surreal = store::surreal::SurrealDb::uninitialized();
-            let matter = super::native_project_fixture::matter(&surreal).await;
-            let assigned = store::projects::find_by_id(&surreal, matter.project)
+            let (matter, admin) = super::native_project_fixture::matter(&surreal).await;
+            let firm = matter
+                .firm_id
+                .expect("the native Project fixture has a Firm");
+            let assigned = store::projects::find_by_id(&surreal, matter.id)
                 .await
                 .unwrap()
                 .unwrap();
-            assert_eq!(assigned.firm_id, Some(matter.firm));
+            assert_eq!(assigned.firm_id, Some(firm));
             assert_eq!(assigned.brand, matter.brand);
-            assert_eq!(assigned.entity_id, matter.entity);
-            assert!(persons::find_by_id(&surreal, matter.admin)
+            assert_eq!(assigned.entity_id, matter.entity_id);
+            assert!(persons::find_by_id(&surreal, admin)
                 .await
                 .unwrap()
                 .is_some());
-            let unassigned_id = super::native_project_fixture::new_project(
+            let unassigned_project = super::native_project_fixture::new_project(
                 &surreal,
-                matter.firm,
+                firm,
                 &matter.brand,
-                matter.entity,
+                matter.entity_id,
             )
             .await;
-            let unassigned = store::projects::find_by_id(&surreal, unassigned_id)
+            let unassigned = store::projects::find_by_id(&surreal, unassigned_project.id)
                 .await
                 .unwrap()
                 .unwrap();
@@ -382,10 +385,10 @@ mod tests {
             )
             .await
             .unwrap();
-            designate_dri_in_surreal(&surreal, matter.project, lawyer.id, DriSide::Lawyer)
+            designate_dri_in_surreal(&surreal, matter.id, lawyer.id, DriSide::Lawyer)
                 .await
                 .unwrap();
-            designate_dri_in_surreal(&surreal, matter.project, client.id, DriSide::Client)
+            designate_dri_in_surreal(&surreal, matter.id, client.id, DriSide::Client)
                 .await
                 .unwrap();
             let source = super::ApplicationDriDigestSource {

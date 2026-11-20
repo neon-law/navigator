@@ -162,13 +162,13 @@ fn bind_legacy_objects(
 pub async fn run(
     shutdown: impl std::future::Future<Output = anyhow::Result<()>> + Send + 'static,
 ) -> anyhow::Result<()> {
-    run_host(
+    Box::pin(run_host(
         Box::pin(shutdown),
         None,
         Box::new(|_| Ok(Vec::new())),
         HostMode::Standalone,
         None,
-    )
+    ))
     .await
 }
 
@@ -187,13 +187,13 @@ where
         Engine::from_lookup(|key| std::env::var(key).ok())? == Engine::Dbos,
         "Embedded workflows require NAVIGATOR_WORKFLOW_ENGINE=dbos"
     );
-    run_host(
+    Box::pin(run_host(
         Box::pin(shutdown),
         Some(schedules),
         Box::new(register_external),
         HostMode::Embedded,
         Some(ready),
-    )
+    ))
     .await
 }
 

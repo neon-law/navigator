@@ -200,15 +200,18 @@ fn local_canary_keeps_manual_registration_and_strict_timer_configuration() {
 }
 
 async fn seed_invoice(source: &SurrealDb, providers: &LocalProviders) -> String {
-    let matter = native_project::matter(source).await;
-    let project = store::projects::find_by_id(source, matter.project)
+    let (matter, admin) = native_project::matter(source).await;
+    let firm = matter
+        .firm_id
+        .expect("the native Project fixture has a Firm");
+    let project = store::projects::find_by_id(source, matter.id)
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(project.firm_id, Some(matter.firm));
+    assert_eq!(project.firm_id, Some(firm));
     assert_eq!(project.brand, matter.brand);
-    assert_eq!(project.entity_id, matter.entity);
-    assert!(store::persons::find_by_id(source, matter.admin)
+    assert_eq!(project.entity_id, matter.entity_id);
+    assert!(store::persons::find_by_id(source, admin)
         .await
         .unwrap()
         .is_some());
@@ -216,9 +219,9 @@ async fn seed_invoice(source: &SurrealDb, providers: &LocalProviders) -> String 
     store::xero_invoices::upsert(
         source,
         &store::xero_invoices::UpsertXeroInvoice {
-            project_id: matter.project,
+            project_id: matter.id,
             xero_invoice_id: invoice.clone(),
-            reference: format!("Matter {}", matter.project),
+            reference: format!("Matter {}", matter.id),
             status: "AUTHORISED".into(),
             amount_cents: 1200,
             currency: "USD".into(),
