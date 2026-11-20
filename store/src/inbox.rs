@@ -1782,6 +1782,14 @@ pub async fn assign(
     conversation_id: Uuid,
     project_id: Uuid,
 ) -> Result<Assignment, InboxError> {
+    // The assign door only opens open Projects: a stale form or a crafted
+    // POST cannot attribute a conversation into a closed or archived matter.
+    let target = projects::find_by_id(db, project_id)
+        .await?
+        .ok_or(InboxError::NotFound)?;
+    if !target.status.eq_ignore_ascii_case("open") {
+        return Err(InboxError::Denied);
+    }
     let conversation = conversation_by_id(db, conversation_id)
         .await?
         .ok_or(InboxError::NotFound)?;
@@ -2067,7 +2075,9 @@ async fn assign_write(
 }
 
 /// Post-operation that attributes an intake message to one Project after it
-/// has been received. Only an Owner or a participating Lawyer/Clerk may do so.
+/// has been received. Only an Owner or a participating Lawyer/Clerk may do so,
+/// and only into an open Project — the door refuses closed and archived
+/// matters with [`InboxError::Denied`].
 pub async fn attribute_to_project(
     db: &SurrealDb,
     actor_id: Uuid,
@@ -4695,9 +4705,10 @@ pub(crate) async fn assignee_label(
         .map_or_else(|| "Unassigned".to_string(), |project| project.name))
 }
 
-/// The Firm's Projects a conversation may be assigned to: every one that is
-/// not closed. The reading pane's picker, the triage override form, and the
-/// classifier's menu all read this list.
+/// The Firm's Projects a conversation may be assigned to: only open ones —
+/// a closed or archived matter is neither offered nor accepted. The reading
+/// pane's picker, the triage override form, and the classifier's menu all
+/// read this list.
 pub async fn projects_in_firm(
     db: &SurrealDb,
     firm_id: Uuid,
@@ -4708,7 +4719,7 @@ pub async fn projects_in_firm(
     let mut response = db
         .query(
             "SELECT id, code, name, description FROM project \
-             WHERE firm_id = $firm AND status != 'closed' ORDER BY name",
+             WHERE firm_id = $firm AND string::lowercase(status) = 'open' ORDER BY name",
         )
         .bind(("firm", record_id(crate::firms::TABLE, firm_id)))
         .await?
@@ -5460,28 +5471,45 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_project_menu_drops_a_closed_project() {
+    async fn the_project_menu_offers_only_open_projects_and_the_door_denies_the_rest() {
         let db = mem_surreal().await;
         let world = world(&db).await;
-        let open: Vec<Uuid> = projects_in_firm(&db, world.firm)
-            .await
-            .unwrap()
-            .into_iter()
-            .map(|project| project.id)
-            .collect();
-        assert!(open.contains(&world.project), "{open:?}");
-
-        db.query("UPDATE $id SET status = 'closed'")
-            .bind(("id", record_id(projects::PROJECT_TABLE, world.project)))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-        let open = projects_in_firm(&db, world.firm).await.unwrap();
-        assert!(
-            open.iter().all(|project| project.id != world.project),
-            "{open:?}"
-        );
+        let ingested = ingest_inbound(
+            &db,
+            &inbound(
+                world.firm,
+                channel::EMAIL,
+                "support",
+                "closed-target",
+                "sender@example.com",
+            ),
+        )
+        .await
+        .unwrap();
+        for status in ["closed", "archived", "Open "] {
+            db.query("UPDATE $id SET status = $status")
+                .bind(("id", record_id(projects::PROJECT_TABLE, world.project)))
+                .bind(("status", status.trim()))
+                .await
+                .unwrap()
+                .check()
+                .unwrap();
+            // The menu never offers a matter that is not open, and the door
+            // refuses a hand-crafted POST into one — the same rule twice.
+            let menu = projects_in_firm(&db, world.firm).await.unwrap();
+            assert!(
+                menu.iter().all(|project| project.id != world.project),
+                "{status}: {menu:?}"
+            );
+            let outcome =
+                attribute_to_project(&db, world.owner, ingested.conversation_id, world.project)
+                    .await;
+            if status == "Open " {
+                outcome.unwrap();
+            } else {
+                assert!(matches!(outcome, Err(InboxError::Denied)), "{status}");
+            }
+        }
     }
 
     #[tokio::test]

@@ -64,7 +64,7 @@ const MESSAGE_COLUMNS: &str = "id, conversation_id, parent_message_id, visibilit
 const ASSIGNMENT_COLUMNS: &str = "id, conversation_id, firm_id, from_project_id, to_project_id, \
     actor_person_id, inserted_at";
 
-/// The Firm's non-closed Projects, with the context the Inbox picker and classifier use.
+/// The Firm's open Projects, with the context the Inbox picker and classifier use.
 pub(crate) async fn projects_in_firm_on(
     pg: &PostgresDb,
     firm_id: Uuid,
@@ -72,7 +72,7 @@ pub(crate) async fn projects_in_firm_on(
     use sqlx::Row;
     let rows = sqlx::query(
         "SELECT id, code, name, description FROM project \
-         WHERE firm_id = $1 AND status != 'closed' ORDER BY name",
+         WHERE firm_id = $1 AND lower(status) = 'open' ORDER BY name",
     )
     .bind(firm_id)
     .fetch_all(pg.pool())
