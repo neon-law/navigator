@@ -392,9 +392,9 @@ pub fn ClerkProjectDetail() -> Element {
             match view.project.as_ref() {
                 Some(project) => rsx! {
                     p { class: "portal-detail__back", a { href: "/app/projects", "← Projects" } }
-                    h1 { class: "matter-heading",
+                    h1 { class: "project-heading",
                         span { "{project.name}" }
-                        span { class: "matter-heading__code", "{project.code}" }
+                        span { class: "project-heading__code", "{project.code}" }
                     }
                     crate::sections::page::CaseNav {
                         tabs: view.page_tabs.clone(),

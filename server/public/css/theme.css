@@ -4802,15 +4802,15 @@ a.lawyer-detail__fact-value:focus-visible {
   margin-bottom: 1rem;
 }
 
-.matter-heading {
+.project-heading {
   display: flex;
   align-items: baseline;
   gap: 0.8rem;
 }
 
-.matter-heading__code {
+.project-heading__code {
   color: var(--nav-color-text-muted);
-  font: 500 0.42em/1 var(--nav-font-sans, sans-serif);
+  font: 500 0.42em/1 var(--nav-font-mono, monospace);
 }
 
 .lawyer-detail__actions {

@@ -209,9 +209,9 @@ pub fn AdminUnassignedProjectDetail() -> Element {
         }
         main { id: "admin-unassigned-project", class: "nav-theme lawyer-detail",
             header { class: "page-header",
-                h1 { class: "matter-heading",
+                h1 { class: "project-heading",
                     span { "{view.name}" }
-                    span { class: "matter-heading__code", "{view.code}" }
+                    span { class: "project-heading__code", "{view.code}" }
                 }
                 p { class: "nav-muted",
                     "Status: {view.status}"

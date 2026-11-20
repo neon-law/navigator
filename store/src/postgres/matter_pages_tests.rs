@@ -81,7 +81,7 @@ async fn replacement_keeps_order_lenses_and_other_projects_isolated() {
                 "provenance_statement".into(),
             ],
         );
-        let declared = vec![first.clone(), page("deadlines"), rich];
+        let declared = vec![first.clone(), page("custom-deadlines"), rich];
         let rows = pages::replace_for_project(&db, project, &declared)
             .await
             .unwrap();
@@ -95,12 +95,12 @@ async fn replacement_keeps_order_lenses_and_other_projects_isolated() {
         assert_eq!(rows[2].position, 2);
         assert!(rows[1].entry.sections_for(Lens::Client).is_none());
         assert_eq!(pages::inbox_entries(&db, project).await.unwrap(), declared);
-        pages::replace_for_project(&db, project, &[page("deadlines")])
+        pages::replace_for_project(&db, project, &[page("custom-deadlines")])
             .await
             .unwrap();
         let rows = pages::list_for_project(&db, project).await.unwrap();
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].entry.slug, "deadlines");
+        assert_eq!(rows[0].entry.slug, "custom-deadlines");
         assert_eq!(rows[0].position, 0);
         pages::delete_for_project(&db, project).await.unwrap();
         assert!(pages::list_for_project(&db, project)

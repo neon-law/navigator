@@ -1017,9 +1017,9 @@ pub fn CaseNav(tabs: Vec<PageTab>, current: String) -> Element {
 #[component]
 pub fn MatterHeading(name: String, code: String, tabs: Vec<PageTab>, current: String) -> Element {
     rsx! {
-        h1 { class: "matter-heading",
+        h1 { class: "project-heading",
             span { "{name}" }
-            span { class: "matter-heading__code", "{code}" }
+            span { class: "project-heading__code", "{code}" }
         }
         CaseNav { tabs, current }
     }
