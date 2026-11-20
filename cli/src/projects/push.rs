@@ -8,7 +8,9 @@
 //! merge-when-green and read the arm back; watch the required check to a
 //! verdict, naming each stall separately; capture the merge commit; then
 //! synchronize a configured secondary mirror and hand the merge commit to the
-//! merge watcher. Review and deployment queries use the [`Forge`] seam.
+//! merge watcher. Review and deployment queries use the [`Forge`] seam. A
+//! read-only live document preflight runs before any branch, staging, or
+//! review request change.
 
 use std::future::Future;
 use std::path::Path;
@@ -48,6 +50,7 @@ pub async fn dispatch(
     body: Option<&str>,
     dry_run: bool,
 ) -> Result<()> {
+    run_document_preflight(dir).await?;
     let remote = git_text(dir, &["remote", "get-url", "origin"])?;
     let github = super::lifecycle::github_origin(dir, &remote)
         .await
@@ -70,6 +73,88 @@ pub async fn dispatch(
     )
     .await?;
     Ok(())
+}
+
+/// Check the live document ledger before the push lane can create a branch,
+/// stage files, or open a review request. The check uses the local site
+/// session, writes no pointers, and names all metadata paths that need review.
+async fn run_document_preflight(dir: &Path) -> Result<()> {
+    let outcome = super::document_check::publish_preflight(dir).await?;
+    for warning in &outcome.warnings {
+        println!(
+            "document preflight warning: {}: {}",
+            warning.location, warning.message
+        );
+    }
+    for fix in &outcome.fixes {
+        println!("document preflight would {}: {}", fix.action, fix.path);
+    }
+    let ignored = ignored_pointer_paths(dir, &outcome.fixes)?;
+    for path in &ignored {
+        eprintln!("document preflight ignored Pointer: {path}");
+    }
+    for error in &outcome.errors {
+        eprintln!(
+            "document preflight error: {}: {}",
+            error.location, error.message
+        );
+    }
+    anyhow::ensure!(
+        outcome.errors.is_empty() && outcome.fixes.is_empty() && ignored.is_empty(),
+        "live document preflight found differences; review the reported metadata, run `navigator project repository sync-skills` if an ignore rule hides a Pointer, run `navigator project gate --check` to reconcile the checkout, and retry"
+    );
+    println!("document preflight: live documents match the committed Pointers");
+    Ok(())
+}
+
+/// Return ignored Pointer paths already in the tree and paths the live check
+/// would create. Git's normal status omits the former, while check-ignore sees
+/// the latter before they exist.
+fn ignored_pointer_paths(
+    dir: &Path,
+    fixes: &[super::document_check::CheckFix],
+) -> Result<Vec<String>> {
+    let output = git(
+        dir,
+        &[
+            "ls-files",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "--",
+            "blobs/",
+        ],
+    )
+    .context("list ignored files below blobs/")?;
+    anyhow::ensure!(
+        output.status.success(),
+        "could not inspect ignored Project Pointer paths"
+    );
+    let mut ignored = std::collections::BTreeSet::new();
+    for relative in String::from_utf8_lossy(&output.stdout).lines() {
+        let path = Path::new(relative);
+        if !crate::document_sync::is_pointer_path(path) {
+            continue;
+        }
+        crate::document_sync::read_pointer(&dir.join(path))
+            .with_context(|| format!("inspect ignored Pointer metadata at {relative}"))?;
+        ignored.insert(relative.to_string());
+    }
+    for fix in fixes {
+        if !crate::document_sync::is_pointer_path(Path::new(&fix.path)) {
+            continue;
+        }
+        let check = git(dir, &["check-ignore", "--quiet", "--", &fix.path])
+            .context("check whether a proposed Pointer is ignored")?;
+        match check.status.code() {
+            Some(0) => {
+                ignored.insert(fix.path.clone());
+            }
+            Some(1) => {}
+            _ => anyhow::bail!("could not inspect Git ignore rules for a proposed Pointer"),
+        }
+    }
+    Ok(ignored.into_iter().collect())
 }
 
 /// Reconcile a review merged outside the delivery lane, without changing local work.
@@ -662,7 +747,10 @@ pub fn render_report(report: &LaneReport) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{branch_slug, check_signing, check_version_pin, render_report, watch_check};
+    use super::{
+        branch_slug, check_signing, check_version_pin, ignored_pointer_paths, render_report,
+        watch_check,
+    };
     use crate::projects::forge::{ArmOutcome, CheckVerdict, Forge, ReviewRef, ReviewRequest};
     use anyhow::Result;
     use async_trait::async_trait;
@@ -670,6 +758,48 @@ mod tests {
     use std::process::Command;
     use std::sync::Mutex;
     use std::time::Instant;
+
+    #[test]
+    fn preflight_reports_a_proposed_pointer_hidden_by_the_legacy_mail_rule() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".gitignore"), "mail/\n").unwrap();
+        let initialized = Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(dir.path())
+            .status()
+            .unwrap();
+        assert!(initialized.success());
+        let fixes = [super::super::document_check::CheckFix {
+            path: "blobs/mail/message/file.pdf.yaml".to_string(),
+            action: "write the missing pointer".to_string(),
+        }];
+
+        let ignored = ignored_pointer_paths(dir.path(), &fixes).unwrap();
+
+        assert_eq!(ignored, vec!["blobs/mail/message/file.pdf.yaml"]);
+        assert!(!dir.path().join("blobs").exists());
+    }
+
+    #[test]
+    fn preflight_finds_an_existing_untracked_pointer_hidden_by_the_legacy_mail_rule() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".gitignore"), "mail/\n").unwrap();
+        let initialized = Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(dir.path())
+            .status()
+            .unwrap();
+        assert!(initialized.success());
+        let relative = "blobs/mail/message/file.pdf.yaml";
+        let pointer = "kind: filing\nvisibility: internal\ncurrent_version:\n  version: 1\n  asset_id: 018f0000-0000-7000-8000-000000000001\n  created_at: \"2026-09-05T12:00:00Z\"\n  sha256: 0000000000000000000000000000000000000000000000000000000000000000\n  size_bytes: 18\n";
+        let path = dir.path().join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, pointer).unwrap();
+
+        let ignored = ignored_pointer_paths(dir.path(), &[]).unwrap();
+
+        assert_eq!(ignored, vec![relative]);
+    }
 
     /// A forge that answers from a script, so the watch loop and the verb
     /// run against a mocked backend and no network.
