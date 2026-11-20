@@ -1234,24 +1234,42 @@ fn serve_health_listener(
 
 #[cfg(test)]
 mod host_mode_tests {
-    #[tokio::test]
-    async fn verified_object_activation_removes_only_the_two_legacy_sdk_http_services() {
+    fn object_fixture_options() -> Option<sqlx::postgres::PgConnectOptions> {
         use sqlx::postgres::{PgConnectOptions, PgSslMode};
         let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {
             assert_ne!(std::env::var("NAV_REQUIRE_POSTGRES").as_deref(), Ok("1"));
+            return None;
+        };
+        Some(
+            PgConnectOptions::new()
+                .host("127.0.0.1")
+                .port(port.parse().unwrap())
+                .username("postgres")
+                .password("synthetic")
+                .database(
+                    &std::env::var("NAVIGATOR_TEST_POSTGRES_DATABASE")
+                        .unwrap_or_else(|_| "smoke".into()),
+                )
+                .ssl_mode(PgSslMode::Disable)
+                .options([("session_preload_libraries", "age")]),
+        )
+    }
+
+    fn object_dbos_lookup(key: &str) -> Option<String> {
+        match key {
+            "NAVIGATOR_DBOS_ENABLED"
+            | "NAVIGATOR_DBOS_NOTATION_ENABLED"
+            | "NAVIGATOR_DBOS_PROJECT_SLACK_ENABLED" => Some("true".into()),
+            "NAVIGATOR_WORKFLOW_ENGINE" => Some("dbos".into()),
+            _ => None,
+        }
+    }
+
+    #[tokio::test]
+    async fn verified_object_activation_removes_only_the_two_legacy_sdk_http_services() {
+        let Some(options) = object_fixture_options() else {
             return;
         };
-        let options = PgConnectOptions::new()
-            .host("127.0.0.1")
-            .port(port.parse().unwrap())
-            .username("postgres")
-            .password("synthetic")
-            .database(
-                &std::env::var("NAVIGATOR_TEST_POSTGRES_DATABASE")
-                    .unwrap_or_else(|_| "smoke".into()),
-            )
-            .ssl_mode(PgSslMode::Disable)
-            .options([("session_preload_libraries", "age")]);
         for active in [false, true] {
             let fixture = if active {
                 store::test_support::PostgresFixture::create(options.clone()).await
@@ -1259,16 +1277,9 @@ mod host_mode_tests {
                 store::test_support::PostgresFixture::create_capture_target(options.clone()).await
             }
             .unwrap();
-            let lookup = |key: &str| match key {
-                "NAVIGATOR_DBOS_ENABLED"
-                | "NAVIGATOR_DBOS_NOTATION_ENABLED"
-                | "NAVIGATOR_DBOS_PROJECT_SLACK_ENABLED" => Some("true".into()),
-                "NAVIGATOR_WORKFLOW_ENGINE" => Some("dbos".into()),
-                _ => None,
-            };
             let selection = store::durable_object_handover::require_runtime_selection(
                 fixture.postgres(),
-                lookup,
+                object_dbos_lookup,
             )
             .await
             .unwrap();
