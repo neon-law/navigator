@@ -10,10 +10,10 @@ fn native(key: &str) -> Option<String> {
     use store::workflow_engine as engine;
     match key {
         "NAVIGATOR_CI_HARNESS" => Some("1".into()),
-        "NAVIGATOR_STAGING" => Some("false".into()),
         engine::ENGINE_ENV => Some("dbos".into()),
         engine::COHOST_ENV | engine::DBOS_ENABLED_ENV => Some("true".into()),
-        workflows::flags::BILLING_CANARY_SCHEDULE_ENABLED_ENV
+        "NAVIGATOR_STAGING"
+        | workflows::flags::BILLING_CANARY_SCHEDULE_ENABLED_ENV
         | workflows::flags::RECONCILE_INVOICES_SCHEDULE_ENABLED_ENV => Some("false".into()),
         name if engine::WORKFLOWS.iter().any(|item| item.flag == name) => Some("true".into()),
         _ => None,
