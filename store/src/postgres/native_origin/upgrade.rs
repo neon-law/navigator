@@ -1,8 +1,14 @@
 //! One bound migration intent, with explicit same-operation interruption recovery.
-use super::*;
+use super::{
+    authority_contract, database_name, origin, require_schema_for, schema_attestation,
+    schema_contract_for, NativeDatabase, Origin, OriginError, TierBinding,
+};
+use crate::postgres::{embedded_migrator, PostgresDb};
 use sqlx::migrate::Migrator;
-use sqlx::Connection;
+use sqlx::postgres::PgConnectOptions;
+use sqlx::{Connection, Row};
 use std::collections::BTreeMap;
+use uuid::Uuid;
 
 const LOCK: i64 = 0x6f72_6967_696e_7570; // "originup", scoped to this database.
 
@@ -149,34 +155,31 @@ pub(super) async fn upgrade_with(
     }
     let target = schema_contract_for(runner);
     let history = chain(pg, &origin, &target).await?;
-    let intent = match history.pending {
-        Some(intent) => {
-            if intent.operation != operation || intent.to != target {
-                return Err(OriginError::Upgrade);
-            }
-            let actual = schema_attestation(pg).await?;
-            if !prefix(&intent.from, &actual) || !prefix(&actual, &intent.to) {
-                return Err(OriginError::Authority);
-            }
-            intent
+    let intent = if let Some(intent) = history.pending {
+        if intent.operation != operation || intent.to != target {
+            return Err(OriginError::Upgrade);
         }
-        None => {
-            require_schema_for(pg, &history.schema).await?;
-            if history.schema == target {
-                return Ok(());
-            }
-            let intent = Intent {
-                operation,
-                predecessor: history.predecessor,
-                from: history.schema,
-                to: target.clone(),
-                completed: false,
-            };
-            sqlx::query("INSERT INTO public.database_origin_upgrade(upgrade_operation,creation_operation,predecessor_operation,from_schema_contract,to_schema_contract,authority_contract) VALUES($1,$2,$3,$4,$5,$6)")
-                .bind(operation).bind(creation).bind(intent.predecessor).bind(&intent.from).bind(&intent.to).bind(authority_contract())
-                .execute(pg.pool()).await?;
-            intent
+        let actual = schema_attestation(pg).await?;
+        if !prefix(&intent.from, &actual) || !prefix(&actual, &intent.to) {
+            return Err(OriginError::Authority);
         }
+        intent
+    } else {
+        require_schema_for(pg, &history.schema).await?;
+        if history.schema == target {
+            return Ok(());
+        }
+        let intent = Intent {
+            operation,
+            predecessor: history.predecessor,
+            from: history.schema,
+            to: target.clone(),
+            completed: false,
+        };
+        sqlx::query("INSERT INTO public.database_origin_upgrade(upgrade_operation,creation_operation,predecessor_operation,from_schema_contract,to_schema_contract,authority_contract) VALUES($1,$2,$3,$4,$5,$6)")
+            .bind(operation).bind(creation).bind(intent.predecessor).bind(&intent.from).bind(&intent.to).bind(authority_contract())
+            .execute(pg.pool()).await?;
+        intent
     };
     pg.migrate(runner, None)
         .await

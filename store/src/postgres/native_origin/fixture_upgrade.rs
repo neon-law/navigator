@@ -1,8 +1,10 @@
 //! Fixed future-release transport fixture; no caller-selected migration or SQL.
-use super::*;
+use super::{admits, upgrade, NativeDatabase, OriginError};
+use crate::postgres::{embedded_migrator, PostgresDb};
 use sqlx::migrate::{Migration, MigrationType, Migrator};
-use sqlx::SqlSafeStr;
+use sqlx::{AssertSqlSafe, SqlSafeStr};
 use std::time::Duration;
+use uuid::Uuid;
 
 const VERSION: i64 = 20_261_120_000_000;
 const MIGRATION_GATE: i64 = 617_250_021;
