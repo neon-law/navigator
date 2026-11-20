@@ -543,6 +543,20 @@
       {
         "action": "export",
         "schema": "public",
+        "name": "durable_object_handover",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "durable_object_ownership",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
         "name": "efiling_transactions",
         "kind": "table",
         "accessible": true
@@ -1340,6 +1354,27 @@
         "action": "export",
         "schema": "public",
         "name": "project_service",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "project_slack_delivery",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "project_slack_delivery_reconciliation",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "project_slack_handover",
         "kind": "table",
         "accessible": true
       },
