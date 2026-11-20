@@ -112,6 +112,13 @@ pub struct CallDetails {
     pub duration_minutes: Option<i64>,
     /// One of [`recorded`].
     pub recorded: String,
+    /// The firm chose to share this call with the client (LAW-424). The
+    /// client lens reads this flag, not `direction`: a call row's
+    /// top-level direction is the call's own, so sharing carries its own
+    /// signal. Rows written before the field lack the key, and the lens
+    /// still reads their share state off `direction != internal`.
+    #[serde(default)]
+    pub client_visible: bool,
     /// The issue a meet-and-confer call addressed, when it was one.
     pub meet_and_confer: Option<String>,
 }
@@ -292,8 +299,9 @@ pub struct NewCall {
     pub call: CallDetails,
     /// What was agreed, each stored `unconfirmed`.
     pub agreements: Vec<String>,
-    /// Share the note with the client: the row's direction becomes the
-    /// call's own, so the client lens reads it. Refused for opposing counsel.
+    /// Share the call with the client: persisted on the row's
+    /// `call.client_visible`, which the client lens reads. Refused for
+    /// opposing counsel.
     pub client_visible: bool,
 }
 
@@ -325,9 +333,10 @@ fn check_call(call: &CallDetails) -> Result<(), CommunicationError> {
     Ok(())
 }
 
-/// Log a call as a Communication (LAW-140). The row is an internal note
-/// unless `client_visible` is set, and a call with opposing counsel is
-/// always internal: that note is work product.
+/// Log a call as a Communication (LAW-140). The row reads as the call
+/// that happened (LAW-424): top-level `direction` and `counterparty_role`
+/// are the call's own flags, shared or not. A call with opposing counsel
+/// is never client-visible: that note is work product.
 ///
 /// # Errors
 /// [`CommunicationError::Invalid`] for a value the caller can correct, or
@@ -359,11 +368,11 @@ pub async fn record_call(
             "a call with opposing counsel is always internal; it cannot be client-visible".into(),
         ));
     }
-    let direction = if new.client_visible {
-        new.call.direction.clone()
-    } else {
-        direction::INTERNAL.to_string()
-    };
+    // LAW-424: the row carries the call's own direction and role at the
+    // top level; sharing is the row's `call.client_visible` signal.
+    let direction = new.call.direction.clone();
+    let mut call = new.call.clone();
+    call.client_visible = new.client_visible;
     let agreements: Vec<Agreement> = new
         .agreements
         .iter()
@@ -381,7 +390,8 @@ pub async fn record_call(
             "id": id, "project_id": new.project_id, "channel": channel::CALL,
             "direction": direction, "author_person_id": new.author_person_id,
             "counterparty": counterparty, "subject": new.subject, "body": body,
-            "occurred_at": at, "call": new.call, "agreements": agreements,
+            "occurred_at": at, "counterparty_role": new.call.counterparty_role,
+            "call": call, "agreements": agreements,
         });
         let query = sqlx::query(
             "INSERT INTO communication SELECT * FROM jsonb_populate_record(NULL::communication, \
@@ -399,7 +409,7 @@ pub async fn record_call(
              project_id = $project_id, channel = $channel, direction = $direction, \
              author_person_id = $author, counterparty = $counterparty, subject = $subject, \
              body = $body, source_ref = NONE, asset_id = NONE, occurred_at = $occurred_at, \
-             call = $call, agreements = $agreements \
+             counterparty_role = $counterparty_role, call = $call, agreements = $agreements \
              RETURN {SELECT}"
         ))
         .bind(("id", record_id(TABLE, id)))
@@ -417,7 +427,8 @@ pub async fn record_call(
         .bind(("subject", new.subject.clone()))
         .bind(("body", body.to_string()))
         .bind(("occurred_at", at))
-        .bind(("call", new.call.clone()))
+        .bind(("counterparty_role", new.call.counterparty_role.clone()))
+        .bind(("call", call))
         .bind(("agreements", agreements))
         .await
         .and_then(surrealdb::IndexedResults::check)?;
@@ -973,10 +984,12 @@ pub async fn exists_for_project(
     Ok(!ids.is_empty())
 }
 
-/// The conversation as a **client** may see it: every row except firm-internal
-/// notes (`direction = internal`). Internal notes are firm work product; a
-/// client must never read one, so the exclusion is enforced in the query, not
-/// left to the template. The firm sees [`for_project`].
+/// The conversation as a **client** may see it: every row except
+/// firm-internal notes (`direction = internal`), and every call whose
+/// `call.client_visible` flag is not set (LAW-424). Internal notes are
+/// firm work product; a client must never read one, so the exclusion is
+/// enforced in the query, not left to the template. The firm sees
+/// [`for_project`].
 ///
 /// # Errors
 ///
@@ -1003,6 +1016,7 @@ async fn read_thread(
         let query = sqlx::query(concat!(
             pg_communication!(),
             " WHERE c.project_id = $1 AND c.direction IS DISTINCT FROM $2 \
+             AND (c.call IS NULL OR COALESCE((c.call->>'client_visible')::boolean, TRUE)) \
              ORDER BY c.occurred_at, c.id"
         ))
         .bind(project_id)
@@ -1010,7 +1024,13 @@ async fn read_thread(
         return Ok(with_receipts(authority::rows(&pg, query).await?));
     }
     let filter = if exclude_direction.is_some() {
-        "AND direction != $excluded "
+        // LAW-424: a call row hides from the client lens on its
+        // `call.client_visible` flag, not its direction. Rows written
+        // before the flag lack the key (NONE): they were shared exactly
+        // when their direction is not `internal`, which the first
+        // clause already covers, so NONE stays visible.
+        "AND direction != $excluded \
+         AND (call == NONE OR call.client_visible == NONE OR call.client_visible == true) "
     } else {
         ""
     };
@@ -1407,11 +1427,15 @@ mod tests {
     }
 
     /// LAW-140: the schema accepts `call` and refuses a channel it does not
-    /// list; a call is internal by default, so the client-visible read
-    /// excludes it while the firm read carries its structure; agreements
-    /// stay unconfirmed until an email Communication confirms them.
+    /// list; a call hides from the client-visible read unless
+    /// `client_visible` is set, while the firm read carries its structure;
+    /// agreements stay unconfirmed until an email Communication confirms
+    /// them.
     #[tokio::test]
-    async fn a_call_is_logged_internal_with_agreements_until_an_email_confirms_them() {
+    async fn a_call_is_logged_with_agreements_until_an_email_confirms_them() {
+        // LAW-424: the row's top-level direction is the call's own now,
+        // so this fixture (outbound, opposing counsel, not shared) no
+        // longer reads `internal`.
         use super::{confirm_agreements, record_call, CallDetails, NewCall};
         let surreal = crate::surreal::test_support::mem().await;
         let project_id = crate::test_support::seed_project_surreal(&surreal, "Test Matter").await;
@@ -1439,6 +1463,7 @@ mod tests {
                     duration_minutes: Some(20),
                     recorded: "none".into(),
                     meet_and_confer: Some("Responses to Set One".into()),
+                    client_visible: false,
                 },
                 agreements: vec!["Extend responses to 2026-11-02".into()],
                 ..NewCall::default()
@@ -1447,7 +1472,8 @@ mod tests {
         .await
         .expect("log the call");
         assert_eq!(call.channel, "call");
-        assert_eq!(call.direction, "internal");
+        assert_eq!(call.direction, "outbound");
+        assert_eq!(call.counterparty_role.as_deref(), Some("opposing_counsel"));
         assert_eq!(call.call.as_ref().unwrap().duration_minutes, Some(20));
         assert_eq!(call.agreements[0].status, "unconfirmed");
         assert!(call.has_unconfirmed_agreements());
@@ -1510,6 +1536,47 @@ mod tests {
                 .is_err(),
             "only a call carries agreements"
         );
+    }
+
+    /// A logged call reads as the call that happened (LAW-424): the row's
+    /// top-level `direction` and `counterparty_role` are the call's own
+    /// flags, even when the firm keeps the note internal.
+    #[tokio::test]
+    async fn a_logged_call_carries_its_direction_and_role_at_the_top_level() {
+        use super::{for_project_client_visible, record_call, CallDetails, NewCall};
+        let surreal = crate::surreal::test_support::mem().await;
+        let project_id = crate::test_support::seed_project_surreal(&surreal, "Test Matter").await;
+
+        let call = record_call(
+            &surreal,
+            &NewCall {
+                project_id,
+                counterparty: "client@example.com".into(),
+                body: "Discussed the engagement.".into(),
+                at: "2026-10-09T15:00:00-07:00".into(),
+                call: CallDetails {
+                    direction: "inbound".into(),
+                    counterparty_role: "client".into(),
+                    duration_minutes: Some(20),
+                    recorded: "none".into(),
+                    meet_and_confer: None,
+                    client_visible: false,
+                },
+                agreements: vec![],
+                ..NewCall::default()
+            },
+        )
+        .await
+        .expect("log the call");
+        assert_eq!(call.direction, "inbound");
+        assert_eq!(call.counterparty_role.as_deref(), Some("client"));
+        assert_eq!(call.call.as_ref().unwrap().direction, "inbound");
+
+        // The firm kept the note internal, so the client lens hides it.
+        assert!(for_project_client_visible(&surreal, project_id)
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]
