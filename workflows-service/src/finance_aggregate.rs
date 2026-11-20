@@ -1,5 +1,5 @@
-//! The `FinanceAggregate` Restate workflow: ingest a Project's matter rows from
-//! object storage, run the fee waterfall, and keep the result in `SurrealDB` and
+//! Shared `FinanceAggregate` logic and its opt-in Restate adapter: ingest matter rows from
+//! object storage, run the fee waterfall, and keep the result in PostgreSQL and
 //! object storage.
 //!
 //! Three journaled steps, so a retry of one never repeats another:
@@ -31,16 +31,21 @@
 //! never enter a span (see the observability skill). Dash0 receives the spans
 //! through the deployment's collector; there is no Dash0 code here.
 
+#[cfg(feature = "restate-compatibility")]
 use std::sync::Arc;
 
 use chrono::Utc;
 use cloud::{StorageError, StorageService};
+#[cfg(feature = "restate-compatibility")]
 use restate_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 use store::finance_aggregate::{self, FinanceInput, Parameters};
 use store::surreal::SurrealDb;
+#[cfg(feature = "restate-compatibility")]
 use tracing::Instrument;
 use uuid::Uuid;
+
+use crate::workflow_step_error::WorkflowStepError;
 
 /// Request body for `FinanceAggregate::run`.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -62,14 +67,16 @@ pub struct FinanceAggregateReport {
     pub report_key: String,
 }
 
-/// Service registered with the Restate endpoint: the worker's `SurrealDB`
+/// Service registered with the Restate endpoint: the worker's store facade
 /// handle and object storage, both opened once at boot.
 #[derive(Clone)]
+#[cfg(feature = "restate-compatibility")]
 pub struct FinanceAggregateService {
     surreal: SurrealDb,
     storage: Arc<dyn StorageService>,
 }
 
+#[cfg(feature = "restate-compatibility")]
 impl FinanceAggregateService {
     #[must_use]
     pub fn new(surreal: SurrealDb, storage: Arc<dyn StorageService>) -> Self {
@@ -77,8 +84,8 @@ impl FinanceAggregateService {
     }
 }
 
-fn terminal(message: impl Into<String>) -> HandlerError {
-    HandlerError::from(TerminalError::new(message))
+fn terminal(message: impl Into<String>) -> WorkflowStepError {
+    WorkflowStepError::terminal(message)
 }
 
 /// Read and parse the input document for `project_code`.
@@ -90,7 +97,7 @@ fn terminal(message: impl Into<String>) -> HandlerError {
 pub async fn read_input(
     storage: &dyn StorageService,
     project_code: &str,
-) -> Result<FinanceInput, HandlerError> {
+) -> Result<FinanceInput, WorkflowStepError> {
     let key = finance_aggregate::input_key(project_code);
     match storage.get(&key).await {
         Ok(object) => serde_json::from_slice(&object.bytes)
@@ -98,7 +105,7 @@ pub async fn read_input(
         Err(StorageError::NotFound(_)) => Err(terminal(format!(
             "finance input {key} has not been uploaded"
         ))),
-        Err(error) => Err(HandlerError::from(error)),
+        Err(error) => Err(WorkflowStepError::retryable(error)),
     }
 }
 
@@ -112,7 +119,7 @@ pub fn compute(
     input: &FinanceInput,
     parameters: Parameters,
     run_id: &str,
-) -> Result<finance_aggregate::FinanceReport, HandlerError> {
+) -> Result<finance_aggregate::FinanceReport, WorkflowStepError> {
     finance_aggregate::aggregate(input, parameters, run_id, Utc::now())
         .map_err(|error| terminal(format!("finance input rejected: {error}")))
 }
@@ -130,20 +137,21 @@ pub async fn persist(
     project_id: Uuid,
     key: &str,
     report: &finance_aggregate::FinanceReport,
-) -> Result<(), HandlerError> {
+) -> Result<(), WorkflowStepError> {
     let bytes = serde_json::to_vec(report)
         .map_err(|error| terminal(format!("report could not be encoded: {error}")))?;
     storage
         .put(key, &bytes, "application/json")
         .await
-        .map_err(HandlerError::from)?;
+        .map_err(WorkflowStepError::retryable)?;
     finance_aggregate::upsert(surreal, project_id, report)
         .await
-        .map_err(HandlerError::from)?;
+        .map_err(WorkflowStepError::retryable)?;
     Ok(())
 }
 
 /// The root span of a `FinanceAggregate::run` invocation. Identifiers only.
+#[cfg(any(test, feature = "restate-compatibility"))]
 fn run_span(
     run_id: &str,
     req: &RunRequest,
@@ -160,6 +168,7 @@ fn run_span(
     )
 }
 
+#[cfg(feature = "restate-compatibility")]
 #[restate_sdk::workflow(name = "FinanceAggregate")]
 impl FinanceAggregateService {
     #[restate_sdk::handler]
@@ -192,7 +201,9 @@ impl FinanceAggregateService {
                     );
                     let recorded = span.clone();
                     async move {
-                        let input = read_input(storage.as_ref(), &code).await?;
+                        let input = read_input(storage.as_ref(), &code)
+                            .await
+                            .map_err(WorkflowStepError::into_handler_error)?;
                         recorded.record("matters", input.matters.len());
                         Ok(Json(input))
                     }
@@ -213,8 +224,12 @@ impl FinanceAggregateService {
                             + input.verticals.len()
                             + input.months.len()
                     );
-                    async move { compute(&input, parameters, &aggregate_run_id).map(Json) }
-                        .instrument(span)
+                    async move {
+                        compute(&input, parameters, &aggregate_run_id)
+                            .map(Json)
+                            .map_err(WorkflowStepError::into_handler_error)
+                    }
+                    .instrument(span)
                 })
                 .name("aggregate")
                 .await?
@@ -237,6 +252,7 @@ impl FinanceAggregateService {
                         &stored_report,
                     )
                     .await
+                    .map_err(WorkflowStepError::into_handler_error)
                 }
                 .instrument(span)
             })

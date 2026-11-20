@@ -11,7 +11,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::workflow_step_error::WorkflowStepError;
 use chrono::{DateTime, Utc};
+#[cfg(feature = "restate-compatibility")]
 use restate_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 use store::config::SocialEgressGate;
@@ -19,8 +21,12 @@ use store::social_accounts::SocialProvider;
 use store::surreal::SurrealDb;
 use uuid::Uuid;
 use workflows::social_publish::{send_credential, SendCredential, TokenRefreshConfig};
+#[cfg(feature = "restate-compatibility")]
 use workflows::trigger::ServiceTarget;
-use workflows::{SocialPublishReport, SocialPublishRequest};
+#[cfg(feature = "restate-compatibility")]
+use workflows::SocialPublishReport;
+#[cfg(feature = "restate-compatibility")]
+use workflows::SocialPublishRequest;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Destination {
@@ -137,11 +143,13 @@ impl SocialPublisherService {
 }
 
 #[derive(Clone)]
+#[cfg(feature = "restate-compatibility")]
 pub struct SocialPublishReconcilerService {
     surreal: SurrealDb,
     publisher: Publisher,
 }
 
+#[cfg(feature = "restate-compatibility")]
 impl SocialPublishReconcilerService {
     #[must_use]
     pub fn new(
@@ -164,6 +172,7 @@ pub struct ReconcileReport {
     pub started: usize,
 }
 
+#[cfg(feature = "restate-compatibility")]
 #[restate_sdk::workflow(name = "SocialPublishReconciler")]
 impl SocialPublishReconcilerService {
     #[restate_sdk::handler]
@@ -238,9 +247,15 @@ impl SocialPublishReconcilerService {
             .await?;
         }
         let publisher = self.publisher.clone();
-        ctx.run(move || async move { publisher.reconcile_youtube_links().await.map(Json) })
-            .name("reconcile-youtube-public-links")
-            .await?;
+        ctx.run(move || async move {
+            publisher
+                .reconcile_youtube_links()
+                .await
+                .map(Json)
+                .map_err(WorkflowStepError::into_handler_error)
+        })
+        .name("reconcile-youtube-public-links")
+        .await?;
         Ok(Json(ReconcileReport {
             started: scheduled.len() + alerts.len(),
         }))
@@ -249,12 +264,14 @@ impl SocialPublishReconcilerService {
 
 /// The reconciler's Restate fallback configuration, read once per tick: the
 /// broker URL plus its optional bearer.
+#[cfg(feature = "restate-compatibility")]
 type RestateFallback = (String, Option<String>);
 
 /// Resolves one of the reconciler's ingress selections from the process
 /// environment: the service's DBOS switch chooses the worker's ingress
 /// (`NAVIGATOR_DBOS_INGRESS_URL` plus bearer) over the Restate broker while
 /// it is on.
+#[cfg(feature = "restate-compatibility")]
 fn resolve_service_target(
     flag: &'static str,
 ) -> Result<workflows::trigger::ServiceTarget, HandlerError> {
@@ -271,6 +288,7 @@ fn resolve_service_target(
 /// `SocialPublisher` switch selects. Both branches key the run by the same
 /// `(post, scheduled time)` identity; the Restate branch keeps its
 /// `to_rfc3339` invocation key, the DBOS branch the shared constructor.
+#[cfg(feature = "restate-compatibility")]
 async fn start_publisher_run(
     target: &workflows::trigger::ServiceTarget,
     restate: Option<&RestateFallback>,
@@ -315,6 +333,7 @@ async fn start_publisher_run(
 /// `InboundMessageAlert` switch selects. The Restate branch keeps the
 /// per-tick invocation key; the DBOS branch joins the alert's canonical
 /// per-message run.
+#[cfg(feature = "restate-compatibility")]
 async fn start_notice_recovery(
     target: &workflows::trigger::ServiceTarget,
     restate: Option<&RestateFallback>,
@@ -432,6 +451,7 @@ pub(crate) enum SnapshotError {
     Accounts(#[from] store::social_accounts::SocialAccountError),
 }
 
+#[cfg(feature = "restate-compatibility")]
 #[restate_sdk::workflow(name = "SocialPublisher")]
 impl SocialPublisherService {
     #[restate_sdk::handler]
@@ -520,6 +540,7 @@ pub(crate) const TIKTOK_POLL: Duration = Duration::from_secs(180);
 pub(crate) const PERMALINK_READS: usize = 3;
 pub(crate) const PERMALINK_READ_AFTER: Duration = Duration::from_secs(30);
 
+#[cfg(feature = "restate-compatibility")]
 impl SocialPublisherService {
     /// Read a confirmed post's public link back from the provider. A link that
     /// stays unreadable leaves the publication confirmed with its link
@@ -548,6 +569,7 @@ impl SocialPublisherService {
                         .read_permalink(post_id, &snapshot.brand_key, &target, &receipt)
                         .await
                         .map(Json)
+                        .map_err(WorkflowStepError::into_handler_error)
                 })
                 .name(format!("permalink-{name}"))
                 .await?
@@ -575,6 +597,7 @@ impl SocialPublisherService {
                     .start_tiktok(post_id, &snapshot, &destination)
                     .await
                     .map(Json)
+                    .map_err(WorkflowStepError::into_handler_error)
             })
             .name("submit-tiktok-business-video")
             .await?
@@ -593,6 +616,7 @@ impl SocialPublisherService {
                         .poll_tiktok(post_id, &snapshot, &destination, &task)
                         .await
                         .map(Json)
+                        .map_err(WorkflowStepError::into_handler_error)
                 })
                 .name(format!("poll-tiktok-business-video-{check}"))
                 .await?
@@ -622,6 +646,7 @@ impl SocialPublisherService {
                     .prepare(post_id, &snapshot, &target)
                     .await
                     .map(Json)
+                    .map_err(WorkflowStepError::into_handler_error)
             })
             .name(format!("prepare-{name}"))
             .await?
@@ -654,6 +679,7 @@ impl SocialPublisherService {
                         .send_direct(post_id, &snapshot, &target)
                         .await
                         .map(Json)
+                        .map_err(WorkflowStepError::into_handler_error)
                 })
                 .name(format!("publish-{name}"))
                 .await?
@@ -668,6 +694,7 @@ impl SocialPublisherService {
                     .create_container(post_id, &snapshot, &target)
                     .await
                     .map(Json)
+                    .map_err(WorkflowStepError::into_handler_error)
             })
             .name(format!("create-container-{name}"))
             .await?
@@ -688,6 +715,7 @@ impl SocialPublisherService {
                         .container_status(post_id, &snapshot, &target, &id)
                         .await
                         .map(Json)
+                        .map_err(WorkflowStepError::into_handler_error)
                 })
                 .name(format!("container-status-{name}-{check}"))
                 .await?
@@ -705,6 +733,7 @@ impl SocialPublisherService {
                                 .publish_container(post_id, &snapshot, &target, &id)
                                 .await
                                 .map(Json)
+                                .map_err(WorkflowStepError::into_handler_error)
                         })
                         .name(format!("publish-container-{name}"))
                         .await?
@@ -724,6 +753,7 @@ impl SocialPublisherService {
                     )
                     .await
                     .map(Json)
+                    .map_err(WorkflowStepError::into_handler_error)
             })
             .name(format!("container-timeout-{name}"))
             .await?
@@ -824,10 +854,10 @@ impl Publisher {
         post_id: Uuid,
         post: &PostSnapshot,
         destination: &Destination,
-    ) -> Result<Step<String>, HandlerError> {
+    ) -> Result<Step<String>, WorkflowStepError> {
         let publications = store::social_publications::for_posts(&self.surreal, &[post_id])
             .await
-            .map_err(HandlerError::from)?;
+            .map_err(WorkflowStepError::retryable)?;
         if let Some(task) = publications
             .iter()
             .find(|p| p.provider == "tiktok")
@@ -910,7 +940,7 @@ impl Publisher {
                 return self
                     .fail_before_send(post_id, destination.provider, problem)
                     .await
-                    .map(Step::Settled)
+                    .map(Step::Settled);
             }
         };
         let credential = match self
@@ -929,7 +959,7 @@ impl Publisher {
         post_id: Uuid,
         post: &PostSnapshot,
         destination: &Destination,
-    ) -> Result<Step<bool>, HandlerError> {
+    ) -> Result<Step<bool>, WorkflowStepError> {
         let Some(ai_generated) = post.tiktok_ai_generated else {
             return self
                 .fail_before_send(
@@ -959,7 +989,7 @@ impl Publisher {
         post: &PostSnapshot,
         destination: &Destination,
         preflight: &SendCredential,
-    ) -> Result<Step<SendCredential>, HandlerError> {
+    ) -> Result<Step<SendCredential>, WorkflowStepError> {
         // Re-read the Brand authorization and production guard immediately before the write.
         let preflight_access_token = preflight.access_token();
         let credential = match self.writable(post_id, post, destination).await? {
@@ -995,10 +1025,10 @@ impl Publisher {
         post: &PostSnapshot,
         destination: &Destination,
         key: &str,
-    ) -> Result<Step<Vec<u8>>, HandlerError> {
+    ) -> Result<Step<Vec<u8>>, WorkflowStepError> {
         let measured = store::posts::find_video(&self.surreal, key)
             .await
-            .map_err(HandlerError::from)?;
+            .map_err(WorkflowStepError::retryable)?;
         if !post.vertical_video
             || measured.as_ref().is_none_or(|video| {
                 video.brand_key != post.brand_key
@@ -1029,7 +1059,7 @@ impl Publisher {
         post_id: Uuid,
         destination: &Destination,
         credential: &SendCredential,
-    ) -> Result<Step<u32>, HandlerError> {
+    ) -> Result<Step<u32>, WorkflowStepError> {
         let settings = tiktok_json(
             self.http
                 .get(format!(
@@ -1111,7 +1141,7 @@ impl Publisher {
         destination: &Destination,
         credential: &SendCredential,
         request: &crate::tiktok_business::VideoRequest<'_>,
-    ) -> Result<Step<String>, HandlerError> {
+    ) -> Result<Step<String>, WorkflowStepError> {
         if let Some(outcome) = self.claim_write(post_id, destination.provider).await? {
             return Ok(Step::Settled(outcome));
         }
@@ -1141,7 +1171,7 @@ impl Publisher {
         };
         store::social_publications::record_provider_task(&self.surreal, post_id, "tiktok", task)
             .await
-            .map_err(HandlerError::from)?;
+            .map_err(WorkflowStepError::retryable)?;
         Ok(Step::Continue(task.to_string()))
     }
 
@@ -1149,10 +1179,10 @@ impl Publisher {
         &self,
         post_id: Uuid,
         post: &PostSnapshot,
-    ) -> Result<bool, HandlerError> {
+    ) -> Result<bool, WorkflowStepError> {
         let current = store::posts::find_by_id(&self.surreal, post_id)
             .await
-            .map_err(HandlerError::from)?;
+            .map_err(WorkflowStepError::retryable)?;
         Ok(current.is_some_and(|row| {
             row.status == "scheduled"
                 && row.publish_at == post.publish_at
@@ -1168,10 +1198,10 @@ impl Publisher {
         post_id: Uuid,
         destination: &Destination,
         task: &str,
-    ) -> Result<Option<PublishOutcome>, HandlerError> {
+    ) -> Result<Option<PublishOutcome>, WorkflowStepError> {
         let publication = store::social_publications::for_posts(&self.surreal, &[post_id])
             .await
-            .map_err(HandlerError::from)?
+            .map_err(WorkflowStepError::retryable)?
             .into_iter()
             .find(|publication| publication.provider == "tiktok");
         if let Some(publication) = publication {
@@ -1195,7 +1225,7 @@ impl Publisher {
         post: &PostSnapshot,
         destination: &Destination,
         task: &str,
-    ) -> Result<Step<()>, HandlerError> {
+    ) -> Result<Step<()>, WorkflowStepError> {
         if let Some(outcome) = self
             .tiktok_terminal_outcome(post_id, destination, task)
             .await?
@@ -1248,7 +1278,7 @@ impl Publisher {
                     None,
                 )
                 .await
-                .map_err(HandlerError::from)?;
+                .map_err(WorkflowStepError::retryable)?;
                 let mut outcome = PublishOutcome::new(destination.provider, CONFIRMED);
                 outcome.link_pending = Some(ids[0].clone());
                 Ok(Step::Settled(outcome))
@@ -1322,12 +1352,12 @@ impl Publisher {
         post_id: Uuid,
         post: &PostSnapshot,
         destination: &Destination,
-    ) -> Result<Step<()>, HandlerError> {
+    ) -> Result<Step<()>, WorkflowStepError> {
         let provider = destination.provider;
         let admission =
             store::social_publications::admit(&self.surreal, post_id, provider.as_str())
                 .await
-                .map_err(HandlerError::from)?;
+                .map_err(WorkflowStepError::retryable)?;
         match admission {
             store::social_publications::Admission::AlreadyConfirmed(publication) => {
                 let mut outcome = PublishOutcome::new(provider, CONFIRMED);
@@ -1418,7 +1448,7 @@ impl Publisher {
         post_id: Uuid,
         post: &PostSnapshot,
         destination: &Destination,
-    ) -> Result<Result<SendCredential, PublishOutcome>, HandlerError> {
+    ) -> Result<Result<SendCredential, PublishOutcome>, WorkflowStepError> {
         let provider = destination.provider;
         if let Err(denied) = self.egress.check() {
             self.record_before_send(post_id, provider, &denied.to_string())
@@ -1449,7 +1479,7 @@ impl Publisher {
         post_id: Uuid,
         provider: SocialProvider,
         reason: &str,
-    ) -> Result<(), HandlerError> {
+    ) -> Result<(), WorkflowStepError> {
         store::social_publications::mark_failed_before_send(
             &self.surreal,
             post_id,
@@ -1458,7 +1488,7 @@ impl Publisher {
         )
         .await
         .map(|_| ())
-        .map_err(HandlerError::from)
+        .map_err(WorkflowStepError::retryable)
     }
 
     async fn fail_before_send(
@@ -1466,7 +1496,7 @@ impl Publisher {
         post_id: Uuid,
         provider: SocialProvider,
         reason: &str,
-    ) -> Result<PublishOutcome, HandlerError> {
+    ) -> Result<PublishOutcome, WorkflowStepError> {
         self.record_before_send(post_id, provider, reason).await?;
         Ok(PublishOutcome::new(provider, FAILED))
     }
@@ -1477,10 +1507,10 @@ impl Publisher {
         post_id: Uuid,
         provider: SocialProvider,
         reason: &str,
-    ) -> Result<PublishOutcome, HandlerError> {
+    ) -> Result<PublishOutcome, WorkflowStepError> {
         store::social_publications::mark_failed(&self.surreal, post_id, provider.as_str(), reason)
             .await
-            .map_err(HandlerError::from)?;
+            .map_err(WorkflowStepError::retryable)?;
         Ok(PublishOutcome::new(provider, FAILED))
     }
 
@@ -1489,10 +1519,10 @@ impl Publisher {
         post_id: Uuid,
         provider: SocialProvider,
         reason: &str,
-    ) -> Result<PublishOutcome, HandlerError> {
+    ) -> Result<PublishOutcome, WorkflowStepError> {
         store::social_publications::mark_unknown(&self.surreal, post_id, provider.as_str(), reason)
             .await
-            .map_err(HandlerError::from)?;
+            .map_err(WorkflowStepError::retryable)?;
         Ok(PublishOutcome::new(provider, UNKNOWN))
     }
 
@@ -1502,14 +1532,14 @@ impl Publisher {
         &self,
         post_id: Uuid,
         provider: SocialProvider,
-    ) -> Result<Option<PublishOutcome>, HandlerError> {
+    ) -> Result<Option<PublishOutcome>, WorkflowStepError> {
         let claimed = store::social_publications::begin_provider_write(
             &self.surreal,
             post_id,
             provider.as_str(),
         )
         .await
-        .map_err(HandlerError::from)?;
+        .map_err(WorkflowStepError::retryable)?;
         Ok((!claimed).then(|| PublishOutcome::new(provider, UNKNOWN)))
     }
 
@@ -1520,7 +1550,7 @@ impl Publisher {
         post_id: Uuid,
         post: &PostSnapshot,
         destination: &Destination,
-    ) -> Result<Step<String>, HandlerError> {
+    ) -> Result<Step<String>, WorkflowStepError> {
         let provider = destination.provider;
         let credential = match self.writable(post_id, post, destination).await? {
             Ok(credential) => credential,
@@ -1620,7 +1650,7 @@ impl Publisher {
         post: &PostSnapshot,
         destination: &Destination,
         container: &str,
-    ) -> Result<Step<ContainerStatus>, HandlerError> {
+    ) -> Result<Step<ContainerStatus>, WorkflowStepError> {
         let provider = destination.provider;
         let credential = match self.writable(post_id, post, destination).await? {
             Ok(credential) => credential,
@@ -1678,7 +1708,7 @@ impl Publisher {
         post: &PostSnapshot,
         destination: &Destination,
         container: &str,
-    ) -> Result<PublishOutcome, HandlerError> {
+    ) -> Result<PublishOutcome, WorkflowStepError> {
         let provider = destination.provider;
         let credential = match self.writable(post_id, post, destination).await? {
             Ok(credential) => credential,
@@ -1711,7 +1741,7 @@ impl Publisher {
         post_id: Uuid,
         post: &PostSnapshot,
         destination: &Destination,
-    ) -> Result<PublishOutcome, HandlerError> {
+    ) -> Result<PublishOutcome, WorkflowStepError> {
         let provider = destination.provider;
         if provider == SocialProvider::X {
             return self.send_x_destination(post_id, post, destination).await;
@@ -1792,7 +1822,7 @@ impl Publisher {
         post_id: Uuid,
         post: &PostSnapshot,
         destination: &Destination,
-    ) -> Result<PublishOutcome, HandlerError> {
+    ) -> Result<PublishOutcome, WorkflowStepError> {
         let provider = SocialProvider::X;
         let credential = match self.writable(post_id, post, destination).await? {
             Ok(credential) => credential,
@@ -1819,7 +1849,7 @@ impl Publisher {
                         provider,
                         "X credentials changed during verification; retry without sending",
                     )
-                    .await
+                    .await;
             }
             Err(outcome) => return Ok(outcome),
         };
@@ -1985,7 +2015,7 @@ impl Publisher {
         post_id: Uuid,
         provider: SocialProvider,
         refusal: &ProviderRefusal,
-    ) -> Result<PublishOutcome, HandlerError> {
+    ) -> Result<PublishOutcome, WorkflowStepError> {
         let mut outcome = self
             .fail(post_id, provider, &refusal.reason(provider))
             .await?;
@@ -2005,7 +2035,7 @@ impl Publisher {
         destination: &Destination,
         receipt: &str,
         credential: &SendCredential,
-    ) -> Result<bool, HandlerError> {
+    ) -> Result<bool, WorkflowStepError> {
         let filters = serde_json::json!({"video_ids":[receipt],"ad_post_only":false}).to_string();
         let body = tiktok_json(
             self.http
@@ -2056,17 +2086,17 @@ impl Publisher {
         store::social_publications::record_permalink(&self.surreal, post_id, "tiktok", link)
             .await
             .map(|_| true)
-            .map_err(HandlerError::from)
+            .map_err(WorkflowStepError::retryable)
     }
 
     /// Revisit retained uploads after the initial polling window. This path only reads providers.
-    pub(crate) async fn reconcile_youtube_links(&self) -> Result<usize, HandlerError> {
+    pub(crate) async fn reconcile_youtube_links(&self) -> Result<usize, WorkflowStepError> {
         if self.egress.check().is_err() {
             return Ok(0);
         }
         let pending = store::social_publications::pending_links(&self.surreal, "youtube", 100)
             .await
-            .map_err(HandlerError::from)?;
+            .map_err(WorkflowStepError::retryable)?;
         let mut recorded = 0;
         for publication in pending {
             let Some(receipt) = publication.provider_post_id.as_deref() else {
@@ -2074,7 +2104,7 @@ impl Publisher {
             };
             let Some(post) = store::posts::find_by_id(&self.surreal, publication.post_id)
                 .await
-                .map_err(HandlerError::from)?
+                .map_err(WorkflowStepError::retryable)?
             else {
                 continue;
             };
@@ -2084,7 +2114,7 @@ impl Publisher {
                 &post.selected_social_accounts,
             )
             .await
-            .map_err(HandlerError::from)?;
+            .map_err(WorkflowStepError::retryable)?;
             let Some(account) = accounts
                 .into_iter()
                 .find(|account| account.provider == SocialProvider::Youtube)
@@ -2111,7 +2141,7 @@ impl Publisher {
         destination: &Destination,
         receipt: &str,
         credential: &SendCredential,
-    ) -> Result<bool, HandlerError> {
+    ) -> Result<bool, WorkflowStepError> {
         let response = self
             .http
             .get(format!("{}/videos", self.endpoints.youtube_api))
@@ -2156,7 +2186,7 @@ impl Publisher {
         brand_key: &str,
         destination: &Destination,
         receipt: &str,
-    ) -> Result<bool, HandlerError> {
+    ) -> Result<bool, WorkflowStepError> {
         let provider = destination.provider;
         if self.egress.check().is_err() {
             return Ok(false);
@@ -2255,7 +2285,7 @@ impl Publisher {
         post_id: Uuid,
         provider: SocialProvider,
         reply: ProviderReply,
-    ) -> Result<PublishOutcome, HandlerError> {
+    ) -> Result<PublishOutcome, WorkflowStepError> {
         match reply {
             ProviderReply::Accepted(body) => {
                 let Some(id) = body.get("id").and_then(serde_json::Value::as_str) else {
@@ -2276,7 +2306,7 @@ impl Publisher {
                     permalink.as_deref(),
                 )
                 .await
-                .map_err(HandlerError::from)?;
+                .map_err(WorkflowStepError::retryable)?;
                 let mut outcome = PublishOutcome::new(provider, CONFIRMED);
                 if permalink.is_none() {
                     outcome.link_pending = Some(id.to_string());
@@ -4745,11 +4775,6 @@ mod tests {
         );
         assert_eq!(parts.endpoints.x_api, "https://api.x.com/2");
         assert!(parts.egress.check().is_ok());
-        let _ = super::SocialPublishReconcilerService::new(
-            fixture.db.clone(),
-            std::sync::Arc::new(fixture.kms.clone()),
-            fixture.storage.clone(),
-        );
         // A gated publisher reads no public link and reconciles nothing.
         let server = silent_provider().await;
         let gated = fixture.publisher(&server, denied_by(Some("dev"), None));

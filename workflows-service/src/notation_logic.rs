@@ -178,6 +178,7 @@ pub(crate) const fn review_copy(hop: ReviewNotificationHop) -> ReviewCopy {
 /// The funnel step caused by one durable workflow transition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WorkflowFunnelStep {
+    #[cfg(feature = "restate-compatibility")]
     IntakeComplete,
     ReviewEntered,
     Sent(telemetry::FunnelChannel),
@@ -438,6 +439,7 @@ pub(crate) async fn record_notation_funnel_step(
     let notation_id = notation_id.to_string();
     let project_id = notation.project_id.to_string();
     let event = match step {
+        #[cfg(feature = "restate-compatibility")]
         WorkflowFunnelStep::IntakeComplete => telemetry::FunnelEvent::IntakeComplete {
             notation_id: &notation_id,
             project_id: &project_id,

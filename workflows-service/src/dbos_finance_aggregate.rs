@@ -1,7 +1,7 @@
 //! DBOS adapter for manually requested `FinanceAggregate` runs.
 //!
 //! The workflow id is supplied by the caller and remains the immutable run id
-//! used by the report object and Surreal record. Repeated caller retries join
+//! used by the report object and PostgreSQL row. Repeated caller retries join
 //! the same run; neither output is duplicated.
 
 use std::sync::Arc;

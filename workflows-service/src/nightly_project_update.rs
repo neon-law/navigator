@@ -14,14 +14,20 @@
 
 use std::fmt::Write as _;
 use std::future::Future;
+#[cfg(any(test, feature = "restate-compatibility"))]
 use std::sync::Arc;
 
-use chrono::{DateTime, NaiveDate, Utc};
+#[cfg(any(test, feature = "restate-compatibility"))]
+use chrono::NaiveDate;
+use chrono::{DateTime, Utc};
+#[cfg(feature = "restate-compatibility")]
 use restate_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 use store::surreal::SurrealDb;
 use uuid::Uuid;
-use workflows::{SlackBot, SlackBotError};
+#[cfg(any(test, feature = "restate-compatibility"))]
+use workflows::SlackBot;
+use workflows::SlackBotError;
 
 pub mod membership;
 pub mod repository;
@@ -31,6 +37,8 @@ use cloud::forgejo_governance::UpdateProposal;
 use membership::MembershipOutcome;
 use repository::RepositoryOutcome;
 use slack::SlackOutcome;
+
+use crate::workflow_step_error::WorkflowStepError;
 
 /// A child DAG. The set is closed: a new tag is a glossary change in the same
 /// pull request as its child.
@@ -89,9 +97,10 @@ pub fn child_key(ran_on: &str, project_id: Uuid) -> String {
     format!("{ran_on}:{project_id}")
 }
 
-fn parse_run_key(key: &str) -> Result<NaiveDate, HandlerError> {
+#[cfg(any(test, feature = "restate-compatibility"))]
+fn parse_run_key(key: &str) -> Result<NaiveDate, WorkflowStepError> {
     NaiveDate::parse_from_str(key, "%Y-%m-%d").map_err(|_| {
-        TerminalError::new("Nightly Project Update is keyed on its UTC date, YYYY-MM-DD").into()
+        WorkflowStepError::terminal("Nightly Project Update is keyed on its UTC date, YYYY-MM-DD")
     })
 }
 
@@ -105,6 +114,7 @@ pub struct ProjectTagRequest {
 
 /// Retries a child's side-effecting step gets before the failure is counted
 /// against its (Project, tag) and the sweep moves on.
+#[cfg(feature = "restate-compatibility")]
 pub(crate) fn tag_retry_policy() -> RunRetryPolicy {
     RunRetryPolicy::new()
         .initial_delay(std::time::Duration::from_secs(1))
@@ -373,6 +383,7 @@ where
 }
 
 #[derive(Clone)]
+#[cfg(feature = "restate-compatibility")]
 pub struct NightlyProjectUpdateService {
     surreal: SurrealDb,
     slack: Arc<dyn SlackBot>,
@@ -382,6 +393,7 @@ pub struct NightlyProjectUpdateService {
     slack_enabled: bool,
 }
 
+#[cfg(feature = "restate-compatibility")]
 impl NightlyProjectUpdateService {
     #[must_use]
     pub fn new(
@@ -403,6 +415,7 @@ impl NightlyProjectUpdateService {
     }
 }
 
+#[cfg(feature = "restate-compatibility")]
 #[restate_sdk::workflow(name = "NightlyProjectUpdate")]
 impl NightlyProjectUpdateService {
     #[restate_sdk::handler]
@@ -414,7 +427,7 @@ impl NightlyProjectUpdateService {
         _request: Json<RunRequest>,
     ) -> Result<Json<NightlyProjectUpdateReport>, HandlerError> {
         let ran_on = ctx.key().to_string();
-        parse_run_key(&ran_on)?;
+        parse_run_key(&ran_on).map_err(WorkflowStepError::into_handler_error)?;
         let outcome_channel = outcome_channel_id(
             self.simulated,
             &self.messages_channel_id,
@@ -422,7 +435,12 @@ impl NightlyProjectUpdateService {
         );
         let surreal = self.surreal.clone();
         let roster = ctx
-            .run(move || async move { discover_roster(&surreal).await.map(Json) })
+            .run(move || async move {
+                discover_roster(&surreal)
+                    .await
+                    .map(Json)
+                    .map_err(WorkflowStepError::into_handler_error)
+            })
             .name("discover-projects")
             .await?
             .into_inner();
@@ -455,7 +473,8 @@ impl NightlyProjectUpdateService {
         )
         .await?;
 
-        validate_configuration(outcome_channel, self.slack_enabled)?;
+        validate_configuration(outcome_channel, self.slack_enabled)
+            .map_err(WorkflowStepError::into_handler_error)?;
 
         let started_at = ctx
             .run(|| async { Ok(Json(Utc::now().to_rfc3339())) })
@@ -466,9 +485,13 @@ impl NightlyProjectUpdateService {
 
         let slack = Arc::clone(&self.slack);
         let channel_id = outcome_channel.to_string();
-        ctx.run(move || async move { post_start(slack.as_ref(), &channel_id).await })
-            .name("post-start")
-            .await?;
+        ctx.run(move || async move {
+            post_start(slack.as_ref(), &channel_id)
+                .await
+                .map_err(WorkflowStepError::into_handler_error)
+        })
+        .name("post-start")
+        .await?;
 
         let context = &ctx;
         let ran_on = &ran_on;
@@ -519,6 +542,7 @@ impl NightlyProjectUpdateService {
                 .post_message(&channel_id, &message)
                 .await
                 .map_err(slack_error)
+                .map_err(WorkflowStepError::into_handler_error)
         })
         .name("post-outcome")
         .await?;
@@ -527,10 +551,12 @@ impl NightlyProjectUpdateService {
     }
 }
 
-pub(crate) async fn discover_roster(surreal: &SurrealDb) -> Result<Vec<RosterEntry>, HandlerError> {
+pub(crate) async fn discover_roster(
+    surreal: &SurrealDb,
+) -> Result<Vec<RosterEntry>, WorkflowStepError> {
     Ok(store::projects::all(surreal)
         .await
-        .map_err(HandlerError::from)?
+        .map_err(WorkflowStepError::retryable)?
         .into_iter()
         .map(|project| RosterEntry {
             project_id: project.id,
@@ -539,35 +565,39 @@ pub(crate) async fn discover_roster(surreal: &SurrealDb) -> Result<Vec<RosterEnt
         .collect())
 }
 
-pub(crate) fn slack_error(error: SlackBotError) -> HandlerError {
+pub(crate) fn slack_error(error: SlackBotError) -> WorkflowStepError {
     match error {
-        SlackBotError::Api(code) => HandlerError::from(TerminalError::new(format!(
+        SlackBotError::Api(code) => WorkflowStepError::terminal(format!(
             "Slack rejected the Nightly Project Update: {code}"
-        ))),
-        error @ SlackBotError::MissingScope { .. } => HandlerError::from(TerminalError::new(
-            format!("Slack rejected the Nightly Project Update: {error}"),
         )),
-        SlackBotError::HttpStatus(status) => HandlerError::from(TerminalError::new(format!(
+        error @ SlackBotError::MissingScope { .. } => WorkflowStepError::terminal(format!(
+            "Slack rejected the Nightly Project Update: {error}"
+        )),
+        SlackBotError::HttpStatus(status) => WorkflowStepError::terminal(format!(
             "Slack rejected the Nightly Project Update with HTTP {status}"
-        ))),
-        SlackBotError::Transport(_) => {
-            HandlerError::from(SlackBotError::Transport("Slack request failed".to_string()))
-        }
+        )),
+        SlackBotError::Transport(_) => WorkflowStepError::retryable(SlackBotError::Transport(
+            "Slack request failed".to_string(),
+        )),
         SlackBotError::RetryableHttpStatus(status) => {
-            HandlerError::from(SlackBotError::RetryableHttpStatus(status))
+            WorkflowStepError::retryable(SlackBotError::RetryableHttpStatus(status))
         }
         SlackBotError::RateLimited {
             retry_after_seconds,
-        } => HandlerError::from(SlackBotError::RateLimited {
+        } => WorkflowStepError::retryable(SlackBotError::RateLimited {
             retry_after_seconds,
         }),
-        SlackBotError::IncompleteResponse => HandlerError::from(SlackBotError::IncompleteResponse),
+        SlackBotError::IncompleteResponse => {
+            WorkflowStepError::retryable(SlackBotError::IncompleteResponse)
+        }
     }
 }
 
+#[cfg(any(test, feature = "restate-compatibility"))]
 const START_MESSAGE: &str = "*Nightly Project Update beginning*\nRepairing Slack channels, reconciling internal membership, and checking repositories.";
 
-async fn post_start(slack: &dyn SlackBot, channel_id: &str) -> Result<(), HandlerError> {
+#[cfg(any(test, feature = "restate-compatibility"))]
+async fn post_start(slack: &dyn SlackBot, channel_id: &str) -> Result<(), WorkflowStepError> {
     slack
         .post_message(channel_id, START_MESSAGE)
         .await
@@ -576,6 +606,7 @@ async fn post_start(slack: &dyn SlackBot, channel_id: &str) -> Result<(), Handle
 
 /// Export the run's outcome metric and, when degraded, one error-level
 /// summary so a log alert sees the run and not only its children.
+#[cfg(feature = "restate-compatibility")]
 fn record_outcome(report: &NightlyProjectUpdateReport) {
     if report.failures() > 0 {
         tracing::error!(
@@ -648,6 +679,7 @@ pub(crate) fn render_report(report: &NightlyProjectUpdateReport) -> String {
     )
 }
 
+#[cfg(any(test, feature = "restate-compatibility"))]
 fn outcome_channel_id<'a>(
     simulated: bool,
     messages: &'a str,
@@ -660,18 +692,17 @@ fn outcome_channel_id<'a>(
     }
 }
 
-fn validate_configuration(channel_id: &str, slack_enabled: bool) -> Result<(), HandlerError> {
+#[cfg(any(test, feature = "restate-compatibility"))]
+fn validate_configuration(channel_id: &str, slack_enabled: bool) -> Result<(), WorkflowStepError> {
     if channel_id.is_empty() {
-        return Err(TerminalError::new(
+        return Err(WorkflowStepError::terminal(
             "messages channel id for this deployment is not configured",
-        )
-        .into());
+        ));
     }
     if !slack_enabled {
-        return Err(TerminalError::new(
+        return Err(WorkflowStepError::terminal(
             "SLACK_BOT_TOKEN must be configured for the Nightly Project Update",
-        )
-        .into());
+        ));
     }
     Ok(())
 }
@@ -1314,7 +1345,13 @@ mod tests {
             },
             SlackBotError::IncompleteResponse,
         ] {
-            let rendered = format!("{:?}", slack_error(error));
+            let terminal = matches!(error, SlackBotError::Api(_) | SlackBotError::HttpStatus(_));
+            let classified = slack_error(error);
+            assert_eq!(
+                matches!(classified, WorkflowStepError::Terminal(_)),
+                terminal
+            );
+            let rendered = format!("{classified:?}");
             assert!(!rendered.contains("private request detail"));
             assert!(!rendered.contains("private@example.com"));
         }

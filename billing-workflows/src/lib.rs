@@ -1,37 +1,24 @@
-//! Worker-side billing workflows, hosted by the `workflows-service`
-//! Restate worker (which binds [`canary::BillingCanaryService`] alongside
-//! the `Notation` and `Archives` services — one endpoint,
-//! no separate billing pod).
+//! Shared billing workflow cores and opt-in Restate replay adapters.
 //!
-//! Every workflow here reads or reports; none of them raises money. Lawyer
-//! agree a matter's price with the client and raise the invoice in Xero
-//! directly, so accounting originates there and Navigator only mirrors
-//! what Xero already holds.
-//!
-//! - [`canary::BillingCanaryService`] — a nightly health check that proves the
-//!   Xero integration is live end-to-end. It find-or-creates a single
-//!   stable canary contact and asserts the resolve is idempotent. The
-//!   `billing-canary-trigger` `CronJob` starts one invocation per day;
-//!   Restate owns the retry schedule.
-//!
-//! - [`digest::BillingDigestService`] — a daily internal ops notice reporting
-//!   trailing-window GCP cost across **every configured billing account and
-//!   every project on each**, grouped by account, by project, and by service,
-//!   each with a prior-window trend. `BILLING_EXPORT_TABLE` lists one export
-//!   table per account. Reads them via `billing::gcp_cost` (shared with
-//!   `archives`); the `billing-digest-trigger` `CronJob` starts one invocation
-//!   per day.
+//! Native DBOS callers use the provider-agnostic billing functions. The
+//! `restate-compatibility` feature exposes the worker adapters for retained runs.
+//! Provider and store effects remain in the shared billing functions.
 
 pub mod canary;
 pub mod digest;
 pub mod reconcile;
 pub mod sandbox_reset;
 
-pub use canary::{run_canary, BillingCanaryService, CanaryReport, RunRequest};
-pub use digest::{
-    build_digest_email, AccountCost, BillingDigestReport, BillingDigestService, DigestOutcome,
-};
-pub use reconcile::{reconcile_once, ReconcileInvoicesService, ReconcileReport, ReconcileRequest};
-pub use sandbox_reset::{
-    overage_invoice_key, SandboxCreditResetService, SandboxResetReport, SandboxResetRequest,
-};
+#[cfg(feature = "restate-compatibility")]
+pub use canary::BillingCanaryService;
+pub use canary::{run_canary, CanaryReport, RunRequest};
+pub use digest::{build_digest_email, AccountCost, BillingDigestReport, DigestOutcome};
+pub use reconcile::{reconcile_once, ReconcileReport, ReconcileRequest};
+pub use sandbox_reset::{overage_invoice_key, SandboxResetReport, SandboxResetRequest};
+
+#[cfg(feature = "restate-compatibility")]
+pub use digest::BillingDigestService;
+#[cfg(feature = "restate-compatibility")]
+pub use reconcile::ReconcileInvoicesService;
+#[cfg(feature = "restate-compatibility")]
+pub use sandbox_reset::SandboxCreditResetService;

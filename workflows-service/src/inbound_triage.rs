@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cloud::{GeminiVertexAdapter, MetadataTokenSource, VertexError, VertexRequest};
+#[cfg(feature = "restate-compatibility")]
 use restate_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 use store::inbox::{direction, Conversation, Message};
@@ -24,6 +25,8 @@ use workflows::{
     assemble_triage, build_triage_prompt, parse_triage, triage_input_digest, InboundTriageReport,
     InboundTriageRequest, ProjectOption, TriageRunConfig,
 };
+
+use crate::workflow_step_error::WorkflowStepError;
 
 const DEFAULT_METADATA_TOKEN_URL: &str =
     "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token";
@@ -257,12 +260,12 @@ async fn triage_context(
     surreal: &SurrealDb,
     message_id: Uuid,
     providers: Option<&TriageProviders>,
-) -> Result<Option<TriageContext>, HandlerError> {
+) -> Result<Option<TriageContext>, WorkflowStepError> {
     let Some(message): Option<Message> = store::inbox::message_by_id(surreal, message_id)
         .await
-        .map_err(HandlerError::from)?
+        .map_err(WorkflowStepError::retryable)?
     else {
-        return Err(TerminalError::new("inbound message not found").into());
+        return Err(WorkflowStepError::terminal("inbound message not found"));
     };
     if message.direction != direction::INBOUND {
         return Ok(None);
@@ -270,9 +273,11 @@ async fn triage_context(
     let Some(conversation): Option<Conversation> =
         store::inbox::conversation_by_id(surreal, message.conversation_id)
             .await
-            .map_err(HandlerError::from)?
+            .map_err(WorkflowStepError::retryable)?
     else {
-        return Err(TerminalError::new("inbound conversation not found").into());
+        return Err(WorkflowStepError::terminal(
+            "inbound conversation not found",
+        ));
     };
     let classifier = match providers {
         Some(providers) if store::inbox_triage::classifier_may_run(&conversation.channel) => {
@@ -284,7 +289,7 @@ async fn triage_context(
             Some(ClassifierConfig {
                 project_id: providers.project_id.clone(),
                 run: TriageRunConfig::new(&providers.model, &providers.location, digest)
-                    .map_err(HandlerError::from)?,
+                    .map_err(WorkflowStepError::retryable)?,
             })
         }
         _ => None,
@@ -305,18 +310,19 @@ async fn validate_suggestion(
     surreal: &SurrealDb,
     firm_id: Uuid,
     candidate: Option<Uuid>,
-) -> Result<Option<Uuid>, HandlerError> {
+) -> Result<Option<Uuid>, WorkflowStepError> {
     let Some(candidate) = candidate else {
         return Ok(None);
     };
     let project = store::projects::find_by_id(surreal, candidate)
         .await
-        .map_err(HandlerError::from)?;
+        .map_err(WorkflowStepError::retryable)?;
     Ok(project
         .filter(|project| project.firm_id == Some(firm_id))
         .map(|_| candidate))
 }
 
+#[cfg(feature = "restate-compatibility")]
 #[restate_sdk::workflow(name = "InboundTriage")]
 impl InboundTriageService {
     #[restate_sdk::handler]
@@ -384,6 +390,7 @@ impl InboundTriageService {
 
 /// Loads the inbound context inside a journaled step, so replays never
 /// re-read the store for a message this run has already triaged.
+#[cfg(feature = "restate-compatibility")]
 async fn load_triage_context(
     ctx: &WorkflowContext<'_>,
     surreal: SurrealDb,
@@ -393,7 +400,9 @@ async fn load_triage_context(
     let context = ctx
         .run(move || async move {
             Ok(Json(
-                triage_context(&surreal, message_id, providers.as_ref()).await?,
+                triage_context(&surreal, message_id, providers.as_ref())
+                    .await
+                    .map_err(WorkflowStepError::into_handler_error)?,
             ))
         })
         .name("load-inbound-triage-context")
@@ -404,6 +413,7 @@ async fn load_triage_context(
 
 /// Reads any existing triage row inside a journaled step: the presence or
 /// absence of the row is journaled, so a replay reports the same decision.
+#[cfg(feature = "restate-compatibility")]
 async fn find_existing_triage(
     ctx: &WorkflowContext<'_>,
     surreal: SurrealDb,
@@ -423,13 +433,20 @@ async fn find_existing_triage(
 
 /// The Firm's open Projects, journaled so the prompt's menu is stable
 /// across replays.
+#[cfg(feature = "restate-compatibility")]
 async fn load_firm_menu(
     ctx: &WorkflowContext<'_>,
     surreal: SurrealDb,
     firm_id: Uuid,
 ) -> Result<Vec<ProjectOption>, HandlerError> {
     let menu = ctx
-        .run(move || async move { Ok(Json(firm_menu(&surreal, firm_id).await?)) })
+        .run(move || async move {
+            Ok(Json(
+                firm_menu(&surreal, firm_id)
+                    .await
+                    .map_err(WorkflowStepError::into_handler_error)?,
+            ))
+        })
         .name("load-firm-project-menu")
         .await?
         .into_inner();
@@ -438,6 +455,7 @@ async fn load_firm_menu(
 
 /// The classifier consultation, journaled with the attempt's audit
 /// artifacts as the step's result.
+#[cfg(feature = "restate-compatibility")]
 async fn run_classifier_step(
     ctx: &WorkflowContext<'_>,
     providers: Option<&TriageProviders>,
@@ -456,7 +474,8 @@ async fn run_classifier_step(
         .run(move || async move {
             Ok::<_, HandlerError>(Json(
                 classifier_attempt(providers, surreal, message_id, invocation, channel, menu)
-                    .await?,
+                    .await
+                    .map_err(WorkflowStepError::into_handler_error)?,
             ))
         })
         .name("classify-inbound-message")
@@ -468,6 +487,7 @@ async fn run_classifier_step(
 /// Validates the suggestion against the message's Firm, assembles the
 /// audit row, and records it through the PR 178 mirror — one journaled
 /// step, so a replay never writes the row twice.
+#[cfg(feature = "restate-compatibility")]
 async fn record_triage_step(
     ctx: &WorkflowContext<'_>,
     surreal: SurrealDb,
@@ -479,7 +499,9 @@ async fn record_triage_step(
     let report = ctx
         .run(move || async move {
             Ok(Json(
-                record_triage(&surreal, message_id, context, lane, attempt).await?,
+                record_triage(&surreal, message_id, context, lane, attempt)
+                    .await
+                    .map_err(WorkflowStepError::into_handler_error)?,
             ))
         })
         .name("record-inbound-triage")
@@ -488,8 +510,13 @@ async fn record_triage_step(
     Ok(report)
 }
 
-async fn firm_menu(surreal: &SurrealDb, firm_id: Uuid) -> Result<Vec<ProjectOption>, HandlerError> {
-    let choices = store::inbox::projects_in_firm(surreal, firm_id).await?;
+async fn firm_menu(
+    surreal: &SurrealDb,
+    firm_id: Uuid,
+) -> Result<Vec<ProjectOption>, WorkflowStepError> {
+    let choices = store::inbox::projects_in_firm(surreal, firm_id)
+        .await
+        .map_err(WorkflowStepError::retryable)?;
     Ok(choices
         .into_iter()
         .map(|choice| ProjectOption {
@@ -507,7 +534,7 @@ async fn classifier_attempt(
     invocation: ClassifierConfig,
     channel: String,
     menu: Vec<ProjectOption>,
-) -> Result<ClassifierAttempt, HandlerError> {
+) -> Result<ClassifierAttempt, WorkflowStepError> {
     // Only the attempt leaves this step. Raw input stays in the
     // store and in this provider call, outside the context checkpoint.
     let config = invocation.run;
@@ -521,12 +548,12 @@ async fn classifier_attempt(
     providers.project_id = invocation.project_id;
     let message = store::inbox::message_by_id(&surreal, message_id)
         .await
-        .map_err(HandlerError::from)?
-        .ok_or_else(|| TerminalError::new("inbound message not found"))?;
+        .map_err(WorkflowStepError::retryable)?
+        .ok_or_else(|| WorkflowStepError::terminal("inbound message not found"))?;
     let conversation = store::inbox::conversation_by_id(&surreal, message.conversation_id)
         .await
-        .map_err(HandlerError::from)?
-        .ok_or_else(|| TerminalError::new("inbound conversation not found"))?;
+        .map_err(WorkflowStepError::retryable)?
+        .ok_or_else(|| WorkflowStepError::terminal("inbound conversation not found"))?;
     let prompt = build_triage_prompt(
         &channel,
         conversation.subject.as_deref(),
@@ -544,7 +571,7 @@ async fn record_triage(
     context: TriageContext,
     lane: ClassifierLane,
     attempt: ClassifierAttempt,
-) -> Result<InboundTriageReport, HandlerError> {
+) -> Result<InboundTriageReport, WorkflowStepError> {
     let validated = validate_suggestion(
         surreal,
         context.firm_id,
@@ -563,7 +590,9 @@ async fn record_triage(
         attempt.output.as_ref(),
         validated,
     );
-    let recorded = store::inbox_triage::record(surreal, &row).await?;
+    let recorded = store::inbox_triage::record(surreal, &row)
+        .await
+        .map_err(WorkflowStepError::retryable)?;
     Ok(triage_report(message_id, &recorded))
 }
 
@@ -637,7 +666,7 @@ pub enum TriageError {
     Store,
 }
 
-fn triage_step_error(_: HandlerError) -> dbos::Error<TriageError> {
+fn triage_step_error(_: WorkflowStepError) -> dbos::Error<TriageError> {
     dbos::Error::Application(TriageError::Store)
 }
 
@@ -965,8 +994,11 @@ mod tests {
         runtime.model = "different-bootstrap-model".into();
         let attempt = classify_message(&runtime, config(&digest), "prompt".into()).await;
         let checkpoint = serde_json::to_value(&attempt).unwrap();
-        assert_eq!(checkpoint["run_config"], serde_json::to_value(config(&digest)).unwrap(),
-            "the journal must retain the actual invocation choices independently of boot configuration");
+        assert_eq!(
+            checkpoint["run_config"],
+            serde_json::to_value(config(&digest)).unwrap(),
+            "the journal must retain the actual invocation choices independently of boot configuration"
+        );
         let replayed: super::ClassifierAttempt = serde_json::from_value(checkpoint).unwrap();
         assert_eq!(replayed.lane().model_id.as_deref(), Some(TRIAGE_MODEL));
         let output = attempt

@@ -193,9 +193,9 @@ pulldown-cmark = { version = "0.13", default-features = false, features = ["html
 syntect = { version = "5.3", default-features = false, features = ["default-fancy"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
-archives = { path = "archives" }
+archives = { path = "archives", default-features = false }
 billing = { path = "billing" }
-billing-workflows = { path = "billing-workflows" }
+billing-workflows = { path = "billing-workflows", default-features = false }
 cloud = { path = "cloud" }
 features = { path = "features" }
 forms = { path = "forms" }
@@ -261,7 +261,7 @@ walkdir = "2.5"
 webapp = { path = "webapp" }
 wiremock = "0.6"
 workflows = { path = "workflows" }
-workflows-service = { path = "workflows-service" }
+workflows-service = { path = "workflows-service", default-features = false }
 word = { path = "word" }
 restate-sdk = "0.13"
 # Native DBOS durable execution on PostgreSQL (docs/dbos-durability.md). Pinned

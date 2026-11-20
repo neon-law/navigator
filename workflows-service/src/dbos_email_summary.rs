@@ -129,8 +129,7 @@ async fn run_summary(
                 check_sender_step(storage, &surreal, &receipt, matter_project_id)
                     .await
                     .map_err(|error| {
-                        // Restate's `HandlerError` has no `Display`; journal
-                        // its `Debug` so a recovery can see what failed.
+                        // Retain the shared step failure for recovery diagnostics.
                         dbos::Error::Application(EmailSummaryError::SenderGate(format!(
                             "{error:?}"
                         )))
@@ -221,8 +220,7 @@ async fn summarize_step(
                 started.elapsed(),
             );
             result.map_err(|error| {
-                // Restate's `HandlerError` has no `Display`; journal its
-                // `Debug` so a recovery can see what failed.
+                // Retain the shared step failure for recovery diagnostics.
                 dbos::Error::Application(EmailSummaryError::Provider(format!("{error:?}")))
             })
         }

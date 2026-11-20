@@ -12,9 +12,11 @@
 //! emails stay inside the journaled step that renders the canvas.
 
 use std::fmt::Write;
+#[cfg(any(test, feature = "restate-compatibility"))]
 use std::sync::Arc;
 
 use cloud::forge::ForgeService;
+#[cfg(feature = "restate-compatibility")]
 use restate_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 use store::projects::ProjectCanvas;
@@ -23,9 +25,16 @@ use uuid::Uuid;
 use workflows::{upsert_channel_canvas, CanvasWrite, SlackBot};
 
 use super::repository::{matches_recorded_repository, RepositoryForge};
-use super::{slack_error, tag_retry_policy, ProjectTagRequest};
+use super::slack_error;
+#[cfg(feature = "restate-compatibility")]
+use super::tag_retry_policy;
+#[cfg(feature = "restate-compatibility")]
+use super::ProjectTagRequest;
+#[cfg(feature = "restate-compatibility")]
 use crate::firm_slack::ProjectSlackBots;
+#[cfg(feature = "restate-compatibility")]
 use crate::project_slack::LaneError;
+use crate::workflow_step_error::WorkflowStepError;
 
 /// What one Project's `slack` child did. Counts only.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -47,6 +56,7 @@ pub enum CanvasStep {
 }
 
 #[derive(Clone)]
+#[cfg(feature = "restate-compatibility")]
 pub struct SlackTagService {
     surreal: SurrealDb,
     bots: Arc<dyn ProjectSlackBots>,
@@ -54,6 +64,7 @@ pub struct SlackTagService {
     forge: RepositoryForge,
 }
 
+#[cfg(feature = "restate-compatibility")]
 impl SlackTagService {
     /// `portal_origin` is the deployment's public origin, such as
     /// `https://www.example.com`; without it the canvas links the portal by
@@ -74,6 +85,7 @@ impl SlackTagService {
     }
 }
 
+#[cfg(feature = "restate-compatibility")]
 #[restate_sdk::workflow(name = "NightlyProjectUpdateSlack")]
 impl SlackTagService {
     #[restate_sdk::handler]
@@ -103,6 +115,7 @@ impl SlackTagService {
                 )
                 .await
                 .map(Json)
+                .map_err(WorkflowStepError::into_handler_error)
             })
             .name("upsert-canvas")
             .retry_policy(tag_retry_policy())
@@ -119,6 +132,7 @@ impl SlackTagService {
                 post_notice(&surreal, slack.as_ref(), &forge, &ran_on, project_id)
                     .await
                     .map(Json)
+                    .map_err(WorkflowStepError::into_handler_error)
             })
             .name("post-notice")
             .retry_policy(tag_retry_policy())
@@ -131,6 +145,7 @@ impl SlackTagService {
     }
 }
 
+#[cfg(any(test, feature = "restate-compatibility"))]
 fn outcome(canvas: CanvasStep, notice_posted: bool) -> SlackOutcome {
     SlackOutcome {
         canvases_created: usize::from(canvas == CanvasStep::Created),
@@ -140,7 +155,8 @@ fn outcome(canvas: CanvasStep, notice_posted: bool) -> SlackOutcome {
     }
 }
 
-fn canvas_outcome(canvas: &Result<CanvasStep, HandlerError>, posted: bool) -> SlackOutcome {
+#[cfg(any(test, feature = "restate-compatibility"))]
+fn canvas_outcome<E>(canvas: &Result<CanvasStep, E>, posted: bool) -> SlackOutcome {
     match canvas {
         Ok(canvas) => outcome(*canvas, posted),
         Err(_) => SlackOutcome {
@@ -158,10 +174,10 @@ pub async fn upsert_canvas(
     portal_origin: Option<&str>,
     ran_on: &str,
     project_id: Uuid,
-) -> Result<CanvasStep, HandlerError> {
+) -> Result<CanvasStep, WorkflowStepError> {
     let Some(canvas) = store::projects::project_canvas(surreal, project_id)
         .await
-        .map_err(HandlerError::from)?
+        .map_err(WorkflowStepError::retryable)?
     else {
         return Ok(CanvasStep::Skipped);
     };
@@ -196,10 +212,10 @@ pub async fn post_notice(
     forge: &RepositoryForge,
     ran_on: &str,
     project_id: Uuid,
-) -> Result<bool, HandlerError> {
+) -> Result<bool, WorkflowStepError> {
     let Some(project) = store::projects::find_by_id(surreal, project_id)
         .await
-        .map_err(HandlerError::from)?
+        .map_err(WorkflowStepError::retryable)?
     else {
         return Ok(false);
     };
@@ -225,7 +241,7 @@ pub async fn post_notice(
     }
     let deadlines = store::project_deadlines::list(surreal, project_id)
         .await
-        .map_err(HandlerError::from)?;
+        .map_err(WorkflowStepError::retryable)?;
     let open: Vec<_> = deadlines
         .iter()
         .filter(|row| row.status == store::project_deadlines::STATUS_OPEN)
@@ -317,7 +333,7 @@ pub(crate) async fn reconcile_slack(
     portal_origin: Option<&str>,
     ran_on: &str,
     project_id: Uuid,
-) -> Result<SlackOutcome, HandlerError> {
+) -> Result<SlackOutcome, WorkflowStepError> {
     let canvas = upsert_canvas(surreal, slack, portal_origin, ran_on, project_id).await;
     let posted = post_notice(surreal, slack, &RepositoryForge::None, ran_on, project_id).await?;
     Ok(canvas_outcome(&canvas, posted))

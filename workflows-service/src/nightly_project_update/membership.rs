@@ -15,15 +15,24 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+#[cfg(feature = "restate-compatibility")]
 use restate_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 use store::surreal::SurrealDb;
 use uuid::Uuid;
 use workflows::{SlackBot, SlackBotError};
 
-use super::{slack_error, tag_retry_policy, ProjectTagRequest};
+use super::slack_error;
+#[cfg(feature = "restate-compatibility")]
+use super::tag_retry_policy;
+#[cfg(feature = "restate-compatibility")]
+use super::ProjectTagRequest;
+#[cfg(feature = "restate-compatibility")]
 use crate::firm_slack::ProjectSlackBots;
-use crate::project_slack::{ensure_channel, ChannelOutcome, LaneError};
+#[cfg(feature = "restate-compatibility")]
+use crate::project_slack::LaneError;
+use crate::project_slack::{ensure_channel, ChannelOutcome};
+use crate::workflow_step_error::WorkflowStepError;
 
 /// What one Project's `membership` child did. Counts only.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -55,12 +64,14 @@ pub struct ChannelResolution {
 }
 
 #[derive(Clone)]
+#[cfg(feature = "restate-compatibility")]
 pub struct MembershipTagService {
     surreal: SurrealDb,
     bots: Arc<dyn ProjectSlackBots>,
     simulated: bool,
 }
 
+#[cfg(feature = "restate-compatibility")]
 impl MembershipTagService {
     #[must_use]
     pub fn new(surreal: SurrealDb, bots: Arc<dyn ProjectSlackBots>, simulated: bool) -> Self {
@@ -72,6 +83,7 @@ impl MembershipTagService {
     }
 }
 
+#[cfg(feature = "restate-compatibility")]
 #[restate_sdk::workflow(name = "NightlyProjectUpdateMembership")]
 impl MembershipTagService {
     #[restate_sdk::handler]
@@ -95,6 +107,7 @@ impl MembershipTagService {
                 reconcile_project(&surreal, &slack, simulated, project_id)
                     .await
                     .map(Json)
+                    .map_err(WorkflowStepError::into_handler_error)
             })
             .name("reconcile-membership")
             .retry_policy(tag_retry_policy())
@@ -109,7 +122,7 @@ pub async fn reconcile_project(
     slack: &Arc<dyn SlackBot>,
     simulated: bool,
     project_id: Uuid,
-) -> Result<MembershipOutcome, HandlerError> {
+) -> Result<MembershipOutcome, WorkflowStepError> {
     let resolution = resolve_channel(surreal, slack, simulated, project_id).await?;
     let mut report = resolution.outcome;
     if resolution.open {
@@ -135,10 +148,10 @@ pub async fn resolve_channel(
     slack: &Arc<dyn SlackBot>,
     simulated: bool,
     project_id: Uuid,
-) -> Result<ChannelResolution, HandlerError> {
+) -> Result<ChannelResolution, WorkflowStepError> {
     let Some(target) = store::projects::slack_membership_target(surreal, project_id)
         .await
-        .map_err(HandlerError::from)?
+        .map_err(WorkflowStepError::retryable)?
     else {
         return Ok(ChannelResolution::default());
     };
@@ -180,14 +193,15 @@ pub async fn resolve_channel(
     if stale || channel_id.is_none() {
         let mut project = store::projects::find_by_id(surreal, target.project_id)
             .await
-            .map_err(HandlerError::from)?
+            .map_err(WorkflowStepError::retryable)?
             .ok_or_else(|| {
-                HandlerError::from(TerminalError::new(
-                    "Project disappeared during Slack membership sync",
-                ))
+                WorkflowStepError::terminal("Project disappeared during Slack membership sync")
             })?;
         project.internal_slack_channel_id = None;
-        match ensure_channel(surreal, slack, &project, simulated).await? {
+        match ensure_channel(surreal, slack, &project, simulated)
+            .await
+            .map_err(WorkflowStepError::retryable)?
+        {
             ChannelOutcome::Created(id) => {
                 if stale {
                     report.channels_repaired += 1;
@@ -217,7 +231,7 @@ pub async fn resolve_channel(
 async fn unarchive_open_channel(
     slack: &Arc<dyn SlackBot>,
     channel_id: &str,
-) -> Result<usize, HandlerError> {
+) -> Result<usize, WorkflowStepError> {
     slack
         .unarchive_channel(channel_id)
         .await
@@ -264,10 +278,10 @@ pub async fn invite_members(
     slack: &Arc<dyn SlackBot>,
     project_id: Uuid,
     channel_id: &str,
-) -> Result<MembershipOutcome, HandlerError> {
+) -> Result<MembershipOutcome, WorkflowStepError> {
     let Some(target) = store::projects::slack_membership_target(surreal, project_id)
         .await
-        .map_err(HandlerError::from)?
+        .map_err(WorkflowStepError::retryable)?
     else {
         return Ok(MembershipOutcome::default());
     };
@@ -318,7 +332,7 @@ pub async fn invite_members(
 async fn resolve_slack_ids(
     slack: &dyn SlackBot,
     target: &store::projects::ProjectSlackMembershipTarget,
-) -> Result<(BTreeSet<String>, usize), HandlerError> {
+) -> Result<(BTreeSet<String>, usize), WorkflowStepError> {
     let mut user_ids: BTreeSet<String> = target.member_slack_ids.iter().cloned().collect();
     let mut unmatched = 0;
     for email in &target.member_emails {
@@ -339,10 +353,10 @@ pub async fn member_mentions(
     surreal: &SurrealDb,
     slack: &dyn SlackBot,
     project_id: Uuid,
-) -> Result<String, HandlerError> {
+) -> Result<String, WorkflowStepError> {
     let Some(target) = store::projects::slack_membership_target(surreal, project_id)
         .await
-        .map_err(HandlerError::from)?
+        .map_err(WorkflowStepError::retryable)?
     else {
         return Ok(String::new());
     };

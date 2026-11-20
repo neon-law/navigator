@@ -23,7 +23,6 @@
 use std::sync::Arc;
 
 use restate_sdk::prelude::*;
-use serde::{Deserialize, Serialize};
 use tracing::Instrument;
 use workflows::{
     dispatch_step, dispatches_side_effect, EmailService, MachineKind, QuestionnaireSpec, StateName,
@@ -70,66 +69,7 @@ const WORKFLOW_SPEC_KEY: &str = "workflow_spec_yaml";
 /// Restate state key for the workflow's current state name.
 const WORKFLOW_STATE_KEY: &str = "workflow_state";
 
-/// JSON request body for a `*_start` handler.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct StartBody {
-    pub spec_yaml: String,
-    /// `true` for workflows that have no `notations` row (e.g. the
-    /// `onboarding__welcome` trigger). The signal handler skips the
-    /// `notation_events` journal append for these, since `append_event`
-    /// would fail reading back a notation that does not exist. Defaults
-    /// to `false` for legacy callers that always start a
-    /// notation-backed workflow.
-    #[serde(default)]
-    pub ephemeral: bool,
-}
-
-/// JSON request body for `questionnaire_signal`. The `value`
-/// becomes the `answer_value` payload of the journaled event.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct QuestionnaireSignalBody {
-    pub condition: String,
-    #[serde(default)]
-    pub value: Option<String>,
-    #[serde(default)]
-    pub acting_person_id: Option<uuid::Uuid>,
-}
-
-/// The actor who is moving the questionnaire back one answerable state.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct QuestionnaireBackBody {
-    pub acting_person_id: uuid::Uuid,
-}
-
-/// JSON request body for `workflow_signal`. The optional `value`
-/// carries a JSON-serialized payload for step dispatch: `email_send__*`
-/// reads it as a [`workflows::EmailPayload`] and `generate_pdf__*`
-/// reads it as a [`workflows::DocumentPayload`]; other step kinds
-/// ignore it. `ephemeral` propagates the flag set at start time so each
-/// signal also skips the journal — required because the worker doesn't
-/// persist start-side flags across the keyed state today.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct WorkflowSignalBody {
-    pub condition: String,
-    #[serde(default)]
-    pub value: Option<String>,
-    #[serde(default)]
-    pub acting_person_id: Option<uuid::Uuid>,
-    #[serde(default)]
-    pub ephemeral: bool,
-}
-
-/// JSON response body for a `*_signal` handler.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct SignalResponse {
-    pub next_state: String,
-}
-
-/// JSON response body for `*_current_state`.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct CurrentStateResponse {
-    pub state: Option<String>,
-}
+pub use crate::notation_transport::*;
 
 /// Service struct held by the Restate endpoint. Carries the shared
 /// store handle, the worker-side [`workflows::EmailService`] that

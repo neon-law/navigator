@@ -22,6 +22,7 @@ use std::sync::Arc;
 use cloud::forge::ForgeService;
 use cloud::forgejo_governance::{FileUpdate, GovernedForge, UpdateProposal};
 use cloud::ForgeBackend;
+#[cfg(feature = "restate-compatibility")]
 use restate_sdk::prelude::*;
 use rules::project_manifest::{
     pin_status, pinned_version, with_pinned_version, PinStatus, FILE as MANIFEST,
@@ -31,7 +32,12 @@ use store::project_surfaces::SurfaceStatus;
 use store::surreal::SurrealDb;
 use uuid::Uuid;
 
-use super::{tag_retry_policy, ProjectTagRequest};
+#[cfg(feature = "restate-compatibility")]
+use super::tag_retry_policy;
+#[cfg(feature = "restate-compatibility")]
+use super::ProjectTagRequest;
+
+use crate::workflow_step_error::WorkflowStepError;
 
 /// The release this worker is: what every repository's pin is compared to.
 pub const RUNTIME_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -119,7 +125,7 @@ pub trait FirmForges: Send + Sync {
         &self,
         surreal: &SurrealDb,
         project_id: Uuid,
-    ) -> Result<Arc<dyn GovernedForge>, HandlerError>;
+    ) -> Result<Arc<dyn GovernedForge>, WorkflowStepError>;
 }
 
 /// [`FirmForges`] from the process environment and the runtime KMS that
@@ -141,7 +147,7 @@ impl FirmForges for EnvFirmForges {
         &self,
         surreal: &SurrealDb,
         project_id: Uuid,
-    ) -> Result<Arc<dyn GovernedForge>, HandlerError> {
+    ) -> Result<Arc<dyn GovernedForge>, WorkflowStepError> {
         let forge = store::project_surfaces::forgejo_for_project(
             surreal,
             project_id,
@@ -149,18 +155,20 @@ impl FirmForges for EnvFirmForges {
             |key| std::env::var(key).ok(),
         )
         .await
-        .map_err(HandlerError::from)?;
+        .map_err(WorkflowStepError::retryable)?;
         Ok(Arc::new(forge))
     }
 }
 
 #[derive(Clone)]
+#[cfg(feature = "restate-compatibility")]
 pub struct RepositoryTagService {
     surreal: SurrealDb,
     forge: RepositoryForge,
     runtime_version: String,
 }
 
+#[cfg(feature = "restate-compatibility")]
 impl RepositoryTagService {
     /// `runtime_version` is the release this worker runs, normally
     /// [`RUNTIME_VERSION`].
@@ -178,6 +186,7 @@ impl RepositoryTagService {
     }
 }
 
+#[cfg(feature = "restate-compatibility")]
 #[restate_sdk::workflow(name = "NightlyProjectUpdateRepository")]
 impl RepositoryTagService {
     #[restate_sdk::handler]
@@ -195,6 +204,7 @@ impl RepositoryTagService {
                 reconcile_repository(&surreal, &forge, project_id, &runtime_version)
                     .await
                     .map(Json)
+                    .map_err(WorkflowStepError::into_handler_error)
             })
             .name("reconcile-repository")
             .retry_policy(tag_retry_policy())
@@ -220,13 +230,13 @@ pub async fn reconcile_repository(
     forge: &RepositoryForge,
     project_id: Uuid,
     runtime_version: &str,
-) -> Result<RepositoryOutcome, HandlerError> {
+) -> Result<RepositoryOutcome, WorkflowStepError> {
     if matches!(forge, RepositoryForge::None) {
         return Ok(RepositoryOutcome::default());
     }
     let Some(project) = store::projects::find_by_id(surreal, project_id)
         .await
-        .map_err(HandlerError::from)?
+        .map_err(WorkflowStepError::retryable)?
         .filter(|project| project.status == "open")
     else {
         return Ok(RepositoryOutcome::default());
@@ -245,13 +255,12 @@ pub async fn reconcile_repository(
         // The origin selects a client. Verify the full URL before using that
         // client's namespace for reads or governance changes.
         let repository = forge.find_repository(&project.code).await.map_err(|_| {
-            HandlerError::from(anyhow::anyhow!("Recorded repository lookup failed"))
+            WorkflowStepError::retryable(anyhow::anyhow!("Recorded repository lookup failed"))
         })?;
         if !repository.is_some_and(|repo| matches_recorded_repository(&repo.url, recorded)) {
-            return Err(TerminalError::new(
+            return Err(WorkflowStepError::terminal(
                 "Configured forge did not verify the recorded repository",
-            )
-            .into());
+            ));
         }
     }
     let surfaces = store::project_surfaces::reconcile(
@@ -261,14 +270,26 @@ pub async fn reconcile_repository(
         Some(forge),
     )
     .await
-    .map_err(HandlerError::from)?;
+    .map_err(WorkflowStepError::retryable)?;
     // An empty repository has no `main` to protect and nothing to update.
     let governed = match governed.as_deref() {
-        Some(governed) if forge.head_commit_sha(&project.code).await?.is_some() => Some(governed),
+        Some(governed)
+            if forge
+                .head_commit_sha(&project.code)
+                .await
+                .map_err(WorkflowStepError::retryable)?
+                .is_some() =>
+        {
+            Some(governed)
+        }
         _ => None,
     };
     let governance_repaired = match governed {
-        Some(governed) => governed.reconcile_governance(&project.code).await?.len(),
+        Some(governed) => governed
+            .reconcile_governance(&project.code)
+            .await
+            .map_err(WorkflowStepError::retryable)?
+            .len(),
         None => 0,
     };
     let (pin, pinned_version, manifest) = read_pin(forge, &project.code, runtime_version).await;
@@ -303,16 +324,16 @@ async fn propose_update(
     project_code: &str,
     manifest: &str,
     runtime_version: &str,
-) -> Result<UpdateProposal, HandlerError> {
+) -> Result<UpdateProposal, WorkflowStepError> {
     let content = with_pinned_version(manifest, runtime_version)
-        .map_err(|reason| HandlerError::from(anyhow::anyhow!(reason)))?;
+        .map_err(|reason| WorkflowStepError::retryable(anyhow::anyhow!(reason)))?;
     let branch = update_branch(runtime_version);
     let title = format!("Update Navigator to {runtime_version}");
     let body = format!(
         "The Nightly Project Update pins `{MANIFEST}` to Navigator {runtime_version}. \
          Only `version:` changes. Squash auto-merge waits for `navigator project gate`."
     );
-    Ok(forge
+    forge
         .propose_file_update(
             project_code,
             &FileUpdate {
@@ -324,7 +345,8 @@ async fn propose_update(
                 body: &body,
             },
         )
-        .await?)
+        .await
+        .map_err(WorkflowStepError::retryable)
 }
 
 /// Read the repository's `navigator.yaml` `version:` and grade it, keeping
@@ -370,7 +392,7 @@ pub(crate) mod tests {
             &self,
             _surreal: &SurrealDb,
             _project_id: Uuid,
-        ) -> Result<Arc<dyn GovernedForge>, HandlerError> {
+        ) -> Result<Arc<dyn GovernedForge>, WorkflowStepError> {
             Ok(Arc::new(self.0.clone()))
         }
     }

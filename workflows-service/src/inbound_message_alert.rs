@@ -2,12 +2,17 @@
 
 use std::sync::Arc;
 
+#[cfg(feature = "restate-compatibility")]
 use restate_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 use store::inbox::{direction, Conversation, InboxError, Message};
 use store::surreal::SurrealDb;
 use uuid::Uuid;
-use workflows::{InboundMessageAlertReport, InboundMessageAlertRequest, SlackBot};
+use workflows::SlackBot;
+#[cfg(feature = "restate-compatibility")]
+use workflows::{InboundMessageAlertReport, InboundMessageAlertRequest};
+
+use crate::workflow_step_error::WorkflowStepError;
 
 #[derive(Clone)]
 pub struct InboundMessageAlertService {
@@ -340,6 +345,7 @@ pub(crate) async fn alert_context(
 }
 
 /// Map the shared context-read error onto the Restate step's error type.
+#[cfg(feature = "restate-compatibility")]
 fn alert_context_handler_error(error: AlertContextError) -> HandlerError {
     match error {
         AlertContextError::Store(inner) => inner.into(),
@@ -347,6 +353,7 @@ fn alert_context_handler_error(error: AlertContextError) -> HandlerError {
     }
 }
 
+#[cfg(feature = "restate-compatibility")]
 #[restate_sdk::workflow(name = "InboundMessageAlert")]
 impl InboundMessageAlertService {
     #[restate_sdk::handler]
@@ -376,7 +383,10 @@ impl InboundMessageAlertService {
         };
         let service = self.clone();
         ctx.run(move || async move {
-            service.deliver_alert(message_id, &context).await?;
+            service
+                .deliver_alert(message_id, &context)
+                .await
+                .map_err(WorkflowStepError::into_handler_error)?;
             Ok(Json(()))
         })
         .name("post-inbound-message-alert")
@@ -399,7 +409,7 @@ impl InboundMessageAlertService {
         &self,
         message_id: Uuid,
         channel_id: Option<&str>,
-    ) -> Result<String, HandlerError> {
+    ) -> Result<String, WorkflowStepError> {
         if let Some(channel) = channel_id {
             if let Ok(Some(found)) = self
                 .slack
@@ -413,12 +423,15 @@ impl InboundMessageAlertService {
                         "notified",
                         Some(&found.timestamp),
                     )
-                    .await?;
+                    .await
+                    .map_err(WorkflowStepError::retryable)?;
                     return Ok("notified".into());
                 }
             }
         }
-        store::inbox_alerts::record(&self.surreal, message_id, "unknown", None).await?;
+        store::inbox_alerts::record(&self.surreal, message_id, "unknown", None)
+            .await
+            .map_err(WorkflowStepError::retryable)?;
         Ok("unknown".into())
     }
 
@@ -428,11 +441,16 @@ impl InboundMessageAlertService {
         &self,
         message_id: Uuid,
         _context: &AlertContext,
-    ) -> Result<String, HandlerError> {
-        let Some(context) = alert_context(&self.surreal, message_id).await? else {
+    ) -> Result<String, WorkflowStepError> {
+        let Some(context) = alert_context(&self.surreal, message_id)
+            .await
+            .map_err(WorkflowStepError::retryable)?
+        else {
             return Ok("skipped_non_inbound".into());
         };
-        let receipt = store::inbox_alerts::receipt(&self.surreal, message_id).await?;
+        let receipt = store::inbox_alerts::receipt(&self.surreal, message_id)
+            .await
+            .map_err(WorkflowStepError::retryable)?;
         if receipt.state.as_deref() == Some("unknown") {
             return self
                 .reconcile_unknown_alert(message_id, receipt.channel_id.as_deref())
@@ -445,7 +463,9 @@ impl InboundMessageAlertService {
         // Firm's inbound metadata into it. Invalid explicit configuration fails closed.
         let owning_firm = match std::env::var("SLACK_MESSAGES_FIRM_ID").ok() {
             Some(value) => Uuid::parse_str(&value).ok(),
-            None => store::firms::firm_id_for_brand_key(&self.surreal, "neon").await?,
+            None => store::firms::firm_id_for_brand_key(&self.surreal, "neon")
+                .await
+                .map_err(WorkflowStepError::retryable)?,
         };
         let channel_id = owning_firm.and_then(|firm_id| {
             workflows::post_slack_notification::select_post_notice_channel(
@@ -471,13 +491,18 @@ impl InboundMessageAlertService {
         let (Some(channel_id), Some(mut inbox_url), true) =
             (channel_id, origin, self.slack_enabled)
         else {
-            store::inbox_alerts::record(&self.surreal, message_id, "disabled", None).await?;
+            store::inbox_alerts::record(&self.surreal, message_id, "disabled", None)
+                .await
+                .map_err(WorkflowStepError::retryable)?;
             return Ok("disabled".into());
         };
         inbox_url.set_path(&format!("/app/inbox/{}", context.conversation_id));
         inbox_url.set_query(None);
         inbox_url.set_fragment(None);
-        if !store::inbox_alerts::reserve(&self.surreal, message_id, channel_id).await? {
+        if !store::inbox_alerts::reserve(&self.surreal, message_id, channel_id)
+            .await
+            .map_err(WorkflowStepError::retryable)?
+        {
             return Ok("unknown".into());
         }
         let text = workflows::render_inbound_message_alert(
@@ -510,7 +535,9 @@ impl InboundMessageAlertService {
             ) => ("failed", None),
             _ => ("unknown", None),
         };
-        store::inbox_alerts::record(&self.surreal, message_id, state, timestamp.as_deref()).await?;
+        store::inbox_alerts::record(&self.surreal, message_id, state, timestamp.as_deref())
+            .await
+            .map_err(WorkflowStepError::retryable)?;
         Ok(state.into())
     }
 }

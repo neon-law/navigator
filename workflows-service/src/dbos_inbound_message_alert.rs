@@ -115,8 +115,7 @@ async fn run_alert(
                     .await
                     .map(|_| ())
                     .map_err(|error| {
-                        // Restate's `HandlerError` has no `Display`; journal
-                        // its `Debug` so a recovery can see what failed.
+                        // Retain the shared delivery failure for recovery diagnostics.
                         dbos::Error::Application(InboundMessageAlertError::Deliver(format!(
                             "{error:?}"
                         )))

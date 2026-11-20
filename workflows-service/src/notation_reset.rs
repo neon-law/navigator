@@ -15,25 +15,33 @@
 //! the duration, and the ids that failed to delete; never a client, a
 //! matter, or a Project code.
 
+#[cfg(any(test, feature = "restate-compatibility"))]
 use std::sync::Arc;
 
+use crate::workflow_step_error::WorkflowStepError;
+#[cfg(any(test, feature = "restate-compatibility"))]
 use chrono::{DateTime, Utc};
+#[cfg(feature = "restate-compatibility")]
 use restate_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 use store::surreal::SurrealDb;
+#[cfg(feature = "restate-compatibility")]
 use uuid::Uuid;
+#[cfg(any(test, feature = "restate-compatibility"))]
 use workflows::SlackBot;
 
 pub use workflows::notation_reset::{
     environment_label, render_failure, render_report, run_key, DraftRoster, NotationResetReport,
 };
 
+#[cfg(feature = "restate-compatibility")]
 use crate::nightly_project_update::{slack_error, tag_retry_policy};
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
 pub struct RunRequest {}
 
 #[derive(Clone)]
+#[cfg(feature = "restate-compatibility")]
 pub struct NotationResetService {
     surreal: SurrealDb,
     slack: Arc<dyn SlackBot>,
@@ -44,6 +52,7 @@ pub struct NotationResetService {
     slack_enabled: bool,
 }
 
+#[cfg(feature = "restate-compatibility")]
 impl NotationResetService {
     #[must_use]
     pub fn new(
@@ -75,6 +84,7 @@ impl NotationResetService {
     }
 }
 
+#[cfg(feature = "restate-compatibility")]
 #[restate_sdk::workflow(name = "NotationReset")]
 impl NotationResetService {
     #[restate_sdk::handler]
@@ -84,14 +94,15 @@ impl NotationResetService {
         _request: Json<RunRequest>,
     ) -> Result<Json<NotationResetReport>, HandlerError> {
         let channel_id = self.channel_id().to_string();
-        validate_configuration(&channel_id, self.slack_enabled)?;
+        validate_configuration(&channel_id, self.slack_enabled)
+            .map_err(WorkflowStepError::into_handler_error)?;
 
         let started_at: String = ctx
             .run(|| async { Ok(Json(Utc::now().to_rfc3339())) })
             .name("read-clock")
             .await?
             .into_inner();
-        let started = parse_clock(&started_at)?;
+        let started = parse_clock(&started_at).map_err(WorkflowStepError::into_handler_error)?;
         tracing::info!(
             run_key = ctx.key(),
             environment = self.environment,
@@ -100,7 +111,12 @@ impl NotationResetService {
 
         let surreal = self.surreal.clone();
         let roster = ctx
-            .run(move || async move { discover_drafts(&surreal).await.map(Json) })
+            .run(move || async move {
+                discover_drafts(&surreal)
+                    .await
+                    .map(Json)
+                    .map_err(WorkflowStepError::into_handler_error)
+            })
             .name("discover-drafts")
             .retry_policy(tag_retry_policy())
             .await;
@@ -142,6 +158,7 @@ impl NotationResetService {
     }
 }
 
+#[cfg(feature = "restate-compatibility")]
 impl NotationResetService {
     /// One journaled delete per Notation draft, each with a bounded retry; a
     /// failure is recorded by id and the run moves on.
@@ -217,6 +234,7 @@ impl NotationResetService {
                 .post_message(&channel_id, &message)
                 .await
                 .map_err(slack_error)
+                .map_err(WorkflowStepError::into_handler_error)
         })
         .name(name)
         .await?;
@@ -233,37 +251,37 @@ impl NotationResetService {
             .name(name)
             .await?
             .into_inner();
-        parse_clock(&at)
+        parse_clock(&at).map_err(WorkflowStepError::into_handler_error)
     }
 }
 
-fn parse_clock(value: &str) -> Result<DateTime<Utc>, HandlerError> {
+#[cfg(any(test, feature = "restate-compatibility"))]
+fn parse_clock(value: &str) -> Result<DateTime<Utc>, WorkflowStepError> {
     DateTime::parse_from_rfc3339(value)
         .map(|at| at.with_timezone(&Utc))
-        .map_err(|_| TerminalError::new("the journaled clock is not RFC 3339").into())
+        .map_err(|_| WorkflowStepError::terminal("the journaled clock is not RFC 3339"))
 }
 
-fn validate_configuration(channel_id: &str, slack_enabled: bool) -> Result<(), HandlerError> {
+#[cfg(any(test, feature = "restate-compatibility"))]
+fn validate_configuration(channel_id: &str, slack_enabled: bool) -> Result<(), WorkflowStepError> {
     if channel_id.is_empty() {
-        return Err(TerminalError::new(
+        return Err(WorkflowStepError::terminal(
             "messages channel id for this deployment is not configured",
-        )
-        .into());
+        ));
     }
     if !slack_enabled {
-        return Err(TerminalError::new(
+        return Err(WorkflowStepError::terminal(
             "SLACK_BOT_TOKEN must be configured for the notation reset",
-        )
-        .into());
+        ));
     }
     Ok(())
 }
 
 /// Every draft id on the deployment, Notations and stored previews.
-pub async fn discover_drafts(surreal: &SurrealDb) -> Result<DraftRoster, HandlerError> {
+pub async fn discover_drafts(surreal: &SurrealDb) -> Result<DraftRoster, WorkflowStepError> {
     workflows::notation_reset::discover_drafts(surreal)
         .await
-        .map_err(|error| HandlerError::from(TerminalError::new(error.to_string())))
+        .map_err(|error| WorkflowStepError::terminal(error.to_string()))
 }
 
 /// The production composition, minus Restate: discover, delete each draft,
@@ -432,27 +450,6 @@ mod tests {
         assert!(format!("{channel:?}").contains("messages channel id"));
         let bot = validate_configuration("C-MESSAGES", false).unwrap_err();
         assert!(format!("{bot:?}").contains("SLACK_BOT_TOKEN"));
-    }
-
-    #[tokio::test]
-    async fn a_simulated_deployment_posts_to_its_staging_channel() {
-        let surreal = mem_surreal().await;
-        let bot: Arc<dyn SlackBot> = Arc::new(workflows::CapturingSlackBot::new());
-        let service = |simulated| {
-            NotationResetService::new(
-                surreal.clone(),
-                Arc::clone(&bot),
-                "C-MESSAGES".into(),
-                "C-STAGING-MESSAGES".into(),
-                "staging",
-                simulated,
-                true,
-            )
-        };
-        assert_eq!(service(true).channel_id(), "C-STAGING-MESSAGES");
-        assert_eq!(service(false).channel_id(), "C-MESSAGES");
-        assert_eq!(service(false).environment, "staging");
-        assert!(service(false).slack_enabled);
     }
 
     #[tokio::test]

@@ -108,21 +108,11 @@ impl Source {
             for (key, value) in [
                 (
                     format!("{kind}_spec_yaml"),
-                    String::from_utf8(
-                        restate_sdk::serde::Serialize::serialize(&SPEC.to_owned())
-                            .unwrap()
-                            .to_vec(),
-                    )
-                    .unwrap(),
+                    String::from_utf8(serde_json::to_vec(&SPEC.to_owned()).unwrap()).unwrap(),
                 ),
                 (
                     format!("{kind}_state"),
-                    String::from_utf8(
-                        restate_sdk::serde::Serialize::serialize(&"BEGIN".to_owned())
-                            .unwrap()
-                            .to_vec(),
-                    )
-                    .unwrap(),
+                    String::from_utf8(serde_json::to_vec(&"BEGIN".to_owned()).unwrap()).unwrap(),
                 ),
             ] {
                 state.push(serde_json::json!({"service_name":"notation","service_key":notation.to_string(),"key":key,"value_utf8":value,"scope":null}));
@@ -134,22 +124,17 @@ impl Source {
             .into_iter()
             .enumerate()
             {
-                let bytes = restate_sdk::serde::Serialize::serialize(&value.to_owned())
-                    .unwrap()
-                    .to_vec();
+                let bytes = serde_json::to_vec(&value.to_owned()).unwrap();
                 start_journal.push(serde_json::json!({"id":format!("synthetic-{kind}"),"index":index+2,"version":2,"entry_json":serde_json::json!({"Command":{"SetState":{"key":key,"value":bytes,"name":""}}}).to_string()}));
             }
-            let payload = restate_sdk::serde::Serialize::serialize(&restate_sdk::serde::Json(
-                workflows_service::notation_service::StartBody {
-                    spec_yaml: SPEC.to_owned(),
-                    ephemeral: true,
-                },
-            ))
-            .unwrap()
-            .to_vec();
+            let payload = serde_json::to_vec(&workflows_service::StartBody {
+                spec_yaml: SPEC.to_owned(),
+                ephemeral: true,
+            })
+            .unwrap();
             invocations.push(serde_json::json!({"id":format!("synthetic-{kind}"),"target_service_name":"notation","target_service_key":notation.to_string(),"target_handler_name":format!("{kind}_start"),"status":"completed","completion_result":"success","scope":null,"pinned_deployment_id":"synthetic-deployment","version":2,"entry_json":serde_json::json!({"Command":{"Input":{"headers":[],"payload":payload,"name":""}}}).to_string()}));
         }
-        state.push(serde_json::json!({"service_name":"project-slack","service_key":posted_project.to_string(),"key":"main_push_seen","value_utf8":String::from_utf8(restate_sdk::serde::Serialize::serialize(&restate_sdk::serde::Json(vec!["abc1234:1"])).unwrap().to_vec()).unwrap(),"scope":null}));
+        state.push(serde_json::json!({"service_name":"project-slack","service_key":posted_project.to_string(),"key":"main_push_seen","value_utf8":String::from_utf8(serde_json::to_vec(&vec!["abc1234:1"]).unwrap()).unwrap(),"scope":null}));
         invocations.push(serde_json::json!({"id":"synthetic-client-view","target_service_name":"project-slack","target_service_key":posted_project.to_string(),"target_handler_name":"client_project_view","status":"completed","completion_result":"success","scope":null,"pinned_deployment_id":"synthetic-deployment","version":null,"entry_json":null}));
         for invocation in &invocations {
             if let Some(entry_json) = invocation["entry_json"].as_str() {
@@ -763,4 +748,30 @@ async fn workflow_metadata_preserves_canonical_project_delete_guards_and_capture
         assert!(store::projects::find_by_id(&db,protected).await.unwrap().is_some());
         let metadata:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM project_slack_handover WHERE project_id=$1)").bind(protected).fetch_one(pg.pool()).await.unwrap();assert!(metadata);
     }).await;
+}
+
+// These are the real pinned SDK serialization boundaries used by captured
+// Notation state/start commands and Project Slack keyed state. Native migration
+// fixtures stay SDK-free; the compatibility lane checks identical persisted bytes.
+#[cfg(feature = "restate-compatibility")]
+#[test]
+fn sdk_wire_codec_matches_native_capture_fixture() {
+    for value in [SPEC, "BEGIN", "quoted \"value\"\n", ""] {
+        let sdk = restate_sdk::serde::Serialize::serialize(&value.to_owned()).unwrap();
+        assert_eq!(sdk.as_ref(), serde_json::to_vec(value).unwrap());
+    }
+    for ephemeral in [false, true] {
+        let body = workflows_service::StartBody {
+            spec_yaml: SPEC.into(),
+            ephemeral,
+        };
+        let native = serde_json::to_vec(&body).unwrap();
+        let sdk =
+            restate_sdk::serde::Serialize::serialize(&restate_sdk::serde::Json(body)).unwrap();
+        assert_eq!(sdk.as_ref(), native);
+    }
+    let seen = vec!["abc1234:1"];
+    let sdk =
+        restate_sdk::serde::Serialize::serialize(&restate_sdk::serde::Json(seen.clone())).unwrap();
+    assert_eq!(sdk.as_ref(), serde_json::to_vec(&seen).unwrap());
 }
