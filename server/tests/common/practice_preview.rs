@@ -11,8 +11,13 @@ pub struct PracticePreview {
 
 impl PracticePreview {
     pub async fn start() -> Self {
+        // PostgreSQL carries every record the preview reads; the Surreal handle
+        // is an unconnected placeholder, as in the other browser fixtures.
+        store::postgres::PostgresDb::application()
+            .await
+            .expect("require PostgreSQL browser fixture history");
         let mut state =
-            portal::test_support::app_state(store::test_support::mem_surreal().await).await;
+            portal::test_support::app_state(store::surreal::SurrealDb::uninitialized()).await;
         store::seed::seed_brand_blog(&state.surreal, store::seed::BrandSeed::Neon)
             .await
             .expect("seed public Brand Posts for previews");

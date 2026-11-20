@@ -6179,7 +6179,7 @@ async fn navigator_home_links_to_the_navigator_page_and_back() {
     };
     c.set_window_size(1280, 900).await.unwrap();
     c.goto(&format!("{}/", base_url())).await.unwrap();
-    wait_for_text(&c, "Star the repo", Duration::from_secs(10)).await;
+    wait_for_text(&c, "Explore Navigator", Duration::from_secs(10)).await;
     c.find(Locator::Css(".site-header a[href='/navigator']"))
         .await
         .expect("Navigator link")
@@ -6194,7 +6194,12 @@ async fn navigator_home_links_to_the_navigator_page_and_back() {
         .click()
         .await
         .unwrap();
-    wait_for_text(&c, "Exacting agentic lawyering.", Duration::from_secs(10)).await;
+    wait_for_text(
+        &c,
+        "Legal work, with the lawyer in control.",
+        Duration::from_secs(10),
+    )
+    .await;
     assert_eq!(c.current_url().await.unwrap().path(), "/");
     c.close().await.unwrap();
 }

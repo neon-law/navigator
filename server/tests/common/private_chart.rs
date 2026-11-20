@@ -12,10 +12,15 @@ async fn fixture() -> String {
         .await
         .expect("fixture client lookup")
         .expect("fixture client");
+    let firm_id = store::firms::firm_id_for_brand_key(&db, "neon")
+        .await
+        .expect("fixture Firm lookup")
+        .expect("the seeded Neon Firm");
     let project = store::projects::create(
         &db,
         &store::projects::NewProject {
             code: format!("chart-browser-{}", Uuid::now_v7()),
+            firm_id: Some(firm_id),
             name: "Synthetic reflection".into(),
             status: "open".into(),
             entity_id: super::seed_browser_entity(&db).await,

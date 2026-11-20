@@ -993,6 +993,7 @@ async fn plan_reopen(
     plan: &mut PortfolioPlan,
     mode: Mode,
     project_id: Uuid,
+    attesting_person_id: Uuid,
     project_code: &str,
     project_already_existed: bool,
 ) -> anyhow::Result<()> {
@@ -1002,12 +1003,14 @@ async fn plan_reopen(
         action_for(project_already_existed),
     );
     if mode.is_apply() && !project_already_existed {
-        crate::projects::transition_project_with_reason(
+        crate::projects::transition_project_attested(
             surreal,
             project_id,
             crate::projects::Transition::Reopen,
             None,
+            Some(crate::projects::ReopenReason::NewMatterEvent),
             None,
+            Some(attesting_person_id),
         )
         .await?;
     }
@@ -1095,6 +1098,7 @@ async fn plan_lifecycle_scenario(
         plan,
         mode,
         project_id,
+        lawyer_id,
         project_already_existed,
         scenario,
     )
@@ -1130,12 +1134,14 @@ async fn file_synthetic_onboarding_signature(
 /// The artifact-filing, close/archive/reopen, and Clerk-assignment half of
 /// [`plan_lifecycle_scenario`], split out only to keep each function under
 /// this workspace's line-count lint.
+#[allow(clippy::too_many_arguments)]
 async fn plan_lifecycle_transitions(
     surreal: &SurrealDb,
     storage: &Arc<dyn cloud::StorageService>,
     plan: &mut PortfolioPlan,
     mode: Mode,
     project_id: Uuid,
+    lawyer_id: Uuid,
     project_already_existed: bool,
     scenario: &LifecycleScenario,
 ) -> anyhow::Result<()> {
@@ -1196,6 +1202,7 @@ async fn plan_lifecycle_transitions(
             plan,
             mode,
             project_id,
+            lawyer_id,
             scenario.project_code,
             project_already_existed,
         )
