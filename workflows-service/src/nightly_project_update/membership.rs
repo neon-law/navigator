@@ -573,11 +573,25 @@ mod tests {
         .unwrap();
         let slack = Arc::new(ReconciliationSlack {
             lookup_error: true,
+            members: [("CIDENTITY".to_string(), vec!["U-STALE".to_string()])].into(),
             ..Default::default()
         });
         let bot: Arc<dyn SlackBot> = slack.clone();
         let report = sweep_in_process(&db, &bot, None, false).await;
         assert_eq!((report.invited, report.membership_failures), (1, 0));
+        // A person the Project no longer names is removed; the notice
+        // mentions the people it does name.
+        assert_eq!(report.removed, 1);
+        assert_eq!(
+            *slack.removals.lock().unwrap(),
+            [("CIDENTITY".to_string(), "U-STALE".to_string())]
+        );
+        assert_eq!(
+            super::member_mentions(&db, bot.as_ref(), target.id)
+                .await
+                .unwrap(),
+            "<@U-RECORDED>"
+        );
         assert!(slack.lookups.lock().unwrap().is_empty());
         assert_eq!(
             *slack.invitations.lock().unwrap(),
@@ -680,7 +694,10 @@ mod tests {
                 ),
                 ("clerk-three@example.com".to_string(), None),
             ],
-            [("CTEAM".to_string(), vec!["U-OLD".to_string()])],
+            [(
+                "CTEAM".to_string(),
+                vec!["U-OLD".to_string(), "U-STALE".to_string()],
+            )],
         ));
         let slack_bot: Arc<dyn SlackBot> = slack.clone();
 
@@ -725,6 +742,8 @@ mod tests {
             .lock()
             .expect("lookups lock")
             .contains(&"client@example.com".to_string()));
+        // clerk-three is unmatched, so the roster is incomplete: nobody is removed.
+        assert!(slack.removals.lock().expect("removals lock").is_empty());
         assert_eq!(
             *slack.invitations.lock().expect("invitations lock"),
             [
@@ -735,84 +754,6 @@ mod tests {
                 ("CEMPTY".to_string(), Vec::new()),
                 ("CNEW1".to_string(), Vec::new())
             ]
-        );
-    }
-
-    async fn removal_fixture(
-        clerk_resolves: bool,
-    ) -> (
-        store::surreal::SurrealDb,
-        Arc<ReconciliationSlack>,
-        uuid::Uuid,
-    ) {
-        let surreal = mem_surreal().await;
-        let firm_id = store::test_support::seed_firm_with_brand(&surreal, "neon").await;
-        let project =
-            store::test_support::seed_project_on_firm(&surreal, Some(firm_id), "Removal").await;
-        set_internal_slack_channel_id(&surreal, project.id, "CTEAM")
-            .await
-            .expect("set channel")
-            .expect("Project exists");
-        let lawyer = person(&surreal, "Lawyer DRI", "lawyer@example.com", Role::Lawyer).await;
-        let clerk = person(&surreal, "Clerk", "clerk@example.com", Role::Clerk).await;
-        for (who, participation) in [(&lawyer, "lawyer"), (&clerk, "clerk")] {
-            projects::add_participation(&surreal, project.id, who.id, participation)
-                .await
-                .expect("add participation");
-        }
-        designate_dri_in_surreal(&surreal, project.id, lawyer.id, DriSide::Lawyer)
-            .await
-            .expect("designate Lawyer DRI");
-        let slack = Arc::new(ReconciliationSlack::new(
-            [
-                ("lawyer@example.com".to_string(), Some("U-LAW".to_string())),
-                (
-                    "clerk@example.com".to_string(),
-                    clerk_resolves.then(|| "U-CLERK".to_string()),
-                ),
-            ],
-            [(
-                "CTEAM".to_string(),
-                vec!["U-LAW".to_string(), "U-GONE".to_string()],
-            )],
-        ));
-        (surreal, slack, project.id)
-    }
-
-    #[tokio::test]
-    async fn members_the_project_no_longer_names_are_removed() {
-        let (surreal, slack, project_id) = removal_fixture(true).await;
-        let bot: Arc<dyn SlackBot> = slack.clone();
-        let outcome = invite_members(&surreal, &bot, project_id, "CTEAM")
-            .await
-            .expect("sync");
-        assert_eq!((outcome.invited, outcome.removed), (1, 1));
-        assert_eq!(
-            *slack.removals.lock().expect("removals lock"),
-            [("CTEAM".to_string(), "U-GONE".to_string())]
-        );
-    }
-
-    #[tokio::test]
-    async fn nobody_is_removed_while_an_assigned_email_is_unmatched() {
-        let (surreal, slack, project_id) = removal_fixture(false).await;
-        let bot: Arc<dyn SlackBot> = slack.clone();
-        let outcome = invite_members(&surreal, &bot, project_id, "CTEAM")
-            .await
-            .expect("sync");
-        assert_eq!((outcome.unmatched_assignments, outcome.removed), (1, 0));
-        assert!(slack.removals.lock().expect("removals lock").is_empty());
-    }
-
-    #[tokio::test]
-    async fn mentions_name_every_person_the_channel_should_hold() {
-        let (surreal, slack, project_id) = removal_fixture(true).await;
-        let bot: Arc<dyn SlackBot> = slack.clone();
-        assert_eq!(
-            super::member_mentions(&surreal, bot.as_ref(), project_id)
-                .await
-                .expect("mentions"),
-            "<@U-CLERK> <@U-LAW>"
         );
     }
 
