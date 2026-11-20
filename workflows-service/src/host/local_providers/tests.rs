@@ -380,3 +380,56 @@ fn database_url(pg: &PostgresDb) -> String {
         options.get_database().unwrap()
     )
 }
+
+#[tokio::test]
+async fn native_billing_digest_without_exports_registers_without_provider_effects() {
+    use workflows::dbos_engine::billing_digest;
+
+    store::test_support::with_postgres(async {
+        let pg = PostgresDb::application().await.unwrap();
+        let context = billing_digest::Context::from_lookup(native).unwrap();
+        let runtime = Arc::new(dbos::DBOS::new(dbos_engine::config(
+            &database_url(&pg),
+            "native-billing-digest",
+        )));
+        let workflow = billing_digest::register(&runtime, context).unwrap();
+        let running = runtime.clone();
+        let checked = tokio::spawn(async move {
+            running.launch().await.unwrap();
+            let slot = Utc.with_ymd_and_hms(2026, 11, 19, 13, 0, 0).unwrap();
+            let first = result(
+                billing_digest::fire(&workflow, slot)
+                    .await
+                    .unwrap()
+                    .result(),
+            )
+            .await;
+            assert!(!first.sent);
+            assert_eq!(
+                (first.cost_total, first.services, first.projects),
+                (0.0, 0, 0)
+            );
+            let replay = result(
+                billing_digest::fire(&workflow, slot)
+                    .await
+                    .unwrap()
+                    .result(),
+            )
+            .await;
+            assert_eq!(replay, first);
+            let steps = running
+                .list_workflow_steps(&billing_digest::workflow_id(slot))
+                .await
+                .unwrap();
+            assert!(steps
+                .iter()
+                .all(|step| step.step_name != "query" && step.step_name != "email"));
+        })
+        .await;
+        runtime.shutdown().await;
+        if let Err(error) = checked {
+            std::panic::resume_unwind(error.into_panic());
+        }
+    })
+    .await;
+}

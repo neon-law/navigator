@@ -52,7 +52,7 @@ binary(/^(project_native_delete|brand_move_mirror|firm_journal|api_reads|postgre
 | (binary(=store) & test(/^postgres::native_origin::tests::/) & not test(=postgres::native_origin::tests::invalid_tier_and_nil_operation_fail_before_connecting))
 | (binary(=hudson) & test(=postgres_backfill::tests::native_target_refuses_dry_run_and_family_before_source_configuration_or_capture_files))
 | (binary(=workflows_service) & test(=host::host_mode_tests::verified_object_activation_removes_only_the_two_legacy_sdk_http_services))
-| (binary(=workflows_service) & test(/^host::local_providers::tests::(detached_native_handlers_use_captured_effects_and_the_owned_postgres_store|injected_store_refuses_damaged_history_and_closed_pool_without_fallback)$/))
+| (binary(=workflows_service) & test(/^host::local_providers::tests::(detached_native_handlers_use_captured_effects_and_the_owned_postgres_store|injected_store_refuses_damaged_history_and_closed_pool_without_fallback|native_billing_digest_without_exports_registers_without_provider_effects)$/))
 | (binary(=workflows) & test(=dbos_engine::dri_digest::tests::native_source_keeps_all_projects_and_both_dri_sides))
 '''
 test-group = "canonical-postgres-fixtures"

@@ -905,7 +905,10 @@ async fn run_host(
             dbos_engine::Executor::launch_hosting_with(
                 &settings,
                 notifier_from_env(),
-                app_schedules.unwrap_or(schedules),
+                match app_schedules {
+                    Some(application) => schedules.with_application_schedules(application),
+                    None => schedules,
+                },
                 move |dbos| {
                     let mut launchers = register_external(dbos)?;
                     let mut registered_ingress = crate::dbos_ingress::WorkerIngress {

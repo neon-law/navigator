@@ -220,6 +220,30 @@ pub struct Schedules {
     pub ceo_digest: Option<ceo_digest::Context>,
 }
 
+impl Schedules {
+    /// Combine the worker's provider contexts with the application's own schedules.
+    /// Explicit fields make a new schedule require an ownership decision.
+    #[must_use]
+    pub fn with_application_schedules(self, application: Self) -> Self {
+        Self {
+            general_nag: self.general_nag,
+            dri_digest: self.dri_digest,
+            billing_canary: self.billing_canary,
+            billing_digest: self.billing_digest,
+            notation_reset: self.notation_reset,
+            profit_digest: self.profit_digest,
+            linear_backlog: application.linear_backlog,
+            project_recovery: application.project_recovery,
+            source_imports: application.source_imports,
+            retention_purge: application.retention_purge,
+            deadline_mirror: application.deadline_mirror,
+            project_calendar: application.project_calendar,
+            purchase_activation: application.purchase_activation,
+            ceo_digest: application.ceo_digest,
+        }
+    }
+}
+
 /// Register an optional schedule's workflows when its context is present.
 fn register_optional<C, W>(
     dbos: &dbos::DBOS,
@@ -1045,5 +1069,55 @@ mod tests {
         loopback.retain(|(name, _)| *name != HOST_ENV);
         loopback.push((HOST_ENV, "127.0.0.1"));
         assert!(Settings::from_lookup(lookup(&loopback)).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod schedule_ownership_tests {
+    use super::*;
+
+    #[test]
+    fn combined_schedules_keep_worker_provider_and_timer_policy_and_application_only_contexts() {
+        let provider: Arc<dyn crate::billing_canary::BillingCanaryProvider> =
+            Arc::new(crate::billing_canary::BillingProviderAdapter(Arc::new(
+                billing::StubBillingProvider::for_simulated_matters(),
+            )));
+        let mut worker =
+            billing_canary::Context::new(provider.clone(), Arc::new(crate::CapturingEmail::new()))
+                .with_schedule_enabled(false);
+        worker.recipient = "worker@example.test".into();
+        let mut application_canary = worker.clone().with_schedule_enabled(true);
+        application_canary.recipient = "application@example.test".into();
+        let linear = linear_backlog::Context::from_lookup(|key| match key {
+            "SLACK_LINEAR_BACKLOG_CHANNEL_ID" => Some("C123".into()),
+            "LINEAR_BACKLOG_READ_KEY" | "SLACK_BOT_TOKEN" => Some("synthetic".into()),
+            _ => None,
+        })
+        .unwrap()
+        .unwrap();
+        let combined = Schedules {
+            billing_canary: Some(worker),
+            ..Default::default()
+        }
+        .with_application_schedules(Schedules {
+            billing_canary: Some(application_canary.clone()),
+            linear_backlog: Some(linear.clone()),
+            ..Default::default()
+        });
+        let canary = combined.billing_canary.unwrap();
+        assert!(Arc::ptr_eq(&canary.provider, &provider));
+        assert_eq!(canary.recipient, "worker@example.test");
+        assert!(!canary.schedule_enabled);
+        assert!(combined.linear_backlog.is_some());
+        let unregistered = Schedules::default().with_application_schedules(Schedules {
+            billing_canary: Some(application_canary),
+            linear_backlog: Some(linear),
+            ..Default::default()
+        });
+        assert!(
+            unregistered.billing_canary.is_none(),
+            "the application cannot replace worker admission"
+        );
+        assert!(unregistered.linear_backlog.is_some());
     }
 }
