@@ -402,16 +402,10 @@ async fn raw_canonical_schema_accepts_origin_attestation_without_a_sqlx_ledger()
             .fetch_one(created.postgres.pool())
             .await
             .unwrap();
-    if !origin_exists {
-        // Until canonical integration unions this migration, exercise the exact
-        // new DDL after the same raw canonical fixture without inventing a ledger.
-        sqlx::raw_sql(include_str!(
-            "../../../postgres/migrations/20261119050000_create_database_origin.sql"
-        ))
-        .execute(created.postgres.pool())
-        .await
-        .unwrap();
-    }
+    assert!(
+        origin_exists,
+        "canonical schema must include Database Origin"
+    );
     let ledger: bool =
         sqlx::query_scalar("SELECT to_regclass('public._sqlx_migrations') IS NOT NULL")
             .fetch_one(created.postgres.pool())
