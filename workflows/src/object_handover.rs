@@ -102,9 +102,9 @@ fn readback(mut query: impl FnMut(&str) -> Result<String>) -> Result<Readback> {
             .collect::<BTreeSet<_>>()
             != BTreeSet::from(["notation", "project-slack"])
         || services.iter().any(|row| row.deployment_id.is_empty())
-        || state.len() >= 100001
-        || invocations.len() >= 100001
-        || start_journal.len() >= 100001
+        || state.len() >= 100_001
+        || invocations.len() >= 100_001
+        || start_journal.len() >= 100_001
         || journals.len() != 1
         || journals[0].count != start_journal.len()
         || states.len() != 1
@@ -283,13 +283,8 @@ fn canonical_uuid(value: &str) -> Result<Uuid> {
 }
 
 fn source_digest(source: &Readback) -> Result<String> {
-    use sha2::Digest;
     let bytes = serde_json::to_vec(source).map_err(|_| CaptureError("invalid object readback"))?;
-    Ok(hex_digest(&sha2::Sha256::digest(bytes)))
-}
-
-fn hex_digest(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    Ok(crate::attest::sha256_hex(&bytes))
 }
 
 /// Map actual retained keys and grounded start inputs into native rows.
@@ -314,41 +309,12 @@ pub fn map_capture(
             .services
             .iter()
             .any(|service| service.deployment_id.is_empty())
-        || source.state.len() >= 100001
-        || source.invocations.len() >= 100001
+        || source.state.len() >= 100_001
+        || source.invocations.len() >= 100_001
     {
         return Err(CaptureError("incomplete captured object inventory"));
     }
-    let mut invocation_ids = BTreeSet::new();
-    for call in &source.invocations {
-        canonical_uuid(&call.target_service_key)?;
-        let known_handler = match call.target_service_name.as_str() {
-            "notation" => matches!(
-                call.target_handler_name.as_str(),
-                "questionnaire_start"
-                    | "questionnaire_signal"
-                    | "questionnaire_back"
-                    | "questionnaire_current_state"
-                    | "workflow_start"
-                    | "workflow_signal"
-                    | "workflow_current_state"
-            ),
-            "project-slack" => matches!(
-                call.target_handler_name.as_str(),
-                "client_project_view" | "main_push"
-            ),
-            _ => false,
-        };
-        if !known_handler
-            || call.status != "completed"
-            || call.scope.is_some()
-            || !invocation_ids.insert(&call.id)
-        {
-            return Err(CaptureError(
-                "unsupported or nonterminal captured object invocation",
-            ));
-        }
-    }
+    validate_captured_invocations(source)?;
     let mut objects: BTreeMap<Uuid, BTreeMap<String, String>> = BTreeMap::new();
     let mut projects: BTreeMap<Uuid, Vec<String>> = BTreeMap::new();
     for row in &source.state {
@@ -385,6 +351,86 @@ pub fn map_capture(
             _ => return Err(CaptureError("unknown object service")),
         }
     }
+    let machines = map_notation_machines(source, objects)?;
+    let slack_projects = project_inventory
+        .iter()
+        .map(|id| {
+            let posted = source.invocations.iter().any(|call| {
+                call.target_service_name == "project-slack"
+                    && call.target_service_key == id.to_string()
+                    && call.target_handler_name == "client_project_view"
+                    && call.completion_result.as_deref() == Some("success")
+                    && source.services.iter().any(|service| {
+                        service.name == "project-slack"
+                            && call.pinned_deployment_id.as_deref()
+                                == Some(service.deployment_id.as_str())
+                    })
+            });
+            SlackProject {
+                project_id: *id,
+                main_push_seen: projects.remove(id).unwrap_or_default(),
+                client_view: if posted {
+                    ClientViewDisposition::Posted
+                } else {
+                    ClientViewDisposition::Unresolved
+                },
+            }
+        })
+        .collect();
+    let capture = Capture {
+        format_version: 1,
+        capture_id,
+        source_environment: environment.to_owned(),
+        ownership_epoch,
+        source_readback_sha256: source_digest(source)?,
+        captured_at_unix,
+        notation_machines: machines,
+        slack_projects,
+    };
+    capture
+        .validate()
+        .map_err(|_| CaptureError("invalid captured object structure"))?;
+    Ok(capture)
+}
+
+fn validate_captured_invocations(source: &Readback) -> Result<()> {
+    let mut invocation_ids = BTreeSet::new();
+    for call in &source.invocations {
+        canonical_uuid(&call.target_service_key)?;
+        let known_handler = match call.target_service_name.as_str() {
+            "notation" => matches!(
+                call.target_handler_name.as_str(),
+                "questionnaire_start"
+                    | "questionnaire_signal"
+                    | "questionnaire_back"
+                    | "questionnaire_current_state"
+                    | "workflow_start"
+                    | "workflow_signal"
+                    | "workflow_current_state"
+            ),
+            "project-slack" => matches!(
+                call.target_handler_name.as_str(),
+                "client_project_view" | "main_push"
+            ),
+            _ => false,
+        };
+        if !known_handler
+            || call.status != "completed"
+            || call.scope.is_some()
+            || !invocation_ids.insert(&call.id)
+        {
+            return Err(CaptureError(
+                "unsupported or nonterminal captured object invocation",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn map_notation_machines(
+    source: &Readback,
+    objects: BTreeMap<Uuid, BTreeMap<String, String>>,
+) -> Result<Vec<MachineState>> {
     let mut machines = Vec::new();
     for (id, keys) in objects {
         for kind in ["questionnaire", "workflow"] {
@@ -434,7 +480,7 @@ pub fn map_capture(
             let ephemeral = *evidence
                 .iter()
                 .next()
-                .ok_or_else(|| CaptureError("missing machine start evidence"))?;
+                .ok_or(CaptureError("missing machine start evidence"))?;
             machines.push(MachineState {
                 notation_id: id,
                 machine_kind: kind.to_owned(),
@@ -444,45 +490,7 @@ pub fn map_capture(
             });
         }
     }
-    let slack_projects = project_inventory
-        .iter()
-        .map(|id| {
-            let posted = source.invocations.iter().any(|call| {
-                call.target_service_name == "project-slack"
-                    && call.target_service_key == id.to_string()
-                    && call.target_handler_name == "client_project_view"
-                    && call.completion_result.as_deref() == Some("success")
-                    && source.services.iter().any(|service| {
-                        service.name == "project-slack"
-                            && call.pinned_deployment_id.as_deref()
-                                == Some(service.deployment_id.as_str())
-                    })
-            });
-            SlackProject {
-                project_id: *id,
-                main_push_seen: projects.remove(id).unwrap_or_default(),
-                client_view: if posted {
-                    ClientViewDisposition::Posted
-                } else {
-                    ClientViewDisposition::Unresolved
-                },
-            }
-        })
-        .collect();
-    let capture = Capture {
-        format_version: 1,
-        capture_id,
-        source_environment: environment.to_owned(),
-        ownership_epoch,
-        source_readback_sha256: source_digest(source)?,
-        captured_at_unix,
-        notation_machines: machines,
-        slack_projects,
-    };
-    capture
-        .validate()
-        .map_err(|_| CaptureError("invalid captured object structure"))?;
-    Ok(capture)
+    Ok(machines)
 }
 
 #[cfg(test)]
