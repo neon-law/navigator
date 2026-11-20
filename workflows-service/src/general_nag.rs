@@ -19,13 +19,18 @@
 //! The `general-nag` `CronJob` fires nightly at 01:11 UTC, keyed on the UTC
 //! run date so a same-day double-fire is a no-op.
 
+#[cfg(feature = "restate-compatibility")]
 use std::sync::Arc;
 
+#[cfg(feature = "restate-compatibility")]
 use restate_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "restate-compatibility")]
 use store::surreal::SurrealDb;
+#[cfg(feature = "restate-compatibility")]
 use workflows::SlackBot;
 
+#[cfg(feature = "restate-compatibility")]
 use crate::dri_digest::open_matters_followup;
 
 /// Request body for `GeneralNag::run`. Empty — the trigger only starts the
@@ -52,6 +57,7 @@ pub fn nag_message(_simulated: bool) -> String {
 /// bot, `#general`'s channel id, and whether this deployment discloses
 /// simulated matters — resolved once at boot in `workflows-service/src/host.rs`.
 #[derive(Clone)]
+#[cfg(feature = "restate-compatibility")]
 pub struct GeneralNagService {
     surreal: SurrealDb,
     slack: Arc<dyn SlackBot>,
@@ -59,6 +65,7 @@ pub struct GeneralNagService {
     simulated: bool,
 }
 
+#[cfg(feature = "restate-compatibility")]
 impl GeneralNagService {
     #[must_use]
     pub fn new(
@@ -76,6 +83,7 @@ impl GeneralNagService {
     }
 }
 
+#[cfg(feature = "restate-compatibility")]
 #[restate_sdk::workflow(name = "GeneralNag")]
 impl GeneralNagService {
     #[restate_sdk::handler]

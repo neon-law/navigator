@@ -22,6 +22,14 @@ on:
       - 'store/tests/postgres_tooling.rs'
       - 'store/Cargo.toml'
       - 'k8s/kind-postgres-config.yaml'
+      - 'workflows-service/**'
+      - 'workflows/**'
+      - 'archives/**'
+      - 'billing-workflows/**'
+      - 'billing/**'
+      - 'images/Containerfile.workflows-service'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
       - '.github/workflows/postgres-compatibility.yml'
   push:
     branches: [main]
@@ -46,6 +54,14 @@ on:
       - 'store/tests/postgres_tooling.rs'
       - 'store/Cargo.toml'
       - 'k8s/kind-postgres-config.yaml'
+      - 'workflows-service/**'
+      - 'workflows/**'
+      - 'archives/**'
+      - 'billing-workflows/**'
+      - 'billing/**'
+      - 'images/Containerfile.workflows-service'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
       - '.github/workflows/postgres-compatibility.yml'
   workflow_dispatch:
 permissions:
@@ -153,10 +169,36 @@ jobs:
         env:
           NAVIGATOR_FORBID_SURREAL: '1'
         run: |
-          cargo test -p workflows-service --features workflows-service/jwt-provider-regression \
+          cargo test -p workflows-service --features restate-compatibility --features workflows-service/jwt-provider-regression \
             --test crypto_provider_health_check
-          cargo test -p workflows-service --features workflows-service/jwt-provider-regression \
-            --lib request_identity::tests::crypto_provider_health_check_passes_once_the_provider_is_pinned -- --exact
+          cargo test -p workflows-service --features restate-compatibility --features workflows-service/jwt-provider-regression \
+            --lib request_identity::tests
+      - name: Retained request identity and captured object wire codecs
+        env:
+          NAVIGATOR_FORBID_SURREAL: '1'
+        run: |
+          cargo test -p workflows-service --features restate-compatibility --test request_identity_signature
+          cargo test -p workflows-service --features restate-compatibility --test object_handover \
+            sdk_wire_codec_matches_native_capture_fixture -- --exact
+      - name: Retained object discovery and embedded identity admission
+        env:
+          KUBECONFIG: /tmp/postgres-kind.config
+          NAVIGATOR_TEST_POSTGRES_PORT: '25432'
+          NAV_REQUIRE_POSTGRES: '1'
+          NAVIGATOR_FORBID_SURREAL: '1'
+          RUST_MIN_STACK: '33554432'
+        run: |
+          kubectl -n navigator port-forward --address 127.0.0.1 service/postgres-spike 25432:5432 > "$RUNNER_TEMP/postgres-smoke/host-mode-port-forward.log" 2>&1 &
+          forward_pid=$!
+          trap 'kill "$forward_pid" 2>/dev/null || true' EXIT
+          ready=false
+          for attempt in $(seq 1 30); do
+            kill -0 "$forward_pid"
+            if bash -c 'echo > /dev/tcp/127.0.0.1/25432' 2>/dev/null; then ready=true; break; fi
+            sleep 1
+          done
+          test "$ready" = true
+          cargo test -p workflows-service --features restate-compatibility --lib host::host_mode_tests
       - name: Application and DBOS state survive image replacement and dump restore
         env:
           KUBECONFIG: /tmp/postgres-kind.config

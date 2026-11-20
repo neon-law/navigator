@@ -1,3 +1,4 @@
+#[cfg(feature = "restate-compatibility")]
 use restate_sdk::endpoint::Builder;
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -62,6 +63,7 @@ pub enum IdentityConfigError {
     Invalid(String),
 }
 
+#[cfg(feature = "restate-compatibility")]
 pub fn apply_identity_key<F: Fn(&str) -> Option<String>>(
     builder: Builder,
     environment: store::DeploymentEnvironment,
@@ -79,7 +81,7 @@ pub fn apply_identity_key<F: Fn(&str) -> Option<String>>(
         .map_err(|error| IdentityConfigError::Invalid(error.to_string()))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "restate-compatibility"))]
 mod tests {
     use super::{
         apply_identity_key, crypto_provider_is_healthy, install_crypto_provider,
@@ -223,5 +225,14 @@ mod tests {
     fn crypto_provider_health_check_passes_once_the_provider_is_pinned() {
         install_crypto_provider();
         assert!(crypto_provider_is_healthy());
+    }
+}
+
+#[cfg(all(test, not(feature = "restate-compatibility")))]
+mod tests {
+    #[test]
+    fn crypto_provider_health_check_passes_once_the_provider_is_pinned() {
+        super::install_crypto_provider();
+        assert!(super::crypto_provider_is_healthy());
     }
 }

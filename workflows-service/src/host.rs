@@ -1,48 +1,66 @@
-//! Shared durable worker host. Opens the shared store connection,
-//! builds the worker's `EmailService` (bare `SendGrid` in prod,
-//! `CapturingEmail` otherwise), wires the `Notation` virtual-object
-//! endpoint, and listens on the port the Restate broker discovers
-//! via `restate-cli register`.
+//! Shared application and worker host for PostgreSQL-backed DBOS execution.
+//! Opens the shared store connection and builds the worker's `EmailService`
+//! (bare `SendGrid` in production, `CapturingEmail` otherwise).
 //!
-//! `NAVIGATOR_WORKFLOW_ENGINE=dbos` runs the DBOS executor beside the Restate
-//! endpoint (`workflows::dbos_engine`); unset, only the Restate endpoint runs.
+//! Native artifacts require DBOS and complete native route ownership. The
+//! `restate-compatibility` feature also exposes the retained Restate endpoint
+//! and permits mixed ownership while retained work drains.
 
+#[cfg(feature = "restate-compatibility")]
 use std::net::SocketAddr;
 use std::sync::Arc;
 
 mod local_providers;
 
+#[cfg(feature = "restate-compatibility")]
 use crate::dri_digest::DriDigestService;
-use crate::email_summary::{EmailSummaryService, SummaryProviders};
+#[cfg(feature = "restate-compatibility")]
+use crate::email_summary::EmailSummaryService;
+use crate::email_summary::SummaryProviders;
 use crate::engine::Engine;
+#[cfg(feature = "restate-compatibility")]
 use crate::finance_aggregate::FinanceAggregateService;
 use crate::firm_slack::{FirmSlackBots, ProjectSlackBots};
+#[cfg(feature = "restate-compatibility")]
 use crate::general_nag::GeneralNagService;
 use crate::inbound_message_alert::InboundMessageAlertService;
 use crate::inbound_triage::{InboundTriageService, TriageProviders};
+use crate::nightly_project_update::repository::{EnvFirmForges, RepositoryForge};
+#[cfg(feature = "restate-compatibility")]
 use crate::nightly_project_update::{
-    membership::MembershipTagService,
-    repository::{EnvFirmForges, RepositoryForge, RepositoryTagService},
-    slack::SlackTagService,
+    membership::MembershipTagService, repository::RepositoryTagService, slack::SlackTagService,
     NightlyProjectUpdateService,
 };
+#[cfg(feature = "restate-compatibility")]
 use crate::notation_reset::NotationResetService;
-use crate::request_identity::{apply_identity_key, install_crypto_provider};
-use crate::social_publisher::{SocialPublishReconcilerService, SocialPublisherService};
+#[cfg(feature = "restate-compatibility")]
+use crate::request_identity::apply_identity_key;
+use crate::request_identity::install_crypto_provider;
+#[cfg(feature = "restate-compatibility")]
+use crate::social_publisher::SocialPublishReconcilerService;
+use crate::social_publisher::SocialPublisherService;
 use crate::youtube_comments::YoutubeCommentsPollerService;
-use crate::{
-    notifier_from_env, project_slack::ProjectSlackService, slack_bot_from_env, NotationService,
-};
+use crate::{notifier_from_env, slack_bot_from_env};
+#[cfg(feature = "restate-compatibility")]
+use crate::{project_slack::ProjectSlackService, NotationService};
 use anyhow::Context;
+#[cfg(feature = "restate-compatibility")]
 use archives::workflow::ArchivesService;
+#[cfg(feature = "restate-compatibility")]
 use billing_workflows::canary::BillingCanaryService;
+#[cfg(feature = "restate-compatibility")]
 use billing_workflows::digest::BillingDigestService;
+#[cfg(feature = "restate-compatibility")]
 use billing_workflows::reconcile::ReconcileInvoicesService;
+#[cfg(feature = "restate-compatibility")]
 use billing_workflows::sandbox_reset::SandboxCreditResetService;
+#[cfg(feature = "restate-compatibility")]
 use restate_sdk::prelude::*;
 use workflows::dbos_engine;
+#[cfg(feature = "restate-compatibility")]
 use workflows::{EmailService, SlackOpsDelivery};
 
+#[cfg(feature = "restate-compatibility")]
 macro_rules! bind_common_services {
     ($endpoint:expr, $surreal:expr, $storage:expr, $assets_storage:expr, $kms:expr, $email_summary:expr, $inbound_triage:expr, $notifier:expr, $ops_delivery:expr, $slack_bot:expr, $project_slack_bots:expr, $general_channel:expr, $finance_channel:expr, $messages_channel:expr, $staging_messages_channel:expr, $slack_bot_enabled:expr, $simulated_matters:expr, $repository_forge:expr, $portal_origin:expr, $environment_label:expr) => {
         $endpoint
@@ -148,6 +166,7 @@ async fn social_runtime_kms_from_env() -> Arc<dyn cloud::RuntimeKms> {
     };
     Arc::new(cloud::GoogleKms::new(config, Arc::new(tokens)))
 }
+#[cfg(feature = "restate-compatibility")]
 fn bind_legacy_objects(
     endpoint: restate_sdk::endpoint::Builder,
     services: Option<(NotationService, ProjectSlackService)>,
@@ -203,6 +222,7 @@ enum HostMode {
     Embedded,
 }
 
+#[cfg(feature = "restate-compatibility")]
 fn restate_endpoint(
     mode: HostMode,
     environment: store::DeploymentEnvironment,
@@ -214,6 +234,26 @@ fn restate_endpoint(
         }
         HostMode::Embedded => Ok(None),
     }
+}
+
+#[cfg(not(feature = "restate-compatibility"))]
+fn require_native_routes(
+    engine: Engine,
+    lookup: impl Fn(&str) -> Option<String>,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        engine == Engine::Dbos,
+        "This artifact runs DBOS; retained Restate work requires the compatibility worker"
+    );
+    for workflow in store::workflow_engine::WORKFLOWS {
+        anyhow::ensure!(
+            dbos_engine::flag_enabled(workflow.flag, lookup(workflow.flag).as_deref())?,
+            "{} requires {}=true in the native worker",
+            workflow.name,
+            workflow.flag
+        );
+    }
+    Ok(())
 }
 
 // Erase host callbacks at the crate boundary so both roles share one compiled
@@ -241,6 +281,11 @@ async fn run_host(
         })
         .await
         .context("verify durable object engine ownership")?;
+    #[cfg(not(feature = "restate-compatibility"))]
+    anyhow::ensure!(
+        !object_selection.legacy_objects(),
+        "The native artifact requires verified durable object ownership; retain the compatibility worker until handover completes"
+    );
     // Drives `DriDigest` and `GeneralNag` staging disclosure and the
     // production-only open-matters follow-up — the same flag the site-wide
     // "simulated projects" banner reads.
@@ -270,6 +315,8 @@ async fn run_host(
             || !(youtube_dbos_enabled || triage_dbos_enabled || sandbox_credit_reset_enabled),
         "The enabled DBOS workflow routes require the DBOS executor"
     );
+    #[cfg(not(feature = "restate-compatibility"))]
+    require_native_routes(engine, lookup)?;
     let dbos_hosting = if engine == Engine::Dbos {
         let local_providers = local_providers::LocalProviders::from_lookup(
             mode,
@@ -568,6 +615,7 @@ async fn run_host(
     } else {
         None
     };
+    #[cfg(feature = "restate-compatibility")]
     let endpoint_builder = restate_endpoint(mode, environment, lookup)
         .map_err(anyhow::Error::msg)
         .context("configure Restate request identity")?;
@@ -621,6 +669,7 @@ async fn run_host(
     // notifier so links and compact status formatting render correctly.
     // The client-facing Notation service uses the email backend, keeping
     // client content inside the client delivery channel.
+    #[cfg(feature = "restate-compatibility")]
     let notifier = notifier_from_env();
     let slack_bot = slack_bot_from_env()
         .map_err(anyhow::Error::msg)
@@ -641,16 +690,19 @@ async fn run_host(
     // `#general`'s channel ID — unset in KIND, where the CronJob is still
     // installed but has no live Slack destination. An empty value fails the
     // `GeneralNag` run as a terminal error rather than posting nowhere.
+    #[cfg(feature = "restate-compatibility")]
     let general_channel = std::env::var("SLACK_GENERAL_CHANNEL_ID").unwrap_or_default();
     // The `#finance` destination for the nightly Xero and IOLTA report. It
     // uses the same configured Slack App as `#general`; the empty-value rule
     // is the same too, so a run with nowhere to report is a terminal error.
+    #[cfg(feature = "restate-compatibility")]
     let finance_channel = std::env::var("SLACK_FINANCE_CHANNEL_ID").unwrap_or_default();
     let messages_channel = std::env::var("SLACK_MESSAGES_CHANNEL_ID").unwrap_or_default();
     let staging_messages_channel =
         std::env::var("SLACK_STAGING_MESSAGES_CHANNEL_ID").unwrap_or_default();
     let slack_bot_enabled = crate::notify_config::bot_enabled(|k| std::env::var(k).ok());
     // How `NotationReset` names this deployment in its daily post.
+    #[cfg(feature = "restate-compatibility")]
     let environment_label =
         crate::notation_reset::environment_label(environment, simulated_matters);
     // The GitHub forge for the daily Project sync; `None` when the deployment
@@ -667,6 +719,7 @@ async fn run_host(
         },
         "workflows-service ops-notification backend"
     );
+    #[cfg(feature = "restate-compatibility")]
     let ops_delivery: Arc<dyn EmailService> = Arc::new(SlackOpsDelivery::new(notifier.clone()));
 
     // Object storage for `generate_pdf__*` step dispatch (the worker
@@ -722,6 +775,7 @@ async fn run_host(
     // Nightly Folder convergence must remain available without Slack configuration.
     // The parent validates/posts Slack only after visiting the full Project roster.
     let summary_providers = SummaryProviders::from_env().context("configure summary providers")?;
+    #[cfg(feature = "restate-compatibility")]
     let email_summary = EmailSummaryService::new(
         surreal.clone(),
         storage.clone(),
@@ -753,6 +807,7 @@ async fn run_host(
         None
     };
 
+    #[cfg(feature = "restate-compatibility")]
     let listen = if mode == HostMode::Standalone {
         let listen: SocketAddr = std::env::var("WORKFLOWS_SERVICE_LISTEN")
             .unwrap_or_else(|_| "0.0.0.0:9080".into())
@@ -775,6 +830,7 @@ async fn run_host(
     // worker — there is no per-workflow pod. The exact set of service names
     // bound here is mirrored in `crate::registry`, which the
     // registry tests guard against drift (count + PascalCase naming).
+    #[cfg(feature = "restate-compatibility")]
     let server = async move {
         if let Some((endpoint_builder, listen)) = endpoint_builder.zip(listen) {
             let legacy_objects = object_selection.legacy_objects().then(|| {
@@ -819,6 +875,9 @@ async fn run_host(
             std::future::pending::<()>().await;
         }
     };
+
+    #[cfg(not(feature = "restate-compatibility"))]
+    let server = std::future::pending::<()>();
 
     let health_listener = bind_health_listener().await?;
     let manual_token = std::env::var(workflows::trigger::DBOS_INGRESS_TOKEN_ENV)
@@ -1276,5 +1335,17 @@ fn serve_health_listener(
     })
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "restate-compatibility"))]
 mod host_mode_tests;
+
+#[cfg(all(test, not(feature = "restate-compatibility")))]
+mod native_host_tests {
+    use super::*;
+    #[test]
+    fn native_host_refuses_missing_or_invalid_routes_before_launch() {
+        assert!(require_native_routes(Engine::Dbos, |_| Some("true".into())).is_ok());
+        assert!(require_native_routes(Engine::Dbos, |_| None).is_err());
+        assert!(require_native_routes(Engine::Dbos, |_| Some("bad".into())).is_err());
+        assert!(require_native_routes(Engine::Restate, |_| Some("true".into())).is_err());
+    }
+}

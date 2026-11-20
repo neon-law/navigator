@@ -20,7 +20,9 @@
 //! and reconcile triggers.
 
 use billing::{BillingProvider, InvoiceLine, InvoiceRequest, XeroBillingProvider};
+#[cfg(feature = "restate-compatibility")]
 use chrono::Datelike;
+#[cfg(feature = "restate-compatibility")]
 use restate_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 use store::postgres::PostgresDb;
@@ -59,10 +61,12 @@ pub struct SandboxResetReport {
 /// the Xero provider are built from env inside the steps so no token sits
 /// idle between monthly runs.
 #[derive(Clone)]
+#[cfg(feature = "restate-compatibility")]
 pub struct SandboxCreditResetService {
     surreal: SurrealDb,
 }
 
+#[cfg(feature = "restate-compatibility")]
 impl SandboxCreditResetService {
     #[must_use]
     pub fn new(surreal: SurrealDb) -> Self {
@@ -70,6 +74,7 @@ impl SandboxCreditResetService {
     }
 }
 
+#[cfg(feature = "restate-compatibility")]
 #[restate_sdk::workflow(name = "SandboxCreditReset")]
 impl SandboxCreditResetService {
     #[restate_sdk::handler]
@@ -199,6 +204,7 @@ fn latest_purchase(
 /// its deterministic key only protects retries inside Xero's six-minute
 /// retention window. Durable per-overage invoice recovery remains separate
 /// from this matter-billing implementation.
+#[cfg(any(test, feature = "restate-compatibility"))]
 async fn invoice_closed_overage(
     billing: &mut dyn BillingProvider,
     pg: &PostgresDb,

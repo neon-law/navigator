@@ -9,17 +9,23 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cloud::{GeminiVertexAdapter, MetadataTokenSource, StorageService, VertexError, VertexRequest};
+#[cfg(feature = "restate-compatibility")]
 use restate_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 use store::email_receipts::EmailReceipt;
+#[cfg(feature = "restate-compatibility")]
 use tracing::Instrument;
 use uuid::Uuid;
+#[cfg(feature = "restate-compatibility")]
+use workflows::EmailSummaryRequest;
 use workflows::{
     build_prompt, deliver_summary, normalize_email, parse_summary, scoped_email_digest, sender,
-    DeliveryResult, EmailSummaryRequest, EmailSummaryRunConfig, ProviderDelivery, Sender, SlackBot,
+    DeliveryResult, EmailSummaryRunConfig, ProviderDelivery, Sender, SlackBot,
     SummaryDeliveryError, SummaryDeliveryMessage, SummaryProvider, DEFAULT_MAX_INPUT_CHARS,
     DEFAULT_MAX_OUTPUT_TOKENS,
 };
+
+use crate::workflow_step_error::WorkflowStepError;
 
 const DEFAULT_METADATA_TOKEN_URL: &str =
     "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token";
@@ -83,7 +89,7 @@ pub async fn check_sender(
     db: &store::surreal::SurrealDb,
     receipt: &EmailReceipt,
     matter_project_id: Option<Uuid>,
-) -> Result<SenderGate, HandlerError> {
+) -> Result<SenderGate, WorkflowStepError> {
     let Some(matter_project_id) = matter_project_id else {
         return Ok(SenderGate::Unknown {
             reason: "message is not assigned to a Project".to_string(),
@@ -92,7 +98,7 @@ pub async fn check_sender(
     let object = storage
         .get(&receipt.archive_key)
         .await
-        .map_err(HandlerError::from)?;
+        .map_err(WorkflowStepError::retryable)?;
     let reason = match sender(&object.bytes) {
         Some(Sender::Email(email)) => {
             match (receipt.firm_id, receipt.provider_account.as_deref()) {
@@ -105,7 +111,7 @@ pub async fn check_sender(
                     }
                     let person = store::persons::find_by_email_ci(db, &email)
                         .await
-                        .map_err(|error| HandlerError::from(anyhow::Error::new(error)))?;
+                        .map_err(|error| WorkflowStepError::retryable(anyhow::Error::new(error)))?;
                     match person.filter(|person| person.email_confirmed) {
                         Some(person) => {
                             if store::summary_sender_approvals::is_approved(
@@ -117,8 +123,9 @@ pub async fn check_sender(
                                 &email,
                             )
                             .await
-                            .map_err(|error| HandlerError::from(anyhow::Error::new(error)))?
-                            {
+                            .map_err(|error| {
+                                WorkflowStepError::retryable(anyhow::Error::new(error))
+                            })? {
                                 return Ok(SenderGate::Known);
                             }
                             "sender identity is not approved for this provider account"
@@ -142,7 +149,7 @@ pub(crate) async fn check_sender_step(
     surreal: &store::surreal::SurrealDb,
     receipt: &EmailReceipt,
     matter_project_id: Option<Uuid>,
-) -> Result<SenderGate, HandlerError> {
+) -> Result<SenderGate, WorkflowStepError> {
     let started = std::time::Instant::now();
     let result = check_sender(storage, surreal, receipt, matter_project_id).await;
     telemetry::record_email_stage(
@@ -176,6 +183,7 @@ pub struct EmailSummaryReport {
 }
 
 #[derive(Clone)]
+#[cfg(feature = "restate-compatibility")]
 pub struct EmailSummaryService {
     surreal: store::surreal::SurrealDb,
     storage: Arc<dyn StorageService>,
@@ -183,6 +191,7 @@ pub struct EmailSummaryService {
     providers: Option<SummaryProviders>,
 }
 
+#[cfg(feature = "restate-compatibility")]
 impl EmailSummaryService {
     #[must_use]
     pub fn new(
@@ -247,7 +256,7 @@ pub async fn summarize_provider(
     receipt: EmailReceipt,
     config: EmailSummaryRunConfig,
     project_id: String,
-) -> Result<ProviderDelivery, HandlerError> {
+) -> Result<ProviderDelivery, WorkflowStepError> {
     summarize_provider_inner(
         storage, None, providers, provider, receipt, config, project_id,
     )
@@ -264,7 +273,7 @@ pub async fn summarize_provider_authorized(
     config: EmailSummaryRunConfig,
     project_id: String,
     matter_project_id: Option<Uuid>,
-) -> Result<ProviderDelivery, HandlerError> {
+) -> Result<ProviderDelivery, WorkflowStepError> {
     summarize_provider_inner(
         storage,
         Some((surreal, matter_project_id)),
@@ -286,7 +295,7 @@ async fn summarize_provider_inner(
     receipt: EmailReceipt,
     config: EmailSummaryRunConfig,
     project_id: String,
-) -> Result<ProviderDelivery, HandlerError> {
+) -> Result<ProviderDelivery, WorkflowStepError> {
     let model = config.model.clone();
     let Some(providers) = providers else {
         return Ok(ProviderDelivery::Failed {
@@ -298,7 +307,7 @@ async fn summarize_provider_inner(
     let object = storage
         .get(&receipt.archive_key)
         .await
-        .map_err(HandlerError::from)?;
+        .map_err(WorkflowStepError::retryable)?;
     let input = match normalize_email(
         &object.bytes,
         config.max_input_chars.min(DEFAULT_MAX_INPUT_CHARS),
@@ -413,19 +422,19 @@ async fn delivery_error(
     error: SummaryDeliveryError,
     db: &store::surreal::SurrealDb,
     receipt_id: uuid::Uuid,
-) -> Result<String, HandlerError> {
+) -> Result<String, WorkflowStepError> {
     if matches!(error, SummaryDeliveryError::Slack(_)) {
         if let Some(delivery) = store::email_deliveries::find(db, receipt_id)
             .await
-            .map_err(HandlerError::from)?
+            .map_err(WorkflowStepError::retryable)?
         {
             if delivery.state == store::email_deliveries::UNKNOWN {
                 return Ok("unknown".to_string());
             }
         }
-        return Err(TerminalError::new(error.to_string()).into());
+        return Err(WorkflowStepError::terminal(error.to_string()));
     }
-    Err(HandlerError::from(error))
+    Err(WorkflowStepError::retryable(error))
 }
 
 /// Everything the `deliver-slack` step needs, so the handler stays short.
@@ -443,13 +452,16 @@ pub(crate) struct DeliveryTarget {
 impl DeliveryTarget {
     /// Post the summary and thread the full body under it. The body is shown
     /// only when the archive still matches the receipt's digest.
-    pub(crate) async fn deliver(self, gemini: ProviderDelivery) -> Result<String, HandlerError> {
+    pub(crate) async fn deliver(
+        self,
+        gemini: ProviderDelivery,
+    ) -> Result<String, WorkflowStepError> {
         let receipt = &self.receipt;
         let object = self
             .storage
             .get(&receipt.archive_key)
             .await
-            .map_err(HandlerError::from)?;
+            .map_err(WorkflowStepError::retryable)?;
         let input = normalize_email(
             &object.bytes,
             self.config.max_input_chars.min(DEFAULT_MAX_INPUT_CHARS),
@@ -491,6 +503,7 @@ impl DeliveryTarget {
 }
 
 /// The root span of an `EmailSummary::run` invocation. Identifiers only.
+#[cfg(any(test, feature = "restate-compatibility"))]
 fn run_span(receipt_id: uuid::Uuid, invocation_id: impl std::fmt::Display) -> tracing::Span {
     tracing::info_span!(
         "email_summary.run",
@@ -500,6 +513,7 @@ fn run_span(receipt_id: uuid::Uuid, invocation_id: impl std::fmt::Display) -> tr
     )
 }
 
+#[cfg(feature = "restate-compatibility")]
 #[restate_sdk::workflow(name = "EmailSummary")]
 impl EmailSummaryService {
     #[restate_sdk::handler]
@@ -543,7 +557,8 @@ impl EmailSummaryService {
                 ctx.run(move || async move {
                     Ok(Json(
                         check_sender_step(storage, &surreal, &receipt, request.matter_project_id)
-                            .await?,
+                            .await
+                            .map_err(WorkflowStepError::into_handler_error)?,
                     ))
                 })
                 .name("check-sender")
@@ -588,7 +603,7 @@ impl EmailSummaryService {
                             },
                             started.elapsed(),
                         );
-                        Ok(Json(result?))
+                        Ok(Json(result.map_err(WorkflowStepError::into_handler_error)?))
                     })
                     .name("summarize-gemini")
                     .await?
@@ -605,7 +620,14 @@ impl EmailSummaryService {
                 channel_id: request.channel_id.clone(),
             };
             let delivery = ctx
-                .run(move || async move { Ok(Json(target.deliver(gemini).await?)) })
+                .run(move || async move {
+                    Ok(Json(
+                        target
+                            .deliver(gemini)
+                            .await
+                            .map_err(WorkflowStepError::into_handler_error)?,
+                    ))
+                })
                 .name("deliver-slack")
                 .await?
                 .into_inner();
@@ -1696,12 +1718,6 @@ mod tests {
             .expect(0)
             .mount(&server)
             .await;
-        let _service = super::EmailSummaryService::new(
-            db.clone(),
-            Arc::new(MemoryStorage { bytes: None }),
-            Arc::new(workflows::CapturingSlackBot::new()),
-            Some(providers(&server.uri())),
-        );
         let result = super::summarize_provider_authorized(
             Arc::new(MemoryStorage {
                 bytes: Some(ARCHIVE.to_vec()),

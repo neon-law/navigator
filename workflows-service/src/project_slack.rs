@@ -14,11 +14,14 @@
 
 use std::sync::Arc;
 
+#[cfg(feature = "restate-compatibility")]
 use restate_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "restate-compatibility")]
 use tracing::Instrument;
 use workflows::{project_channel_name, SlackBot, SlackBotError, SlackChannel};
 
+#[cfg(feature = "restate-compatibility")]
 use crate::firm_slack::ProjectSlackBots;
 
 /// Why a lane step failed, shared by the Restate and DBOS paths.
@@ -85,6 +88,7 @@ impl LaneError {
     /// carry this distinction: the SDK's blanket `From<E: Error>` would
     /// make a terminal failure retriable.
     #[must_use]
+    #[cfg(feature = "restate-compatibility")]
     pub fn into_handler_error(self) -> HandlerError {
         if self.terminal() {
             TerminalError::new(self.to_string()).into()
@@ -206,6 +210,7 @@ pub enum MainPushOutcome {
 
 /// The object-state key holding the `(sha, run attempt)` keys this Project
 /// has already posted, newest last.
+#[cfg(feature = "restate-compatibility")]
 const MAIN_PUSH_SEEN_KEY: &str = "main_push_seen";
 /// How many posted keys one Project remembers. A rerun of a run attempt
 /// arrives within hours; a thousand pushes later the key is new again.
@@ -226,12 +231,14 @@ pub const CLIENT_PROJECT_VIEW_MESSAGE: &str = "A client viewed this Project in t
 /// Project at the moment a step needs it (ENG-392): there is no
 /// deployment-wide bot for Project channels.
 #[derive(Clone)]
+#[cfg(feature = "restate-compatibility")]
 pub struct ProjectSlackService {
     surreal: store::surreal::SurrealDb,
     bots: Arc<dyn ProjectSlackBots>,
     simulated: bool,
 }
 
+#[cfg(feature = "restate-compatibility")]
 impl ProjectSlackService {
     /// `simulated` selects the channel prefix: `staging-` on a
     /// simulated-matters deployment, `navigator-` otherwise.
@@ -249,6 +256,7 @@ impl ProjectSlackService {
     }
 }
 
+#[cfg(any(test, feature = "restate-compatibility"))]
 fn project_id(key: &str) -> Result<uuid::Uuid, LaneError> {
     key.parse::<uuid::Uuid>().map_err(|error| {
         LaneError::InvalidIdentity(format!(
@@ -257,6 +265,7 @@ fn project_id(key: &str) -> Result<uuid::Uuid, LaneError> {
     })
 }
 
+#[cfg(any(test, feature = "restate-compatibility"))]
 fn project_store_error(error: &store::projects::ProjectStoreError) -> LaneError {
     use store::projects::ProjectStoreError as Error;
     if matches!(
@@ -299,6 +308,7 @@ impl ChannelOutcome {
 
 /// Find or create the Project's private Slack channel. Extracted from the
 /// Restate handler so the store/Slack work is unit-testable without a broker.
+#[cfg(any(test, feature = "restate-compatibility"))]
 pub(crate) async fn ensure_internal_channel(
     surreal: &store::surreal::SurrealDb,
     slack: &Arc<dyn SlackBot>,
@@ -403,6 +413,7 @@ async fn record_channel(
     Ok(())
 }
 
+#[cfg(any(test, feature = "restate-compatibility"))]
 async fn post_client_view_notice(
     slack: &Arc<dyn SlackBot>,
     channel_id: &str,
@@ -414,6 +425,7 @@ async fn post_client_view_notice(
 }
 
 /// The root span of a `client_project_view` invocation. Identifiers only.
+#[cfg(any(test, feature = "restate-compatibility"))]
 fn client_project_view_span(project_id: &str) -> tracing::Span {
     tracing::info_span!(
         "project_slack.client_project_view",
@@ -423,6 +435,7 @@ fn client_project_view_span(project_id: &str) -> tracing::Span {
 }
 
 /// The root span of a `main_push` invocation. Identifiers only.
+#[cfg(any(test, feature = "restate-compatibility"))]
 fn main_push_span(project_id: &str, event_key: &str) -> tracing::Span {
     tracing::info_span!(
         "project_slack.main_push",
@@ -441,6 +454,7 @@ pub struct MainPushDestination {
     pub repository_url: Option<String>,
 }
 
+#[cfg(any(test, feature = "restate-compatibility"))]
 pub(crate) async fn main_push_destination(
     surreal: &store::surreal::SurrealDb,
     slack: &Arc<dyn SlackBot>,
@@ -559,6 +573,7 @@ pub fn admit_main_push(seen: &mut Vec<String>, event: &MainPushRequest) -> MainP
     MainPushOutcome::Posted
 }
 
+#[cfg(feature = "restate-compatibility")]
 #[restate_sdk::object(name = "project-slack")]
 impl ProjectSlackService {
     /// Ensure the Project has a private Slack channel, then post the client
@@ -682,7 +697,7 @@ mod tests {
         admit_main_push, client_project_view_span, ensure_internal_channel, main_push_span,
         post_client_view_notice, project_command_error, project_id, project_store_error,
         render_main_push, CiOutcome, LaneError, MainPushOutcome, MainPushRequest,
-        ProjectSlackService, CLIENT_PROJECT_VIEW_MESSAGE,
+        CLIENT_PROJECT_VIEW_MESSAGE,
     };
     use std::sync::Arc;
     use store::projects::{create, set_internal_slack_channel_id, NewProject, ProjectCommandError};
@@ -726,7 +741,7 @@ mod tests {
     }
 
     #[test]
-    fn database_unavailability_stays_retriable_and_rerenders_through_restate() {
+    fn database_unavailability_stays_retryable() {
         let store_err = project_store_error(&store::projects::ProjectStoreError::Db(
             surrealdb::Error::validation("the store is down".to_string(), None),
         ));
@@ -738,15 +753,18 @@ mod tests {
         // The Restate path renders the same LaneError the DBOS path
         // classifies: a retriable failure surfaces as an ordinary error the
         // engine may retry; a terminal one renders its verdict as text.
-        let retriable = store_err.into_handler_error();
-        assert!(!format!("{retriable:?}").contains("stop"), "{retriable:?}");
-        let terminal =
-            LaneError::ProjectGone("Project no longer exists for Slack notice".to_string())
-                .into_handler_error();
-        assert!(
-            format!("{terminal:?}").contains("no longer exists"),
-            "{terminal:?}"
-        );
+        #[cfg(feature = "restate-compatibility")]
+        {
+            let retriable = store_err.into_handler_error();
+            assert!(!format!("{retriable:?}").contains("stop"), "{retriable:?}");
+            let terminal =
+                LaneError::ProjectGone("Project no longer exists for Slack notice".to_string())
+                    .into_handler_error();
+            assert!(
+                format!("{terminal:?}").contains("no longer exists"),
+                "{terminal:?}"
+            );
+        }
     }
 
     #[test]
@@ -1122,17 +1140,6 @@ mod tests {
             .await
             .expect_err("missing project");
         assert!(err.to_string().contains("no longer exists"), "{err:?}");
-    }
-
-    #[tokio::test]
-    async fn service_holds_the_store_and_bots() {
-        let surreal = mem_surreal().await;
-        let slack: Arc<dyn workflows::SlackBot> = Arc::new(CapturingSlackBot::new());
-        let _service = ProjectSlackService::new(
-            surreal,
-            Arc::new(crate::firm_slack::SharedSlackBot(slack)),
-            false,
-        );
     }
 
     #[tokio::test]

@@ -18,7 +18,7 @@ ammonia.workspace = true
 anyhow.workspace = true
 # The Archives workflow and the Sent Email Export's Iceberg writer, hosted by
 # this process's DBOS executor.
-archives.workspace = true
+archives = { workspace = true, default-features = false }
 arrow.workspace = true
 async-trait.workspace = true
 axum = { workspace = true, features = ["form", "multipart"] }
@@ -72,7 +72,7 @@ uuid.workspace = true
 views.workspace = true
 walkdir.workspace = true
 webapp = { workspace = true, features = ["server"] }
-workflows-service.workspace = true
+workflows-service = { workspace = true, default-features = false }
 workflows = { workspace = true, features = ["dbos"] }
 word.workspace = true
 zip.workspace = true

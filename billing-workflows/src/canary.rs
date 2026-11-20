@@ -23,14 +23,24 @@
 //! ([`build_confirmation`]) are pure/provider-agnostic so they unit-test
 //! against the [`billing::StubBillingProvider`] without a worker.
 
+#[cfg(feature = "restate-compatibility")]
 use std::sync::Arc;
 
-use billing::{BillingProvider, XeroBillingProvider};
+use billing::BillingProvider;
+#[cfg(feature = "restate-compatibility")]
+use billing::XeroBillingProvider;
+#[cfg(feature = "restate-compatibility")]
 use restate_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
+#[cfg(any(test, feature = "restate-compatibility"))]
+use workflows::billing_canary::notify_recipient;
+#[cfg(feature = "restate-compatibility")]
+use workflows::billing_canary::BillingProviderAdapter;
+use workflows::billing_canary::CanaryProviderError;
 pub use workflows::billing_canary::CanaryReport;
-use workflows::billing_canary::{BillingProviderAdapter, CanaryProviderError};
-use workflows::{EmailService, OutboundEmail};
+#[cfg(feature = "restate-compatibility")]
+use workflows::EmailService;
+use workflows::OutboundEmail;
 
 /// Request body for `BillingCanary::run`. Empty — the trigger only starts
 /// the workflow — but kept as a struct so fields can be threaded later
@@ -43,10 +53,12 @@ pub struct RunRequest {}
 /// built from env inside the Xero step so no token or HTTP client is held
 /// idle between runs. Same shape as `archives`'s `ArchivesService`.
 #[derive(Clone)]
+#[cfg(feature = "restate-compatibility")]
 pub struct BillingCanaryService {
     email: Arc<dyn EmailService>,
 }
 
+#[cfg(feature = "restate-compatibility")]
 impl BillingCanaryService {
     #[must_use]
     pub fn new(email: Arc<dyn EmailService>) -> Self {
@@ -54,6 +66,7 @@ impl BillingCanaryService {
     }
 }
 
+#[cfg(feature = "restate-compatibility")]
 #[restate_sdk::workflow(name = "BillingCanary")]
 impl BillingCanaryService {
     #[restate_sdk::handler]
@@ -123,13 +136,6 @@ pub async fn run_canary(
     workflows::billing_canary::run_canary(&Borrowed(provider))
         .await
         .map_err(|_| billing::BillingError::Provider("canary contact resolve failed".into()))
-}
-
-/// The confirmation-email recipient: `BILLING_CANARY_NOTIFY_EMAIL`, else
-/// the default. Takes a `key -> value` lookup so it is unit-testable
-/// without mutating process env.
-fn notify_recipient<F: Fn(&str) -> Option<String>>(get: F) -> String {
-    workflows::billing_canary::notify_recipient(get)
 }
 
 /// Build the plain-text confirmation email for a completed canary run.

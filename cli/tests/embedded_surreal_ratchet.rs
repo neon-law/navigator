@@ -32,7 +32,7 @@ const BASELINE: &[(&str, usize)] = &[
     ("store", 1211),
     ("webapp", 28),
     ("workflows", 15),
-    ("workflows-service", 97),
+    ("workflows-service", 95),
 ];
 
 /// Calls that name the embedded engine wherever they appear.

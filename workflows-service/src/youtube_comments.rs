@@ -17,6 +17,7 @@
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
+#[cfg(feature = "restate-compatibility")]
 use restate_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 use store::config::SocialEgressGate;
@@ -605,6 +606,7 @@ fn occurred_at(published_at: &str) -> Option<DateTime<Utc>> {
         .map(DateTime::from)
 }
 
+#[cfg(feature = "restate-compatibility")]
 #[restate_sdk::workflow(name = "YoutubeCommentsPoller")]
 impl YoutubeCommentsPollerService {
     /// One polling tick: resolve targets once, then journal one step per

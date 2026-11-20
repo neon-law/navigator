@@ -53,11 +53,14 @@ use std::sync::Arc;
 
 use chrono::{DateTime, NaiveDate, Utc};
 use dbos::{CancellationToken, StepOptions, WorkflowRef, DBOS};
+#[cfg(feature = "restate-compatibility")]
 use restate_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "restate-compatibility")]
 use tracing::Instrument;
 use workflows::SlackBot;
 
+#[cfg(feature = "restate-compatibility")]
 use billing::gcp_cost::CostReport;
 
 use crate::digest::{render_archives_slack, DiagnosticReport};
@@ -479,12 +482,14 @@ pub async fn schedule_dbos(workflow: ArchivesDbosWorkflow, stop: CancellationTok
 /// because the digest is mrkdwn with clickable links a code fence would
 /// break — the same reason `Heartbeat` talks to the notifier directly.
 #[derive(Clone)]
+#[cfg(feature = "restate-compatibility")]
 pub struct ArchivesService {
     slack: Arc<dyn SlackBot>,
     channel_id: String,
     slack_enabled: bool,
 }
 
+#[cfg(feature = "restate-compatibility")]
 impl ArchivesService {
     #[must_use]
     pub fn new(slack: Arc<dyn SlackBot>, channel_id: String, slack_enabled: bool) -> Self {
@@ -499,6 +504,7 @@ impl ArchivesService {
     }
 }
 
+#[cfg(feature = "restate-compatibility")]
 #[restate_sdk::workflow(name = "Archives")]
 impl ArchivesService {
     #[restate_sdk::handler]
@@ -696,21 +702,22 @@ fn record_run_metrics(summary: &SnapshotSummary) {
     telemetry::record_archives_run(written as u64, run_failure(summary).is_some());
 }
 
+#[cfg(any(test, feature = "restate-compatibility"))]
 async fn post_digest(
     slack: &dyn SlackBot,
     channel_id: &str,
     enabled: bool,
     message: &str,
-) -> Result<(), HandlerError> {
+) -> anyhow::Result<()> {
     if !enabled || channel_id.trim().is_empty() {
-        return Err(HandlerError::from(anyhow::anyhow!(
+        return Err(anyhow::anyhow!(
             "Archives requires SLACK_BOT_TOKEN and its messages channel"
-        )));
+        ));
     }
     slack
         .post_message(channel_id, message)
         .await
-        .map_err(HandlerError::from)
+        .map_err(anyhow::Error::from)
 }
 
 /// DBOS can repeat a step after Slack accepts its request but before the step
@@ -722,11 +729,11 @@ async fn post_digest_idempotent(
     enabled: bool,
     message: &str,
     correlation_id: &str,
-) -> Result<(), HandlerError> {
+) -> anyhow::Result<()> {
     if !enabled || channel_id.trim().is_empty() {
-        return Err(HandlerError::from(anyhow::anyhow!(
+        return Err(anyhow::anyhow!(
             "Archives requires SLACK_BOT_TOKEN and its messages channel"
-        )));
+        ));
     }
     if slack
         .message_receipt_by_correlation(channel_id, correlation_id)
@@ -739,7 +746,7 @@ async fn post_digest_idempotent(
         .post_message_with_receipt(channel_id, message, Some(correlation_id))
         .await
         .map(|_| ())
-        .map_err(HandlerError::from)
+        .map_err(anyhow::Error::from)
 }
 
 /// Compose the Slack digest message a completed run posts: assemble the
@@ -844,7 +851,7 @@ async fn promote_iceberg_metadata<F: Fn(&str) -> Option<String>>(
         Err(e) => {
             return vec![format!(
                 "(iceberg metadata promotion skipped — storage unavailable: {e})"
-            )]
+            )];
         }
     };
     let Some(bucket) = get("NAVIGATOR_ARCHIVES_BUCKET").filter(|s| !s.is_empty()) else {

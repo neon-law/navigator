@@ -17,9 +17,13 @@
 //! [`billing::StubBillingProvider`] + a test database without a worker.
 
 use std::fmt::Write as _;
+#[cfg(feature = "restate-compatibility")]
 use std::sync::Arc;
 
-use billing::{BillingProvider, XeroBillingProvider};
+use billing::BillingProvider;
+#[cfg(feature = "restate-compatibility")]
+use billing::XeroBillingProvider;
+#[cfg(feature = "restate-compatibility")]
 use restate_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 use store::surreal::SurrealDb;
@@ -91,6 +95,7 @@ pub struct TrustLine {
 /// same connection the worker opened at boot); the Xero provider is built from
 /// env inside the step so no token sits idle between nightly runs.
 #[derive(Clone)]
+#[cfg(feature = "restate-compatibility")]
 pub struct ReconcileInvoicesService {
     surreal: SurrealDb,
     /// The same Slack Web API bot used for `#general`. Both notices use the
@@ -106,6 +111,7 @@ pub struct ReconcileInvoicesService {
     simulated: bool,
 }
 
+#[cfg(feature = "restate-compatibility")]
 impl ReconcileInvoicesService {
     #[must_use]
     pub fn new(
@@ -123,6 +129,7 @@ impl ReconcileInvoicesService {
     }
 }
 
+#[cfg(feature = "restate-compatibility")]
 #[restate_sdk::workflow(name = "ReconcileInvoices")]
 impl ReconcileInvoicesService {
     #[restate_sdk::handler]

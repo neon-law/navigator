@@ -78,7 +78,7 @@ tempfile.workspace = true
 toml.workspace = true
 uuid.workspace = true
 wiremock.workspace = true
-workflows-service.workspace = true
+workflows-service = { workspace = true, default-features = false }
 
 [lints]
 workspace = true

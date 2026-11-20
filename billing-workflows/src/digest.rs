@@ -1,13 +1,17 @@
 //! Restate adapter for the shared `BillingDigest` core.
 
+#[cfg(feature = "restate-compatibility")]
 use restate_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "restate-compatibility")]
 use std::sync::Arc;
+#[cfg(feature = "restate-compatibility")]
 use workflows::EmailService;
 
 pub use workflows::billing_digest::{
     build_digest_email, AccountCost, BillingDigestReport, DigestOutcome,
 };
+#[cfg(feature = "restate-compatibility")]
 use workflows::billing_digest::{query_report, DigestConfig};
 
 /// Request body for `BillingDigest::run`; the trigger supplies no fields.
@@ -15,10 +19,12 @@ use workflows::billing_digest::{query_report, DigestConfig};
 pub struct RunRequest {}
 
 #[derive(Clone)]
+#[cfg(feature = "restate-compatibility")]
 pub struct BillingDigestService {
     email: Arc<dyn EmailService>,
 }
 
+#[cfg(feature = "restate-compatibility")]
 impl BillingDigestService {
     #[must_use]
     pub fn new(email: Arc<dyn EmailService>) -> Self {
@@ -26,6 +32,7 @@ impl BillingDigestService {
     }
 }
 
+#[cfg(feature = "restate-compatibility")]
 #[restate_sdk::workflow(name = "BillingDigest")]
 impl BillingDigestService {
     #[restate_sdk::handler]

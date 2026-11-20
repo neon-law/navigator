@@ -38,8 +38,10 @@
 
 use std::sync::Arc;
 
+#[cfg(feature = "restate-compatibility")]
 use restate_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
+#[cfg(any(test, feature = "restate-compatibility"))]
 use store::projects::ProjectDriSummary;
 use store::surreal::SurrealDb;
 pub use workflows::dri_digest::dri_digest_message;
@@ -81,6 +83,7 @@ pub fn open_matters_followup(simulated: bool, open: usize, pitches: usize) -> Op
 /// `workflows-service/src/host.rs`, not re-read from the environment on
 /// every run.
 #[derive(Clone)]
+#[cfg(feature = "restate-compatibility")]
 pub struct DriDigestService {
     surreal: SurrealDb,
     notifier: Arc<dyn Notifier>,
@@ -104,6 +107,7 @@ pub fn dbos_context(
         .map_err(Into::into)
 }
 
+#[cfg(feature = "restate-compatibility")]
 impl DriDigestService {
     #[must_use]
     pub fn new(surreal: SurrealDb, notifier: Arc<dyn Notifier>, simulated: bool) -> Self {
@@ -187,6 +191,7 @@ mod dbos_context_tests {
     }
 }
 
+#[cfg(feature = "restate-compatibility")]
 #[restate_sdk::workflow(name = "DriDigest")]
 impl DriDigestService {
     #[restate_sdk::handler]
