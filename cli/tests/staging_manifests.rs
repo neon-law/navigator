@@ -712,8 +712,13 @@ fn postgres_overlays_converge_least_privilege_roles_without_the_superuser_elsewh
             "ALTER ROLE navigator_owner WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION",
             "ALTER ROLE navigator_app WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION",
             "ALTER ROLE navigator_backup WITH LOGIN REPLICATION NOSUPERUSER",
-            "ALTER DATABASE navigator OWNER TO navigator_owner",
-            "REVOKE ALL ON DATABASE navigator FROM PUBLIC",
+            "\\if :{?navigator_database}\n\\else\n\\set navigator_database navigator\n\\endif",
+            r#"ALTER DATABASE :"navigator_database" OWNER TO navigator_owner"#,
+            r#"GRANT CONNECT ON DATABASE :"navigator_database" TO navigator_app"#,
+            r#"GRANT CONNECT ON DATABASE :"navigator_database" TO navigator_archive"#,
+            r#"ALTER ROLE navigator_owner IN DATABASE :"navigator_database" SET session_preload_libraries = 'age'"#,
+            r#"ALTER ROLE navigator_app IN DATABASE :"navigator_database" SET session_preload_libraries = 'age'"#,
+            r#"REVOKE ALL ON DATABASE :"navigator_database" FROM PUBLIC"#,
             "REVOKE ALL ON SCHEMA public FROM PUBLIC",
             "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO navigator_app",
             "SET log_min_error_statement = panic",
@@ -734,7 +739,7 @@ fn postgres_overlays_converge_least_privilege_roles_without_the_superuser_elsewh
             .collect();
         assert_eq!(
             creates,
-            ["GRANT CONNECT, CREATE ON DATABASE navigator TO navigator_dbos;"],
+            [r#"GRANT CONNECT, CREATE ON DATABASE :"navigator_database" TO navigator_dbos;"#],
             "no other login gains DDL"
         );
         assert!(

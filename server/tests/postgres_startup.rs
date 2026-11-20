@@ -159,6 +159,7 @@ fn child_command(
         .env("NAVIGATOR_WORKFLOW_ENGINE", "dbos")
         .env("NAVIGATOR_DBOS_ENABLED", "true")
         .env("NAVIGATOR_DBOS_NOTATION_ENABLED", "true")
+        .env("NAVIGATOR_DBOS_PROJECT_SLACK_ENABLED", "true")
         .env("NAVIGATOR_RELEASE_TAG", "synthetic-native-startup")
         .env(
             "NAVIGATOR_DBOS_EXECUTOR_ID",

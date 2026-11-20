@@ -1720,7 +1720,11 @@ mod tests {
             assert_eq!(entry.rows, 0, "synthetic empty table {table}");
             assert_eq!(parquet(object(&storage, &entry.key).await).num_rows(), 0);
         }
-        let journal = &generation.tables[0];
+        let journal = generation
+            .tables
+            .iter()
+            .find(|entry| entry.table == "journal_entry")
+            .expect("journal entries are exported");
         assert_eq!((journal.table.as_str(), journal.rows), ("journal_entry", 0));
         let batch = parquet(object(&storage, &journal.key).await);
         assert_eq!(batch.num_rows(), 0);
