@@ -171,7 +171,7 @@ async fn restore_rows(
         );
     let conflict = if fixed { " ON CONFLICT DO NOTHING" } else { "" };
     let statement = format!(
-        "INSERT INTO \"{}\".\"{}\" ({columns}) VALUES ({placeholders}){conflict}",
+        "INSERT INTO \"{}\".\"{}\" ({columns}) OVERRIDING SYSTEM VALUE VALUES ({placeholders}){conflict}",
         schema.relation.schema, schema.relation.name
     );
     for row in 0..batch.num_rows() {
