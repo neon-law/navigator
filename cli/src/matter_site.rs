@@ -517,11 +517,13 @@ pub enum NotationAction {
         envelope: uuid::Uuid,
     },
     /// Resume filling a Notation's questionnaire from a saved answers file.
+    #[command(after_long_help = crate::answers_file::ANSWERS_FILE_HELP)]
     Fill {
         /// Notation UUID.
         notation_id: uuid::Uuid,
         #[command(flatten)]
         host: HostOpt,
+        /// Saved answers file to apply. See the answers-file shape below.
         #[arg(long)]
         answers_from: PathBuf,
     },
@@ -537,6 +539,7 @@ pub enum NotationAction {
         json: bool,
     },
     /// Read the filed answers and their source provenance for one notation.
+    #[command(after_long_help = crate::answers_file::ANSWERS_FILE_HELP)]
     Answers {
         /// Notation UUID.
         notation_id: uuid::Uuid,
@@ -545,10 +548,7 @@ pub enum NotationAction {
         /// Emit the raw JSON answers.
         #[arg(long)]
         json: bool,
-        /// Save the filed answers to this path as a `state: value` YAML map
-        /// for `--answers-from` / `--answers-file` prefill. Intended on a
-        /// completed notation — typically an onboarding whose answers a
-        /// follow-on notation should repeat.
+        /// Save the filed answers to this path as YAML for a later prefill.
         #[arg(long)]
         save_answers: Option<PathBuf>,
     },
@@ -897,5 +897,39 @@ pub async fn run_mail(action: SiteMailAction) -> ExitCode {
             )
             .await
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn answers_help_prints_the_full_single_choice_shape() {
+        let mut command = crate::concise_help(crate::navigator_command());
+        let help = command
+            .find_subcommand_mut("site")
+            .and_then(|site| site.find_subcommand_mut("notation"))
+            .and_then(|notation| notation.find_subcommand_mut("answers"))
+            .unwrap()
+            .render_long_help()
+            .to_string();
+        assert!(
+            help.contains("custom_single_choice__governing_law: nevada"),
+            "{help}"
+        );
+        assert!(
+            !help.contains("as a `state."),
+            "the answers-file shape is cut off: {help}"
+        );
+        let fill = command
+            .find_subcommand_mut("site")
+            .and_then(|site| site.find_subcommand_mut("notation"))
+            .and_then(|notation| notation.find_subcommand_mut("fill"))
+            .unwrap()
+            .render_long_help()
+            .to_string();
+        assert!(
+            fill.contains("custom_single_choice__governing_law: nevada"),
+            "{fill}"
+        );
     }
 }

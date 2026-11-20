@@ -80,6 +80,27 @@ async fn mount_projects(server: &MockServer, project_id: Uuid) {
         .await;
 }
 
+async fn mount_handles(
+    server: &MockServer,
+    project_id: Uuid,
+    client_dri: &str,
+    repository_url: Option<&str>,
+) {
+    Mock::given(method("GET"))
+        .and(path(format!("/app/api/project-surfaces/{project_id}")))
+        .and(header("authorization", "Bearer test-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "code": CODE,
+            "repository_url": repository_url,
+            "lawyer_dri": ["lawyer@example.com"],
+            "client_dri": [client_dri],
+            "private_slack_channel": null,
+            "private_notion_page": null
+        })))
+        .mount(server)
+        .await;
+}
+
 async fn mount_import(server: &MockServer, project_id: Uuid, response: ResponseTemplate) {
     Mock::given(method("POST"))
         .and(path(format!(
@@ -336,31 +357,13 @@ fn scaffold(credentials: &Path, host: &str, dir: &Path, extra: &[&str]) -> Run {
 }
 
 /// Resume an interrupted open into an empty directory: the tree is rebuilt
-/// with the given client DRI and no repository is requested.
+/// from the live client contact and no repository is requested.
 fn prepare_scaffold(credentials: &Path, host: &str, dir: &Path) {
-    let missing = scaffold(
-        credentials,
-        host,
-        dir,
-        &["--resume", CODE, "--no-repository"],
-    );
-    assert_eq!(missing.code, Some(2));
-    assert!(
-        missing.stderr.contains("--client-email"),
-        "{}",
-        missing.stderr
-    );
     let rebuilt = scaffold(
         credentials,
         host,
         dir,
-        &[
-            "--resume",
-            CODE,
-            "--no-repository",
-            "--client-email",
-            "client@example.com",
-        ],
+        &["--resume", CODE, "--no-repository"],
     );
     assert!(rebuilt.success, "{}", rebuilt.stderr);
     assert!(
@@ -398,6 +401,7 @@ async fn resume_imports_before_attempting_the_work_checkout_and_reports_a_retry(
     let credentials = credentials(&login, &host, Some("lawyer@example.com"));
     let project_id = Uuid::now_v7();
     mount_projects(&server, project_id).await;
+    mount_handles(&server, project_id, "client@example.com", None).await;
     let parent = TempDir::new().unwrap();
     let dir = parent.path().join("sample-import");
 
@@ -556,6 +560,7 @@ async fn resume_reports_a_provisioning_failure_with_the_retry_command() {
     let credentials = credentials(&login, &host, Some("lawyer@example.com"));
     let project_id = Uuid::now_v7();
     mount_projects(&server, project_id).await;
+    mount_handles(&server, project_id, "client@example.com", None).await;
     mount_reconcile(
         &server,
         project_id,
@@ -625,7 +630,9 @@ async fn resume_needs_a_login_that_names_the_lawyer() {
     let host = server.uri();
     let login = TempDir::new().unwrap();
     let credentials = credentials(&login, &host, None);
-    mount_projects(&server, Uuid::now_v7()).await;
+    let project_id = Uuid::now_v7();
+    mount_projects(&server, project_id).await;
+    mount_handles(&server, project_id, "client@example.com", None).await;
     let parent = TempDir::new().unwrap();
     let dir = parent.path().join("sample-import");
 
@@ -723,14 +730,16 @@ async fn resume_refuses_a_visible_project_without_an_owning_firm() {
     let host = server.uri();
     let login = TempDir::new().unwrap();
     let credentials = credentials(&login, &host, Some("lawyer@example.com"));
+    let project_id = Uuid::now_v7();
     Mock::given(method("GET"))
         .and(path("/app/api/projects"))
         .and(header("authorization", "Bearer test-token"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
-            { "id": Uuid::now_v7(), "code": CODE, "firm_id": null, "brand": "sample" }
+            { "id": project_id, "code": CODE, "firm_id": null, "brand": "sample" }
         ])))
         .mount(&server)
         .await;
+    mount_handles(&server, project_id, "client@example.com", None).await;
 
     let parent = TempDir::new().unwrap();
     let result = scaffold(
@@ -786,4 +795,75 @@ fn a_fresh_scaffold_without_a_terminal_explains_the_headless_path() {
         );
         assert!(!dir.exists());
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn resume_writes_the_live_client_contact_and_sets_origin() {
+    let server = MockServer::start().await;
+    let host = server.uri();
+    let login = TempDir::new().unwrap();
+    let credentials = credentials(&login, &host, Some("lawyer@example.com"));
+    let project_id = Uuid::now_v7();
+    let repository = "https://github.com/example/sample-import";
+    mount_projects(&server, project_id).await;
+    mount_handles(&server, project_id, "live@example.com", Some(repository)).await;
+    let parent = TempDir::new().unwrap();
+    let dir = parent.path().join(CODE);
+
+    let wrong = scaffold(
+        &credentials,
+        &host,
+        &dir,
+        &[
+            "--resume",
+            CODE,
+            "--no-repository",
+            "--client-email",
+            "other@example.com",
+        ],
+    );
+    assert_eq!(wrong.code, Some(2));
+    assert!(
+        wrong.stderr.contains("not a client DRI"),
+        "{}",
+        wrong.stderr
+    );
+    assert!(
+        !dir.join("navigator.yaml").exists(),
+        "a mismatched contact is not written"
+    );
+
+    let rebuilt = scaffold(
+        &credentials,
+        &host,
+        &dir,
+        &["--resume", CODE, "--no-repository"],
+    );
+    assert!(rebuilt.success, "{}", rebuilt.stderr);
+    let manifest = fs::read_to_string(dir.join("navigator.yaml")).unwrap();
+    assert!(
+        manifest.contains("client_dri: live@example.com"),
+        "{manifest}"
+    );
+    assert!(!manifest.contains("other@example.com"), "{manifest}");
+    let origin = std::process::Command::new("git")
+        .args(["config", "--local", "--get", "remote.origin.url"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8(origin.stdout).unwrap().trim(), repository);
+    let pushurl = std::process::Command::new("git")
+        .args(["config", "--local", "--get", "remote.origin.pushurl"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(pushurl.stdout).unwrap().trim(),
+        repository
+    );
+    assert!(
+        rebuilt.stdout.contains(&format!("origin: {repository}")),
+        "{}",
+        rebuilt.stdout
+    );
 }

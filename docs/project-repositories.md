@@ -1142,6 +1142,15 @@ Project's source repository and prints each resource's outcome. If any step fail
 files of that Project's existing checkout, and retries provisioning. A directory holding another Project's scaffold is
 refused.
 
+When `--resume` rebuilds an empty directory, `project.client_dri` is the live Project's client contact. `--client-email`
+is optional. A supplied address is written only when it is that live contact; any other address is refused, so the
+manifest does not name a contact the Project does not have. When the live row has one client contact, omit the flag.
+When it has several, pass `--client-email` for the contact the manifest should name.
+
+When the live row has a `repository_url`, the scaffold sets `origin` and `remote.origin.pushurl` to that URL. When
+provisioning was requested and the row still has no repository URL, the command says to add `origin` by hand before
+pushing.
+
 With `NAVIGATOR_FORGE_BACKEND=forgejo`, provisioning creates a private `<firm-slug>/<code>` repository on the instance
 at `NAVIGATOR_FORGEJO_ROOT_URL`, authenticated with the owning Firm's `forgejo_access_token` integration secret. An
 existing repository is adopted only when Forgejo reports it private, in that Firm's namespace, and named for the code.

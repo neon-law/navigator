@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
 
-use anyhow::{anyhow, ensure, Context, Result};
+use anyhow::{anyhow, bail, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::document_sync::{
@@ -329,12 +329,7 @@ async fn update_checkout(
         Path::new(git_root.trim()).canonicalize()? == root,
         "Project folder is not a Git checkout"
     );
-    let origin = command(
-        &root,
-        "git",
-        &["config", "--local", "--get", "remote.origin.url"],
-    )
-    .await?;
+    let origin = ensure_origin(&root, url).await?;
     ensure!(
         origin.trim() == url,
         "local origin differs from the Project repository"
@@ -474,6 +469,43 @@ async fn configure_mirror(root: &Path, url: &str, mirror: &str) -> Result<()> {
     Ok(())
 }
 
+async fn ensure_origin(root: &Path, url: &str) -> Result<String> {
+    let output = git_output(root, &["config", "--local", "--get", "remote.origin.url"]).await?;
+    if output.status.success() {
+        return Ok(String::from_utf8(output.stdout)?);
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let missing = output.status.code() == Some(1)
+        && !stderr.to_ascii_lowercase().contains("fatal")
+        && !stderr.to_ascii_lowercase().contains("error");
+    if !missing {
+        bail!(
+            "git config --local --get remote.origin.url failed ({}): {}",
+            output.status,
+            stderr.trim()
+        );
+    }
+    command(root, "git", &["remote", "add", "origin", url]).await?;
+    command(
+        root,
+        "git",
+        &["config", "--local", "remote.origin.pushurl", url],
+    )
+    .await?;
+    Ok(url.to_string())
+}
+
+async fn git_output(dir: &Path, args: &[&str]) -> Result<std::process::Output> {
+    tokio::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .kill_on_drop(true)
+        .output()
+        .await
+        .with_context(|| format!("run git {}", args.join(" ")))
+}
+
 async fn command(dir: &Path, program: &str, args: &[&str]) -> Result<String> {
     let output = tokio::process::Command::new(program)
         .args(args)
@@ -483,12 +515,14 @@ async fn command(dir: &Path, program: &str, args: &[&str]) -> Result<String> {
         .output()
         .await
         .with_context(|| format!("run {program}"))?;
-    ensure!(
-        output.status.success(),
-        "{program} {} failed ({})",
-        args[0],
-        output.status
-    );
+    if !output.status.success() {
+        bail!(
+            "{program} {} failed ({}): {}",
+            args.join(" "),
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
     Ok(String::from_utf8(output.stdout)?)
 }
 
@@ -725,6 +759,52 @@ mod tests {
             repository_url: Some(origin.to_str().unwrap().into()),
         };
         Ok((project, origin, mirror))
+    }
+
+    #[tokio::test]
+    async fn a_checkout_without_origin_receives_the_live_repository_url() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        command(
+            root.path(),
+            "git",
+            &["init", "--quiet", "--initial-branch=main"],
+        )
+        .await?;
+        let url = "https://github.com/example/matter";
+        let origin = super::ensure_origin(root.path(), url).await?;
+        assert_eq!(origin, url);
+        let pushurl = command(
+            root.path(),
+            "git",
+            &["config", "--local", "--get", "remote.origin.pushurl"],
+        )
+        .await?;
+        assert_eq!(pushurl.trim(), url);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn git_config_failure_includes_the_git_error() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        command(root.path(), "git", &["init", "--quiet"]).await?;
+        std::fs::write(root.path().join(".git/config"), "[\n")?;
+        let error = command(
+            root.path(),
+            "git",
+            &["config", "--local", "--get", "remote.origin.url"],
+        )
+        .await
+        .unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.contains("git config --local --get remote.origin.url failed"),
+            "{message}"
+        );
+        assert!(
+            message.contains("bad config") || message.contains("fatal"),
+            "{message}"
+        );
+        Ok(())
     }
 
     #[test]

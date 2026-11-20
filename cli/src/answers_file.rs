@@ -64,6 +64,23 @@ pub fn save_answers_file(path: &Path, answers: &[FiledAnswer]) -> Result<usize> 
 /// The parsed `state: value` map `--answers-from` / `--answers-file` reads.
 pub type SavedAnswers = BTreeMap<String, serde_yaml::Value>;
 
+/// Full answers-file shape for `--help`. Terminal headlines stop at the first
+/// colon, so this text is attached with `after_long_help` and is not shortened.
+pub const ANSWERS_FILE_HELP: &str = "\
+Answers file shape
+
+The file is one YAML map. Each key is a question code. Each value is that question's answer.
+`site notation answers --save-answers` writes this map. `site notation fill --answers-from` reads it.
+
+A single-choice question uses the choice value:
+
+  custom_single_choice__governing_law: nevada
+
+A text question uses the text:
+
+  client_full_name: Ada Example
+";
+
 /// Read and parse a saved answers file.
 ///
 /// # Errors
