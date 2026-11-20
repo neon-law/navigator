@@ -582,6 +582,12 @@ async fn wait_for(pg: &PostgresDb, sql: &'static str) {
     .unwrap();
 }
 
+// A completed upgrade attempt closes its dedicated advisory-lock lease on drop.
+// Wait for that backend cleanup before the next intentionally sequential attempt.
+async fn wait_upgrade_lease_released(pg: &PostgresDb) {
+    wait_for(pg, "SELECT NOT EXISTS(SELECT 1 FROM pg_locks WHERE locktype='advisory' AND database=(SELECT oid FROM pg_database WHERE datname=current_database()) AND classid=1869769063 AND objid=1768846704)").await;
+}
+
 #[tokio::test]
 async fn migration_commit_before_upgrade_completion_recovers_only_the_same_bound_operation() {
     let Some(options) = options() else { return };
@@ -651,11 +657,12 @@ async fn migration_commit_before_upgrade_completion_recovers_only_the_same_bound
     drop(migration_gate);
     // Cancellation closes the dedicated lease instead of returning a locked
     // session to the pool. Observe that resource cleanup before resuming.
-    wait_for(pg,"SELECT NOT EXISTS(SELECT 1 FROM pg_locks WHERE locktype='advisory' AND database=(SELECT oid FROM pg_database WHERE datname=current_database()) AND classid=1869769063 AND objid=1768846704)").await;
+    wait_upgrade_lease_released(pg).await;
     assert!(matches!(
         upgrade::upgrade_with(pg, creation, &binding, Uuid::new_v4(), &future_schema(true)).await,
         Err(OriginError::Upgrade)
     ));
+    wait_upgrade_lease_released(pg).await;
     assert!(
         matches!(
             upgrade::upgrade_with(pg, creation, &binding, operation, &future_schema(false)).await,
@@ -663,12 +670,14 @@ async fn migration_commit_before_upgrade_completion_recovers_only_the_same_bound
         ),
         "same version with a different checksum cannot resume the intent"
     );
+    wait_upgrade_lease_released(pg).await;
     upgrade::upgrade_with(pg, creation, &binding, operation, &future_schema(true))
         .await
         .unwrap();
     assert!(admits_for(pg, &schema_contract_for(&future_schema(true)))
         .await
         .unwrap());
+    wait_upgrade_lease_released(pg).await;
     upgrade::upgrade_with(pg, creation, &binding, operation, &future_schema(true))
         .await
         .unwrap();
