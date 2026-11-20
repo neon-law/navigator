@@ -5427,7 +5427,7 @@ jobs:
             findings
                 .iter()
                 .any(|finding| finding.starts_with("Y024: `.gitignore` lacks")
-                    && finding.contains("`/documents/`, `*.pdf`, `*.docx`, `*.local` a document")
+                    && finding.contains("`/documents/`, `/notes/`, `/mail/`, `*.pdf`, `*.docx`, `*.local` private matter records or document bytes")
                     && finding.contains("sync-skills")),
             "{findings:#?}"
         );
@@ -5457,7 +5457,7 @@ jobs:
         let root = tempfile::tempdir().unwrap();
         scaffold_minimal(root.path());
         let custom =
-            "# Our own ignores.\n/documents/\nnotes/\n*.pdf\n*.docx\n*.local\nnode_modules\n";
+            "# Our own ignores.\n/documents/\n/notes/\n/mail/\n*.pdf\n*.docx\n*.local\nnode_modules\n";
         fs::write(root.path().join(".gitignore"), custom).unwrap();
 
         let mut errors: Vec<Finding> = Vec::new();
