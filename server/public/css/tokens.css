@@ -16,6 +16,7 @@
   color-scheme: light dark;
 
   --nav-font-family: "GORP Serif", Georgia, serif;
+  --nav-font-sans: ui-sans-serif, system-ui, sans-serif;
   /* Quoted identifiers and code — the one place the serif steps aside. */
   --nav-font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
 

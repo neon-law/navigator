@@ -149,10 +149,10 @@ impl MatterTab {
     pub const ROUTED: [Self; 8] = [
         Self::Onboarding,
         Self::Deadlines,
+        Self::Billing,
         Self::Tasks,
         Self::Communications,
         Self::Documents,
-        Self::Billing,
         Self::Participants,
         Self::Testimonial,
     ];
@@ -162,10 +162,10 @@ impl MatterTab {
     pub const WORKBENCH: [Self; 7] = [
         Self::Onboarding,
         Self::Deadlines,
+        Self::Billing,
         Self::Tasks,
         Self::Communications,
         Self::Documents,
-        Self::Billing,
         Self::Participants,
     ];
 

@@ -52,7 +52,9 @@ use crate::components::{
 // The vendor marks come from their own module rather than the theme root: they
 // are the one component whose colours are a third party's rather than the
 // deployment's, so they are kept visibly apart from the themed set.
-use crate::components::resource_mark::{ResourceMark, ResourceMarkGlyph};
+use crate::components::resource_mark::{
+    GitRepositoryGlyph, ResourceMark, ResourceMarkGlyph, WebGraphGlyph,
+};
 use crate::firm_footer::FirmFooter;
 use crate::public_chrome::PublicChrome;
 
@@ -1516,6 +1518,20 @@ fn ResourceMarkShowcase() -> Element {
                             }
                             span { class: "project-resources__label", "{label}" }
                         }
+                    }
+                }
+            }
+            ul { class: "project-resources__list",
+                li { class: "project-resources__row",
+                    span { class: "project-resources__link",
+                        GitRepositoryGlyph { class: "project-resources__mark".to_string() }
+                        span { class: "project-resources__label", "Source repository" }
+                    }
+                }
+                li { class: "project-resources__row",
+                    span { class: "project-resources__link",
+                        WebGraphGlyph { class: "project-resources__mark".to_string() }
+                        span { class: "project-resources__label", "Relationship graph" }
                     }
                 }
             }

@@ -294,13 +294,27 @@ mod tests {
         assert_eq!(served(K::LawyerDri), workbench);
         assert_eq!(
             served(K::ClientDri),
-            [MatterTab::Overview, MatterTab::Testimonial]
+            [
+                MatterTab::Overview,
+                MatterTab::Onboarding,
+                MatterTab::Testimonial
+            ]
         );
-        assert_eq!(served(K::Client), [MatterTab::Overview]);
-        assert_eq!(served(K::Clerk), [MatterTab::Overview]);
+        assert_eq!(
+            served(K::Client),
+            [MatterTab::Overview, MatterTab::Onboarding]
+        );
+        assert_eq!(
+            served(K::Clerk),
+            [MatterTab::Overview, MatterTab::Onboarding]
+        );
         assert_eq!(
             served(K::AdminUnassigned),
-            [MatterTab::Overview, MatterTab::Participants]
+            [
+                MatterTab::Overview,
+                MatterTab::Onboarding,
+                MatterTab::Participants
+            ]
         );
         assert!(served(K::None).is_empty());
     }
