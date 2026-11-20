@@ -75,7 +75,7 @@ jobs:
           sha256sum "$tools/dx"
           echo "$tools" >> "$GITHUB_PATH"
       - name: build navigator CLI
-        run: cargo build -p hudson --quiet
+        run: cargo build --locked -p hudson --quiet
       - name: hudson quickstart
         run: |
           target/debug/hudson quickstart > /tmp/quickstart.log 2>&1 &
@@ -218,6 +218,14 @@ jobs:
   pull_request:
     paths:
       - deploy/src/devx/quickstart.rs
+      - portal/src/hosting.rs
+      - portal/src/hosting/**
+      - workflows-service/src/host.rs
+      - workflows-service/src/host/**
+      - workflows/src/dbos_engine.rs
+      - workflows/src/dbos_engine/**
+      - model/src/workflow_engine.rs
+      - server/tests/postgres_startup.rs
       - deploy/src/devx/webapp.rs
       - deploy/src/devx/native_profile.rs
       - deploy/src/devx/orchestrate.rs
