@@ -2897,7 +2897,7 @@ async fn sitemap_xml_lists_public_routes_from_loaded_indexes() {
     }
     // The firm's pages ARE advertised — one host, one sitemap. What must not
     // appear is a firm page filed beneath `/foundation`.
-    for firm_page in ["/blog", "/navigator", "/notations", "/testimonials"] {
+    for firm_page in ["/blog", "/legal-aid", "/notations", "/testimonials"] {
         assert!(
             body.contains(&format!("<loc>https://www.neonlaw.com{firm_page}</loc>")),
             "sitemap must advertise the firm page {firm_page}: {body}"

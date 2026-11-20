@@ -60,6 +60,7 @@ pub const PUBLIC_PATHS: &[&str] = &[
     // Answers a 301 to `/`, like `/personal` above: the business counsel
     // page is retired.
     "/business",
+    // Answers a 301 to `/` too: the platform page is retired.
     "/navigator",
     "/legal-aid",
     // The Neon-hosted gateway to the DeleteYourDebt.com practice. Neon-only —
@@ -199,7 +200,6 @@ pub fn sitemap_paths(state: &AppState, key: BrandKey) -> std::collections::BTree
         BrandKey::Neon => {
             let mut paths: std::collections::BTreeSet<String> = [
                 "/",
-                "/navigator",
                 "/legal-aid",
                 "/delete-your-debt",
                 "/delete-your-data",
@@ -437,12 +437,6 @@ fn indexed_pages(mark: &str) -> Vec<portal::LlmsTxtLink> {
              fee for a mutual split. Joint representation is subject to applicable \
              rules, conflict review, and informed written consent. No result or \
              timeline is promised.",
-        ),
-        indexed_page(
-            "Neon Law Navigator",
-            "/navigator",
-            "The firm's legal project platform, open source under MIT OR Apache-2.0, with \
-                 an open invitation to co-counsel a pro bono case.",
         ),
         indexed_page(
             "Legal Aid",

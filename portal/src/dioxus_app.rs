@@ -3551,8 +3551,7 @@ pub fn marketing_page_router(
         ))
 }
 
-/// The firm's platform page: what Neon Law Navigator is, its hosted SaaS
-/// pricing, and the invitation to co-counsel a pro bono case.
+/// The retired platform page's path, which now answers a 301 to the home.
 pub const FIRM_NAVIGATOR_PATH: &str = "/navigator";
 
 /// The retired consumer-plan path, kept only so its inbound links resolve.

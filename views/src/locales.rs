@@ -63,7 +63,6 @@ pub const KNOWN_PAGES: &[&str] = &[
     "immigration-uscis-notices",
     "legal-aid",
     "litigation",
-    "navigator",
     "notations",
 ];
 
@@ -665,7 +664,7 @@ pub struct TestimonialEntryCopy {
     pub body: String,
 }
 
-/// A marketing page (`/navigator`, `/services`).
+/// A marketing page (`/legal-aid`, `/services`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MarketingPageCopy {
     pub head_title: String,
@@ -722,7 +721,6 @@ pub fn locale_page_kind(stem: &str) -> Option<LocalePageKind> {
         "free-resources" => Some(LocalePageKind::FreeResources),
         "fractional-gc" => Some(LocalePageKind::Transactional),
         "legal-aid"
-        | "navigator"
         | "notations"
         | "services"
         | "car-accidents"
@@ -974,7 +972,7 @@ body:
     #[test]
     fn marketing_catalog_deserializes_a_downloads_band() {
         parse_locale_file(
-            "navigator",
+            "legal-aid",
             r#"
 head_title: "Neon Law Navigator — {site_name}"
 meta_description: Agentic lawyering, declared in Git.
@@ -997,11 +995,11 @@ bands:
     email: "{firm_email}"
 "#,
         )
-        .expect("navigator catalog");
+        .expect("downloads catalog");
     }
 
     /// A Neon-only practice gateway deserializes as a `MarketingPageCopy` like
-    /// `navigator` and `services` do; only the stem is new.
+    /// `legal-aid` and `services` do; only the stem is new.
     #[test]
     fn gateway_catalog_deserializes() {
         parse_locale_file(

@@ -1576,12 +1576,8 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
     ));
     // The retired business-counsel page answers a 301 to the home.
     routers.push(moved_permanently(FIRM_RETIRED_BUSINESS_PATH, "/"));
-    routers.push(dioxus_app::marketing_page_router(
-        dioxus_app::FIRM_NAVIGATOR_PATH,
-        firm_copy::navigator(branding),
-        state.sessions.clone(),
-        portal::secure_cookies(state),
-    ));
+    // The retired platform page: its content lives on the home.
+    routers.push(moved_permanently(dioxus_app::FIRM_NAVIGATOR_PATH, "/"));
     routers.push(dioxus_app::marketing_page_router(
         "/legal-aid",
         firm_copy::legal_aid(branding),

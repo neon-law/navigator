@@ -142,7 +142,6 @@ async fn site_host_serves_the_firm_surface_and_host_documents() {
 
     for path in [
         "/",
-        "/navigator",
         "/blog",
         "/notations",
         "/contact",
@@ -220,8 +219,6 @@ async fn the_home_presents_navigator_and_links_to_its_page() {
     assert_eq!(body.matches("<h1").count(), 1);
     for text in [
         "Legal work, with the lawyer in control.",
-        "Explore Navigator",
-        r#"href="/navigator""#,
         r#"href="/notations/about""#,
         r#"href="/legal-aid""#,
     ] {
@@ -288,7 +285,7 @@ async fn the_footer_carries_the_pages_the_header_does_not() {
         "/testimonials",
     ];
     let app = site_app().await;
-    let body = body_string(anon_get(&app, "/navigator").await).await;
+    let body = body_string(anon_get(&app, "/notations").await).await;
     let footer = body
         .split_once(r#"aria-label="More pages""#)
         .and_then(|(_, rest)| rest.split_once("</nav>"))
@@ -328,7 +325,7 @@ async fn the_firm_footer_publishes_no_bar_number_and_no_qualified_office() {
     // means an address is being published with a qualification on it. Checked
     // on `/disputes` because the footer is shared chrome.
     let app = site_app().await;
-    let body = body_string(anon_get(&app, "/navigator").await).await;
+    let body = body_string(anon_get(&app, "/notations").await).await;
     for retired in [
         "Bar No.",
         "Admitted in",
@@ -366,7 +363,7 @@ async fn the_firm_footer_publishes_no_bar_number_and_no_qualified_office() {
 #[tokio::test]
 async fn the_firm_footer_sets_each_office_over_explicit_lines() {
     let app = site_app().await;
-    let full_body = body_string(anon_get(&app, "/navigator").await).await;
+    let full_body = body_string(anon_get(&app, "/notations").await).await;
     let body = full_body
         .split(r#"<ul class="site-footer__offices""#)
         .nth(1)
@@ -440,9 +437,8 @@ async fn every_public_page_wears_the_brand_mark_as_its_tab_icon() {
 async fn the_sitemap_lists_the_products_and_excludes_retired_pages() {
     let app = site_app().await;
     let body = body_string(anon_get(&app, "/sitemap.xml").await).await;
-    for path in ["/navigator", "/notations"] {
-        assert!(body.contains(path), "missing {path}: {body}");
-    }
+    assert!(body.contains("/notations"), "missing /notations: {body}");
+    assert!(!body.contains("/navigator"), "retired page listed: {body}");
     assert!(!body.contains("/nautilus"));
     assert!(!body.contains("/disputes"));
     assert!(!body.contains("/business"));
@@ -506,79 +502,16 @@ async fn supporting_pages_do_not_publish_separate_fees() {
     }
 }
 
-/// The platform page points hosting to the Legal Aid offer and keeps the
-/// co-counsel invitation; it prices no subscription for law firms.
+/// The home offers MCP setup, the presentation, and the local quickstart.
 #[tokio::test]
-async fn the_navigator_page_points_hosting_to_legal_aid_and_invites_co_counsel() {
+async fn the_home_explains_the_mcp_setup_and_the_quickstart() {
     let app = site_app().await;
-    let body = body_string(anon_get(&app, "/navigator").await).await;
-    assert!(
-        body.contains("Free use for those who co-counsel with us."),
-        "the page offers free use to co-counseling attorneys: {body}"
-    );
-    assert!(
-        body.contains(
-            "Anyone who co-counsels a case with us gets the software free for life for their own practices."
-        ),
-        "the lifetime software offer reaches the rendered page: {body}"
-    );
-    assert!(
-        body.contains("contact@neonlaw.com"),
-        "contact address: {body}"
-    );
-    for expected in [
-        "Hosted Navigator for legal aid",
-        "One price per user per month, plus model tokens.",
-        r#"href="/legal-aid""#,
-    ] {
-        assert!(body.contains(expected), "missing {expected}: {body}");
-    }
-    for retired in [
-        "Navigator as a service",
-        "$50",
-        "Contact us for a demo",
-        "We invite law firms to see our production account.",
-        "Skin Navigator for your firm",
-    ] {
-        assert!(!body.contains(retired), "{retired} survives: {body}");
-    }
-    assert!(
-        body.contains(r#"id="video""#)
-            && body.contains(r#"aria-label="Neon Law presentation""#)
-            && body.contains(r#"src="/public/img/neon-home/neon-home-presentation.mp4""#)
-            && body.contains(r#"type="video/mp4""#),
-        "the Navigator page reuses the home presentation until its video is ready: {body}"
-    );
-    for removed in [
-        "The manuals that go with the binary",
-        "What a firm works with",
-        "The licence, and the one thing we sell around it",
-        "not yet signed or notarized",
-    ] {
-        assert!(
-            !body.contains(removed),
-            "the retired copy remains: {removed}: {body}"
-        );
-    }
-}
-
-/// The Navigator page offers MCP setup and the local quickstart.
-#[tokio::test]
-async fn the_navigator_page_explains_the_workflow_and_the_quickstart() {
-    let app = site_app().await;
-    let body = body_string(anon_get(&app, "/navigator").await).await;
+    let body = body_string(anon_get(&app, "/").await).await;
     for expected in [
         r#"id="connect-mcp""#,
         "https://neonlaw.com/app/mcp",
-        "Token efficiency",
-        "Spend tokens on the legal work, not on context.",
-        "navigator glossary show",
-        "pins its Project Skills",
-        "Drafts and pages are text in Git",
-        "Declare the matter. Git keeps the history.",
-        "img/navigator-matter-pages/timeline-lawyer.jpg",
-        "The CLI and MCP server give Claude Code, Codex, and Cursor the same commands a lawyer runs.",
         "Navigator is open source under MIT OR Apache-2.0.",
+        r#"id="video""#,
         "navigator quickstart",
         "it brings up the full stack in KIND with a seeded sample firm and three sample matters",
     ] {
@@ -590,11 +523,11 @@ async fn the_navigator_page_explains_the_workflow_and_the_quickstart() {
     );
 }
 
-/// The public Navigator page maps the Project's connected work around Navigator.
+/// The home maps the Project's connected work around Navigator.
 #[tokio::test]
-async fn the_navigator_page_maps_a_connected_project() {
+async fn the_home_maps_a_connected_project() {
     let app = site_app().await;
-    let body = body_string(anon_get(&app, "/navigator").await).await;
+    let body = body_string(anon_get(&app, "/").await).await;
 
     assert!(
         body.contains(r#"class="fm-project-network""#)
@@ -685,7 +618,7 @@ async fn the_navigator_page_maps_a_connected_project() {
     );
 }
 
-/// `/navigator` publishes the CLI as three download boxes and the Homebrew
+/// `/` publishes the CLI as three download boxes and the Homebrew
 /// route, anonymously, at the release this deployment runs.
 ///
 /// **This is the covering assertion for the whole downloads band**, and it has
@@ -702,11 +635,11 @@ async fn the_navigator_page_maps_a_connected_project() {
 /// the page prints is the string both archives are fetched at — a page
 /// naming one release and linking another is worse than one naming none.
 #[tokio::test]
-async fn the_navigator_page_publishes_the_cli_at_the_release_it_runs() {
+async fn the_home_publishes_the_cli_at_the_release_it_runs() {
     const DOWNLOAD_BASE: &str = "https://github.com/neon-law/navigator/releases/download/";
 
     let app = site_app().await;
-    let body = body_string(anon_get(&app, "/navigator").await).await;
+    let body = body_string(anon_get(&app, "/").await).await;
 
     // The version, read out of the first download href.
     //
@@ -1042,12 +975,9 @@ async fn legal_aid_page_prices_hosted_navigator_and_links_the_workshops() {
         assert!(body.contains(expected), "missing {expected}");
     }
     assert!(!body.contains("$50"), "unexpected law-firm price");
-    let navigator = body_string(anon_get(&app, "/navigator").await).await;
+    let navigator = body_string(anon_get(&app, "/").await).await;
     for retired in ["$50", "Navigator as a service"] {
-        assert!(
-            !navigator.contains(retired),
-            "/navigator still offers {retired}"
-        );
+        assert!(!navigator.contains(retired), "/ still offers {retired}");
     }
     assert!(navigator.contains(r#"href="/legal-aid""#));
     let sitemap = body_string(anon_get(&app, "/sitemap.xml").await).await;
@@ -1953,7 +1883,7 @@ async fn notations_about_tells_the_format_story_and_returns_to_the_gallery() {
     // not a 404 for an unknown notation.
     assert!(!body.contains("Template frontmatter"), "{body}");
 
-    let navigator = body_string(anon_get(&app, "/navigator").await).await;
+    let navigator = body_string(anon_get(&app, "/").await).await;
     assert!(!navigator.contains("id=\"notation-flow\""));
 }
 
@@ -2013,7 +1943,7 @@ async fn contact_returns_contact_page_html() {
 #[tokio::test]
 async fn every_public_page_names_and_links_navigator() {
     let app = site_router(site_state().await);
-    for uri in ["/", "/notations", "/navigator"] {
+    for uri in ["/", "/notations"] {
         let resp = app
             .clone()
             .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
@@ -2212,7 +2142,7 @@ async fn a_mounted_brand_bundle_rebrands_the_firm_home() {
 #[tokio::test]
 async fn the_firm_footer_publishes_no_registered_address_row() {
     let app = site_app().await;
-    let body = body_string(anon_get(&app, "/navigator").await).await;
+    let body = body_string(anon_get(&app, "/notations").await).await;
     for retired in [
         "site-footer__legal-addresses",
         r#"class="site-footer__legal-address""#,
@@ -2235,7 +2165,7 @@ async fn the_firm_footer_publishes_no_registered_address_row() {
 #[tokio::test]
 async fn no_firm_page_publishes_an_unresolved_placeholder() {
     let app = site_app().await;
-    for path in ["/", "/navigator"] {
+    for path in ["/", "/notations"] {
         let body = body_string(anon_get(&app, path).await).await;
         for token in ["{shared:", "{site_name}", "{firm_email}"] {
             assert!(

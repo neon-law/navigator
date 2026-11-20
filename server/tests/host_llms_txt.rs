@@ -141,7 +141,6 @@ async fn the_index_advertises_the_firms_pages() {
 
     for firm_page in [
         "/",
-        "/navigator",
         "/delete-your-debt",
         "/delete-your-data",
         "/immigration",

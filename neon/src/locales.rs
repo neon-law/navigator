@@ -32,7 +32,6 @@ const NEON_LITIGATION_YAML: &str = include_str!("../locales/en/neon/litigation.y
 const NEON_FRACTIONAL_GC_YAML: &str = include_str!("../locales/en/neon/fractional-gc.yaml");
 const NEON_NOTATIONS_YAML: &str = include_str!("../locales/en/neon/notations.yaml");
 const NEON_LEGAL_AID_YAML: &str = include_str!("../locales/en/neon/legal-aid.yaml");
-const NEON_NAVIGATOR_YAML: &str = include_str!("../locales/en/neon/navigator.yaml");
 const NEON_FREE_RESOURCES_YAML: &str = include_str!("../locales/en/neon/free-resources.yaml");
 /// `/delete-your-debt` — Neon's own gateway to the DeleteYourDebt.com
 /// practice. The first of a family of Neon-only practice gateways; see
@@ -196,7 +195,6 @@ pub fn catalog_yaml(key: BrandKey, page: &str) -> Option<&'static str> {
         (BrandKey::Neon, "litigation") => Some(NEON_LITIGATION_YAML),
         (BrandKey::Neon, "fractional-gc") => Some(NEON_FRACTIONAL_GC_YAML),
         (BrandKey::Neon, "notations") => Some(NEON_NOTATIONS_YAML),
-        (BrandKey::Neon, "navigator") => Some(NEON_NAVIGATOR_YAML),
         (BrandKey::Neon, "legal-aid") => Some(NEON_LEGAL_AID_YAML),
         (BrandKey::Neon, "home-marketing") => Some(NEON_HOME_MARKETING_YAML),
         (BrandKey::Neon, "gateway-delete-your-debt") => Some(NEON_GATEWAY_DELETE_YOUR_DEBT_YAML),
@@ -1498,11 +1496,6 @@ pub fn fractional_gc(
     }
 }
 
-/// `/navigator`, from this brand's `navigator.yaml`.
-pub fn navigator(branding: &views::brand::Branding) -> PageContent {
-    marketing_page(load_page(branding, "navigator"), None, branding)
-}
-
 /// `/legal-aid`, from this brand's `legal-aid.yaml`.
 pub fn legal_aid(branding: &views::brand::Branding) -> PageContent {
     marketing_page(load_page(branding, "legal-aid"), None, branding)
@@ -2740,35 +2733,37 @@ mod tests {
         );
     }
 
-    /// The home tells the Navigator software story and links its detailed guide.
+    /// The home tells the Navigator software story: how to connect, the
+    /// connected Project, the presentation, and the download.
     #[test]
     fn neon_home_presents_navigator_as_software() {
         let content = neon_home(&views::brand::DEFAULT_BRANDING, None);
         assert_eq!(content.tagline, "Legal work, with the lawyer in control.");
-        let hero = content.hero_cta.as_ref().expect("hero action");
-        assert_eq!(
-            (hero.href.as_str(), hero.label.as_str()),
-            ("/navigator", "Explore Navigator")
-        );
-        let mut anchors = Vec::new();
-        for band in &content.bands {
-            match band {
+        assert!(content.hero_cta.is_none(), "the platform page is retired");
+        let kinds: Vec<&str> = content
+            .bands
+            .iter()
+            .map(|band| match band {
+                Band::Steps { .. } => "steps",
+                Band::ProjectNetwork { .. } => "project_network",
+                Band::Video { .. } => "video",
+                Band::Downloads { .. } => "downloads",
                 Band::Cta { action, .. } => {
-                    let action = action.as_ref().expect("the closing band links Navigator");
-                    assert_eq!(action.href, "/navigator");
+                    assert!(action.is_none(), "the closing band links no retired page");
+                    "cta"
                 }
-                Band::Cards { anchor, .. } | Band::Steps { anchor, .. } => {
-                    anchors.push(anchor.as_str());
-                }
-                Band::Statement { .. } => {}
-                _ => panic!("the home publishes only steps, cards, statements, and the closing call to action"),
-            }
-        }
-        assert!(anchors.contains(&"notation"), "{anchors:?}");
+                _ => panic!(
+                    "the home publishes only the Navigator bands and the closing call to action"
+                ),
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            ["steps", "project_network", "video", "downloads", "cta"]
+        );
         let text = serde_yaml::to_string(&content).expect("home serializes");
         assert!(text.contains("open source under MIT OR Apache-2.0"));
-        assert!(text.contains("/navigator#download"));
-        assert!(text.contains("/legal-aid"));
+        assert!(!text.contains("href: /navigator"));
         for retired in [
             "Attorneys for the Ambitious",
             "$5,000",

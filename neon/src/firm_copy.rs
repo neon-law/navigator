@@ -10,12 +10,6 @@ use webapp::marketing_page::PageContent;
 
 use crate::locales;
 
-/// `/navigator` — the platform the firms the firm serves work on. See
-/// `locales/en/neon/navigator.yaml`.
-pub fn navigator(branding: &views::brand::Branding) -> PageContent {
-    locales::navigator(branding)
-}
-
 /// `/legal-aid` — hosted Navigator for legal aid organizations, the
 /// workshops, and self-hosting. See `locales/en/neon/legal-aid.yaml`.
 pub fn legal_aid(branding: &views::brand::Branding) -> PageContent {
@@ -170,7 +164,7 @@ pub fn divorce_gateway(
 
 /// The regulated claims on the firm's public pages.
 ///
-/// `/navigator` and `/services` are the firm's, so the copy and the guards that
+/// `/services` is the firm's, so the copy and the guards that
 /// hold its claims in place live in the binary that publishes them rather than
 /// in the application underneath.
 #[cfg(test)]
@@ -204,7 +198,6 @@ mod firm_copy_tests {
             .cadence
             .as_deref()
             .is_some_and(|c| c.contains("model tokens")));
-        assert!(pricing_cards(super::navigator(branding)).is_empty());
         assert!(pricing_cards(crate::locales::neon_home(branding, None)).is_empty());
     }
 
@@ -494,86 +487,6 @@ mod firm_copy_tests {
         bands.iter().map(band_text).collect::<Vec<_>>().join(" ")
     }
 
-    /// The platform page offers free use to attorneys who co-counsel with the firm.
-    #[test]
-    fn the_navigator_page_invites_pro_bono_co_counsel() {
-        let content = super::navigator(&views::brand::DEFAULT_BRANDING);
-        let text = format!("{} {}", page_text(&content.bands), content.meta_description);
-        assert!(
-            text.contains("Free use for those who co-counsel with us."),
-            "the page offers free use to co-counseling attorneys: {text}"
-        );
-        assert!(
-            text.contains("Anyone who co-counsels a case with us gets the software free for life for their own practices."),
-            "the page states the lifetime software offer: {text}"
-        );
-        for removed in [
-            "The manuals that go with the binary",
-            "What a firm works with",
-            "The licence, and the one thing we sell around it",
-        ] {
-            assert!(
-                !text.contains(removed),
-                "the retired band remains: {removed}: {text}"
-            );
-        }
-        assert!(
-            !text.to_lowercase().contains("fractional"),
-            "the retired fractional offer must not remain: {text}"
-        );
-        match content.bands.last() {
-            Some(Band::Cta { email, .. }) => {
-                assert_eq!(email, views::brand::firm_email());
-            }
-            _ => panic!("the co-counsel invitation must be the page CTA"),
-        }
-    }
-
-    /// The platform page is not a CTO/CISO or consulting advertisement.
-    #[test]
-    fn the_navigator_page_removes_the_cto_ciso_offer() {
-        let content = super::navigator(&views::brand::DEFAULT_BRANDING);
-        let text = format!("{} {}", page_text(&content.bands), content.meta_description);
-        let words = || text.split(|character: char| !character.is_ascii_alphanumeric());
-        assert!(
-            !words().any(|word| word.eq_ignore_ascii_case("cto")),
-            "no CTO offer reaches the page: {text}"
-        );
-        assert!(
-            !words().any(|word| word.eq_ignore_ascii_case("ciso")),
-            "no CISO offer reaches the page: {text}"
-        );
-        // `law-related service` is the RPC 5.7 term of art, and the licence
-        // offer is required to use it — so the ban moves off the phrase and onto
-        // the *subject* the retired copy attached it to. Banning the phrase
-        // outright would mean this page could never make the one disclosure the
-        // rule asks for, which is not what removing a consulting offer was for.
-        for retired in ["technology function", "consulting"] {
-            assert!(
-                !text.to_lowercase().contains(retired),
-                "the retired consulting offer must not return to this page \
-                 (`{retired}`): {text}"
-            );
-        }
-        assert_eq!(
-            text.matches("law-related service").count(),
-            text.matches("Licensing software is a law-related service")
-                .count(),
-            "every `law-related service` on this page must be the licence \
-             disclosure; any other use is the consulting characterization \
-             coming back: {text}"
-        );
-        assert!(
-            !text.contains("Bring a case") && !text.contains("See it in practice"),
-            "the sales-style card grid must not remain: {text}"
-        );
-        assert!(
-            !text.contains("Navigator is the AI system we build")
-                && !text.contains("everyone loves vibe-coding"),
-            "the retired explanatory copy must not remain: {text}"
-        );
-    }
-
     /// The `/delete-your-debt` gateway names the destination and the firm
     /// behind it, and its CTA is a destination-named handoff — never a claim
     /// that Neon itself provides `PandA` Law's services.
@@ -639,90 +552,10 @@ mod firm_copy_tests {
         );
     }
 
-    /// The page states the token-efficiency thesis and names what carries it.
-    ///
-    /// Token efficiency is the page's argument: the agent spends tokens on the
-    /// legal work because the context is already written down. Each named
-    /// mechanism is something the repository ships (the glossary command, a
-    /// Project's `navigator.yaml` and its Project Skills, Drafts and pages as
-    /// text in Git, the CLI and MCP server), so dropping the names leaves
-    /// the page asserting a preference with nothing under it.
-    #[test]
-    fn the_navigator_page_makes_the_token_efficiency_case() {
-        let content = super::navigator(&views::brand::DEFAULT_BRANDING);
-        let text = format!(
-            "{} {} {}",
-            content.tagline,
-            page_text(&content.bands),
-            content.meta_description
-        );
-        assert!(
-            text.contains("Token efficiency") && text.contains("Spend tokens on the legal work"),
-            "the page explains token efficiency: {text}"
-        );
-        for named in [
-            "navigator glossary show",
-            "navigator.yaml",
-            "Project Skills",
-            "Drafts and pages are text in Git",
-            "navigator project gate",
-            "MCP server",
-            "Claude Code",
-            "Codex",
-        ] {
-            assert!(
-                text.contains(named),
-                "the page names {named}, a mechanism the claim rests on: {text}"
-            );
-        }
-        assert!(
-            text.contains("MIT OR Apache-2.0"),
-            "the page states the open-source licence: {text}"
-        );
-        let lowered = text.to_lowercase();
-        for retired in ["vibe", "portal"] {
-            assert!(
-                !lowered.contains(retired),
-                "Matter Pages are declared, so the page names no {retired}: {text}"
-            );
-        }
-    }
-
-    /// The declarative walk shows each step on a real sample Matter Page.
-    #[test]
-    fn the_navigator_page_shows_declared_matter_pages() {
-        let content = super::navigator(&views::brand::DEFAULT_BRANDING);
-        let steps = content
-            .bands
-            .iter()
-            .find_map(|band| match band {
-                Band::Steps { anchor, items, .. } if anchor == "declare" => Some(items),
-                _ => None,
-            })
-            .expect("the Navigator page walks the declarative loop");
-        let images: Vec<_> = steps
-            .iter()
-            .filter_map(|step| step.image.as_ref())
-            .collect();
-        let registered: Vec<String> = views::assets::NAVIGATOR_MATTER_PAGE_SCREENSHOTS
-            .iter()
-            .map(|key| views::assets::asset_url(key))
-            .collect();
-        assert_eq!(
-            images
-                .iter()
-                .map(|image| image.src.clone())
-                .collect::<Vec<_>>(),
-            registered,
-            "each screenshot is a registered public asset, in order"
-        );
-        assert!(images.iter().all(|image| !image.alt.is_empty()));
-    }
-
     /// The connected-Project diagram names the Project's work surfaces.
     #[test]
-    fn the_navigator_page_maps_connected_project_surfaces() {
-        let content = super::navigator(&views::brand::DEFAULT_BRANDING);
+    fn the_home_maps_connected_project_surfaces() {
+        let content = crate::locales::neon_home(&views::brand::DEFAULT_BRANDING, None);
         let diagram = content
             .bands
             .iter()
@@ -806,8 +639,8 @@ mod firm_copy_tests {
     /// The banned list is a floor, not the whole rule. A superlative that is not
     /// spelled here is still a superlative.
     #[test]
-    fn the_navigator_page_publishes_no_superlative_and_no_turnaround_promise() {
-        let content = super::navigator(&views::brand::DEFAULT_BRANDING);
+    fn the_home_publishes_no_superlative_and_no_turnaround_promise() {
+        let content = crate::locales::neon_home(&views::brand::DEFAULT_BRANDING, None);
         let text = format!(
             "{} {} {}",
             content.tagline,

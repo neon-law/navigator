@@ -570,7 +570,7 @@ async fn the_public_shell_passes_a_full_document_audit() {
         let Some(c) = session_in_scheme(scheme, &base_url()).await else {
             return;
         };
-        for path in ["/", "/navigator", "/notations"] {
+        for path in ["/", "/notations"] {
             assert_route_passes_axe(&c, path, DOCUMENT_AXE_SCOPE, scheme).await;
             assert_public_shell(&c).await;
         }
@@ -1060,8 +1060,8 @@ async fn the_error_pages_pass_axe_wcag_a_and_aa() {
     }
 }
 
-/// The public surface's two interactive affordances on the Neon host: the
-/// home hero's call to action, and the blog collage's lightbox dialog.
+/// The public surface's interactive affordance on the Neon host: the blog
+/// collage's lightbox dialog.
 ///
 /// Same Day Legal's enrollment CTA is on its own host; Neon 301s there.
 /// The directory publishes on Guieb & Shook, so this Neon audit skips it.
@@ -1073,19 +1073,6 @@ async fn public_navigation_images_and_collage_dialog_are_accessible() {
     };
 
     assert_public_shell(&c).await;
-    let cta = c
-        .find(Locator::Css(".fm-hero__cta:not(.home-call)"))
-        .await
-        .expect("the Neon home has its hero call to action");
-    let href = cta
-        .attr("href")
-        .await
-        .expect("the home call to action has an href")
-        .expect("the home call to action has an href");
-    assert_eq!(
-        href, "/navigator",
-        "the Neon home's call to action opens the Navigator page"
-    );
 
     c.goto(&format!("{site_base_url}/blog/thanks-apple"))
         .await
