@@ -278,7 +278,13 @@ mod tests {
                 Some("true"),
                 CLI_SESSION_TTL_SECS,
             ),
-            (true, None, Some("true"), Some("true"), CLI_SESSION_TTL_SECS),
+            (
+                true,
+                None,
+                Some("true"),
+                Some("true"),
+                STAGING_CLI_SESSION_TTL_SECS,
+            ),
             (
                 false,
                 Some("production"),
