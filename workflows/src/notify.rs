@@ -167,6 +167,17 @@ pub trait SlackBot: Send + Sync {
         channel_id: &str,
         user_ids: &[String],
     ) -> Result<(), SlackBotError>;
+    /// Remove one user from a channel. `Ok(true)` when this call removed them;
+    /// `Ok(false)` when they were not a member or are the bot itself, so a
+    /// nightly re-run is a no-op.
+    async fn remove_from_channel(
+        &self,
+        channel_id: &str,
+        user_id: &str,
+    ) -> Result<bool, SlackBotError> {
+        let _ = (channel_id, user_id);
+        Err(SlackBotError::Api(REMOVE_UNSUPPORTED.to_string()))
+    }
     /// Post a message and retain Slack's delivery coordinates. Implementors
     /// that only support the legacy operation receive an explicit empty
     /// receipt, so existing operational callers remain unchanged.
@@ -270,6 +281,8 @@ pub trait SlackBot: Send + Sync {
 
 /// The error code an implementor that cannot archive channels returns.
 pub const ARCHIVE_UNSUPPORTED: &str = "archive_unsupported";
+/// The error code an implementor that cannot remove channel members returns.
+pub const REMOVE_UNSUPPORTED: &str = "remove_unsupported";
 /// The error code an implementor without canvases returns.
 pub const CANVAS_UNSUPPORTED: &str = "canvas_unsupported";
 /// Slack's error code for creating a second canvas on one channel.
@@ -682,6 +695,26 @@ impl SlackBot for SlackBotClient {
             }
         }
         Ok(())
+    }
+
+    async fn remove_from_channel(
+        &self,
+        channel_id: &str,
+        user_id: &str,
+    ) -> Result<bool, SlackBotError> {
+        let response: InviteResponse = self
+            .post(
+                "conversations.kick",
+                &json!({ "channel": channel_id, "user": user_id }),
+            )
+            .await?;
+        match (response.ok, response.error.as_deref()) {
+            (true, _) => Ok(true),
+            (false, Some("not_in_channel" | "cant_kick_self")) => Ok(false),
+            (false, error) => Err(SlackBotError::Api(
+                error.unwrap_or("unknown_error").to_string(),
+            )),
+        }
     }
 
     async fn archive_channel(&self, channel_id: &str) -> Result<bool, SlackBotError> {
@@ -1120,6 +1153,14 @@ impl SlackBot for CapturingSlackBot {
         _user_ids: &[String],
     ) -> Result<(), SlackBotError> {
         Ok(())
+    }
+
+    async fn remove_from_channel(
+        &self,
+        _channel_id: &str,
+        _user_id: &str,
+    ) -> Result<bool, SlackBotError> {
+        Ok(false)
     }
 
     async fn post_message_with_receipt(
@@ -1949,6 +1990,30 @@ mod tests {
         bot.invite_to_channel("G123", &["U123".into(), "U789".into()])
             .await
             .expect("invite succeeds");
+    }
+
+    #[tokio::test]
+    async fn removing_a_member_kicks_them_and_tolerates_absence_and_self() {
+        use wiremock::matchers::{body_partial_json, method, path};
+        use wiremock::{Mock, ResponseTemplate};
+        let server = wiremock::MockServer::start().await;
+        for (user, body, expected) in [
+            ("U1", r#"{"ok":true}"#, true),
+            ("U2", r#"{"ok":false,"error":"not_in_channel"}"#, false),
+            ("UBOT", r#"{"ok":false,"error":"cant_kick_self"}"#, false),
+        ] {
+            Mock::given(method("POST"))
+                .and(path("/conversations.kick"))
+                .and(body_partial_json(
+                    serde_json::json!({ "channel": "G1", "user": user }),
+                ))
+                .respond_with(ResponseTemplate::new(200).set_body_string(body))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let bot = SlackBotClient::with_base_url("xoxb-test", server.uri());
+            assert_eq!(bot.remove_from_channel("G1", user).await.unwrap(), expected);
+        }
     }
 
     #[test]

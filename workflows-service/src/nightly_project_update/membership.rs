@@ -31,6 +31,9 @@ pub struct MembershipOutcome {
     pub channels: usize,
     pub projects_without_channel: usize,
     pub invited: usize,
+    /// People removed because the Project no longer names them.
+    #[serde(default)]
+    pub removed: usize,
     pub already_members: usize,
     pub unmatched_assignments: usize,
     pub channels_created: usize,
@@ -113,6 +116,7 @@ pub async fn reconcile_project(
         if let Some(channel_id) = resolution.channel_id {
             let invited = invite_members(surreal, slack, project_id, &channel_id).await?;
             report.invited += invited.invited;
+            report.removed += invited.removed;
             report.already_members += invited.already_members;
             report.unmatched_assignments += invited.unmatched_assignments;
             report.channels += invited.channels;
@@ -274,15 +278,8 @@ pub async fn invite_members(
         channels: 1,
         ..Default::default()
     };
-    let mut user_ids: BTreeSet<String> = target.member_slack_ids.into_iter().collect();
-    for email in &target.member_emails {
-        match slack.user_id_by_email(email).await.map_err(slack_error)? {
-            Some(user_id) => {
-                user_ids.insert(user_id);
-            }
-            None => report.unmatched_assignments += 1,
-        }
-    }
+    let (user_ids, unmatched) = resolve_slack_ids(slack.as_ref(), &target).await?;
+    report.unmatched_assignments += unmatched;
     let members: BTreeSet<String> = slack
         .channel_member_ids(channel_id)
         .await
@@ -290,7 +287,8 @@ pub async fn invite_members(
         .into_iter()
         .collect();
     let (present, missing): (Vec<String>, Vec<String>) = user_ids
-        .into_iter()
+        .iter()
+        .cloned()
         .partition(|user_id| members.contains(user_id));
     report.already_members += present.len();
     slack
@@ -298,7 +296,62 @@ pub async fn invite_members(
         .await
         .map_err(slack_error)?;
     report.invited += missing.len();
+    // Removal only runs against a complete roster: one unresolved email (or an
+    // empty roster) would otherwise read as "everyone else left" and empty the
+    // channel. The next run retries once Slack matches every identity.
+    if unmatched == 0 && !user_ids.is_empty() {
+        for stale in members.difference(&user_ids) {
+            if slack
+                .remove_from_channel(channel_id, stale)
+                .await
+                .map_err(slack_error)?
+            {
+                report.removed += 1;
+            }
+        }
+    }
     Ok(report)
+}
+
+/// The Slack ids a Project's channel should hold, and how many assigned
+/// emails Slack could not match.
+async fn resolve_slack_ids(
+    slack: &dyn SlackBot,
+    target: &store::projects::ProjectSlackMembershipTarget,
+) -> Result<(BTreeSet<String>, usize), HandlerError> {
+    let mut user_ids: BTreeSet<String> = target.member_slack_ids.iter().cloned().collect();
+    let mut unmatched = 0;
+    for email in &target.member_emails {
+        match slack.user_id_by_email(email).await.map_err(slack_error)? {
+            Some(user_id) => {
+                user_ids.insert(user_id);
+            }
+            None => unmatched += 1,
+        }
+    }
+    Ok((user_ids, unmatched))
+}
+
+/// `<@U…>` mentions for the people a Project's channel should hold, so a post
+/// notifies them even where they have muted the channel. Empty when the
+/// Project has no membership target.
+pub async fn member_mentions(
+    surreal: &SurrealDb,
+    slack: &dyn SlackBot,
+    project_id: Uuid,
+) -> Result<String, HandlerError> {
+    let Some(target) = store::projects::slack_membership_target(surreal, project_id)
+        .await
+        .map_err(HandlerError::from)?
+    else {
+        return Ok(String::new());
+    };
+    let (user_ids, _) = resolve_slack_ids(slack, &target).await?;
+    Ok(user_ids
+        .iter()
+        .map(|user_id| format!("<@{user_id}>"))
+        .collect::<Vec<_>>()
+        .join(" "))
 }
 
 #[cfg(test)]
@@ -325,6 +378,8 @@ mod tests {
         members: BTreeMap<String, Vec<String>>,
         lookups: Mutex<Vec<String>>,
         invitations: Mutex<Vec<(String, Vec<String>)>>,
+        /// `(channel, user)` pairs removal was asked for, in order.
+        removals: Mutex<Vec<(String, String)>>,
         /// Channel names created, in order.
         created: Mutex<Vec<String>>,
         /// Private channels that already exist, by name.
@@ -418,6 +473,18 @@ mod tests {
             Ok(())
         }
 
+        async fn remove_from_channel(
+            &self,
+            channel_id: &str,
+            user_id: &str,
+        ) -> Result<bool, SlackBotError> {
+            self.removals
+                .lock()
+                .expect("removals lock")
+                .push((channel_id.to_string(), user_id.to_string()));
+            Ok(true)
+        }
+
         async fn channel_canvas_id(&self, _: &str) -> Result<Option<String>, SlackBotError> {
             Ok(None)
         }
@@ -506,11 +573,25 @@ mod tests {
         .unwrap();
         let slack = Arc::new(ReconciliationSlack {
             lookup_error: true,
+            members: [("CIDENTITY".to_string(), vec!["U-STALE".to_string()])].into(),
             ..Default::default()
         });
         let bot: Arc<dyn SlackBot> = slack.clone();
         let report = sweep_in_process(&db, &bot, None, false).await;
         assert_eq!((report.invited, report.membership_failures), (1, 0));
+        // A person the Project no longer names is removed; the notice
+        // mentions the people it does name.
+        assert_eq!(report.removed, 1);
+        assert_eq!(
+            *slack.removals.lock().unwrap(),
+            [("CIDENTITY".to_string(), "U-STALE".to_string())]
+        );
+        assert_eq!(
+            super::member_mentions(&db, bot.as_ref(), target.id)
+                .await
+                .unwrap(),
+            "<@U-RECORDED>"
+        );
         assert!(slack.lookups.lock().unwrap().is_empty());
         assert_eq!(
             *slack.invitations.lock().unwrap(),
@@ -613,7 +694,10 @@ mod tests {
                 ),
                 ("clerk-three@example.com".to_string(), None),
             ],
-            [("CTEAM".to_string(), vec!["U-OLD".to_string()])],
+            [(
+                "CTEAM".to_string(),
+                vec!["U-OLD".to_string(), "U-STALE".to_string()],
+            )],
         ));
         let slack_bot: Arc<dyn SlackBot> = slack.clone();
 
@@ -639,8 +723,12 @@ mod tests {
             *slack.created.lock().expect("created lock"),
             ["navigator-sync-no-channel"]
         );
+        // Membership and the notice's mentions each resolve the roster.
+        let mut looked_up = slack.lookups.lock().expect("lookups lock").clone();
+        looked_up.sort();
+        looked_up.dedup();
         assert_eq!(
-            *slack.lookups.lock().expect("lookups lock"),
+            looked_up,
             [
                 "clerk-one@example.com",
                 "clerk-three@example.com",
@@ -654,6 +742,8 @@ mod tests {
             .lock()
             .expect("lookups lock")
             .contains(&"client@example.com".to_string()));
+        // clerk-three is unmatched, so the roster is incomplete: nobody is removed.
+        assert!(slack.removals.lock().expect("removals lock").is_empty());
         assert_eq!(
             *slack.invitations.lock().expect("invitations lock"),
             [

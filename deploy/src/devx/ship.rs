@@ -8544,7 +8544,7 @@ mod tests {
             );
             for ((cronjob, flag), cadence) in COHOST_TRIGGERS
                 .into_iter()
-                .zip(["55 5 * * *", "*/15 * * * *"])
+                .zip(["33 11 * * *", "*/15 * * * *"])
             {
                 let original = manifest_doc(&mixed, "CronJob", cronjob);
                 let native = manifest_doc(&manifests, "CronJob", cronjob);

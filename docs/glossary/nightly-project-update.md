@@ -14,8 +14,8 @@ The parent, `NightlyProjectUpdate`, is a Restate workflow keyed on the UTC date,
 attaches to the first. It journals the clock and the Project roster, then runs one child workflow per (Project, tag),
 keyed `{date}:{project id}`. The `membership`, `slack`, and `repository` children are implemented as
 `NightlyProjectUpdateMembership`, `NightlyProjectUpdateSlack`, and `NightlyProjectUpdateRepository`. The `calendar`
-child is not yet implemented. The CronJob `nightly-project-update-trigger` runs at **05:55 UTC daily**, using `timeZone:
-Etc/UTC`; it does not follow Pacific daylight saving time. Parent and children:
+child is not yet implemented. The CronJob `nightly-project-update-trigger` runs at **11:33 UTC daily** (03:33 fixed
+PST), using `timeZone: Etc/UTC`; it does not follow Pacific daylight saving time. Parent and children:
 [`nightly_project_update.rs`](../../workflows-service/src/nightly_project_update.rs).
 
 After journaling the roster, both the Restate parent and its opt-in DBOS twin reconcile the folder tree and separate
@@ -28,7 +28,7 @@ The diagrams show the full composition. Each open Project gets its own set of ch
 
 ```mermaid
 flowchart TB
-  Clock["Kubernetes CronJob<br/>55 5 * * * UTC"]
+  Clock["Kubernetes CronJob<br/>33 11 * * * UTC"]
   Parent["Nightly Project Update<br/>parent DAG · key = UTC date"]
   Clock --> Parent
   Parent --> Folders["Converge folder trees<br/>every open Project"]
@@ -71,7 +71,9 @@ describe the children, including work not yet implemented.
 
 `membership` — create or adopt the **internal** Slack channel (`navigator-<code>`, or `staging-<code>` on a simulated
 deployment) with the owning Firm's Slack bot. Invite the Lawyer [DRI](directly-responsible-individual-dri.md) and the
-other Firm-side Project participants. Prefer recorded Slack identities. The reconciliation targets the internal channel.
+other Firm-side Project participants, and remove channel members the Project no longer names. Removal waits until every
+assigned email resolves in Slack, so a lookup gap never empties a channel. Prefer recorded Slack identities. The
+reconciliation targets the internal channel.
 
 `slack` — upsert the internal channel's one canvas: synopsis, Client DRI emails, Lawyer DRIs, portal
 `/app/projects/{code}/portal/`, and basic handles (code, status, repository URL when recorded). A later run edits the

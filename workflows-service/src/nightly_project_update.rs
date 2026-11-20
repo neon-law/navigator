@@ -140,6 +140,9 @@ pub struct NightlyProjectUpdateReport {
     pub channels: usize,
     pub projects_without_channel: usize,
     pub invited: usize,
+    /// People removed from a channel because the Project no longer names them.
+    #[serde(default)]
+    pub removed: usize,
     pub already_members: usize,
     pub unmatched_assignments: usize,
     /// Channels created for an open Project that had none.
@@ -278,6 +281,7 @@ impl NightlyProjectUpdateReport {
                 self.channels += m.channels;
                 self.projects_without_channel += m.projects_without_channel;
                 self.invited += m.invited;
+                self.removed += m.removed;
                 self.already_members += m.already_members;
                 self.unmatched_assignments += m.unmatched_assignments;
                 self.channels_created += m.channels_created;
@@ -613,7 +617,7 @@ fn render_headline(report: &NightlyProjectUpdateReport) -> String {
 
 pub(crate) fn render_report(report: &NightlyProjectUpdateReport) -> String {
     format!(
-        "{}\nProjects: {} ({} open).\nChannels checked: {}; channels created: {}; channels repaired: {}; channels archived: {}; channels unarchived: {}; Projects without a channel: {}; people invited: {}; already members: {}; unmatched assignments: {}.\nCanvases created: {}; canvases edited: {}; notices posted: {}.\nRepositories created or adopted: {}. Navigator pins — current: {}; stale: {}; unreadable: {}.\nUpdate pull requests — opened: {}; awaiting merge: {}; declined: {}. Governance repaired: {}.\nFailures by tag — membership: {}; slack: {}; repository: {}.",
+        "{}\nProjects: {} ({} open).\nChannels checked: {}; channels created: {}; channels repaired: {}; channels archived: {}; channels unarchived: {}; Projects without a channel: {}; people invited: {}; people removed: {}; already members: {}; unmatched assignments: {}.\nCanvases created: {}; canvases edited: {}; notices posted: {}.\nRepositories created or adopted: {}. Navigator pins — current: {}; stale: {}; unreadable: {}.\nUpdate pull requests — opened: {}; awaiting merge: {}; declined: {}. Governance repaired: {}.\nFailures by tag — membership: {}; slack: {}; repository: {}.",
         render_headline(report),
         report.projects,
         report.open_projects,
@@ -624,6 +628,7 @@ pub(crate) fn render_report(report: &NightlyProjectUpdateReport) -> String {
         report.channels_unarchived,
         report.projects_without_channel,
         report.invited,
+        report.removed,
         report.already_members,
         report.unmatched_assignments,
         report.canvases_created,
@@ -1022,7 +1027,7 @@ mod tests {
     }
 
     #[test]
-    fn the_daily_trigger_runs_at_0555_utc_in_every_manifest() {
+    fn the_daily_trigger_runs_at_0333_pst_in_every_manifest() {
         for source in [
             include_str!(
                 "../../examples/deploy/k8s/exports/cron-nightly-project-update-trigger.yaml"
@@ -1032,7 +1037,7 @@ mod tests {
             ),
         ] {
             let manifest: serde_yaml::Value = serde_yaml::from_str(source).unwrap();
-            assert_eq!(manifest["spec"]["schedule"].as_str(), Some("55 5 * * *"));
+            assert_eq!(manifest["spec"]["schedule"].as_str(), Some("33 11 * * *"));
             assert_eq!(manifest["spec"]["timeZone"].as_str(), Some("Etc/UTC"));
             assert_eq!(
                 manifest["metadata"]["name"].as_str(),
@@ -1137,6 +1142,7 @@ mod tests {
             channels: 3,
             projects_without_channel: 2,
             invited: 4,
+            removed: 5,
             already_members: 2,
             unmatched_assignments: 1,
             channels_created: 5,
@@ -1158,7 +1164,7 @@ mod tests {
         });
         assert_eq!(
             message,
-            "*Nightly Project Update complete*\nProjects: 9 (8 open).\nChannels checked: 3; channels created: 5; channels repaired: 6; channels archived: 14; channels unarchived: 2; Projects without a channel: 2; people invited: 4; already members: 2; unmatched assignments: 1.\nCanvases created: 10; canvases edited: 11; notices posted: 12.\nRepositories created or adopted: 7. Navigator pins — current: 5; stale: 1; unreadable: 2.\nUpdate pull requests — opened: 4; awaiting merge: 1; declined: 0. Governance repaired: 3.\nFailures by tag — membership: 0; slack: 0; repository: 0."
+            "*Nightly Project Update complete*\nProjects: 9 (8 open).\nChannels checked: 3; channels created: 5; channels repaired: 6; channels archived: 14; channels unarchived: 2; Projects without a channel: 2; people invited: 4; people removed: 5; already members: 2; unmatched assignments: 1.\nCanvases created: 10; canvases edited: 11; notices posted: 12.\nRepositories created or adopted: 7. Navigator pins — current: 5; stale: 1; unreadable: 2.\nUpdate pull requests — opened: 4; awaiting merge: 1; declined: 0. Governance repaired: 3.\nFailures by tag — membership: 0; slack: 0; repository: 0."
         );
         assert!(!message.contains('@'));
     }

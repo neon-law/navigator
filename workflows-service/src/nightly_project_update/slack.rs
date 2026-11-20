@@ -209,7 +209,12 @@ pub async fn post_notice(
     ) else {
         return Ok(false);
     };
+    let mentions = super::membership::member_mentions(surreal, slack, project_id).await?;
     let mut text = notice(ran_on);
+    if !mentions.is_empty() {
+        // The channel is muted, so a mention is what notifies each person.
+        text = format!("{mentions} {text}");
+    }
     if let Some(url) = project.repository_url.as_deref() {
         let activity = repository_activity(surreal, forge, &project, url).await;
         let _ = write!(
