@@ -330,8 +330,8 @@ self-hosted server that runs AGE and DBOS:
   proven by the scratch restore drill in `k8s/postgres/restore-drill`, restore both databases to one point in time. They
   also keep DBOS's pending workflows resumable on the same executor identity and release ([PostgreSQL on
   Kubernetes](postgres-kubernetes.md#backups-and-point-in-time-recovery)).
-- **Iceberg does not certify DBOS replay.** It holds the `dbos` tables as rows. Rehydrated rows are a record of what
-  ran, not a system database an executor can resume from.
+- **Iceberg does not certify DBOS replay.** It holds the `dbos` tables as rows. Restored rows alone do not establish
+  safe executor resumption or external-effect replay.
 - **Iceberg has no shared recovery point.** Each database has its own watermark (`cross_database_atomic: false`), and
   sequences are read outside MVCC.
 

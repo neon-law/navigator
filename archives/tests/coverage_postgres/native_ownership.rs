@@ -341,7 +341,7 @@ async fn roundtrip_on(
     forge_target: &PgPool,
     port: &str,
 ) {
-    prepare_target_migration_ledger(source_pg.pool(), target_pg.pool()).await;
+    restore::prepare_target_migration_ledger(source_pg.pool(), target_pg.pool()).await;
     let domain = seed(source_pg).await;
     let calls = Arc::new(AtomicUsize::new(0));
     sdk(source_pg, port, Some(domain), None, Arc::clone(&calls)).await;
@@ -518,31 +518,6 @@ async fn reject_target_only_fixed_reference(
         "fixed-reference conflict handling must never certify target-only rows"
     );
     restore::assert_database_equal(manifest, source, target).await;
-}
-
-async fn prepare_target_migration_ledger(source: &PgPool, target: &PgPool) {
-    use sqlx::migrate::Migrate as _;
-    let present: bool =
-        sqlx::query_scalar("SELECT to_regclass('public._sqlx_migrations') IS NOT NULL")
-            .fetch_one(source)
-            .await
-            .unwrap();
-    if present {
-        let mut connection = target.acquire().await.unwrap();
-        // SQLx0.9 creates only the ledger shape; no applied versions are invented.
-        connection
-            .ensure_migrations_table("public._sqlx_migrations")
-            .await
-            .unwrap();
-        let applied: i64 = sqlx::query_scalar("SELECT count(*) FROM public._sqlx_migrations")
-            .fetch_one(&mut *connection)
-            .await
-            .unwrap();
-        assert_eq!(
-            applied, 0,
-            "schema-only target must not fabricate applied migrations"
-        );
-    }
 }
 
 async fn assert_identity_continuity(source: &PgPool, restored: &PgPool) {

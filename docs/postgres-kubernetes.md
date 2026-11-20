@@ -251,9 +251,30 @@ The log reports the recovery point, databases, extensions, row counts per table,
 and release, and the executor identity and release that own each `PENDING` run: a restored pending run resumes only on
 an executor with that identity and release ([DBOS durability](dbos-durability.md#several-replicas)). It verifies
 Navigator and, when present, Forgejo separately. The Cloud SDK fetch container runs as its named UID 1000; PostgreSQL
-runs as UID 999, with the shared scratch volume group 999. Compare the counts with
-`k8s/postgres/restore-drill/verify.sql` run against each live database, and record the result. Delete the Job
-afterwards; its scratch claim goes with it.
+runs as UID 999, with the shared scratch volume group 999. The application inventory includes `navigator` and the
+provisioner's `navigator_native_<operation>` databases. A native database must retain its exact creation name, OID and
+database comment, matching schema and authority contracts, and a completed, connected upgrade chain. These checks do not
+start an executor or authorize provider effects. A logical row restore cannot establish native origin.
+
+The mounted `native-origin-contract.json` is generated from the same release's admission builders, rather than from
+restored rows. Generate and check it with the release's Hudson before rendering the drill:
+
+```bash
+hudson ops postgres native-origin-contract --out k8s/postgres/restore-drill/native-origin-contract.json
+hudson ops postgres native-origin-contract --out k8s/postgres/restore-drill/native-origin-contract.json --check
+```
+
+Compare the report with the same verifier run against each authorized source database using that exact artifact. Supply
+the normal authorized connection options separately; the verifier itself opens no connection:
+
+```bash
+psql --no-psqlrc --set=ON_ERROR_STOP=1 \
+  --set=native_origin_contract="$(cat k8s/postgres/restore-drill/native-origin-contract.json)" \
+  --file=k8s/postgres/restore-drill/verify.sql
+```
+
+Record the result. Delete the Job afterwards; its scratch claim goes with it. Successful integrity verification is not
+evidence that retained DBOS work or external effects may be replayed; verify that recovery boundary separately.
 
 The drill recovers to the end of the archive, which is the right default. A fixed `RECOVERY_TARGET_TIME` needs a commit
 after it in the archived WAL: on an idle database, a target later than the last commit fails with `recovery ended before

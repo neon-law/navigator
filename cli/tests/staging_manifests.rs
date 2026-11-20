@@ -1121,6 +1121,25 @@ fn postgres_restore_drill_recovers_from_backups_without_touching_the_live_server
             assert!(restore.contains(needle), "restore.sh must keep `{needle}`");
         }
         let verify = data["verify.sql"].as_str().expect("verify.sql");
+        let contract: serde_json::Value = serde_json::from_str(
+            data["native-origin-contract.json"]
+                .as_str()
+                .expect("the drill mounts its release-generated native-origin contract"),
+        )
+        .expect("native-origin contract JSON");
+        assert_eq!(contract["format_version"], 1);
+        for field in ["schema_contract", "authority_contract"] {
+            assert!(
+                contract[field]
+                    .as_array()
+                    .is_some_and(|items| !items.is_empty()),
+                "native-origin admission needs a nonempty release {field}"
+            );
+        }
+        assert!(restore.contains("--set=native_origin_contract=\"$contract\""));
+        assert!(restore.contains("^navigator_native_[0-9a-f]{32}$"));
+        assert!(!restore.contains("--dbname=navigator \\"));
+        assert!(verify.contains("READ ONLY"));
         let fetch = data["fetch-backup.sh"].as_str().expect("fetch-backup.sh");
         assert!(fetch.contains("chmod -R g+rX /restore/base /restore/wal"));
         assert!(fetch.contains("chmod g+w /restore/wal"));

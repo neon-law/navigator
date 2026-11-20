@@ -1,6 +1,6 @@
 //! DBOS port of the `notation` Restate virtual object.
 //!
-//! The Restate object (`notation_service.rs`) gave one serialized lane per
+//! The Restate object (`notation_service.rs`) provides one serialized lane per
 //! `notation_id`, four K/V values for the two machines' spec and state, and
 //! journaled side effects. DBOS has no virtual-object primitive, so the port
 //! reproduces the three guarantees with its own pieces:
@@ -28,7 +28,7 @@
 //! (`retryable_steps` below); deterministic outcomes — a bad spec, no
 //! transition, an unknown notation — surface once as
 //! [`NotationTransitionError`] and fail the workflow. That split is the one
-//! deliberate divergence from the Restate adapter, which surfaced both
+//! deliberate divergence from the Restate adapter, which surfaces both
 //! classes as terminal; the shared-logic module header records it.
 
 use std::sync::Arc;
