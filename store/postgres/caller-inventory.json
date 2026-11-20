@@ -13970,6 +13970,7 @@
       "portal/src/project_billing_api.rs",
       "portal/src/project_billing_forms.rs",
       "portal/src/project_documents.rs",
+      "portal/src/project_export.rs",
       "portal/src/project_notation.rs",
       "portal/src/project_stage_forms.rs",
       "portal/src/project_stages_api.rs",

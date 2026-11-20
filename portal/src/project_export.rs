@@ -37,11 +37,19 @@ pub async fn download_all(
     Path(project_code): Path<String>,
     session: Option<Extension<SessionData>>,
 ) -> Response {
-    let Some(project_id) = store::projects::id_for_code(&state.surreal, &project_code).await else {
-        return not_found();
-    };
     let Some(session) = session.as_deref() else {
         return not_found();
+    };
+    if !store::projects::is_valid_code(&project_code) {
+        return not_found();
+    }
+    let project_id = match store::projects::find_by_code(&state.surreal, &project_code).await {
+        Ok(Some(project)) => project.id,
+        Ok(None) => return not_found(),
+        Err(error) => {
+            tracing::error!(error = %error, "documents.zip: Project lookup failed");
+            return internal_error();
+        }
     };
     // Gate on the caller's matter participation and use the same resolved lens
     // for the bytes that ship. A mixed-role person must not widen this archive
@@ -61,8 +69,13 @@ pub async fn download_all(
             return internal_error();
         }
     };
-    let Ok(Some(proj)) = store::projects::find_by_id(&state.surreal, project_id).await else {
-        return not_found();
+    let proj = match store::projects::find_by_id(&state.surreal, project_id).await {
+        Ok(Some(project)) => project,
+        Ok(None) => return not_found(),
+        Err(error) => {
+            tracing::error!(error = %error, %project_id, "documents.zip: Project read failed");
+            return internal_error();
+        }
     };
 
     // The durable index: every document filed to this matter. The store is

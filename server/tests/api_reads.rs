@@ -1023,3 +1023,139 @@ async fn contract_review_read_is_gated() {
     })
     .await;
 }
+
+async fn document_status(fx: &Fixture, code: &str, auth: Option<&str>, upload: bool) -> StatusCode {
+    let suffix = if upload {
+        "documents/upload"
+    } else {
+        "documents.zip"
+    };
+    let mut request = Request::builder()
+        .method(if upload { "POST" } else { "GET" })
+        .uri(format!("/app/projects/{code}/{suffix}"));
+    let mut csrf = None;
+    if let Some(auth) = auth {
+        if upload {
+            let token = auth.strip_prefix("Bearer ").unwrap();
+            let session = SessionStore::new(KEY).decode(token).unwrap();
+            request = request.header(
+                "cookie",
+                format!("{}={token}", portal::session::SESSION_COOKIE_NAME),
+            );
+            csrf = Some(session.csrf_token);
+        } else {
+            request = request.header("authorization", auth);
+        }
+    }
+    let body = if upload {
+        request = request.header(
+            "content-type",
+            "multipart/form-data; boundary=project-lookup",
+        );
+        Body::from(csrf.map_or_else(
+            || "--project-lookup--\r\n".to_owned(),
+            |token| format!("--project-lookup\r\nContent-Disposition: form-data; name=\"_csrf\"\r\n\r\n{token}\r\n--project-lookup--\r\n"),
+        ))
+    } else {
+        Body::empty()
+    };
+    fx.app
+        .clone()
+        .oneshot(request.body(body).unwrap())
+        .await
+        .unwrap()
+        .status()
+}
+
+async fn assert_document_project_query_failure(upload: bool) {
+    let fx = build_fixture().await;
+    let success = if upload {
+        StatusCode::SEE_OTHER
+    } else {
+        StatusCode::OK
+    };
+    assert_eq!(
+        document_status(&fx, &fx.project_code, Some(&fx.lawyer), upload).await,
+        success
+    );
+    for code in [fx.project_code.as_str(), "missing-project", "new"] {
+        assert_eq!(
+            document_status(&fx, code, Some(&fx.outsider), upload).await,
+            StatusCode::NOT_FOUND
+        );
+    }
+    for code in ["missing-project", "new"] {
+        assert_eq!(
+            document_status(&fx, code, Some(&fx.lawyer), upload).await,
+            StatusCode::NOT_FOUND
+        );
+    }
+    // The mounted session boundary redirects an anonymous browser before the
+    // handler; a Project storage fault must not replace that private response.
+    let anonymous = document_status(&fx, &fx.project_code, None, upload).await;
+    assert_eq!(anonymous, StatusCode::SEE_OTHER);
+    if upload {
+        let token = fx.lawyer.strip_prefix("Bearer ").unwrap();
+        let request = Request::builder()
+            .method("POST")
+            .uri(format!(
+                "/app/projects/{}/documents/upload",
+                fx.project_code
+            ))
+            .header(
+                "cookie",
+                format!("{}={token}", portal::session::SESSION_COOKIE_NAME),
+            )
+            .header(
+                "content-type",
+                "multipart/form-data; boundary=project-lookup",
+            )
+            .body(Body::from("--project-lookup--\r\n"))
+            .unwrap();
+        assert_eq!(
+            fx.app.clone().oneshot(request).await.unwrap().status(),
+            StatusCode::FORBIDDEN
+        );
+    }
+    let pg = PostgresDb::application().await.unwrap();
+    // Break only the Project lookup, after proving the real bearer session and
+    // participation work. Authentication and all other tables remain intact.
+    sqlx::query("ALTER TABLE project RENAME COLUMN code TO unavailable_code")
+        .execute(pg.pool())
+        .await
+        .unwrap();
+    assert!(PostgresDb::application().await.is_ok());
+    assert!(store::projects::find_by_code(&fx.surreal, &fx.project_code)
+        .await
+        .is_err());
+    assert_eq!(
+        document_status(&fx, &fx.project_code, Some(&fx.lawyer), upload).await,
+        StatusCode::INTERNAL_SERVER_ERROR
+    );
+    assert_eq!(
+        document_status(&fx, &fx.project_code, None, upload).await,
+        anonymous
+    );
+    assert_eq!(
+        document_status(&fx, "new", Some(&fx.lawyer), upload).await,
+        StatusCode::NOT_FOUND
+    );
+    sqlx::query("ALTER TABLE project RENAME COLUMN unavailable_code TO code")
+        .execute(pg.pool())
+        .await
+        .unwrap();
+    assert_eq!(
+        document_status(&fx, &fx.project_code, Some(&fx.lawyer), upload).await,
+        success
+    );
+}
+
+#[tokio::test]
+async fn documents_zip_reports_project_query_failure_after_authentication() {
+    store::test_support::with_postgres(assert_document_project_query_failure(false)).await;
+}
+
+#[tokio::test]
+async fn document_upload_reports_project_query_failure_after_authentication() {
+    store::test_support::with_postgres(assert_document_project_query_failure(true)).await;
+}

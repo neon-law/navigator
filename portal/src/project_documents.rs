@@ -129,8 +129,16 @@ pub async fn upload(
     let Some(Extension(session_data)) = session else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let Some(project_id) = store::projects::id_for_code(&state.surreal, &project_code).await else {
+    if !store::projects::is_valid_code(&project_code) {
         return StatusCode::NOT_FOUND.into_response();
+    }
+    let project_id = match store::projects::find_by_code(&state.surreal, &project_code).await {
+        Ok(Some(project)) => project.id,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(error) => {
+            tracing::error!(error = %error, "document upload: Project lookup failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
     };
 
     // A matter-surface write: the matter's gate (a participation row of every
@@ -150,9 +158,14 @@ pub async fn upload(
     }
     // Bail early if the project doesn't exist, so a bad id is a friendly 404
     // rather than a later failure mid-ingest.
-    let Ok(Some(_)) = store::projects::find_by_id(&state.surreal, project_id).await else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
+    match store::projects::find_by_id(&state.surreal, project_id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(error) => {
+            tracing::error!(error = %error, %project_id, "document upload: Project read failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    }
 
     // The multipart CSRF check the middleware can't do without buffering
     // the upload: the form renders `_csrf` first, so verify it before
