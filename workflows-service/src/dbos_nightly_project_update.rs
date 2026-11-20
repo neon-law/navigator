@@ -295,6 +295,7 @@ fn register_tag(dbos: &DBOS, context: Context, tag: Tag) -> dbos::Result<TagWork
                                 .await?;
                                 report.channels += invited.channels;
                                 report.invited += invited.invited;
+                                report.removed += invited.removed;
                                 report.already_members += invited.already_members;
                                 report.unmatched_assignments += invited.unmatched_assignments;
                             } else {

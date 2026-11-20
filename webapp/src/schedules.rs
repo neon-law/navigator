@@ -111,10 +111,10 @@ const JOB_COPY: &[JobCopy] = &[
     JobCopy {
         cron_name: "nightly-project-update-trigger",
         name: "Nightly Project Update",
-        cadence: "Daily · 05:55 UTC",
+        cadence: "Daily · 03:33 PST",
         description: "Walks every Project and runs its tagged child workflows: creates or repairs each open \
                       Project's private Slack channel and GitHub repository, adds Lawyer DRIs and \
-                      participating Clerks to the channel, refreshes the channel's canvas, then posts \
+                      participating Clerks to the channel and removes anyone no longer named, refreshes the channel's canvas, then posts \
                       aggregate counts to the environment's messages channel.",
         manual_slug: None,
     },
