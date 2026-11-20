@@ -57,6 +57,9 @@ impl PracticePreview {
         );
         state.storage = blobs.clone();
         state.assets_storage = blobs;
+        store::seed::seed_canonical(&state.surreal, &state.assets_storage)
+            .await
+            .expect("seed canonical Firms and Brands before their public Posts");
         store::seed::seed_brand_blog(&state.surreal, store::seed::BrandSeed::Neon)
             .await
             .expect("seed public Brand Posts for previews");
@@ -75,9 +78,10 @@ impl PracticePreview {
         state.canonical_host = portal::CanonicalHost::new(None).with_local_ports(ports);
         let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR))
             .layer(axum::middleware::from_fn(
-                move |request, next: axum::middleware::Next| {
+                move |mut request: axum::extract::Request, next: axum::middleware::Next| {
                     let pg = pg.clone();
                     async move {
+                        request.extensions_mut().insert(pg.clone());
                         PostgresDb::with_application_db(pg, next.run(request))
                             .await
                             .unwrap_or_else(|_| {

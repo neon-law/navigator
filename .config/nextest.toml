@@ -72,6 +72,7 @@ binary(/^(mail_signatures|project_drive_folder_id|project_repository_url|project
 | (binary(=workflows) & test(=dbos_engine::dri_digest::tests::native_source_keeps_all_projects_and_both_dri_sides))
 | (binary(=store) & test(/^(entity_roles|relationships)::tests::/))
 | binary(=sandbox_usage_ledger)
+| (binary(=webapp) & test(=server_store::tests::request_pool_crosses_spawn_and_damaged_history_refuses_the_callback))
 | (binary(=hudson) & test(=postgres_admission::tests::selected_application_database_must_match_the_verified_target))
 '''
 test-group = "canonical-postgres-fixtures"

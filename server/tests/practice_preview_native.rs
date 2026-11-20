@@ -6,6 +6,37 @@ mod practice_preview;
 use practice_preview::PracticePreview;
 use store::postgres::PostgresDb;
 
+fn page_text(body: &str) -> String {
+    let document = scraper::Html::parse_document(body);
+    let selector = scraper::Selector::parse("body").unwrap();
+    let page = document.select(&selector).next().unwrap();
+    let mut text = String::new();
+    for node in page.descendants() {
+        if let Some(value) = node.value().as_text() {
+            let script_or_style = node
+                .ancestors()
+                .filter_map(scraper::ElementRef::wrap)
+                .any(|element| matches!(element.value().name(), "script" | "style"));
+            if !script_or_style {
+                text.push_str(value);
+            }
+        }
+    }
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+#[test]
+fn hydration_metadata_cannot_substitute_for_rendered_brand_content() {
+    assert!(page_text(
+        "<title>Brand</title><style>Brand</style><body><script>Brand</script></body>"
+    )
+    .is_empty());
+    assert_eq!(
+        page_text("<main>Brand <strong>content</strong></main>"),
+        "Brand content"
+    );
+}
+
 #[tokio::test]
 async fn independent_brand_previews_bind_their_own_pool_and_recheck_admission() {
     let names = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -27,12 +58,14 @@ async fn independent_brand_previews_bind_their_own_pool_and_recheck_admission() 
                     let response = client.get(origin).send().await.unwrap();
                     assert!(response.status().is_success());
                     let body = response.text().await.unwrap();
-                    assert!(body.contains(
-                        brand
-                            .resolve_branding(&views::brand::DEFAULT_BRANDING)
-                            .firm
-                            .site_name
-                    ));
+                    let expected = brand
+                        .resolve_branding(&views::brand::DEFAULT_BRANDING)
+                        .firm
+                        .site_name;
+                    assert!(
+                        page_text(&body).contains(expected),
+                        "preview {brand:?} must render {expected}"
+                    );
                 }
                 sqlx::query("DELETE FROM mirror_backfill_checkpoint")
                     .execute(pg.pool())
