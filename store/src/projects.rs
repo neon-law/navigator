@@ -4709,7 +4709,7 @@ impl OnboardingStatus {
 ///
 /// # Errors
 ///
-/// PostgreSQL configuration and query failures are returned to the caller.
+/// PostgreSQL application admission and query failures are returned to the caller.
 pub async fn onboarding_status(
     _surreal: &crate::surreal::SurrealDb,
     project_id: Uuid,
@@ -4740,7 +4740,7 @@ pub fn execution_lifecycle_label(status: &str, official: bool) -> &'static str {
 ///
 /// # Errors
 ///
-/// PostgreSQL configuration and query failures are returned to the caller.
+/// PostgreSQL application admission and query failures are returned to the caller.
 pub async fn onboarding_official_sets(
     _surreal: &crate::surreal::SurrealDb,
     projects: &[Project],
@@ -4758,7 +4758,7 @@ pub async fn onboarding_official_sets(
 ///
 /// # Errors
 ///
-/// PostgreSQL configuration and query failures are returned to the caller.
+/// PostgreSQL application admission and query failures are returned to the caller.
 pub async fn onboarding_esign_pending(
     _surreal: &crate::surreal::SurrealDb,
     projects: &[Project],
@@ -4780,7 +4780,7 @@ pub async fn onboarding_esign_pending(
 ///
 /// # Errors
 ///
-/// PostgreSQL configuration and query failures are returned to the caller.
+/// PostgreSQL application admission and query failures are returned to the caller.
 pub async fn matter_lifecycle_sets(
     _surreal: &crate::surreal::SurrealDb,
     projects: &[Project],
