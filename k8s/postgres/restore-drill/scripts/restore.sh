@@ -34,13 +34,30 @@ until [ "$(psql --host=/tmp --username=postgres --dbname=postgres --no-psqlrc -A
 done
 finished="$(date -u +%s)"
 
-psql --host=/tmp --username=postgres --dbname=navigator --no-psqlrc \
-  --set=ON_ERROR_STOP=1 --file=/etc/navigator/postgres/drill/verify.sql
+# Only the provisioner-owned application naming contract is selected. The
+# verifier rejects missing/foreign origin evidence for every native candidate.
+contract="$(cat /etc/navigator/postgres/drill/native-origin-contract.json)"
+psql --host=/tmp --username=postgres --dbname=postgres --no-psqlrc \
+  --set=ON_ERROR_STOP=1 -Atc \
+  "SELECT datname FROM pg_database WHERE NOT datistemplate AND
+   (datname = 'navigator' OR datname ~ '^navigator_native_[0-9a-f]{32}$')
+   ORDER BY datname" > /restore/application-databases
+if [ ! -s /restore/application-databases ]; then
+  echo 'restore drill: no sanctioned application database was recovered' >&2
+  exit 1
+fi
+while IFS= read -r database; do
+  echo "restore drill: verifying application database $database"
+  psql --host=/tmp --username=postgres --dbname="$database" --no-psqlrc \
+    --set=ON_ERROR_STOP=1 --set=native_origin_contract="$contract" \
+    --file=/etc/navigator/postgres/drill/verify.sql
+done < /restore/application-databases
 if [ "$(psql --host=/tmp --username=postgres --dbname=postgres --no-psqlrc -Atc \
   "SELECT EXISTS (SELECT FROM pg_database WHERE datname = 'forgejo')")" = t ]; then
   echo "restore drill: verifying forgejo database"
   psql --host=/tmp --username=postgres --dbname=forgejo --no-psqlrc \
-    --set=ON_ERROR_STOP=1 --file=/etc/navigator/postgres/drill/verify.sql
+    --set=ON_ERROR_STOP=1 --set=native_origin_contract="$contract" \
+    --file=/etc/navigator/postgres/drill/verify.sql
 fi
 echo "restore drill: base_backup=$(cat /restore/base-stamp)" \
   "target=${RECOVERY_TARGET_TIME:-end-of-archive}" \

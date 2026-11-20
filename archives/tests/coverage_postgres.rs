@@ -5,6 +5,8 @@ use sqlx::{postgres::PgConnectOptions, PgPool};
 use store::postgres::PostgresDb;
 use store::postgres_backfill::family::{require_scope, Family, FamilyError, SourceReceipt};
 
+#[path = "coverage_postgres/native_origin.rs"]
+mod native_origin;
 #[path = "coverage_postgres/native_ownership.rs"]
 mod native_ownership;
 #[path = "coverage_postgres/restore.rs"]

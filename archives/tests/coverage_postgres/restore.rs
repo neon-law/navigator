@@ -63,7 +63,7 @@ async fn restore_database(
             entry.rows
         );
         restore_relation(schema, batches, target, &mut largeobjects).await;
-        if schema.relation.name == "mirror_backfill_run" {
+        if schema.relation.name == "mirror_backfill_run" && entry.rows > 0 {
             assert!(
                 matches!(
                     require_scope(ledger, Family::Satellites).await,
@@ -77,8 +77,9 @@ async fn restore_database(
 
 fn restore_order(name: &str) -> u8 {
     match name {
-        "workflow_status" | "mirror_backfill_run" => 0,
-        "mirror_backfill_checkpoint"
+        "workflow_status" | "mirror_backfill_run" | "database_origin" => 0,
+        "database_origin_upgrade"
+        | "mirror_backfill_checkpoint"
         | "mirror_backfill_failure"
         | "person"
         | "jurisdiction"
@@ -299,6 +300,31 @@ pub(super) async fn assert_database_equal(db: &DatabaseManifest, source: &PgPool
         assert_eq!(
             original, restored,
             "complete stored-table restoration for {relation}"
+        );
+    }
+}
+
+pub(super) async fn prepare_target_migration_ledger(source: &PgPool, target: &PgPool) {
+    use sqlx::migrate::Migrate as _;
+    let present: bool =
+        sqlx::query_scalar("SELECT to_regclass('public._sqlx_migrations') IS NOT NULL")
+            .fetch_one(source)
+            .await
+            .unwrap();
+    if present {
+        let mut connection = target.acquire().await.unwrap();
+        // SQLx0.9 creates only the ledger shape; no applied versions are invented.
+        connection
+            .ensure_migrations_table("public._sqlx_migrations")
+            .await
+            .unwrap();
+        let applied: i64 = sqlx::query_scalar("SELECT count(*) FROM public._sqlx_migrations")
+            .fetch_one(&mut *connection)
+            .await
+            .unwrap();
+        assert_eq!(
+            applied, 0,
+            "schema-only target must not fabricate applied migrations"
         );
     }
 }

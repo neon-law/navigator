@@ -9,6 +9,7 @@ configMapGenerator:
       - scripts/fetch-backup.sh
       - scripts/restore.sh
       - verify.sql
+      - native-origin-contract.json
     options:
       disableNameSuffixHash: true
 images:
