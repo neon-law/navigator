@@ -4663,6 +4663,26 @@ jobs:
     }
 
     #[test]
+    fn save_work_is_defined_in_the_canonical_contract() {
+        let contract = AGENT_CONTRACT_BASE
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        // The phrase is defined, beside the push workflow, with the same rigor:
+        // a signed change on current main, a ready PR, merge verification, and
+        // a refreshed checkout.
+        assert!(contract.contains("\"Save work\" means"));
+        assert!(contract.contains("ready pull request"));
+        assert!(contract.contains("auto-merge is armed"));
+        assert!(contract.contains("confirmed merge"));
+        assert!(contract.contains("update this checkout"));
+        assert!(contract.contains("merge commit"));
+        // The noun is stated too: what saving persists and what it does not.
+        assert!(contract.contains("Saving persists"));
+        assert!(contract.contains("does not persist"));
+    }
+
+    #[test]
     fn canonical_contract_requires_deliberate_client_visibility_review() {
         assert!(AGENT_CONTRACT_BASE.contains("## Branches"));
         assert!(AGENT_CONTRACT_BASE.contains("squash-merged"));
