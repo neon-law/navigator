@@ -3,8 +3,8 @@ title: "Project Slack Delivery Reconciliation"
 description: "A Project Slack Delivery Reconciliation records an attributed posting-evidence decision."
 ---
 
-A Project Slack Delivery Reconciliation resolves an unresolved client-view notice as posted or verified not-posted.
-The privileged operation records its identity, ownership epoch, authorized Person actor and private evidence reference.
+A Project Slack Delivery Reconciliation resolves an unresolved client-view notice as posted or verified not-posted. The
+privileged operation records its identity, ownership epoch, authorized Person actor and private evidence reference.
 Actor attribution does not authenticate an independently supplied capture or prove source quiescence.
 
 The decision and its audit record commit together under the Project lane. Exact operation replay is idempotent;
