@@ -120,8 +120,8 @@ pub enum Error {
 /// Parses the canonical PostgreSQL DDL in a deliberately small, stable subset.
 /// The subset is sufficient for the checked-in migrations: CREATE TABLE,
 /// column declarations, inline REFERENCES, named table constraints,
-/// standalone indexes, and named CHECK constraints and dropped named
-/// constraints (neither changes table/column parity).
+/// standalone indexes, PUBLIC privilege revocations, and named CHECK constraints
+/// and dropped named constraints (neither changes table/column parity).
 #[expect(
     clippy::too_many_lines,
     reason = "single ordered pass tracks SQL table and procedural block state"
@@ -166,6 +166,16 @@ pub fn parse_schema(sql: &str) -> Result<BTreeMap<String, Table>, Error> {
             continue;
         }
         if current.is_none() && line.starts_with("DROP VIEW ") && line.ends_with(';') {
+            continue;
+        }
+        // Privileges do not change table, column, or reference shape.
+        if let Some(revoked) = line.strip_prefix("REVOKE ALL ON ") {
+            let target = revoked.strip_suffix(" FROM PUBLIC;");
+            if current.is_some()
+                || target.is_none_or(|target| target.trim().is_empty() || target.contains(';'))
+            {
+                return Err(Error::UnsupportedSql(line.to_string()));
+            }
             continue;
         }
         if line.is_empty() || line.starts_with("--") || line == ")" || line == ");" {
@@ -2211,6 +2221,13 @@ mod tests {
                    ALTER TABLE brand DROP CONSTRAINT brand_font_licence_check;";
         let tables = parse_schema(ddl).expect("dropped constraint parses");
         assert_eq!(tables["brand"].columns.len(), 1);
+        for revoke in [
+            "REVOKE ALL ON brand FROM PUBLIC;",
+            "REVOKE ALL ON FUNCTION protect_brand() FROM PUBLIC;",
+            "REVOKE ALL ON FUNCTION protect_brand(REGROLE) FROM PUBLIC;",
+        ] {
+            assert_eq!(parse_schema(&format!("{ddl}\n{revoke}")).unwrap(), tables);
+        }
         assert!(parse_schema(
             "CREATE TABLE brand (\n id UUID PRIMARY KEY\n);\n\
              ALTER TABLE absent DROP CONSTRAINT x;"
@@ -2484,6 +2501,11 @@ mod tests {
     #[test]
     fn malformed_ddl_is_refused_line_by_line() {
         for ddl in [
+            "REVOKE ALL ON brand FROM PUBLIC",
+            "REVOKE ALL ON  FROM PUBLIC;",
+            "REVOKE ALL ON brand; SELECT 1 FROM PUBLIC;",
+            "REVOKE ALL ON brand FROM navigator_app;",
+            "CREATE TABLE brand (\n id UUID PRIMARY KEY,\n REVOKE ALL ON brand FROM PUBLIC;\n);",
             "CREATE TABLE brand (\nCREATE TABLE firm (\n",
             "CREATE TABLE brand (\n id UUID PRIMARY KEY\n);\nALTER TABLE brand ADD COLUMN x TEXT\n",
             "CREATE TABLE brand (\n id UUID PRIMARY KEY,\nALTER TABLE brand ADD COLUMN x TEXT;\n",
