@@ -943,6 +943,20 @@ jobs:
               (cd features && "${bin}")
           done < /tmp/surreal-free/features-args
           cargo test --workspace --doc
+          # This pure source ratchet contains engine-call examples as strings,
+          # so the conservative primary selector omits it. Run its already-built
+          # instrumented binary explicitly without resolving another Cargo graph.
+          ratchet_bin="$(jq -r '
+              select(.reason == "compiler-artifact" and .executable != null
+                  and (.manifest_path | endswith("/cli/Cargo.toml"))
+                  and (.target.kind | index("test"))
+                  and .target.name == "embedded_surreal_ratchet")
+              | .executable' /tmp/test-artifacts.json)"
+          if [ "$(printf '%s\n' "${ratchet_bin}" | grep -c .)" -ne 1 ]; then
+              echo "::error::embedded SurrealDB source ratchet did not resolve to exactly one binary"
+              exit 1
+          fi
+          NAVIGATOR_FORBID_SURREAL=1 "${ratchet_bin}" --nocapture
           # THE COVERAGE GATE. `--fail-under-lines` exits non-zero when total
           # workspace line coverage is under the floor, which fails this job and
           # therefore the `ci` merge gate. There is no upload, no separate
