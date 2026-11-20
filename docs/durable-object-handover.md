@@ -46,7 +46,8 @@ hudson ops restate object-handover import \
 Applying or activating a handover requires the installation's privileged migration/operator connection. Supply the
 existing `NAVIGATOR_POSTGRES_*` coordinates for `navigator_owner` through the approved private operator environment;
 these commands do not obtain migration credentials or elevate a runtime connection automatically. The ordinary
-`navigator_app` role can read global handover and ownership metadata but cannot write it. Keep that restriction intact.
+`navigator_app` role can read global handover and ownership metadata but cannot insert, update, delete or truncate it.
+Keep that restriction intact. Normal Project creation and posting receipts retain their separate runtime grants.
 Application-history admission still applies to the operator target; a privileged login does not replace those proofs.
 
 Import defaults to a read-only parity preview. Add `--apply --operator-writers-held` to copy the captured rows in one
@@ -57,10 +58,6 @@ transaction rolls back. Import never updates or deletes existing native state.
 The component parity receipt contains capture version, identity, digest, row counts and commit status. Its digest binds
 input and target values. It does not authenticate an independently supplied file or prove source quiescence. Preserve
 the private source evidence and operator acceptance independently.
-
-Import with `--apply` and activation use an explicit PostgreSQL operator or migration-role connection. The application
-role can read global handover ownership but cannot insert, update, delete or truncate it. Normal Project creation and
-posting receipts retain their separate runtime grants.
 
 ## Activate and preserve posting evidence
 
