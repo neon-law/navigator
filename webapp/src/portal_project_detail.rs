@@ -585,6 +585,7 @@ pub async fn get_project_detail() -> Result<ProjectDetailView, ServerFnError> {
             &crate::project_resources::ProjectResourceLinks {
                 client_submissions_folder_id: None,
                 private_slack_channel_url: project.internal_slack_channel_url.clone(),
+                private_slack_channel_id: project.internal_slack_channel_id.clone(),
                 private_notion_page_url: project.private_notion_page_url.clone(),
                 drive_folder_id: None,
                 shared_slack_channel_url: project.external_slack_channel_url.clone(),
@@ -1116,6 +1117,7 @@ pub fn ClientProjectDetailPage(view: ProjectDetailView) -> Element {
             }
             crate::sections::page::MatterHeading {
                 name: view.name.clone(),
+                code: view.code.clone(),
                 tabs: view.page_tabs.clone(),
                 current: view.selected_tab.href(&view.code),
             }

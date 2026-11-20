@@ -42,14 +42,16 @@ pub const MAX_SLUG_LEN: usize = 48;
 /// two identical tabs side by side, so `Y021` refuses it.
 pub const SHOW_PAGE_TITLE: &str = "Overview";
 
-/// The labels of the matter's built-in tabs, which follow the declared pages
-/// in the same strip. A declared page titled the same would put two
+/// The labels of the matter's core tabs, which follow Overview and precede
+/// declared pages in the same strip. A declared page titled the same would put two
 /// identically named tabs side by side, so `Y021` refuses it.
 pub const BUILTIN_TAB_TITLES: &[&str] = &[
+    "Onboarding",
+    "Deadlines",
+    "Billing",
     "Tasks",
     "Communications",
     "Documents",
-    "Billing",
     "Participants",
     "Testimonial",
 ];
@@ -63,6 +65,7 @@ pub const RESERVED_SLUGS: &[&str] = &[
     "communications",
     "contract-review",
     "conversation",
+    "deadlines",
     "documents",
     "edit",
     "graph",
@@ -70,6 +73,7 @@ pub const RESERVED_SLUGS: &[&str] = &[
     "intake",
     "invoices",
     "notations",
+    "onboarding",
     "participants",
     "people",
     "portal",

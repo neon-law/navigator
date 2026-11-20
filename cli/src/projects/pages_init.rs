@@ -221,8 +221,8 @@ struct Seed {
 const LITIGATION: &[Seed] = &[
     Seed {
         kind: Kind::DocketDeadlineBoard,
-        slug: "deadlines",
-        title: "Deadlines",
+        slug: "docket",
+        title: "Docket",
     },
     Seed {
         kind: Kind::DiscoveryCockpit,
@@ -234,8 +234,8 @@ const LITIGATION: &[Seed] = &[
 const PROBATE: &[Seed] = &[
     Seed {
         kind: Kind::DocketDeadlineBoard,
-        slug: "deadlines",
-        title: "Deadlines",
+        slug: "docket",
+        title: "Docket",
     },
     Seed {
         kind: Kind::DeliverablePackage,
@@ -288,7 +288,7 @@ fn practice_seeds(practice_area: &str) -> &'static [Seed] {
 fn default_seed(kind: Kind) -> Option<(&'static str, &'static str)> {
     skeleton(kind)?;
     Some(match kind {
-        Kind::DocketDeadlineBoard => ("deadlines", "Deadlines"),
+        Kind::DocketDeadlineBoard => ("docket", "Docket"),
         Kind::DiscoveryCockpit => ("discovery", "Discovery"),
         Kind::EngagementBillingRecords => ("engagement", "Engagement and billing"),
         Kind::DeliverablePackage => ("deliverables", "Deliverables"),
@@ -708,7 +708,7 @@ mod tests {
             [Kind::DocketDeadlineBoard, Kind::DiscoveryCockpit]
         );
         let block = render(&pages);
-        assert!(block.contains("slug: deadlines"), "{block}");
+        assert!(block.contains("slug: docket"), "{block}");
         assert!(block.contains("slug: discovery"), "{block}");
         validate(&block).expect("passes the page rules");
         assert_gate_clean(&block);
@@ -930,7 +930,7 @@ mod tests {
             .iter()
             .find(|page| page.kind == Kind::DocketDeadlineBoard)
             .unwrap();
-        assert_eq!(board.slug, "deadlines");
+        assert_eq!(board.slug, "docket");
         assert!(!board.lawyer_only);
         assert!(board.sections.contains(&Section::PartyRoster));
         assert_gate_clean(&render(&pages));
