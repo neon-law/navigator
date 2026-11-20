@@ -252,6 +252,9 @@ pub enum PersonError {
     /// this module could not read back — see [`PersonRow::into_person`].
     #[error("writing a person returned no usable row")]
     WriteReturnedNothing,
+    /// Reading a structured Person Phone failed.
+    #[error("phone lookup: {0}")]
+    Phone(String),
 }
 
 /// Application identity reads and writes require validated PostgreSQL history.
@@ -696,6 +699,18 @@ fn phone_digits(phone: &str) -> String {
 ///
 /// [`PersonError::Db`] if the lookup fails.
 pub async fn find_by_phone(db: &SurrealDb, phone: &str) -> Result<Option<Person>, PersonError> {
+    if !phone_digits(phone).is_empty() {
+        let mut structured = crate::person_phones::person_ids_for_phone(db, phone)
+            .await
+            .map_err(|error| PersonError::Phone(error.to_string()))?;
+        structured.sort_unstable();
+        structured.dedup();
+        match structured.as_slice() {
+            [person_id] => return find_by_id(db, *person_id).await,
+            [_first, _second, ..] => return Ok(None),
+            [] => {}
+        }
+    }
     if postgres_authority().await?.is_some() {
         return Ok(list_with_phone(db).await?.into_iter().find(|person| {
             person

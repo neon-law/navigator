@@ -1407,21 +1407,63 @@ pub(crate) async fn link_contact_phone_on(
     let person = crate::persons::find_by_any_email(db, email.trim())
         .await?
         .ok_or_else(|| InboxError::Contact("No person has that email".into()))?;
-    if let Some(holder) = crate::persons::find_by_phone(db, &conversation.external_address).await? {
-        return if holder.id == person.id {
-            Ok(ContactLink::of(&holder))
-        } else {
-            Err(InboxError::Contact(
-                "That number already belongs to another person".into(),
-            ))
-        };
-    }
-    if person.phone.is_some() {
+    if conversation
+        .person_id
+        .is_some_and(|holder| holder != person.id)
+    {
         return Err(InboxError::Contact(
-            "That person already has a different phone recorded".into(),
+            "That conversation is already linked to another person".into(),
         ));
     }
-    let updated = crate::persons::set_phone(db, person.id, Some(&conversation.external_address))
+    let structured_holders =
+        crate::person_phones::person_ids_for_phone(db, &conversation.external_address)
+            .await
+            .map_err(|error| InboxError::Db(error.to_string()))?;
+    if structured_holders.iter().any(|holder| *holder != person.id) {
+        return Err(InboxError::Contact(
+            "That number already belongs to another person".into(),
+        ));
+    }
+    if crate::persons::find_by_phone(db, &conversation.external_address)
+        .await?
+        .is_some_and(|holder| holder.id != person.id)
+    {
+        return Err(InboxError::Contact(
+            "That number already belongs to another person".into(),
+        ));
+    }
+    crate::person_phones::seed_from_legacy_phone(db, person.id)
+        .await
+        .map_err(|error| InboxError::Db(error.to_string()))?;
+    crate::person_phones::set_phone(
+        db,
+        person.id,
+        &conversation.external_address,
+        crate::person_phones::PhoneLabel::Mobile,
+        false,
+    )
+    .await
+    .map_err(|error| InboxError::Db(error.to_string()))?;
+    if person.phone.is_none() {
+        crate::persons::set_phone(db, person.id, Some(&conversation.external_address))
+            .await?
+            .ok_or(InboxError::NotFound)?;
+    }
+    let linked = sqlx::query(
+        "UPDATE inbox_conversation SET person_id = $2, updated_at = now() \
+         WHERE id = $1 AND (person_id IS NULL OR person_id = $2)",
+    )
+    .bind(conversation_id)
+    .bind(person.id)
+    .execute(&pg.0)
+    .await
+    .map_err(db_error)?;
+    if linked.rows_affected() != 1 {
+        return Err(InboxError::Contact(
+            "That conversation is already linked to another person".into(),
+        ));
+    }
+    let updated = crate::persons::find_by_id(db, person.id)
         .await?
         .ok_or(InboxError::NotFound)?;
     Ok(ContactLink::of(&updated))

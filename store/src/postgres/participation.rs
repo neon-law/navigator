@@ -117,6 +117,36 @@ pub async fn for_person_projects_on(
         .collect()
 }
 
+/// Project participants and their current Person contact details for Projects.
+pub async fn contacts_for_projects_on(
+    pg: &PostgresDb,
+    projects: &[Uuid],
+) -> Result<Vec<(Uuid, String, String, String)>, ParticipationError> {
+    if projects.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut query = sqlx::QueryBuilder::<sqlx::Postgres>::new(
+        "SELECT ppr.person_id,p.name,p.email,p.role FROM person_project_role ppr \
+         JOIN person p ON p.id=ppr.person_id WHERE ppr.project_id IN (",
+    );
+    let mut values = query.separated(",");
+    for project in projects {
+        values.push_bind(project);
+    }
+    values.push_unseparated(") ORDER BY ppr.person_id,ppr.project_id");
+    let rows = query.build().fetch_all(pg.pool()).await?;
+    rows.iter()
+        .map(|row| {
+            Ok((
+                sqlx::Row::try_get(row, "person_id")?,
+                sqlx::Row::try_get(row, "name")?,
+                sqlx::Row::try_get(row, "email")?,
+                sqlx::Row::try_get(row, "role")?,
+            ))
+        })
+        .collect()
+}
+
 /// Insert one membership; participation comes only from the current Person role.
 /// Duplicate memberships are rejected by PostgreSQL, including concurrent requests.
 pub async fn add_on(

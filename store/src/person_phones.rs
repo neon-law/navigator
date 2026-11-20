@@ -69,21 +69,35 @@ fn from_pg(row: &PgRow) -> Result<Option<PersonPhone>, sqlx::Error> {
     }))
 }
 
-async fn pg_list(pg: &PostgresDb, person_id: Uuid) -> Result<Vec<PersonPhone>, PhoneError> {
-    let rows = sqlx::query(AssertSqlSafe(format!(
-        "SELECT {SELECT} FROM {TABLE} WHERE person_id = $1 \
-         ORDER BY is_primary DESC, inserted_at, id"
-    )))
-    .bind(person_id)
+async fn pg_person_ids_for_phone(pg: &PostgresDb, e164: &str) -> Result<Vec<Uuid>, PhoneError> {
+    sqlx::query_scalar(
+        "SELECT DISTINCT person_id FROM person_phone WHERE e164 = $1 ORDER BY person_id",
+    )
+    .bind(e164)
     .fetch_all(&pg.0)
     .await
-    .map_err(AuthorityError::from)?;
-    let phones: Vec<Option<PersonPhone>> = rows
-        .iter()
-        .map(from_pg)
-        .collect::<Result<_, _>>()
+    .map_err(|error| crate::persons::PersonError::Postgres(error.to_string()).into())
+}
+
+async fn pg_list_on(pg: &PostgresDb, person_id: Uuid) -> Result<Vec<PersonPhone>, PhoneError> {
+    let rows = sqlx::query(AssertSqlSafe(format!("SELECT {SELECT} FROM person_phone WHERE person_id=$1 ORDER BY is_primary DESC,inserted_at,id")))
+        .bind(person_id)
+        .fetch_all(pg.pool())
+        .await
         .map_err(AuthorityError::from)?;
-    Ok(phones.into_iter().flatten().collect())
+    rows.iter()
+        .map(from_pg)
+        .collect::<Result<Vec<_>, _>>()
+        .map(|rows| rows.into_iter().flatten().collect())
+        .map_err(|error| PhoneError::Authority(AuthorityError::from(error)))
+}
+
+/// List one Person's structured numbers from the supplied PostgreSQL authority.
+pub async fn list_phones_on(
+    pg: &PostgresDb,
+    person_id: Uuid,
+) -> Result<Vec<PersonPhone>, PhoneError> {
+    pg_list_on(pg, person_id).await
 }
 
 /// [`set_phone`] in one PostgreSQL transaction, serialized per Person so
@@ -263,7 +277,7 @@ where
 /// [`PhoneError::Db`] if the query fails.
 pub async fn list_phones(db: &SurrealDb, person_id: Uuid) -> Result<Vec<PersonPhone>, PhoneError> {
     if let Some(pg) = authority::authority().await? {
-        return Box::pin(pg_list(&pg, person_id)).await;
+        return pg_list_on(&pg, person_id).await;
     }
     let response = db
         .query(format!(
@@ -272,6 +286,26 @@ pub async fn list_phones(db: &SurrealDb, person_id: Uuid) -> Result<Vec<PersonPh
         .bind(("person", record_id("person", person_id)))
         .await?;
     many(response)
+}
+
+/// Find every Person that records this normalized number.
+///
+/// # Errors
+/// [`PhoneError`] when normalization or the store lookup fails.
+pub async fn person_ids_for_phone(db: &SurrealDb, raw: &str) -> Result<Vec<Uuid>, PhoneError> {
+    let e164 = normalize_e164(raw)?;
+    if let Some(pg) = authority::authority().await? {
+        return pg_person_ids_for_phone(&pg, &e164).await;
+    }
+    let mut response = db
+        .query("SELECT VALUE person_id FROM person_phone WHERE e164 = $e164")
+        .bind(("e164", e164))
+        .await?;
+    let rows: Vec<RecordId> = response.take(0)?;
+    let mut people: Vec<Uuid> = rows.iter().filter_map(record_uuid).collect();
+    people.sort_unstable();
+    people.dedup();
+    Ok(people)
 }
 
 /// Set one of a Person's phone numbers, creating or updating its row.

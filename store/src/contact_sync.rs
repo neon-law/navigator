@@ -14,6 +14,7 @@ use uuid::Uuid;
 use cloud::contacts::{ContactBooks, ContactPhone, ContactsError, ManagedContact};
 
 use crate::persons::{self, Person, Role};
+use crate::postgres::{participation, projects as pg_projects, PostgresDb};
 use crate::projects;
 use crate::surreal::SurrealDb;
 
@@ -39,6 +40,8 @@ impl std::ops::AddAssign for ContactSyncReport {
 pub enum ContactSyncError {
     #[error("contacts: {0}")]
     Contacts(#[from] ContactsError),
+    #[error("provider did not retain the requested contact changes")]
+    NotVerified,
     #[error("database: {0}")]
     Db(String),
 }
@@ -56,6 +59,9 @@ pub async fn sync_project_members(
     project_id: Uuid,
     books: &dyn ContactBooks,
 ) -> Result<ContactSyncReport, ContactSyncError> {
+    if let Some(pg) = crate::persons::postgres_authority().await.map_err(db)? {
+        return sync_project_members_postgres(&pg, project_id, books).await;
+    }
     let mut report = ContactSyncReport::default();
     for row in projects::participations_for_project(surreal, project_id)
         .await
@@ -75,6 +81,38 @@ pub async fn sync_project_members(
     Ok(report)
 }
 
+/// Reconcile one Project using an explicit PostgreSQL authority.
+///
+/// # Errors
+/// A store or provider failure.
+#[cfg(test)]
+pub(crate) async fn sync_project_members_with_postgres(
+    pg: &PostgresDb,
+    project_id: Uuid,
+    books: &dyn ContactBooks,
+) -> Result<ContactSyncReport, ContactSyncError> {
+    sync_project_members_postgres(pg, project_id, books).await
+}
+
+async fn sync_project_members_postgres(
+    pg: &PostgresDb,
+    project_id: Uuid,
+    books: &dyn ContactBooks,
+) -> Result<ContactSyncReport, ContactSyncError> {
+    let rows = participation::contacts_for_projects_on(pg, &[project_id])
+        .await
+        .map_err(db)?;
+    let mut report = ContactSyncReport::default();
+    for (person_id, name, email, role) in rows {
+        if role == Role::Client.as_str() || email.trim().is_empty() {
+            continue;
+        }
+        let member = person_from_projection(person_id, name, email, &role);
+        report += sync_member_postgres(pg, &member, books).await?;
+    }
+    Ok(report)
+}
+
 /// Make `member`'s Navigator contacts exactly the other people on their open
 /// matters.
 ///
@@ -85,44 +123,160 @@ pub async fn sync_member(
     member: &Person,
     books: &dyn ContactBooks,
 ) -> Result<ContactSyncReport, ContactSyncError> {
+    if let Some(pg) = crate::persons::postgres_authority().await.map_err(db)? {
+        return sync_member_postgres(&pg, member, books).await;
+    }
     let wanted = wanted_contacts(surreal, member.id).await?;
+    reconcile(member, wanted, books).await
+}
+
+fn map_contacts(error: ContactsError) -> ContactSyncError {
+    if matches!(error, ContactsError::NotVerified) {
+        ContactSyncError::NotVerified
+    } else {
+        ContactSyncError::Contacts(error)
+    }
+}
+
+fn person_from_projection(id: Uuid, name: String, email: String, role: &str) -> Person {
+    Person {
+        id,
+        name,
+        given_name: None,
+        family_name: None,
+        middle_name: None,
+        email,
+        oidc_subject: None,
+        microsoft_subject: None,
+        apple_subject: None,
+        role: Role::parse(role).unwrap_or(Role::Client),
+        title: None,
+        phone: None,
+        xero_contact_id: None,
+        profile_image_url: None,
+        linkedin_url: None,
+        email_confirmed: false,
+        inserted_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+    }
+}
+
+async fn sync_member_postgres(
+    pg: &PostgresDb,
+    member: &Person,
+    books: &dyn ContactBooks,
+) -> Result<ContactSyncReport, ContactSyncError> {
+    let wanted = wanted_contacts_postgres(pg, member.id).await?;
+    reconcile(member, wanted, books).await
+}
+
+async fn reconcile(
+    member: &Person,
+    wanted: BTreeMap<String, ManagedContact>,
+    books: &dyn ContactBooks,
+) -> Result<ContactSyncReport, ContactSyncError> {
     let book = books.book(member.email.trim()).await?;
     let mut report = ContactSyncReport {
         members: 1,
-        ..ContactSyncReport::default()
+        ..Default::default()
     };
     let mut held = BTreeSet::new();
     for stored in book.managed_contacts().await? {
         match wanted.get(&stored.contact.person_id) {
-            // A second copy of one Person is removed like a stale one.
             Some(_) if !held.insert(stored.contact.person_id.clone()) => {
-                book.delete_contact(&stored).await?;
+                book.delete_contact(&stored).await.map_err(map_contacts)?;
                 report.removed += 1;
             }
             Some(contact) if same(contact, &stored.contact) => {}
             Some(contact) => {
-                book.update_contact(&stored, contact).await?;
+                book.update_contact(&stored, contact)
+                    .await
+                    .map_err(map_contacts)?;
                 report.updated += 1;
             }
             None => {
-                book.delete_contact(&stored).await?;
+                book.delete_contact(&stored).await.map_err(map_contacts)?;
                 report.removed += 1;
             }
         }
     }
-    for (person_id, contact) in &wanted {
-        if !held.contains(person_id) {
-            book.create_contact(contact).await?;
+    for (id, contact) in &wanted {
+        if !held.contains(id) {
+            book.create_contact(contact).await.map_err(map_contacts)?;
             report.created += 1;
         }
     }
     Ok(report)
 }
 
+async fn wanted_contacts_postgres(
+    pg: &PostgresDb,
+    member_id: Uuid,
+) -> Result<BTreeMap<String, ManagedContact>, ContactSyncError> {
+    let mut projects = BTreeSet::new();
+    for row in participation::for_person_projects_on(pg, member_id)
+        .await
+        .map_err(db)?
+    {
+        if pg_projects::find_by_id_on(pg, row.project_id)
+            .await
+            .map_err(db)?
+            .is_some_and(|project| project.status == "open")
+        {
+            projects.insert(row.project_id);
+        }
+    }
+    let people =
+        participation::contacts_for_projects_on(pg, &projects.iter().copied().collect::<Vec<_>>())
+            .await
+            .map_err(db)?;
+    let mut wanted = BTreeMap::new();
+    for (person_id, name, email, role) in people {
+        if person_id == member_id {
+            continue;
+        }
+        let person = person_from_projection(person_id, name, email, &role);
+        wanted.insert(person.id.to_string(), contact_for_person(pg, person).await?);
+    }
+    Ok(wanted)
+}
+
+async fn contact_for_person(
+    pg: &PostgresDb,
+    person: Person,
+) -> Result<ManagedContact, ContactSyncError> {
+    let phones = crate::person_phones::list_phones_on(pg, person.id)
+        .await
+        .map_err(db)?
+        .into_iter()
+        .map(|phone| ContactPhone {
+            value: phone.e164,
+            label: phone.label.as_str().to_string(),
+        })
+        .collect();
+    let mut emails = BTreeSet::new();
+    let primary = person.email.trim().to_lowercase();
+    if !primary.is_empty() {
+        emails.insert(primary);
+    }
+    emails.extend(
+        crate::postgres::people::aliases(pg, person.id)
+            .await
+            .map_err(db)?,
+    );
+    Ok(ManagedContact {
+        person_id: person.id.to_string(),
+        name: person.name,
+        emails: emails.into_iter().collect(),
+        phones,
+    })
+}
+
 /// Equal up to phone order, which the People API does not promise to keep.
 fn same(left: &ManagedContact, right: &ManagedContact) -> bool {
+    let emails = |contact: &ManagedContact| contact.emails.iter().cloned().collect::<BTreeSet<_>>();
     let phones = |contact: &ManagedContact| contact.phones.iter().cloned().collect::<BTreeSet<_>>();
-    left.name == right.name && left.email == right.email && phones(left) == phones(right)
+    left.name == right.name && emails(left) == emails(right) && phones(left) == phones(right)
 }
 
 /// Every other participant on the member's open matters, by Person id.
@@ -156,6 +310,9 @@ async fn wanted_contacts(
         let Some(person) = persons::find_by_id(surreal, person_id).await.map_err(db)? else {
             continue;
         };
+        crate::person_phones::seed_from_legacy_phone(surreal, person_id)
+            .await
+            .map_err(db)?;
         let phones = crate::person_phones::list_phones(surreal, person_id)
             .await
             .map_err(db)?
@@ -165,152 +322,28 @@ async fn wanted_contacts(
                 label: phone.label.as_str().to_string(),
             })
             .collect();
-        let email = Some(person.email.trim().to_string()).filter(|email| !email.is_empty());
+        let mut emails = BTreeSet::new();
+        let primary_email = person.email.trim().to_lowercase();
+        if !primary_email.is_empty() {
+            emails.insert(primary_email);
+        }
+        emails.extend(
+            persons::aliases(surreal, person_id)
+                .await
+                .map_err(db)?
+                .into_iter()
+                .map(|email| email.trim().to_lowercase())
+                .filter(|email| !email.is_empty()),
+        );
         wanted.insert(
             person_id.to_string(),
             ManagedContact {
                 person_id: person_id.to_string(),
                 name: person.name,
-                email,
+                emails: emails.into_iter().collect(),
                 phones,
             },
         );
     }
     Ok(wanted)
-}
-
-#[cfg(test)]
-mod tests {
-    use cloud::contacts::FakeContactBooks;
-
-    use super::sync_project_members;
-    use crate::person_phones::{self, PhoneLabel};
-    use crate::persons::{self, NewPerson, Role};
-    use crate::projects::{self, OpenMatterCommand};
-    use crate::test_support::{mem_surreal, seed_entity, seed_firm_with_brand};
-
-    const LAWYER: &str = "lawyer@example.com";
-
-    async fn open_matter(surreal: &crate::surreal::SurrealDb) -> (projects::Project, uuid::Uuid) {
-        seed_firm_with_brand(surreal, "neon").await;
-        let entity_id = seed_entity(surreal).await;
-        let lawyer = persons::create(
-            surreal,
-            &NewPerson::with_role("Lawyer", LAWYER, Role::Lawyer),
-        )
-        .await
-        .expect("lawyer");
-        let client = persons::create(
-            surreal,
-            &NewPerson::with_role("Ada Client", "client@example.com", Role::Client),
-        )
-        .await
-        .expect("client");
-        person_phones::set_phone(
-            surreal,
-            client.id,
-            "+1 555 555 0100",
-            PhoneLabel::Mobile,
-            true,
-        )
-        .await
-        .expect("phone");
-        let project = projects::open_matter(
-            surreal,
-            &OpenMatterCommand {
-                firm_id: None,
-                name: "Synthetic matter".into(),
-                code: "matter-one".into(),
-                client_id: client.id,
-                entity_id,
-                jurisdiction_id: None,
-                description: None,
-                brand: "neon".to_string(),
-                attestation: true,
-                acting_person_id: lawyer.id,
-                closed_at: None,
-            },
-        )
-        .await
-        .expect("open");
-        (project, client.id)
-    }
-
-    #[tokio::test]
-    async fn the_lawyer_gets_the_client_and_the_client_gets_no_book() {
-        let surreal = mem_surreal().await;
-        let (project, client_id) = open_matter(&surreal).await;
-        let books = FakeContactBooks::default();
-
-        let report = sync_project_members(&surreal, project.id, &books)
-            .await
-            .unwrap();
-
-        assert_eq!(report.members, 1, "only the firm side gets a book");
-        assert_eq!(report.created, 1);
-        let held = books.contacts(LAWYER);
-        let contact = &held[&client_id.to_string()];
-        assert_eq!(contact.name, "Ada Client");
-        assert_eq!(contact.email.as_deref(), Some("client@example.com"));
-        assert_eq!(contact.phones[0].value, "+15555550100");
-        assert!(books.contacts("client@example.com").is_empty());
-    }
-
-    #[tokio::test]
-    async fn a_rerun_changes_nothing_and_a_new_number_is_an_update() {
-        let surreal = mem_surreal().await;
-        let (project, client_id) = open_matter(&surreal).await;
-        let books = FakeContactBooks::default();
-        sync_project_members(&surreal, project.id, &books)
-            .await
-            .unwrap();
-
-        let again = sync_project_members(&surreal, project.id, &books)
-            .await
-            .unwrap();
-        assert_eq!((again.created, again.updated, again.removed), (0, 0, 0));
-
-        person_phones::set_phone(
-            &surreal,
-            client_id,
-            "+1 555 555 0199",
-            PhoneLabel::Work,
-            false,
-        )
-        .await
-        .unwrap();
-        let changed = sync_project_members(&surreal, project.id, &books)
-            .await
-            .unwrap();
-        assert_eq!(changed.updated, 1);
-        assert_eq!(
-            books.contacts(LAWYER)[&client_id.to_string()].phones.len(),
-            2
-        );
-    }
-
-    #[tokio::test]
-    async fn closing_the_matter_removes_its_people() {
-        let surreal = mem_surreal().await;
-        let (project, _) = open_matter(&surreal).await;
-        let books = FakeContactBooks::default();
-        sync_project_members(&surreal, project.id, &books)
-            .await
-            .unwrap();
-
-        // Closing through the lifecycle needs an offboarding document; the
-        // sync reads only the status.
-        surreal
-            .query("UPDATE $id SET status = 'closed', closed_at = '2026-01-01T00:00:00Z'")
-            .bind(("id", crate::surreal::record_id("project", project.id)))
-            .await
-            .and_then(surrealdb::IndexedResults::check)
-            .unwrap();
-        let report = sync_project_members(&surreal, project.id, &books)
-            .await
-            .unwrap();
-
-        assert_eq!(report.removed, 1);
-        assert!(books.contacts(LAWYER).is_empty());
-    }
 }

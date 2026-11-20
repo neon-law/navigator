@@ -91,6 +91,9 @@ mod project_writes_tests;
 #[cfg(test)]
 mod inbox_tests;
 
+#[cfg(test)]
+mod contact_sync_tests;
+
 /// `store/postgres/migrations`, compiled in so the operator binary carries the
 /// exact SQL of its release.
 static MIGRATIONS: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/postgres/migrations");

@@ -1014,6 +1014,9 @@ async fn sync_one_contacts(state: &ApiState, project: &store::projects::Project)
         Err(store::contact_sync::ContactSyncError::Contacts(_)) => {
             ProjectOutcome::plain(project.code.clone(), "provider_unavailable")
         }
+        Err(store::contact_sync::ContactSyncError::NotVerified) => {
+            ProjectOutcome::plain(project.code.clone(), "verification_failed")
+        }
         Err(_) => ProjectOutcome::plain(project.code.clone(), "address_not_recorded"),
     }
 }

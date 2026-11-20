@@ -44,7 +44,7 @@ pub struct ContactPhone {
 pub struct ManagedContact {
     pub person_id: String,
     pub name: String,
-    pub email: Option<String>,
+    pub emails: Vec<String>,
     pub phones: Vec<ContactPhone>,
 }
 
@@ -76,6 +76,8 @@ pub enum ContactsError {
         #[source]
         source: reqwest::Error,
     },
+    #[error("Contacts API did not retain the requested contact changes")]
+    NotVerified,
 }
 
 /// One member's contact book, limited to the contacts Navigator manages.
@@ -253,7 +255,7 @@ impl ApiPerson {
                 unstructured_name: contact.name.clone(),
             }],
             email_addresses: contact
-                .email
+                .emails
                 .iter()
                 .map(|value| ApiValue {
                     value: value.clone(),
@@ -295,7 +297,11 @@ impl ApiPerson {
                     .next()
                     .map(|name| name.unstructured_name)
                     .unwrap_or_default(),
-                email: self.email_addresses.into_iter().next().map(|e| e.value),
+                emails: self
+                    .email_addresses
+                    .into_iter()
+                    .map(|email| email.value)
+                    .collect(),
                 phones: self
                     .phone_numbers
                     .into_iter()
@@ -347,7 +353,8 @@ impl ContactBook for GoogleContactBook {
             .http
             .post(format!("{}/people:createContact", self.base_url))
             .json(&ApiPerson::from_contact(contact));
-        self.send(request, "creating a contact").await.map(drop)
+        self.send(request, "creating a contact").await?;
+        self.verify(contact).await
     }
 
     async fn update_contact(
@@ -366,7 +373,8 @@ impl ContactBook for GoogleContactBook {
             ))
             .query(&[("updatePersonFields", UPDATE_FIELDS)])
             .json(&body);
-        self.send(request, "updating a contact").await.map(drop)
+        self.send(request, "updating a contact").await?;
+        self.verify(contact).await
     }
 
     async fn delete_contact(&self, stored: &StoredContact) -> Result<(), ContactsError> {
@@ -374,8 +382,48 @@ impl ContactBook for GoogleContactBook {
             "{}/{}:deleteContact",
             self.base_url, stored.resource_name
         ));
-        self.send(request, "deleting a contact").await.map(drop)
+        self.send(request, "deleting a contact").await?;
+        if self.managed_contacts().await?.iter().any(|current| {
+            current.resource_name == stored.resource_name
+                || current.contact.person_id == stored.contact.person_id
+        }) {
+            return Err(ContactsError::NotVerified);
+        }
+        Ok(())
     }
+}
+
+impl GoogleContactBook {
+    async fn verify(&self, expected: &ManagedContact) -> Result<(), ContactsError> {
+        let found = self
+            .managed_contacts()
+            .await?
+            .into_iter()
+            .find(|stored| stored.contact.person_id == expected.person_id);
+        if found.is_some_and(|stored| same_contact(&stored.contact, expected)) {
+            Ok(())
+        } else {
+            Err(ContactsError::NotVerified)
+        }
+    }
+}
+
+fn same_contact(left: &ManagedContact, right: &ManagedContact) -> bool {
+    let emails = |contact: &ManagedContact| {
+        contact
+            .emails
+            .iter()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    let phones = |contact: &ManagedContact| {
+        contact
+            .phones
+            .iter()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    left.name == right.name && emails(left) == emails(right) && phones(left) == phones(right)
 }
 
 /// In-memory books for tests: each member's Navigator contacts by Person id.
@@ -483,7 +531,7 @@ mod tests {
         ManagedContact {
             person_id: "person-1".into(),
             name: "Ada Client".into(),
-            email: Some("ada@example.com".into()),
+            emails: vec!["ada@example.com".into()],
             phones: vec![ContactPhone {
                 value: "+15555550100".into(),
                 label: "mobile".into(),
@@ -512,6 +560,10 @@ mod tests {
                     "resourceName": "people/c2",
                     "etag": "e2",
                     "names": [{ "unstructuredName": "Ada Client" }],
+                    "emailAddresses": [
+                        { "value": "ada@example.com" },
+                        { "value": "ada.work@example.com" }
+                    ],
                     "clientData": [{ "key": MANAGED_KEY, "value": "person-1" }]
                 }]
             })))
@@ -535,6 +587,10 @@ mod tests {
         assert_eq!(managed[0].resource_name, "people/c2");
         assert_eq!(managed[0].contact.person_id, "person-1");
         assert_eq!(managed[0].contact.name, "Ada Client");
+        assert_eq!(
+            managed[0].contact.emails,
+            ["ada@example.com", "ada.work@example.com"]
+        );
     }
 
     #[tokio::test]
@@ -544,11 +600,26 @@ mod tests {
             .and(path("/people:createContact"))
             .and(body_partial_json(serde_json::json!({
                 "names": [{ "unstructuredName": "Ada Client" }],
+                "emailAddresses": [{ "value": "ada@example.com" }],
                 "phoneNumbers": [{ "value": "+15555550100", "type": "mobile" }],
                 "clientData": [{ "key": MANAGED_KEY, "value": "person-1" }]
             })))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
             .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/people/me/connections"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "connections": [{
+                    "resourceName": "people/c1",
+                    "etag": "e1",
+                    "names": [{ "unstructuredName": "Ada Client" }],
+                    "emailAddresses": [{ "value": "ada@example.com" }],
+                    "phoneNumbers": [{ "value": "+15555550100", "type": "mobile" }],
+                    "clientData": [{ "key": MANAGED_KEY, "value": "person-1" }]
+                }]
+            })))
             .mount(&server)
             .await;
         book(&server).create_contact(&contact()).await.unwrap();
@@ -574,6 +645,28 @@ mod tests {
             .and(path("/people/c2:deleteContact"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
             .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/people/me/connections"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "connections": [{
+                    "resourceName": "people/c2",
+                    "etag": "e2",
+                    "names": [{ "unstructuredName": "Ada Client" }],
+                    "emailAddresses": [{ "value": "ada@example.com" }],
+                    "phoneNumbers": [{ "value": "+15555550100", "type": "mobile" }],
+                    "clientData": [{ "key": MANAGED_KEY, "value": "person-1" }]
+                }]
+            })))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/people/me/connections"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "connections": []
+            })))
             .mount(&server)
             .await;
         let book = book(&server);
