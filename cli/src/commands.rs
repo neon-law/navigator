@@ -957,9 +957,19 @@ pub enum ProjectsCmd {
     /// in an outside tracker. Runs locally; the text is never sent anywhere.
     /// Exits non-zero and names each placeholder to use when it finds any.
     FeedbackCheck {
-        /// Draft title and body; reads stdin when omitted.
+        /// Draft title and body; reads stdin when no other text is given.
         #[arg(long)]
         file: Option<PathBuf>,
+        /// Also check a Git range (for example `origin/main..HEAD`): each
+        /// commit message and every line the range adds.
+        #[arg(long)]
+        range: Option<String>,
+        /// Also check this pull request title.
+        #[arg(long)]
+        pr_title: Option<String>,
+        /// Also check the pull request body in this file.
+        #[arg(long)]
+        pr_body_file: Option<PathBuf>,
         /// A private name or Project code to refuse; repeat for each.
         #[arg(long = "term")]
         terms: Vec<String>,
@@ -2560,13 +2570,21 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
         },
         ProjectsCmd::FeedbackCheck {
             file,
+            range,
+            pr_title,
+            pr_body_file,
             terms,
             projects,
             all_projects,
             host,
         } => {
             projects::feedback_check::run(
-                file,
+                projects::feedback_check::Sources {
+                    file,
+                    range,
+                    pr_title,
+                    pr_body_file,
+                },
                 &terms,
                 &projects,
                 all_projects,

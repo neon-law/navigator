@@ -175,22 +175,125 @@ async fn read_private_terms(
         .map_err(|_| "incomplete private-terms response".to_string())
 }
 
+/// The text one run checks. Each source becomes a labelled section so a
+/// finding says which commit message, file diff or PR field carries it.
+#[derive(Default)]
+pub struct Sources {
+    /// Draft title and body file; stdin when no other source is given.
+    pub file: Option<PathBuf>,
+    /// A Git revision range (`origin/main..HEAD`): commit messages and the
+    /// lines the range adds.
+    pub range: Option<String>,
+    /// The pull request title.
+    pub pr_title: Option<String>,
+    /// A file holding the pull request body.
+    pub pr_body_file: Option<PathBuf>,
+}
+
+impl Sources {
+    fn read(&self) -> anyhow::Result<Vec<(String, String)>> {
+        let mut sections = Vec::new();
+        if self.file.is_none()
+            && self.range.is_none()
+            && self.pr_title.is_none()
+            && self.pr_body_file.is_none()
+        {
+            sections.push((String::new(), std::io::read_to_string(std::io::stdin())?));
+        }
+        if let Some(path) = &self.file {
+            sections.push((String::new(), std::fs::read_to_string(path)?));
+        }
+        if let Some(title) = &self.pr_title {
+            sections.push(("PR title".to_string(), title.clone()));
+        }
+        if let Some(path) = &self.pr_body_file {
+            sections.push(("PR body".to_string(), std::fs::read_to_string(path)?));
+        }
+        if let Some(range) = &self.range {
+            sections.extend(range_sections(range)?);
+        }
+        Ok(sections)
+    }
+}
+
+fn git(args: &[&str]) -> anyhow::Result<String> {
+    let out = std::process::Command::new("git").args(args).output()?;
+    if !out.status.success() {
+        return Err(anyhow!("git {} failed", args.first().unwrap_or(&"")));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// One section per commit message and per file's added lines in `range`.
+/// A range git cannot resolve is an error, never an empty clean scan.
+fn range_sections(range: &str) -> anyhow::Result<Vec<(String, String)>> {
+    let Some((base, tip)) = range.split_once("..") else {
+        return Err(anyhow!(
+            "a range needs two revisions, like origin/main..HEAD"
+        ));
+    };
+    // Diff from the merge base, so commits that landed on the base since the
+    // branch forked are not read as this branch's lines.
+    let diff_range = format!("{base}...{}", tip.trim_start_matches('.'));
+    let mut sections = Vec::new();
+    for sha in git(&["rev-list", "--reverse", range, "--"])?.lines() {
+        let message = without_attribution(&git(&["show", "-s", "--format=%B", sha])?);
+        sections.push((
+            format!("commit {} message", &sha[..sha.len().min(8)]),
+            message,
+        ));
+    }
+    sections.extend(added_lines_by_file(&git(&[
+        "diff",
+        "--no-color",
+        "--no-ext-diff",
+        "-U0",
+        &diff_range,
+        "--",
+    ])?));
+    Ok(sections)
+}
+
+/// Drop `Co-Authored-By` trailers naming a `noreply` address: the repository
+/// requires that attribution, and it identifies no client.
+fn without_attribution(message: &str) -> String {
+    message
+        .lines()
+        .filter(|line| !(line.starts_with("Co-Authored-By:") && line.contains("<noreply@")))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Group the added lines of a unified diff by file, labelled `diff <path>`.
+fn added_lines_by_file(diff: &str) -> Vec<(String, String)> {
+    let mut sections: Vec<(String, String)> = Vec::new();
+    for line in diff.lines() {
+        if let Some(path) = line.strip_prefix("+++ ") {
+            let path = path.strip_prefix("b/").unwrap_or(path);
+            sections.push((format!("diff {path}"), String::new()));
+        } else if let Some(added) = line.strip_prefix('+') {
+            if let Some((_, text)) = sections.last_mut() {
+                text.push_str(added);
+                text.push('\n');
+            }
+        }
+    }
+    sections.retain(|(_, text)| !text.is_empty());
+    sections
+}
+
 /// Run the check over `file` (stdin when `None`). Exits 0 on a clean draft,
 /// 1 naming each placeholder when it finds an identifier, 2 when the draft,
 /// the terms, or a Project's coverage cannot be read.
 pub async fn run(
-    file: Option<PathBuf>,
+    sources: Sources,
     terms: &[String],
     projects: &[String],
     all_projects: bool,
     host: Option<&str>,
 ) -> ExitCode {
-    let text = match file {
-        Some(path) => std::fs::read_to_string(path),
-        None => std::io::read_to_string(std::io::stdin()),
-    };
-    let Ok(text) = text else {
-        eprintln!("navigator: could not read the draft");
+    let Ok(sections) = sources.read() else {
+        eprintln!("navigator: could not read the text to check");
         return ExitCode::from(2);
     };
     // Term-only checks work offline without any login.
@@ -224,7 +327,14 @@ pub async fn run(
         }
     };
     let terms = crate::pii_audit::merge_terms(&resolved, terms);
-    let findings = crate::feedback_scan::scan(&text, &terms);
+    let findings: Vec<(String, crate::feedback_scan::Finding)> = sections
+        .iter()
+        .flat_map(|(label, text)| {
+            crate::feedback_scan::scan(text, &terms)
+                .into_iter()
+                .map(move |finding| (label.clone(), finding))
+        })
+        .collect();
     let (lines, code) = report(&findings, &failures);
     for (stream, line) in &lines {
         match stream {
@@ -250,7 +360,7 @@ enum Stream {
 /// dominates both other codes — unresolved coverage is neither clean nor a
 /// mere findings list.
 fn report(
-    findings: &[crate::feedback_scan::Finding],
+    findings: &[(String, crate::feedback_scan::Finding)],
     failures: &[(String, String)],
 ) -> (Vec<(Stream, String)>, ExitCode) {
     let mut lines = Vec::new();
@@ -267,11 +377,16 @@ fn report(
             lines.push((Stream::Err, format!("{code}: {reason}")));
         }
     }
-    for finding in findings {
+    for (label, finding) in findings {
+        let prefix = if label.is_empty() {
+            String::new()
+        } else {
+            format!("{label} ")
+        };
         lines.push((
             Stream::Err,
             format!(
-                "line {}: {} found; write {} instead",
+                "{prefix}line {}: {} found; write {} instead",
                 finding.line, finding.kind, finding.placeholder
             ),
         ));
@@ -290,6 +405,46 @@ fn report(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_diff_yields_only_added_lines_grouped_by_file() {
+        let diff =
+            "diff --git a/a.md b/a.md\n--- a/a.md\n+++ b/a.md\n@@ -1 +1,2 @@\n-old\n+new\n+more\n";
+        assert_eq!(
+            added_lines_by_file(diff),
+            vec![("diff a.md".to_string(), "new\nmore\n".to_string())]
+        );
+    }
+
+    #[test]
+    fn a_bare_revision_is_not_a_range() {
+        assert!(range_sections("HEAD").is_err());
+    }
+
+    #[test]
+    fn the_attribution_trailer_is_not_scanned_but_other_lines_are() {
+        let trailer = concat!("Co-Authored-By: Claude <noreply@", "anthropic.com>");
+        let message = format!("feat: x\n\nbody\n\n{trailer}\n");
+        assert_eq!(without_attribution(&message), "feat: x\n\nbody\n");
+    }
+
+    #[test]
+    fn an_unresolvable_range_is_an_error_not_a_clean_scan() {
+        assert!(range_sections("no-such-ref-xyz..HEAD").is_err());
+    }
+
+    #[test]
+    fn a_finding_names_the_commit_or_field_that_carries_it() {
+        let findings: Vec<_> =
+            crate::feedback_scan::scan("Harper Cruller", &["Harper Cruller".to_string()])
+                .into_iter()
+                .map(|f| ("PR title".to_string(), f))
+                .collect();
+        let (lines, code) = report(&findings, &[]);
+        assert!(lines[0].1.starts_with("PR title line 1:"));
+        assert_eq!(code, ExitCode::FAILURE);
+    }
+
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -650,8 +805,11 @@ mod tests {
                     .to_string(),
             ),
         ];
-        let findings =
-            crate::feedback_scan::scan("Harper Cruller", &["Harper Cruller".to_string()]);
+        let findings: Vec<_> =
+            crate::feedback_scan::scan("Harper Cruller", &["Harper Cruller".to_string()])
+                .into_iter()
+                .map(|f| (String::new(), f))
+                .collect();
         assert!(!findings.is_empty(), "the scan must produce a finding");
 
         let (lines, code) = report(&findings, &failures);
