@@ -560,7 +560,7 @@ fn postgres_gke_overlays_target_the_deployment_namespace_and_retain_storage() {
         assert_eq!(
             container(postgres, "postgres")["image"].as_str(),
             Some(
-                "ghcr.io/neon-law/navigator/postgres@sha256:e35b30928a1f3d0deb6695e0c0974dfa17d3c05839dd9a298e2770ea32d126f5"
+                "ghcr.io/neon-law/navigator/postgres@sha256:68592ff5d7307eac550fd86818fb10011293ec974fd47ba5be956eed2ad148ff"
             ),
             "GKE must consume the tested immutable PostgreSQL image digest"
         );
