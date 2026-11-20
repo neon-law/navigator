@@ -65,7 +65,7 @@ impl Group {
     }
 
     fn stop(&mut self) -> bool {
-        self.stop_with(|pid, signal| killpg(pid, signal))
+        self.stop_with(killpg)
     }
 }
 
@@ -160,7 +160,10 @@ fn execute_with_budget(
     // Reserve cleanup within this budget. Cleanup success is never command success.
     let cleanup_reserve = (budget / 4).min(Duration::from_secs(5));
     let mut natural_completion = false;
-    while Instant::now() < deadline - cleanup_reserve {
+    let command_deadline = deadline
+        .checked_sub(cleanup_reserve)
+        .expect("cleanup reserve fits the command deadline");
+    while Instant::now() < command_deadline {
         if group.poll() {
             natural_completion = true;
             break;

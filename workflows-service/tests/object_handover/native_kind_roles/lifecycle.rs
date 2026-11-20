@@ -260,12 +260,12 @@ impl Fixture {
         if !jobs_drained {
             errors.push("Job/Pod drain unproved");
         }
-        if jobs_drained && healthy(&self.tier.health) {
-            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.tier.cleanup_sql()))
+        if jobs_drained
+            && healthy(&self.tier.health)
+            && std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.tier.cleanup_sql()))
                 .is_err()
-            {
-                errors.push("immutable SQL cleanup incomplete");
-            }
+        {
+            errors.push("immutable SQL cleanup incomplete");
         }
         let owner_closed = close_pool(&mut self.owner).await;
         let app_closed = if sdk_drained {
@@ -354,14 +354,13 @@ async fn run_case(fixture: Arc<tokio::sync::Mutex<Fixture>>, operation: Run) {
         }
     });
     let result = tokio::time::timeout(Duration::from_secs(180), &mut task).await;
-    let outcome = match result {
-        Ok(outcome) => Some(outcome),
-        Err(_) => {
-            task.abort();
-            tokio::time::timeout(Duration::from_secs(5), &mut task)
-                .await
-                .ok()
-        }
+    let outcome = if let Ok(outcome) = result {
+        Some(outcome)
+    } else {
+        task.abort();
+        tokio::time::timeout(Duration::from_secs(5), &mut task)
+            .await
+            .ok()
     };
     let Some(outcome) = outcome else {
         panic!("role task drain unproved; durable pending intent retains tier/resources");

@@ -6512,13 +6512,9 @@ async fn repository_draft_inventory_and_open_pin_the_image_git_commit_and_body()
     let unrelated_create = format!("/app/api/projects/{}/notations", unrelated.id);
     let mut repository =
         git_draft::DraftRepository::configured().expect("owned repository fixture");
-    let source = include_str!("../../templates/notations/neon_law/onboarding__letter.md");
-    let first_body = format!("{source}\nSynthetic Git revision one.\n");
-    let first_sha = repository
-        .commit(&project.code, &draft_code, &first_body)
+    let (first_sha, first_digest) = repository
+        .commit_template_revision(&project.code, &draft_code, "one")
         .unwrap();
-    let first_digest =
-        store::assets::sha256_hex(rules::clauses::compile(&first_body).unwrap().as_bytes());
 
     browser.goto(&base_url()).await.unwrap();
     assert_eq!(git_draft::request(&browser, &inventory, None).await.0, 401);
@@ -6533,69 +6529,49 @@ async fn repository_draft_inventory_and_open_pin_the_image_git_commit_and_body()
         .find(|row| row["template_code"] == draft_code)
         .expect("populated repository Draft is visible to its participating Lawyer");
     assert!(row["notation_id"].is_null());
-    assert_eq!(
-        git_draft::request(&browser, &unrelated_inventory, None)
-            .await
-            .0,
-        404
-    );
     let payload =
         serde_json::json!({"template_code": draft_code, "client_email": "client@neonlaw.com"});
-    assert_eq!(
-        git_draft::request(&browser, &unrelated_create, Some((payload.clone(), &csrf)))
-            .await
-            .0,
-        404
-    );
-    assert_eq!(
-        git_draft::request(&browser, &create, Some((payload.clone(), "")))
-            .await
-            .0,
-        403
-    );
+    git_draft::assert_access_guards(
+        &browser,
+        &unrelated_inventory,
+        &unrelated_create,
+        &create,
+        &payload,
+        &csrf,
+    )
+    .await;
     let (status, opened) =
         git_draft::request(&browser, &create, Some((payload.clone(), &csrf))).await;
     assert_eq!(status, 201, "real repository import must open a Notation");
     let first_id = opened["notation_id"]
         .as_str()
         .expect("created Notation UUID");
-    let first_url = format!("/app/api/notations/{first_id}");
-    let (status, first) = git_draft::request(&browser, &first_url, None).await;
-    assert_eq!(status, 200);
-    assert_eq!(first["template_source_commit_sha"], first_sha);
-    assert_eq!(first["template_body_sha256"], first_digest);
+    let first =
+        git_draft::assert_notation_provenance(&browser, first_id, &first_sha, &first_digest).await;
     assert_eq!(first["project_id"], project.id.to_string());
 
-    let second_body = format!("{source}\nSynthetic Git revision two.\n");
-    let second_sha = repository
-        .commit(&project.code, &draft_code, &second_body)
+    let (second_sha, second_digest) = repository
+        .commit_template_revision(&project.code, &draft_code, "two")
         .unwrap();
-    let second_digest =
-        store::assets::sha256_hex(rules::clauses::compile(&second_body).unwrap().as_bytes());
     assert_ne!(first_sha, second_sha);
     assert_ne!(first_digest, second_digest);
-    let (status, rows) = git_draft::request(&browser, &inventory, None).await;
-    assert_eq!(status, 200);
-    assert!(rows
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|row| row["notation_id"] == first_id && row["template_stale"] == true));
-    let (status, preserved) = git_draft::request(&browser, &first_url, None).await;
-    assert_eq!(status, 200);
-    assert_eq!(preserved["template_source_commit_sha"], first_sha);
-    assert_eq!(preserved["template_body_sha256"], first_digest);
+    git_draft::assert_stale_revision_preserved(
+        &browser,
+        &inventory,
+        first_id,
+        &first_sha,
+        &first_digest,
+    )
+    .await;
     let (status, opened) = git_draft::request(&browser, &create, Some((payload, &csrf))).await;
     assert_eq!(status, 201);
     let second_id = opened["notation_id"]
         .as_str()
         .expect("second Notation UUID");
     assert_ne!(first_id, second_id);
-    let (status, second) =
-        git_draft::request(&browser, &format!("/app/api/notations/{second_id}"), None).await;
-    assert_eq!(status, 200);
-    assert_eq!(second["template_source_commit_sha"], second_sha);
-    assert_eq!(second["template_body_sha256"], second_digest);
+    let second =
+        git_draft::assert_notation_provenance(&browser, second_id, &second_sha, &second_digest)
+            .await;
     assert_ne!(
         first["template_id"], second["template_id"],
         "changed Draft bytes create a new immutable Template version"

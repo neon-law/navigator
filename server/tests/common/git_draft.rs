@@ -52,7 +52,7 @@ fn inspect(kind: &str, id: &str) -> anyhow::Result<Value> {
         rows.len() == 1,
         "fixture inspection must identify exactly one resource"
     );
-    Ok(rows.into_iter().next().context("fixture inspect row")?)
+    rows.into_iter().next().context("fixture inspect row")
 }
 
 fn hex(value: &str, prefix: &str) -> bool {
@@ -209,6 +209,21 @@ impl DraftRepository {
             .to_owned())
     }
 
+    /// Commit a real template revision and hash the compiled bytes the API must import.
+    pub fn commit_template_revision(
+        &mut self,
+        project_code: &str,
+        draft_code: &str,
+        revision: &str,
+    ) -> anyhow::Result<(String, String)> {
+        let source = include_str!("../../../templates/notations/neon_law/onboarding__letter.md");
+        let body = format!("{source}\nSynthetic Git revision {revision}.\n");
+        let commit = self.commit(project_code, draft_code, &body)?;
+        let compiled = rules::clauses::compile(&body).map_err(anyhow::Error::msg)?;
+        let digest = store::assets::sha256_hex(compiled.as_bytes());
+        Ok((commit, digest))
+    }
+
     pub fn commit(
         &mut self,
         project_code: &str,
@@ -319,6 +334,59 @@ pub async fn request(
         result["status"].as_u64().expect("HTTP status"),
         result["body"].clone(),
     )
+}
+
+pub async fn assert_access_guards(
+    browser: &fantoccini::Client,
+    unrelated_inventory: &str,
+    unrelated_create: &str,
+    create: &str,
+    payload: &Value,
+    csrf: &str,
+) {
+    assert_eq!(request(browser, unrelated_inventory, None).await.0, 404);
+    assert_eq!(
+        request(browser, unrelated_create, Some((payload.clone(), csrf)))
+            .await
+            .0,
+        404
+    );
+    assert_eq!(
+        request(browser, create, Some((payload.clone(), "")))
+            .await
+            .0,
+        403
+    );
+}
+
+pub async fn assert_notation_provenance(
+    browser: &fantoccini::Client,
+    id: &str,
+    commit: &str,
+    digest: &str,
+) -> Value {
+    let (status, notation) = request(browser, &format!("/app/api/notations/{id}"), None).await;
+    assert_eq!(status, 200);
+    assert_eq!(notation["template_source_commit_sha"], commit);
+    assert_eq!(notation["template_body_sha256"], digest);
+    notation
+}
+
+pub async fn assert_stale_revision_preserved(
+    browser: &fantoccini::Client,
+    inventory: &str,
+    id: &str,
+    commit: &str,
+    digest: &str,
+) {
+    let (status, rows) = request(browser, inventory, None).await;
+    assert_eq!(status, 200);
+    assert!(rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|row| row["notation_id"] == id && row["template_stale"] == true));
+    assert_notation_provenance(browser, id, commit, digest).await;
 }
 
 pub async fn csrf(browser: &fantoccini::Client) -> String {

@@ -383,7 +383,7 @@ impl Fixture {
         assert_eq!(
             denied
                 .as_database_error()
-                .and_then(|error| error.code())
+                .and_then(sqlx::error::DatabaseError::code)
                 .as_deref(),
             Some("42501")
         );
@@ -663,15 +663,15 @@ async fn base_and_wal_restore_resumes_checkpointed_effects() {
     let mut body = tokio::spawn(async move {
         inner.lock().await.run().await;
     });
-    let outcome = match tokio::time::timeout(Duration::from_secs(210), &mut body).await {
-        Ok(outcome) => outcome,
-        Err(_) => {
+    let outcome =
+        if let Ok(outcome) = tokio::time::timeout(Duration::from_secs(210), &mut body).await {
+            outcome
+        } else {
             body.abort();
             tokio::time::timeout(Duration::from_secs(5), &mut body)
                 .await
                 .expect("body drain unproved; durable intent retains tier")
-        }
-    };
+        };
     let inner = Arc::clone(&fixture);
     let mut cleanup = tokio::spawn(async move { inner.lock().await.finish().await });
     let cleaned = tokio::time::timeout(Duration::from_secs(60), &mut cleanup).await;

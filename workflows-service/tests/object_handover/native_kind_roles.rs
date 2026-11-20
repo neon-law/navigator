@@ -1,6 +1,7 @@
 //! Opt-in acceptance on the already verified, drained, task-owned native KIND tier.
 use super::{matter, new_project, push, Matter, Source};
 use base64::Engine as _;
+use serde::Deserialize as _;
 use serde_json::{json, Value};
 use sqlx::postgres::{PgConnectOptions, PgSslMode};
 use std::path::{Path, PathBuf};
@@ -95,7 +96,7 @@ impl Tier {
         );
         let result = run(
             &self.health,
-            &mut Command::new(&self.hudson)
+            Command::new(&self.hudson)
                 .current_dir(&self.root)
                 .args(["ops", "postgres", "ready", "--json"]),
             None,
@@ -154,7 +155,7 @@ impl Tier {
         );
         let source = run(
             &health,
-            &mut Command::new("git")
+            Command::new("git")
                 .current_dir(&root)
                 .args(["rev-parse", "HEAD"]),
             None,
@@ -166,7 +167,7 @@ impl Tier {
         // This existing command validates intent/registry/namespace/TLS identity before any Secret read.
         let ready: Value = serde_json::from_slice(&run(
             &health,
-            &mut Command::new(&hudson)
+            Command::new(&hudson)
                 .current_dir(&root)
                 .args(["ops", "postgres", "ready", "--json"]),
             None,
@@ -204,10 +205,10 @@ impl Tier {
             .into();
         let pods = tier.json(&["get", "pods", "-l", "app=navigator-postgres", "-o", "json"]);
         assert_eq!(pods["items"].as_array().unwrap().len(), 1);
-        tier.pod_uid = pods["items"][0]["metadata"]["uid"]
+        pods["items"][0]["metadata"]["uid"]
             .as_str()
             .unwrap()
-            .to_owned();
+            .clone_into(&mut tier.pod_uid);
         tier.verify();
         tier.load_role_credentials_and_template();
         tier
@@ -239,12 +240,11 @@ impl Tier {
         // Render the current canonical Job, not a remembered/TTL-expired live Job or copied SQL.
         let rendered = run(
             &self.health,
-            &mut Command::new("kubectl")
+            Command::new("kubectl")
                 .current_dir(&self.root)
                 .args(["kustomize", "k8s/overlays/kind-postgres-dbos-deps"]),
             None,
         );
-        use serde::Deserialize as _;
         for document in serde_yaml::Deserializer::from_slice(&rendered) {
             let value = Value::deserialize(document).unwrap();
             if value["kind"] == "Job" && value["metadata"]["name"] == "navigator-postgres-roles" {
@@ -588,7 +588,7 @@ impl Tier {
 
 async fn role_acl_fingerprint(pg: &PostgresDb) -> Value {
     // Deliberately omit passwords/role authentication hashes and arbitrary settings.
-    sqlx::query_scalar(r#"
+    sqlx::query_scalar(r"
 SELECT jsonb_build_object(
  'roles',(SELECT jsonb_agg(jsonb_build_array(rolname,rolsuper,rolcreatedb,rolcreaterole,
        rolreplication,rolbypassrls,rolcanlogin,rolconnlimit) ORDER BY rolname)
@@ -612,7 +612,7 @@ SELECT jsonb_build_object(
        FROM pg_db_role_setting s JOIN pg_roles r ON r.oid=s.setrole,
        unnest(s.setconfig) setting WHERE s.setdatabase=(SELECT oid FROM pg_database
        WHERE datname=current_database()) AND setting='session_preload_libraries=age'))
-"#).fetch_one(pg.pool()).await.unwrap()
+").fetch_one(pg.pool()).await.unwrap()
 }
 
 async fn snapshot(pg: &PostgresDb) -> Vec<Value> {
@@ -659,7 +659,7 @@ async fn canonical_initializer_converges_origin_role_rails(app: &PostgresDb, own
             assert_eq!(
                 error
                     .as_database_error()
-                    .and_then(|error| error.code())
+                    .and_then(sqlx::error::DatabaseError::code)
                     .as_deref(),
                 Some("42501")
             );
@@ -673,7 +673,7 @@ async fn canonical_initializer_converges_origin_role_rails(app: &PostgresDb, own
     assert_eq!(
         error
             .as_database_error()
-            .and_then(|error| error.code())
+            .and_then(sqlx::error::DatabaseError::code)
             .as_deref(),
         Some("42501")
     );
