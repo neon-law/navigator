@@ -3,6 +3,8 @@
 //! A tier binding is the privileged provisioner's verified Kubernetes identity.
 //! This module binds it to successful database creation; it does not authenticate
 //! Kubernetes itself. Captured-source enrollment keeps its independent guards.
+use std::sync::OnceLock;
+
 use super::{embedded_migrator, PostgresDb};
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgConnectOptions;
@@ -249,7 +251,10 @@ pub async fn resume(
 }
 
 fn schema_contract() -> serde_json::Value {
-    schema_contract_for(&embedded_migrator())
+    static CONTRACT: OnceLock<serde_json::Value> = OnceLock::new();
+    CONTRACT
+        .get_or_init(|| schema_contract_for(&embedded_migrator()))
+        .clone()
 }
 
 fn schema_contract_for(runner: &sqlx::migrate::Migrator) -> serde_json::Value {

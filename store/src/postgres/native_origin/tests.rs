@@ -549,6 +549,22 @@ fn future_schema(gated: bool) -> sqlx::migrate::Migrator {
     sqlx::migrate::Migrator::with_migrations(migrations)
 }
 
+#[test]
+fn compiled_schema_contract_is_isolated_from_owned_values_and_future_runners() {
+    let expected = schema_contract_for(&embedded_migrator());
+    assert_eq!(schema_contract(), expected);
+    let mut owned = schema_contract();
+    owned
+        .as_array_mut()
+        .expect("migration contract array")
+        .clear();
+    assert_ne!(owned, expected);
+    assert_eq!(schema_contract(), expected);
+    let future = schema_contract_for(&future_schema(false));
+    assert_ne!(future, expected);
+    assert_eq!(schema_contract(), expected);
+}
+
 async fn wait_for(pg: &PostgresDb, sql: &'static str) {
     tokio::time::timeout(std::time::Duration::from_secs(20), async {
         loop {
