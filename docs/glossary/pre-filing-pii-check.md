@@ -19,6 +19,11 @@ as the first line of its output — a partially covered scan is never clean, and
 list read, unknown code, or ambiguous code refuses the whole check. No incomplete check ever counts as clean. The draft
 never leaves the machine. Findings name categories and replacement placeholders, not the matched private values.
 
+`--range <revision range>` (for example `origin/main..HEAD`), `--pr-title` and `--pr-body-file` add a branch's commit
+messages, the lines it adds, and the pull request title and body to the same scan, so a push or PR carries no private
+identifier. Each finding names its source (`commit abcd1234 message`, `diff path`, `PR title`, `PR body`) and line. A
+range git cannot resolve refuses the check; it never reads as clean.
+
 `--project <Project code>` limits a scan to explicitly selected Projects. Without `--all-projects` or `--project`,
 `--term` and generic-pattern scanning work offline. A clean scan is coverage for the identifiers and patterns checked;
 it does not authorize quoting matter text or replace lawyer review.
