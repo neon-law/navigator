@@ -53,7 +53,7 @@ const AXE_WCAG_TAGS: [&str; 4] = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"];
 /// schemes. `the_axe_suite_carries_the_component_policy` pins all three.
 const AXE_POLICY_SUITE: &str = "accessibility_e2e";
 
-/// The suites the CI `integration` gate runs, in order.
+/// The suites selected by the CI `integration` gate.
 const SUITES: [&str; 3] = [
     "browser_e2e",
     "accessibility_e2e",
@@ -81,9 +81,8 @@ pub fn run_browser_e2e(base_url: Option<&str>) -> Result<()> {
     let _driver = Chromedriver::start(&cft.chromedriver, driver_port)?;
     let webdriver_url = format!("http://127.0.0.1:{driver_port}");
 
-    // Lawyer must be `lawyer` in the store the host `web` reads, so the grant
-    // resolves its endpoint from the same `NAVIGATOR_SURREAL_*` the host
-    // `web` was started with.
+    // Grant against the same admitted PostgreSQL target the host web reads;
+    // the compatibility handle is inert and opens no Source connection.
     e2e::grant_lawyer_at()?;
 
     let stack = std::env::var("RUST_MIN_STACK").ok();
@@ -93,37 +92,41 @@ pub fn run_browser_e2e(base_url: Option<&str>) -> Result<()> {
          /design audited in light and dark ===",
         AXE_WCAG_TAGS.join(", ")
     );
-    for suite in SUITES {
-        eprintln!(
-            "=== cargo nextest run -p server --test {suite} (ci profile, pinned Chrome, NAV_REQUIRE_HARNESS=1) ==="
-        );
-        let mut cmd = Command::new("cargo");
-        cmd.args([
-            "nextest",
-            "run",
-            "-p",
-            "server",
-            "--test",
-            suite,
-            "--profile",
-            "ci",
-            "--no-fail-fast",
-            "--test-threads",
-            "1",
-            "--no-capture",
-        ]);
-        for (key, value) in &env {
-            cmd.env(key, value);
-        }
-        run(&mut cmd).with_context(|| {
-            format!(
-                "{suite} failed — a real failure, or (with NAV_REQUIRE_HARNESS=1) a harness \
-                 the suite could not reach"
-            )
-        })?;
+    // One run owns the ci profile's single JUnit report. Independent runs
+    // overwrite it and return early before later binaries after a failure.
+    eprintln!(
+        "=== browser gate: {} (ci profile, pinned Chrome, NAV_REQUIRE_HARNESS=1) ===",
+        SUITES.join(" + ")
+    );
+    let mut cmd = browser_test_command();
+    for (key, value) in &env {
+        cmd.env(key, value);
     }
+    run(&mut cmd).context(
+        "browser gate failed — inspect the complete Nextest report for test failures \
+         or a harness the suites could not reach",
+    )?;
     eprintln!("=== browser gate green: {} ===", SUITES.join(" + "));
     Ok(())
+}
+
+/// Select all browser binaries in one serial, non-fail-fast run so one report
+/// retains every suite and its retry outcomes, even when a different suite fails.
+fn browser_test_command() -> Command {
+    let mut cmd = Command::new("cargo");
+    cmd.args(["nextest", "run", "-p", "server"]);
+    for suite in SUITES {
+        cmd.args(["--test", suite]);
+    }
+    cmd.args([
+        "--profile",
+        "ci",
+        "--no-fail-fast",
+        "--test-threads",
+        "1",
+        "--no-capture",
+    ]);
+    cmd
 }
 
 /// Resolve the web base URL: an explicit `--base-url`/`$NAV_BASE_URL`
@@ -319,6 +322,33 @@ impl Drop for Chromedriver {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn all_browser_binaries_share_one_serial_non_fail_fast_report_run() {
+        let command = browser_test_command();
+        assert_eq!(command.get_program(), "cargo");
+        let args: Vec<_> = command
+            .get_args()
+            .map(|arg| arg.to_str().unwrap())
+            .collect();
+        assert_eq!(&args[..4], ["nextest", "run", "-p", "server"]);
+        let selected: Vec<_> = args
+            .windows(2)
+            .filter_map(|pair| (pair[0] == "--test").then_some(pair[1]))
+            .collect();
+        assert_eq!(
+            selected,
+            [
+                "browser_e2e",
+                "accessibility_e2e",
+                "notation_preview_layout"
+            ]
+        );
+        assert!(args.windows(2).any(|pair| pair == ["--profile", "ci"]));
+        assert!(args.windows(2).any(|pair| pair == ["--test-threads", "1"]));
+        assert!(args.contains(&"--no-fail-fast"));
+        assert!(args.contains(&"--no-capture"));
+    }
 
     #[test]
     fn resolve_base_url_prefers_explicit_then_port() {
