@@ -1707,6 +1707,7 @@ mod tests {
                 "20261119010000_create_project_pull_request_notice.sql",
                 include_str!("../postgres/migrations/20261119010000_create_project_pull_request_notice.sql"),
             ),
+            ("20261119020000_email_summary_recovery.sql", include_str!("../postgres/migrations/20261119020000_email_summary_recovery.sql")),
             (
                 "20261119180000_add_firm_esign_provider.sql",
                 include_str!("../postgres/migrations/20261119180000_add_firm_esign_provider.sql"),

@@ -39,6 +39,7 @@ pub struct WorkerIngress {
     pub reconcile: Option<ReconcileIngress>,
     pub nightly_project_update: Option<NightlyIngress>,
     pub email_summary: Option<EmailSummaryIngress>,
+    pub email_summary_recovery: Option<crate::dbos_email_summary::recovery::RecoveryIngress>,
     pub inbound_message_alert: Option<AlertIngress>,
     pub project_slack: Option<ProjectSlackIngress>,
     pub social_publisher: Option<SocialPublisherIngress>,
@@ -467,6 +468,13 @@ impl FinanceStarter for DbosFinanceStarter {
     }
 }
 
+pub(crate) fn request_fingerprint<T: serde::Serialize>(
+    request: &T,
+) -> Result<Vec<u8>, serde_json::Error> {
+    use sha2::{Digest, Sha256};
+    Ok(Sha256::digest(serde_json::to_vec(request)?).to_vec())
+}
+
 async fn claim_request_identity<O, E, T>(
     postgres: &store::postgres::PostgresDb,
     dbos: &dbos::DBOS,
@@ -477,10 +485,7 @@ async fn claim_request_identity<O, E, T>(
 where
     T: serde::Serialize,
 {
-    use sha2::{Digest, Sha256};
-
-    let encoded = serde_json::to_vec(request).map_err(|_| StartError::StartFailed)?;
-    let fingerprint = Sha256::digest(encoded);
+    let fingerprint = request_fingerprint(request).map_err(|_| StartError::StartFailed)?;
     let existing: Option<(String, Vec<u8>)> = sqlx::query_as(
         "SELECT workflow_name, request_fingerprint FROM dbos_workflow_request WHERE workflow_id = $1",
     )
@@ -634,14 +639,11 @@ pub fn add_routes(router: Router, ingress: WorkerIngress) -> Router {
     } else {
         router
     };
-    let router = if let Some(email_summary) = ingress.email_summary {
-        router.route(
-            "/internal/dbos/email-summary",
-            post(start_email_summary).with_state(email_summary),
-        )
-    } else {
-        router
-    };
+    let router = add_email_summary_routes(
+        router,
+        ingress.email_summary,
+        ingress.email_summary_recovery,
+    );
     let router = if let Some(alert) = ingress.inbound_message_alert {
         router.route(
             "/internal/dbos/inbound-message-alert",
@@ -709,6 +711,26 @@ pub fn add_routes(router: Router, ingress: WorkerIngress) -> Router {
         router
     };
     router.layer(axum::extract::DefaultBodyLimit::max(MAX_BODY_BYTES))
+}
+
+fn add_email_summary_routes(
+    router: Router,
+    summary: Option<EmailSummaryIngress>,
+    recovery: Option<crate::dbos_email_summary::recovery::RecoveryIngress>,
+) -> Router {
+    let router = if let Some(summary) = summary {
+        router.route(
+            "/internal/dbos/email-summary",
+            post(start_email_summary).with_state(summary),
+        )
+    } else {
+        router
+    };
+    if let Some(recovery) = recovery {
+        router.merge(crate::dbos_email_summary::recovery::router(recovery))
+    } else {
+        router
+    }
 }
 
 /// The notation virtual object's eight routes: the Restate object's seven
@@ -1580,6 +1602,31 @@ async fn start_social_reconcile(
     ))
 }
 
+pub(crate) async fn claim_summary_recovery_request(
+    postgres: &store::postgres::PostgresDb,
+    dbos: &dbos::DBOS,
+    workflow_id: &str,
+    request: &crate::dbos_email_summary::recovery::RecoveryInput,
+) -> Result<(), StatusCode> {
+    claim_request_identity::<
+        crate::dbos_email_summary::recovery::RecoveryReport,
+        crate::dbos_email_summary::recovery::RecoveryError,
+        _,
+    >(
+        postgres,
+        dbos,
+        workflow_id,
+        crate::dbos_email_summary::recovery::WORKFLOW,
+        request,
+    )
+    .await
+    .map_err(|error| match error {
+        StartError::Conflict => StatusCode::CONFLICT,
+        StartError::ProjectNotFound => StatusCode::NOT_FOUND,
+        StartError::StartFailed => StatusCode::SERVICE_UNAVAILABLE,
+    })
+}
+
 async fn start_email_summary(
     State(ingress): State<EmailSummaryIngress>,
     headers: HeaderMap,
@@ -1645,7 +1692,7 @@ async fn start_inbound_message_alert(
     ))
 }
 
-fn authorized(headers: &HeaderMap, token: &str) -> bool {
+pub(crate) fn authorized(headers: &HeaderMap, token: &str) -> bool {
     let Some(value) = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())

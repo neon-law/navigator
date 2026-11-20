@@ -1436,7 +1436,14 @@ fn dispatch_with_dns_provider(
         crate::Command::Ops(crate::OpsCmd::EmailSummary(crate::EmailSummaryCmd::Redrive {
             receipt,
             after_failed_result,
-        })) => email_summary_redrive::run(receipt, after_failed_result.as_deref()),
+            recovery_id,
+            from_recovery,
+        })) => email_summary_redrive::run(
+            receipt,
+            after_failed_result.as_deref(),
+            recovery_id,
+            from_recovery,
+        ),
         crate::Command::Ops(crate::OpsCmd::EmailSummary(crate::EmailSummaryCmd::Health)) => {
             email_summary_delivery::health()
         }

@@ -54,6 +54,12 @@ pub const WORKFLOW_SERVICES: &[&str] = &[
 /// convention.
 pub const VIRTUAL_OBJECTS: &[&str] = &["notation", "project-slack"];
 
+/// Internal DBOS operations have no Restate binding and share their parent caller switch.
+pub const INTERNAL_DBOS_OPERATIONS: &[(&str, &str)] = &[(
+    crate::dbos_email_summary::recovery::WORKFLOW,
+    crate::dbos_email_summary::ENABLED_ENV,
+)];
+
 #[cfg(test)]
 mod tests {
     use super::{VIRTUAL_OBJECTS, WORKFLOW_SERVICES};
@@ -145,6 +151,16 @@ mod tests {
             registered,
             admission.iter().map(|(name, _)| *name).collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn internal_recovery_uses_its_registered_parent_selector() {
+        for (name, flag) in super::INTERNAL_DBOS_OPERATIONS {
+            assert!(!WORKFLOW_SERVICES.contains(name));
+            assert!(store::workflow_engine::WORKFLOWS
+                .iter()
+                .any(|selection| selection.name == "EmailSummary" && selection.flag == *flag));
+        }
     }
 
     /// Every registered durable workflow is named `PascalCase`, checked with

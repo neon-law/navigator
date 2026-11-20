@@ -2252,35 +2252,28 @@ enum EmailSummaryCmd {
     /// Read-only pipeline check: fail on overdue receipts or failed/unknown delivery.
     Health,
 
-    /// Re-run a completed `EmailSummary` Restate workflow for one receipt —
-    /// the recovery path for a run that completed with a bounded provider
-    /// failure (e.g. `input_digest_mismatch`) before intake can re-POST,
-    /// since `SendGrid` never retries a message that already got a 202.
-    ///
-    /// Refuses when the receipt's Slack delivery is already `confirmed`, so
-    /// this can never risk a second post, unless `--after-failed-result`
-    /// vouches that the confirmed post was a failure notice. Never creates a second receipt,
-    /// letter, or archive: those are digest-keyed in `SurrealDB` already, and
-    /// this command only purges the retained invocation and resubmits the
-    /// identical `EmailSummaryRequest` under the same workflow key (the
-    /// receipt id). Prints the receipt id, the invocation id, and status
-    /// only — never a summary, a letter, or any client content. Reads
-    /// `NAVIGATOR_SURREAL_*` (the deployment's database), the
-    /// `NAVIGATOR_SUMMARY_*` / `RESTATE_BROKER_URL` summary-lane
-    /// configuration, and `RESTATE_ADMIN_URL` / `RESTATE_ADMIN_TOKEN` /
-    /// `RESTATE_AUTH_TOKEN` — the same environment `hudson dev up`/`ops
-    /// ship` already source for the target deployment, so there is no
-    /// separate `--deployment` flag to keep in sync with it.
+    /// Recover one archived `EmailSummary` on its selected durable engine.
+    /// DBOS uses an explicit recovery identity and preserves recorded inputs/checkpoints.
+    /// Restate purges a completed invocation before resubmitting the same request.
+    /// Confirmed failure notices require --after-failed-result; uncertain deliveries
+    /// remain quarantined. Reads the target's PostgreSQL and summary configuration.
+    /// Diagnostics contain status words only.
     Redrive {
         /// The receipt to redrive.
         #[arg(long)]
         receipt: uuid::Uuid,
         /// Vouch that the receipt's `confirmed` Slack post was a
         /// provider-failure notice, and name the operator. Reopens the
-        /// delivery after the purge so the redriven run posts the real
-        /// summary; without it a `confirmed` delivery is refused.
+        /// delivery only after selected-engine recovery admission. An interrupted
+        /// DBOS run preserves its confirmed delivery rather than reopening it.
         #[arg(long, value_name = "ACTOR")]
         after_failed_result: Option<String>,
+        /// Stable identity for this DBOS repair; repeat the same value after a lost response.
+        #[arg(long)]
+        recovery_id: Option<uuid::Uuid>,
+        /// Repair the child of a previous recovery rather than its original run.
+        #[arg(long, requires = "recovery_id")]
+        from_recovery: Option<uuid::Uuid>,
     },
     /// List every delivery currently quarantined in `UNKNOWN`, the state
     /// `deliver_summary` records when Slack's response is lost, times out,

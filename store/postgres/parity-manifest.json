@@ -15,6 +15,13 @@
       "table": "deployment_secret_change"
     },
     {
+      "extra_column": "summary_recovery_operation",
+      "extra_table": null,
+      "missing_column": null,
+      "missing_table": null,
+      "table": "email_receipt"
+    },
+    {
       "extra_column": "entity_id",
       "extra_table": null,
       "missing_column": null,
@@ -3080,6 +3087,7 @@
           "receiving_mailbox": "TEXT",
           "sender_authenticated": "BOOLEAN",
           "source_message_id": "TEXT",
+          "summary_recovery_operation": "UUID",
           "updated_at": "TIMESTAMPTZ"
         },
         "foreign_keys": [
