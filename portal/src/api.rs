@@ -1176,7 +1176,15 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
         (
             "POST",
             "/app/api/projects/{id}/mail/eml",
-            post(eml_upload_door),
+            // A legacy CLI still ships the whole raw .eml base64-encoded in
+            // one request, so the cap admits the base64 inflation of the
+            // largest raw message the door accepts (the inbound-message
+            // ceiling); the new CLI's reference requests carry no MIME
+            // bytes and stay far under it. An over-limit payload fails as
+            // the door's classified JSON — never axum's bare 413.
+            post(eml_upload_door).layer(DefaultBodyLimit::max(
+                crate::inbound_email::MAX_INBOUND_MESSAGE_BYTES / 3 * 4 + 65_536,
+            )),
         ),
         (
             "POST",
@@ -6287,6 +6295,24 @@ struct UploadDocumentRequest {
     /// chain. Absent — an old CLI — files exactly as before, no CAS.
     #[serde(default)]
     expected_head: Option<store::assets::ExpectedHead>,
+    /// Mail-lane provenance the CLI's `mail parse` stamps when it files a
+    /// `.eml` source document or one of its attachments through this door:
+    /// the message identity the raw `.eml` door's parse derives on its own
+    /// variant. Optional; an incomplete block is `400
+    /// invalid_mail_provenance` and writes nothing.
+    #[serde(default)]
+    mail_provenance: Option<UploadMailProvenance>,
+}
+
+/// The mail provenance a document-lane mail filing stamps onto the asset row,
+/// spelled on the wire as the strings the ingest stores (`source_message_id`,
+/// `source_sender`, `source_received_at`, `source_subject`).
+#[derive(Deserialize)]
+struct UploadMailProvenance {
+    message_id: String,
+    sender: String,
+    received_at: String,
+    subject: Option<String>,
 }
 
 /// Reserve provider evidence for server writes and verify completion in the Firm account.
@@ -6692,6 +6718,26 @@ async fn upload_document_door(
         input.metadata,
     )
     .await?;
+    let mail_provenance = match input.mail_provenance.as_ref() {
+        Some(provenance) => {
+            let message_id = provenance.message_id.trim();
+            let sender = provenance.sender.trim();
+            let received_at = provenance.received_at.trim();
+            if message_id.is_empty() || sender.is_empty() || received_at.is_empty() {
+                return Ok(bad_request(
+                    "invalid_mail_provenance",
+                    "Mail provenance needs the message id, sender, and received date.",
+                ));
+            }
+            Some(store::documents::MailProvenance {
+                message_id,
+                sender,
+                received_at,
+                subject: provenance.subject.as_deref().unwrap_or(""),
+            })
+        }
+        None => None,
+    };
     let args = store::documents::IngestArgs {
         project_id: id,
         source: store::documents::source::UPLOAD,
@@ -6711,11 +6757,8 @@ async fn upload_document_door(
         secondary_storage_key: None,
         visibility,
     };
-    let filed = match store::assets::file_revision_with_expected_head(
-        &state.surreal,
-        &state.storage,
-        &args,
-        &store::documents::DocumentIdentity {
+    let filed = match {
+        let identity = store::documents::DocumentIdentity {
             slug: Some(slug),
             published_at: None,
             metadata,
@@ -6729,12 +6772,33 @@ async fn upload_document_door(
             notarization: input.notarization.clone(),
             evidence: input.evidence.clone(),
             folder: folder.map(store::document_pointers::MatterFolder::as_str),
-        },
-        input.expected_head.as_ref(),
-        &bytes,
-    )
-    .await
-    {
+        };
+        match mail_provenance.as_ref() {
+            Some(provenance) => {
+                store::assets::file_revision_with_provenance_and_expected_head(
+                    &state.surreal,
+                    &state.storage,
+                    &args,
+                    &identity,
+                    provenance,
+                    input.expected_head.as_ref(),
+                    &bytes,
+                )
+                .await
+            }
+            None => {
+                store::assets::file_revision_with_expected_head(
+                    &state.surreal,
+                    &state.storage,
+                    &args,
+                    &identity,
+                    input.expected_head.as_ref(),
+                    &bytes,
+                )
+                .await
+            }
+        }
+    } {
         Ok(filed) => filed,
         Err(store::assets::RevisionError::HeadConflict { current, .. }) => {
             return Ok(head_conflict_response(current.as_ref()));
@@ -7666,14 +7730,18 @@ struct EmlUploadRequest {
     gmail_sent: Option<bool>,
     /// The raw RFC 822 message, base64-encoded: bytes the caller already
     /// holds (a saved copy, a downloaded export), so no per-machine Gmail
-    /// OAuth grant is involved in filing.
-    raw_base64: String,
+    /// OAuth grant is involved in filing. The legacy CLI's variant — the
+    /// newer CLI files the bytes through the document lane and sends
+    /// `source_document` instead. At most one of the two is present;
+    /// neither is `400 missing_payload`.
+    raw_base64: Option<String>,
     /// The firm mailbox the filing lawyer files from. When it matches the
     /// message's `From`, the message files as outbound. Defaults to the
     /// signed-in lawyer's own address.
     mailbox: Option<String>,
     /// Required asset-lane kind when the message carries attachments — a
-    /// decision, never a default, matching `POST .../documents`.
+    /// decision, never a default, matching `POST .../documents`. Not
+    /// needed on the reference variant: its attachments are already filed.
     kind: Option<String>,
     /// `"client"` makes every filed attachment client-visible; anything else
     /// (the default) files them as internal work product.
@@ -7681,6 +7749,35 @@ struct EmlUploadRequest {
     /// List what would file, writing nothing.
     #[serde(default)]
     dry_run: bool,
+    /// The new CLI's variant: the asset id of the full raw `.eml` the
+    /// caller already filed through the document lane (`mail/<message
+    /// ref>/source`, `message/rfc822`). The request then carries only
+    /// headers, text, and `source_ref` — no MIME bytes — and the filed
+    /// Communication links this document as its own (`asset_id`, LAW-469).
+    /// The document must already be filed on this matter (`400
+    /// source_document_not_on_matter`); the attachments are not re-ingested.
+    source_document: Option<Uuid>,
+    /// Asset ids of the attachments the caller already filed through the
+    /// document lane under `mail/<message ref>/<index>`. Recorded for the
+    /// response's pointer list, never re-ingested; each must be on this
+    /// matter (`400 attachment_document_not_on_matter`).
+    #[serde(default)]
+    attachment_documents: Vec<Uuid>,
+    /// The external id the message dedups on (`eml:<Message-ID or
+    /// digest>`), as the filing CLI parsed it. Reference filings only.
+    source_ref: Option<String>,
+    /// The message's `From` address; reference filings only.
+    from: Option<String>,
+    /// The message's `To` addresses, comma-joined; reference filings only.
+    to: Option<String>,
+    /// The message subject; reference filings only.
+    subject: Option<String>,
+    /// The plain-text body as the filing CLI parsed it; reference filings
+    /// only.
+    text_body: Option<String>,
+    /// RFC 2822 date the message was sent or received; reference filings
+    /// only.
+    occurred_at: Option<String>,
 }
 
 /// One attachment as the .eml door reports it, filed or not.
@@ -7759,12 +7856,63 @@ async fn eml_upload_door(
     if !in_scope {
         return Err(ApiError::NotFound);
     }
-    let Ok(raw) = base64::engine::general_purpose::STANDARD.decode(input.raw_base64.trim()) else {
+    // The new CLI's variant: the .eml and its attachments already sit in
+    // object storage as matter documents, so this request carries only
+    // their ids, headers, and text — never MIME bytes — and stays far
+    // under any body limit at any message size. `source_document` links
+    // the filed Communication to the stored raw message (LAW-469).
+    if let Some(source_document) = input.source_document {
+        if input.raw_base64.is_some() {
+            return Ok(bad_request(
+                "ambiguous_payload",
+                "Send either raw_base64 or source_document, never both.",
+            ));
+        }
+        if input.gmail_message_id.is_some() {
+            return Ok(bad_request(
+                "invalid_message_id",
+                "Gmail filing uses raw_base64; a reference filing has no Gmail source.",
+            ));
+        }
+        return Box::pin(file_eml_reference(
+            &state,
+            id,
+            &lawyer,
+            source_document,
+            input.attachment_documents,
+            input.source_ref.as_deref(),
+            input.from.as_deref(),
+            input.to.as_deref(),
+            input.subject.as_deref(),
+            input.text_body.as_deref(),
+            input.occurred_at.as_deref(),
+            input.dry_run,
+            input.mailbox,
+        ))
+        .await;
+    }
+    let Some(raw_base64) = input.raw_base64.as_deref() else {
+        return Ok(bad_request(
+            "missing_payload",
+            "Send the message as raw_base64, or as source_document referencing an already-filed .eml document.",
+        ));
+    };
+    let Ok(raw) = base64::engine::general_purpose::STANDARD.decode(raw_base64.trim()) else {
         return Ok(bad_request(
             "not_base64",
             "raw_base64 must be the raw .eml message, base64-encoded.",
         ));
     };
+    if raw.len() > crate::inbound_email::MAX_INBOUND_MESSAGE_BYTES {
+        return Ok(bad_request(
+            "message_too_large",
+            &format!(
+                "The raw .eml is {} bytes; the filing door accepts at most {} bytes (the inbound-message cap). File it through the document lane instead — `navigator mail parse` does.",
+                raw.len(),
+                crate::inbound_email::MAX_INBOUND_MESSAGE_BYTES
+            ),
+        ));
+    }
     let mailbox = match input.mailbox {
         Some(mailbox) => Some(mailbox),
         None => filing_lawyer_mailbox(&state.surreal, &lawyer).await?,
@@ -7974,6 +8122,164 @@ async fn file_parsed_eml(
             attachments,
             filed,
             skipped,
+        }),
+    )
+        .into_response())
+}
+
+/// The filing half of the reference variant: the caller (the new CLI) has
+/// already filed the raw `.eml` and its attachments through the document
+/// lane, so this files only the Communication — headers, text, and
+/// `source_ref` travel in the request, the source document's asset id
+/// links the message to its stored bytes (LAW-469), and no document
+/// ingest runs here. The message still dedups idempotently on
+/// `(channel, source_ref)`, so a retry after a partial failure writes
+/// nothing a second time.
+#[allow(clippy::too_many_arguments)]
+async fn file_eml_reference(
+    state: &ApiState,
+    project_id: Uuid,
+    lawyer: &LawyerSession,
+    source_document: Uuid,
+    attachment_documents: Vec<Uuid>,
+    source_ref: Option<&str>,
+    from: Option<&str>,
+    to: Option<&str>,
+    subject: Option<&str>,
+    text_body: Option<&str>,
+    occurred_at: Option<&str>,
+    dry_run: bool,
+    mailbox: Option<String>,
+) -> Result<Response, ApiError> {
+    let Some(source_ref) = source_ref.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(bad_request(
+            "invalid_source_ref",
+            "A reference filing needs the source_ref the CLI parsed (`eml:<Message-ID or digest>`).",
+        ));
+    };
+    if source_ref.len() > 512 {
+        return Ok(bad_request(
+            "invalid_source_ref",
+            "The source_ref is unreasonably long.",
+        ));
+    }
+    let Some(from) = from.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(bad_request(
+            "invalid_reference",
+            "A reference filing needs the message's From address.",
+        ));
+    };
+    let Some(occurred_at) = occurred_at.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(bad_request(
+            "no_date",
+            "A reference filing needs the message's date.",
+        ));
+    };
+    let Some(text_body) = text_body.filter(|s| !s.is_empty()) else {
+        return Ok(bad_request(
+            "no_body",
+            "A reference filing needs the message's plain-text body.",
+        ));
+    };
+    if dry_run {
+        return Ok((
+            StatusCode::OK,
+            Json(EmlUploadResponse {
+                source_ref: source_ref.to_string(),
+                direction: "inbound".to_string(),
+                deduped: false,
+                communication_id: None,
+                attachments: Vec::new(),
+                filed: Vec::new(),
+                skipped: Vec::new(),
+            }),
+        )
+            .into_response());
+    }
+    let source = store::assets::find_by_id(&state.surreal, source_document)
+        .await
+        .map_err(ApiError::Asset)?;
+    let Some(source) = source else {
+        return Ok(bad_request(
+            "source_document_not_on_matter",
+            "The referenced source document does not exist.",
+        ));
+    };
+    if source.project_id != Some(project_id) {
+        return Ok(bad_request(
+            "source_document_not_on_matter",
+            "The referenced source document is not filed on this matter.",
+        ));
+    }
+    if !attachment_documents.is_empty() {
+        let attachments = store::assets::find_by_ids(
+            &state.surreal,
+            &attachment_documents,
+        )
+        .await
+        .map_err(ApiError::Asset)?;
+        if attachments.len() != attachment_documents.len()
+            || attachments
+                .iter()
+                .any(|asset| asset.project_id != Some(project_id))
+        {
+            return Ok(bad_request(
+                "attachment_document_not_on_matter",
+                "Every referenced attachment document must be filed on this matter.",
+            ));
+        }
+    }
+    let mailbox = match mailbox {
+        Some(mailbox) => Some(mailbox),
+        None => filing_lawyer_mailbox(&state.surreal, lawyer).await?,
+    };
+    let outbound = mailbox.as_deref().map(str::trim) == Some(from);
+    let (channel, direction) = if outbound {
+        (
+            store::communications::channel::EMAIL_OUTBOUND,
+            store::communications::direction::OUTBOUND,
+        )
+    } else {
+        (
+            store::communications::channel::EMAIL_INBOUND,
+            store::communications::direction::INBOUND,
+        )
+    };
+    let counterparty = if outbound { to.unwrap_or("") } else { from };
+    let author_person_id = lawyer.0.person_id.ok_or(ApiError::NotFound)?;
+    let ingested = store::communications::ingest_email(
+        &state.surreal,
+        &store::communications::IngestArgs {
+            project_id,
+            channel,
+            direction,
+            author_person_id: Some(author_person_id),
+            counterparty: Some(counterparty),
+            subject,
+            body: text_body,
+            source_ref: Some(source_ref),
+            asset_id: Some(source_document),
+            occurred_at,
+        },
+        store::communications::EmailDetails::default(),
+    )
+    .await
+    .map_err(crate::communications_api::map_communication)?;
+    let status = if ingested.deduped {
+        StatusCode::OK
+    } else {
+        StatusCode::CREATED
+    };
+    Ok((
+        status,
+        Json(EmlUploadResponse {
+            source_ref: source_ref.to_string(),
+            direction: direction.to_string(),
+            deduped: ingested.deduped,
+            communication_id: Some(ingested.communication_id),
+            attachments: Vec::new(),
+            filed: Vec::new(),
+            skipped: Vec::new(),
         }),
     )
         .into_response())
@@ -12959,11 +13265,22 @@ Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
         EmlUploadRequest {
             gmail_message_id: None,
             gmail_sent: None,
-            raw_base64: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, raw),
+            raw_base64: Some(base64::Engine::encode(
+                &base64::engine::general_purpose::STANDARD,
+                raw,
+            )),
             mailbox,
             kind,
             visibility: None,
             dry_run,
+            source_document: None,
+            attachment_documents: Vec::new(),
+            source_ref: None,
+            from: None,
+            to: None,
+            subject: None,
+            text_body: None,
+            occurred_at: None,
         }
     }
 
@@ -16875,6 +17192,7 @@ Content-Disposition: attachment; filename=\"records.pdf\"\r\n\
                 evidence: None,
                 folder: Some("Discovery".to_string()),
                 expected_head: None,
+                mail_provenance: None,
             }),
         )
         .await
@@ -16942,6 +17260,7 @@ Content-Disposition: attachment; filename=\"records.pdf\"\r\n\
                 evidence: None,
                 folder: None,
                 expected_head: None,
+                mail_provenance: None,
             }),
         )
         .await
@@ -17006,6 +17325,7 @@ Content-Disposition: attachment; filename=\"records.pdf\"\r\n\
                 evidence: None,
                 folder: Some("Left Drawer".to_string()),
                 expected_head: None,
+                mail_provenance: None,
             }),
         )
         .await
