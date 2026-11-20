@@ -7,8 +7,7 @@
 //!
 //! A Lawyer sees the matters they participate in firm-side. An Admin also
 //! sees every matter in a Firm they administer, including one nobody is on
-//! yet, and an Owner sees every matter (see [`accessible_projects`]). No Brand
-//! or Firm tab narrows the list.
+//! yet, and an Owner sees every matter (see [`accessible_projects`]).
 //!
 //! Listing a matter is not opening it. Every firm tier needs a firm-side
 //! participation row to open the matter surface at `/app/projects/{code}`.
@@ -16,7 +15,9 @@
 //! Status is the matter-lifecycle pill (`store::projects::matter_lifecycle`):
 //! `pitch`, `active`, or `closed`, with an archived matter reading `closed`.
 //! The `?status=` filter is a multi-select over those three, comma-separated;
-//! with no `?status=` the list shows `pitch` and `active`.
+//! with no `?status=` the list shows `pitch` and `active`. The `?brand=`
+//! filter is a multi-select over the brand keys among the viewer's matters,
+//! comma-separated; with no `?brand=` every brand shows.
 
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -35,6 +36,14 @@ pub const DEFAULT_PROJECT_STATUSES: [&str; 2] = ["pitch", "active"];
 /// The `?status=` value that selects no status. Any value the filter does
 /// not offer selects nothing, so this one only needs to be stable.
 const NO_STATUS: &str = "none";
+
+/// One Brand the filter row offers: its registry key (the `?brand=` value)
+/// and its display name.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct BrandFacet {
+    pub key: String,
+    pub name: String,
+}
 
 /// One matter row, in a wasm-safe shape (plain fields — no `store` types cross
 /// to the client build).
@@ -62,6 +71,14 @@ pub struct ProjectListView {
     pub role: ViewerRole,
     /// The selected statuses, in [`PROJECT_STATUSES`] order.
     pub statuses: Vec<String>,
+    /// The brand keys selected by `?brand=`, lowercased; empty when every
+    /// brand shows.
+    #[serde(default)]
+    pub brands: Vec<String>,
+    /// The brand facets the filter row offers: every brand key among the
+    /// viewer's matters, with its resolved display name.
+    #[serde(default)]
+    pub brand_facets: Vec<BrandFacet>,
     /// The deploy's brand mark for the navbar.
     #[serde(default)]
     pub logo: Option<crate::components::AppLogo>,
@@ -83,6 +100,8 @@ pub struct ProjectListQuery {
     pub sort: Option<String>,
     #[serde(default)]
     pub status: Option<String>,
+    #[serde(default)]
+    pub brand: Option<String>,
     #[serde(default)]
     pub error: Option<String>,
 }
@@ -125,6 +144,50 @@ fn status_query(selected: &[String]) -> Vec<(String, String)> {
     } else {
         vec![("status".to_string(), selected.join(","))]
     }
+}
+
+/// The brand keys a `?brand=` value selects, lowercased and deduplicated.
+/// Absent or empty means every brand shows; a key no facet offers selects
+/// nothing, which the empty state recovers from.
+#[must_use]
+pub fn selected_brands(raw: Option<&str>) -> Vec<String> {
+    let mut selected: Vec<String> = Vec::new();
+    for value in raw.unwrap_or_default().split(',') {
+        let key = value.trim().to_lowercase();
+        if !key.is_empty() && !selected.contains(&key) {
+            selected.push(key);
+        }
+    }
+    selected
+}
+
+/// `selected` with `key` added or removed.
+fn toggle_brand(selected: &[String], key: &str) -> Vec<String> {
+    let mut next = selected.to_vec();
+    match next.iter().position(|candidate| candidate == key) {
+        Some(position) => {
+            next.remove(position);
+        }
+        None => next.push(key.to_lowercase()),
+    }
+    next
+}
+
+/// The query pairs that carry the brand filter: none while every brand shows.
+fn brand_query(selected: &[String]) -> Vec<(String, String)> {
+    if selected.is_empty() {
+        Vec::new()
+    } else {
+        vec![("brand".to_string(), selected.join(","))]
+    }
+}
+
+/// The query pairs carrying both filters — what sort links and each chip's
+/// href preserve so a toggle never drops the other filter.
+fn filters_query(statuses: &[String], brands: &[String]) -> Vec<(String, String)> {
+    let mut pairs = status_query(statuses);
+    pairs.extend(brand_query(brands));
+    pairs
 }
 
 /// The list's href for `query`, keeping the current sort.
@@ -265,6 +328,30 @@ async fn accessible_projects(
     Ok(matters)
 }
 
+/// One facet per distinct brand key among the viewer's matters, labelled with
+/// the brand's resolved display name (the raw key when the registry has none).
+fn brand_facets_from(
+    matters: &[store::projects::Project],
+    brands: &[store::brands::Brand],
+) -> Vec<BrandFacet> {
+    let mut facets: Vec<BrandFacet> = Vec::new();
+    for matter in matters {
+        if facets.iter().any(|facet| facet.key == matter.brand) {
+            continue;
+        }
+        let name = brands
+            .iter()
+            .find(|b| b.key == matter.brand)
+            .map_or(matter.brand.as_str(), |b| b.name.as_str())
+            .to_string();
+        facets.push(BrandFacet {
+            key: matter.brand.clone(),
+            name,
+        });
+    }
+    facets
+}
+
 /// Fetch the projects list for the current request. A non-firm caller gets a
 /// `404`: the directory is hidden from them, not merely refused.
 #[server]
@@ -293,6 +380,7 @@ pub async fn get_project_list() -> Result<ProjectListView, ServerFnError> {
     .await?;
     let sort = query.sort.unwrap_or_default();
     let statuses = selected_statuses(query.status.as_deref());
+    let brand_keys = selected_brands(query.brand.as_deref());
     let store_role = match role {
         ViewerRole::Owner => store::persons::Role::Owner,
         ViewerRole::Admin => store::persons::Role::Admin,
@@ -320,8 +408,21 @@ pub async fn get_project_list() -> Result<ProjectListView, ServerFnError> {
     let has_engagement = store::projects::onboarding_official_sets(&surreal, &matters)
         .await
         .map_err(loader_error)?;
+
+    // Brand facets come from the viewer's matters before the brand filter is
+    // applied, so a chip never offers a value that would select nothing here.
+    let brand_facets = brand_facets_from(&matters, &brands);
+
     let mut rows: Vec<ProjectRow> = matters
         .into_iter()
+        // The brand filter matches the raw registry key, before the row's
+        // brand-name resolution.
+        .filter(|m| {
+            brand_keys.is_empty()
+                || brand_keys
+                    .iter()
+                    .any(|key| m.brand.eq_ignore_ascii_case(key))
+        })
         .map(|m| {
             let brand_name = brands
                 .iter()
@@ -342,10 +443,100 @@ pub async fn get_project_list() -> Result<ProjectListView, ServerFnError> {
         sort,
         role,
         statuses,
+        brands: brand_keys,
+        brand_facets,
         logo: crate::app_chrome::app_logo_from_context().await,
         tokens_href: crate::app_chrome::app_tokens_href_from_context().await,
         error: query.error.filter(|message| !message.is_empty()),
     })
+}
+
+/// One toggle chip in a labelled filter row.
+struct FilterChip {
+    key: String,
+    label: String,
+    selected: bool,
+    href: String,
+}
+
+/// The Status filter row: one chip per lifecycle status, the list's standing
+/// facets.
+fn status_chip_row(view: &ProjectListView) -> Vec<FilterChip> {
+    PROJECT_STATUSES
+        .iter()
+        .map(|status| {
+            let selected = view.statuses.iter().any(|s| s == status);
+            FilterChip {
+                key: (*status).to_string(),
+                label: (*status).to_string(),
+                selected,
+                href: list_href(
+                    &view.sort,
+                    &filters_query(&toggle_status(&view.statuses, status), &view.brands),
+                ),
+            }
+        })
+        .collect()
+}
+
+/// The Brand filter row: one chip per brand among the viewer's matters,
+/// labelled with the brand's resolved display name.
+fn brand_chip_row(view: &ProjectListView) -> Vec<FilterChip> {
+    view.brand_facets
+        .iter()
+        .map(|facet| {
+            let selected = view
+                .brands
+                .iter()
+                .any(|key| facet.key.eq_ignore_ascii_case(key));
+            FilterChip {
+                key: facet.key.clone(),
+                label: facet.name.clone(),
+                selected,
+                href: list_href(
+                    &view.sort,
+                    &filters_query(&view.statuses, &toggle_brand(&view.brands, &facet.key)),
+                ),
+            }
+        })
+        .collect()
+}
+
+/// A labelled multi-select filter row: every chip is a link toggling its one
+/// value in or out of the query string, so selection needs no client JS.
+fn filter_row(label: &str, chips: &[FilterChip]) -> Element {
+    rsx! {
+        nav { class: "nav-tabs", role: "group", "aria-label": "{label}",
+            for chip in chips.iter() {
+                a { key: "{chip.key}",
+                    class: if chip.selected { "nav-tab is-active" } else { "nav-tab" },
+                    href: "{chip.href}",
+                    "aria-current": if chip.selected { "true" } else { "false" },
+                    "{chip.label}"
+                }
+            }
+        }
+    }
+}
+
+/// The empty list's paragraph. A filtered-empty view recovers through a
+/// Clear-filters link; a firm with no matters points at Add project.
+fn empty_message(sort: &str, filters_active: bool) -> Element {
+    if filters_active {
+        rsx! {
+            p { class: "projects-empty",
+                "No projects match these filters. "
+                a { href: "{list_href(sort, &[])}", "Clear filters" }
+            }
+        }
+    } else {
+        rsx! {
+            p { class: "projects-empty",
+                "No projects match. "
+                a { href: "/app/projects/new", "Add a project." }
+            }
+        }
+    }
 }
 
 /// The firm-side projects list: server-rendered rows, sort headers and status
@@ -369,18 +560,10 @@ pub fn LawyerProjects() -> Element {
     };
 
     let sort = SortState::parse(Some(&view.sort));
-    let extra_query = status_query(&view.statuses);
-    let toggles: Vec<(&str, bool, String)> = PROJECT_STATUSES
-        .iter()
-        .map(|status| {
-            let selected = view.statuses.iter().any(|s| s == status);
-            let href = list_href(
-                &view.sort,
-                &status_query(&toggle_status(&view.statuses, status)),
-            );
-            (*status, selected, href)
-        })
-        .collect();
+    let extra_query = filters_query(&view.statuses, &view.brands);
+    let status_chips = status_chip_row(&view);
+    let brand_chips = brand_chip_row(&view);
+    let filters_active = !extra_query.is_empty();
     let columns = vec![
         Column::sortable("code", "Code"),
         Column::sortable("name", "Name"),
@@ -403,25 +586,15 @@ pub fn LawyerProjects() -> Element {
                 h1 { "Projects" }
                 p { a { class: "nav-btn nav-btn--primary", href: "/app/projects/new", "Add project" } }
             }
-            nav { class: "nav-tabs", aria_label: "Project status",
-                for (status, selected, href) in toggles {
-                    a { key: "{status}",
-                        class: if selected { "nav-tab is-active" } else { "nav-tab" },
-                        href: "{href}",
-                        "data-status": "{status}",
-                        "aria-current": if selected { "true" } else { "false" },
-                        "{status}"
-                    }
-                }
+            { filter_row("Project status", &status_chips) }
+            if !brand_chips.is_empty() {
+                { filter_row("Project brand", &brand_chips) }
             }
             if let Some(error) = error.as_ref() {
                 p { class: "nav-form-error", role: "alert", "{error}" }
             }
             if is_empty {
-                p { class: "projects-empty",
-                    "No projects match. "
-                    a { href: "/app/projects/new", "Add a project." }
-                }
+                { empty_message(&view.sort, filters_active) }
             } else {
                 DataTable {
                     columns,
@@ -490,5 +663,81 @@ mod tests {
         assert!(status_query(&toggle_status(&with_closed, "closed")).is_empty());
         let none = toggle_status(&owned(&["active"]), "active");
         assert_eq!(selected_statuses(Some(&status_query(&none)[0].1)), none);
+    }
+
+    #[test]
+    fn brand_filter_is_case_insensitive_deduplicated_and_absent_means_all() {
+        assert!(selected_brands(None).is_empty());
+        assert!(selected_brands(Some("")).is_empty());
+        assert_eq!(
+            selected_brands(Some(" Neon , neon,delete-your-data")),
+            owned(&["neon", "delete-your-data"])
+        );
+    }
+
+    #[test]
+    fn brand_toggling_round_trips_through_the_query() {
+        let with_neon = toggle_brand(&[], "neon");
+        assert_eq!(with_neon, owned(&["neon"]));
+        let with_both = toggle_brand(&with_neon, "Vesta");
+        assert_eq!(
+            brand_query(&with_both),
+            vec![("brand".to_string(), "neon,vesta".to_string())]
+        );
+        assert_eq!(toggle_brand(&with_both, "vesta"), with_neon);
+        assert!(brand_query(&toggle_brand(&with_neon, "neon")).is_empty());
+    }
+
+    #[test]
+    fn filter_queries_carry_both_filters_and_compose_with_the_sort() {
+        let statuses = owned(&["pitch", "closed"]);
+        let brands = owned(&["neon"]);
+        assert_eq!(
+            list_href("name", &filters_query(&statuses, &brands)),
+            "/app/projects?brand=neon&status=pitch,closed&sort=name"
+        );
+        assert_eq!(list_href("name", &[]), "/app/projects?sort=name");
+        assert_eq!(list_href("", &[]), "/app/projects");
+    }
+
+    #[test]
+    fn filter_rows_are_labelled_groups_with_aria_current_chips() {
+        let chips = vec![
+            // The selected chip's href drops its own value; the other chip's
+            // adds it — both keep the sort.
+            FilterChip {
+                key: "neon".into(),
+                label: "Neon".into(),
+                selected: true,
+                href: "/app/projects?sort=name".into(),
+            },
+            FilterChip {
+                key: "vesta".into(),
+                label: "Vesta".into(),
+                selected: false,
+                href: "/app/projects?brand=vesta&sort=name".into(),
+            },
+        ];
+        let html = dioxus_ssr::render_element(filter_row("Project brand", &chips));
+        assert!(html.contains(r#"role="group""#), "{html}");
+        assert!(html.contains(r#"aria-label="Project brand""#), "{html}");
+        assert!(html.contains(r#"aria-current="true""#), "{html}");
+        assert!(html.contains(r#"href="/app/projects?sort=name""#), "{html}");
+        assert!(
+            html.contains(r#"href="/app/projects?brand=vesta&#38;sort=name""#),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn a_filtered_empty_list_offers_clear_filters() {
+        let html = dioxus_ssr::render_element(empty_message("name", true));
+        assert!(html.contains("No projects match these filters."), "{html}");
+        assert!(html.contains("Clear filters"), "{html}");
+        assert!(html.contains(r#"href="/app/projects?sort=name""#), "{html}");
+        let unfiltered = dioxus_ssr::render_element(empty_message("", false));
+        assert!(unfiltered.contains("No projects match. "), "{unfiltered}");
+        assert!(unfiltered.contains("/app/projects/new"), "{unfiltered}");
+        assert!(!unfiltered.contains("Clear filters"), "{unfiltered}");
     }
 }
