@@ -245,8 +245,8 @@ present, is silently ignored — the `IdTokenClaims` struct in `portal::oauth` d
 
 ## Local fixture, client, and environment
 
-[`k8s/staging/rauthy.yaml`](../k8s/staging/rauthy.yaml) is the reusable deployment layer. It contains no bootstrap
-credentials or client registration: an environment must supply `rauthy-secrets`, `rauthy-client`, and
+[`k8s/base/rauthy/rauthy.yaml`](../k8s/base/rauthy/rauthy.yaml) is the reusable deployment layer. It contains no
+bootstrap credentials or client registration: an environment must supply `rauthy-secrets`, `rauthy-client`, and
 `rauthy-bootstrap`, so a staging deployment without environment-owned values fails closed.
 
 The KIND-only fixture at [`k8s/overlays/kind/rauthy/local-fixture.yaml`](../k8s/overlays/kind/rauthy/local-fixture.yaml)

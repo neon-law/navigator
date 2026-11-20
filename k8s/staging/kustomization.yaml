@@ -12,11 +12,11 @@ labels:
 resources:
   - ../base
   - ../base/web
-  - rauthy.yaml
+  - ../base/rauthy
   - restate.yaml
-  - openobserve.yaml
+  - ../base/openobserve
   - workflows-service.yaml
-  - clamav.yaml
+  - ../base/clamav
   - brand-bundle.yaml
 
 patches:

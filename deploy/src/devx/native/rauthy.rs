@@ -54,7 +54,7 @@ use super::supervisor::Service;
 
 /// The Rauthy release the native tier builds.
 ///
-/// Held equal to the image tag in `k8s/staging/rauthy.yaml` by a test —
+/// Held equal to the image tag in `k8s/base/rauthy/rauthy.yaml` by a test —
 /// the two lanes must authenticate against the same provider version or
 /// an OIDC behavior difference shows up as a login bug in one lane only.
 pub(super) const RAUTHY_VERSION: &str = "0.36.1";
@@ -62,7 +62,7 @@ pub(super) const RAUTHY_VERSION: &str = "0.36.1";
 /// Manifest whose image tag this build must match. Read only by the
 /// parity test — that assertion is the constant's whole purpose.
 #[cfg_attr(not(test), allow(dead_code))]
-const RAUTHY_MANIFEST: &str = "k8s/staging/rauthy.yaml";
+const RAUTHY_MANIFEST: &str = "k8s/base/rauthy/rauthy.yaml";
 
 /// Rauthy's git tags carry a `v` prefix that the container tag does not.
 fn release_tag(version: &str) -> String {

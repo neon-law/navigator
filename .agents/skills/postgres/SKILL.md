@@ -14,10 +14,11 @@ through the domain accessor. [Storage models and writes](../../../docs/storage-m
 for People and the AGE graph, PostgreSQL-native domains, and cutover limits. A mirror alone does not transfer write
 authority. The schema and parity inventory live under `store/postgres/`.
 
-Run `navigator-migrate` before a PostgreSQL-configured boot ([tooling](../../../docs/postgres-tooling.md)); request
-handlers and the runtime importer perform no DDL. Deployment configuration selects each domain's active backend.
-[SurrealDB compatibility](../../../docs/surreal-compatibility.md) holds the remaining source-engine contracts, and
-[surreal-migrations](../surreal-migrations/SKILL.md) governs schema changes to those live paths.
+Apply migrations through the target's authority boundary before application boot. Fresh native creation and its explicit
+bound upgrade own their migration step; do not run an independent migrator around that upgrade intent. Captured
+deployments use `navigator-migrate` ([tooling](../../../docs/postgres-tooling.md)). Request handlers and the runtime
+importer perform no DDL. [SurrealDB compatibility](../../../docs/surreal-compatibility.md) holds the remaining
+source-engine contracts; [surreal-migrations](../surreal-migrations/SKILL.md) governs changes to those live paths.
 
 ## The image
 
@@ -77,11 +78,20 @@ cargo run -p hudson -- dev worktree-env up --runtime kind --path "$PWD"
 set -a; source .devx/env; set +a
 ```
 
-Use the application-role connection in `.devx/env`; it verifies the loopback server against the task-owned CA. The
-bootstrap holds writers, verifies and enrolls a fresh synthetic legacy source, then seeds through the normal accessors.
-It refuses nonempty history without valid enrollment rather than replacing its proof. See
-[kind-local-dev](../kind-local-dev/SKILL.md) for lifecycle and retry boundaries. Tear down only your own tier with
-`cargo run -p hudson -- dev worktree-env down --path "$PWD"`.
+Use the application-role connection in `.devx/env`; it verifies the loopback server against the task-owned CA. A fresh
+KIND tier creates a unique PostgreSQL database and records its [Database
+Origin](../../../docs/glossary/database-origin.md) before seeding through admitted accessors. It cohosts DBOS in `web`
+without creating Source or Restate services. Repeated startup verifies the same origin; unknown or partial authority
+requires explicit recovery, never synthetic captured receipts or a replacement database.
+
+Existing legacy KIND descriptors and the explicit host-process `--runtime native` topology retain their compatibility
+contracts. Captured bootstrap holds writers, verifies a real export, and enrolls scopes before seeding. The existing
+deploy browser gate still uses that captured boundary and retained Source/Restate fixtures; do not describe it as
+engine-absent. Focused unit fixtures are separate from either application topology.
+
+See [kind-local-dev](../kind-local-dev/SKILL.md) for profile and retry boundaries. Tear down only your own tier with
+`cargo run -p hudson -- dev worktree-env down --path "$PWD"`. Initialization or passing fixture checks do not certify
+production cutover, physical recovery, or provider-effect replay.
 
 The standalone persistence and restore drill remains in `k8s/overlays/kind-postgres-persistence`;
 `postgres-persistence.yml` shows the synthetic Secrets it needs.

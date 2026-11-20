@@ -192,13 +192,22 @@ impl Credentials {
     }
 
     pub(super) fn environment(&self, cfg: &KindConfig, root: &Path) -> BTreeMap<String, String> {
+        self.environment_for(cfg, root, "navigator")
+    }
+
+    pub(super) fn environment_for(
+        &self,
+        cfg: &KindConfig,
+        root: &Path,
+        database: &str,
+    ) -> BTreeMap<String, String> {
         BTreeMap::from([
             ("NAVIGATOR_POSTGRES_HOST".into(), "127.0.0.1".into()),
             (
                 "NAVIGATOR_POSTGRES_PORT".into(),
                 cfg.postgres_port.to_string(),
             ),
-            ("NAVIGATOR_POSTGRES_DATABASE".into(), "navigator".into()),
+            ("NAVIGATOR_POSTGRES_DATABASE".into(), database.into()),
             ("NAVIGATOR_POSTGRES_USER".into(), "navigator_app".into()),
             (
                 "NAVIGATOR_POSTGRES_PASSWORD".into(),

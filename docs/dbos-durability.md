@@ -492,6 +492,24 @@ is omitted. Complete native cohosting defaults off even outside ship; the native
 unless deployment coordinates opt in with true. Malformed timer settings are refused before live provider construction.
 The offline ship plan reports both timer states.
 
-## Not yet decided
+## Embedded development provider captures
 
-- Draining in-flight Restate runs before a deployment switches engines.
+The embedded development harness can register the same native workflows without external Slack or Xero credentials. This
+selection requires complete canonical DBOS-only caller selection, the actual `dev` profile, `NAVIGATOR_CI_HARNESS=1`,
+simulated matters, and embedded hosting. Partial and mixed hosts retain strict provider selection. An explicit staging
+identity or invalid staging setting refuses captures. Explicit Slack or Xero configuration conflicts with this capture
+profile and fails startup rather than being silently replaced. Other profiles keep their strict provider constructors.
+
+GeneralNag, DriDigest, NotationReset, and Archives use the existing capturing notification transports. BillingCanary
+uses the existing billing stub and capturing email; ReconcileInvoices runs the shared reconciliation operation with that
+stub and its admitted PostgreSQL store. These captures do not send external messages or certify provider delivery.
+Registration does not activate the canary or reconciliation timers; their independent schedule controls still apply.
+Per-Firm Slack credentials, repository providers, archive storage, and other handler requirements keep their own guards.
+
+## Cutover acceptance
+
+Before changing callers or retiring a Restate endpoint, reconcile pending, paused, and dead-lettered work and preserve
+retained state and outcomes. Preserve the original idempotency and effect identities when retrying or recording a work
+item's disposition. Ambiguous provider effects require reconciliation rather than a fresh submission. Complete [durable
+object handover](durable-object-handover.md) for Notation and Project Slack, then verify native routing and recovery.
+Selected flags and local captures do not establish that these operational gates have passed.

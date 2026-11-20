@@ -10,6 +10,8 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+mod local_providers;
+
 use crate::dri_digest::DriDigestService;
 use crate::email_summary::{EmailSummaryService, SummaryProviders};
 use crate::engine::Engine;
@@ -269,6 +271,13 @@ async fn run_host(
         "The enabled DBOS workflow routes require the DBOS executor"
     );
     let dbos_hosting = if engine == Engine::Dbos {
+        let local_providers = local_providers::LocalProviders::from_lookup(
+            mode,
+            environment,
+            simulated_matters,
+            &lookup,
+        )
+        .context("select native local providers")?;
         let settings = dbos_engine::Settings::from_lookup(lookup).context("configure DBOS")?;
         let general_nag_enabled = workflows::dbos_engine::general_nag::enabled(lookup)
             .context("read NAVIGATOR_DBOS_GENERAL_NAG_ENABLED")?;
@@ -373,31 +382,39 @@ async fn run_host(
             None
         };
         let general_nag = if general_nag_enabled {
-            Some(
+            let source = surreal
+                .clone()
+                .context("GeneralNag database not configured")?;
+            Some(if let Some(local) = &local_providers {
+                local.general_nag(source, postgres.clone())
+            } else {
                 workflows::dbos_engine::general_nag::Context::from_lookup(
-                    surreal
-                        .clone()
-                        .ok_or_else(|| anyhow::anyhow!("GeneralNag database not configured"))?,
+                    source,
                     simulated_matters,
                     lookup,
                 )
-                .context("validate GeneralNag delivery configuration")?,
-            )
+                .context("validate GeneralNag delivery configuration")?
+            })
         } else {
             None
         };
         let notation_reset = if notation_reset_enabled {
-            Some(
+            let source = surreal
+                .clone()
+                .context("NotationReset database not configured")?;
+            let label =
+                workflows::notation_reset::environment_label(environment, simulated_matters);
+            Some(if let Some(local) = &local_providers {
+                local.notation_reset(source, label)
+            } else {
                 workflows::dbos_engine::notation_reset::Context::from_lookup(
-                    surreal
-                        .clone()
-                        .ok_or_else(|| anyhow::anyhow!("NotationReset database not configured"))?,
-                    workflows::notation_reset::environment_label(environment, simulated_matters),
+                    source,
+                    label,
                     simulated_matters,
                     lookup,
                 )
-                .context("validate NotationReset delivery configuration")?,
-            )
+                .context("validate NotationReset delivery configuration")?
+            })
         } else {
             None
         };
@@ -421,35 +438,55 @@ async fn run_host(
             None
         };
         let reconcile_context = if reconcile_enabled {
-            Some(
+            let source = surreal
+                .clone()
+                .context("ReconcileInvoices database not configured")?;
+            Some(if let Some(local) = &local_providers {
+                local.reconcile(source, postgres.clone(), &lookup)?
+            } else {
                 crate::dbos_reconcile::Context::from_env(
-                    surreal.clone().ok_or_else(|| {
-                        anyhow::anyhow!("ReconcileInvoices database not configured")
-                    })?,
+                    source,
                     slack_bot_from_env().map_err(anyhow::Error::msg)?,
                     simulated_matters,
                     lookup,
                 )
                 .map_err(anyhow::Error::msg)
-                .context("configure DBOS ReconcileInvoices")?,
-            )
+                .context("configure DBOS ReconcileInvoices")?
+            })
         } else {
             None
         };
-        let dri_digest = crate::dri_digest::dbos_context(
-            surreal.clone(),
-            notifier_from_env(),
-            simulated_matters,
-            lookup,
-        )
-        .context("configure DBOS DriDigest")?;
+        let dri_digest = if let Some(local) = &local_providers {
+            if dri_digest_enabled {
+                Some(
+                    local.dri_digest(
+                        surreal
+                            .clone()
+                            .context("DriDigest database not configured")?,
+                        postgres.clone(),
+                    ),
+                )
+            } else {
+                None
+            }
+        } else {
+            crate::dri_digest::dbos_context(
+                surreal.clone(),
+                notifier_from_env(),
+                simulated_matters,
+                lookup,
+            )
+            .context("configure DBOS DriDigest")?
+        };
         let billing_canary = if workflows::dbos_engine::billing_canary::enabled(lookup)
             .context("read NAVIGATOR_DBOS_BILLING_CANARY_ENABLED")?
         {
-            Some(
+            Some(if let Some(local) = &local_providers {
+                local.canary(&lookup)?
+            } else {
                 workflows::dbos_engine::billing_canary::Context::from_lookup(lookup)
-                    .context("configure DBOS BillingCanary")?,
-            )
+                    .context("configure DBOS BillingCanary")?
+            })
         } else {
             None
         };
@@ -464,19 +501,23 @@ async fn run_host(
             None
         };
         let archives_context = if archives_enabled {
-            let slack = slack_bot_from_env().map_err(anyhow::Error::msg)?;
-            let channel_id = std::env::var(if simulated_matters {
-                "SLACK_STAGING_MESSAGES_CHANNEL_ID"
+            Some(if let Some(local) = &local_providers {
+                local.archives()
             } else {
-                "SLACK_MESSAGES_CHANNEL_ID"
+                let slack = slack_bot_from_env().map_err(anyhow::Error::msg)?;
+                let channel_id = lookup(if simulated_matters {
+                    "SLACK_STAGING_MESSAGES_CHANNEL_ID"
+                } else {
+                    "SLACK_MESSAGES_CHANNEL_ID"
+                })
+                .unwrap_or_default();
+                let slack_enabled = crate::notify_config::bot_enabled(lookup);
+                anyhow::ensure!(
+                    slack_enabled && !channel_id.trim().is_empty(),
+                    "DBOS Archives requires SLACK_BOT_TOKEN and its messages channel"
+                );
+                (slack, channel_id, slack_enabled)
             })
-            .unwrap_or_default();
-            let slack_enabled = crate::notify_config::bot_enabled(lookup);
-            anyhow::ensure!(
-                slack_enabled && !channel_id.trim().is_empty(),
-                "DBOS Archives requires SLACK_BOT_TOKEN and its messages channel"
-            );
-            Some((slack, channel_id, slack_enabled))
         } else {
             None
         };

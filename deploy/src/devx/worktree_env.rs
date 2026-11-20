@@ -13,10 +13,10 @@
 //! Two modes, both reached through the same front door:
 //!
 //! - **dev (default)** — an isolated KIND dependency tier per worktree. The
-//!   tier owns its `SurrealDB`, Rauthy, `SeaweedFS`, Restate broker, and
-//!   `workflows-service`; host `web` receives matching, worktree-specific
-//!   forwards. A Restate journal and worker can therefore never cross from one
-//!   checkout into another.
+//!   fresh tier owns PostgreSQL, Rauthy, `SeaweedFS`, and task-specific ports;
+//!   host `web` cohosts the DBOS handlers. Its private Database Origin intent
+//!   binds repeated starts to the same verified resource. Existing legacy
+//!   descriptors retain their explicit Source/Restate compatibility topology.
 //! - **demo (`--demo`)** — the full stack running *in* KIND from the
 //!   images CI published to Artifact Registry (no local build). Delegates to the
 //!   pull-based [`super::deploy`]; one full stack at a time (a demo is
@@ -388,8 +388,8 @@ fn up_dev(root: &Path, no_deps: bool, runtime: Runtime, base_cfg: &KindConfig) -
     let _setup_lock = acquire_worktree_env_lock(root)?;
     let _host_lock = acquire_host_worktree_env_lock()?;
     let existing = read_descriptor(root);
-    let db_name = match runtime {
-        Runtime::Kind => "navigator".to_string(),
+    let mut db_name = match runtime {
+        Runtime::Kind => String::new(),
         Runtime::Native => existing
             .as_ref()
             .filter(|descriptor| descriptor.runtime == Runtime::Native)
@@ -418,6 +418,21 @@ fn up_dev(root: &Path, no_deps: bool, runtime: Runtime, base_cfg: &KindConfig) -
         cfg.rauthy_port = base_cfg.rauthy_port;
         cfg.seaweedfs_s3_port = base_cfg.seaweedfs_s3_port;
         cfg.surreal_port = base_cfg.surreal_port;
+    }
+    if runtime == Runtime::Kind {
+        anyhow::ensure!(
+            existing
+                .as_ref()
+                .is_none_or(|descriptor| descriptor.runtime == Runtime::Kind),
+            "an existing host-process tier requires explicit cleanup before selecting KIND"
+        );
+        db_name = super::native_profile::select_database(
+            root,
+            &cfg,
+            existing
+                .as_ref()
+                .and_then(|descriptor| descriptor.db_name.as_deref()),
+        )?;
     }
     let mut sample_project_refreshed = false;
     match runtime {
@@ -453,6 +468,12 @@ fn up_dev(root: &Path, no_deps: bool, runtime: Runtime, base_cfg: &KindConfig) -
             runtime,
         },
     )?;
+
+    if runtime == Runtime::Kind && super::native_profile::selected(root, &cfg)? {
+        super::orchestrate::up_native_in(root, &cfg, no_deps)?;
+        print_dev_summary(&slug, &db_name, runtime, &cfg);
+        return Ok(());
+    }
 
     // Provision the tier. Everything below this block is lane-neutral:
     // both lanes leave the same ports listening, so the migration, the
@@ -527,13 +548,54 @@ fn up_dev(root: &Path, no_deps: bool, runtime: Runtime, base_cfg: &KindConfig) -
     Ok(())
 }
 
-fn down(root: &Path, base_cfg: &KindConfig) -> Result<()> {
+/// Missing or foreign native state never falls through to legacy cleanup.
+fn native_teardown_config(
+    root: &Path,
+    base_cfg: &KindConfig,
+    descriptor: Option<&WorktreeEnv>,
+) -> Result<Option<KindConfig>> {
+    let Some(intent) = super::native_profile::Intent::read(root)? else {
+        anyhow::ensure!(
+            !descriptor
+                .and_then(|value| value.db_name.as_deref())
+                .is_some_and(|name| name.starts_with("navigator_native_")),
+            "native creation intent is missing; explicit owned-resource recovery is required"
+        );
+        return Ok(None);
+    };
+    let descriptor = descriptor.context("native tier descriptor is missing or corrupt; explicit owned-resource recovery is required")?;
+    anyhow::ensure!(
+        descriptor.mode == "dev" && descriptor.runtime == Runtime::Kind,
+        "native tier descriptor identifies another runtime"
+    );
+    let slot = descriptor
+        .dev_slot()
+        .context("native tier slot is missing")?;
+    let cfg = worktree_kind_config(base_cfg, root, slot);
+    intent.verify_target(root, &cfg)?;
+    anyhow::ensure!(
+        descriptor.db_name.as_deref() == Some(intent.database()?.as_str()),
+        "native tier descriptor identifies another database"
+    );
+    Ok(Some(cfg))
+}
+
+pub(super) fn down(root: &Path, base_cfg: &KindConfig) -> Result<()> {
     // Teardown mutates the same descriptor and database state that `up`
     // inspects. Keep the lock for the whole transaction so `down` cannot
     // remove a reservation or database while another worktree is setting up.
     let _environment_lock = acquire_worktree_env_lock(root)?;
     let _host_lock = acquire_host_worktree_env_lock()?;
     let desc = read_descriptor(root);
+    if let Some(cfg) = native_teardown_config(root, base_cfg, desc.as_ref())? {
+        verify_postgres_fixture_target(root, &cfg)?;
+        super::orchestrate::verify_native_teardown(root, &cfg)?;
+        super::down_in(root, &cfg)?;
+        unregister_worktree_cluster(&host_cluster_registry_path(), &cfg.cluster)?;
+        remove_worktree_state(root);
+        eprintln!("==> native worktree-env down complete");
+        return Ok(());
+    }
     if desc.as_ref().map(|d| d.mode.as_str()) == Some("demo") {
         eprintln!("==> worktree-env down (demo): deleting the in-cluster stack");
         // Removes the navigator namespace; leaves the cluster + deps.
@@ -609,18 +671,34 @@ fn status_report(root: &Path, base_cfg: &KindConfig, port_in_use: &dyn Fn(u16) -
                 match d.runtime {
                     Runtime::Kind => {
                         let _ = writeln!(out, "  KIND cluster: {}", cfg.cluster);
-                        let _ = writeln!(
-                            out,
-                            "  Restate 127.0.0.1:{}: {}",
-                            cfg.restate_ingress_port,
-                            yes_no(port_in_use(cfg.restate_ingress_port))
-                        );
-                        let _ = writeln!(
-                            out,
-                            "  Surreal 127.0.0.1:{}: {}",
-                            cfg.surreal_port,
-                            yes_no(port_in_use(cfg.surreal_port))
-                        );
+                        if d.db_name.as_deref().is_some_and(native_database_name) {
+                            let _ = writeln!(
+                                out,
+                                "  PostgreSQL 127.0.0.1:{}: {}",
+                                cfg.postgres_port,
+                                yes_no(port_in_use(cfg.postgres_port))
+                            );
+                            if let Ok(port) = super::native_profile::dbos_port(&cfg) {
+                                let _ = writeln!(
+                                    out,
+                                    "  DBOS cohost 127.0.0.1:{port}: {}",
+                                    yes_no(port_in_use(port))
+                                );
+                            }
+                        } else {
+                            let _ = writeln!(
+                                out,
+                                "  Restate 127.0.0.1:{}: {}",
+                                cfg.restate_ingress_port,
+                                yes_no(port_in_use(cfg.restate_ingress_port))
+                            );
+                            let _ = writeln!(
+                                out,
+                                "  Surreal 127.0.0.1:{}: {}",
+                                cfg.surreal_port,
+                                yes_no(port_in_use(cfg.surreal_port))
+                            );
+                        }
                     }
                     // The native lane has no cluster to name, so its
                     // supervised processes are what there is to report:
@@ -907,6 +985,8 @@ fn worktree_slot_has_listener(
         cfg.rauthy_port,
         cfg.seaweedfs_s3_port,
         cfg.web_port,
+        // The complete native cohost uses its own slot, never a retired engine port.
+        cfg.web_port.saturating_add(700),
         cfg.openobserve_port,
         cfg.openobserve_otlp_port,
         cfg.clamav_port,
@@ -1007,15 +1087,32 @@ pub(super) fn verify_postgres_fixture_target(root: &Path, cfg: &KindConfig) -> R
             .dev_slot()
             .context("fixture requires a development worktree slot")?;
         anyhow::ensure!(
-            descriptor.runtime == Runtime::Kind
-                && descriptor.db_name.as_deref() == Some("navigator"),
+            descriptor.runtime == Runtime::Kind,
             "fixture requires this worktree's KIND database"
         );
+        let database = descriptor
+            .db_name
+            .as_deref()
+            .context("fixture database is missing")?;
+        if database != "navigator" {
+            let intent = super::native_profile::Intent::read(root)?
+                .context("native fixture creation intent is missing")?;
+            intent.verify_target(root, cfg)?;
+            anyhow::ensure!(
+                intent.database()? == database,
+                "native fixture database differs from its creation operation"
+            );
+        } else {
+            anyhow::ensure!(
+                super::native_profile::Intent::read(root)?.is_none(),
+                "legacy fixture conflicts with native creation intent"
+            );
+        }
         let expected = worktree_kind_config(cfg, root, slot);
         anyhow::ensure!(
             expected.cluster == cfg.cluster
                 && expected.postgres_port == cfg.postgres_port
-                && expected.surreal_port == cfg.surreal_port,
+                && (database != "navigator" || expected.surreal_port == cfg.surreal_port),
             "fixture coordinates do not match the worktree descriptor"
         );
         let RegistryLoad::Loaded(registry) = load_cluster_registry(&host_cluster_registry_path())
@@ -1861,21 +1958,39 @@ fn print_dev_summary(slug: &str, db_name: &str, runtime: Runtime, cfg: &KindConf
 /// The tier line differs by lane because the thing an operator would
 /// look at differs: a cluster name is something to `kubectl` at, and the
 /// native lane has none.
+fn native_database_name(name: &str) -> bool {
+    name.strip_prefix("navigator_native_")
+        .and_then(|value| uuid::Uuid::parse_str(value).ok())
+        .and_then(|id| store::postgres::native_origin::database_name(id).ok())
+        .is_some_and(|canonical| canonical == name)
+}
+
 fn dev_summary(slug: &str, db_name: &str, runtime: Runtime, cfg: &KindConfig) -> String {
     let rule = "===========================================================";
     let tier = match runtime {
         Runtime::Kind => format!("  KIND cluster : {}\n", cfg.cluster),
         Runtime::Native => "  tier         : native host processes\n".to_string(),
     };
+    let engines = if runtime == Runtime::Kind && native_database_name(db_name) {
+        format!(
+            "  PostgreSQL port : {}\n  DBOS cohost port : {}\n",
+            cfg.postgres_port,
+            super::native_profile::dbos_port(cfg)
+                .map_or_else(|_| "invalid".into(), |port| port.to_string())
+        )
+    } else {
+        format!(
+            "  Restate port : {}\n  Surreal port : {}\n",
+            cfg.restate_ingress_port, cfg.surreal_port
+        )
+    };
     format!(
         "\n{rule}\n hudson dev worktree-env up — dev environment for `{slug}`\n{rule}\n\n\
-         {tier}  database     : {db_name}\n  Restate port : {}\n  Surreal port : {}\n  web port     : {}\n\
+         {tier}  database     : {db_name}\n{engines}  web port     : {}\n\
          \x20 delete-your-data web port : {}\n\n\
          Start this worktree's web server:\n\n{}\n\n\
          Tear down this worktree's tier:\n    \
          hudson dev worktree-env down\n",
-        cfg.restate_ingress_port,
-        cfg.surreal_port,
         cfg.web_port,
         cfg.delete_your_data_web_port,
         web_start_instructions(cfg.web_port, cfg.delete_your_data_web_port)
@@ -1997,6 +2112,70 @@ mod tests {
             cfg.web_port,
             cfg.delete_your_data_web_port
         )));
+    }
+
+    #[test]
+    fn interrupted_native_teardown_refuses_missing_corrupt_and_foreign_descriptors() {
+        let root = tempfile::tempdir().unwrap();
+        let base = KindConfig::from_env();
+        let cfg = worktree_kind_config(&base, root.path(), 37);
+        let intent = super::super::native_profile::Intent::prepare(root.path(), &cfg).unwrap();
+        assert!(native_teardown_config(root.path(), &base, None).is_err());
+        std::fs::write(descriptor_path(root.path()), "invalid descriptor").unwrap();
+        assert!(
+            native_teardown_config(root.path(), &base, read_descriptor(root.path()).as_ref())
+                .is_err()
+        );
+        let mut descriptor = WorktreeEnv {
+            slug: "native-cleanup".into(),
+            mode: "dev".into(),
+            db_name: Some(intent.database().unwrap()),
+            web_port: cfg.web_port,
+            slot: Some(37),
+            runtime: Runtime::Kind,
+        };
+        assert_eq!(
+            native_teardown_config(root.path(), &base, Some(&descriptor))
+                .unwrap()
+                .unwrap()
+                .cluster,
+            cfg.cluster
+        );
+        descriptor.db_name = Some("navigator".into());
+        assert!(native_teardown_config(root.path(), &base, Some(&descriptor)).is_err());
+        descriptor.db_name = Some(intent.database().unwrap());
+        descriptor.runtime = Runtime::Native;
+        assert!(native_teardown_config(root.path(), &base, Some(&descriptor)).is_err());
+        let legacy = tempfile::tempdir().unwrap();
+        assert!(native_teardown_config(legacy.path(), &base, Some(&descriptor)).is_err());
+        std::fs::write(
+            root.path().join(".devx/postgres/native-origin.json"),
+            "invalid intent",
+        )
+        .unwrap();
+        assert!(native_teardown_config(root.path(), &base, Some(&descriptor)).is_err());
+        assert!(native_teardown_config(legacy.path(), &base, None)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn native_kind_summary_names_only_its_actual_engines() {
+        let cfg = worktree_kind_config(
+            &KindConfig::from_env(),
+            Path::new("/tmp/native-summary"),
+            37,
+        );
+        let database = store::postgres::native_origin::database_name(uuid::Uuid::new_v4()).unwrap();
+        let summary = dev_summary("native-summary", &database, Runtime::Kind, &cfg);
+        assert!(summary.contains(&format!("PostgreSQL port : {}", cfg.postgres_port)));
+        assert!(summary.contains(&format!(
+            "DBOS cohost port : {}",
+            super::super::native_profile::dbos_port(&cfg).unwrap()
+        )));
+        assert!(!summary.contains("Restate port"));
+        assert!(!summary.contains("Surreal port"));
+        assert!(!native_database_name("navigator_native_invalid"));
     }
 
     #[test]

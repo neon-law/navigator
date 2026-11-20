@@ -31,7 +31,7 @@ const BASELINE: &[(&str, usize)] = &[
     ("server", 158),
     ("store", 1245),
     ("webapp", 28),
-    ("workflows", 16),
+    ("workflows", 15),
     ("workflows-service", 97),
 ];
 

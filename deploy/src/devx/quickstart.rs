@@ -10,10 +10,12 @@
 //!    Run anywhere else (a Homebrew install), it clones the source into
 //!    `~/.navigator/quickstart` and hands off to that checkout's own CLI, so
 //!    the binary never drives manifests from a different release.
-//! 3. **Tier.** `dev worktree-env up` gives the checkout its own KIND cluster
+//! 3. **Client.** The pinned Dioxus CLI incrementally builds and stages this
+//!    checkout's debug client before creating dependency resources.
+//! 4. **Tier.** `dev worktree-env up` gives the checkout its own KIND cluster
 //!    on its own slot ports, applies the schema, and stages the sample
 //!    matters; `dev forgejo up` adds PostgreSQL and Forgejo on that slot.
-//! 4. **Web.** `dev serve` builds and starts `web`, which seeds the Guieb & Shook
+//! 5. **Web.** `dev serve` builds and starts `web`, which seeds the Guieb & Shook
 //!    PC firm and its sample matters on boot, and the browser opens once it
 //!    is ready.
 //!
@@ -60,16 +62,12 @@ const TOOLS: &[Tool] = &[
         formula: "kubernetes-cli",
     },
     Tool {
-        command: "helm",
-        formula: "helm",
-    },
-    Tool {
-        command: "restate",
-        formula: "restatedev/tap/restate",
-    },
-    Tool {
         command: "git",
         formula: "git",
+    },
+    Tool {
+        command: "ssh-keygen",
+        formula: "openssh",
     },
     Tool {
         command: "openssl",
@@ -243,6 +241,9 @@ pub(super) fn run(base_cfg: &KindConfig) -> Result<()> {
     let Ok(root) = super::workspace_root() else {
         return hand_off();
     };
+    // Rebuild incrementally before any tier resources or watcher start. Existing
+    // asset files are not evidence that this checkout's client is current.
+    super::webapp::build(false)?;
     super::worktree_env::up_kind(&root, base_cfg)?;
     // `forgejo up` and `serve` read the slot this checkout was just given.
     dotenvy::from_path_override(root.join(".devx/env")).context("load .devx/env")?;
@@ -277,10 +278,10 @@ mod tests {
 
     #[test]
     fn every_missing_tool_is_reported_in_one_install_line() {
-        let missing = missing_tools(&|command| !matches!(command, "kind" | "helm" | "cargo"));
+        let missing = missing_tools(&|command| !matches!(command, "kind" | "openssl" | "cargo"));
         let hint = install_hint(&missing);
-        assert!(hint.starts_with("missing required tools: kind, helm, cargo"));
-        assert!(hint.contains("  brew install kind helm rustup\n"));
+        assert!(hint.starts_with("missing required tools: kind, openssl, cargo"));
+        assert!(hint.contains("  brew install kind openssl@3 rustup\n"));
         assert!(hint.contains("rustup-init -y"));
         assert!(hint.ends_with("Then run `hudson quickstart` again."));
         assert!(!hint.contains("orbstack"));
@@ -298,11 +299,18 @@ mod tests {
     #[test]
     fn the_tool_table_covers_what_the_composed_commands_require() {
         let commands: Vec<&str> = TOOLS.iter().map(|tool| tool.command).collect();
-        // `dev worktree-env up` (kind, kubectl, docker, helm, restate),
+        // The engine-absent KIND tier uses kind, kubectl, and docker;
         // `dev forgejo up` (kubectl, openssl), sample staging (git), and
         // `dev serve` (cargo, cmake).
         for required in [
-            "docker", "kind", "kubectl", "helm", "restate", "git", "openssl", "cargo", "cmake",
+            "docker",
+            "kind",
+            "kubectl",
+            "git",
+            "ssh-keygen",
+            "openssl",
+            "cargo",
+            "cmake",
         ] {
             assert!(commands.contains(&required), "{required} is not checked");
         }

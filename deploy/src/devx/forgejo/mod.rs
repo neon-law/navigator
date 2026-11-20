@@ -40,7 +40,7 @@ const OVERLAY: &str = "k8s/overlays/kind/forgejo";
 /// Rauthy's KIND fixture and its reusable Deployment, applied when the
 /// cluster has no Rauthy yet (a bare CI cluster).
 const RAUTHY_FIXTURE: &str = "k8s/overlays/kind/rauthy";
-const RAUTHY_DEPLOYMENT: &str = "k8s/staging/rauthy.yaml";
+const RAUTHY_DEPLOYMENT: &str = "k8s/base/rauthy/rauthy.yaml";
 /// The issuer authority the committed KIND manifests carry; `up` rewrites it
 /// to the tier's own Rauthy port.
 const FIXTURE_RAUTHY_AUTHORITY: &str = "localhost:30080";
