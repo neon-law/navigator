@@ -3,7 +3,6 @@ meta_description: >-
   Hosted Navigator for legal aid organizations: one price per user per month
   plus model tokens, with your own brand name and Forgejo instance included.
 title: Legal Aid
-tagline: We run Navigator under your name so your team can run its cases.
 bands:
   - kind: cards
     anchor: pricing
@@ -24,15 +23,6 @@ bands:
           - Hosting, upgrades, backups, and sign-in
         href: /contact
         href_label: Ask about hosting
-  - kind: statement
-    heading: What we run for you
-    lead: You do the legal work. We keep Navigator running.
-    body:
-      - - text: >-
-            We put your organization's brand name on Navigator and stand up a
-            Forgejo instance that holds each Project's repository. We run the
-            database, the releases, and the sign-in, and we help you write
-            token-efficient prompts for your practice.
   - kind: statement
     heading: Learn Navigator
     lead: Two open workshops.

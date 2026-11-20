@@ -145,11 +145,10 @@ const FIRM_NAV: &[NavLink] = &[
     NavLink::leaf("Book Consultation", SHOOK_CONSULTATION_URL),
 ];
 
-/// Neon's header names its three products: Same Day Legal, the subscription
+/// Neon's header names its pages: Same Day Legal, the subscription
 /// `/same-day-legal` redirects to; Navigator, the engine; and Notations, the document format. The shared
 /// footer row still links Navigator and Notations for every brand.
 const NEON_NAV: &[NavLink] = &[
-    NavLink::leaf("Navigator", "/navigator"),
     NavLink::leaf("Notations", "/notations"),
     NavLink::leaf("Legal Aid", "/legal-aid"),
 ];
@@ -3067,15 +3066,11 @@ mod tests {
     }
 
     #[test]
-    fn the_neon_nav_links_its_three_pages() {
+    fn the_neon_nav_links_its_pages() {
         let nav: Vec<(&str, &str)> = FIRM_BRAND.nav.iter().map(|n| (n.label, n.href)).collect();
         assert_eq!(
             nav,
-            [
-                ("Navigator", "/navigator"),
-                ("Notations", "/notations"),
-                ("Legal Aid", "/legal-aid"),
-            ]
+            [("Notations", "/notations"), ("Legal Aid", "/legal-aid"),]
         );
     }
 

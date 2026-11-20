@@ -6,94 +6,110 @@ meta_description: >-
 title: Navigator
 hero_mark: helm
 tagline: Legal work, with the lawyer in control.
-hero_lead: >-
-  Neon Law builds Navigator, open source software that gives lawyers and AI
-  agents one place to work a matter: its facts, documents, deadlines, and
-  review.
-hero_cta:
-  href: /navigator
-  label: Explore Navigator
 skin: marketing
 bands:
   - kind: steps
-    anchor: what-it-does
-    overline: What Navigator does
-    heading: The agent drafts. The lawyer decides.
-    items:
-      - title: One Project per matter
-        body:
-          - - text: "Each matter is a Project with its own Git repository. The agent reads the Project's "
-            - text: navigator.yaml
-              code: true
-            - text: " and its Project Skills before it does any work."
-      - title: Documents as Notations
-        body:
-          - - text: >-
-                A Template plus a questionnaire becomes a Notation for one
-                Person in one Project, with its answers and history kept
-                together.
-      - title: A lawyer reviews every step
-        body:
-          - - text: >-
-                Agents prepare drafts. Email stays a draft until a lawyer sends
-                it, and nothing reaches a client before Lawyer Review.
-      - title: Use the tools you already have
-        body:
-          - - text: >-
-                The CLI and MCP server give Claude Code, Codex, and Cursor the
-                same commands a lawyer runs.
-  - kind: cards
-    anchor: notation
-    overline: Notation
-    heading: Documents built for agents and lawyers.
+    anchor: connect-mcp
+    overline: Remote MCP
+    heading: Connect Navigator to your AI assistant
     description: >-
-      Notation is Markdown with Frontmatter. One file holds the document, the
-      questions that fill it, and the review it needs.
+      Browse public legal Templates from a chat app that supports remote MCP.
+      You can use Template discovery without a Navigator account.
     items:
-      - title: Plain text
+      - title: Add a custom connector
         body:
           - - text: >-
-                Drafts live in Git, so each revision is a reviewable change
-                instead of a new file.
-      - title: Questionnaires
+                Open your assistant's connector settings and choose the option to add a custom MCP server.
+                In Grok, open Connectors, choose New Connector, then select Custom.
+      - title: Enter the Navigator URL
+        body:
+          - - text: https://neonlaw.com/app/mcp
+              code: true
+            - text: " is the server URL. If asked for a transport, choose Streamable HTTP."
+      - title: Try a request in chat
         body:
           - - text: >-
-                Typed questions gather the answers a Template needs, from a
-                client or from the agent.
-      - title: Many outputs
-        body:
-          - - text: >-
-                Render to PDF, return edits to Word with tracked changes, or
-                fill a government form.
-        href: /notations/about
-        href_label: Read about Notation
-      - title: A public library
-        body:
-          - - text: >-
-                Browse letters, agreements, and government forms written in
-                Notation.
-        href: /notations
-        href_label: Browse the Notations
-  - kind: statement
-    heading: Open source software, with a hosted option
-    lead: Run Navigator yourself, or use our hosted service for legal aid.
-    body:
-      - - text: >-
-            Navigator is open source under MIT OR Apache-2.0. See releases and
-            installation instructions.
-      - - text: See setup and downloads
-          href: /navigator#download
-      - - text: >-
-            We also host Navigator for legal aid organizations under their own
-            brand name, with a Forgejo instance included.
-      - - text: See the Legal Aid offer
-          href: /legal-aid
+                Ask “List Navigator’s public Templates.” If you ask “Create a work in progress,”
+                Navigator asks whether you want a matter summary or want to record time or a cost.
+  - kind: project_network
+    anchor: connected-project
+    overline: One connected Project
+    heading: Navigator is the center of the work.
+    center_detail: Web API MCP CLI
+    description: >-
+      A Project can include one or more cases, companies, filings, and more so
+      long as it's related to the best interest of our clients.
+    left:
+      - label: Internal Slack
+        detail: Firm-only Project conversation.
+      - label: Internal Notion
+        detail: Firm working notes and knowledge.
+      - label: Project repository
+        detail: The matter's Git history of pages, Drafts, and document pointers.
+      - label: Matter Pages
+        detail: Lawyer and client dashboards declared in navigator.yaml.
+    right:
+      - label: Shared Slack
+        detail: Client collaboration when the Project uses it.
+      - label: Per-Project Inbox
+        detail: Project email intake and conversation.
+      - label: Google Drive folder
+        detail: Large document intake
+      - label: Shared Notion
+        detail: Client collaboration when the Project uses it.
+    mcp_tools:
+      - Court Listener
+      - Descrybe
+      - Exa
+      - Midpage
+      - Perplexity
+    agentic_coding_tools:
+      - Antigravity
+      - Claude Code
+      - Codex
+      - Cursor
+    saas_tools:
+      - Descript
+      - DocuSign
+      - Google Workspace
+      - Linear
+      - Mercury
+      - Restate
+      - SurrealDB
+      - Twilio
+      - Xero
+  - kind: video
+    anchor: video
+    overline: Video
+    heading: Presentation
+    label: Neon Law presentation
+    asset_key: img/neon-home/neon-home-presentation.mp4
+  - kind: downloads
+    anchor: download
+    overline: Download
+    heading: Run Navigator yourself
+    description: >-
+      Navigator is open source under MIT OR Apache-2.0. It is built for Macs and for
+      containers in the cloud: download it for Apple silicon macOS or x86_64 Linux.
+      Each release is attached to the public GitHub repository.
+    archive_label: every release
+    package:
+      heading: Install with Homebrew
+      body:
+        - - text: "The formula lives in our own tap, "
+          - text: neon-law/homebrew-navigator
+            href: https://github.com/neon-law/homebrew-navigator
+          - text: ", which is updated by every release."
+        - - text: "Install with the command below, then run "
+          - text: navigator quickstart
+            code: true
+          - text: >-
+              . With Docker running, it brings up the full stack in KIND with a
+              seeded sample firm and three sample matters, each cloned from
+              its own Project repository: Cruller v. Prine, Widget Works, and
+              the Estate of Cornelius Montgomery.
   - kind: cta
     heading: Explore Navigator
     body: >-
-      Read how the platform works, or visit the public repository to inspect
-      the code and releases.
+      Visit the public repository to inspect the code and releases.
     email: "{firm_email}"
-    action:
-      href: /navigator
-      label: How Navigator works
