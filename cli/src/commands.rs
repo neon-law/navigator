@@ -1283,8 +1283,9 @@ pub enum ProjectsCmd {
         /// the server to create or adopt a source repository.
         #[arg(long)]
         no_repository: bool,
-        /// Client contact email for the manifest's client DRI. Required when
-        /// `--resume` rebuilds the tree in an empty directory.
+        /// Client contact for the manifest's client DRI. On resume into an
+        /// empty directory this defaults to the live client contact, and a
+        /// supplied address must be that contact.
         #[arg(long, value_name = "EMAIL")]
         client_email: Option<String>,
         /// Owning Firm name. Requires --brand.

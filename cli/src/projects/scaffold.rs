@@ -6,6 +6,9 @@
 //! source-only tree, and asks the server to create or adopt the repository.
 //! If a step fails after the Project opened, `--resume <code>` skips the
 //! prompts and the open, writes or repairs the tree, and retries provisioning.
+//! A resumed empty directory takes its client DRI from the live Project.
+//! `--client-email` is optional and must name that live contact. When the live
+//! row has a repository URL, resume sets `origin` and its push URL to it.
 //! `--no-repository` keeps the Project repository-less. No client fact enters
 //! the tree beyond the manifest's DRI handles, and nothing is copied from a
 //! sibling matter.
@@ -107,9 +110,9 @@ pub struct ScaffoldOptions {
     pub provision_repository: bool,
     pub firm: Option<String>,
     pub brand: Option<String>,
-    /// The client contact a resumed scaffold writes as the manifest's client
-    /// DRI. Required only when `--resume` rebuilds the tree in an empty
-    /// directory, where the original prompt answer is gone.
+    /// The client contact a resumed scaffold may write as the manifest's client
+    /// DRI. When omitted, an empty directory uses the live Project's client
+    /// contact. A supplied address must be that contact.
     pub client_email: Option<String>,
 }
 
@@ -166,16 +169,12 @@ fn validate_scaffold_start(
         if !model::projects::is_valid_code(code) {
             bail!("invalid immutable Project code `{code}`");
         }
-        if empty
-            && !options
-                .client_email
-                .as_deref()
-                .is_some_and(|email| email.contains('@'))
+        if options
+            .client_email
+            .as_deref()
+            .is_some_and(|email| !email.contains('@'))
         {
-            bail!(
-                "resuming `{code}` into an empty directory rebuilds its manifest; pass \
-                 --client-email <email> for the client DRI"
-            );
+            bail!("client DRI must be an email address");
         }
         if !empty && !manifest_names(directory, code) {
             bail!(
@@ -253,9 +252,17 @@ async fn run_inner(
         write_tree(&base, directory, &plan.code, Some(&plan.client_email))?;
         plan.code
     };
+    let mut repository_url = None;
     if resume.is_some() {
+        let handles = live_handles(host, &code).await?;
+        repository_url = handles.repository_url.filter(|url| !url.is_empty());
+        let supplied = options.client_email.as_deref();
+        if !empty && supplied.is_some() {
+            client_dri_for_resume(&handles.client_dri, supplied)?;
+        }
         if empty {
-            write_tree(&base, directory, &code, options.client_email.as_deref())?;
+            let email = client_dri_for_resume(&handles.client_dri, supplied)?;
+            write_tree(&base, directory, &code, Some(&email))?;
         } else {
             let outcome = crate::projects::repository::validate_gate(directory, Some(&code), true);
             if outcome.errors != 0 {
@@ -272,13 +279,18 @@ async fn run_inner(
         directory.display()
     );
     if !options.provision_repository {
+        ensure_origin(directory, repository_url.as_deref(), false)?;
         println!("Repository provisioning skipped; the Project stays repository-less.");
         return Ok(ExitCode::SUCCESS);
     }
     let provisioned = provision(host, &code).await?;
-    if provisioned != ExitCode::SUCCESS {
-        return Ok(provisioned);
+    let Provisioned::Ready(provisioned_url) = provisioned else {
+        return Ok(ExitCode::from(2));
+    };
+    if provisioned_url.as_ref().is_some_and(|url| !url.is_empty()) {
+        repository_url = provisioned_url;
     }
+    ensure_origin(directory, repository_url.as_deref(), true)?;
     let imported = crate::projects::source_import::run(host, &code, directory, None, true).await;
     if imported != ExitCode::SUCCESS {
         return Ok(imported);
@@ -340,12 +352,116 @@ fn write_tree(base: &str, directory: &Path, code: &str, client_email: Option<&st
     .context("Project opened but repository scaffold failed; rerun with --resume")
 }
 
+/// The client DRI a resumed scaffold may write. A supplied address is accepted
+/// only when the live Project already names it.
+fn client_dri_for_resume(live: &[String], supplied: Option<&str>) -> Result<String> {
+    if let Some(supplied) = supplied {
+        if !supplied.contains('@') {
+            bail!("client DRI must be an email address");
+        }
+        if !live.iter().any(|email| email == supplied) {
+            bail!(
+                "the supplied client contact is not a client DRI on the live Project; \
+                 the manifest keeps the live client contact"
+            );
+        }
+        return Ok(supplied.to_string());
+    }
+    match live {
+        [email] => Ok(email.clone()),
+        [] => {
+            bail!("the live Project has no client contact; the manifest cannot name a client DRI")
+        }
+        _ => bail!(
+            "the live Project has more than one client contact; pass --client-email for the \
+             contact the manifest should name"
+        ),
+    }
+}
+
+async fn live_handles(
+    host: Option<&str>,
+    code: &str,
+) -> Result<model::project_surfaces::ProjectHandles> {
+    let (base, token) = crate::remote::resolve(host)?;
+    let project_id = super::surfaces::resolve_project_id(&base, &token, code).await?;
+    super::surfaces::get_handles(&base, &token, project_id).await
+}
+
+/// Set `origin` and its push URL from the live repository URL.
+fn configure_repository_remote(directory: &Path, url: &str) -> Result<()> {
+    let remotes = git_stdout(directory, &["remote"])?;
+    if remotes.lines().any(|name| name == "origin") {
+        // Read the stored value. `git remote get-url` applies insteadOf rewrites
+        // and can substitute credentials that must not be compared or printed.
+        let current = git_stdout(
+            directory,
+            &["config", "--local", "--get", "remote.origin.url"],
+        )?;
+        if current != url {
+            bail!("origin is `{current}`, which differs from the live repository URL `{url}`");
+        }
+    } else {
+        git_ok(directory, &["remote", "add", "origin", url])?;
+    }
+    git_ok(
+        directory,
+        &["config", "--local", "remote.origin.pushurl", url],
+    )?;
+    println!("origin: {url}");
+    Ok(())
+}
+
+fn ensure_origin(directory: &Path, repository_url: Option<&str>, provisioned: bool) -> Result<()> {
+    match repository_url {
+        Some(url) => configure_repository_remote(directory, url),
+        None if provisioned => {
+            println!(
+                "the live Project has no repository URL; add an origin remote by hand before pushing"
+            );
+            Ok(())
+        }
+        None => Ok(()),
+    }
+}
+
+fn git_ok(directory: &Path, args: &[&str]) -> Result<()> {
+    let output = super::lifecycle::git(directory, args)?;
+    if output.status.success() {
+        return Ok(());
+    }
+    bail!(
+        "git {} failed ({}): {}",
+        args.join(" "),
+        output.status,
+        String::from_utf8_lossy(&output.stderr).trim()
+    )
+}
+
+fn git_stdout(directory: &Path, args: &[&str]) -> Result<String> {
+    let output = super::lifecycle::git(directory, args)?;
+    if !output.status.success() {
+        bail!(
+            "git {} failed ({}): {}",
+            args.join(" "),
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8(output.stdout)?.trim().to_string())
+}
+
+enum Provisioned {
+    Ready(Option<String>),
+    Failed,
+}
+
 /// Ask the server to create or adopt the repository, and report each
 /// resource's outcome as the server recorded it.
-async fn provision(host: Option<&str>, code: &str) -> Result<ExitCode> {
+async fn provision(host: Option<&str>, code: &str) -> Result<Provisioned> {
     let (base, token) = crate::remote::resolve(host)?;
-    let project_id = crate::projects::surfaces::resolve_project_id(&base, &token, code).await?;
-    match crate::projects::surfaces::post_reconcile(&base, &token, project_id).await {
+    let project_id = super::surfaces::resolve_project_id(&base, &token, code).await?;
+    match super::surfaces::post_reconcile(&base, &token, project_id).await {
         Ok(surfaces) => {
             println!(
                 "repository: {:?}{}",
@@ -360,14 +476,14 @@ async fn provision(host: Option<&str>, code: &str) -> Result<ExitCode> {
                 println!("repository detail: {detail}");
             }
             println!("drive: {:?}", surfaces.drive_status);
-            Ok(ExitCode::SUCCESS)
+            Ok(Provisioned::Ready(surfaces.repository_url))
         }
         Err(error) => {
             eprintln!(
                 "navigator: the Project and its scaffold exist, but provisioning failed: \
                  {error:#}\nretry with `navigator project scaffold --resume {code}`"
             );
-            Ok(ExitCode::from(2))
+            Ok(Provisioned::Failed)
         }
     }
 }
@@ -646,26 +762,107 @@ mod tests {
         assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
     }
 
-    #[tokio::test]
-    async fn resuming_into_an_empty_directory_needs_the_client_email() {
+    #[test]
+    fn resume_into_an_empty_directory_allows_a_missing_client_email() {
         let root = tempfile::tempdir().unwrap();
-        for client_email in [None, Some("not-an-email".to_string())] {
-            let error = run_inner(
-                None,
-                root.path(),
-                Some("matter-one"),
-                ScaffoldOptions {
-                    firm: None,
-                    brand: None,
-                    provision_repository: false,
-                    client_email,
-                },
-            )
-            .await
-            .unwrap_err();
-            assert!(error.to_string().contains("--client-email"), "{error}");
-        }
+        let empty = validate_scaffold_start(
+            root.path(),
+            Some("matter-one"),
+            &ScaffoldOptions {
+                firm: None,
+                brand: None,
+                provision_repository: false,
+                client_email: None,
+            },
+        )
+        .unwrap();
+        assert!(empty);
         assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
+    }
+
+    #[tokio::test]
+    async fn resume_rejects_a_client_email_that_is_not_an_address() {
+        let root = tempfile::tempdir().unwrap();
+        let error = run_inner(
+            None,
+            root.path(),
+            Some("matter-one"),
+            ScaffoldOptions {
+                firm: None,
+                brand: None,
+                provision_repository: false,
+                client_email: Some("not-an-email".to_string()),
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("email address"), "{error}");
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn resume_client_dri_uses_the_single_live_contact() {
+        let live = vec!["client@example.com".to_string()];
+        assert_eq!(
+            client_dri_for_resume(&live, None).unwrap(),
+            "client@example.com"
+        );
+        assert_eq!(
+            client_dri_for_resume(&live, Some("client@example.com")).unwrap(),
+            "client@example.com"
+        );
+        let error = client_dri_for_resume(&live, Some("other@example.com")).unwrap_err();
+        assert!(error.to_string().contains("not a client DRI"), "{error}");
+        assert!(!error.to_string().contains("other@example.com"));
+        let missing = client_dri_for_resume(&[], None).unwrap_err();
+        assert!(
+            missing.to_string().contains("no client contact"),
+            "{missing}"
+        );
+    }
+
+    #[test]
+    fn resume_client_dri_requires_a_choice_when_several_contacts_exist() {
+        let live = vec!["one@example.com".to_string(), "two@example.com".to_string()];
+        let error = client_dri_for_resume(&live, None).unwrap_err();
+        assert!(error.to_string().contains("--client-email"), "{error}");
+        assert_eq!(
+            client_dri_for_resume(&live, Some("two@example.com")).unwrap(),
+            "two@example.com"
+        );
+    }
+
+    #[test]
+    fn configure_repository_remote_sets_origin_and_pushurl() {
+        let root = tempfile::tempdir().unwrap();
+        let url = "https://github.com/example/matter";
+        git_ok(root.path(), &["init", "--quiet", "--initial-branch=main"]).unwrap();
+        configure_repository_remote(root.path(), url).unwrap();
+        assert_eq!(
+            git_stdout(
+                root.path(),
+                &["config", "--local", "--get", "remote.origin.url"]
+            )
+            .unwrap(),
+            url
+        );
+        assert_eq!(
+            git_stdout(
+                root.path(),
+                &["config", "--local", "--get", "remote.origin.pushurl"]
+            )
+            .unwrap(),
+            url
+        );
+        configure_repository_remote(root.path(), url).unwrap();
+        let error = configure_repository_remote(root.path(), "https://github.com/example/other")
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("differs from the live repository URL"),
+            "{error}"
+        );
     }
 
     #[tokio::test]
