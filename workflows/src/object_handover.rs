@@ -127,6 +127,7 @@ fn readback(mut query: impl FnMut(&str) -> Result<String>) -> Result<Readback> {
 
 pub fn check_environment(environment: &str) -> Result<()> {
     if environment.is_empty()
+        || environment.starts_with('-')
         || environment.len() > 128
         || !environment
             .bytes()
