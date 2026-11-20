@@ -3906,12 +3906,36 @@ pub fn detect_mutable_tags(path: &std::path::Path, contents: &str) -> Vec<(usize
         && path.components().any(|c| c.as_os_str() == "workflows")
         && path.to_string_lossy().contains(".github");
     let mut findings = Vec::new();
+    let mut stages = std::collections::BTreeSet::new();
     for (idx, raw) in contents.lines().enumerate() {
         let (code, exempt) = split_trailing_comment(raw);
-        if exempt {
+        let trimmed = code.trim();
+        // A prior named stage reuses this file's filesystem, not an external
+        // image tag. Check before recording this line's alias so a forward
+        // reference or a stage naming itself still consumes an external image.
+        let internal_stage = if is_containerfile {
+            containerfile_from_ref(trimmed).is_some_and(|rest| {
+                let mut tokens = rest
+                    .split_whitespace()
+                    .filter(|token| !token.starts_with("--"));
+                let reference = tokens.next().unwrap_or("").to_ascii_lowercase();
+                let internal = stages.contains(&reference);
+                if tokens
+                    .next()
+                    .is_some_and(|token| token.eq_ignore_ascii_case("AS"))
+                {
+                    if let Some(alias) = tokens.next() {
+                        stages.insert(alias.to_ascii_lowercase());
+                    }
+                }
+                internal
+            })
+        } else {
+            false
+        };
+        if exempt || internal_stage {
             continue;
         }
-        let trimmed = code.trim();
         let reference = if is_yaml {
             yaml_image_entry(trimmed)
         } else if is_containerfile {
@@ -5788,6 +5812,36 @@ mod gate_helpers_tests {
         assert_eq!(findings.len(), 1);
         let chart = std::path::Path::new("charts/values.yaml");
         assert!(detect_mutable_tags(chart, "version: latest\n").is_empty());
+    }
+
+    #[test]
+    fn mutable_tag_check_resolves_only_prior_container_stages() {
+        let path = std::path::Path::new("images/Containerfile.neon");
+        let findings = detect_mutable_tags(
+            path,
+            "FROM debian:bookworm-slim@sha256:abc AS runtime-base\n\
+             FROM --platform=linux/amd64 runtime-base AS check\n\
+             from CHECK as runtime\n",
+        );
+        assert!(
+            findings.is_empty(),
+            "internal stages are not consumed image tags"
+        );
+
+        let findings = detect_mutable_tags(
+            path,
+            "FROM later AS forward\n\
+             FROM unknown AS unknown\n\
+             FROM debian:latest AS later\n\
+             FROM later AS final\n",
+        );
+        assert_eq!(
+            findings.iter().map(|finding| finding.0).collect::<Vec<_>>(),
+            [1, 2, 3]
+        );
+        assert!(findings[0].1.contains("later"));
+        assert!(findings[1].1.contains("unknown"));
+        assert!(findings[2].1.contains("latest"));
     }
 
     #[test]

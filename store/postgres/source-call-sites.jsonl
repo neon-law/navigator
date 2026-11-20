@@ -113,7 +113,8 @@
 {"file":"cli/src/answers_file.rs","line":186,"function":"pdf_fields","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/answers_file.rs","line":195,"function":"pdf_fields","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/assumptions.rs","line":40,"function":"run","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
-{"file":"cli/src/commands.rs","line":5103,"function":"parse_notarization","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/commands.rs","line":3928,"function":"detect_mutable_tags","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/commands.rs","line":5127,"function":"parse_notarization","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/credentials.rs","line":74,"function":"set","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/credentials.rs","line":206,"function":"write_with_mode_0600","operation":"create","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/document_deletion.rs","line":58,"function":"record_actioned","operation":"create","sql_operations":[],"tables":[],"transaction":false}
