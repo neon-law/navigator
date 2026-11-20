@@ -3,6 +3,7 @@
 use std::process::Command;
 
 use anyhow::{bail, Result};
+use workflows::attest::sha256_hex;
 use workflows::object_handover::{self, Readback};
 
 fn cli_query(environment: &str, sql: &str) -> Result<String> {
@@ -110,10 +111,7 @@ fn now() -> Result<u64> {
 }
 
 fn require_fresh(captured_at: u64, current: u64) -> Result<()> {
-    if !current
-        .checked_sub(captured_at)
-        .is_some_and(|age| age <= 900)
-    {
+    if current.checked_sub(captured_at).is_none_or(|age| age > 900) {
         bail!("object capture evidence expired or has an invalid time");
     }
     Ok(())
@@ -126,14 +124,6 @@ fn require_hold(held: bool) -> Result<()> {
         );
     }
     Ok(())
-}
-
-fn sha256(bytes: &[u8]) -> String {
-    use sha2::Digest;
-    sha2::Sha256::digest(bytes)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
 }
 
 fn private_parent(path: &std::path::Path) -> Result<std::path::PathBuf> {
@@ -171,7 +161,7 @@ fn write_private(path: &std::path::Path, capture: &PrivateCapture) -> Result<Str
     file.write_all(&bytes)
         .and_then(|()| file.sync_all())
         .map_err(|_| anyhow::anyhow!("private capture write failed"))?;
-    Ok(sha256(&bytes))
+    Ok(sha256_hex(&bytes))
 }
 
 fn read_private(
@@ -193,7 +183,7 @@ fn read_private(
     file.take(128 * 1024 * 1024 + 1)
         .read_to_end(&mut bytes)
         .map_err(|_| anyhow::anyhow!("private capture read failed"))?;
-    if bytes.len() > 128 * 1024 * 1024 || sha256(&bytes) != expected {
+    if bytes.len() > 128 * 1024 * 1024 || sha256_hex(&bytes) != expected {
         bail!("object capture digest mismatch or bound exceeded");
     }
     let captured: PrivateCapture = serde_json::from_slice(&bytes)
@@ -242,8 +232,8 @@ pub(super) fn run(operation: Operation) -> Result<()> {
         | Operation::Activate {
             operator_writers_held,
             ..
-        } => require_hold(*operator_writers_held)?,
-        Operation::Import {
+        }
+        | Operation::Import {
             apply: true,
             operator_writers_held,
             ..
@@ -328,7 +318,7 @@ mod tests {
         let file = directory.path().join("capture.json");
         std::fs::write(&file, b"{}").unwrap();
         std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
-        assert!(read_private(&file, &sha256(b"{}"), "synthetic").is_err());
+        assert!(read_private(&file, &sha256_hex(b"{}"), "synthetic").is_err());
         std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
         assert!(read_private(&file, "wrong-digest", "synthetic").is_err());
         assert!(object_handover::check_environment("--untrusted-option").is_err());
