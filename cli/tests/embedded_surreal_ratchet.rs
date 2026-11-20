@@ -28,7 +28,7 @@ const BASELINE: &[(&str, usize)] = &[
     ("mcp", 42),
     ("neon", 4),
     ("portal", 347),
-    ("server", 159),
+    ("server", 158),
     ("store", 1245),
     ("webapp", 28),
     ("workflows", 16),
