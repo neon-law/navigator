@@ -96,8 +96,8 @@ PST is UTC−8; during PDT (UTC−7) the same expression lands at 03:00 local. I
 year-round, set `spec.timeZone: "America/Los_Angeles"` instead of doing the math.
 
 When the requested time is explicitly UTC, keep both the schedule comment and expression in UTC. The
-`nightly-project-update-trigger` runs at `33 11 * * *` with `timeZone: Etc/UTC` (03:33 fixed PST) every day and starts the
-`NightlyProjectUpdate` workflow keyed on the UTC date. The parent walks every Project and runs the `membership`,
+`nightly-project-update-trigger` runs at `33 11 * * *` with `timeZone: Etc/UTC` (03:33 fixed PST) every day and starts
+the `NightlyProjectUpdate` workflow keyed on the UTC date. The parent walks every Project and runs the `membership`,
 `slack`, and `repository` child workflows; the [Nightly Project Update](glossary/nightly-project-update.md) defines the
 full tag set. This is fixed PST (UTC−8); it does not track daylight saving time.
 

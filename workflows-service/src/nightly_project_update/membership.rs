@@ -740,7 +740,11 @@ mod tests {
 
     async fn removal_fixture(
         clerk_resolves: bool,
-    ) -> (store::surreal::SurrealDb, Arc<ReconciliationSlack>, uuid::Uuid) {
+    ) -> (
+        store::surreal::SurrealDb,
+        Arc<ReconciliationSlack>,
+        uuid::Uuid,
+    ) {
         let surreal = mem_surreal().await;
         let firm_id = store::test_support::seed_firm_with_brand(&surreal, "neon").await;
         let project =
