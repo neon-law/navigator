@@ -277,57 +277,13 @@ async fn run_lane(
     let (kind, key) = delivery_identity(&request);
     if store::project_slack_deliveries::admission(&context.postgres, project_id, kind, &key)
         .await
-        .map_err(|error| dbos::Error::Application(delivery_error(error)))?
+        .map_err(|error| dbos::Error::Application(delivery_error(&error)))?
         == store::project_slack_deliveries::Admission::Posted
     {
         return Ok(());
     }
     match request {
-        LaneRequest::ClientView => {
-            let surreal = context.surreal.clone();
-            let bots = Arc::clone(&context.bots);
-            let simulated = context.simulated;
-            let postgres = context.postgres.clone();
-            let channel_id: String =
-                dbos::step_with("ensure-channel", lane_step_options(), move || {
-                    let surreal = surreal.clone();
-                    let bots = Arc::clone(&bots);
-                    let postgres = postgres.clone();
-                    async move {
-                        let slack = bots
-                            .for_project_on(&postgres, &surreal, project_id)
-                            .await
-                            .map_err(dbos::Error::Application)?;
-                        main_push_destination_on(&postgres, &slack, project_id, simulated)
-                            .await
-                            .map(|destination| destination.channel_id)
-                            .map_err(dbos::Error::Application)
-                    }
-                })
-                .await?;
-            let surreal = context.surreal.clone();
-            let bots = Arc::clone(&context.bots);
-            let postgres = context.postgres.clone();
-            dbos::step_with("post-client-view", lane_step_options(), move || {
-                let surreal = surreal.clone();
-                let bots = Arc::clone(&bots);
-                let channel_id = channel_id.clone();
-                let postgres = postgres.clone();
-                async move {
-                    let slack = bots
-                        .for_project_on(&postgres, &surreal, project_id)
-                        .await
-                        .map_err(dbos::Error::Application)?;
-                    slack
-                        .post_message(&channel_id, CLIENT_PROJECT_VIEW_MESSAGE)
-                        .await
-                        .map_err(|error| {
-                            dbos::Error::Application(LaneError::Slack(error.to_string()))
-                        })
-                }
-            })
-            .await?;
-        }
+        LaneRequest::ClientView => post_client_view(context, project_id).await?,
         LaneRequest::MainPush(event) => {
             let surreal = context.surreal.clone();
             let bots = Arc::clone(&context.bots);
@@ -383,10 +339,57 @@ async fn run_lane(
         async move {
             store::project_slack_deliveries::record_posted(&postgres, project_id, kind, &key)
                 .await
-                .map_err(|error| dbos::Error::Application(delivery_error(error)))
+                .map_err(|error| dbos::Error::Application(delivery_error(&error)))
         }
     })
     .await
+}
+
+async fn post_client_view(
+    context: &Context,
+    project_id: uuid::Uuid,
+) -> dbos::Result<(), LaneError> {
+    let surreal = context.surreal.clone();
+    let bots = Arc::clone(&context.bots);
+    let simulated = context.simulated;
+    let postgres = context.postgres.clone();
+    let channel_id: String = dbos::step_with("ensure-channel", lane_step_options(), move || {
+        let surreal = surreal.clone();
+        let bots = Arc::clone(&bots);
+        let postgres = postgres.clone();
+        async move {
+            let slack = bots
+                .for_project_on(&postgres, &surreal, project_id)
+                .await
+                .map_err(dbos::Error::Application)?;
+            main_push_destination_on(&postgres, &slack, project_id, simulated)
+                .await
+                .map(|destination| destination.channel_id)
+                .map_err(dbos::Error::Application)
+        }
+    })
+    .await?;
+    let surreal = context.surreal.clone();
+    let bots = Arc::clone(&context.bots);
+    let postgres = context.postgres.clone();
+    dbos::step_with("post-client-view", lane_step_options(), move || {
+        let surreal = surreal.clone();
+        let bots = Arc::clone(&bots);
+        let channel_id = channel_id.clone();
+        let postgres = postgres.clone();
+        async move {
+            let slack = bots
+                .for_project_on(&postgres, &surreal, project_id)
+                .await
+                .map_err(dbos::Error::Application)?;
+            slack
+                .post_message(&channel_id, CLIENT_PROJECT_VIEW_MESSAGE)
+                .await
+                .map_err(|error| dbos::Error::Application(LaneError::Slack(error.to_string())))
+        }
+    })
+    .await?;
+    Ok(())
 }
 
 /// The canonical delivery identity shared with pre-start ingress admission.
@@ -400,7 +403,7 @@ pub(crate) fn delivery_identity(request: &LaneRequest) -> (&'static str, String)
     }
 }
 
-fn delivery_error(error: store::project_slack_deliveries::DeliveryError) -> LaneError {
+fn delivery_error(error: &store::project_slack_deliveries::DeliveryError) -> LaneError {
     match error {
         store::project_slack_deliveries::DeliveryError::Storage => {
             LaneError::Store("Project Slack delivery storage unavailable".to_owned())
