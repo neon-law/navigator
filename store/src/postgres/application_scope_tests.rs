@@ -93,6 +93,21 @@ async fn application_scope_rechecks_history_and_never_falls_back_to_another_admi
                         PostgresDb::application().await,
                         Err(PostgresError::History)
                     ));
+                    let source = crate::surreal::SurrealDb::uninitialized();
+                    assert!(
+                        crate::projects::onboarding_status(&source, uuid::Uuid::new_v4())
+                            .await
+                            .is_err()
+                    );
+                    assert!(crate::projects::onboarding_official_sets(&source, &[])
+                        .await
+                        .is_err());
+                    assert!(crate::projects::onboarding_esign_pending(&source, &[])
+                        .await
+                        .is_err());
+                    assert!(crate::projects::matter_lifecycle_sets(&source, &[])
+                        .await
+                        .is_err());
                     assert_eq!(
                         name(&PostgresDb::from_env().await.unwrap()).await,
                         name(&admitted).await

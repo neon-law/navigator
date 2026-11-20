@@ -4714,7 +4714,7 @@ pub async fn onboarding_status(
     _surreal: &crate::surreal::SurrealDb,
     project_id: Uuid,
 ) -> Result<OnboardingStatus, String> {
-    let pg = crate::postgres::PostgresDb::from_env()
+    let pg = crate::postgres::PostgresDb::application()
         .await
         .map_err(|error| error.to_string())?;
     let official = crate::onboarding::official_projects(&pg, &[project_id])
@@ -4745,7 +4745,7 @@ pub async fn onboarding_official_sets(
     _surreal: &crate::surreal::SurrealDb,
     projects: &[Project],
 ) -> Result<std::collections::HashSet<Uuid>, String> {
-    let pg = crate::postgres::PostgresDb::from_env()
+    let pg = crate::postgres::PostgresDb::application()
         .await
         .map_err(|error| error.to_string())?;
     let ids: Vec<_> = projects.iter().map(|project| project.id).collect();
@@ -4763,7 +4763,7 @@ pub async fn onboarding_esign_pending(
     _surreal: &crate::surreal::SurrealDb,
     projects: &[Project],
 ) -> Result<std::collections::HashMap<Uuid, crate::onboarding::EsignSummary>, String> {
-    let pg = crate::postgres::PostgresDb::from_env()
+    let pg = crate::postgres::PostgresDb::application()
         .await
         .map_err(|error| error.to_string())?;
     let ids: Vec<_> = projects.iter().map(|project| project.id).collect();
@@ -4791,7 +4791,7 @@ pub async fn matter_lifecycle_sets(
     ),
     String,
 > {
-    let pg = crate::postgres::PostgresDb::from_env()
+    let pg = crate::postgres::PostgresDb::application()
         .await
         .map_err(|error| error.to_string())?;
     let ids: Vec<_> = projects.iter().map(|project| project.id).collect();
