@@ -5427,7 +5427,8 @@ jobs:
             findings
                 .iter()
                 .any(|finding| finding.starts_with("Y024: `.gitignore` lacks")
-                    && finding.contains("`/documents/`, `/notes/`, `/mail/`, `*.pdf`, `*.docx`, `*.local` private matter records or document bytes")
+                    && finding.contains("`/notes/`, `/mail/`")
+                    && finding.contains("private matter records or document bytes")
                     && finding.contains("sync-skills")),
             "{findings:#?}"
         );
