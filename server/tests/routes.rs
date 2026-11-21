@@ -24172,19 +24172,21 @@ async fn upload_document(
     bytes: &[u8],
     content_type: &str,
     slug: &str,
-    mail_provenance: Option<serde_json::Value>,
 ) -> (StatusCode, Uuid) {
-    let mut body = serde_json::json!({
+    let body = serde_json::json!({
         "filename": filename,
         "content_base64": base64::engine::general_purpose::STANDARD.encode(bytes),
         "content_type": content_type,
         "kind": "letter",
         "visibility": "internal",
         "slug": slug,
+        "mail_provenance": {
+            "message_id": "eml:law470-router@example.test",
+            "sender": "Client <client@example.test>",
+            "received_at": "2025-10-09T14:03:00Z",
+            "subject": "Engagement enclosures",
+        },
     });
-    if let Some(provenance) = mail_provenance {
-        body["mail_provenance"] = provenance;
-    }
     let resp = app
         .clone()
         .oneshot(
@@ -24206,6 +24208,25 @@ async fn upload_document(
         .parse()
         .unwrap();
     (status, asset_id)
+}
+
+async fn upload_and_retry_mail_document(
+    app: &axum::Router,
+    bearer: &str,
+    project_id: Uuid,
+    filename: &str,
+    bytes: &[u8],
+    content_type: &str,
+    slug: &str,
+) -> Uuid {
+    let (status, asset) =
+        upload_document(app, bearer, project_id, filename, bytes, content_type, slug).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (retry_status, retry_asset) =
+        upload_document(app, bearer, project_id, filename, bytes, content_type, slug).await;
+    assert_eq!(retry_status, StatusCode::OK);
+    assert_eq!(retry_asset, asset);
+    asset
 }
 
 #[tokio::test]
@@ -24231,13 +24252,7 @@ async fn an_eml_reference_filing_files_an_oversized_message_end_to_end() {
             "the fixture clears the old wall"
         );
         let message_ref = "signing-router";
-        let provenance = serde_json::json!({
-            "message_id": "eml:law470-router@example.test",
-            "sender": "Client <client@example.test>",
-            "received_at": "2025-10-09T14:03:00Z",
-            "subject": "Engagement enclosures",
-        });
-        let (source_status, source_asset) = upload_document(
+        let source_asset = upload_and_retry_mail_document(
             &app,
             &bearer,
             project_id,
@@ -24245,11 +24260,9 @@ async fn an_eml_reference_filing_files_an_oversized_message_end_to_end() {
             &raw,
             "message/rfc822",
             &format!("mail/{message_ref}/source"),
-            Some(provenance.clone()),
         )
         .await;
-        assert_eq!(source_status, StatusCode::CREATED);
-        let (attachment_status, attachment_asset) = upload_document(
+        let attachment_asset = upload_and_retry_mail_document(
             &app,
             &bearer,
             project_id,
@@ -24257,41 +24270,8 @@ async fn an_eml_reference_filing_files_an_oversized_message_end_to_end() {
             b"PDF-BYTES",
             "application/pdf",
             &format!("mail/{message_ref}/0"),
-            Some(provenance.clone()),
         )
         .await;
-        assert_eq!(attachment_status, StatusCode::CREATED);
-
-        // Retry safety (LAW-470): re-filing the batch after a partial
-        // failure reuses the documents the matter already holds — the mail
-        // lane's (project, filename, sha256) probe — instead of writing
-        // second copies.
-        let (source_retry_status, source_retry_asset) = upload_document(
-            &app,
-            &bearer,
-            project_id,
-            "signing-router.eml",
-            &raw,
-            "message/rfc822",
-            &format!("mail/{message_ref}/source"),
-            Some(provenance.clone()),
-        )
-        .await;
-        assert_eq!(source_retry_status, StatusCode::OK);
-        assert_eq!(source_retry_asset, source_asset);
-        let (attachment_retry_status, attachment_retry_asset) = upload_document(
-            &app,
-            &bearer,
-            project_id,
-            "enclosure.pdf",
-            b"PDF-BYTES",
-            "application/pdf",
-            &format!("mail/{message_ref}/0"),
-            Some(provenance),
-        )
-        .await;
-        assert_eq!(attachment_retry_status, StatusCode::OK);
-        assert_eq!(attachment_retry_asset, attachment_asset);
 
         let filing_request = serde_json::json!({
             "source_document": source_asset,
