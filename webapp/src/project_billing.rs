@@ -365,15 +365,6 @@ pub fn BillingTab(
                 p { class: "nav-form-error", role: "alert", "{error}" }
             }
 
-            section { class: "lawyer-detail__subsection",
-                h3 { "Client funds" }
-                p { "Deposit client advances for fees and costs in the reviewed trust account for this matter. Before collecting a payment, check who owns it under the agreement and governing rules." }
-                if trust.any {
-                    p { strong { "{trust.held}" } " held for this matter in the Xero mirror." }
-                } else {
-                    p { class: "nav-muted", "No trust activity appears in the matter mirror." }
-                }
-            }
             section { class: "lawyer-detail__subsection matter-billing-review",
                 h3 { "Time awaiting review" }
                 if annotations.is_empty() {
@@ -401,11 +392,7 @@ pub fn BillingTab(
             }
             section { class: "lawyer-detail__subsection matter-billing-time",
                 h3 { "Time" }
-                if timer.is_some() {
-                    p { class: "nav-muted",
-                        "A timer is running — it ticks in the header above and stops into a time entry from there."
-                    }
-                } else {
+                if timer.is_none() {
                     FormCard {
                         title: "Start the timer".to_string(),
                         action: "/app/projects/{code}/timer/start",
@@ -630,7 +617,7 @@ pub fn BillingTab(
                                     th { scope: "col", "Payee" }
                                     th { scope: "col", "Description" }
                                     th { scope: "col", "Amount" }
-                                    th { scope: "col", "Amount" }
+                                    th { scope: "col", "Amount status" }
                                     th { scope: "col", "Billing" }
                                 }
                             }

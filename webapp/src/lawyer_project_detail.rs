@@ -80,15 +80,10 @@ fn matter_fact_grid(view: &LawyerDetailView) -> Element {
         .iter()
         .filter(|row| row.is_overdue(&view.today))
         .count();
-    let trust_held = view.trust.held.clone();
     let wip = view.wip.clone();
     let outstanding = view.outstanding.clone();
     let unread_inbox = view.unread_inbox;
-    let has_facts = open_tasks > 0
-        || unread_inbox > 0
-        || view.trust.any
-        || wip.is_some()
-        || outstanding.is_some();
+    let has_facts = open_tasks > 0 || unread_inbox > 0 || wip.is_some() || outstanding.is_some();
 
     if !has_facts {
         return rsx! {};
@@ -117,11 +112,6 @@ fn matter_fact_grid(view: &LawyerDetailView) -> Element {
                             class: "lawyer-detail__fact-value lawyer-detail__fact-link",
                             "{unread_inbox}",
                         }
-                    }
-                }
-                if view.trust.any {
-                    FactCard { title: "Trust held".to_string(),
-                        span { class: "lawyer-detail__fact-value", "{trust_held}" }
                     }
                 }
                 if let Some(wip) = wip {
@@ -1049,6 +1039,9 @@ pub fn LawyerProjectDetail() -> Element {
         view.lawyer_dris.is_empty() && view.role.is_lawyer_tier(),
     );
     let may_govern_client_side = view.role.is_lawyer_tier();
+    let has_stage = view.stage.current.is_some()
+        || !view.stage.definitions.is_empty()
+        || !view.stage.history.is_empty();
     let brand_disp = crate::brand_website::BrandWebsite::from_key(&view.brand).attached_line();
 
     rsx! {
@@ -1136,7 +1129,7 @@ pub fn LawyerProjectDetail() -> Element {
                     Toast { message: flash.clone(), tone: ToastTone::Success }
                 }
                 // The Tasks panel renders its own refusal beside its forms.
-                if view.active_tab != MatterTab::Tasks {
+                if !matches!(view.active_tab, MatterTab::Tasks | MatterTab::Billing) && !(view.active_tab == MatterTab::Overview && has_stage) {
                     if let Some(error) = view.error.as_ref() {
                         p { class: "nav-form-error", role: "alert", "{error}" }
                     }
@@ -1150,7 +1143,6 @@ pub fn LawyerProjectDetail() -> Element {
                             "Status: {view.status}"
                             if !view.lawyer_dris.is_empty() { " · Lawyer DRI: {lawyer_dri_disp}" }
                             if !view.client_dris.is_empty() { " · Client DRI: {client_dri_disp}" }
-                            if let Some(stage) = &view.stage.current { " · {stage.label}" }
                             if view.missing_offboarding_letter {
                                 span { class: "matter-flag", "Missing offboarding letter" }
                             }
@@ -1172,7 +1164,7 @@ pub fn LawyerProjectDetail() -> Element {
                                     " · Last commit " crate::components::UtcTime { at: at.clone() }
                                 }
                             }
-                            if !view.stage.definitions.is_empty() || !view.stage.history.is_empty() {
+                            if has_stage {
                                 StageSection {
                                     code: view.code.clone(), csrf: csrf.clone(),
                                     stage: view.stage.clone(), error: view.error.clone(),
@@ -1192,9 +1184,6 @@ pub fn LawyerProjectDetail() -> Element {
                             section { class: "lawyer-detail__section project-close",
                                 p { class: "nav-muted",
                                     "To close this project, email the lawyer DRI"
-                                    if !view.lawyer_dris.is_empty() {
-                                        " ({lawyer_dri_disp})"
-                                    }
                                     " or "
                                     "support@neonlaw.com"
                                     "."
@@ -1239,13 +1228,8 @@ pub fn LawyerProjectDetail() -> Element {
                         }
                     },
                     MatterTab::Deadlines => rsx! {
-                        crate::project_deadlines::ProjectDeadlinesPanel {
-                            section_class: "lawyer-detail__section".to_string(),
-                            rows: view.deadlines.clone(),
-                            past: view.past_deadlines.clone(),
-                        }
-                        details { id: "calendar", open: view.calendar_expanded,
-                            summary { "View calendar timeline" }
+                        if view.calendar_expanded {
+                            a { class: "nav-link", href: "{current_page}", "View deadline details" }
                             crate::project_calendar::ProjectCalendar {
                                 section_class: "lawyer-detail__section project-calendar".to_string(),
                                 heading: "Calendar timeline".to_string(),
@@ -1257,10 +1241,17 @@ pub fn LawyerProjectDetail() -> Element {
                                 dir: view.calendar_dir.clone(),
                                 events: view.calendar_events.clone(),
                             }
+                        } else {
+                            a { class: "nav-link", href: "{current_page}?sort=date&dir=asc", "View calendar timeline" }
+                            crate::project_deadlines::ProjectDeadlinesPanel {
+                                section_class: "lawyer-detail__section".to_string(),
+                                rows: view.deadlines.clone(),
+                                past: view.past_deadlines.clone(),
+                            }
                         }
                     },
                     MatterTab::Tasks => rsx! {
-                        crate::project_tasks::PendingHandoffs { code: view.code.clone(), rows: view.pending_handoffs.clone() }
+                        crate::project_tasks::PendingHandoffs { rows: view.pending_handoffs.clone() }
                         TasksTab {
                             code: view.code.clone(),
                             csrf: csrf.clone(),
@@ -1508,8 +1499,7 @@ mod tests {
         );
         assert!(html.contains("1 overdue"), "{html}");
         assert!(!html.contains("Next deadline"), "{html}");
-        assert!(html.contains("Trust held"), "{html}");
-        assert!(html.contains("$5,000"), "{html}");
+        assert!(!html.contains("$5,000"), "{html}");
     }
 
     #[test]

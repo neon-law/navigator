@@ -18880,7 +18880,9 @@ async fn project_calendar_renders_an_appearance_only_for_a_participant() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/app/projects/{project_code}/deadlines"))
+                .uri(format!(
+                    "/app/projects/{project_code}/deadlines?sort=date&dir=asc"
+                ))
                 .header("cookie", &cookie)
                 .body(Body::empty())
                 .unwrap(),
@@ -18912,7 +18914,9 @@ async fn project_calendar_renders_an_appearance_only_for_a_participant() {
     let denied = app
         .oneshot(
             Request::builder()
-                .uri(format!("/app/projects/{project_code}/deadlines"))
+                .uri(format!(
+                    "/app/projects/{project_code}/deadlines?sort=date&dir=asc"
+                ))
                 .header("cookie", &outsider_cookie)
                 .body(Body::empty())
                 .unwrap(),
@@ -23278,7 +23282,7 @@ async fn the_workbench_points_every_firm_participant_at_email_to_close_a_matter(
         // hydration comments — so no long contiguous run of it survives SSR.
         assert!(
             body.contains("To close this project, email the lawyer DRI")
-                && body.contains("(Lawyer Project Fixture)")
+                && body.contains("Lawyer Project Fixture")
                 && body.contains("support@neonlaw.com"),
             "{who} is pointed at the named lawyer DRI and the support address: {body}"
         );

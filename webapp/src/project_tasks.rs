@@ -81,13 +81,13 @@ impl From<store::task_handoffs::PendingHandoff> for HandoffRow {
 }
 
 #[component]
-pub fn PendingHandoffs(code: String, rows: Vec<HandoffRow>) -> Element {
+pub fn PendingHandoffs(rows: Vec<HandoffRow>) -> Element {
+    if rows.is_empty() {
+        return rsx! {};
+    }
     rsx! {
         section { class: "lawyer-detail__section", id: "pending-handoffs",
             h2 { "Pending handoffs and follow-ups" }
-            if rows.iter().all(|row| row.state == "resolved") {
-                p { class: "nav-muted", "No pending handoffs." }
-            }
             for row in rows.iter().filter(|row| row.state != "resolved") {
                 article { class: "detail-note",
                     h3 { "{row.title}" }
@@ -128,7 +128,6 @@ pub fn PendingHandoffs(code: String, rows: Vec<HandoffRow>) -> Element {
                     }
                 }
             }
-            a { href: "/app/projects/{code}/tasks#promote-handoff", "Review and save a handoff" }
         }
     }
 }
@@ -506,7 +505,7 @@ mod tests {
             },
         ];
         let html = dioxus_ssr::render_element(rsx! {
-            PendingHandoffs { code: "synthetic".to_string(), rows }
+            PendingHandoffs { rows }
         });
         assert!(html.contains("Ready to retry"));
         assert!(html.contains("Confirm the Calendar ID"));
