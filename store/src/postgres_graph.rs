@@ -964,6 +964,8 @@ async fn relationship_source_rows(pg: &PostgresDb) -> Result<RelationshipRows, G
                 payloads.push(json!({
                     "from_id": from_id,
                     "to_id": to_id,
+                    "from_kind": from_table,
+                    "to_kind": to_table,
                     "kind": row.try_get::<String, _>("kind")?,
                     "confidence_pct": row.try_get::<i64, _>("confidence_pct")?,
                     "source_kind": row.try_get::<String, _>("source_kind")?,

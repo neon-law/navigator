@@ -10,6 +10,8 @@ on:
       - 'store/src/postgres_schema.rs'
       - 'store/src/schema/navigator.surql'
       - 'store/src/lib.rs'
+      - 'store/examples/runtime_graph_roles.rs'
+      - 'k8s/postgres/access/roles.sql'
       - 'store/examples/postgres_schema.rs'
       - 'store/examples/postgres_callers.rs'
       - 'store/examples/postgres_callers/**'
@@ -41,6 +43,8 @@ on:
       - 'store/src/postgres_schema.rs'
       - 'store/src/schema/navigator.surql'
       - 'store/src/lib.rs'
+      - 'store/examples/runtime_graph_roles.rs'
+      - 'k8s/postgres/access/roles.sql'
       - 'store/examples/postgres_schema.rs'
       - 'store/examples/postgres_callers.rs'
       - 'store/examples/postgres_callers/**'
@@ -164,6 +168,13 @@ jobs:
           cargo test -p store --lib journal_startup_migration::
           cargo test -p store \
             --test firm_journal --test postgres_tooling --test brand_move_mirror
+      - name: Runtime graph writers use genuine native admission and restricted App roles
+        env:
+          NAV_REQUIRE_POSTGRES: '1'
+          NAVIGATOR_FORBID_SURREAL: '1'
+          RUST_MIN_STACK: '33554432'
+        run: |
+          bash images/postgres/tests/runtime-graph-roles.sh 2>&1 | tee "$RUNNER_TEMP/postgres-smoke/runtime-graph-roles.log"
       - name: JWT health detects optional ambiguity and pins before the first probe
         env:
           NAVIGATOR_FORBID_SURREAL: '1'
