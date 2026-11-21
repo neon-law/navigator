@@ -2033,6 +2033,12 @@ fn timestamp(value: &Value) -> Result<Value, MirrorError> {
 }
 
 /// One row of either store in the comparable form both upsert and parity use.
+/// Boolean columns a source row may lack, which PostgreSQL stores as `false`: rows
+/// written before the field existed carry no value. The typed mirror reads the
+/// same absence with `unwrap_or_default`, so the generic path must agree or a
+/// legacy row compares as differing and inserts NULL into a NOT NULL column.
+const ABSENT_IS_FALSE: &[(&str, &str)] = &[("lead_consent", "call_opt_in")];
+
 fn normalize(table: &'static Table, row: Value) -> Result<(MirrorKey, Value), MirrorError> {
     let Value::Object(mut fields) = row else {
         return Err(MirrorError::Source);
@@ -2047,6 +2053,9 @@ fn normalize(table: &'static Table, row: Value) -> Result<(MirrorKey, Value), Mi
             continue;
         }
         let value = fields.entry(*name).or_insert(Value::Null);
+        if value.is_null() && ABSENT_IS_FALSE.contains(&(table.name, *name)) {
+            *value = Value::Bool(false);
+        }
         if value.is_null() {
             continue;
         }

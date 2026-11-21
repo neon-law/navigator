@@ -128,3 +128,20 @@ async fn consent_precision_ties_keep_uuid_order_and_missing_parent_cannot_create
     .await;
     pg.pool().close().await;
 }
+
+#[test]
+fn a_legacy_consent_without_call_opt_in_normalizes_to_false() {
+    let row = serde_json::json!({
+        "id": Uuid::now_v7(),
+        "lead_id": Uuid::now_v7(),
+        "consented_at": "2026-09-21T00:07:47.534385955Z",
+        "source_path": "/contact",
+        "sms_consent_version": "sms-v1",
+        "sms_policy_version": "policy-v1",
+        "sms_opt_in": false,
+    });
+    let (_, normalized) =
+        crate::postgres_mirror::records::normalized_record("lead_consent", row).unwrap();
+    assert_eq!(normalized["call_opt_in"], serde_json::Value::Bool(false));
+    assert!(normalized["phone"].is_null());
+}
