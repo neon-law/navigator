@@ -1558,13 +1558,8 @@ mod tests {
             html.contains("name=\"digest\" value=\"digest-of-the-reviewed-compose\""),
             "missing [name=\"digest\" value=\"digest-of-the-reviewed-compose\"]"
         );
-        assert!(html.contains("Not now"), "missing [Not now]");
-        // The escape-free substring: dioxus-ssr escapes apostrophes in text
-        // nodes, so the assert avoids the possessive in "the Firm's ledger".
-        assert!(
-            html.contains("This is what it composes"),
-            "missing [This is what it composes]"
-        );
+        assert!(html.contains(r#"href="/app/projects/acme/billing""#));
+        assert!(html.contains("records a receivable in Xero"));
     }
 
     // ---- the server-side reads, against PostgreSQL ----
