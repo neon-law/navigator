@@ -1861,6 +1861,7 @@ impl DocumentClient {
             None,
             None,
             &DocumentExecution::default(),
+            None,
         )
         .await
     }
@@ -1868,7 +1869,10 @@ impl DocumentClient {
     /// Upload a revision with the structured OCR provenance fields. Routes
     /// by size: the buffered door for everything that fits its per-kind cap,
     /// the streaming lane above it (LAW-172) — one lane choice, made here,
-    /// so no upload command needs to know the difference.
+    /// so no upload command needs to know the difference. `mail_provenance`,
+    /// when present, stamps mail-message provenance on a buffered upload's
+    /// asset row (LAW-470); the streaming session protocol does not carry
+    /// it, so an oversized mail document files without the stamp.
     #[allow(clippy::too_many_arguments)]
     pub async fn upload_bytes_with_details(
         &self,
@@ -1883,6 +1887,7 @@ impl DocumentClient {
         derived_from: Option<serde_json::Value>,
         transcript_quality: Option<&str>,
         execution: &DocumentExecution,
+        mail_provenance: Option<serde_json::Value>,
     ) -> Result<model::document_pointers::DocumentPointer> {
         model::documents::validate_onboarding_envelope(
             kind,
@@ -1924,6 +1929,7 @@ impl DocumentClient {
                         transcript_quality,
                         execution,
                         expected.as_ref(),
+                        mail_provenance.clone(),
                     )
                     .await
                 }
@@ -2034,6 +2040,7 @@ impl DocumentClient {
         transcript_quality: Option<&str>,
         execution: &DocumentExecution,
         expected: Option<&ExpectedHead>,
+        mail_provenance: Option<serde_json::Value>,
     ) -> Result<model::document_pointers::DocumentPointer> {
         validate_document_upload_size_in_bytes(kind, bytes.len())?;
         let effective_slug = slug
@@ -2063,6 +2070,9 @@ impl DocumentClient {
         }
         if let Some(transcript_quality) = transcript_quality {
             body["transcript_quality"] = serde_json::Value::String(transcript_quality.to_string());
+        }
+        if let Some(mail_provenance) = mail_provenance {
+            body["mail_provenance"] = mail_provenance;
         }
         if let Some(expected_head) = expected {
             body["expected_head"] =
@@ -2845,6 +2855,7 @@ async fn file_upload_target(
             None,
             transcript_quality,
             execution,
+            None,
         )
         .await?;
     if let Some(folder) = folder {
@@ -3189,6 +3200,7 @@ async fn upload_transcript(
             Some(derived_from),
             Some(quality),
             &DocumentExecution::default(),
+            None,
         )
         .await
 }
@@ -12539,6 +12551,7 @@ mod tests {
                     receipt: Some(serde_json::from_value(receipt.clone()).unwrap()),
                     ..Default::default()
                 },
+                None,
             )
             .await
             .unwrap();
@@ -12596,6 +12609,7 @@ mod tests {
                 Some(serde_json::json!({ "asset_id": "source" })),
                 Some("machine"),
                 &execution,
+                None,
             )
             .await
             .unwrap();
