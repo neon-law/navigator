@@ -6139,11 +6139,10 @@ async fn store_sample_pages(surreal: &store::surreal::SurrealDb) -> Vec<(String,
     declared
 }
 
-/// Every declared page of the three sample matters renders in a browser for
-/// the fixture client and the fixture lawyer, each in their own lens, from
-/// the records the development seed writes.
+/// On Neon the client can open only the litigation matter. The fixture
+/// lawyer can open all three matters through the Firm workbench.
 #[tokio::test]
-async fn every_sample_matter_page_renders_in_the_client_and_lawyer_lens() {
+async fn sample_matter_pages_follow_client_brand_and_lawyer_participation() {
     let Some(c) = new_client_or_skip().await else {
         return;
     };
@@ -6163,6 +6162,17 @@ async fn every_sample_matter_page_renders_in_the_client_and_lawyer_lens() {
             c.goto(&format!("{}/app/projects/{code}/{slug}", base_url()))
                 .await
                 .unwrap();
+            if lens == "client" && code != store::seed::SAMPLE_LITIGATION_CODE {
+                assert!(
+                    c.title()
+                        .await
+                        .unwrap()
+                        .to_lowercase()
+                        .contains("not found"),
+                    "/app/projects/{code}/{slug} is hidden on the Neon client portal"
+                );
+                continue;
+            }
             c.wait()
                 .at_most(Duration::from_secs(10))
                 .for_element(Locator::Css(&format!("[data-lens='{lens}']")))

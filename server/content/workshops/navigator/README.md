@@ -223,9 +223,9 @@ one of several. Do not treat `letter` as offboarding.
 
 ### Inspect the matter page and its Matter Pages
 
-Sign in as `client@neonlaw.com`, open `/app/projects`, and select **Cruller v. Prine**. All three seeded matters are in
-that list, because the fixture client participates in each one. The detail page keeps the human-readable code in the
-address bar:
+Sign in to Neon as `client@neonlaw.com`, open `/app/projects`, and select **Cruller v. Prine**. The fixture client
+participates in all three sample matters. Each Brand lists only its own matter. The detail page keeps the Project code
+in the address bar:
 
 ```text
 /app/projects/sample-litigation

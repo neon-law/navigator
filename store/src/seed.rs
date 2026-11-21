@@ -1915,9 +1915,9 @@ impl SampleClientKind {
 ///
 /// They are three deliberately different shapes of legal work, because one
 /// matter could only ever demonstrate one: a dispute in front of a court, a
-/// company on a monthly retainer, and an estate plan. A person signing in as
-/// the fixture Client sees all three at once, which is what makes the
-/// participation-scoped list worth looking at.
+/// company on a monthly retainer, and an estate plan. Each belongs to its own
+/// Brand. The fixture Client participates in all three and sees each matter
+/// on its Brand's portal.
 const SAMPLE_MATTERS: &[SampleMatter] = &[
     SampleMatter {
         code: SAMPLE_LITIGATION_CODE,

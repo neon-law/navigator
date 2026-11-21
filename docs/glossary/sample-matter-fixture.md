@@ -30,6 +30,5 @@ leaves it alone and an unpublished portal answers 404 rather than a placeholder 
 That is the one place [Deployment Environment](deployment-environment.md) reaches past which rows get seeded and into
 what gets written to object storage.
 
-The fixture Client participates in all three, so a signed-in client sees a project list worth looking at. The fixture
-Admin participates in none of them — see [Deployment Environment](deployment-environment.md) for which deployments apply
-this layer at all.
+The fixture Client participates in all three matters and sees each one on its Brand's portal. The fixture Admin has no
+Project participation. [Deployment Environment](deployment-environment.md) lists the deployments that use this seed.
