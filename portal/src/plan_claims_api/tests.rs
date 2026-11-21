@@ -130,7 +130,7 @@ async fn a_closed_project_reconciles_claims_through_the_authenticated_routes() {
             minutes: 60,
             description: "Synthetic plan advice".into(),
             billable: true,
-            rate_cents_per_hour: 10000,
+            rate_cents_per_hour: 10_000,
             source: TimeEntrySource::Manual,
         }).await.unwrap().id;
 

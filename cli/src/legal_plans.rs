@@ -404,20 +404,20 @@ fn claim_key(value: &Value) -> Uuid {
     Uuid::from_bytes(bytes)
 }
 
-fn claim_event(claim: Uuid, on: NaiveDate, event: Value) -> Value {
+fn claim_event(claim: Uuid, on: NaiveDate, event: &Value) -> Value {
     let event_id = claim_key(&json!(["navigator-plan-claim-event", claim, on, event]));
     json!({"claim_id": claim, "event_id": event_id, "occurred_on": on, "event": event})
 }
 
 impl ExistingClaim {
-    fn event(self, event: Value) -> Value {
+    fn event(self, event: &Value) -> Value {
         claim_event(self.claim, self.on, event)
     }
 }
 
 impl ClaimSubmission {
     fn event(self, kind: &str) -> Value {
-        self.claim.event(json!({
+        self.claim.event(&json!({
             "type": kind, "provider_reference": self.provider_reference, "claimed_cents": self.claimed_cents,
         }))
     }
@@ -426,7 +426,7 @@ impl ClaimSubmission {
 impl ClaimAmountEvidence {
     fn event(self, kind: &str) -> Value {
         self.claim
-            .event(json!({"type": kind, "reference": self.reference, "cents": self.cents}))
+            .event(&json!({"type": kind, "reference": self.reference, "cents": self.cents}))
     }
 }
 
@@ -448,7 +448,7 @@ impl ClaimCmd {
                 claim_event(
                     claim,
                     work.performed_on,
-                    json!({
+                    &json!({
                         "type": "work_recorded", "work": {
                             "service": work.service, "benefit": work.benefit, "performed_on": work.performed_on,
                             "attorney_minutes": work.attorney_minutes, "time_entry_ids": entries,
@@ -462,15 +462,15 @@ impl ClaimCmd {
                     .evidence()?
                     .ok_or_else(|| anyhow!("supply verified authorization terms"))?;
                 claim.event(
-                    json!({"type": "authorization_confirmed", "authorization": authorization}),
+                    &json!({"type": "authorization_confirmed", "authorization": authorization}),
                 )
             }
-            Self::Prepare(claim) => claim.event(json!({"type": "prepared"})),
+            Self::Prepare(claim) => claim.event(&json!({"type": "prepared"})),
             Self::Submit(submission) => submission.event("submission"),
             Self::Correct(submission) => submission.event("correction"),
             Self::Approve(evidence) => evidence.event("approval"),
             Self::Deny { claim, reference } => {
-                claim.event(json!({"type": "denial", "reference": reference}))
+                claim.event(&json!({"type": "denial", "reference": reference}))
             }
             Self::Pay(evidence) => evidence.event("payment"),
             Self::Reverse(evidence) => evidence.event("reversal"),

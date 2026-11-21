@@ -236,7 +236,7 @@ impl ClaimState {
         }
         match event {
             Event::WorkRecorded { work } if self.stage == Stage::Completed => {
-                self.work = work.clone()
+                self.work = work.clone();
             }
             Event::AuthorizationConfirmed { authorization } => {
                 self.work.authorization = Some(authorization.clone());
@@ -245,7 +245,7 @@ impl ClaimState {
             Event::Prepared
                 if self.stage == Stage::Completed && self.work.estimate()?.is_some() =>
             {
-                self.stage = Stage::Prepared
+                self.stage = Stage::Prepared;
             }
             Event::Submission {
                 provider_reference,
@@ -253,13 +253,13 @@ impl ClaimState {
             } if self.stage == Stage::Prepared
                 || (self.stage == Stage::Completed && claimed_cents.is_none()) =>
             {
-                self.submit(on, provider_reference, *claimed_cents)?
+                self.submit(on, provider_reference, *claimed_cents)?;
             }
             Event::Correction {
                 provider_reference,
                 claimed_cents,
             } if self.submitted_on.is_some() => {
-                self.submit(on, provider_reference, *claimed_cents)?
+                self.submit(on, provider_reference, *claimed_cents)?;
             }
             Event::Approval { cents, .. } if self.stage == Stage::Submitted && *cents > 0 => {
                 self.stage = Stage::Approved;
@@ -276,7 +276,7 @@ impl ClaimState {
                     .ok_or(ClaimError::Invalid("payment total is too large"))?;
             }
             Event::Reversal { cents, .. } if *cents > 0 && self.net_cents >= i64::from(*cents) => {
-                self.net_cents -= i64::from(*cents)
+                self.net_cents -= i64::from(*cents);
             }
             _ => {
                 return Err(ClaimError::Invalid(
@@ -755,7 +755,7 @@ fn summarize(
         totals.pending_attorney_minutes += i64::from(pending_minutes);
         match state.stage {
             Stage::Completed | Stage::Prepared if estimate.is_some() => {
-                totals.eligible_unsubmitted_count += 1
+                totals.eligible_unsubmitted_count += 1;
             }
             Stage::Completed | Stage::Prepared => totals.needs_verification_count += 1,
             Stage::Denied => totals.denied_count += 1,
