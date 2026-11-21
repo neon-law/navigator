@@ -8,7 +8,7 @@ use std::sync::OnceLock;
 use super::{embedded_migrator, PostgresDb};
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgConnectOptions;
-use sqlx::{AssertSqlSafe, Row};
+use sqlx::{AssertSqlSafe, PgConnection, Row};
 use uuid::Uuid;
 
 #[cfg(any(test, feature = "test-support"))]
@@ -123,13 +123,21 @@ pub async fn create(
     let admin = PostgresDb::connect(admin_options.clone())
         .await
         .map_err(|_| OriginError::Creation)?;
-    let result = create_database_on(&admin, &name, || {}).await;
+    let result = async {
+        let mut connection = admin
+            .pool()
+            .acquire()
+            .await
+            .map_err(|_| OriginError::Creation)?;
+        create_database_on(&mut connection, &name, || {}).await
+    }
+    .await;
     admin.pool().close().await;
     result?;
     let postgres = PostgresDb::connect(admin_options.clone().database(&name))
         .await
         .map_err(|_| OriginError::Creation)?;
-    stamp_creation(&postgres, &name, operation).await?;
+    stamp_creation(postgres.pool(), &name, operation).await?;
     Ok(CreatedDatabase {
         postgres,
         operation,
@@ -141,7 +149,7 @@ pub async fn create(
 /// CREATE is exclusive. Report acknowledgement before the later fencing
 /// operations so the owning fixture can clean up only its own resource.
 async fn create_database_on(
-    admin: &PostgresDb,
+    admin: &mut PgConnection,
     name: &str,
     observe_created: impl FnOnce(),
 ) -> Result<(), OriginError> {
@@ -149,7 +157,7 @@ async fn create_database_on(
     sqlx::query(AssertSqlSafe(format!(
         "CREATE DATABASE \"{name}\" TEMPLATE template0 ALLOW_CONNECTIONS false"
     )))
-    .execute(admin.pool())
+    .execute(&mut *admin)
     .await
     .map_err(|_| OriginError::Creation)?;
     observe_created();
@@ -157,24 +165,28 @@ async fn create_database_on(
     sqlx::query(AssertSqlSafe(format!(
         "REVOKE ALL ON DATABASE \"{name}\" FROM PUBLIC"
     )))
-    .execute(admin.pool())
+    .execute(&mut *admin)
     .await
     .map_err(|_| OriginError::Creation)?;
     sqlx::query(AssertSqlSafe(format!(
         "ALTER DATABASE \"{name}\" ALLOW_CONNECTIONS true"
     )))
-    .execute(admin.pool())
+    .execute(&mut *admin)
     .await
     .map_err(|_| OriginError::Creation)?;
     Ok(())
 }
 
-async fn stamp_creation(pg: &PostgresDb, name: &str, operation: Uuid) -> Result<(), OriginError> {
+async fn stamp_creation<'a>(
+    executor: impl sqlx::Executor<'a, Database = sqlx::Postgres>,
+    name: &str,
+    operation: Uuid,
+) -> Result<(), OriginError> {
     sqlx::query(AssertSqlSafe(format!(
         "COMMENT ON DATABASE \"{name}\" IS '{}'",
         marker(operation)
     )))
-    .execute(pg.pool())
+    .execute(executor)
     .await?;
     Ok(())
 }

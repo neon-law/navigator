@@ -20,16 +20,18 @@ pub(crate) async fn create(
 ) -> anyhow::Result<NativeDatabase> {
     tier.validate()?;
     let name = database_name(operation)?;
+    // Keep the session borrowed across the administrative steps, including cleanup.
+    let mut connection = admin.pool().acquire().await?;
     let mut acknowledged = false;
     let mut data_pool = None;
     let prepared = async {
-        create_database_on(admin, &name, || acknowledged = true).await?;
-        stamp_creation(admin, &name, operation).await?;
+        create_database_on(&mut connection, &name, || acknowledged = true).await?;
         let oid: i64 =
             sqlx::query_scalar("SELECT oid::bigint FROM pg_catalog.pg_database WHERE datname = $1")
                 .bind(&name)
-                .fetch_one(admin.pool())
+                .fetch_one(&mut *connection)
                 .await?;
+        stamp_creation(&mut *connection, &name, operation).await?;
         let pg = PostgresDb::connect(fixture_options.database(&name)).await?;
         data_pool = Some(pg.clone());
         // Validate the separate transport before letting it modify the schema.
@@ -59,7 +61,7 @@ pub(crate) async fn create(
         Ok(native) => Ok(native),
         Err(error) if acknowledged => {
             let cleanup = sqlx::query(AssertSqlSafe(format!("DROP DATABASE \"{name}\"")))
-                .execute(admin.pool())
+                .execute(&mut *connection)
                 .await;
             match cleanup {
                 Ok(_) => Err(error),
