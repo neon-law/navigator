@@ -30,5 +30,5 @@ pub const REASON_ADVERSE_PARTY: &str = "adverse_party";
 /// Reason: the counterparty organization itself.
 pub const REASON_COUNTERPARTY_ENTITY: &str = "counterparty_entity";
 
-/// Reason: a person on a government office's staff.
+/// Reason: a person who works at a government office.
 pub const REASON_GOVERNMENT_OFFICIAL: &str = "government_official";

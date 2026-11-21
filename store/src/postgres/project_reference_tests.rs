@@ -41,7 +41,7 @@ async fn matter(pg: &crate::postgres::PostgresDb) -> (Uuid, Uuid) {
     .await
     .unwrap();
     sqlx::query(
-        "INSERT INTO person (id,name,email,role) VALUES ($1,'Agency Staff','staff@example.com','client')",
+        "INSERT INTO person (id,name,email,role) VALUES ($1,'Agency Auditor','auditor@example.com','client')",
     )
     .bind(person)
     .execute(pg.pool())

@@ -5,8 +5,8 @@
 //!
 //! Every `person_project_role.participation` value grants a lens on the
 //! matter. A counterparty's officer, its registered agent, the signatory on
-//! the instrument, the counterparty organization itself, or a government
-//! office's staff must be durable
+//! the instrument, the counterparty organization itself, or someone who
+//! works at a government office must be durable
 //! so the Conflict-Check Graph can collide a future matter with them.
 //! A reference grants no participation or access to the matter. The row
 //! is its own row — a PostgreSQL `project_reference` wherever PostgreSQL is

@@ -1248,10 +1248,10 @@ DEFINE INDEX OVERWRITE entity_role_tie ON entity_role FIELDS in, out, role UNIQU
 -- `project_reference`: a Project names a Person or an Entity it has verified
 -- without giving them any standing on the matter — a counterparty's officer,
 -- its registered agent, the signatory on the instrument, the adverse party,
--- the counterparty organization itself, or a government office's staff. It is
--- the one seam through which a Project repository may record a counterparty,
--- and it is deliberately not a
--- `person_project_role`: every participation value grants a lens, and a
+-- the counterparty organization itself, or someone who works at a government
+-- office. It is the one seam through which a Project repository may record a
+-- counterparty, and it is deliberately not a `person_project_role`: every
+-- participation value grants a lens, and a
 -- reference grants nothing. `store::access` and the embedded Rego policy
 -- never read this table, and the portal party list never renders it; both
 -- carry a test that fails if they ever do. The Conflict-Check Graph does not
