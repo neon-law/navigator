@@ -525,7 +525,7 @@ exit 7
     let attempted = fs::read_to_string(attempted).unwrap();
     assert!(attempted.contains(repository), "{attempted}");
     assert!(
-        attempted.contains("git\nclone\n--colocate\n--\n"),
+        attempted.contains("git\nclone\n--colocate\n--branch\nmain\n--\n"),
         "{attempted}"
     );
     assert!(attempted.starts_with(

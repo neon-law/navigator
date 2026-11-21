@@ -365,6 +365,7 @@ async fn client_portal_uses_the_host_brand_for_the_list_detail_and_api() {
                 "--nocapture",
             ])
             .env(CHILD, "1")
+            .env("NAV_BASE_URL", "https://www.neonlaw.com")
             .env("NAVIGATOR_POSTGRES_HOST", "127.0.0.1")
             .env(
                 "NAVIGATOR_POSTGRES_PORT",
@@ -453,6 +454,69 @@ async fn response_text(response: axum::response::Response) -> String {
     String::from_utf8(bytes.to_vec()).unwrap()
 }
 
+async fn seed_confirmed_plan_project(fx: &Fixture, project: &store::projects::Project) {
+    let pg = PostgresDb::application().await.unwrap();
+    let plan = store::legal_plans::create(
+        &pg,
+        project.firm_id.unwrap(),
+        &store::legal_plans::NewLegalPlan {
+            name: "Example Plan".into(),
+            contact: None,
+            portal: None,
+            acceptance_sla_hours: 24,
+            turnaround_sla_days: 7,
+            reporting_requirements: None,
+        },
+    )
+    .await
+    .unwrap();
+    store::projects::set_plan_columns(
+        &fx.surreal,
+        &pg,
+        project.id,
+        &store::projects::PlanColumns {
+            legal_plan_id: Some(plan.id),
+            plan_accepted_on: Some("2026-11-20".into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    store::projects::set_repository_url(
+        &fx.surreal,
+        project.id,
+        Some("https://forge.example.test/example-firm/sibling-matter"),
+    )
+    .await
+    .unwrap();
+    for (filename, visibility) in [
+        ("released-welcome.pdf", store::documents::visibility::CLIENT),
+        (
+            "internal-review.pdf",
+            store::documents::visibility::INTERNAL,
+        ),
+    ] {
+        store::documents::ingest_bytes(
+            &fx.surreal,
+            &fx.storage,
+            &store::documents::IngestArgs {
+                project_id: project.id,
+                source: store::documents::source::GENERATED,
+                filename,
+                kind: "unclassified",
+                content_type: "application/pdf",
+                description: None,
+                secondary_storage_key: None,
+                visibility,
+            },
+            filename.as_bytes(),
+        )
+        .await
+        .unwrap();
+    }
+}
+
+#[allow(clippy::too_many_lines)] // One mounted fixture supplies every Brand and access check.
 async fn check_two_brand_portal() {
     let fx = build_fixture().await;
     let (project, sibling) = seed_sibling_brand(&fx).await;
@@ -486,6 +550,16 @@ async fn check_two_brand_portal() {
     )
     .await
     .unwrap();
+    store::projects::designate_dri_in_surreal(
+        &fx.surreal,
+        sibling.id,
+        client.person_id.unwrap(),
+        store::projects::DriSide::Client,
+    )
+    .await
+    .unwrap();
+    seed_confirmed_plan_project(&fx, &sibling).await;
+
     let request = |host: &str, path: &str, session: &portal::SessionData| {
         let cookie = format!(
             "{}={}",
@@ -501,6 +575,82 @@ async fn check_two_brand_portal() {
                 .unwrap(),
         )
     };
+    let invitation_path = format!("/app/api/projects/{}/portal-invitation", sibling.id);
+    let response = request("www.neonlaw.com", &invitation_path, &lawyer)
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let invitation: serde_json::Value =
+        serde_json::from_str(&response_text(response).await).unwrap();
+    assert_eq!(invitation["recipient"], "client@example.com");
+    let url = url::Url::parse(invitation["portal_url"].as_str().unwrap()).unwrap();
+    assert_eq!(url.host_str(), Some("www.deleteyourdata.com"));
+    assert_eq!(url.path(), format!("/app/projects/{}", sibling.code));
+    let invited_host = url.host_str().unwrap();
+    let signed_out = fx
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(url.path())
+                .header("host", invited_host)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(signed_out.status(), StatusCode::SEE_OTHER);
+    let login_location = signed_out.headers()["location"].to_str().unwrap();
+    assert_eq!(
+        login_location,
+        format!("/auth/login?return_to={}", url.path())
+    );
+    let landing = portal::oauth::post_login_landing(Role::Client, url.path());
+    assert_eq!(landing, url.path());
+    let page = request(invited_host, &landing, &client).await.unwrap();
+    assert_eq!(page.status(), StatusCode::OK);
+    let html = response_text(page).await;
+    assert!(html.contains("released-welcome.pdf"));
+    assert!(!html.contains("internal-review.pdf") && !html.contains("forge.example"));
+    assert_eq!(
+        request("www.neonlaw.com", url.path(), &client)
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    let nonparticipant = store::persons::create(
+        &fx.surreal,
+        &store::persons::NewPerson::with_role(
+            "Other Client",
+            "other-client@example.com",
+            Role::Client,
+        ),
+    )
+    .await
+    .unwrap();
+    let other = login(&bearer(nonparticipant.id, Role::Client));
+    assert_eq!(
+        request(invited_host, url.path(), &other)
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        request(invited_host, &invitation_path, &login(&fx.outsider))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        request(invited_host, &invitation_path, &client)
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
     for (host, visible, hidden) in [
         ("www.neonlaw.com", &project, &sibling),
         ("www.deleteyourdata.com", &sibling, &project),

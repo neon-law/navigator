@@ -71,6 +71,23 @@ impl ForgejoForge {
         )
     }
 
+    /// Read the bound primary's review controls and Actions setting.
+    pub(super) async fn verify_workspace(&self) -> Result<()> {
+        let repository: serde_json::Value = self
+            .request(Method::GET, &format!("repos/{}", self.repository), None)
+            .await?;
+        ensure!(
+            repository["has_actions"].as_bool() == Some(true),
+            "Forgejo Actions are disabled for the Project's primary repository"
+        );
+        self.governance
+            .verify(
+                &self.repository,
+                &model::forgejo_governance::Policy::new(REQUIRED_CHECK_CONTEXT)?,
+            )
+            .await
+    }
+
     async fn request<T: serde::de::DeserializeOwned>(
         &self,
         method: Method,

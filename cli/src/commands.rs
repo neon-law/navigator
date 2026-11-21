@@ -1473,24 +1473,34 @@ pub enum ProjectsCmd {
         #[command(subcommand)]
         action: projects::pages_init::PagesCmd,
     },
-    /// Complete an existing Project's Drive, GitHub, Slack, Notion, and shared
-    /// Google Calendar setup. A closed Project's calendar is made read-only.
+    /// Complete a Project's workspace and integrations.
     ///
-    /// Each resource is attempted through the logged-in deployment's existing
-    /// authenticated door and reported separately. A failed resource is safe
-    /// to retry; already-recorded provider identities are never replaced.
+    /// Single-Project setup verifies source history, branch protection, any
+    /// required mirror, and the local Jujutsu checkout. All-mode setup
+    /// reconciles integration resources. A closed Project's calendar is
+    /// made read-only. Failed resources are reported and safe to retry.
     Setup {
         /// Project code. Defaults to `navigator.yaml`'s `project.name` when
         /// run from a Project repository root; required otherwise, unless
         /// `--all` is supplied.
         #[arg(conflicts_with = "all")]
         project_code: Option<String>,
-        /// Complete every Project visible to this login.
+        /// Reconcile integrations for every visible Project.
         #[arg(long)]
         all: bool,
         /// Emit one JSON result per Project and resource.
         #[arg(long)]
         json: bool,
+        #[command(flatten)]
+        host: HostOpt,
+    },
+    /// Prepare an unsent portal invitation for a Legal Plan member.
+    Invite {
+        /// Project code.
+        project_code: String,
+        /// Update this existing Gmail draft when preparing the invitation again.
+        #[arg(long)]
+        draft_id: Option<String>,
         #[command(flatten)]
         host: HostOpt,
     },
@@ -3330,6 +3340,11 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
             json,
             host,
         } => projects::setup::run(host.host.as_deref(), project_code.as_deref(), all, json).await,
+        ProjectsCmd::Invite {
+            project_code,
+            draft_id,
+            host,
+        } => projects::invite::run(host.host.as_deref(), &project_code, draft_id).await,
         ProjectsCmd::Skill { action } => run_project_skill(action).await,
         ProjectsCmd::Jj { action } => match action {
             ProjectJjCmd::StageTime { revision } => {

@@ -139,7 +139,7 @@ async fn sync_once(dir: Option<PathBuf>, host: &str, code: Option<&str>) -> Resu
     for project in projects {
         if !matches!(project.status.as_str(), "open" | "pitch") {
             if dir.join(&project.code).exists() {
-                println!("Closed Project checkout retained: {}", project.code);
+                eprintln!("Closed Project checkout retained: {}", project.code);
             }
             continue;
         }
@@ -337,6 +337,8 @@ async fn update_checkout(
     prepare_clean_jj(&root).await?;
     if let Some(mirror) = forgejo {
         configure_mirror(&root, url, mirror).await?;
+    } else {
+        check_push_destinations(&root, &[url])?;
     }
     command(
         &root,
@@ -406,7 +408,16 @@ async fn ensure_checkout_exists(
         command(
             staging.path(),
             "jj",
-            &["git", "clone", "--colocate", "--", url, "checkout"],
+            &[
+                "git",
+                "clone",
+                "--colocate",
+                "--branch",
+                "main",
+                "--",
+                url,
+                "checkout",
+            ],
         )
         .await?;
         let (code, manifest_host) = read_manifest(&checkout)?;
@@ -419,7 +430,7 @@ async fn ensure_checkout_exists(
             "cloned manifest names a different Project"
         );
         std::fs::rename(checkout, &root).context("publish Project checkout")?;
-        println!("Cloned {}", project.code);
+        eprintln!("Cloned {}", project.code);
     }
     Ok(())
 }
@@ -441,15 +452,7 @@ async fn configure_mirror(root: &Path, url: &str, mirror: &str) -> Result<()> {
     } else {
         command(root, "git", &["remote", "add", "forgejo", mirror]).await?;
     }
-    let configured = super::lifecycle::git(
-        root,
-        &["config", "--local", "--get-all", "remote.origin.pushurl"],
-    )?;
-    ensure!(
-        configured.status.success() || configured.status.code() == Some(1),
-        "could not inspect origin push URLs"
-    );
-    let urls = String::from_utf8(configured.stdout)?;
+    let urls = check_push_destinations(root, &[url, mirror])?;
     for destination in [url, mirror] {
         if !urls.lines().any(|configured| configured == destination) {
             command(
@@ -467,6 +470,23 @@ async fn configure_mirror(root: &Path, url: &str, mirror: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn check_push_destinations(root: &Path, allowed: &[&str]) -> Result<String> {
+    let configured = super::lifecycle::git(
+        root,
+        &["config", "--local", "--get-all", "remote.origin.pushurl"],
+    )?;
+    ensure!(
+        configured.status.success() || configured.status.code() == Some(1),
+        "could not inspect origin push URLs"
+    );
+    let urls = String::from_utf8(configured.stdout)?;
+    ensure!(
+        urls.lines().all(|url| allowed.contains(&url)),
+        "origin has an unexpected push destination; review the Project's current forge authority before retrying"
+    );
+    Ok(urls)
 }
 
 async fn ensure_origin(root: &Path, url: &str) -> Result<String> {
@@ -506,7 +526,7 @@ async fn git_output(dir: &Path, args: &[&str]) -> Result<std::process::Output> {
         .with_context(|| format!("run git {}", args.join(" ")))
 }
 
-async fn command(dir: &Path, program: &str, args: &[&str]) -> Result<String> {
+pub(super) async fn command(dir: &Path, program: &str, args: &[&str]) -> Result<String> {
     let output = tokio::process::Command::new(program)
         .args(args)
         .current_dir(dir)

@@ -2559,6 +2559,27 @@ fn canonical_document(base: &str) -> Value {
             }
           }
         },
+        "/app/api/projects/{id}/portal-invitation": {
+          "get": {
+            "summary": "Read invitation details for an accepted Legal Plan Project",
+            "description": "Requires lawyer-tier firm-side participation. Resolves the participating client DRI and the Project's Brand portal URL for an unsent invitation.",
+            "parameters": [
+              { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+            ],
+            "responses": {
+              "200": { "description": "Recipient and portal URL", "content": { "application/json": {
+                "schema": { "type": "object", "required": ["recipient", "portal_url"], "properties": {
+                  "recipient": { "type": "string", "format": "email" },
+                  "portal_url": { "type": "string", "format": "uri" }
+                } }
+              } } },
+              "401": { "description": "No authenticated session" },
+              "403": { "description": "Lawyer tier required" },
+              "404": { "description": "No Project in firm-side participation scope" },
+              "409": { "description": "The Project, recipient, or Brand is not ready for an invitation" }
+            }
+          }
+        },
         "/app/api/projects/{id}/testimonial": {
           "post": {
             "summary": "Submit or edit the authenticated client's testimonial",

@@ -209,7 +209,7 @@ fn project_set_refuses_a_link_that_is_not_a_drive_folder() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn setup_runs_every_door_and_repeat_execution_is_successful() {
+async fn bulk_setup_runs_every_integration_and_defers_local_work_on_retry() {
     let server = MockServer::start().await;
     let host = server.uri();
     let credentials_dir = TempDir::new().unwrap();
@@ -230,7 +230,7 @@ async fn setup_runs_every_door_and_repeat_execution_is_successful() {
     for _ in 0..2 {
         let output = command()
             .env("NAVIGATOR_CREDENTIALS_FILE", &credentials_path)
-            .args(["project", "setup", "acme", "--host", &host, "--json"])
+            .args(["project", "setup", "--all", "--host", &host, "--json"])
             .output()
             .unwrap();
         assert!(
@@ -240,6 +240,10 @@ async fn setup_runs_every_door_and_repeat_execution_is_successful() {
         );
         let report: Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(report["results"][0]["project_code"], "acme");
+        assert_eq!(
+            report["results"][0]["resources"]["workspace"]["outcome"],
+            "deferred"
+        );
         assert!(
             report["results"][0]["resources"]["publisher"].is_null(),
             "Portal publisher provisioning is retired"
@@ -279,15 +283,24 @@ async fn setup_reports_a_read_only_calendar_as_converged() {
     let host = server.uri();
     let credentials_dir = TempDir::new().unwrap();
     let credentials_path = credentials(&credentials_dir, &host);
+    let project_id = Uuid::now_v7();
     mount_setup_doors(
         &server,
-        Uuid::now_v7(),
+        project_id,
         "acme",
         [
             ("slack", "adopted"),
             ("notion", "adopted"),
             ("calendar", "read_only"),
         ],
+    )
+    .await;
+
+    mount_workspace_inventory(
+        &server,
+        project_id,
+        "closed",
+        Some("https://forge.example/acme"),
     )
     .await;
 
@@ -305,6 +318,71 @@ async fn setup_reports_a_read_only_calendar_as_converged() {
     assert_eq!(
         report["results"][0]["resources"]["calendar"]["outcome"],
         "read_only"
+    );
+    assert_eq!(
+        report["results"][0]["resources"]["workspace"]["outcome"],
+        "read_only"
+    );
+}
+
+async fn mount_workspace_inventory(
+    server: &MockServer,
+    project_id: Uuid,
+    status: &str,
+    origin: Option<&str>,
+) {
+    Mock::given(method("GET"))
+        .and(path(format!("/app/api/projects/{project_id}")))
+        .and(header("authorization", "Bearer test-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "code": "acme",
+            "status": status,
+            "firm_id": null,
+            "brand": "sample",
+            "repository_remotes": {
+                "origin": origin,
+                "forgejo": null,
+                "forgejo_status": "not_configured"
+            }
+        })))
+        .expect(1)
+        .mount(server)
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn single_project_setup_reports_an_unlinked_source_and_keeps_the_integration_results() {
+    let server = MockServer::start().await;
+    let host = server.uri();
+    let credentials_dir = TempDir::new().unwrap();
+    let credentials_path = credentials(&credentials_dir, &host);
+    let project_id = Uuid::now_v7();
+    mount_setup_doors(
+        &server,
+        project_id,
+        "acme",
+        [
+            ("slack", "adopted"),
+            ("notion", "adopted"),
+            ("calendar", "present"),
+        ],
+    )
+    .await;
+    mount_workspace_inventory(&server, project_id, "pitch", None).await;
+
+    let output = command()
+        .env("NAVIGATOR_CREDENTIALS_FILE", &credentials_path)
+        .args(["project", "setup", "acme", "--host", &host, "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let resources = &report["results"][0]["resources"];
+    assert_eq!(resources["calendar"]["outcome"], "present");
+    assert_eq!(resources["workspace"]["outcome"], "incomplete");
+    assert_eq!(
+        resources["workspace"]["detail"],
+        "source repository is not linked"
     );
 }
 

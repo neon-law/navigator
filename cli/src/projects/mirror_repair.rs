@@ -73,7 +73,47 @@ async fn run_inner(dir: &Path, host: Option<&str>) -> Result<()> {
 
     let (base, token) = crate::remote::resolve(host)?;
     let project_id = super::surfaces::resolve_project_id(&base, &token, code).await?;
-    let response = crate::remote::authenticated_client_builder(&base)?
+    let mirror = request(&base, &token, project_id, &owner, &name).await?;
+    let source = &mirror.source;
+    let verified = &mirror.url;
+    let outcome = mirror.outcome;
+
+    let existing = super::lifecycle::git(dir, &["remote", "get-url", "forgejo"])?;
+    let existing = existing
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&existing.stdout).trim().to_string());
+    match remote_action(existing.as_deref(), verified)? {
+        RemoteAction::Add => {
+            super::lifecycle::git_text(dir, &["remote", "add", "forgejo", verified])
+                .context("configure the Forgejo remote")?;
+            println!("Forgejo mirror {outcome} and remote configured.");
+        }
+        RemoteAction::AlreadyConfigured => {
+            println!("Forgejo mirror is present and its verified remote is configured.");
+        }
+    }
+    println!("GitHub source: {source}");
+    println!("Forgejo mirror: {verified}");
+    println!("GitHub remains the source and CI/CD provider.");
+    Ok(())
+}
+
+pub(super) struct Mirror {
+    source: String,
+    pub url: String,
+    outcome: &'static str,
+}
+
+pub(super) async fn request(
+    base: &str,
+    token: &str,
+    project_id: uuid::Uuid,
+    owner: &str,
+    name: &str,
+) -> Result<Mirror> {
+    let response = crate::remote::authenticated_client_builder(base)?
+        .timeout(std::time::Duration::from_secs(30))
         .build()?
         .post(format!(
             "{base}/app/api/project-forgejo-mirrors/{project_id}"
@@ -103,7 +143,7 @@ async fn run_inner(dir: &Path, host: Option<&str>) -> Result<()> {
         .context("mirror repair response has no GitHub source URL")?;
     let (source_owner, source_name) = super::lifecycle::github_owner_name(source)?;
     ensure!(
-        source_owner.eq_ignore_ascii_case(&owner) && source_name == name,
+        source_owner.eq_ignore_ascii_case(owner) && source_name == name,
         "the checkout origin does not match the Project's GitHub source"
     );
     let verified = body["repository_url"]
@@ -112,32 +152,18 @@ async fn run_inner(dir: &Path, host: Option<&str>) -> Result<()> {
     let forgejo_owner = body["forgejo_owner"]
         .as_str()
         .context("mirror repair response has no verified Forgejo organization")?;
-    let verified = verified_mirror_url(verified, forgejo_owner, &name)?;
+    let verified = verified_mirror_url(verified, forgejo_owner, name)?;
     let outcome = match body["mirror_status"].as_str() {
         Some("created") => "created",
         Some("present") => "adopted",
         _ => bail!("mirror repair response has no known outcome"),
     };
 
-    let existing = super::lifecycle::git(dir, &["remote", "get-url", "forgejo"])?;
-    let existing = existing
-        .status
-        .success()
-        .then(|| String::from_utf8_lossy(&existing.stdout).trim().to_string());
-    match remote_action(existing.as_deref(), verified)? {
-        RemoteAction::Add => {
-            super::lifecycle::git_text(dir, &["remote", "add", "forgejo", verified])
-                .context("configure the Forgejo remote")?;
-            println!("Forgejo mirror {outcome} and remote configured.");
-        }
-        RemoteAction::AlreadyConfigured => {
-            println!("Forgejo mirror is present and its verified remote is configured.");
-        }
-    }
-    println!("GitHub source: {source}");
-    println!("Forgejo mirror: {verified}");
-    println!("GitHub remains the source and CI/CD provider.");
-    Ok(())
+    Ok(Mirror {
+        source: source.to_owned(),
+        url: verified.to_owned(),
+        outcome,
+    })
 }
 
 #[cfg(test)]

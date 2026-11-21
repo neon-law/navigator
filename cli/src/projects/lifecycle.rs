@@ -686,6 +686,8 @@ pub fn github_owner_name(remote: &str) -> Result<(String, String)> {
         rest
     } else if let Some(rest) = url.strip_prefix("ssh://git@github.com/") {
         rest
+    } else if let Some(rest) = url.strip_prefix("ssh://git@ssh.github.com:443/") {
+        rest
     } else {
         return Err(anyhow!("origin must be a GitHub repository URL"));
     };
