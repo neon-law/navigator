@@ -375,6 +375,13 @@
       {
         "action": "export",
         "schema": "public",
+        "name": "billing_annotation",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
         "name": "brand",
         "kind": "table",
         "accessible": true

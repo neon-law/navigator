@@ -68,6 +68,13 @@
     "scope": "firm",
     "through": "brand_key -> Brand.firm_id"
   },
+  "billing_annotation": {
+    "migration_slice": "matter-invoice-generation",
+    "parity_scenario": "an attested change and its review survive replay, with at most one Time Entry",
+    "scope": "project",
+    "target_only": true,
+    "through": "project_id and the timekeeper's Project participation"
+  },
   "brand": {
     "migration_slice": "tenancy-storage",
     "parity_scenario": "same-Firm round trip; cross-Firm refusal",
