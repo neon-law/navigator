@@ -274,10 +274,10 @@ links use the same Notion booking calendar as Neon and Vesta. Plus Jakarta Sans 
 Pricing uses the shared `PricingSection` with the brand palette and typeface. The cloak crossing an internet grid is
 decorative; reduced-motion preferences disable animation. The Solana section carries the approved request-record and
 litigation copy. The page uses the same footer treatment as Neon and Vesta. The same subscription is sold as [Same Day
-Legal](glossary/same-day-legal.md), a brand of Lex Tecnica, Ltd. Its home leads with free MCP setup, account signup, and
-a first public Template lookup. Visitors can request a single attorney review or explore the subscription. The `/app`
-page carries the subscription and enrollment. Both pages use the `same_day_legal` skin, the Lex Tecnica brand kit in
-monochrome with Cormorant SC display type.
+Legal](glossary/same-day-legal.md), a brand of Lex Tecnica, Ltd. Its home leads with free account signup, followed by
+MCP setup and a first public Template lookup. Visitors can request a single attorney review or explore the subscription.
+The `/app` page carries the subscription and enrollment. Both pages use the `same_day_legal` skin, the Lex Tecnica brand
+kit in monochrome with Cormorant SC display type.
 
 An `app_preview` band on `/app` draws an iPhone in its body proportions, listing every check as an equal peer: data
 removal, privacy protection, credit monitoring, dark web monitoring, identity theft insurance, unclaimed property,

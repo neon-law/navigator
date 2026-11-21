@@ -1,21 +1,21 @@
 head_title: "{site_name} | Home"
 meta_description: >-
-  Prepare your own business filing with free tools in your AI assistant. Choose
+  Pre-sign up for free tools to prepare your own business filing before the new year. Choose
   ad hoc attorney review from $50 or ongoing help for $29 per month.
 title: ""
-tagline: Free tools for your business filing
+tagline: Get your business filing started before the new year
 hero_lead: >-
-  Planning to start a business in the new year? Connect Navigator to your AI assistant
-  to find templates for your paperwork. You file them yourself and pay any government filing fees.
+  Create your free account now. When you’re ready, use Navigator in your AI assistant
+  to find templates and prepare your own paperwork. You file it yourself and pay any government fees.
 hero_cta:
-  href: "#mcp-setup"
-  label: Set up the free MCP
+  href: /auth/signup
+  label: Pre-sign up for free
 skin: same_day_legal
 bands:
   - kind: steps
     anchor: mcp-setup
     overline: ""
-    heading: Set up Navigator in your AI assistant
+    heading: Set up the free MCP in your AI assistant
     items:
       - title: Start with a free account
         body:
@@ -24,7 +24,7 @@ bands:
             - text: " or "
             - text: sign in
               href: "/auth/login?return_to=/%23mcp-setup"
-            - text: ". Come back to Free MCP setup after signup. Public templates are available before you sign in."
+            - text: ". After signup, open Free MCP setup on this page. Public templates are available before you sign in."
       - title: Connect the tool
         body:
           - - text: "In your assistant’s connector settings, add a custom MCP server. Paste "
@@ -51,7 +51,7 @@ bands:
         chips: ["From $50"]
         cadence: one time
         body:
-          - - text: A lawyer reviews one document or question. You agree on the fee and pay once before the review begins.
+          - - text: Get a lawyer’s review of one filing question or one document. You agree on the fee before you pay.
         href: "mailto:{firm_email}"
         href_label: Contact us for one review
       - title: Ongoing help

@@ -131,9 +131,17 @@ async fn the_gateway_is_404_on_every_non_neon_brand_host() {
 }
 
 #[tokio::test]
-async fn same_day_legal_home_leads_to_free_setup_and_separate_attorney_options() {
-    let app =
-        app(portal::test_support::app_state(store::surreal::SurrealDb::uninitialized()).await);
+async fn same_day_legal_home_leads_to_signup_and_separate_attorney_options() {
+    let mut state =
+        portal::test_support::app_state(store::surreal::SurrealDb::uninitialized()).await;
+    state.oauth = Some(portal::OAuthConfig::new(
+        "client",
+        "secret",
+        "https://primary.example/auth/callback",
+        "https://idp.example/authorize",
+        "https://idp.example/token",
+    ));
+    let app = app(state);
     let app_path = views::brand::SAME_DAY_LEGAL_APP_PATH;
     for host in ["sameday.neonlaw.com", "staging-sameday.neonlaw.com"] {
         let (status, home) = get_on_host(&app, "/", Some(host)).await;
@@ -154,11 +162,14 @@ async fn same_day_legal_home_leads_to_free_setup_and_separate_attorney_options()
         let html = scraper::Html::parse_document(&home);
         let hero_links = scraper::Selector::parse(".fm-hero a").unwrap();
         let first_action = html.select(&hero_links).next().expect("homepage action");
-        assert_eq!(first_action.attr("href"), Some("#mcp-setup"), "{host}");
+        assert_eq!(first_action.attr("href"), Some("/auth/signup"), "{host}");
         assert!(first_action
             .value()
             .classes()
             .any(|c| c == "nav-btn--primary"));
+        let (status, signup) = get_on_host(&app, "/auth/signup", Some(host)).await;
+        assert_eq!(status, StatusCode::OK, "{host}: {signup}");
+        assert!(signup.contains(r#"action="/auth/signup/age""#), "{host}");
         assert!(!home.contains("data-enrollment-intake"));
         let (status, _) = get_on_host(&app, "/app/projects", Some(host)).await;
         assert_eq!(status, StatusCode::SEE_OTHER);

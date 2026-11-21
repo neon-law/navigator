@@ -180,13 +180,16 @@ async fn enrollment_intake_preserves_answers_and_reviews_before_sign_in() {
     c.goto(&format!("{origin}/"))
         .await
         .expect("Same Day Legal home");
-    c.find(Locator::Css(".fm-hero a[href='#mcp-setup']"))
+    c.find(Locator::Css(".fm-hero a[href='/auth/signup']"))
         .await
-        .expect("free setup link")
+        .expect("free pre-signup link")
         .click()
         .await
         .unwrap();
-    assert_eq!(c.current_url().await.unwrap().fragment(), Some("mcp-setup"));
+    c.find(Locator::Css("form[action='/auth/signup/age']"))
+        .await
+        .expect("pre-signup opens the account eligibility form");
+    c.back().await.unwrap();
     c.find(Locator::Css("#mcp-setup a[href='/auth/signup']"))
         .await
         .expect("free account link");

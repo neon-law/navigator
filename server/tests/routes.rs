@@ -10889,7 +10889,7 @@ const LIVE_HOME_CONTRACTS: &[(views::brand::BrandKey, LiveHomeContract)] = &[
         views::brand::BrandKey::SameDayLegal,
         LiveHomeContract {
             title: "<title>Same Day Legal | Home</title>",
-            copy: "Set up the free MCP",
+            copy: "Pre-sign up for free",
         },
     ),
 ];
