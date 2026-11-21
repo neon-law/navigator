@@ -139,7 +139,7 @@ async fn sync_once(dir: Option<PathBuf>, host: &str, code: Option<&str>) -> Resu
     for project in projects {
         if !matches!(project.status.as_str(), "open" | "pitch") {
             if dir.join(&project.code).exists() {
-                println!("Closed Project checkout retained: {}", project.code);
+                eprintln!("Closed Project checkout retained: {}", project.code);
             }
             continue;
         }
@@ -430,7 +430,7 @@ async fn ensure_checkout_exists(
             "cloned manifest names a different Project"
         );
         std::fs::rename(checkout, &root).context("publish Project checkout")?;
-        println!("Cloned {}", project.code);
+        eprintln!("Cloned {}", project.code);
     }
     Ok(())
 }
