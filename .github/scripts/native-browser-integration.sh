@@ -212,11 +212,20 @@ finalize_cleanup() {
   exit "$result"
 }
 
+# Snapshot only our exact image before any teardown command can fail.
+snapshot_owned_image() {
+  if ! $image_started; then return 0; fi
+  test "$(docker inspect "$image_container_id" --format '{{index .Config.Labels "com.neonlaw.navigator.browser-operation"}}')" = "$volume_operation" &&
+    test "$(docker inspect "$image_container_id" --format '{{index .Config.Labels "com.neonlaw.navigator.browser-fixture"}}')" = git-runtime || return 1
+  docker logs "$image_container_id" > "$private/image.log" 2>&1
+}
+
 cleanup() {
   result=$?
   trap - EXIT INT TERM
   trap finalize_cleanup ERR
-  # Export startup evidence before any teardown or secondary cleanup failure.
+  # Preserve owned runtime evidence before any teardown or secondary cleanup failure.
+  snapshot_owned_image || cleanup_failed=true
   redact || cleanup_failed=true
   # A later attempt can prove drain; prior cleanup failure remains sticky.
   groups_drained=true

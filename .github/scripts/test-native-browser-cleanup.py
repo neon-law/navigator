@@ -5,7 +5,8 @@ import sys
 root=Path(__file__).parent
 helper=Path(sys.argv[1]).resolve()
 results=[]
-for mode in ('secondary_failure', 'completed_teardown', 'unsupported_assignment'):
+for mode in ('secondary_failure', 'completed_teardown', 'unsupported_assignment',
+             'image_secondary_failure', 'unowned_image_secondary_failure'):
     source=helper.read_text()
     functions=source[source.index('resources() {'):source.index('trap cleanup EXIT')]
     with tempfile.TemporaryDirectory(prefix='native-cleanup-regression-') as directory:
@@ -37,11 +38,44 @@ supervisor=$!
 wait "$supervisor" || true
 startup_alive
 '''
+        if mode in ('image_secondary_failure', 'unowned_image_secondary_failure'):
+            prelude += "\nimage_started=true; image_container_id=synthetic-owned-image\n"
+            prelude += "IMAGE_OWNER=" + ('foreign' if mode.startswith('unowned') else 'synthetic') + "\n"
+            prelude += r'''docker() {
+  printf '%s\n' "$1" >> "$private/docker.calls"
+  case "$1" in
+    inspect)
+      if [[ "$*" == *browser-fixture* ]]; then printf '%s\n' git-runtime
+      else printf '%s\n' "$IMAGE_OWNER"; fi ;;
+    logs) printf '%s\n' 'synthetic image failure' 'synthetic-secret-value' ;;
+    *) return 98 ;;
+  esac
+}
+'''
+            # Force a failure BEFORE the original image-log producer, after early export.
+            scenario = "stop_browser() { return 73; }\n" + scenario
         script=task/'probe.sh';script.write_text('COPY_EXIT='+('73' if mode=='secondary_failure' else '0')+'\n'+prelude+functions+scenario)
         result=subprocess.run(['bash',str(script)],cwd=task,capture_output=True,timeout=10)
         public=task/'public';quick=public/'quickstart.log';cleanup=public/'cleanup.log'
         row={'mode':mode,'exit':result.returncode,'startup_exported':quick.exists(),'cleanup_exported':cleanup.exists(),'private_retained':(task/'private').exists(),'role_exported':(public/'role-private.log').exists()}
         assert result.returncode==1,row
+        if mode in ('image_secondary_failure', 'unowned_image_secondary_failure'):
+            image = public/'image.log'
+            calls_file = task/'private/docker.calls'
+            calls = calls_file.read_text().splitlines() if calls_file.exists() else []
+            assert row['private_retained'] and cleanup.exists(), row
+            assert 'primary_exit=1' in cleanup.read_text() and 'secondary_exit=73' in cleanup.read_text()
+            assert not row['role_exported'], row
+            if mode == 'image_secondary_failure':
+                assert image.exists() and 'synthetic image failure' in image.read_text()
+                assert 'synthetic-secret-value' not in image.read_text() and '[REDACTED]' in image.read_text()
+                assert calls == ['inspect', 'inspect', 'logs'], calls
+            else:
+                assert not image.exists(), 'foreign image output must never be read or exported'
+                assert calls == ['inspect'], calls
+            row['image_exported'] = image.exists()
+            results.append(row)
+            continue
         if mode == 'unsupported_assignment':
             assert not quick.exists(), 'unsupported discovery cannot publish after env deletion'
             assert not (task/'.devx/env').exists(), 'normal teardown must have removed env'
