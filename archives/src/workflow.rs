@@ -97,8 +97,8 @@ pub struct RunReport {
     pub write_only: Option<crate::write_only::operations::Report>,
 }
 
-/// Independent opt-in for the DBOS Archives schedule. Restate remains the
-/// default scheduler until the deployment deliberately switches this flag.
+/// Ownership selector for an explicit compatibility host. The normal native
+/// application owns Archives without consulting this switch.
 pub const DBOS_ENABLED_ENV: &str = "NAVIGATOR_DBOS_ARCHIVES_ENABLED";
 const DBOS_WORKFLOW: &str = "Archives";
 const DBOS_NOTIFY_ATTEMPTS: u32 = 3;

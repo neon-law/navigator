@@ -384,17 +384,15 @@ pub(crate) async fn status(
     .into_response())
 }
 
-/// Whether this deployment can start publications: the `SocialPublisher`
-/// switch selects the worker's DBOS ingress, else the Restate broker.
+/// Whether the native `SocialPublisher` ingress has its URL and authentication token.
 fn publisher_configured() -> bool {
-    match workflows::trigger::service_target(
-        std::env::var(workflows::trigger::DBOS_INGRESS_URL_ENV).ok(),
-        std::env::var(workflows::trigger::DBOS_INGRESS_TOKEN_ENV).ok(),
-    ) {
-        Ok(workflows::trigger::ServiceTarget::Dbos { .. }) => true,
-        Ok(workflows::trigger::ServiceTarget::Restate) => false,
-        Err(_) => false,
-    }
+    matches!(
+        workflows::trigger::service_target(
+            std::env::var(workflows::trigger::DBOS_INGRESS_URL_ENV).ok(),
+            std::env::var(workflows::trigger::DBOS_INGRESS_TOKEN_ENV).ok(),
+        ),
+        Ok(workflows::trigger::ServiceTarget::Dbos { .. })
+    )
 }
 
 async fn selected_accounts(

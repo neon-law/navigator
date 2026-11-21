@@ -29,7 +29,8 @@ either value.
 
 ## Where DBOS state lives
 
-- **Database:** the same `navigator-postgres` server and `navigator` database as application tables.
+- **Database:** the configured application database on `navigator-postgres`. Fresh native tiers use the database
+  recorded in their creation intent; their DBOS connection targets that same database.
 - **Schema:** `dbos`. The SDK creates and migrates its own tables there on launch (`Config.migrate`).
 - **Login:** `navigator_dbos`, owning only the `dbos` schema. It has no rights on `public`. Application logins have no
   rights on `dbos`. It also holds `CREATE` on the database: the SDK runs `CREATE SCHEMA IF NOT EXISTS dbos` on every
@@ -51,8 +52,8 @@ The rule that closes the gap:
 2. **A PostgreSQL write** stores the effect key in a unique column, in the same transaction as the write. Use
    `INSERT … ON CONFLICT (effect_key) DO NOTHING` or an upsert, then read the stored row back so a re-run returns the
    first result.
-3. **A provider call that accepts an idempotency key** receives the effect key. 4. **A provider call without one** stays
-at least once. Name that in the workflow's docs, and keep the step to the
+3. **A provider call that accepts an idempotency key** receives the effect key.
+4. **A provider call without one** stays at least once. Name that in the workflow's docs, and keep the step to the
    single call so the duplicate window is only the crash between the provider's reply and the checkpoint.
 
 `workflows-service/tests/dbos/effects.rs` proves both halves against PostgreSQL. An unkeyed effect repeats after a crash
@@ -89,10 +90,11 @@ bypass those checks. Startup then:
    is loopback) and an optional `_ROOT_CERT`. It is never a connection-string secret. The release image bakes
    `NAVIGATOR_RELEASE_TAG` in. DBOS connections bound PostgreSQL lock waits to five seconds; application pools keep
    their own settings.
-2. Binds the listeners. 3. Registers every ported workflow. Registration must finish before launch. 4. Calls
-`DBOS::launch`. Launch migrates the `dbos` schema and re-enqueues workflows left pending by this version. 5. Starts each
-schedule loop, then serves. 6. On `SIGTERM` or Ctrl-C, drains every listener, cancels scheduling, calls
-`DBOS::shutdown`, then joins the schedule
+2. Binds the listeners.
+3. Registers every ported workflow. Registration must finish before launch.
+4. Calls `DBOS::launch`. Launch migrates the `dbos` schema and re-enqueues workflows left pending by this version.
+5. Starts each schedule loop, then serves.
+6. On `SIGTERM` or Ctrl-C, drains every listener, cancels scheduling, calls `DBOS::shutdown`, then joins the schedule
    tasks. Work cut off there stays pending, and the next launch of the same version recovers it.
 
 `workflows::dbos_engine::Executor` is steps 3 to 6, behind the crate's `dbos` feature. `neon/tests/dbos_host.rs` runs
@@ -217,7 +219,7 @@ DBOS-hosted schedules' CronJobs, and the offline plan lists that deletion.
 
 The native schedule retains 01:11 UTC and `GeneralNag-<UTC date>`; another same-date start joins the existing run. The
 deployment requires `SLACK_BOT_TOKEN` and `SLACK_GENERAL_CHANNEL_ID`. The normal render retires the old `general-nag`
-CronJob. Old backend false selected an unsuspended legacy Cron, so it was not automation consent.
+CronJob. Backend selectors do not disable this native schedule.
 
 Each notification step uses its DBOS Effect Key as Slack's `client_msg_id` and searches channel history from the
 original workflow date's UTC midnight, inclusively. Recovery reuses a retained receipt before sending. It follows cursor
@@ -407,14 +409,14 @@ The native reconciler requires authenticated DBOS ingress for inbound notice rec
 preserves its legacy route. Exhausted DBOS step retries fail the run; provider credentials and egress policy remain
 required, and uncertain sends remain quarantined rather than repeated.
 
-## Port order
+## Native workflow boundaries
 
 The native registry retains these workflow boundaries. Explicit compatibility artifacts preserve the retained handlers
 until their histories are reconciled; this table does not certify live cutover.
 
-| # | Service | Why here |
+| # | Service | Behavior |
 | --- | --- | --- |
-| 1 | `Heartbeat` | No database, one Slack call. Ported; its Restate service and trigger are gone. |
+| 1 | `Heartbeat` | No database, one Slack call; native-only schedule. |
 | 2 | `GeneralNag` | One read and Slack posts. Native daily schedule. |
 | 3 | `DriDigest` | Read-only digest and Slack posts; Native daily schedule; historical ownership remains guarded. |
 | 4 | `BillingCanary` | Find-or-create on a fixed key, then one notice |
@@ -429,10 +431,11 @@ until their histories are reconciled; this table does not certify live cutover.
 | 13 | `EmailSummary` | Email jobs |
 | 14 | `SocialPublisher`, `SocialPublishReconciler` | Public posts; provider idempotency first |
 | 15 | `project-slack` | Virtual object → partitioned queue |
-| 16 | `notation` | Binding legal workflows; the `StateMachineRuntime` adapter, last |
+| 16 | `notation` | Binding legal workflows through the `StateMachineRuntime` adapter |
 
-Native `Archives` uses `Archives:<UTC slot>` for the 05:55 and 17:55 slots, with a 15-minute late-start window. Because
-`web` holds the PostgreSQL connection, each run also exports the paired PostgreSQL coverage generation to Iceberg. `ops
+Native `Archives` uses `Archives:<UTC slot>` for the 05:55 and 17:55 slots, with a 15-minute late-start window. The
+default mode exports the paired PostgreSQL coverage generation to Iceberg. [Write-only
+configuration](write-only-iceberg.md) selects the recorded scope and independent destination attempts instead. `ops
 ship` renders the read-only archive login and reviewed coverage manifest, and deletes the duplicate `archives-trigger`.
 See [Iceberg archive](iceberg-archive.md#where-it-runs).
 
@@ -453,10 +456,10 @@ The offline ship plan reports both timer states.
 ## Embedded development provider captures
 
 The embedded development harness can register the same native workflows without external Slack or Xero credentials. This
-selection requires the embedded host, actual `dev` profile, `NAVIGATOR_CI_HARNESS=1`, simulated matters, and embedded
-hosting. Partial and mixed hosts retain strict provider selection. An explicit staging identity or invalid staging
-setting refuses captures. Explicit Slack or Xero configuration conflicts with this capture profile and fails startup
-rather than being silently replaced. Other profiles keep their strict provider constructors.
+selection requires the embedded host, actual `dev` profile, `NAVIGATOR_CI_HARNESS=1`, and simulated matters. Standalone
+compatibility hosts retain strict provider selection. An explicit staging identity or invalid staging setting refuses
+captures. Explicit Slack or Xero configuration conflicts with this capture profile and fails startup rather than being
+silently replaced. Other profiles keep their strict provider constructors.
 
 GeneralNag, DriDigest, NotationReset, and Archives use the existing capturing notification transports. BillingCanary
 uses the existing billing stub and capturing email; ReconcileInvoices runs the shared reconciliation operation with that

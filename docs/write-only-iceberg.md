@@ -55,9 +55,9 @@ archive mode and its guards remain in effect. Workflow input binds the configura
 
 For a normal `hudson ops ship` deployment, set `NAVIGATOR_ARCHIVE_WRITE_ONLY_CONFIG` in the deployment's `config.toml`
 to `/etc/navigator/archive-write-only/config.json`. The path is a container path, not the operator's filesystem. The
-native Archives owner uses the PostgreSQL source; backend-selection flags are not required. The environment Secret
-must not carry this setting. If `NAVIGATOR_ARCHIVE_SOURCE` is configured for this mode, it also belongs in the
-reviewed coordinates, not the environment Secret; its only accepted value is `postgres`.
+native Archives owner uses the PostgreSQL source; backend-selection flags are not required. The environment Secret must
+not carry this setting. If `NAVIGATOR_ARCHIVE_SOURCE` is configured for this mode, it also belongs in the reviewed
+coordinates, not the environment Secret; its only accepted value is `postgres`.
 
 Provision the immutable `navigator-archive-write-only-config` ConfigMap in that deployment's namespace with the
 operator-generated JSON under `config.json`. It contains no credentials. Set its `local_root` to

@@ -178,8 +178,8 @@ permissions:
 # in this workflow. Every deployment's assets bucket is private and served
 # same-origin through the live site's `/assets` proxy, so the only URL that
 # can verify publication is the deployment's own public host. That host is
-# checked by `ops ship` after a full or image-only roll, once the rollout and
-# Restate re-registration have completed; a failed check prevents ship from
+# checked by `ops ship` after a full or image-only roll, once the rollout
+# has completed; a failed check prevents ship from
 # reporting success. The operator upload lane and `ops ship`'s direct
 # slide-media NAVIGATOR_ASSETS_BUCKET preflight still catch missing bytes
 # before mutation, while the KIND image bakes stubbed placeholders and the
@@ -564,11 +564,11 @@ jobs:
   # `integration` — overlaps those compiles so the wall-clock is ~one build,
   # not three. It also stops `integration` from spending most of its budget
   # building before it can even start the e2e suite (itself only ~6 min),
-  # keeping that job under its own 60-min cap even on a cold cache.
+  # leaving the integration job's configured budget for runtime acceptance.
   #
   # Each image is built locally under an ephemeral, per-run tag, saved to a
   # tarball, and uploaded as a workflow artifact that `integration` downloads
-  # and loads into KIND. These per-commit CI images are NEVER pushed to any
+  # and loads locally for exact-image acceptance. These CI images are NEVER pushed to any
   # registry — they never leave the run, so no registry auth is needed here.
   build:
     name: build ${{ matrix.image }}

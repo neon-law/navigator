@@ -1202,11 +1202,6 @@ async fn ceo_digest_schedule(
     Ok(Some(context))
 }
 
-/// Resolve the independent BillingDigest gate before constructing its context.
-
-/// Resolve the independent NotationReset gate before constructing its
-/// context, so an unused schedule never requires Slack credentials.
-
 /// Configure ProfitDigest on a DBOS host with its PostgreSQL and Slack coordinates.
 async fn profit_digest_context(
     rt: &HostRuntime,
@@ -1407,9 +1402,6 @@ fn dri_digest_context(
     .context("validate DriDigest delivery configuration")
 }
 
-/// Resolve the independent DriDigest gate before constructing a delivery
-/// context, so an unused schedule never requires Slack credentials.
-
 async fn ceo_digest_context(
     rt: &HostRuntime,
     lookup: impl Fn(&str) -> Option<String> + Copy,
@@ -1462,10 +1454,6 @@ fn general_nag_context(
     )
     .context("validate GeneralNag delivery configuration")
 }
-
-/// Resolve the independent DBOS and GeneralNag gates before constructing the
-/// delivery context. A disabled DBOS host must not validate an unused workflow
-/// flag or require Slack credentials.
 
 /// Every port this boot binds: the primary configured port plus every extra
 /// local-brand port, deduplicated and in a stable order. A pure helper so

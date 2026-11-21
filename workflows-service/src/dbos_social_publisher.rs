@@ -1,7 +1,7 @@
 //! DBOS port of the social publication workflows.
 //!
-//! [`SocialPublisher`] and [`SocialPublishReconciler`] run on Restate today;
-//! this module journals the same calls as DBOS steps and replaces Restate's
+//! Native `SocialPublisher` and `SocialPublishReconciler` journal the same
+//! provider calls as their retained compatibility adapters and replace Restate's
 //! durable `ctx.sleep` with `dbos::sleep`, whose wake time is checkpointed
 //! before the first wait — a worker that dies mid-poll resumes at the same
 //! step with the original deadline instead of re-waiting. The provider
@@ -27,10 +27,8 @@
 //! child workflow with the deterministic id
 //! [`publisher_workflow_id`], and its own slot starts are idempotent through
 //! [`reconciler_workflow_id`]. Steps retry transient failures a bounded
-//! number of times and then fail the run; Restate Cloud retried a failed
-//! invocation indefinitely, so that resilience difference is a documented
-//! tradeoff of this port (recovery is the reconciler's publication-state
-//! machinery plus a manual resume).
+//! number of times and then fail the run. Recovery uses the reconciler's
+//! publication-state machinery plus an explicit manual resume.
 
 use std::sync::Arc;
 use std::time::Duration;

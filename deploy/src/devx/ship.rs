@@ -19,17 +19,16 @@
 //!   embedded GKE tree with the deployer's `NAVIGATOR_*` values **and the
 //!   tag** → confirm the prod Secret satisfies the new binary's boot
 //!   invariants against that rendered tree → `kubectl apply -k` it → wait
-//!   out the rollouts → re-register the worker with Restate → verify the
-//!   public asset origin. Every service deployment lands on the **same** tag —
+//!   out the rollouts → verify the public asset origin. Every service
+//!   deployment lands on the **same** tag —
 //!   never a version skew.
 //!
 //!   The order is the safety property, not an implementation detail.
 //!   Everything before the apply is local or read-only, so an unsatisfied
 //!   boot invariant aborts a ship that has changed nothing. And the apply
 //!   carries the real tag rather than a placeholder a later `set image`
-//!   corrects: `workflows-service` (`maxSurge: 0`) deletes the running pod
-//!   before the replacement is ready, so a first write on an unpullable tag
-//!   takes that tier down for however long the gap lasts. One write, one
+//!   corrects. An unpullable image can wedge a rollout; verifying the tag
+//!   before applying avoids that intermediate generation. One write, one
 //!   `ReplicaSet`.
 //! - **No-rebuild restart** (`--restart-only`): after a Secret value
 //!   was rotated, `kubectl rollout restart` service deployments that
@@ -562,8 +561,6 @@ where
 /// `web-env.yaml` entry, whose `$patch: replace` would otherwise drop the
 /// connection variables.
 const POSTGRES_WEB_PATCH_TOKEN: &str = "  # NAVIGATOR_POSTGRES_WEB_PATCH\n";
-
-/// Require complete caller ownership before omitting the separate worker.
 
 /// Route authenticated submissions to the cohost listener, never a removed worker.
 pub(super) fn cohost_ingress<F>(get: &F) -> Result<(String, String)>
@@ -3696,10 +3693,9 @@ fn post_roll_asset_refs(root: &Path) -> PostRollAssetRefs {
     }
 }
 
-/// Finish a lane that changed the deployed image: Restate must see the new
-/// handler list first, then the public origin must prove every asset the
-/// rolled binary can request. Both verifiers are injected so this ordering,
-/// the choice between them, and their failure boundary stay unit-testable
+/// Finish a lane that changed the deployed image: the public origin must
+/// prove every asset the rolled binary can request. Both verifiers are
+/// injected so the choice between them and their failure boundary stay unit-testable
 /// without a cluster or network: `verify` walks a source checkout's
 /// `server/content`; `verify_embedded` probes the same origin for the
 /// references this binary embeds when the root carries no such tree (the
@@ -3809,9 +3805,9 @@ fn image_only(
 
 /// The narrow lane past its preflight, split from [`image_only`] for the same
 /// reason [`restart_only_steps`] is: under `--dry-run` every step below prints
-/// its command instead of running it, so a unit test walks the whole four-step
+/// its command instead of running it, so a unit test walks the whole
 /// sequence — context cross-check, drift refusal, the image writes, the
-/// `CronJob` re-pin, the rollout wait, the Restate re-register — with no
+/// `CronJob` re-pin, the rollout wait, and the asset check — with no
 /// cluster, no `kubectl`, and no `gcloud`.
 fn image_only_steps(
     cfg: &ShipConfig,
@@ -3945,7 +3941,7 @@ fn drift_verdict(code: Option<i32>) -> Result<()> {
 /// CI built and published the images; this only updates the cluster:
 /// resolve the tag → confirm the Secret satisfies the new binary's boot
 /// invariants → pin service deployments AND every trigger `CronJob` to
-/// that tag → wait → re-register the worker with Restate → smoke-check.
+/// that tag → wait → verify public assets → smoke-check.
 /// No build, no push, no skew — every navigator image in sync at one tag.
 fn roll(
     cfg: &ShipConfig,
@@ -4093,16 +4089,14 @@ fn roll(
     //    means one ReplicaSet: no intermediate generation on an unpullable
     //    placeholder for a `maxSurge: 0` workload to be deleted for.
     // 5b. Pin every trigger CronJob to the same tag so a roll is atomic
-    //     across ALL navigator images, not just the two services. CronJobs
+    //     across the application and scheduled jobs. CronJobs
     //     don't "roll" — the new image takes effect on the next scheduled
     //     run — so there is nothing to wait on.
     pin_cronjob_images(cfg, &tag, opts.image_digests.as_deref(), dry_run)?;
 
-    // 6. Re-register the workers with Restate, then verify every public asset
-    // after the new pods are live. The DevX notification worker must register
-    // successfully: unlike the established workflows service, it has no prior
-    // deployment to preserve on its first ship. A failed asset check returns
-    // before the completion line below.
+    // 6. Verify public assets after the application rollout. A failed asset
+    // check returns before the completion line below. Retained SDK worker
+    // registration is an explicit operator operation.
     finish_roll(
         ShipLane::Roll,
         cfg,
@@ -5343,13 +5337,6 @@ fn env_var_is_usable(
         .and_then(serde_json::Value::as_str)
         .is_some_and(|v| !v.is_empty())
 }
-
-/// 7d — register the workflows worker with Restate so handlers added since the
-/// last registration are reachable. REQUIRED: a failed re-register leaves
-/// Restate on a stale handler list that would silently drop invocations to a
-/// new service (a canary invocation tests only its own handler, not the full
-/// service list), so the ship fails rather than complete with the new
-/// services unreachable.
 
 /// 8 — curl the public landing and grep a fixed phrase. Best-effort:
 /// reports, never fails the ship.
@@ -8433,6 +8420,8 @@ mod tests {
     /// Restate trigger leaves the render and the live one is deleted.
     #[test]
     fn explicit_write_only_archive_path_mounts_readonly_config_and_persistent_shared_receipts() {
+        use serde::Deserialize as _;
+
         let get = env_getter(FULL_ENV);
         let manifests = rendered_manifests(|key| match key {
             "NAVIGATOR_ARCHIVES_BUCKET" => None,
@@ -8492,7 +8481,6 @@ mod tests {
         assert!(receipts.get("emptyDir").is_none());
         assert!(receipts.get("hostPath").is_none());
         assert!(!renders_cronjob(&manifests, "archives-trigger"));
-        use serde::Deserialize as _;
         assert!(
             !serde_yaml::Deserializer::from_str(&manifests).any(|doc| {
                 let doc = serde_yaml::Value::deserialize(doc).unwrap();
@@ -10800,35 +10788,34 @@ spec:
         let manifests = kustomize_build(&rendered.path().join(GKE_KUSTOMIZE_SUBPATH))
             .expect("rendered GKE manifests build");
 
-        for (deployment_name, container_name) in [(WEB_DEPLOYMENT, "web")] {
-            let deployment = manifest_doc(&manifests, "Deployment", deployment_name);
-            let container = deployment["spec"]["template"]["spec"]["containers"]
+        let (deployment_name, container_name) = (WEB_DEPLOYMENT, "web");
+        let deployment = manifest_doc(&manifests, "Deployment", deployment_name);
+        let container = deployment["spec"]["template"]["spec"]["containers"]
+            .as_sequence()
+            .expect("deployment containers")
+            .iter()
+            .find(|container| container["name"].as_str() == Some(container_name))
+            .unwrap_or_else(|| panic!("{deployment_name}/{container_name} container"));
+        assert_eq!(
+            container["env"]
                 .as_sequence()
-                .expect("deployment containers")
+                .expect("container env")
                 .iter()
-                .find(|container| container["name"].as_str() == Some(container_name))
-                .unwrap_or_else(|| panic!("{deployment_name}/{container_name} container"));
-            assert_eq!(
-                container["env"]
-                    .as_sequence()
-                    .expect("container env")
-                    .iter()
-                    .find(|entry| entry["name"].as_str() == Some("POD_NAME"))
-                    .and_then(|entry| entry["valueFrom"]["fieldRef"]["fieldPath"].as_str()),
-                Some("metadata.name"),
-                "{deployment_name} must use the downward API for pod identity"
-            );
-            assert_eq!(
-                container["env"]
-                    .as_sequence()
-                    .expect("container env")
-                    .iter()
-                    .find(|entry| entry["name"].as_str() == Some("OTEL_RESOURCE_ATTRIBUTES"))
-                    .and_then(|entry| entry["value"].as_str()),
-                Some("k8s.pod.name=$(POD_NAME),service.instance.id=$(POD_NAME)"),
-                "{deployment_name} must carry pod identity on the shared resource"
-            );
-        }
+                .find(|entry| entry["name"].as_str() == Some("POD_NAME"))
+                .and_then(|entry| entry["valueFrom"]["fieldRef"]["fieldPath"].as_str()),
+            Some("metadata.name"),
+            "{deployment_name} must use the downward API for pod identity"
+        );
+        assert_eq!(
+            container["env"]
+                .as_sequence()
+                .expect("container env")
+                .iter()
+                .find(|entry| entry["name"].as_str() == Some("OTEL_RESOURCE_ATTRIBUTES"))
+                .and_then(|entry| entry["value"].as_str()),
+            Some("k8s.pod.name=$(POD_NAME),service.instance.id=$(POD_NAME)"),
+            "{deployment_name} must carry pod identity on the shared resource"
+        );
     }
 
     #[test]
@@ -11346,21 +11333,20 @@ spec:
         let rendered = render_manifests_with(&subs).expect("render succeeds");
         let manifests = kustomize_build(&rendered.path().join(GKE_KUSTOMIZE_SUBPATH))
             .expect("rendered GKE manifests build");
-        for (deployment, container) in [(WEB_DEPLOYMENT, "web")] {
-            let container_spec = rendered_container(&manifests, deployment, container);
-            let secrets: Vec<&str> = container_spec
-                .get("envFrom")
-                .and_then(serde_json::Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(|source| source.pointer("/secretRef/name"))
-                .filter_map(serde_json::Value::as_str)
-                .collect();
-            assert!(
-                secrets.contains(&"example-production-web-secrets"),
-                "{deployment}/{container} must envFrom the deployment Secret: {secrets:?}"
-            );
-        }
+        let (deployment, container) = (WEB_DEPLOYMENT, "web");
+        let container_spec = rendered_container(&manifests, deployment, container);
+        let secrets: Vec<&str> = container_spec
+            .get("envFrom")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|source| source.pointer("/secretRef/name"))
+            .filter_map(serde_json::Value::as_str)
+            .collect();
+        assert!(
+            secrets.contains(&"example-production-web-secrets"),
+            "{deployment}/{container} must envFrom the deployment Secret: {secrets:?}"
+        );
         let web = rendered_container(&manifests, WEB_DEPLOYMENT, "web");
         let callback = web
             .get("env")

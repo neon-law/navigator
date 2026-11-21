@@ -1,12 +1,11 @@
-//! The per-workflow DBOS switches, readable without the `dbos` feature.
+//! Strict controls for optional schedules and explicit compatibility adapters.
 //!
-//! Every caller of a ported service — `web`, the thin trigger binaries, the
-//! worker's own Restate handlers — reads the same strict `true` / `false`
-//! switch to choose between the worker's DBOS ingress and the Restate
-//! ingress. Those callers do not host the executor, and several crates
-//! depend on `workflows` without its `dbos` feature, so the parser lives
-//! outside the feature gate. `dbos_engine` re-exports both items so the
-//! established `workflows::dbos_engine::flag_enabled` path keeps resolving.
+//! Normal application callers use native DBOS ingress without backend selectors.
+//! Optional application schedules and explicit compatibility callers retain
+//! strict `true` / `false` controls. Several crates depend on `workflows` without
+//! its `dbos` feature, so the parsers live outside that feature gate.
+//! `dbos_engine` re-exports them for the established
+//! `workflows::dbos_engine::flag_enabled` path.
 
 /// Automatic weekly starts, independent of BillingCanary's native registration.
 pub const BILLING_CANARY_SCHEDULE_ENABLED_ENV: &str =
