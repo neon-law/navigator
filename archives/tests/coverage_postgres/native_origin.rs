@@ -191,6 +191,20 @@ async fn roundtrip(
     .await
     .unwrap();
     assert!(!paired.cross_database_atomic);
+    assert_eq!(
+        paired.databases[0].recovery_plan.is_some(),
+        completed.is_none(),
+        "a future upgrade is archived without authorizing native activation"
+    );
+    if completed.is_some() {
+        assert!(matches!(
+            store::postgres::native_origin::recovery::RecoveryInput::from_archive(
+                Uuid::new_v4(),
+                serde_json::to_vec(&paired).unwrap(),
+            ),
+            Err(store::postgres::native_origin::OriginError::Recovery)
+        ));
+    }
     let target_pg = PostgresDb::connect(target.connect_options().as_ref().clone())
         .await
         .unwrap();

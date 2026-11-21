@@ -1,4 +1,5 @@
 use super::*;
+use sha2::Digest as _;
 use sqlx::postgres::PgSslMode;
 use sqlx::SqlSafeStr;
 
@@ -61,7 +62,10 @@ async fn actual_new_database_acquires_native_authority_without_any_capture_recei
     let created = create(options.clone(), operation, binding.clone())
         .await
         .unwrap();
-    assert!(!admits(&created.postgres).await.unwrap());
+    assert!(matches!(
+        admits(&created.postgres).await,
+        Err(OriginError::Recovery)
+    ));
     let native = created.initialize().await.unwrap();
     assert!(admits(native.postgres()).await.unwrap());
     native
@@ -111,13 +115,16 @@ async fn concurrent_creators_never_adopt_an_existing_empty_resource() {
     };
     assert!(matches!(
         resume(options.clone(), operation, binding.clone()).await,
-        Err(OriginError::Authority)
+        Err(OriginError::Recovery)
     ));
     assert!(matches!(
         create(options.clone(), operation, binding).await,
         Err(OriginError::Creation)
     ));
-    assert!(!admits(&created.postgres).await.unwrap());
+    assert!(matches!(
+        admits(&created.postgres).await,
+        Err(OriginError::Recovery)
+    ));
     cleanup(options, created.postgres, operation).await;
 }
 
@@ -540,7 +547,12 @@ fn future_schema(gated: bool) -> sqlx::migrate::Migrator {
         "CREATE TABLE native_origin_upgrade_probe(id UUID PRIMARY KEY);"
     };
     migrations.push(sqlx::migrate::Migration::new(
-        20_261_120_000_000,
+        migrations
+            .iter()
+            .map(|entry| entry.version)
+            .max()
+            .and_then(|version| version.checked_add(1))
+            .expect("bounded future fixture version"),
         "synthetic native upgrade".into(),
         sqlx::migrate::MigrationType::Simple,
         AssertSqlSafe(sql).into_sql_str(),
@@ -565,7 +577,7 @@ fn compiled_schema_contract_is_isolated_from_owned_values_and_future_runners() {
     assert_eq!(schema_contract(), expected);
 }
 
-async fn wait_for(pg: &PostgresDb, sql: &'static str) {
+async fn wait_for(pg: &PostgresDb, sql: &str) {
     tokio::time::timeout(std::time::Duration::from_secs(20), async {
         loop {
             let ready: bool = sqlx::query_scalar(AssertSqlSafe(sql))
@@ -648,7 +660,14 @@ async fn migration_commit_before_upgrade_completion_recovers_only_the_same_bound
         .unwrap();
     wait_for(
         pg,
-        "SELECT EXISTS(SELECT 1 FROM _sqlx_migrations WHERE version=20261120000000 AND success)",
+        &format!(
+            "SELECT EXISTS(SELECT 1 FROM _sqlx_migrations WHERE version={} AND success)",
+            future_schema(true)
+                .iter()
+                .map(|entry| entry.version)
+                .max()
+                .unwrap()
+        ),
     )
     .await;
     let completed: bool = sqlx::query_scalar(
@@ -937,6 +956,7 @@ async fn existing_esign_ledger_accepts_earlier_handover_migrations_without_nativ
         20_261_119_030_000_i64,
         20_261_119_040_000,
         20_261_119_050_000,
+        20_261_121_000_000,
     ];
     let existing = sqlx::migrate::Migrator::with_migrations(
         embedded_migrator()
@@ -956,7 +976,7 @@ async fn existing_esign_ledger_accepts_earlier_handover_migrations_without_nativ
     .fetch_one(pg.pool())
     .await
     .unwrap();
-    assert!(!admits(&pg).await.unwrap());
+    assert!(matches!(admits(&pg).await, Err(OriginError::Recovery)));
     pg.migrate_embedded(None).await.unwrap();
     pg.migrate_embedded(None).await.unwrap();
     let applied = pg.applied_migrations().await.unwrap();
@@ -978,6 +998,7 @@ async fn existing_esign_ledger_accepts_earlier_handover_migrations_without_nativ
         "project_slack_delivery_reconciliation",
         "database_origin",
         "database_origin_upgrade",
+        "database_recovery",
     ] {
         let exists: bool = sqlx::query_scalar("SELECT to_regclass($1) IS NOT NULL")
             .bind(format!("public.{table}"))
@@ -1008,4 +1029,217 @@ async fn existing_esign_ledger_accepts_earlier_handover_migrations_without_nativ
         .unwrap();
     assert_eq!(receipts, 0, "no captured-source receipts were manufactured");
     cleanup(options, pg, operation).await;
+}
+
+/// Recovery never turns copied source identity into target creation authority.
+#[tokio::test]
+async fn recovery_target_is_bound_pending_and_has_no_fresh_ownership_epoch() {
+    use futures::FutureExt as _;
+    let Some(options) = options() else { return };
+    let creation = Uuid::new_v4();
+    let binding = tier();
+    let manifest = b"synthetic unverified manifest bytes".to_vec();
+    let source = b"synthetic unverified source identity bytes".to_vec();
+    let recovery_operation = Uuid::new_v4();
+    let created = create(options.clone(), creation, binding.clone())
+        .await
+        .unwrap();
+    let pending = created
+        .initialize_recovery(
+            recovery::RecoveryInput::new(recovery_operation, manifest.clone(), source.clone())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let pg = pending.postgres().clone();
+    let result = std::panic::AssertUnwindSafe(async {
+        assert_eq!(pending.creation_operation(), creation);
+        let origin: (Uuid, String, i64) = sqlx::query_as("SELECT creation_operation,database_name,database_oid FROM database_origin WHERE singleton")
+            .fetch_one(pg.pool()).await.unwrap();
+        let actual = identity(&pg).await.unwrap();
+        assert_eq!(origin, (creation, actual.0, actual.1));
+        let captured: i64 = sqlx::query_scalar("SELECT count(*) FROM mirror_backfill_run")
+            .fetch_one(pg.pool()).await.unwrap();
+        assert_eq!(captured, 0);
+        let ownership: i64 = sqlx::query_scalar("SELECT count(*) FROM durable_object_ownership")
+            .fetch_one(pg.pool()).await.unwrap();
+        assert_eq!(ownership, 0, "restore must supply genuine checkpoint ownership, not a new epoch");
+        let retained: (Uuid, Uuid, Vec<u8>, Vec<u8>, String) = sqlx::query_as("SELECT recovery_operation,creation_operation,manifest_bytes,source_identity_bytes,manifest_sha256 FROM database_recovery")
+            .fetch_one(pg.pool()).await.unwrap();
+        assert_eq!(retained, (recovery_operation, creation, manifest.clone(), source.clone(), hex::encode(sha2::Sha256::digest(&manifest))));
+        sqlx::query("ALTER TABLE public.database_recovery RENAME TO missing_recovery_fence").execute(pg.pool()).await.unwrap();
+        assert!(matches!(admits(&pg).await, Err(OriginError::Recovery)), "current real migration evidence requires the recovery fence");
+        sqlx::query("ALTER TABLE public.database_origin RENAME TO missing_origin_too").execute(pg.pool()).await.unwrap();
+        assert!(matches!(admits(&pg).await,Err(OriginError::Recovery)),"missing both tables cannot hide the actual current migration ledger");
+        sqlx::query("ALTER TABLE public.missing_origin_too RENAME TO database_origin").execute(pg.pool()).await.unwrap();
+        sqlx::query("CREATE TABLE public.database_recovery (LIKE public.missing_recovery_fence INCLUDING ALL)").execute(pg.pool()).await.unwrap();
+        assert!(admits(&pg).await.is_err(),"an empty replacement fence never establishes absence of the bound recovery");
+        sqlx::query("DROP TABLE public.database_recovery").execute(pg.pool()).await.unwrap();
+        sqlx::query("ALTER TABLE public.missing_recovery_fence RENAME TO database_recovery").execute(pg.pool()).await.unwrap();
+        let original_function:String=sqlx::query_scalar("SELECT pg_get_functiondef('public.database_recovery_pending()'::regprocedure)").fetch_one(pg.pool()).await.unwrap();
+        sqlx::raw_sql("CREATE OR REPLACE FUNCTION public.database_recovery_pending() RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path=pg_catalog AS $$ SELECT false $$").execute(pg.pool()).await.unwrap();
+        assert!(matches!(admits(&pg).await,Err(OriginError::Recovery)),"replacement predicate is not trusted as absence proof");
+        sqlx::raw_sql(sqlx::AssertSqlSafe(original_function)).execute(pg.pool()).await.unwrap();
+        assert!(matches!(admits(&pg).await, Err(OriginError::Recovery)));
+        assert!(pg.require_application_history().await.is_err());
+        assert!(crate::postgres_backfill::family::require_scope(&pg, crate::postgres_backfill::family::Family::Satellites).await.is_err());
+        for sql in ["DELETE FROM database_recovery", "UPDATE database_recovery SET manifest_bytes='changed'::bytea", "TRUNCATE database_recovery"] {
+            assert!(sqlx::raw_sql(sql).execute(pg.pool()).await.is_err());
+        }
+        assert!(matches!(admits(&pg).await, Err(OriginError::Recovery)));
+        assert!(resume(options.clone(), creation, binding).await.is_err());
+    }).catch_unwind().await;
+    drop(pending);
+    cleanup(options, pg, creation).await;
+    if let Err(panic) = result {
+        std::panic::resume_unwind(panic);
+    }
+}
+
+#[test]
+fn recovery_input_rejects_nil_empty_and_unbounded_input() {
+    use recovery::RecoveryInput;
+    assert!(RecoveryInput::new(Uuid::nil(), vec![1], vec![1]).is_err());
+    assert!(RecoveryInput::new(Uuid::new_v4(), vec![], vec![1]).is_err());
+    assert!(RecoveryInput::new(Uuid::new_v4(), vec![1], vec![]).is_err());
+    assert!(RecoveryInput::new(Uuid::new_v4(), vec![1], vec![0; 1024 * 1024 + 1]).is_err());
+}
+
+#[tokio::test]
+async fn genuine_pre_recovery_origin_upgrades_without_missing_fence_bypass() {
+    use futures::FutureExt as _;
+    let Some(options) = options() else { return };
+    let creation = Uuid::new_v4();
+    let binding = tier();
+    let old = embedded_migrator()
+        .iter()
+        .filter(|m| m.version < 20_261_121_000_000)
+        .map(|m| m.version)
+        .max()
+        .unwrap();
+    let native = create(options.clone(), creation, binding.clone())
+        .await
+        .unwrap()
+        .initialize_through(Some(old), None)
+        .await
+        .unwrap();
+    let pg = native.postgres().clone();
+    let result = std::panic::AssertUnwindSafe(async {
+        let absent: bool =
+            sqlx::query_scalar("SELECT to_regclass('public.database_recovery') IS NULL")
+                .fetch_one(pg.pool())
+                .await
+                .unwrap();
+        assert!(absent);
+        recovery::require_no_pending(&pg).await.unwrap();
+        assert!(matches!(admits(&pg).await, Err(OriginError::Authority)));
+        let upgraded = upgrade(options.clone(), creation, binding, Uuid::new_v4())
+            .await
+            .unwrap();
+        assert!(admits(upgraded.postgres()).await.unwrap());
+        let exists: bool =
+            sqlx::query_scalar("SELECT to_regclass('public.database_recovery') IS NOT NULL")
+                .fetch_one(upgraded.postgres().pool())
+                .await
+                .unwrap();
+        assert!(exists);
+        upgraded.postgres().pool().close().await;
+    })
+    .catch_unwind()
+    .await;
+    drop(native);
+    cleanup(options, pg, creation).await;
+    if let Err(panic) = result {
+        std::panic::resume_unwind(panic);
+    }
+}
+
+/// An acknowledged name can be reused by another acknowledged creation;
+/// the stale capability must compare its retained OID before administrative ALTER.
+#[tokio::test]
+async fn recovery_stale_creation_oid_refuses_before_sealing_same_name_replacement() {
+    use futures::FutureExt as _;
+    let Some(options) = options() else { return };
+    let creation = Uuid::new_v4();
+    let recovery_operation = Uuid::new_v4();
+    let name = database_name(creation).unwrap();
+    let admin = PostgresDb::connect(options.clone()).await.unwrap();
+    let mut acknowledged = false;
+    let mut first_pool = None;
+    let mut replacement_pool = None;
+    let mut stale = None;
+    let result=std::panic::AssertUnwindSafe(async {
+        let created=create(options.clone(),creation,tier()).await.unwrap();
+        acknowledged=true;
+        first_pool=Some(created.postgres.clone());
+        let pending=created.initialize_recovery(recovery::RecoveryInput::new(
+            recovery_operation,b"synthetic unverified first manifest".to_vec(),b"synthetic first identity".to_vec(),
+        ).unwrap()).await.unwrap();
+        let first=pending.postgres().clone();
+        let (_,first_oid,first_marker)=identity(&first).await.unwrap();
+        let first_marker=first_marker.unwrap();
+        assert_eq!(first_marker,recovery::marker(creation,recovery_operation));
+        stale=Some(pending);
+        // Default min_connections is zero. Drain every positively owned session,
+        // keeping the OLD POOL OPEN so verification can reconnect to A2. Closing
+        // the pool here would only test PoolClosed, never the retained OID guard.
+        while first.pool().size()>0 {
+            first.pool().acquire().await.unwrap().close().await.unwrap();
+        }
+        assert!(!first.pool().is_closed());
+        let sessions:i64=sqlx::query_scalar("SELECT count(*) FROM pg_stat_activity WHERE datid=(SELECT oid FROM pg_database WHERE datname=$1)")
+            .bind(&name).fetch_one(admin.pool()).await.unwrap();
+        assert_eq!(sessions,0,"only our drained sessions may have used A1");
+        sqlx::query(AssertSqlSafe(format!("DROP DATABASE \"{name}\""))).execute(admin.pool()).await.unwrap();
+        acknowledged=false;
+        let created=create(options.clone(),creation,tier()).await.unwrap();
+        acknowledged=true;
+        replacement_pool=Some(created.postgres.clone());
+        let replacement=created.initialize_recovery(recovery::RecoveryInput::new(
+            Uuid::new_v4(),b"synthetic unverified replacement manifest".to_vec(),b"synthetic replacement identity".to_vec(),
+        ).unwrap()).await.unwrap();
+        let replacement_oid=identity(replacement.postgres()).await.unwrap().1;
+        assert_ne!(first_oid,replacement_oid);
+        let origin:serde_json::Value=sqlx::query_scalar("SELECT to_jsonb(o) FROM public.database_origin o").fetch_one(replacement.postgres().pool()).await.unwrap();
+        // Both schemas came from real migrations. Copy ONLY the old resource
+        // comment, not Origin/ledger rows, so name+marker alone cannot decide.
+        sqlx::query(AssertSqlSafe(format!("COMMENT ON DATABASE \"{name}\" IS '{}'",first_marker.replace('\'', "''"))))
+            .execute(admin.pool()).await.unwrap();
+        let before:bool=sqlx::query_scalar("SELECT datallowconn FROM pg_database WHERE datname=$1").bind(&name).fetch_one(admin.pool()).await.unwrap();
+        assert!(before);
+        assert!(!first.pool().is_closed());
+        let outcome=stale.take().unwrap().verify_and_complete().await;
+        assert!(matches!(outcome,Err(OriginError::Recovery)));
+        assert!(first.pool().is_closed(),"actual fixed-predicate reads and pool drain must run before the OID refusal");
+        let after:(i64,bool)=sqlx::query_as("SELECT oid::bigint,datallowconn FROM pg_database WHERE datname=$1").bind(&name).fetch_one(admin.pool()).await.unwrap();
+        assert_eq!(after,(replacement_oid,true),"a stale capability must not seal the positively owned replacement");
+        let preserved:serde_json::Value=sqlx::query_scalar("SELECT to_jsonb(o) FROM public.database_origin o").fetch_one(replacement.postgres().pool()).await.unwrap();
+        assert_eq!(preserved,origin);
+        let value:i32=sqlx::query_scalar("SELECT 1").fetch_one(replacement.postgres().pool()).await.unwrap();
+        assert_eq!(value,1);
+    }).catch_unwind().await;
+    // No FORCE, backend termination, shared roles or unacknowledged DROP.
+    if let Some(pg) = first_pool {
+        pg.pool().close().await;
+    }
+    if let Some(pg) = replacement_pool {
+        pg.pool().close().await;
+    }
+    drop(stale);
+    let cleanup = if acknowledged {
+        sqlx::query(AssertSqlSafe(format!("DROP DATABASE \"{name}\"")))
+            .execute(admin.pool())
+            .await
+            .map(|_| ())
+    } else {
+        Ok(())
+    };
+    admin.pool().close().await;
+    if let Err(panic) = result {
+        if cleanup.is_err() {
+            eprintln!("owned replacement cleanup also failed");
+        }
+        std::panic::resume_unwind(panic);
+    }
+    cleanup.unwrap();
 }
