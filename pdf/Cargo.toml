@@ -21,7 +21,7 @@ thiserror.workspace = true
 typst-layout = "=0.15.1"
 typst-pdf = "=0.15.1"
 typst.workspace = true
-typst-as-lib = { version = "=0.17.0", features = ["typst-kit-fonts", "typst-kit-embed-fonts"] }
+typst-as-lib = { version = "=0.18.0", features = ["typst-kit-fonts", "typst-kit-embed-fonts"] }
 word.workspace = true
 
 [dev-dependencies]
