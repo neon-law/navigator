@@ -77,7 +77,7 @@ own served hosts, marketing pages, or fallback presentation. Editing the `neon` 
 which hosts resolve to it.
 
 The client dashboard uses the serving Brand's logo and colours. An uploaded `brand.logo_object_key` takes precedence
-over the compiled logo. Staff use their Firm's [Portal Theme Brand](portal-theme-brand.md). The legal footer identifies
+over the compiled logo. The Firm team uses its [Portal Theme Brand](portal-theme-brand.md). The legal footer identifies
 the Firm wearing the host's Brand. The dashboard's browser tab is titled "Navigator | Projects".
 
 The `/app` inventory surfaces name a compiled brand's production website as its `www` host (`www.deleteyourdata.com`):

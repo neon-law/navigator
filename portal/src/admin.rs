@@ -2283,7 +2283,7 @@ async fn project_view_as_client(
     ) {
         return not_found_response();
     }
-    // Host-only cookies cannot start a preview on another Brand. Send staff
+    // Host-only cookies cannot start a preview on another Brand. Send the reviewer
     // to the matter there while they still have their own session.
     if !crate::client_portal::access().contains(&project) {
         let authority = headers

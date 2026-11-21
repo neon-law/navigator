@@ -377,7 +377,10 @@ async fn client_portal_uses_the_host_brand_for_the_list_detail_and_api() {
             .status()
             .await
             .unwrap();
-        assert!(status.success(), "render the client and staff portals");
+        assert!(
+            status.success(),
+            "render the client, clerk, and lawyer dashboards"
+        );
     })
     .await;
 }
@@ -533,8 +536,8 @@ async fn check_two_brand_portal() {
             StatusCode::OK
         );
     }
-    for staff in [&clerk, &lawyer] {
-        let response = request("www.neonlaw.com", "/app/projects", staff)
+    for team_member in [&clerk, &lawyer] {
+        let response = request("www.neonlaw.com", "/app/projects", team_member)
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);

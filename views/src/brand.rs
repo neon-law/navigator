@@ -1146,7 +1146,7 @@ impl BrandKey {
     pub const LEX_TECNICA_FAMILY: &'static [Self] =
         &[Self::LexTecnica, Self::IepDefenders, Self::SameDayLegal];
 
-    /// Whether staff on this Brand's host always see its own palette, logo, and name
+    /// Whether signed-in Firm team members on this Brand's host always see its own palette, logo, and name
     /// even when the Firm selects a [Portal Theme Brand](../../docs/glossary/portal-theme-brand.md).
     #[must_use]
     pub fn keeps_own_portal_look(self) -> bool {

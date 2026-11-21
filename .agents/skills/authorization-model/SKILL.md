@@ -37,7 +37,7 @@ tiers and anonymous, the participation vocabulary, the seeded people, and the Re
   different decisions. `participation` is also not the `disclosures` table (conflicts of interest), which flows the
   other direction.
 
-- Limit client portal reads and writes to the intersection of client participation and the host-resolved Brand. Apply
+- Limit client reads and writes to Projects with client participation on the host-resolved Brand. Apply
   that boundary to counts, links, API and agent reads, and resources addressed by their own ID. In Dioxus, read the host
   Brand from the request extension. Preserve Firm-tier participation, supervision, and oversight.
 - Test with one client on Projects under two Brands of one Firm. Switch hosts and verify the list, a direct URL, and an

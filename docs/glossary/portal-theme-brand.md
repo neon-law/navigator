@@ -1,6 +1,6 @@
 ---
 title: "Portal Theme Brand"
-description: "A Portal Theme Brand supplies the colours, logo, and name on a Firm’s staff portal."
+description: "A Portal Theme Brand supplies the colours, logo, and name in the Firm team’s workbench."
 ---
 
 A [Firm](firm.md) can select one of its [Brands](brand.md) for the portal its clerks, lawyers, admins, and owners use.

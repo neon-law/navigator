@@ -6169,7 +6169,7 @@ async fn sample_matter_pages_follow_client_brand_and_lawyer_participation() {
                         .unwrap()
                         .to_lowercase()
                         .contains("not found"),
-                    "/app/projects/{code}/{slug} is hidden on the Neon client portal"
+                    "/app/projects/{code}/{slug} is hidden from the client on Neon"
                 );
                 continue;
             }

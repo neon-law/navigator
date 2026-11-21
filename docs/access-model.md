@@ -121,11 +121,11 @@ above it. Person deletion remains client-only, so no privileged identity is dele
 
 A person the firm represents on at least one matter. The client lens sees only projects where the person is recorded as
 the client-side participant — a `person_project_role` row whose participation is client-side, which includes the row
-carrying the `is_client_dri` accountability marker. On the client portal, the Project's Brand must also match the
-serving host's Brand. The dashboard counts, direct links, API, and agent reads share this boundary. Client matter access
-is portal-native: documents, Engagements/Notations, invoices, and reviewed artifacts are rendered through `web` after
-the Project visibility check. Clients do not receive Git clone URLs, Git PATs, branch names, commit SHAs, or direct GCS
-bucket credentials.
+carrying the `is_client_dri` accountability marker. The Project's Brand must also match the serving host's Brand. The
+dashboard counts, direct links, API, and agent reads share this boundary. Client matter access is portal-native:
+documents, Engagements/Notations, invoices, and reviewed artifacts are rendered through `web` after the Project
+visibility check. Clients do not receive Git clone URLs, Git PATs, branch names, commit SHAs, or direct GCS bucket
+credentials.
 
 ### `clerk`
 

@@ -2,7 +2,7 @@
 //!
 //! A descriptive edit on `store::firms::update`: name, status
 //! (`active`/`suspended`/`archived`), the Entity the Firm is, and its Portal
-//! Theme Brand, which supplies the staff portal’s look. For Owner
+//! Theme Brand, which supplies the Firm team’s theme. For Owner
 //! only, it also offers the Admin DRI picker, which the update handler hands
 //! to `store::firms::appoint_admin_dri` — the designation's only writer. It
 //! never touches any other membership row; those move only through
@@ -341,7 +341,7 @@ fn edit_form(view: &FirmEditView) -> Element {
             view.portal_theme_brand_key.clone(),
         )
         .help(
-            "The brand your staff sees in the portal. Clients see the brand of the site \
+            "The brand your team sees when signed in. Clients see the brand of the site \
              where they sign in.",
         ),
     ];
