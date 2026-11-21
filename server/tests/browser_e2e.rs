@@ -440,70 +440,73 @@ async fn prepared_practice_brands_have_responsive_pages_and_a_working_mobile_men
     let Some(c) = new_client_or_skip().await else {
         return;
     };
-    let preview = practice_preview::PracticePreview::start().await;
-    let capture_dir = std::path::Path::new("/tmp/navigator-screenshots");
-    std::fs::create_dir_all(capture_dir).expect("capture directory");
-    for (key, origin) in &preview.sites {
-        for (width, height) in [(320, 700), (390, 844), (1280, 900)] {
-            if width == 320 && *key != views::brand::BrandKey::Vesta {
-                continue;
-            }
-            set_practice_viewport(&c, width, height).await;
-            let paths = std::iter::once("/")
-                .chain(std::iter::once("/services"))
-                .chain(key.explainer_pages().iter().map(|(path, _)| *path));
-            for path in paths {
-                c.goto(&format!("{origin}{path}"))
-                    .await
-                    .expect("practice page");
-                let mark = key
-                    .resolve_branding(&views::brand::DEFAULT_BRANDING)
-                    .firm
-                    .site_name;
-                wait_for_text(&c, mark, Duration::from_secs(10)).await;
-                let widths = c.execute("return [document.documentElement.scrollWidth, document.documentElement.clientWidth];", vec![])
-                    .await.expect("page widths");
-                let widths = widths.as_array().expect("width pair");
-                assert!(
-                    widths[1].as_u64().expect("viewport width") <= u64::from(width),
-                    "requested viewport applied"
-                );
-                assert!(
-                    widths[0].as_u64() <= widths[1].as_u64(),
-                    "{key:?} {path} overflows at {width}px"
-                );
-                if *key == views::brand::BrandKey::Vesta && path == "/" {
-                    assert_vesta_layout(&c, width, capture_dir).await;
+    practice_preview::PracticePreview::run(|preview| {
+        Box::pin(async move {
+            let capture_dir = std::path::Path::new("/tmp/navigator-screenshots");
+            std::fs::create_dir_all(capture_dir).expect("capture directory");
+            for (key, origin) in &preview.sites {
+                for (width, height) in [(320, 700), (390, 844), (1280, 900)] {
+                    if width == 320 && *key != views::brand::BrandKey::Vesta {
+                        continue;
+                    }
+                    set_practice_viewport(&c, width, height).await;
+                    let paths = std::iter::once("/")
+                        .chain(std::iter::once("/services"))
+                        .chain(key.explainer_pages().iter().map(|(path, _)| *path));
+                    for path in paths {
+                        c.goto(&format!("{origin}{path}"))
+                            .await
+                            .expect("practice page");
+                        let mark = key
+                            .resolve_branding(&views::brand::DEFAULT_BRANDING)
+                            .firm
+                            .site_name;
+                        wait_for_text(&c, mark, Duration::from_secs(10)).await;
+                        let widths = c.execute("return [document.documentElement.scrollWidth, document.documentElement.clientWidth];", vec![])
+                            .await.expect("page widths");
+                        let widths = widths.as_array().expect("width pair");
+                        assert!(
+                            widths[1].as_u64().expect("viewport width") <= u64::from(width),
+                            "requested viewport applied"
+                        );
+                        assert!(
+                            widths[0].as_u64() <= widths[1].as_u64(),
+                            "{key:?} {path} overflows at {width}px"
+                        );
+                        if *key == views::brand::BrandKey::Vesta && path == "/" {
+                            assert_vesta_layout(&c, width, capture_dir).await;
+                        }
+                        if width == 390 && path == "/" && *key != views::brand::BrandKey::Vesta {
+                            std::fs::write(
+                                capture_dir.join(format!("{}-mobile-home.png", key.as_str())),
+                                c.screenshot().await.expect("home capture"),
+                            )
+                            .expect("save home capture");
+                            c.find(Locator::Css(".site-header__burger"))
+                                .await
+                                .expect("mobile menu")
+                                .click()
+                                .await
+                                .expect("open menu");
+                            let contact = c
+                                .find(Locator::Css(
+                                    ".site-header__links a[href^='https://calendar.notion.so/']",
+                                ))
+                                .await
+                                .expect("calendar contact link");
+                            assert!(contact.is_displayed().await.expect("contact visibility"));
+                            std::fs::write(
+                                capture_dir.join(format!("{}-mobile-menu.png", key.as_str())),
+                                c.screenshot().await.expect("menu capture"),
+                            )
+                            .expect("save menu capture");
+                        }
+                    }
                 }
-                if width == 390 && path == "/" && *key != views::brand::BrandKey::Vesta {
-                    std::fs::write(
-                        capture_dir.join(format!("{}-mobile-home.png", key.as_str())),
-                        c.screenshot().await.expect("home capture"),
-                    )
-                    .expect("save home capture");
-                    c.find(Locator::Css(".site-header__burger"))
-                        .await
-                        .expect("mobile menu")
-                        .click()
-                        .await
-                        .expect("open menu");
-                    let contact = c
-                        .find(Locator::Css(
-                            ".site-header__links a[href^='https://calendar.notion.so/']",
-                        ))
-                        .await
-                        .expect("calendar contact link");
-                    assert!(contact.is_displayed().await.expect("contact visibility"));
-                    std::fs::write(
-                        capture_dir.join(format!("{}-mobile-menu.png", key.as_str())),
-                        c.screenshot().await.expect("menu capture"),
-                    )
-                    .expect("save menu capture");
-                }
             }
-        }
-    }
-    c.close().await.expect("close browser");
+            c.close().await.expect("close browser");
+        })
+    }).await;
 }
 
 async fn assert_vesta_layout(c: &Client, width: u32, capture_dir: &std::path::Path) {
@@ -6479,4 +6482,112 @@ mod login_form_tests {
             ])
         );
     }
+}
+
+#[path = "common/git_draft.rs"]
+mod git_draft;
+
+/// A populated Git Draft opens through the real Lawyer API with immutable source provenance.
+#[tokio::test]
+async fn repository_draft_inventory_and_open_pin_the_image_git_commit_and_body() {
+    let Some(browser) = new_client_or_skip().await else {
+        return;
+    };
+    let db = postgres_browser_store().await.unwrap();
+    let firm = store::firms::firm_id_for_brand_key(&db, "neon")
+        .await
+        .unwrap()
+        .expect("seeded browser Firm");
+    let lawyer = store::persons::find_by_email_ci(&db, "lawyer@neonlaw.com")
+        .await
+        .unwrap()
+        .expect("seeded Rauthy Lawyer");
+    let project = seed_browser_project_on_firm(&db, Some(firm), "Synthetic Git Draft").await;
+    store::projects::add_participation(&db, project.id, lawyer.id, "lawyer")
+        .await
+        .unwrap();
+    let unrelated = seed_browser_project_on_firm(&db, Some(firm), "Synthetic Private Draft").await;
+    let draft_code = format!("synthetic-git-{}", Uuid::now_v7().simple());
+    assert!(
+        store::templates::resolve(&db, Some(project.id), &draft_code)
+            .await
+            .unwrap()
+            .is_none(),
+        "the Draft cannot fall back to the catalog"
+    );
+    let inventory = format!("/app/api/projects/{}/notation-inventory", project.id);
+    let create = format!("/app/api/projects/{}/notations", project.id);
+    let unrelated_inventory = format!("/app/api/projects/{}/notation-inventory", unrelated.id);
+    let unrelated_create = format!("/app/api/projects/{}/notations", unrelated.id);
+    let mut repository =
+        git_draft::DraftRepository::configured().expect("owned repository fixture");
+    let (first_sha, first_digest) = repository
+        .commit_template_revision(&project.code, &draft_code, "one")
+        .unwrap();
+
+    browser.goto(&base_url()).await.unwrap();
+    assert_eq!(git_draft::request(&browser, &inventory, None).await.0, 401);
+    login_as_lawyer(&browser).await;
+    let csrf = git_draft::csrf(&browser).await;
+    let (status, rows) = git_draft::request(&browser, &inventory, None).await;
+    assert_eq!(status, 200);
+    let row = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["template_code"] == draft_code)
+        .expect("populated repository Draft is visible to its participating Lawyer");
+    assert!(row["notation_id"].is_null());
+    let payload =
+        serde_json::json!({"template_code": draft_code, "client_email": "client@neonlaw.com"});
+    git_draft::assert_access_guards(
+        &browser,
+        &unrelated_inventory,
+        &unrelated_create,
+        &create,
+        &payload,
+        &csrf,
+    )
+    .await;
+    let (status, opened) =
+        git_draft::request(&browser, &create, Some((payload.clone(), &csrf))).await;
+    assert_eq!(status, 201, "real repository import must open a Notation");
+    let first_id = opened["notation_id"]
+        .as_str()
+        .expect("created Notation UUID");
+    let first =
+        git_draft::assert_notation_provenance(&browser, first_id, &first_sha, &first_digest).await;
+    assert_eq!(first["project_id"], project.id.to_string());
+
+    let (second_sha, second_digest) = repository
+        .commit_template_revision(&project.code, &draft_code, "two")
+        .unwrap();
+    assert_ne!(first_sha, second_sha);
+    assert_ne!(first_digest, second_digest);
+    git_draft::assert_stale_revision_preserved(
+        &browser,
+        &inventory,
+        first_id,
+        &first_sha,
+        &first_digest,
+    )
+    .await;
+    let (status, opened) = git_draft::request(&browser, &create, Some((payload, &csrf))).await;
+    assert_eq!(status, 201);
+    let second_id = opened["notation_id"]
+        .as_str()
+        .expect("second Notation UUID");
+    assert_ne!(first_id, second_id);
+    let second =
+        git_draft::assert_notation_provenance(&browser, second_id, &second_sha, &second_digest)
+            .await;
+    assert_ne!(
+        first["template_id"], second["template_id"],
+        "changed Draft bytes create a new immutable Template version"
+    );
+    assert!(store::notations::list_by_project(&db, unrelated.id)
+        .await
+        .unwrap()
+        .is_empty());
+    browser.close().await.unwrap();
 }

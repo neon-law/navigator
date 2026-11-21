@@ -10959,6 +10959,7 @@ dependencies = [
  "features",
  "flate2",
  "forms",
+ "futures",
  "hmac 0.13.0",
  "http-body-util",
  "image",
