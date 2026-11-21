@@ -13,7 +13,10 @@ use crate::{
 
 pub async fn run(host: Option<&str>, project: Option<&str>, json: bool) -> ExitCode {
     match read(host, project).await {
-        Ok(value) => {
+        Ok(mut value) => {
+            if matches!(value["project_status"].as_str(), Some("pitch" | "open")) {
+                value["workspace"] = super::workspace::inspect(&value).await;
+            }
             if json {
                 println!("{value}");
             } else {
@@ -153,6 +156,11 @@ fn print_status(value: &serde_json::Value) {
                     );
                 }
             }
+        }
+    }
+    if let Some(workspace) = value["workspace"].as_object() {
+        for (step, outcome) in workspace {
+            println!("workspace {step}: {}", outcome.as_str().unwrap_or_default());
         }
     }
     if let Some(missing) = value["missing"].as_array() {

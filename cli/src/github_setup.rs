@@ -28,7 +28,7 @@ use std::env;
 use std::fmt;
 use std::process::Command;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, bail, ensure, Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use reqwest::header;
 use serde::{Deserialize, Serialize};
@@ -1201,7 +1201,10 @@ impl GitHubClient {
     }
 
     pub fn from_env(repository: &RepositoryTarget) -> Result<Self> {
-        let token = required_env(TOKEN_ENV)?;
+        Self::with_token(repository, &required_env(TOKEN_ENV)?)
+    }
+
+    fn with_token(repository: &RepositoryTarget, token: &str) -> Result<Self> {
         let api_base = repository.api_base.clone();
         let mut headers = header::HeaderMap::new();
         headers.insert(
@@ -1840,6 +1843,31 @@ pub fn run(
     })
 }
 
+/// Confirm privacy before bootstrapping the Project's signed initial source.
+pub(crate) async fn verify_private_project(target: &RepositoryTarget) -> Result<()> {
+    let client = GitHubClient::with_token(target, &crate::projects::lifecycle::github_token()?)?;
+    let repository: Repository = client.get_json(&client.repo_path("")).await?;
+    ensure!(
+        repository.private == Some(true),
+        "Project repository must be private before source can be written"
+    );
+    Ok(())
+}
+
+/// Apply the Project's normal GitHub policy without proposing workflow updates.
+pub(crate) async fn protect_project(target: &RepositoryTarget) -> Result<()> {
+    let client = GitHubClient::with_token(target, &crate::projects::lifecycle::github_token()?)?;
+    let policy = target.policy();
+    reconcile_inner(
+        policy,
+        &client,
+        false,
+        None,
+        project_repository::DEFAULT_WORKFLOW_HOME,
+    )
+    .await
+}
+
 /// The read-only half of the workflow-content reconciliation: classify the
 /// repository, and — only for a confirmed [`WorkflowTemplateScope::Project`]
 /// — diff its live `ci.yml` and `cd.yml` against the desired templates and its
@@ -2179,6 +2207,18 @@ async fn reconcile(
     action_version: &str,
     workflow_home: &str,
 ) -> Result<()> {
+    reconcile_inner(policy, client, dry_run, Some(action_version), workflow_home).await
+}
+
+#[allow(clippy::too_many_lines)] // Plan, apply and read back the same repository policy.
+async fn reconcile_inner(
+    policy: RepositoryPolicy,
+    client: &GitHubClient,
+    dry_run: bool,
+    action_version: Option<&str>,
+    workflow_home: &str,
+) -> Result<()> {
+    let update_workflows = action_version.is_some();
     eprintln!("==> reconciling {}", client.repository);
     let url = client.url(&client.repo_path(""));
     let response = client.http.get(&url).send().await?;
@@ -2190,6 +2230,12 @@ async fn reconcile(
         .filter(|scopes| !scopes.trim().is_empty())
         .is_some_and(|scopes| !scopes.split(',').any(|scope| scope.trim() == "workflow"));
     let repository: Repository = parse_json(response, &url).await?;
+    if !update_workflows {
+        ensure!(
+            repository.private == Some(true),
+            "Project repository must be private before protection is reconciled"
+        );
+    }
     report_visibility_finding(dry_run, policy, &repository);
     let settings_policy = settings_posture(policy, &repository, client).await?;
 
@@ -2246,10 +2292,20 @@ async fn reconcile(
         &live_rulesets,
         &labels,
     );
-    if policy.branch_protections && ruleset_ids.contains_key(REVIEW_RULESET_NAME) {
+    if policy.branch_protections
+        && ruleset_ids.contains_key(REVIEW_RULESET_NAME)
+        && update_workflows
+    {
         actions.push(Action::DeleteRuleset {
             name: REVIEW_RULESET_NAME.to_string(),
         });
+    }
+    if !update_workflows
+        && actions
+            .iter()
+            .any(|action| matches!(action, Action::UpdateRuleset { .. }))
+    {
+        bail!("existing Project ruleset differs from the canonical policy; an authorized repository administrator must inspect it before changing protections");
     }
     actions.extend(deploy_environments::plan(policy, client).await?);
 
@@ -2259,8 +2315,15 @@ async fn reconcile(
     // ends the reconcile here rather than midway through the ruleset/label
     // writes above.
     let scope = classify_scope(client, policy, workflow_home).await?;
-    let workflow_paths =
-        plan_workflow_updates_in(client, &scope, action_version, workflow_home).await?;
+    let workflow_paths = if let Some(action_version) = action_version {
+        plan_workflow_updates_in(client, &scope, action_version, workflow_home).await?
+    } else {
+        ensure!(
+            matches!(scope, WorkflowTemplateScope::Project { .. }),
+            "repository is not a recognized canonical Project"
+        );
+        Vec::new()
+    };
     actions.extend(workflow_paths.iter().map(|update| Action::UpdateWorkflow {
         path: update.path.clone(),
     }));
@@ -2272,7 +2335,7 @@ async fn reconcile(
     if dry_run || actions.is_empty() {
         return Ok(());
     }
-    if !workflow_paths.is_empty() {
+    if let Some(action_version) = action_version.filter(|_| !workflow_paths.is_empty()) {
         open_workflow_update_pull_request(client, action_version.trim(), &workflow_paths).await?;
     }
     for action in actions {
@@ -2291,6 +2354,34 @@ async fn reconcile(
             action,
         )
         .await?;
+    }
+    if !update_workflows {
+        let repository: Repository = client.get_json(&client.repo_path("")).await?;
+        ensure!(
+            RepositorySettings::from_live(&repository, &client.repository, settings_policy)?
+                == desired_repository_settings(settings_policy),
+            "GitHub repository did not retain the Project merge settings"
+        );
+        let (_, live) = read_live_rulesets(
+            client,
+            policy,
+            actions_app_id,
+            &review_bypass_actors,
+            &required_check_context,
+        )
+        .await?;
+        ensure!(
+            desired_rulesets(
+                policy,
+                actions_app_id,
+                &review_bypass_actors,
+                &required_check_context
+            )
+            .iter()
+            .zip(live)
+            .all(|(wanted, actual)| actual.is_some_and(|actual| ruleset_matches(wanted, &actual))),
+            "GitHub repository did not retain Project branch protection"
+        );
     }
     eprintln!("==> GitHub settings reconciled");
     Ok(())

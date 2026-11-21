@@ -1494,6 +1494,16 @@ pub enum ProjectsCmd {
         #[command(flatten)]
         host: HostOpt,
     },
+    /// Save an unsent Gmail invitation for the participating Legal Plan member.
+    Invite {
+        /// Project code.
+        project_code: String,
+        /// Update this existing Gmail draft when preparing the invitation again.
+        #[arg(long)]
+        draft_id: Option<String>,
+        #[command(flatten)]
+        host: HostOpt,
+    },
     /// The Project Skill catalog — jurisdiction/practice-area playbooks
     /// compiled into this binary from `skills/` — and the pins a Project
     /// records against it in its own `navigator.yaml`.
@@ -3316,6 +3326,11 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
             json,
             host,
         } => projects::setup::run(host.host.as_deref(), project_code.as_deref(), all, json).await,
+        ProjectsCmd::Invite {
+            project_code,
+            draft_id,
+            host,
+        } => projects::invite::run(host.host.as_deref(), &project_code, draft_id).await,
         ProjectsCmd::Skill { action } => run_project_skill(action).await,
         ProjectsCmd::Jj { action } => match action {
             ProjectJjCmd::StageTime { revision } => {

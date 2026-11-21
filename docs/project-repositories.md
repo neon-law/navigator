@@ -578,26 +578,29 @@ command invents no entry number and does not rewrite those bytes.
 
 ## Existing Project setup
 
-One CLI command converges an existing Project's Drive/repository surfaces and its Firm-private Slack channel and Notion
-page through the existing authenticated doors (`portal::integrations_api`):
+Setup reconciles a Project's Drive, source repository, Slack, calendar, contacts, and Notion resources.
 
 ```bash
-navigator project setup <code>        # one Project, one outcome per resource
-navigator project setup --all --json  # every Project visible to this login
+navigator project setup <code>
+navigator project setup --all --json
 ```
 
-`navigator project create` runs the same setup as its last step, so a new Project gets its surfaces without a second
-command. It prints one row per resource and never fails the open: a resource whose runtime is not configured reports
-that, and the Project stays open until `navigator project setup <code>` converges it. A Project opened already closed is
-not set up.
+`navigator project create` attempts the integration resources after opening an active Project and reports pending
+workspace setup. Run setup for one code to finish or verify that workspace. It initializes an empty private GitHub
+repository with a signed canonical scaffold, applies and checks the required branch protection, and fast-forwards the
+verified Forgejo mirror to the exact GitHub `main`. On a Forgejo-primary Project the provisioner owns initialization and
+setup verifies the configured Forgejo host, branch protection, and a successful Actions run for current `main`. The
+recorded repository URL determines which forge is authoritative. Setup keeps that URL and refuses to overwrite divergent
+history.
 
-Setup composes the surface reconcile door, Slack ensure door, and Notion ensure door. It does not accept provider
-credentials or open a database connection. The doors keep their existing admin, visible-Project, and owning-Firm
-`FirmCapability::UseIntegrations` checks. Text prints one row per resource; `--json` returns one structured resource
-outcome per Project. Any required resource outcome other than `created`, `present`, `adopted`, `unchanged`, `repaired`,
-or `notified` makes the process exit nonzero, including `credential_missing`, `provider_unavailable`,
-`recorded_resource_missing`, `wrong_parent`, `not_private`, `renamed`, `archived`, `conflict`, and
-`address_not_recorded`. Setup reports no `publisher` resource; Portal publishing is retired.
+Setup fetches or creates the Project's colocated Jujutsu checkout under `~/Work/<code>` without discarding local work.
+If the published manifest has stale coordinates, run `navigator project set --from-live` in that checkout and land the
+change through normal review before retrying setup. Use `navigator project status <code>` to see the source and mirror
+branches and whether a local checkout exists. Setup reports an incomplete step and exits nonzero. The bulk command
+reconciles integration resources and defers local workspace work to single-Project setup.
+
+Setup uses the existing authenticated doors for integrations. The doors enforce their admin, visible-Project, and
+owning-Firm `FirmCapability::UseIntegrations` checks. The text and JSON reports include each resource outcome.
 
 An unconfigured Drive or repository provider reports `skipped` with a detail naming the disabled provider; that outcome
 exits nonzero. A partially configured provider fails the reconcile door with its initialization error.
@@ -1177,9 +1180,17 @@ Then converge the other setup resources:
 navigator project setup <code>
 ```
 
-Rerun setup after a failure; it reports no `publisher` resource. The first main-branch push uses the repository's
-generated `cd.yml` caller. `navigator project doctor --project <code>` checks local deployment and Project coordinates;
-`navigator project gate` validates the repository.
+On GitHub, single-Project setup initializes an empty repository. Its first push runs the generated `cd.yml` caller.
+
+Use `navigator project status <code>` for workspace progress or `navigator project gate` to validate a checkout.
+
+### Invite an accepted Legal Plan member
+
+A participating lawyer can run `navigator project invite <code>` after confirming the plan acceptance. The command
+resolves the member from the Project's current client DRI participation and saves an unsent Gmail draft linking to the
+Project on its Brand's portal. Review the recipient and message in Gmail before sending. To update the same draft, pass
+`--draft-id`. The member signs in with the invited address and sees the client view, including any available action or
+released document for that Project.
 
 ### Proposing matter pages
 

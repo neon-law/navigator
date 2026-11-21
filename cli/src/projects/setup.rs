@@ -121,6 +121,8 @@ fn succeeded(outcome: &ResourceOutcome) -> bool {
             | "notified"
             | "read_only"
             | "synced"
+            | "verified"
+            | "deferred"
     )
 }
 
@@ -145,11 +147,27 @@ fn print_report(report: &SetupReport, json: bool) {
     }
 }
 
-async fn setup_one(base: &str, token: &str, project: &VisibleProject) -> ProjectSetupOutcome {
+#[derive(Clone, Copy)]
+enum WorkspaceMode {
+    Finish,
+    Pending,
+    Deferred,
+}
+
+async fn setup_one(
+    base: &str,
+    token: &str,
+    project: &VisibleProject,
+    workspace_mode: WorkspaceMode,
+) -> ProjectSetupOutcome {
     let mut resources = BTreeMap::new();
-    resources.extend(surface_results(
-        surfaces::post_reconcile(base, token, project.id).await,
-    ));
+    let reconciled = surfaces::post_reconcile(base, token, project.id).await;
+    let repository_attached = reconciled
+        .as_ref()
+        .ok()
+        .and_then(|surface| surface.repository_url.as_ref())
+        .is_some();
+    resources.extend(surface_results(reconciled));
     // Contacts runs after the calendar so a matter's people reach each
     // member's phone once the matter is set up.
     for (name, door) in [
@@ -172,6 +190,18 @@ async fn setup_one(base: &str, token: &str, project: &VisibleProject) -> Project
                 .and_then(|report| one_integration_result(&report.results)),
             ),
         );
+    }
+    if repository_attached {
+        let workspace = match workspace_mode {
+            WorkspaceMode::Finish => match super::workspace::finish(base, token, project.id, &project.code).await {
+                Ok(true) => resource("verified"),
+                Ok(false) => resource("read_only"),
+                Err(error) => resource_with_detail("incomplete", format!("{error:#}")),
+            },
+            WorkspaceMode::Pending => resource_with_detail("pending", "run navigator project setup for this Project to verify source, branch protection, mirror, and checkout"),
+            WorkspaceMode::Deferred => resource_with_detail("deferred", "run setup for this Project by code to finish its repository and checkout"),
+        };
+        resources.insert("workspace".to_owned(), workspace);
     }
     ProjectSetupOutcome {
         project_code: project.code.clone(),
@@ -202,7 +232,7 @@ pub async fn after_create(base: &str, token: &str, id: uuid::Uuid, code: &str) -
         brand: None,
     };
     let report = SetupReport {
-        results: vec![setup_one(base, token, &project).await],
+        results: vec![setup_one(base, token, &project, WorkspaceMode::Pending).await],
     };
     print_report(&report, false);
     let complete = report
@@ -314,8 +344,15 @@ pub async fn run(
     let mut report = SetupReport {
         results: Vec::new(),
     };
+    let workspace_mode = if all {
+        WorkspaceMode::Deferred
+    } else {
+        WorkspaceMode::Finish
+    };
     for project in &projects {
-        report.results.push(setup_one(&base, &token, project).await);
+        report
+            .results
+            .push(setup_one(&base, &token, project, workspace_mode).await);
     }
     let success = report
         .results

@@ -388,6 +388,13 @@ async fn check_live_handles(dir: &Path, base: &str, token: &str) -> Result<()> {
         super::document_check::check_timeline_records(dir, &rows)?;
     }
 
+    check_manifest_handles(&manifest, &live)
+}
+
+pub(super) fn check_manifest_handles(
+    manifest: &manifest::Manifest,
+    live: &model::project_surfaces::ProjectHandles,
+) -> Result<()> {
     let mut differing = Vec::new();
     if !manifest.lawyer_dri.as_deref().is_some_and(|value| {
         live.lawyer_dri

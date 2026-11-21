@@ -85,6 +85,10 @@ pub async fn run(request: SetRequest<'_>) -> ExitCode {
 }
 
 async fn set(request: SetRequest<'_>) -> Result<Vec<String>> {
+    set_at(Path::new("."), request).await
+}
+
+pub(super) async fn set_at(dir: &Path, request: SetRequest<'_>) -> Result<Vec<String>> {
     let SetRequest {
         host_override,
         project_override,
@@ -102,8 +106,8 @@ async fn set(request: SetRequest<'_>) -> Result<Vec<String>> {
     let drive_folder = drive_folder_id(live_fields.drive_folder_id)?;
     let live_fields = live_fields.with_drive_folder(drive_folder.as_deref());
     let live_patch = live_patch(live_fields, private_slack_channel)?;
-    let path = Path::new(manifest::FILE);
-    let contents = std::fs::read_to_string(path).context("read navigator.yaml")?;
+    let path = dir.join(manifest::FILE);
+    let contents = std::fs::read_to_string(&path).context("read navigator.yaml")?;
     let parsed = manifest::parse(&contents).map_err(|error| anyhow!(error))?;
     let host = host_override
         .or(parsed.host.as_deref())
@@ -157,7 +161,7 @@ async fn set(request: SetRequest<'_>) -> Result<Vec<String>> {
             changed.push("manifest Firm and brand".into());
         }
     }
-    let findings = manifest::lint_contents(path, &updated);
+    let findings = manifest::lint_contents(&path, &updated);
     if let Some(finding) = findings.into_iter().find(|finding| !finding.warning) {
         return Err(anyhow!(
             "{} ({}): {}",

@@ -16,7 +16,7 @@ use axum::extract::{
     State,
 };
 use axum::http::request::Parts;
-use axum::http::StatusCode;
+use axum::http::{header, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::MethodRouter;
@@ -540,6 +540,11 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             "GET",
             "/app/api/projects/{id}/status",
             get(project_status_door),
+        ),
+        (
+            "GET",
+            "/app/api/projects/{id}/portal-invitation",
+            get(project_portal_invitation_door),
         ),
         (
             "POST",
@@ -2082,16 +2087,10 @@ async fn repair_project_forgejo_mirror_door(
         .await
         .map_err(|error| ApiError::Db(error.to_string()))?
         .ok_or(ApiError::NotFound)?;
-    if project
+    if !project
         .repository_url
         .as_deref()
-        .is_none_or(|url| url.trim().is_empty())
-    {
-        return Err(ApiError::NotFound);
-    }
-    if cloud::ForgeBackend::from_lookup(|key| std::env::var(key).ok())
-        .map_err(|error| ApiError::Db(error.to_string()))?
-        != cloud::ForgeBackend::GitHub
+        .is_some_and(github_project_origin)
     {
         return Err(ApiError::NotFound);
     }
@@ -2249,6 +2248,17 @@ async fn get_project_door(
     Ok((StatusCode::OK, Json(payload)).into_response())
 }
 
+fn github_project_origin(remote: &str) -> bool {
+    remote.starts_with("git@github.com:")
+        || remote.starts_with("git@ssh.github.com:")
+        || url::Url::parse(remote).is_ok_and(|url| {
+            matches!(
+                (url.scheme(), url.host_str()),
+                ("https", Some("github.com")) | ("ssh", Some("github.com" | "ssh.github.com"))
+            )
+        })
+}
+
 async fn repository_remotes(
     state: &ApiState,
     project: &store::projects::Project,
@@ -2256,13 +2266,10 @@ async fn repository_remotes(
 ) -> Result<serde_json::Value, ApiError> {
     let mut forgejo_url = None;
     let mut forgejo_status = "not_configured";
-    let is_github = cloud::ForgeBackend::from_lookup(|key| std::env::var(key).ok())
-        .is_ok_and(|backend| backend == cloud::ForgeBackend::GitHub);
-    if is_github
-        && project
-            .repository_url
-            .as_deref()
-            .is_some_and(|url| !url.trim().is_empty())
+    if project
+        .repository_url
+        .as_deref()
+        .is_some_and(github_project_origin)
     {
         if let Some(firm_id) = project.firm_id {
             let access = store::firm_capability::resolve(
@@ -2462,6 +2469,76 @@ async fn project_status_door(
         "missing": missing
     }))
     .into_response())
+}
+
+fn invitation_client(
+    pinned: Option<Uuid>,
+    participants: &[store::projects::PersonProjectRole],
+) -> Option<Uuid> {
+    let mut eligible = participants
+        .iter()
+        .filter(|row| row.is_client_dri && row.participation == "client")
+        .map(|row| row.person_id);
+    if let Some(pinned) = pinned {
+        return eligible.find(|person| *person == pinned);
+    }
+    let client = eligible.next()?;
+    eligible.next().is_none().then_some(client)
+}
+
+/// Resolve the recipient and destination of a lawyer's unsent invitation.
+async fn project_portal_invitation_door(
+    State(state): State<ApiState>,
+    lawyer: LawyerSession,
+    Path(id): Path<Uuid>,
+) -> Result<Response, ApiError> {
+    if !participates_as_firm(&state, &lawyer, id).await {
+        return Err(ApiError::NotFound);
+    }
+    let project = store::projects::find_by_id(&state.surreal, id)
+        .await
+        .map_err(|error| ApiError::Db(error.to_string()))?
+        .ok_or(ApiError::NotFound)?;
+    let conflict = |message: &'static str| Ok((StatusCode::CONFLICT, message).into_response());
+    if project.legal_plan_id.is_none()
+        || project
+            .plan_accepted_on
+            .as_deref()
+            .is_none_or(|date| date.trim().is_empty())
+        || !matches!(project.status.as_str(), "pitch" | "open")
+    {
+        return conflict("This Project has no active, confirmed Legal Plan acceptance.");
+    }
+    let participants = store::projects::participations_for_project(&state.surreal, id)
+        .await
+        .map_err(|error| ApiError::Db(error.to_string()))?;
+    let Some(client_id) = invitation_client(project.client_dri_person_id, &participants) else {
+        return conflict("Designate the member as the Project's client DRI first.");
+    };
+    if !store::access::can_see_project_as_client(&state.surreal, Some(client_id), id)
+        .await
+        .map_err(ApiError::Db)?
+    {
+        return conflict("The member needs client participation on this Project.");
+    }
+    let client = store::persons::find_by_id(&state.surreal, client_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    if client.role != store::persons::Role::Client {
+        return conflict("The member needs a client account for this Project's portal.");
+    }
+    let base = crate::openapi::base_url_for(None);
+    let Some(origin) = crate::client_portal::project_origin(&project.brand, &base) else {
+        return conflict("The Project Brand's portal origin could not be verified.");
+    };
+    Ok((
+        [(header::CACHE_CONTROL, "private, no-store")],
+        Json(serde_json::json!({
+            "recipient": client.email,
+            "portal_url": format!("{origin}/app/projects/{}", project.code),
+        })),
+    )
+        .into_response())
 }
 
 #[derive(Debug, Deserialize)]

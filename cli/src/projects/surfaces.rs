@@ -53,11 +53,17 @@ pub async fn resolve_project_id(base: &str, token: &str, project_code: &str) -> 
     // it is read out of the same clap `Commands` enum a `Secrets` variant
     // lives on, which CodeQL's cleartext-logging query treats as tainted —
     // see `stderr_does_not_echo_the_cli_project_argument` below.
-    projects
+    let mut matching = projects
         .into_iter()
-        .find(|project| project.code == project_code)
-        .map(|project| project.id)
-        .ok_or_else(|| anyhow!("no visible matter with that code"))
+        .filter(|project| project.code == project_code);
+    let project = matching
+        .next()
+        .ok_or_else(|| anyhow!("no visible matter with that code"))?;
+    anyhow::ensure!(
+        matching.next().is_none(),
+        "more than one visible matter has that code"
+    );
+    Ok(project.id)
 }
 
 /// Create or adopt the Project's three handles through the admin-tier
