@@ -14349,7 +14349,6 @@
       "webapp/src/lawyer_project_communications.rs",
       "webapp/src/lawyer_project_detail.rs",
       "webapp/src/lawyer_project_documents.rs",
-      "webapp/src/lawyer_project_integrations.rs",
       "webapp/src/lawyer_project_notations.rs",
       "webapp/src/lawyer_project_participation.rs",
       "webapp/src/lawyer_project_testimonial.rs",

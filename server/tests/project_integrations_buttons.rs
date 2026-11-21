@@ -1,7 +1,4 @@
-//! Integration test: the two resource-bearing sections on
-//! `GET /app/projects/:code` — the "Resources" panel (the matter's Slack
-//! channels, Notion pages, Drive folder, and portal) and the "Integrations"
-//! section that still carries Xero and the source repository.
+//! Project toolbar resources and invoice links on the lawyer Billing tab.
 //!
 //! The audience split is what these assert. Xero and the repository stay
 //! lawyer-only. A resource is firm-only or shared by *name*: a client sees the
@@ -207,12 +204,9 @@ async fn lawyer_sees_the_external_slack_button_when_the_matter_has_one() {
     assert!(html.contains("Shared Slack channel"));
 }
 
-/// The Xero button links straight to the matter's most recently raised
-/// invoice, mirrored locally in `xero_invoice` — `for_projects` orders
-/// newest first, so a matter carrying several invoices still resolves to
-/// one button target.
+/// An invoice reference in the lawyer’s Billing table opens that invoice in Xero.
 #[tokio::test]
-async fn lawyer_sees_the_xero_button_pointing_at_the_raised_invoice() {
+async fn lawyer_can_open_the_mirrored_invoice_in_xero() {
     const XERO_ID: &str = "11111111-2222-3333-4444-555555555555";
     let f = build_fixture().await;
     store::xero_invoices::upsert(
@@ -240,7 +234,7 @@ async fn lawyer_sees_the_xero_button_pointing_at_the_raised_invoice() {
     assert!(html.contains(&format!(
         "https://go.xero.com/AccountsReceivable/View.aspx?InvoiceID={XERO_ID}"
     )));
-    assert!(html.contains(">Xero<"));
+    assert!(html.contains("Open invoice in Xero"));
 }
 
 /// **The confidentiality boundary.** A client sees the resources shared with
@@ -329,7 +323,10 @@ async fn a_client_sees_the_shared_resources_and_none_of_the_firms() {
     let visible = html
         .split_once("</head>")
         .map_or(html.as_str(), |(_, body)| body);
-    assert!(!visible.contains("Integrations"), "Xero stays lawyer-only");
+    assert!(
+        !visible.contains("https://go.xero.com"),
+        "Xero stays lawyer-only"
+    );
     // A client configures nothing.
     assert!(!html.contains("Configure resources"));
 }

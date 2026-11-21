@@ -14,8 +14,7 @@
 //! module — documents in [`crate::lawyer_project_documents`], the notation
 //! board in [`crate::lawyer_project_notations`], the participation ledger in
 //! [`crate::lawyer_project_participation`], the testimonial card in
-//! [`crate::lawyer_project_testimonial`], and the integrations section in
-//! [`crate::lawyer_project_integrations`]. The write forms render markup that
+//! [`crate::lawyer_project_testimonial`], and billing in [`crate::project_billing`]. The write forms render markup that
 //! posts to the existing native `/app/projects/{code}/...` handlers; only the
 //! rendering moves.
 //!
@@ -31,7 +30,6 @@ use crate::components::{FactCard, FactGrid, Field, FormCard, Toast, ToastTone};
 use crate::csrf::CsrfToken;
 use crate::lawyer_project_communications::{communications_tab, notes_tab, CommunicationRow};
 use crate::lawyer_project_documents::{documents_table, LawyerDocRow};
-use crate::lawyer_project_integrations::integrations_section;
 use crate::lawyer_project_notations::{ProjectNotationBoard, ProjectNotationRow};
 use crate::lawyer_project_participation::{
     may_govern_lawyer_dri, ParticipationRow, ParticipationTable,
@@ -196,7 +194,6 @@ pub struct LawyerDetailView {
     /// a page whose reader may not see it, and one filtered list is the only
     /// place that decision is made.
     pub resources: crate::project_resources::ProjectResourcesView,
-    pub xero_invoice_url: Option<String>,
     /// This matter's client-trust position — the same client-safe numbers
     /// the client sees on their own page, for the lawyers on this matter.
     /// A Firm-wide view of the pooled account is a different surface and
@@ -580,32 +577,19 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         has_closing.contains(&id),
     );
 
-    // The matter's most recently raised Xero invoice — a matter may carry
-    // several over time, and `for_projects` orders newest first. Absent
-    // until an invoice raised in Xero is mirrored here.
-    // Same fold, same matter scope as the client page: a lawyer reading a
-    // matter sees that matter's trust position, not the pooled balance.
-    let position = store::trust::position_for_project(&surreal, id)
-        .await
-        .map_err(server_error)?;
-    let trust = crate::portal_project_detail::trust_view(
-        &position,
-        &store::iolta_withdrawals::for_project(&surreal, id)
+    let trust = if active_tab == MatterTab::Billing {
+        let position = store::trust::position_for_project(&surreal, id)
             .await
-            .map_err(server_error)?,
-    );
-
-    let xero_invoice_url = store::xero_invoices::for_projects(&surreal, &[id])
-        .await
-        .map_err(server_error)?
-        .into_iter()
-        .next()
-        .map(|invoice| {
-            format!(
-                "https://go.xero.com/AccountsReceivable/View.aspx?InvoiceID={}",
-                invoice.xero_invoice_id
-            )
-        });
+            .map_err(server_error)?;
+        crate::portal_project_detail::trust_view(
+            &position,
+            &store::iolta_withdrawals::for_project(&surreal, id)
+                .await
+                .map_err(server_error)?,
+        )
+    } else {
+        Default::default()
+    };
 
     // Per-matter financial projections — Work in Progress and Outstanding
     // Balance, read-only over the time-entry, project-cost, and invoice-mirror
@@ -667,8 +651,8 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
     // renders the workbench without them; a read failure inside a configured
     // deployment is a 500.
     let (billing_annotations, billing_entries, billing_fees, billing_invoices, billing_expenses) =
-        match pg.as_ref() {
-            Some(pg) => {
+        match (active_tab, pg.as_ref()) {
+            (MatterTab::Billing, Some(pg)) => {
                 let reads =
                     crate::project_billing::read_billing(&surreal, pg, id, person_id).await?;
                 (
@@ -679,7 +663,7 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
                     reads.expense_rows,
                 )
             }
-            None => (
+            (MatterTab::Billing, None) => (
                 Vec::new(),
                 Vec::new(),
                 crate::project_billing::FeeStructureView::default(),
@@ -690,6 +674,7 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
                 crate::project_billing::mirrored_invoice_rows(&surreal, id).await?,
                 Vec::new(),
             ),
+            _ => Default::default(),
         };
     let running_timer = match (pg.as_ref(), person_id) {
         (Some(pg), Some(person_id)) => {
@@ -909,7 +894,6 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
             can_configure: role.is_lawyer_tier(),
             project_code: code_for_resources,
         },
-        xero_invoice_url,
         trust,
         wip,
         outstanding,
@@ -1324,7 +1308,6 @@ pub fn LawyerProjectDetail() -> Element {
                         }
                     },
                     MatterTab::Billing => rsx! {
-                        {integrations_section(&view)}
                         BillingTab {
                             code: view.code.clone(),
                             csrf: csrf.clone(),
