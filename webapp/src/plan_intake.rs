@@ -8,8 +8,6 @@
 //! action posts to an axum door in `portal` that re-checks authority
 //! server-side, exactly like the triage queue.
 
-use std::fmt::Write as _;
-
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -146,6 +144,8 @@ pub async fn plan_intake_page() -> Result<PlanIntakePage, ServerFnError> {
 /// runs inside `#[server]` bodies.
 #[cfg(feature = "server")]
 fn fee_quote(staged: &store::plan_intake::StagedAssignment) -> String {
+    use std::fmt::Write as _;
+
     let Some(plan_fee) = staged.fee_plan_fee_cents else {
         return "Coverage and fees are unverified.".to_string();
     };
