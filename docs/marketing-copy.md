@@ -62,15 +62,15 @@ Daybridge Divorce Law (`daybridge/`):
 | `neon/locales/en/daybridge/home.yaml` | `/` agreed divorce for couples |
 | `neon/locales/en/daybridge/services.yaml` | `/services` scope, timing, and cost disclosures |
 
-Daybridge serves couples who agree for a one-time $333 fee for a mutual split. Its public pages present that single fee.
-The home page leads with moving on: the firm keeps its own part moving, and the court sets its own schedule. The copy
-states no turnaround time. The hero carries an original bridge-at-sunrise illustration, a tracked static asset, with the
-fee beneath it. The sunrise palette is the same in light and dark mode. The hero and the closing offer the brand's phone
-line and the Notion booking calendar, and the home Lead form carries its own heading and a sentence on what to expect. A
-sibling-practice card points to Vesta Estate Planning for a review after the divorce is final, under a separate
-engagement and without a price. Joint representation is subject to applicable rules, conflict review, and informed
-written consent. Its pages explain shared information, independent advice, and stopping joint work when a conflict
-prevents it. Contested proceedings sit outside the joint engagement. Agreement and consent alone do not establish
+Daybridge charges $200 for an agreed divorce and $500 for a contested one, plus the court's filing fees and $50 per
+motion. A contested matter opens with a $1,000 retainer that the flat fee and each motion are billed against, and the
+remainder is refunded. The home page is plain-spoken: divorce is hard, nobody wants it, and the firm makes it fair and
+keeps it moving while the court sets its own schedule. The copy states no turnaround time. The two prices are the
+largest type on the page, in prose rather than list or card rows. The hero and the closing offer the brand's phone line,
+the Notion booking calendar, and account creation, which lands a new client on their matters. Published testimonials sit
+between the story and the closing. A sibling-practice card points to Vesta Estate Planning for a review after the
+divorce is final, under a separate engagement and without a price. Joint representation of an agreed divorce is subject
+to applicable rules, conflict review, and informed written consent. Agreement and consent alone do not establish
 eligibility for joint representation.
 
 [Nevada conflict rules](https://www.leg.state.nv.us/courtrules/rpc.html) restrict claims between clients in the same

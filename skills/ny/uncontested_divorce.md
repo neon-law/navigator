@@ -23,9 +23,9 @@ conflict review and informed written consent; each spouse understands the choice
 Defined terms carry their glossary meanings: the client is a Person, the matter a Project, a work product a Notation, a
 docketed date a Deadline, and the Firm is the Firm.
 
-The Kit carries no Firm numbers. The one-time fee for a mutual split lives in the Firm's plan fee schedule and the
-written retainer, never in the Kit. Where the playbook plans effort, it renders the Firm's own Assumption for the key
-declared above; the field stays blank until the Firm sets a value in the Firm Assumptions catalog.
+The Kit carries no Firm numbers. The fee lives in the Firm's plan fee schedule and the written retainer, never in the
+Kit. Where the playbook plans effort, it renders the Firm's own Assumption for the key declared above; the field stays
+blank until the Firm sets a value in the Firm Assumptions catalog.
 
 ## Intake
 

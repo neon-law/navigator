@@ -2,24 +2,30 @@
 
 use serde::{Deserialize, Serialize};
 
-/// The focused offer, service commitments, and short engagement flow.
+/// The two prices, what sits beside them, and the plain-spoken story.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DaybridgeCopy {
     pub eyebrow: String,
     pub fee_label: String,
-    pub fee_price: String,
-    pub fee_unit: String,
-    pub fee_body: String,
-    pub fee_note: String,
-    pub response_heading: String,
-    pub response_body: String,
-    pub motions_heading: String,
-    pub motions_body: String,
+    pub agreed_label: String,
+    pub agreed_price: String,
+    pub agreed_unit: String,
+    pub agreed_body: String,
+    pub contested_label: String,
+    pub contested_price: String,
+    pub contested_unit: String,
+    pub contested_body: String,
     pub costs_heading: String,
     pub costs_body: String,
-    pub process_label: String,
-    pub process_heading: String,
-    pub steps: Vec<[String; 2]>,
+    pub story_heading: String,
+    pub story_body: String,
+    pub joint_heading: String,
+    pub joint_body: String,
+    pub testimonials_heading: String,
+    pub account_heading: String,
+    pub account_body: String,
+    pub signup_label: String,
+    pub signin_label: String,
     pub closing_heading: String,
     pub closing_body: String,
     /// Sibling practices this home points a reader to, such as Vesta Estate

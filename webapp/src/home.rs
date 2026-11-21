@@ -682,13 +682,12 @@ fn HomePageBody(
                     cards: testimonials,
                 }
             } else if let Some(daybridge) = content.daybridge.as_ref() {
-                daybridge::DaybridgeHome { content: content.clone(), daybridge: daybridge.clone() }
-                if let Some(photo) = content.photo.clone() { HomePhotograph { photo } }
-                TestimonialSection {
-                    heading: "Testimonials".to_string(),
-                    lead: String::new(),
-                    cards: testimonials,
+                daybridge::DaybridgeHome {
+                    content: content.clone(),
+                    daybridge: daybridge.clone(),
+                    testimonials,
                 }
+                if let Some(photo) = content.photo.clone() { HomePhotograph { photo } }
             } else if chrome.tokens_href == crate::brand_style::brand_tokens_href("delete-your-debt") {
                 DebtHome { content: content.clone() }
                 if let Some(photo) = content.photo.clone() { HomePhotograph { photo } }

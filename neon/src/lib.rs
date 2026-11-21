@@ -433,10 +433,10 @@ fn indexed_pages(mark: &str) -> Vec<portal::LlmsTxtLink> {
             "Divorce",
             "/divorce",
             "Neon's gateway page naming Daybridge Divorce Law as the destination for couples \
-             who agree: a one-time $333 \
-             fee for a mutual split. Joint representation is subject to applicable \
-             rules, conflict review, and informed written consent. No result or \
-             timeline is promised.",
+             $200 if you agree, \
+             $500 if you do not, plus court fees and $50 per motion. Joint \
+             representation is subject to applicable rules, conflict review, and \
+             informed written consent. No result or timeline is promised.",
         ),
         indexed_page(
             "Legal Aid",
