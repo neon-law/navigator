@@ -702,7 +702,7 @@ fn confirm_step(code: &str, csrf: &str, generate: &GenerateInvoiceView) -> Eleme
         p { class: "nav-muted",
             {match generate.stripe_iolta {
                 Some(true) => "This creates an unsent Stripe draft. Before sending it, verify that the payment belongs in the selected trust account. Review earned fees and reimbursement of costs the Firm already paid separately.",
-                Some(false) => "An operating-account draft requires reconciliation.",
+                Some(false) => "This creates an unsent draft in the Firm’s operating account for earned fees or reimbursable costs. Review the destination before collection.",
                 None => "This records a receivable in Xero. Confirm the proper destination before requesting payment.",
             }}
         }
@@ -1032,37 +1032,42 @@ pub(crate) async fn read_generate(
     let pending = store::billing_batches::pending_for_project(pg, project_id)
         .await
         .map_err(server_error)?;
-    let route = firm_secrets::stripe_trust_route(surreal, project)
-        .await
-        .map_err(server_error)?;
     let stripe_pending = pending.as_ref().filter(|b| b.stripe_account_id.is_some());
-    if stripe_pending.is_some_and(|batch| {
-        route
-            .as_ref()
-            .is_none_or(|route| !route.matches_batch(batch))
-    }) {
+    let use_stripe = pending.is_none() || stripe_pending.is_some();
+    let route = if use_stripe {
+        firm_secrets::stripe_trust_route(surreal, project)
+            .await
+            .map_err(server_error)?
+    } else {
+        None
+    };
+    if stripe_pending
+        .is_some_and(|batch| !firm_secrets::stripe_batch_matches_route(batch, route.as_ref()))
+    {
         return Ok(GenerateInvoiceView {
             note: Some(
-                "Review the existing draft and its trust destination before collection.".into(),
+                "Review the existing draft and its payment destination before collection.".into(),
             ),
             ..Default::default()
         });
     }
-    let route = route.filter(|_| pending.is_none() || stripe_pending.is_some());
-    let stripe_iolta = route.as_ref().map(|_| true);
-    if let Some(route) = &route {
-        let available = match project.firm_id {
-            Some(firm) => {
-                firm_secrets::stripe_credential_configured(surreal, firm, route.credential_kind())
-                    .await
-                    .map_err(server_error)?
-            }
-            None => false,
-        };
-        if !available {
-            return Ok(GenerateInvoiceView { note:Some("Configure the Firm credential for this state's trust account before creating a Stripe draft.".into()), ..Default::default()});
-        }
+    let kind = route.as_ref().map_or(
+        firm_secrets::IntegrationSecretKind::StripeOperatingAppKey,
+        firm_secrets::TrustRoute::credential_kind,
+    );
+    let available = match project.firm_id.filter(|_| use_stripe) {
+        Some(firm) => firm_secrets::stripe_credential_configured(surreal, firm, kind)
+            .await
+            .map_err(server_error)?,
+        None => false,
+    };
+    if !available && (route.is_some() || stripe_pending.is_some()) {
+        return Ok(GenerateInvoiceView {
+            note: Some("Configure the Firm credential for the selected Stripe account before creating a draft.".into()),
+            ..Default::default()
+        });
     }
+    let stripe_iolta = available.then_some(route.is_some());
     if pending
         .as_ref()
         .is_some_and(|batch| batch.stripe_invoice_id.is_some())

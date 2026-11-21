@@ -1778,9 +1778,8 @@ approval and fee agreement. Keep the same service from appearing in both a plan 
 
 ---
 
-Use a separate Stripe account for each payout destination: operating or the applicable state's approved trust account.
-Review the destination before sending an invoice. Navigator currently supports operating and Nevada draft routes; do not
-assume another state's route is available merely because its Stripe account exists.
+Use a separate Stripe account for each payout destination. Verify the Firm's state mapping and review the draft
+destination before sending an invoice.
 
 ### Submit once and reconcile payment
 
@@ -1828,7 +1827,7 @@ account for each approved trust destination. Verify the applicable rules and pay
 
 ### Turn on the route and set the Firm key
 
-- `STRIPE_DEFAULT` enables the Firm platform credential for connected trust accounts.
+- `STRIPE_DEFAULT` enables the Firm credential for operating drafts and connected trust accounts.
 - `STRIPE_NEVADA` enables the Nevada route.
 - Set each credential in the Firm's Integration Secrets.
 - Sync `project.jurisdiction: NV` from the Project repository's `navigator.yaml`.
@@ -1837,8 +1836,9 @@ account for each approved trust destination. Verify the applicable rules and pay
 
 Set `NAVIGATOR_STRIPE_TRUST_ROUTES` to the reviewed Firm, state and Stripe account mappings. Use sandbox credentials in
 staging and live credentials in production. A dedicated Nevada route verifies its account against the mapped ID. Each
-connected route uses the state's account on every Stripe request. The operating account receives authorized draws after
-the firm verifies its entitlement and the available funds for that matter.
+connected route uses the state's account on every Stripe request. A matter without a state route uses the configured
+operating account for an unsent draft. The operating account receives authorized draws after the firm verifies its
+entitlement and the available funds for that matter.
 
 ### Verify before accepting trust payments
 
