@@ -437,13 +437,12 @@ where
     store::config::staging_from(&get).map_err(|_| {
         anyhow::anyhow!("NAVIGATOR_STAGING must be exactly true or false when configured")
     })?;
-    let dbos_only = dbos_only_profile(&get)?;
     let mut substitutions = base_substitutions(deployment, tag, &get)?;
     substitutions.extend(
         PLAINTEXT_SUBSTITUTIONS
             .iter()
             .map(|&(token, env)| {
-                if dbos_only && matches!(env, "RESTATE_IDENTITY_KEY" | "NAVIGATOR_WORKFLOWS_HOST") {
+                if matches!(env, "RESTATE_IDENTITY_KEY" | "NAVIGATOR_WORKFLOWS_HOST") {
                     Ok(Substitution {
                         token,
                         env,
@@ -464,12 +463,16 @@ where
         env: "NAVIGATOR_POSTGRES_HOST",
         value: web_patch_entry(POSTGRES_WEB_PATCH_PATH),
     });
-    substitutions.push(web_patch_substitution(deployment, &get, &DBOS_WEB_PATCH)?);
+    substitutions.push(Substitution {
+        token: DBOS_WEB_PATCH_TOKEN,
+        env: "NAVIGATOR_DBOS_HOST",
+        value: web_patch_entry("postgres/web/web-dbos.yaml"),
+    });
     substitutions.extend(dbos_schedule_substitutions(deployment, &get)?);
     substitutions.push(timer_env_substitution(&get)?);
-    substitutions.extend(archives_substitutions(&get));
+    substitutions.extend(archives_substitutions());
     substitutions.extend(replica_substitutions(deployment, &get)?);
-    substitutions.push(dbos_only_patch(deployment, &get)?);
+    substitutions.push(native_topology_patch(deployment, &get)?);
     substitutions.extend(cohost_resource_substitutions(&get)?);
     // Not in PLAINTEXT_SUBSTITUTIONS and not read from `get` at all: the additional brand
     // hosts this deployment's environment serves come from the compiled
@@ -503,7 +506,7 @@ where
     substitutions.push(Substitution {
         token: MANAGED_CERTIFICATES_ANNOTATION_TOKEN,
         env: "views::brand::BrandKey",
-        value: managed_certificates_annotation(&public_host, &brand_bindings, !dbos_only),
+        value: managed_certificates_annotation(&public_host, &brand_bindings, false),
     });
     substitutions.push(Substitution {
         token: BRAND_INGRESS_RULES_TOKEN,
@@ -552,28 +555,9 @@ where
 const POSTGRES_WEB_PATCH_TOKEN: &str = "  # NAVIGATOR_POSTGRES_WEB_PATCH\n";
 
 /// Require complete caller ownership before omitting the separate worker.
-fn dbos_only_profile<F>(get: &F) -> Result<bool>
-where
-    F: Fn(&str) -> Option<String>,
-{
-    use store::workflow_engine as engine;
-    let complete = engine::dbos_only(get)?;
-    if non_empty_env(engine::COHOST_ENV, get)
-        .as_deref()
-        .map(str::trim)
-        == Some("true")
-    {
-        ensure!(
-            complete,
-            "DBOS cohosting requires the DBOS engine, executor, and every caller selector; missing native selectors: {}",
-            engine::missing_dbos_flags(get)?.join(", ")
-        );
-    }
-    Ok(complete)
-}
 
 /// Route authenticated submissions to the cohost listener, never a removed worker.
-fn cohost_ingress<F>(get: &F) -> Result<(String, String)>
+pub(super) fn cohost_ingress<F>(get: &F) -> Result<(String, String)>
 where
     F: Fn(&str) -> Option<String>,
 {
@@ -603,13 +587,13 @@ const DBOS_ONLY_PATCH_TOKEN: &str = "  # NAVIGATOR_DBOS_ONLY_PATCHES\n";
 
 /// Omit process/network objects from the desired tree; apply never prunes the
 /// existing worker. Its `ServiceAccount` remains for operational archive Jobs.
-fn dbos_only_patch<F>(deployment: &str, get: &F) -> Result<Substitution>
+fn native_topology_patch<F>(deployment: &str, get: &F) -> Result<Substitution>
 where
     F: Fn(&str) -> Option<String>,
 {
     use std::fmt::Write as _;
     let mut value = String::new();
-    if dbos_only_profile(get)? {
+    {
         let mut objects = vec![
             ("apps/v1", "Deployment", WORKFLOWS_DEPLOYMENT),
             ("v1", "Service", WORKFLOWS_DEPLOYMENT),
@@ -642,40 +626,27 @@ where
         )?)?;
         let token = workflows::trigger::DBOS_INGRESS_TOKEN_ENV;
         let url = workflows::trigger::DBOS_INGRESS_URL_ENV;
-        for (cronjob, flag) in COHOST_TRIGGERS {
-            let _ = write!(value, "  - target:\n      kind: CronJob\n      name: {cronjob}\n    patch: |\n      apiVersion: batch/v1\n      kind: CronJob\n      metadata:\n        name: {cronjob}\n      spec:\n        jobTemplate:\n          spec:\n            template:\n              metadata:\n                labels:\n                  app: {cronjob}\n              spec:\n                containers:\n                  - name: {cronjob}\n                    env:\n                      - $patch: replace\n                      - name: {flag}\n                        value: \"true\"\n                      - name: {url}\n                        value: {internal}\n                      - name: {token}\n                        valueFrom:\n                          secretKeyRef:\n                            name: {secret}\n                            key: {token}\n                      - name: RUST_LOG\n                        value: info\n");
+        for cronjob in COHOST_TRIGGERS {
+            let _ = write!(value, "  - target:\n      kind: CronJob\n      name: {cronjob}\n    patch: |\n      apiVersion: batch/v1\n      kind: CronJob\n      metadata:\n        name: {cronjob}\n      spec:\n        jobTemplate:\n          spec:\n            template:\n              metadata:\n                labels:\n                  app: {cronjob}\n              spec:\n                containers:\n                  - name: {cronjob}\n                    env:\n                      - $patch: replace\n                      - name: {url}\n                        value: {internal}\n                      - name: {token}\n                        valueFrom:\n                          secretKeyRef:\n                            name: {secret}\n                            key: {token}\n                      - name: RUST_LOG\n                        value: info\n");
         }
     }
     Ok(Substitution {
         token: DBOS_ONLY_PATCH_TOKEN,
-        env: store::workflow_engine::COHOST_ENV,
+        env: "NAVIGATOR_DBOS_HOST",
         value,
     })
 }
 
 /// The deployment coordinate that hosts the DBOS executor inside `web`.
+#[cfg(test)]
 const NAVIGATOR_DBOS_ENABLED: &str = "NAVIGATOR_DBOS_ENABLED";
 
 /// The whole-line placeholder in `kustomization.yaml` that becomes the DBOS
 /// `web` patch for an opted-in deployment, also after `web-env.yaml`.
 const DBOS_WEB_PATCH_TOKEN: &str = "  # NAVIGATOR_DBOS_WEB_PATCH\n";
 
-/// One opt-in `web` patch: the `config.toml` switch, the placeholder line it
-/// replaces, and the patch file it renders.
-struct WebPatch {
-    env: &'static str,
-    token: &'static str,
-    path: &'static str,
-}
-
-/// `web`'s PostgreSQL connection, rendered for every deployment.
+/// The application's PostgreSQL connection is rendered for every deployment.
 const POSTGRES_WEB_PATCH_PATH: &str = "postgres/web/web-postgres.yaml";
-
-const DBOS_WEB_PATCH: WebPatch = WebPatch {
-    env: NAVIGATOR_DBOS_ENABLED,
-    token: DBOS_WEB_PATCH_TOKEN,
-    path: "postgres/web/web-dbos.yaml",
-};
 
 /// A daily workflow the DBOS executor in `web` hosts: its `config.toml`
 /// switch, the Restate trigger `CronJob` it retires (none for a workflow born
@@ -683,8 +654,7 @@ const DBOS_WEB_PATCH: WebPatch = WebPatch {
 /// switch, the row secret `web` refuses to boot without, and whether an
 /// absent switch means on wherever the executor runs.
 struct DbosSchedule {
-    env: &'static str,
-    default_on: bool,
+    name: &'static str,
     retires: Option<RetiredCronJob>,
     coordinates: &'static [&'static str],
     secret: Option<&'static str>,
@@ -703,17 +673,15 @@ const fn retired(cronjob: &'static str, resource: &'static str) -> RetiredCronJo
     RetiredCronJob { cronjob, resource }
 }
 
-const DBOS_SCHEDULES: [DbosSchedule; 6] = [
+const DBOS_SCHEDULES: [DbosSchedule; 5] = [
     DbosSchedule {
-        env: "NAVIGATOR_DBOS_GENERAL_NAG_ENABLED",
-        default_on: true,
+        name: "GeneralNag",
         retires: Some(retired("general-nag", "  - cron-general-nag.yaml\n")),
         coordinates: &["SLACK_GENERAL_CHANNEL_ID"],
         secret: Some("SLACK_BOT_TOKEN"),
     },
     DbosSchedule {
-        env: "NAVIGATOR_DBOS_DRI_DIGEST_ENABLED",
-        default_on: false,
+        name: "DriDigest",
         retires: Some(retired(
             "dri-digest-trigger",
             "  - cron-dri-digest-trigger.yaml\n",
@@ -722,18 +690,16 @@ const DBOS_SCHEDULES: [DbosSchedule; 6] = [
         secret: Some(SLACK_WEBHOOK_URL),
     },
     DbosSchedule {
-        env: "NAVIGATOR_DBOS_BILLING_DIGEST_ENABLED",
-        default_on: false,
+        name: "BillingDigest",
         retires: Some(retired(
             "billing-digest-trigger",
             "  - cron-billing-digest-trigger.yaml\n",
         )),
-        coordinates: &["BILLING_EXPORT_TABLE", "BIGQUERY_PROJECT"],
-        secret: Some(SLACK_WEBHOOK_URL),
+        coordinates: &[],
+        secret: None,
     },
     DbosSchedule {
-        env: "NAVIGATOR_DBOS_NOTATION_RESET_ENABLED",
-        default_on: false,
+        name: "NotationReset",
         retires: Some(retired(
             "notation-reset-trigger",
             "  - cron-notation-reset-trigger.yaml\n",
@@ -744,18 +710,10 @@ const DBOS_SCHEDULES: [DbosSchedule; 6] = [
         ],
         secret: None,
     },
-    DbosSchedule {
-        env: "NAVIGATOR_DBOS_PROJECT_CALENDAR_MEMBERSHIP_ENABLED",
-        default_on: false,
-        retires: None,
-        coordinates: &[],
-        secret: None,
-    },
     // Archives also renders `web-archives.yaml` and the coverage ConfigMap;
     // see [`archives_substitutions`].
     DbosSchedule {
-        env: ARCHIVES_SCHEDULE_ENV,
-        default_on: false,
+        name: "Archives",
         retires: Some(retired(
             "archives-trigger",
             "  - cron-archives-trigger.yaml\n",
@@ -776,15 +734,9 @@ const COHOST_CRONJOBS: [RetiredCronJob; 1] = [retired(
     "  - cron-social-publish-reconciler-trigger.yaml\n",
 )];
 
-const COHOST_TRIGGERS: [(&str, &str); 2] = [
-    (
-        "nightly-project-update-trigger",
-        "NAVIGATOR_DBOS_NIGHTLY_PROJECT_UPDATE_ENABLED",
-    ),
-    (
-        "youtube-comments-poll-trigger",
-        "NAVIGATOR_DBOS_YOUTUBE_COMMENTS_POLLER_ENABLED",
-    ),
+const COHOST_TRIGGERS: [&str; 2] = [
+    "nightly-project-update-trigger",
+    "youtube-comments-poll-trigger",
 ];
 const DBOS_INTERNAL_RESOURCE_TOKEN: &str = "  # NAVIGATOR_DBOS_INTERNAL_RESOURCE\n";
 const DBOS_INTERNAL_PORT_TOKEN: &str = "YOUR_DBOS_COHOST_PORT";
@@ -794,25 +746,16 @@ fn cohost_resource_substitutions<F>(get: &F) -> Result<Vec<Substitution>>
 where
     F: Fn(&str) -> Option<String>,
 {
-    let native = dbos_only_profile(get)?;
-    let port = if native {
-        cohost_ingress(get)?
-            .0
-            .parse::<std::net::SocketAddr>()
-            .context("parse validated cohost listener")?
-            .port()
-    } else {
-        9083
-    };
+    let port = cohost_ingress(get)?
+        .0
+        .parse::<std::net::SocketAddr>()
+        .context("parse validated cohost listener")?
+        .port();
     Ok(vec![
         Substitution {
             token: DBOS_INTERNAL_RESOURCE_TOKEN,
-            env: store::workflow_engine::COHOST_ENV,
-            value: if native {
-                "  - dbos-internal.yaml\n".into()
-            } else {
-                String::new()
-            },
+            env: "NAVIGATOR_DBOS_HOST",
+            value: "  - dbos-internal.yaml\n".into(),
         },
         Substitution {
             token: DBOS_INTERNAL_PORT_TOKEN,
@@ -822,10 +765,7 @@ where
     ])
 }
 
-/// The switch that moves Archives onto the DBOS executor in `web`. Beyond
-/// the shared schedule switch, it gives `web` the archive login and the
-/// reviewed coverage manifest, so each scheduled run exports the whole
-/// PostgreSQL database (`docs/iceberg-archive.md`).
+#[cfg(test)]
 const ARCHIVES_SCHEDULE_ENV: &str = "NAVIGATOR_DBOS_ARCHIVES_ENABLED";
 
 /// The whole-line placeholder in `kustomization.yaml` that becomes the
@@ -843,43 +783,11 @@ const POSTGRES_ARCHIVE_PASSWORD: &str = "NAVIGATOR_POSTGRES_ARCHIVE_PASSWORD";
 /// Archives runs on DBOS in `web`.
 const ARCHIVES_SERVICE_OBJECT: (&str, &str) = ("secret", "navigator-postgres-archive");
 
-/// Whether this deployment runs Archives on DBOS in `web`. The value itself
-/// is validated with the other schedule switches.
-fn archives_on_dbos<F>(get: &F) -> bool
-where
-    F: Fn(&str) -> Option<String>,
-{
-    non_empty_env(ARCHIVES_SCHEDULE_ENV, get).as_deref() == Some("true")
-}
-
-/// Archives on DBOS exports PostgreSQL from `web`, so it needs `web`'s
-/// PostgreSQL connection beside the executor. Its patch adds the read-only
-/// archive login and the coverage manifest; off, both placeholders render
-/// empty and the tree is unchanged.
-fn archives_substitutions<F>(get: &F) -> Vec<Substitution>
-where
-    F: Fn(&str) -> Option<String>,
-{
-    let enabled = archives_on_dbos(get);
+/// Native Archives receives its read-only PostgreSQL login and reviewed coverage manifest.
+fn archives_substitutions() -> Vec<Substitution> {
     vec![
-        Substitution {
-            token: ARCHIVES_WEB_PATCH_TOKEN,
-            env: ARCHIVES_SCHEDULE_ENV,
-            value: if enabled {
-                "  - path: postgres/web/web-archives.yaml\n    target:\n      kind: Deployment\n      name: navigator-web\n".into()
-            } else {
-                String::new()
-            },
-        },
-        Substitution {
-            token: ARCHIVES_COVERAGE_RESOURCE_TOKEN,
-            env: ARCHIVES_SCHEDULE_ENV,
-            value: if enabled {
-                "  - ../../../../k8s/postgres/archive\n".into()
-            } else {
-                String::new()
-            },
-        },
+        Substitution { token: ARCHIVES_WEB_PATCH_TOKEN, env: "NAVIGATOR_POSTGRES_ARCHIVE_USER", value: "  - path: postgres/web/web-archives.yaml\n    target:\n      kind: Deployment\n      name: navigator-web\n".into() },
+        Substitution { token: ARCHIVES_COVERAGE_RESOURCE_TOKEN, env: "NAVIGATOR_POSTGRES_ARCHIVE_USER", value: "  - ../../../../k8s/postgres/archive\n".into() },
     ]
 }
 
@@ -891,92 +799,29 @@ const LINEAR_BACKLOG_CHANNEL: &str = "SLACK_LINEAR_BACKLOG_CHANNEL_ID";
 /// The incoming webhook `DriDigest` on DBOS refuses to boot without.
 const SLACK_WEBHOOK_URL: &str = "SLACK_WEBHOOK_URL";
 
-/// Each schedule's switch, read as `"true"` or `"false"`, in
-/// [`DBOS_SCHEDULES`] order. An absent switch is off, except that a
-/// `default_on` schedule is on wherever `NAVIGATOR_DBOS_ENABLED = "true"` and
-/// `web` has everything it reads. A schedule on DBOS needs the executor, so
-/// an explicit `"true"` without it is refused at ship rather than at boot.
-fn dbos_schedule_flags<F>(deployment: &str, get: &F) -> Result<Vec<bool>>
-where
-    F: Fn(&str) -> Option<String>,
-{
-    let dbos_on = non_empty_env(NAVIGATOR_DBOS_ENABLED, get).as_deref() == Some("true");
-    let mut flags = Vec::with_capacity(DBOS_SCHEDULES.len());
-    for schedule in &DBOS_SCHEDULES {
-        let flag = match non_empty_env(schedule.env, get).as_deref() {
-            None => schedule.default_on && dbos_on,
-            Some("false") => false,
-            Some("true") => true,
-            Some(_) => bail!(
-                "{} in deployments/{deployment}/config.toml must be \"true\" or \"false\"",
-                schedule.env
-            ),
-        };
-        ensure!(
-            !flag || dbos_on,
-            "{} requires {NAVIGATOR_DBOS_ENABLED} = \"true\" in deployments/{deployment}/config.toml",
-            schedule.env
-        );
-        flags.push(flag);
-    }
-    Ok(flags)
-}
-
-/// Move each switched-on schedule from Restate to DBOS in one render: its
-/// switch and coordinates reach `web`, and its trigger `CronJob` leaves the
-/// exports tree.
+/// Preserve the existing schedule cadences on the cohosted executor, with
+/// native credentials and genuine product controls.
 fn dbos_schedule_substitutions<F>(deployment: &str, get: &F) -> Result<Vec<Substitution>>
 where
     F: Fn(&str) -> Option<String>,
 {
     use std::fmt::Write as _;
-    let flags = dbos_schedule_flags(deployment, get)?;
     let mut env = String::new();
-    let mut rendered: Vec<&str> = Vec::new();
+    let mut rendered = BTreeSet::new();
     let mut substitutions = Vec::new();
-    for (enabled, schedule) in flags.into_iter().zip(&DBOS_SCHEDULES) {
-        let _ = write!(
-            env,
-            "            - name: {}\n              value: \"{enabled}\"\n",
-            schedule.env
-        );
-        if !enabled {
-            continue;
-        }
+    // Backend=false selected an unsuspended legacy CronJob. Native ownership keeps its cadence.
+    for schedule in &DBOS_SCHEDULES {
         if let Some(retired) = schedule.retires {
             substitutions.push(Substitution {
                 token: retired.resource,
-                env: schedule.env,
+                env: "NAVIGATOR_DBOS_HOST",
                 value: String::new(),
             });
         }
         for key in schedule.coordinates {
-            let value = non_empty_env(key, get).with_context(|| {
-                format!(
-                    "{} requires {key} in deployments/{deployment}/config.toml",
-                    schedule.env
-                )
-            })?;
-            if !rendered.contains(key) {
-                rendered.push(key);
-                let _ = write!(
-                    env,
-                    "            - name: {key}\n              value: \"{value}\"\n"
-                );
-            }
-        }
-    }
-    if non_empty_env(NAVIGATOR_DBOS_ENABLED, get).as_deref() == Some("true") {
-        for key in [
-            "SLACK_MESSAGES_CHANNEL_ID",
-            "SLACK_STAGING_MESSAGES_CHANNEL_ID",
-            LINEAR_BACKLOG_CHANNEL,
-            "NAVIGATOR_ARCHIVE_SOURCE",
-        ] {
-            if rendered.contains(&key) {
-                continue;
-            }
-            if let Some(value) = non_empty_env(key, get) {
+            let value = required_coordinate(deployment, key, get)
+                .with_context(|| format!("{} requires {key}", schedule.name))?;
+            if rendered.insert(*key) {
                 let quoted = serde_json::to_string(&value)?;
                 let _ = write!(
                     env,
@@ -985,19 +830,33 @@ where
             }
         }
     }
-    if dbos_only_profile(get)? {
-        env.push_str(&cohost_environment(deployment, get)?);
-        for retired in COHOST_CRONJOBS {
-            substitutions.push(Substitution {
-                token: retired.resource,
-                env: store::workflow_engine::COHOST_ENV,
-                value: String::new(),
-            });
+    for key in [
+        "SLACK_MESSAGES_CHANNEL_ID",
+        "SLACK_STAGING_MESSAGES_CHANNEL_ID",
+        LINEAR_BACKLOG_CHANNEL,
+    ] {
+        if rendered.contains(key) {
+            continue;
         }
+        if let Some(value) = non_empty_env(key, get) {
+            let quoted = serde_json::to_string(&value)?;
+            let _ = write!(
+                env,
+                "            - name: {key}\n              value: {quoted}\n"
+            );
+        }
+    }
+    env.push_str(&cohost_environment(deployment, get)?);
+    for retired in COHOST_CRONJOBS {
+        substitutions.push(Substitution {
+            token: retired.resource,
+            env: "NAVIGATOR_DBOS_HOST",
+            value: String::new(),
+        });
     }
     substitutions.push(Substitution {
         token: DBOS_SCHEDULE_ENV_TOKEN,
-        env: NAVIGATOR_DBOS_ENABLED,
+        env: "NAVIGATOR_DBOS_HOST",
         value: env,
     });
     Ok(substitutions)
@@ -1029,31 +888,22 @@ where
     let token = workflows::trigger::DBOS_INGRESS_TOKEN_ENV;
     let _ = write!(env, "            - name: {token}\n              valueFrom:\n                secretKeyRef:\n                  name: {secret}\n                  key: {token}\n");
     for key in [
-        store::workflow_engine::COHOST_ENV,
-        store::workflow_engine::ENGINE_ENV,
-    ] {
-        let quoted = serde_json::to_string(&required_coordinate(deployment, key, get)?)?;
-        let _ = write!(
-            env,
-            "            - name: {key}\n              value: {quoted}\n"
-        );
-    }
-    let selectors = store::workflow_engine::WORKFLOWS
-        .iter()
-        .map(|workflow| workflow.flag)
-        .collect::<BTreeSet<_>>();
-    for key in selectors {
-        if !DBOS_SCHEDULES.iter().any(|schedule| schedule.env == key) {
-            let _ = write!(
-                env,
-                "            - name: {key}\n              value: \"true\"\n"
-            );
-        }
-    }
-    for key in [
         "NAVIGATOR_GITHUB_ORG",
         "NAVIGATOR_EXPORTS_BUCKET",
         "SLACK_FINANCE_CHANNEL_ID",
+        "BILLING_EXPORT_TABLE",
+        "BILLING_EXPORT_TABLES",
+        "BIGQUERY_PROJECT",
+        "BILLING_DIGEST_NOTIFY_EMAIL",
+        "NAVIGATOR_DBOS_PROJECT_CALENDAR_MEMBERSHIP_ENABLED",
+        "NAVIGATOR_DBOS_PROJECT_RECOVERY_ENABLED",
+        "NAVIGATOR_DBOS_SOURCE_IMPORT_ENABLED",
+        "NAVIGATOR_DBOS_RETENTION_PURGE_ENABLED",
+        "NAVIGATOR_DBOS_DEADLINE_MIRROR_ENABLED",
+        "NAVIGATOR_DBOS_PURCHASE_ACTIVATION_ENABLED",
+        "NAVIGATOR_DBOS_CEO_DIGEST_ENABLED",
+        "NAVIGATOR_DBOS_SENT_EMAIL_EXPORT_ENABLED",
+        workflows::trigger::INBOX_ATTACHMENT_FILING_DBOS_ENABLED_ENV,
     ] {
         if let Some(value) = non_empty_env(key, get) {
             let quoted = serde_json::to_string(&value)?;
@@ -1073,50 +923,37 @@ where
     F: Fn(&str) -> Option<String>,
 {
     use std::fmt::Write as _;
-    let native = dbos_only_profile(get)?;
     let mut value = String::new();
     for key in [
         workflows::flags::BILLING_CANARY_SCHEDULE_ENABLED_ENV,
         workflows::flags::RECONCILE_INVOICES_SCHEDULE_ENABLED_ENV,
     ] {
-        if native || get(key).is_some() {
-            let enabled = workflows::flags::schedule_enabled(key, get)?;
-            let _ = write!(
-                value,
-                "            - name: {key}\n              value: \"{enabled}\"\n"
-            );
-        }
+        let enabled = workflows::flags::schedule_enabled(key, get)?;
+        let _ = write!(
+            value,
+            "            - name: {key}\n              value: \"{enabled}\"\n"
+        );
     }
     Ok(Substitution {
         token: DBOS_TIMER_ENV_TOKEN,
-        env: store::workflow_engine::COHOST_ENV,
+        env: "NAVIGATOR_DBOS_HOST",
         value,
     })
 }
 
 /// The secret each switched-on schedule needs before `web` can boot with it.
 fn require_dbos_schedule_prerequisites(deployment: &super::deployments::Deployment) -> Result<()> {
-    if dbos_only_profile(&|key| deployment.coordinates.get(key).cloned())? {
-        ensure!(
-            deployment
-                .encrypted_keys
-                .contains(workflows::trigger::DBOS_INGRESS_TOKEN_ENV),
-            "native cohosting requires NAVIGATOR_DBOS_INGRESS_TOKEN in the deployment secret"
-        );
-    }
+    ensure!(
+        deployment
+            .encrypted_keys
+            .contains(workflows::trigger::DBOS_INGRESS_TOKEN_ENV),
+        "native cohosting requires NAVIGATOR_DBOS_INGRESS_TOKEN in the deployment secret"
+    );
     if deployment
         .coordinates
         .get(LINEAR_BACKLOG_CHANNEL)
         .is_some_and(|value| !value.trim().is_empty())
     {
-        ensure!(
-            deployment
-                .coordinates
-                .get(NAVIGATOR_DBOS_ENABLED)
-                .map(String::as_str)
-                == Some("true"),
-            "{LINEAR_BACKLOG_CHANNEL} requires {NAVIGATOR_DBOS_ENABLED}"
-        );
         for key in ["LINEAR_BACKLOG_READ_KEY", "SLACK_BOT_TOKEN"] {
             ensure!(
                 deployment.encrypted_keys.contains(key),
@@ -1124,16 +961,22 @@ fn require_dbos_schedule_prerequisites(deployment: &super::deployments::Deployme
             );
         }
     }
-    let flags = dbos_schedule_flags(&deployment.name, &|key: &str| {
-        deployment.coordinates.get(key).cloned()
-    })?;
-    for (enabled, schedule) in flags.into_iter().zip(&DBOS_SCHEDULES) {
-        if let (true, Some(secret)) = (enabled, schedule.secret) {
+    let get = |key: &str| deployment.coordinates.get(key).cloned();
+    if workflows::billing_digest::DigestConfig::from_env(get)
+        .query
+        .is_some()
+    {
+        ensure!(
+            deployment.encrypted_keys.contains(SLACK_WEBHOOK_URL),
+            "configured BillingDigest requires SLACK_WEBHOOK_URL in the deployment secret"
+        );
+    }
+    for schedule in &DBOS_SCHEDULES {
+        if let Some(secret) = schedule.secret {
             ensure!(
                 deployment.encrypted_keys.contains(secret),
-                "{} requires {secret} in deployments/{}/secrets.enc.yaml: its DBOS workflow \
-                 refuses to boot without it",
-                schedule.env,
+                "{} requires {secret} in deployments/{}/secrets.enc.yaml",
+                schedule.name,
                 deployment.name
             );
         }
@@ -1146,41 +989,22 @@ fn require_dbos_schedule_prerequisites(deployment: &super::deployments::Deployme
 /// `CronJob` an earlier release created.
 const RETIRED_CRONJOBS: [&str; 1] = ["heartbeat-trigger"];
 
-/// Every trigger `CronJob` this roll deletes: each switched-on DBOS schedule's
+/// Every trigger `CronJob` this roll deletes: each native schedule's
 /// Restate trigger, then every [`RETIRED_CRONJOBS`] entry.
-fn retired_cronjobs(deployment: &super::deployments::Deployment) -> Result<Vec<&'static str>> {
-    let flags = dbos_schedule_flags(&deployment.name, &|key: &str| {
-        deployment.coordinates.get(key).cloned()
-    })?;
-    let native = dbos_only_profile(&|key: &str| deployment.coordinates.get(key).cloned())?;
-    Ok(flags
-        .into_iter()
-        .zip(&DBOS_SCHEDULES)
-        .filter_map(|(enabled, schedule)| {
-            schedule
-                .retires
-                .filter(|_| enabled)
-                .map(|retired| retired.cronjob)
-        })
-        .chain(
-            COHOST_CRONJOBS
-                .iter()
-                .filter(|_| native)
-                .map(|retired| retired.cronjob),
-        )
+fn retired_cronjobs() -> Vec<&'static str> {
+    DBOS_SCHEDULES
+        .iter()
+        .filter_map(|schedule| schedule.retires.map(|retired| retired.cronjob))
+        .chain(COHOST_CRONJOBS.iter().map(|retired| retired.cronjob))
         .chain(RETIRED_CRONJOBS)
-        .collect())
+        .collect()
 }
 
 /// `kubectl apply` never prunes, so a trigger `CronJob` the render dropped
 /// would keep starting its Restate workflow beside the DBOS schedule and post
 /// twice. Delete each retired one after the new `web` is applied.
-fn retire_dbos_hosted_cronjobs(
-    cfg: &ShipConfig,
-    dry_run: bool,
-    deployment: &super::deployments::Deployment,
-) -> Result<()> {
-    for cronjob in retired_cronjobs(deployment)? {
+fn retire_dbos_hosted_cronjobs(cfg: &ShipConfig, dry_run: bool) -> Result<()> {
+    for cronjob in retired_cronjobs() {
         exec(
             dry_run,
             kubectl(cfg)
@@ -1191,28 +1015,6 @@ fn retire_dbos_hosted_cronjobs(
         )?;
     }
     Ok(())
-}
-
-/// Render one [`WebPatch`]. Absent or `false` keeps the rendered tree
-/// byte-identical to a deployment without it; any other value is refused so a
-/// typo cannot silently leave `web` on the old path.
-fn web_patch_substitution<F>(deployment: &str, get: &F, patch: &WebPatch) -> Result<Substitution>
-where
-    F: Fn(&str) -> Option<String>,
-{
-    let value = match non_empty_env(patch.env, get).as_deref() {
-        None | Some("false") => String::new(),
-        Some("true") => web_patch_entry(patch.path),
-        Some(_) => bail!(
-            "{} in deployments/{deployment}/config.toml must be \"true\" or \"false\"",
-            patch.env
-        ),
-    };
-    Ok(Substitution {
-        token: patch.token,
-        env: patch.env,
-        value,
-    })
 }
 
 /// One `kustomization.yaml` `patches:` entry applying `path` to `web`.
@@ -1229,7 +1031,7 @@ const REPLICAS_PATCH_TOKEN: &str = "  # NAVIGATOR_REPLICAS_PATCH\n";
 const DISRUPTION_BUDGETS_RESOURCE_TOKEN: &str = "  # NAVIGATOR_DISRUPTION_BUDGETS_RESOURCE\n";
 
 /// The Deployments whose replica count follows the row's profile.
-const REPLICATED_DEPLOYMENTS: [&str; 2] = [WEB_DEPLOYMENT, WORKFLOWS_DEPLOYMENT];
+const REPLICATED_DEPLOYMENTS: [&str; 1] = [WEB_DEPLOYMENT];
 
 /// How many pods each [`REPLICATED_DEPLOYMENTS`] entry runs on this row.
 ///
@@ -1253,12 +1055,8 @@ where
     }
 }
 
-/// The replica-count patches and the `PodDisruptionBudget` resource for this
-/// row. One replica leaves both placeholders empty, so the render is the
-/// committed overlay's one pod per tier and no budget (a `minAvailable: 1`
-/// budget over one pod would block every node drain). Two replicas patch both
-/// Deployments to two and add `disruption-budgets.yaml`, which keeps one pod
-/// of each tier up through a voluntary eviction.
+/// Scale the cohosted application and protect its availability during node drain.
+/// A single replica needs no budget; two replicas retain one available pod.
 fn replica_substitutions<F>(deployment: &str, get: &F) -> Result<Vec<Substitution>>
 where
     F: Fn(&str) -> Option<String>,
@@ -1904,14 +1702,11 @@ pub(super) fn require_ordered_service_prerequisites(
             ][..],
         ),
     ];
-    // Each opt-in login's password, required only when its switch is on.
-    let login_keys: Vec<&str> = [
-        (dbos_enabled(deployment), "NAVIGATOR_POSTGRES_DBOS_PASSWORD"),
-        (archives_enabled(deployment), POSTGRES_ARCHIVE_PASSWORD),
-    ]
-    .into_iter()
-    .filter_map(|(enabled, key)| enabled.then_some(key))
-    .collect();
+    // Both native role passwords must exist before the application is applied.
+    let login_keys = [
+        "NAVIGATOR_POSTGRES_DBOS_PASSWORD",
+        POSTGRES_ARCHIVE_PASSWORD,
+    ];
     let required = required.into_iter().chain([(
         "postgres-secrets.enc.yaml",
         &deployment.postgres_encrypted_keys,
@@ -2006,7 +1801,13 @@ where
     F: FnMut(ReleaseStep) -> Result<()>,
 {
     for step in ordered_release_steps() {
-        run_step(*step).with_context(|| format!("ordered release stopped at {step:?}"))?;
+        run_step(*step).with_context(|| {
+            if *step == ReleaseStep::ApplicationReadiness {
+                "ordered release stopped at ApplicationReadiness: inspect the application's PostgreSQL history verification Job and existing activation/restore/handover evidence; workflow flags cannot activate history".to_owned()
+            } else {
+                format!("ordered release stopped at {step:?}")
+            }
+        })?;
     }
     Ok(())
 }
@@ -2052,22 +1853,7 @@ fn ensure_required_manifest(path: &Path, kind: &str, name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Whether this deployment hosts the DBOS executor in `web`
-/// (`NAVIGATOR_DBOS_ENABLED = "true"` in its `config.toml`).
-fn dbos_enabled(deployment: &super::deployments::Deployment) -> bool {
-    deployment
-        .coordinates
-        .get(NAVIGATOR_DBOS_ENABLED)
-        .is_some_and(|value| value.trim() == "true")
-}
-
-/// Whether this deployment runs Archives on the DBOS executor in `web`.
-fn archives_enabled(deployment: &super::deployments::Deployment) -> bool {
-    archives_on_dbos(&|key: &str| deployment.coordinates.get(key).cloned())
-}
-
-/// The DBOS login's Secret, required before the first apply only when the
-/// deployment hosts the executor.
+/// The native executor login must exist before application rollout.
 const DBOS_SERVICE_OBJECT: (&str, &str) = ("secret", "navigator-postgres-dbos");
 
 /// Objects the Deployment Operator provisions outside the release. The
@@ -2497,8 +2283,6 @@ pub struct ShipConfig {
     pub environment: store::DeploymentEnvironment,
     /// Explicit deployment roles used to scope singleton integrations.
     pub capabilities: store::deployment::DeploymentCapabilities,
-    /// Every selected caller runs inside the web-hosted DBOS executor.
-    pub dbos_only: bool,
     /// Target GCP project ID (`NAVIGATOR_GCP_PROJECT_ID`). Used to
     /// derive the `kubectl` context.
     pub project_id: String,
@@ -2591,7 +2375,7 @@ impl ShipConfig {
             name: name.to_owned(),
             environment,
             capabilities,
-            dbos_only: dbos_only_profile(&get)?,
+
             project_id,
             location,
             cluster,
@@ -2620,41 +2404,6 @@ impl ShipConfig {
     #[must_use]
     pub fn web_image(&self, tag: &str) -> String {
         format!("{}/{}:{tag}", self.registry(), self.web_image_name)
-    }
-
-    /// Published `navigator-workflows-service` image URL at the
-    /// `YY.M.D` `tag`.
-    #[must_use]
-    pub fn workflows_image(&self, tag: &str) -> String {
-        format!("{}/navigator-workflows-service:{tag}", self.registry())
-    }
-
-    /// The public worker URL the 7d re-register targets, resolved the
-    /// same way `devx restate register` resolves it: explicit
-    /// `NAVIGATOR_WORKFLOWS_URL` first, otherwise derived from the resolved
-    /// `brand.primary_domain` (`https://workflows.<domain>/`), never
-    /// the bare placeholder when a domain is known. This is what the
-    /// 2026-06-10 ship needed — it had a domain but no explicit URL and
-    /// fell through to `workflows.example.com`, silently no-op'ing the
-    /// register.
-    #[must_use]
-    pub fn workflows_url_resolved(&self) -> String {
-        super::resolve_workflows_url(
-            None,
-            self.workflows_url.as_deref(),
-            Some(&self.primary_domain),
-        )
-    }
-
-    /// This row as the owner of the 7d re-register: its name and its
-    /// `RESTATE_ADMIN_URL`, so the `restate` CLI path targets this row's
-    /// environment and not the CLI's current one.
-    #[must_use]
-    pub fn restate_register_target(&self) -> super::RegisterTarget<'_> {
-        super::RegisterTarget {
-            deployment: &self.name,
-            admin_url: self.restate_admin_url.as_deref(),
-        }
     }
 }
 
@@ -2798,12 +2547,11 @@ impl SecretRequirement {
 
 fn shared_web_requirements(
     capabilities: store::deployment::DeploymentCapabilities,
-    dbos_only: bool,
 ) -> Vec<SecretRequirement> {
     store::deployment::WEB_REQUIREMENTS
         .iter()
         .filter(|requirement| requirement.scope.applies(capabilities))
-        .filter(|requirement| !dbos_only || !store::deployment::is_restate_requirement(requirement))
+        .filter(|requirement| !store::deployment::is_restate_requirement(requirement))
         .map(|requirement| SecretRequirement {
             any_of: requirement
                 .any_of
@@ -3039,16 +2787,12 @@ pub struct ShipOpts {
     pub certificate_timeout_minutes: u32,
 }
 
-fn restart_deployments(cfg: &ShipConfig) -> &'static [&'static str] {
-    if cfg.dbos_only {
-        &[WEB_DEPLOYMENT]
-    } else {
-        &[WEB_DEPLOYMENT, WORKFLOWS_DEPLOYMENT]
-    }
+fn restart_deployments() -> &'static [&'static str] {
+    &[WEB_DEPLOYMENT]
 }
 
-fn rollout_wait_deployments(cfg: &ShipConfig) -> &'static [&'static str] {
-    restart_deployments(cfg)
+fn rollout_wait_deployments() -> &'static [&'static str] {
+    restart_deployments()
 }
 
 /// The Deployments that run the `web` binary and so answer to its boot
@@ -3598,7 +3342,7 @@ fn offline_ship_plan(
     match lane {
         ShipLane::RestartOnly => {
             operations.extend(
-                restart_deployments(cfg)
+                restart_deployments()
                     .iter()
                     .map(|name| format!("restart deployment/{name}")),
             );
@@ -3612,13 +3356,11 @@ fn offline_ship_plan(
             local_validation.push(format!("parsed {count} rendered YAML documents"));
             operations.push(format!(
                 "set release images on {}",
-                restart_deployments(cfg).join(", ")
+                restart_deployments().join(", ")
             ));
             operations.push("re-pin Navigator CronJob images".to_owned());
             operations.push("wait for selected application rollouts".to_owned());
-            if !cfg.dbos_only {
-                operations.push("re-register the Restate worker".to_owned());
-            }
+
             operations.push("verify public assets and smoke-check the public host".to_owned());
         }
         ShipLane::Roll => {
@@ -3631,7 +3373,7 @@ fn offline_ship_plan(
             )?;
         }
     }
-    if cfg.dbos_only {
+    {
         for key in [
             workflows::flags::BILLING_CANARY_SCHEDULE_ENABLED_ENV,
             workflows::flags::RECONCILE_INVOICES_SCHEDULE_ENABLED_ENV,
@@ -3700,10 +3442,10 @@ fn offline_roll_plan(
             "retire automatic Source mirror recovery after PostgreSQL admission".to_owned()
         }
         ReleaseStep::Application => {
-            format!("apply {}", restart_deployments(cfg).join(", "))
+            format!("apply {}", restart_deployments().join(", "))
         }
     }));
-    for cronjob in retired_cronjobs(deployment)? {
+    for cronjob in retired_cronjobs() {
         operations.push(format!(
             "delete the Restate CronJob {cronjob} now hosted by DBOS"
         ));
@@ -3715,10 +3457,8 @@ fn offline_roll_plan(
     }
     operations.push("pin Navigator CronJob images to the selected tag".to_owned());
     operations.push("wait for selected application rollouts".to_owned());
-    if !cfg.dbos_only {
-        operations.push("re-register the Restate worker".to_owned());
-    }
-    if cfg.dbos_only {
+
+    {
         operations.push(
             "keep existing worker resources until operator-verified drain and retirement"
                 .to_owned(),
@@ -3927,21 +3667,18 @@ fn post_roll_asset_refs(root: &Path) -> PostRollAssetRefs {
 /// documented deploy-only invocation, ENG-552). Neither is skipped — a
 /// missing tree changes the reference source, never whether the origin is
 /// checked — and either failing blocks completion.
-fn finish_roll<R, F, E>(
+fn finish_roll<F, E>(
     lane: ShipLane,
     cfg: &ShipConfig,
     root: &Path,
     dry_run: bool,
-    reregister: R,
     verify: F,
     verify_embedded: E,
 ) -> Result<()>
 where
-    R: FnOnce() -> Result<()>,
     F: FnOnce(&Path, &str) -> Result<()>,
     E: FnOnce(&str) -> Result<()>,
 {
-    reregister()?;
     if lane_requires_post_roll_asset_verification(lane) {
         let refs = post_roll_asset_refs(root);
         if dry_run {
@@ -3999,11 +3736,11 @@ fn restart_only_steps(cfg: &ShipConfig, dry_run: bool) -> Result<()> {
     eprintln!("==> no-rebuild push: rollout restart service deployments (Secret rotation)");
     let mut cmd = kubectl(cfg);
     cmd.arg("rollout").arg("restart");
-    for deployment in restart_deployments(cfg) {
+    for deployment in restart_deployments() {
         cmd.arg(format!("deployment/{deployment}"));
     }
     exec(dry_run, &mut cmd)?;
-    wait_rollouts(cfg, dry_run, "120s", rollout_wait_deployments(cfg))?;
+    wait_rollouts(cfg, dry_run, "120s", rollout_wait_deployments())?;
     eprintln!(
         "==> restart complete. VERIFY on the third-party side (the pod will 2xx against a \
          valid-but-wrong key) — compare upstream stats before/after."
@@ -4011,23 +3748,9 @@ fn restart_only_steps(cfg: &ShipConfig, dry_run: bool) -> Result<()> {
     Ok(())
 }
 
-/// Move every navigator image to `tag` and change nothing else.
-///
-/// FOUR STEPS, NOT ONE. "Set the image and wait" is the obvious reading and
-/// it is wrong twice over:
-///
-///   * The seven scheduled-job `CronJob`s carry their own image. Skip them and
-///     the web pods run the new version while every scheduled job keeps running
-///     the old one — a skew nothing reports, because `CronJob`s do not roll.
-///   * Restate resolves a worker's handler list at registration. A new
-///     `workflows-service` image that Restate has not rediscovered leaves a
-///     stale list, and `reregister`'s own error says webhook submissions then
-///     fail SILENTLY. That is a live wrong-behaviour bug, not a cosmetic gap.
-///
-/// What it deliberately does NOT do is the expensive half of a full roll: the
-/// web GSA's self-signing IAM re-assert, and `apply -k` over the whole
-/// rendered tree. Both are idempotent no-ops on a routine version bump, and
-/// both are what make the full roll's credential large.
+/// Move the cohosted application and rendered scheduled-job images to `tag`.
+/// The lane verifies drift first and preserves its narrower IAM/apply boundary.
+/// Retained SDK worker registration is an explicit operator operation.
 fn image_only(
     cfg: &ShipConfig,
     deployment: &super::deployments::Deployment,
@@ -4073,13 +3796,12 @@ fn image_only_steps(
     }
 
     pin_cronjob_images(cfg, tag, None, dry_run)?;
-    wait_rollouts(cfg, dry_run, ROLLOUT_TIMEOUT, rollout_wait_deployments(cfg))?;
+    wait_rollouts(cfg, dry_run, ROLLOUT_TIMEOUT, rollout_wait_deployments())?;
     finish_roll(
         ShipLane::ImageOnly,
         cfg,
         root,
         dry_run,
-        || reregister(cfg, dry_run),
         crate::assets::verify_public_asset_origin,
         crate::assets::verify_public_asset_origin_embedded,
     )?;
@@ -4097,11 +3819,7 @@ fn image_only_steps(
 /// The mixed-engine topology writes both tiers; complete native cohosting writes
 /// only web and leaves a retained draining worker untouched.
 fn image_only_image_writes(cfg: &ShipConfig, tag: &str) -> Vec<(&'static str, String)> {
-    let mut images = vec![(WEB_DEPLOYMENT, cfg.web_image(tag))];
-    if !cfg.dbos_only {
-        images.push((WORKFLOWS_DEPLOYMENT, cfg.workflows_image(tag)));
-    }
-    images
+    vec![(WEB_DEPLOYMENT, cfg.web_image(tag))]
 }
 
 /// The release tag the narrow lane rolls onto, or the reason it cannot.
@@ -4309,12 +4027,7 @@ fn roll(
     //     keeps the rendered catalog from drifting from what `ops secrets
     //     apply` can write.
     ensure_projected_objects_resolve(&manifests)?;
-    ensure_ordered_service_objects(
-        cfg,
-        dry_run,
-        dbos_enabled(deployment),
-        archives_enabled(deployment),
-    )?;
+    ensure_ordered_service_objects(cfg, dry_run, true, true)?;
     // 4c. Request the shared Firm certificate for this build's brand hosts
     //     now, so Google issues it while the release rolls, and keep the one
     //     serving today attached until it does; see `firm_certificate_roll`.
@@ -4322,7 +4035,7 @@ fn roll(
 
     // 5. Reconcile services in dependency order, then apply the application.
     reconcile_ordered_services(cfg, dry_run, &rendered, opts, &tag, &target)?;
-    retire_dbos_hosted_cronjobs(cfg, dry_run, deployment)?;
+    retire_dbos_hosted_cronjobs(cfg, dry_run)?;
     retire_firm_only_brand_certificates(cfg, dry_run)?;
 
     // 6. Wait on the rollouts the reconcile started. The apply in step 5
@@ -4346,7 +4059,6 @@ fn roll(
         cfg,
         root,
         dry_run,
-        || reregister(cfg, dry_run),
         crate::assets::verify_public_asset_origin,
         crate::assets::verify_public_asset_origin_embedded,
     )?;
@@ -4454,7 +4166,7 @@ fn reconcile_ordered_services(
         }
         ReleaseStep::Application => {
             reconcile_manifests(cfg, dry_run, target)?;
-            wait_rollouts(cfg, dry_run, ROLLOUT_TIMEOUT, rollout_wait_deployments(cfg))
+            wait_rollouts(cfg, dry_run, ROLLOUT_TIMEOUT, rollout_wait_deployments())
         }
     })
 }
@@ -5306,11 +5018,11 @@ fn check_secret_invariants(
     manifests: &str,
     secret_keys: &BTreeSet<String>,
 ) -> Result<()> {
-    if cfg.dbos_only {
+    {
         ensure!(secret_keys.contains(workflows::trigger::DBOS_INGRESS_TOKEN_ENV),
             "native cohosting requires a populated NAVIGATOR_DBOS_INGRESS_TOKEN in the selected deployment Secret");
     }
-    let parsed = shared_web_requirements(cfg.capabilities, cfg.dbos_only);
+    let parsed = shared_web_requirements(cfg.capabilities);
     let deployment_envs = parse_web_binary_envs(manifests, &cfg.secret_name, secret_keys)?;
     let missing_by_deployment =
         missing_requirements_by_deployment(&parsed, secret_keys, &deployment_envs);
@@ -5583,83 +5295,12 @@ fn env_var_is_usable(
         .is_some_and(|v| !v.is_empty())
 }
 
-struct RestateDeployment {
-    name: &'static str,
-    url: String,
-}
-
-fn reregister_targets(cfg: &ShipConfig) -> Vec<RestateDeployment> {
-    if cfg.dbos_only {
-        return Vec::new();
-    }
-    // One worker, every service — there is no separate worker endpoint to
-    // register.
-    vec![RestateDeployment {
-        name: WORKFLOWS_DEPLOYMENT,
-        url: cfg.workflows_url_resolved(),
-    }]
-}
-
-fn apply_registration_result(deployment: &RestateDeployment, result: Result<()>) -> Result<()> {
-    result.with_context(|| {
-        format!(
-            "Restate re-register of {} failed; its handler list would be stale — missing any \
-             service added since the last registration — so invocations to it would silently \
-             fail. Refusing to complete the ship.",
-            deployment.name
-        )
-    })
-}
-
 /// 7d — register the workflows worker with Restate so handlers added since the
 /// last registration are reachable. REQUIRED: a failed re-register leaves
 /// Restate on a stale handler list that would silently drop invocations to a
 /// new service (a canary invocation tests only its own handler, not the full
 /// service list), so the ship fails rather than complete with the new
 /// services unreachable.
-fn reregister(cfg: &ShipConfig, dry_run: bool) -> Result<()> {
-    let deployments = reregister_targets(cfg);
-    if deployments.is_empty() {
-        return Ok(());
-    }
-    if dry_run {
-        for deployment in deployments {
-            eprintln!(
-                "DRY-RUN: would re-register {} with Restate (devx restate register {})",
-                deployment.name, deployment.url
-            );
-        }
-        return Ok(());
-    }
-    // The admin REST API path (RESTATE_ADMIN_URL + RESTATE_ADMIN_TOKEN) needs
-    // no `restate` CLI, so only require the CLI when those env vars are absent.
-    // These are operator-session credentials like ADC or a `restate cloud
-    // login` token — never deployment coordinates, which all come from the
-    // `deployments/` tree. Ship reads no secret value from the repository.
-    let has_admin_api = !std::env::var("RESTATE_ADMIN_URL")
-        .unwrap_or_default()
-        .trim()
-        .is_empty()
-        && !std::env::var("RESTATE_ADMIN_TOKEN")
-            .unwrap_or_default()
-            .trim()
-            .is_empty();
-    if !has_admin_api && !tool_present("restate") {
-        bail!(
-            "no RESTATE_ADMIN_URL/TOKEN and `restate` CLI not on PATH; cannot register {WORKFLOWS_DEPLOYMENT}"
-        );
-    }
-    // Pass every resolved URL explicitly so ship targets the same endpoints
-    // it printed, independent of the workflows-only environment resolver.
-    for deployment in &deployments {
-        let target = cfg.restate_register_target();
-        apply_registration_result(
-            deployment,
-            super::restate_register(Some(&deployment.url), Some(&target)),
-        )?;
-    }
-    Ok(())
-}
 
 /// 8 — curl the public landing and grep a fixed phrase. Best-effort:
 /// reports, never fails the ship.
@@ -5692,9 +5333,9 @@ fn smoke_check(cfg: &ShipConfig, dry_run: bool) {
         Ok(out) => eprintln!("WARN: smoke check non-2xx for {url}: {}", out.status),
         Err(err) => eprintln!("WARN: smoke check could not reach {url}: {err}"),
     }
-    eprintln!("==> workflows-service has no public /; confirm it is ready:");
+    eprintln!("==> confirm the cohosted application is ready:");
     eprintln!(
-        "    kubectl --context {} -n {} get pods -l app={WORKFLOWS_DEPLOYMENT}",
+        "    kubectl --context {} -n {} get pods -l app={WEB_DEPLOYMENT}",
         cfg.context, cfg.namespace
     );
 }
@@ -6669,6 +6310,8 @@ mod tests {
             "NAVIGATOR_POSTGRES_APP_PASSWORD",
             "NAVIGATOR_POSTGRES_MIGRATOR_PASSWORD",
             "NAVIGATOR_POSTGRES_BACKUP_PASSWORD",
+            "NAVIGATOR_POSTGRES_DBOS_PASSWORD",
+            POSTGRES_ARCHIVE_PASSWORD,
         ]
         .into_iter()
         .map(str::to_owned)
@@ -6691,7 +6334,14 @@ mod tests {
                     .into(),
             provisioned: true,
             coordinates,
-            encrypted_keys: BTreeSet::new(),
+            encrypted_keys: [
+                workflows::trigger::DBOS_INGRESS_TOKEN_ENV,
+                "SLACK_BOT_TOKEN",
+                SLACK_WEBHOOK_URL,
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
             postgres_encrypted_keys,
             forgejo_encrypted_keys,
         }
@@ -6747,7 +6397,7 @@ mod tests {
 
     /// Incomplete history stops release ordering before any application mutation.
     #[test]
-    fn incomplete_application_history_stops_every_ship_before_the_application() {
+    fn incomplete_application_history_stops_full_roll_before_the_application() {
         let mut observed = Vec::new();
         let error = run_ordered_release(|step| {
             observed.push(step);
@@ -6827,33 +6477,17 @@ mod tests {
         require_ordered_service_prerequisites(&ordered_deployment())
             .expect("complete synthetic service prerequisites pass");
 
-        // Hosting DBOS in `web` needs its login before the first apply.
-        let mut deployment = ordered_deployment();
-        deployment
-            .coordinates
-            .insert(NAVIGATOR_DBOS_ENABLED.into(), "true".into());
-        let error = require_ordered_service_prerequisites(&deployment)
-            .expect_err("DBOS on needs the DBOS login's password");
-        assert!(error
-            .to_string()
-            .contains("NAVIGATOR_POSTGRES_DBOS_PASSWORD"));
-        deployment
-            .postgres_encrypted_keys
-            .insert("NAVIGATOR_POSTGRES_DBOS_PASSWORD".into());
-        require_ordered_service_prerequisites(&deployment).expect("DBOS on with its login passes");
-
-        // Archives on DBOS reads PostgreSQL as its own archive login.
-        deployment
-            .coordinates
-            .insert(ARCHIVES_SCHEDULE_ENV.into(), "true".into());
-        let error = require_ordered_service_prerequisites(&deployment)
-            .expect_err("Archives on DBOS needs the archive login's password");
-        assert!(error.to_string().contains(POSTGRES_ARCHIVE_PASSWORD));
-        deployment
-            .postgres_encrypted_keys
-            .insert(POSTGRES_ARCHIVE_PASSWORD.into());
-        require_ordered_service_prerequisites(&deployment)
-            .expect("Archives on DBOS with its login passes");
+        // Native roles are mandatory, independently of old backend coordinates.
+        for key in [
+            "NAVIGATOR_POSTGRES_DBOS_PASSWORD",
+            POSTGRES_ARCHIVE_PASSWORD,
+        ] {
+            let mut deployment = ordered_deployment();
+            deployment.postgres_encrypted_keys.remove(key);
+            let error = require_ordered_service_prerequisites(&deployment)
+                .expect_err("a missing native role blocks the ordered rollout");
+            assert!(error.to_string().contains(key), "{error}");
+        }
     }
 
     #[test]
@@ -7022,7 +6656,7 @@ mod tests {
             name: "example-prod".into(),
             environment: store::DeploymentEnvironment::Production,
             capabilities: store::deployment::DeploymentCapabilities::default(),
-            dbos_only: false,
+
             project_id: "my-org-prod".into(),
             location: "example-region".into(),
             cluster: "navigator".into(),
@@ -7806,7 +7440,7 @@ mod tests {
                 );
             }
             let budgets = disruption_budgets(&manifests);
-            assert_eq!(budgets.len(), 2, "{value:?}");
+            assert_eq!(budgets.len(), 1, "{value:?}");
             for name in REPLICATED_DEPLOYMENTS {
                 let budget = budgets
                     .iter()
@@ -8086,23 +7720,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn worker_postgres_adds_verify_full_app_login_without_replacing_its_proxy() {
-        let deployment = rendered_deployment(WORKFLOWS_DEPLOYMENT, env_getter(FULL_ENV));
-        assert_application_postgres_client(&deployment, "worker", "NAVIGATOR_GCP_PROJECT_ID");
-        let pod = &deployment["spec"]["template"]["spec"];
-        assert!(pod["containers"]
-            .as_sequence()
-            .unwrap()
-            .iter()
-            .any(|container| container["name"].as_str() == Some("envoy")));
-        assert!(pod["volumes"]
-            .as_sequence()
-            .unwrap()
-            .iter()
-            .any(|volume| volume["name"].as_str() == Some("envoy-config")));
-    }
-
     fn assert_application_postgres_client(
         deployment: &serde_yaml::Value,
         container_name: &str,
@@ -8200,19 +7817,19 @@ mod tests {
     }
 
     #[test]
-    fn web_without_dbos_opt_in_renders_no_dbos_wiring() {
-        for value in [None, Some("false")] {
+    fn native_executor_is_present_without_ownership_selectors() {
+        for value in [None, Some("false"), Some("yes")] {
             let deployment = rendered_web_deployment(with_dbos(value));
-            let text = serde_yaml::to_string(&deployment).expect("deployment serializes");
-            assert!(
-                !text.contains("NAVIGATOR_DBOS_") && !text.contains("dbos"),
-                "{value:?} must leave web untouched by DBOS wiring"
+            assert_eq!(
+                web_env_value(&deployment, "NAVIGATOR_DBOS_USER").as_deref(),
+                Some("navigator_dbos")
             );
+            assert!(web_env_value(&deployment, NAVIGATOR_DBOS_ENABLED).is_none());
         }
     }
 
     #[test]
-    fn web_dbos_opt_in_adds_the_executor_login_from_its_own_secret() {
+    fn native_web_has_the_executor_login_from_its_own_secret() {
         let deployment = rendered_web_deployment(with_dbos(Some("true")));
         let namespace = deployment["metadata"]["namespace"]
             .as_str()
@@ -8242,7 +7859,6 @@ mod tests {
         }
         let host = format!("navigator-postgres.{namespace}.svc.cluster.local");
         for (name, expected) in [
-            ("NAVIGATOR_DBOS_ENABLED", "true"),
             ("NAVIGATOR_DBOS_HOST", host.as_str()),
             ("NAVIGATOR_DBOS_PORT", "5432"),
             ("NAVIGATOR_DBOS_DATABASE", "navigator"),
@@ -8280,17 +7896,6 @@ mod tests {
         assert_eq!(items[0]["key"].as_str(), Some("ca.crt"));
     }
 
-    #[test]
-    fn web_dbos_opt_in_refuses_an_ambiguous_value() {
-        let error = resolve_substitutions_for_deployment(
-            "synthetic-deployment",
-            "26.9.16",
-            with_dbos(Some("yes")),
-        )
-        .unwrap_err();
-        assert!(error.to_string().contains(NAVIGATOR_DBOS_ENABLED));
-    }
-
     fn with_schedules(
         dbos: Option<&'static str>,
         general_nag: Option<&'static str>,
@@ -8317,54 +7922,11 @@ mod tests {
     }
 
     fn native_ship_env(key: &str) -> Option<String> {
-        use store::workflow_engine as engine;
         match key {
-            engine::COHOST_ENV | engine::DBOS_ENABLED_ENV => Some("true".into()),
-            engine::ENGINE_ENV => Some("dbos".into()),
             "NAVIGATOR_ENVIRONMENT" => Some("dev".into()),
             "NAVIGATOR_GKE_CLUSTER_NAME" => Some("synthetic-cluster".into()),
             "RESTATE_IDENTITY_KEY" | "NAVIGATOR_WORKFLOWS_HOST" => None,
-            "BILLING_EXPORT_TABLE" => Some("example.billing.exports".into()),
-            "BIGQUERY_PROJECT" => Some("example-project".into()),
-            _ if engine::WORKFLOWS
-                .iter()
-                .any(|workflow| workflow.flag == key) =>
-            {
-                Some("true".into())
-            }
             _ => env_getter(FULL_ENV)(key),
-        }
-    }
-
-    #[test]
-    fn dbos_only_ship_refuses_every_missing_false_or_invalid_caller_selector() {
-        for workflow in store::workflow_engine::WORKFLOWS {
-            for value in [None, Some("false"), Some("invalid")] {
-                let get = |key: &str| {
-                    if key == workflow.flag {
-                        value.map(str::to_owned)
-                    } else {
-                        native_ship_env(key)
-                    }
-                };
-                let error = dbos_only_profile(&get).unwrap_err();
-                assert!(
-                    error.to_string().contains(workflow.flag),
-                    "{}: {error}",
-                    workflow.name
-                );
-            }
-        }
-        for key in [
-            store::workflow_engine::DBOS_ENABLED_ENV,
-            store::workflow_engine::ENGINE_ENV,
-        ] {
-            assert!(dbos_only_profile(&|name| if name == key {
-                None
-            } else {
-                native_ship_env(name)
-            })
-            .is_err());
         }
     }
 
@@ -8431,14 +7993,13 @@ mod tests {
                     assert!(!has("CronJob", schedule.cronjob), "{}", schedule.cronjob);
                 }
                 let web = manifest_doc(&manifests, "Deployment", WEB_DEPLOYMENT);
-                assert_eq!(
-                    web_env_value(&web, store::workflow_engine::COHOST_ENV).as_deref(),
-                    Some("true")
-                );
-                assert_eq!(
-                    web_env_value(&web, store::workflow_engine::ENGINE_ENV).as_deref(),
-                    Some("dbos")
-                );
+                for key in [
+                    store::workflow_engine::COHOST_ENV,
+                    store::workflow_engine::ENGINE_ENV,
+                    store::workflow_engine::DBOS_ENABLED_ENV,
+                ] {
+                    assert!(web_env_value(&web, key).is_none(), "retired selector {key}");
+                }
                 assert!(web_env_value(&web, "RESTATE_IDENTITY_KEY").is_none());
                 assert_eq!(
                     web_env_value(&web, workflows::trigger::DBOS_INGRESS_URL_ENV).as_deref(),
@@ -8476,11 +8037,10 @@ mod tests {
                     .expect("native ingress requires its own secret, not a Restate broker");
 
                 for workflow in store::workflow_engine::WORKFLOWS {
-                    assert_eq!(
-                        web_env_value(&web, workflow.flag).as_deref(),
-                        Some("true"),
+                    assert!(
+                        web_env_value(&web, workflow.flag).is_none(),
                         "{}",
-                        workflow.name
+                        workflow.flag
                     );
                 }
             }
@@ -8553,12 +8113,9 @@ mod tests {
                 .collect::<BTreeSet<_>>();
             assert_eq!(
                 allowed,
-                COHOST_TRIGGERS
-                    .iter()
-                    .map(|(name, _)| *name)
-                    .collect::<BTreeSet<_>>()
+                COHOST_TRIGGERS.iter().copied().collect::<BTreeSet<_>>()
             );
-            for ((cronjob, flag), cadence) in COHOST_TRIGGERS
+            for (cronjob, cadence) in COHOST_TRIGGERS
                 .into_iter()
                 .zip(["33 11 * * *", "*/15 * * * *"])
             {
@@ -8597,8 +8154,6 @@ mod tests {
                         .find(|entry| entry["name"].as_str() == Some(key))
                         .unwrap()
                 };
-                assert_eq!(entry(flag)["value"].as_str(), Some("true"));
-                assert!(entry(flag).get("valueFrom").is_none());
                 assert_eq!(
                     entry(workflows::trigger::DBOS_INGRESS_URL_ENV)["value"].as_str(),
                     Some(internal.as_str())
@@ -8657,18 +8212,23 @@ mod tests {
     }
 
     #[test]
-    fn worker_schedule_selectors_do_not_retire_triggers_without_the_native_cohost() {
-        let manifests = rendered_manifests(|key| match key {
-            NAVIGATOR_DBOS_ENABLED
-            | "NAVIGATOR_DBOS_NIGHTLY_PROJECT_UPDATE_ENABLED"
-            | "NAVIGATOR_DBOS_SOCIAL_PUBLISH_RECONCILER_ENABLED"
-            | "NAVIGATOR_DBOS_YOUTUBE_COMMENTS_POLLER_ENABLED" => Some("true".into()),
-            _ => env_getter(FULL_ENV)(key),
-        });
-        for retired in COHOST_CRONJOBS {
-            assert!(renders_cronjob(&manifests, retired.cronjob));
+    fn native_cadences_do_not_depend_on_retired_backend_selectors() {
+        for value in [None, Some("false"), Some("yes")] {
+            let manifests = rendered_manifests(with_schedules(value, value, value));
+            for name in retired_cronjobs() {
+                assert!(!renders_cronjob(&manifests, name), "{name}");
+            }
+            assert!(renders_cronjob(
+                &manifests,
+                "nightly-project-update-trigger"
+            ));
+            assert!(renders_cronjob(&manifests, "youtube-comments-poll-trigger"));
+            let web = manifest_doc(&manifests, "Deployment", WEB_DEPLOYMENT);
+            assert_eq!(
+                web_env_value(&web, "SLACK_GENERAL_CHANNEL_ID").as_deref(),
+                Some("C012GENERAL")
+            );
         }
-        assert!(manifests.contains("name: workflows-service"));
     }
 
     #[test]
@@ -8706,64 +8266,14 @@ mod tests {
     }
 
     #[test]
-    fn mixed_hosts_keep_timer_defaults_and_honor_explicit_timer_coordinates() {
-        for key in [
-            workflows::flags::BILLING_CANARY_SCHEDULE_ENABLED_ENV,
-            workflows::flags::RECONCILE_INVOICES_SCHEDULE_ENABLED_ENV,
-        ] {
-            let get = |name: &str| {
-                if name == NAVIGATOR_DBOS_ENABLED {
-                    Some("true".into())
-                } else {
-                    env_getter(FULL_ENV)(name)
-                }
-            };
-            let defaults = rendered_manifests(get);
-            let web = manifest_doc(&defaults, "Deployment", WEB_DEPLOYMENT);
-            assert!(
-                web_env_value(&web, key).is_none(),
-                "omission preserves the runtime mixed default"
-            );
-            for value in ["true", "false"] {
-                let manifests = rendered_manifests(|name| {
-                    if name == key {
-                        Some(value.into())
-                    } else {
-                        get(name)
-                    }
-                });
-                for deployment in [WEB_DEPLOYMENT, WORKFLOWS_DEPLOYMENT] {
-                    let object = manifest_doc(&manifests, "Deployment", deployment);
-                    let containers = object["spec"]["template"]["spec"]["containers"]
-                        .as_sequence()
-                        .unwrap();
-                    let found = containers
-                        .iter()
-                        .filter_map(|container| container["env"].as_sequence())
-                        .flat_map(|env| env.iter())
-                        .find(|entry| entry["name"].as_str() == Some(key))
-                        .unwrap();
-                    assert_eq!(found["value"].as_str(), Some(value));
-                }
-            }
-        }
-    }
-
-    #[test]
     fn dbos_only_ship_targets_web_and_never_registers_or_restarts_a_retained_worker() {
         let cfg = ShipConfig::from_lookup("synthetic-deployment", native_ship_env)
             .expect("the complete native deployment needs no broker coordinate");
-        assert!(cfg.dbos_only);
-        assert_eq!(restart_deployments(&cfg), [WEB_DEPLOYMENT]);
-        assert_eq!(rollout_wait_deployments(&cfg), [WEB_DEPLOYMENT]);
+        assert_eq!(restart_deployments(), [WEB_DEPLOYMENT]);
+        assert_eq!(rollout_wait_deployments(), [WEB_DEPLOYMENT]);
         assert_eq!(
             image_only_image_writes(&cfg, "26.1.1"),
             vec![(WEB_DEPLOYMENT, cfg.web_image("26.1.1"))]
-        );
-        assert!(reregister_targets(&cfg).is_empty());
-        assert!(
-            reregister(&cfg, false).is_ok(),
-            "no external CLI or credentials are needed without a Restate target"
         );
     }
 
@@ -8800,42 +8310,21 @@ mod tests {
     }
 
     #[test]
-    fn general_nag_defaults_to_dbos_and_respects_an_explicit_override() {
-        for (flag, expected) in [(None, "true"), (Some("false"), "false")] {
-            let manifests = rendered_manifests(with_schedules(Some("true"), flag, None));
-            let web = manifest_doc(&manifests, "Deployment", WEB_DEPLOYMENT);
-            assert_eq!(
-                web_env_value(&web, "NAVIGATOR_DBOS_GENERAL_NAG_ENABLED").as_deref(),
-                Some(expected)
-            );
-            assert_eq!(
-                renders_cronjob(&manifests, "general-nag"),
-                expected == "false"
-            );
-            assert!(renders_cronjob(&manifests, "dri-digest-trigger"));
-        }
-    }
-
-    #[test]
-    fn a_switched_on_schedule_moves_to_web_and_leaves_its_cronjob_out() {
-        let manifests = rendered_manifests(with_schedules(Some("true"), Some("true"), None));
+    fn native_schedules_deliver_required_channels_to_the_only_owner() {
+        let manifests = rendered_manifests(env_getter(FULL_ENV));
         let web = manifest_doc(&manifests, "Deployment", WEB_DEPLOYMENT);
-        assert_eq!(
-            web_env_value(&web, "NAVIGATOR_DBOS_GENERAL_NAG_ENABLED").as_deref(),
-            Some("true")
-        );
-        assert_eq!(
-            web_env_value(&web, "SLACK_GENERAL_CHANNEL_ID").as_deref(),
-            Some("C012GENERAL"),
-            "GeneralNag on DBOS posts to the general channel from web"
-        );
-        assert!(!renders_cronjob(&manifests, "general-nag"));
-        assert!(renders_cronjob(&manifests, "dri-digest-trigger"));
-
-        let manifests =
-            rendered_manifests(with_schedules(Some("true"), Some("false"), Some("true")));
-        assert!(renders_cronjob(&manifests, "general-nag"));
-        assert!(!renders_cronjob(&manifests, "dri-digest-trigger"));
+        for (key, value) in [
+            ("SLACK_GENERAL_CHANNEL_ID", "C012GENERAL"),
+            ("SLACK_MESSAGES_CHANNEL_ID", "C012MESSAGES"),
+            ("SLACK_STAGING_MESSAGES_CHANNEL_ID", "C012STAGING"),
+        ] {
+            assert_eq!(web_env_value(&web, key).as_deref(), Some(value));
+        }
+        for schedule in &DBOS_SCHEDULES {
+            if let Some(retired) = schedule.retires {
+                assert!(!renders_cronjob(&manifests, retired.cronjob));
+            }
+        }
     }
 
     /// Archives on DBOS moves to `web` with everything its whole-database
@@ -8850,10 +8339,7 @@ mod tests {
         };
         let manifests = rendered_manifests(switched);
         let web = manifest_doc(&manifests, "Deployment", WEB_DEPLOYMENT);
-        assert_eq!(
-            web_env_value(&web, ARCHIVES_SCHEDULE_ENV).as_deref(),
-            Some("true")
-        );
+        assert!(web_env_value(&web, ARCHIVES_SCHEDULE_ENV).is_none());
         assert!(web_env_value(&web, "NAVIGATOR_ARCHIVES_BUCKET").is_some());
         assert!(web_env_value(&web, "SLACK_MESSAGES_CHANNEL_ID").is_some());
         for user in [
@@ -8897,86 +8383,37 @@ mod tests {
         assert!(coverage["navigator"]["relations"].is_array());
         assert!(coverage["forgejo"]["relations"].is_array());
         assert!(!renders_cronjob(&manifests, "archives-trigger"));
-
-        let manifests = rendered_manifests(with_schedules(Some("true"), None, None));
-        assert!(renders_cronjob(&manifests, "archives-trigger"));
-        assert!(!manifests.contains("navigator-archive-coverage"));
-        assert!(!manifests.contains("NAVIGATOR_ARCHIVE_POSTGRES_USER"));
-
-        let mut deployment =
-            super::super::deployments::Deployment::load(&fixture_tree(), "example-deployment")
-                .expect("fixture row loads");
-        for key in [NAVIGATOR_DBOS_ENABLED, ARCHIVES_SCHEDULE_ENV] {
-            deployment.coordinates.insert(key.into(), "true".into());
-        }
-        // General Nag is on wherever the executor runs, so it retires too.
-        assert_eq!(
-            retired_cronjobs(&deployment).unwrap(),
-            ["general-nag", "archives-trigger", "heartbeat-trigger"]
-        );
     }
 
     #[test]
-    fn billing_digest_moves_to_web_and_retires_its_cronjob() {
-        let switched = |key: &str| match key {
-            NAVIGATOR_DBOS_ENABLED | "NAVIGATOR_DBOS_BILLING_DIGEST_ENABLED" => {
-                Some("true".to_owned())
-            }
-            "BILLING_EXPORT_TABLE" => Some("synthetic-project.billing.export".to_owned()),
-            "BIGQUERY_PROJECT" => Some("synthetic-project".to_owned()),
-            _ => env_getter(FULL_ENV)(key),
-        };
-        let manifests = rendered_manifests(switched);
-        let web = manifest_doc(&manifests, "Deployment", WEB_DEPLOYMENT);
-        assert_eq!(
-            web_env_value(&web, "NAVIGATOR_DBOS_BILLING_DIGEST_ENABLED").as_deref(),
-            Some("true")
-        );
+    fn native_billing_digest_preserves_optional_query_and_delivery_requirements() {
+        let manifests = rendered_manifests(env_getter(FULL_ENV));
         assert!(!renders_cronjob(&manifests, "billing-digest-trigger"));
-
-        let mut deployment =
-            super::super::deployments::Deployment::load(&fixture_tree(), "example-deployment")
-                .expect("fixture row loads");
+        let mut deployment = ordered_deployment();
+        for key in [
+            workflows::trigger::DBOS_INGRESS_TOKEN_ENV,
+            "SLACK_BOT_TOKEN",
+            SLACK_WEBHOOK_URL,
+        ] {
+            deployment.encrypted_keys.insert(key.into());
+        }
+        deployment.encrypted_keys.remove(SLACK_WEBHOOK_URL);
+        // DRI independently needs the webhook; its validation must not be bypassed.
+        assert!(require_dbos_schedule_prerequisites(&deployment).is_err());
+        deployment.encrypted_keys.insert(SLACK_WEBHOOK_URL.into());
+        require_dbos_schedule_prerequisites(&deployment).unwrap();
+        deployment.coordinates.insert(
+            "BILLING_EXPORT_TABLE".into(),
+            "synthetic.billing.export".into(),
+        );
         deployment
             .coordinates
-            .insert(NAVIGATOR_DBOS_ENABLED.into(), "true".into());
-        deployment.coordinates.insert(
-            "NAVIGATOR_DBOS_BILLING_DIGEST_ENABLED".into(),
-            "true".into(),
-        );
+            .insert("BIGQUERY_PROJECT".into(), "synthetic-project".into());
         deployment.encrypted_keys.remove(SLACK_WEBHOOK_URL);
-        let error = require_dbos_schedule_prerequisites(&deployment).unwrap_err();
-        assert!(error.to_string().contains(SLACK_WEBHOOK_URL), "{error}");
-
-        let missing_executor = |key: &str| match key {
-            "NAVIGATOR_DBOS_BILLING_DIGEST_ENABLED" => Some("true".to_owned()),
-            _ => env_getter(FULL_ENV)(key),
-        };
-        let error = resolve_substitutions_for_deployment(
-            "synthetic-deployment",
-            "26.9.16",
-            missing_executor,
-        )
-        .unwrap_err();
-        assert!(
-            error.to_string().contains(NAVIGATOR_DBOS_ENABLED),
-            "{error}"
-        );
-
-        let missing_export = |key: &str| match key {
-            NAVIGATOR_DBOS_ENABLED | "NAVIGATOR_DBOS_BILLING_DIGEST_ENABLED" => {
-                Some("true".to_owned())
-            }
-            "BIGQUERY_PROJECT" => Some("synthetic-project".to_owned()),
-            _ => env_getter(FULL_ENV)(key),
-        };
-        let error =
-            resolve_substitutions_for_deployment("synthetic-deployment", "26.9.16", missing_export)
-                .unwrap_err();
-        assert!(
-            error.to_string().contains("BILLING_EXPORT_TABLE"),
-            "{error}"
-        );
+        assert!(require_dbos_schedule_prerequisites(&deployment)
+            .unwrap_err()
+            .to_string()
+            .contains(SLACK_WEBHOOK_URL));
     }
 
     #[test]
@@ -8989,10 +8426,7 @@ mod tests {
         };
         let manifests = rendered_manifests(switched);
         let web = manifest_doc(&manifests, "Deployment", WEB_DEPLOYMENT);
-        assert_eq!(
-            web_env_value(&web, "NAVIGATOR_DBOS_NOTATION_RESET_ENABLED").as_deref(),
-            Some("true")
-        );
+        assert!(web_env_value(&web, "NAVIGATOR_DBOS_NOTATION_RESET_ENABLED").is_none());
         assert_eq!(
             web_env_value(&web, "SLACK_MESSAGES_CHANNEL_ID").as_deref(),
             Some("C012MESSAGES")
@@ -9023,7 +8457,7 @@ mod tests {
     }
 
     #[test]
-    fn dbos_renders_digest_destinations_and_retires_nothing() {
+    fn native_render_preserves_optional_digest_destinations() {
         let switched = |key: &str| match key {
             NAVIGATOR_DBOS_ENABLED => Some("true".to_owned()),
             "SLACK_LINEAR_BACKLOG_CHANNEL_ID" => Some("C012BACKLOG".into()),
@@ -9041,7 +8475,7 @@ mod tests {
         }
         for schedule in DBOS_SCHEDULES.iter().filter_map(|s| s.retires) {
             assert!(
-                renders_cronjob(&manifests, schedule.cronjob),
+                !renders_cronjob(&manifests, schedule.cronjob),
                 "{}",
                 schedule.cronjob
             );
@@ -9055,13 +8489,15 @@ mod tests {
             .coordinates
             .insert(LINEAR_BACKLOG_CHANNEL.into(), "C012BACKLOG".into());
 
-        let error = require_dbos_schedule_prerequisites(&deployment).unwrap_err();
-        assert!(error.to_string().contains(NAVIGATOR_DBOS_ENABLED));
-
-        deployment
-            .coordinates
-            .insert(NAVIGATOR_DBOS_ENABLED.into(), "true".into());
+        for key in [
+            workflows::trigger::DBOS_INGRESS_TOKEN_ENV,
+            "SLACK_BOT_TOKEN",
+            SLACK_WEBHOOK_URL,
+        ] {
+            deployment.encrypted_keys.insert(key.into());
+        }
         for key in ["LINEAR_BACKLOG_READ_KEY", "SLACK_BOT_TOKEN"] {
+            deployment.encrypted_keys.remove(key);
             let error = require_dbos_schedule_prerequisites(&deployment).unwrap_err();
             assert!(error.to_string().contains(key), "{error}");
             deployment.encrypted_keys.insert(key.into());
@@ -9070,80 +8506,12 @@ mod tests {
     }
 
     #[test]
-    fn a_schedule_switch_refuses_typos_and_a_missing_executor() {
-        for (dbos, general_nag, dri_digest, named) in [
-            (
-                Some("true"),
-                Some("yes"),
-                None,
-                "NAVIGATOR_DBOS_GENERAL_NAG_ENABLED",
-            ),
-            (
-                Some("true"),
-                None,
-                Some("1"),
-                "NAVIGATOR_DBOS_DRI_DIGEST_ENABLED",
-            ),
-            (
-                None,
-                Some("true"),
-                None,
-                "NAVIGATOR_DBOS_GENERAL_NAG_ENABLED",
-            ),
-            (
-                Some("false"),
-                None,
-                Some("true"),
-                "NAVIGATOR_DBOS_DRI_DIGEST_ENABLED",
-            ),
-        ] {
-            let error = resolve_substitutions_for_deployment(
-                "synthetic-deployment",
-                "26.9.16",
-                with_schedules(dbos, general_nag, dri_digest),
-            )
-            .unwrap_err();
-            assert!(error.to_string().contains(named), "{error}");
+    fn every_full_roll_retires_legacy_trigger_cronjobs() {
+        let manifests = rendered_manifests(env_getter(FULL_ENV));
+        for name in retired_cronjobs() {
+            assert!(!renders_cronjob(&manifests, name), "{name}");
         }
-    }
-
-    #[test]
-    fn every_roll_deletes_the_retired_heartbeat_trigger() {
-        for dbos in [None, Some("true")] {
-            let manifests = rendered_manifests(with_schedules(dbos, None, None));
-            for retired in RETIRED_CRONJOBS {
-                assert!(
-                    !renders_cronjob(&manifests, retired),
-                    "{retired} is never rendered"
-                );
-            }
-        }
-        let mut deployment =
-            super::super::deployments::Deployment::load(&fixture_tree(), "example-deployment")
-                .expect("fixture row loads");
-        assert_eq!(
-            retired_cronjobs(&deployment).unwrap(),
-            ["heartbeat-trigger"]
-        );
-        deployment
-            .coordinates
-            .insert(NAVIGATOR_DBOS_ENABLED.into(), "true".into());
-        assert_eq!(
-            retired_cronjobs(&deployment).unwrap(),
-            ["general-nag", "heartbeat-trigger"]
-        );
-        deployment.encrypted_keys.remove("SLACK_BOT_TOKEN");
-        let error = require_dbos_schedule_prerequisites(&deployment).unwrap_err();
-        assert!(error.to_string().contains("SLACK_BOT_TOKEN"), "{error}");
-        deployment.coordinates.insert(
-            "NAVIGATOR_DBOS_BILLING_DIGEST_ENABLED".into(),
-            "true".into(),
-        );
-        deployment.encrypted_keys.insert(SLACK_WEBHOOK_URL.into());
-        assert_eq!(
-            retired_cronjobs(&deployment).unwrap(),
-            ["general-nag", "billing-digest-trigger", "heartbeat-trigger"]
-        );
+        assert!(retired_cronjobs().contains(&"heartbeat-trigger"));
     }
 
     /// Staging's Ingress asked for 17 certificates for 21 hours: the three
@@ -9176,40 +8544,12 @@ mod tests {
 
     #[test]
     fn dri_digest_on_dbos_requires_its_webhook_secret() {
-        let mut deployment =
-            super::super::deployments::Deployment::load(&fixture_tree(), "example-deployment")
-                .expect("fixture row loads");
-        deployment
-            .coordinates
-            .insert(NAVIGATOR_DBOS_ENABLED.into(), "true".into());
-        deployment
-            .coordinates
-            .insert("NAVIGATOR_DBOS_DRI_DIGEST_ENABLED".into(), "true".into());
+        let mut deployment = ordered_deployment();
         deployment.encrypted_keys.remove(SLACK_WEBHOOK_URL);
         let error = require_dbos_schedule_prerequisites(&deployment).unwrap_err();
         assert!(error.to_string().contains(SLACK_WEBHOOK_URL), "{error}");
         deployment.encrypted_keys.insert(SLACK_WEBHOOK_URL.into());
         require_dbos_schedule_prerequisites(&deployment).unwrap();
-    }
-
-    #[test]
-    fn public_example_rows_do_not_enable_dbos_implicitly() {
-        let root = fixture_tree();
-        for row in ["example-deployment", "example-automation-home"] {
-            let path = root.join("deployments").join(row).join("config.toml");
-            let config: toml::Table = fs::read_to_string(&path)
-                .expect("read the deployment config")
-                .parse()
-                .expect("parse the deployment config");
-            assert_eq!(
-                config
-                    .get("env")
-                    .and_then(|env| env.get(NAVIGATOR_DBOS_ENABLED))
-                    .and_then(toml::Value::as_str),
-                None,
-                "{row} must opt into DBOS explicitly; private deployment profiles are not inferred"
-            );
-        }
     }
 
     #[test]
@@ -10680,31 +10020,6 @@ mod tests {
     }
 
     #[test]
-    fn reregister_targets_the_rows_own_restate_admin_url() {
-        let root =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/deployment-tree");
-        let mut deployment =
-            super::super::deployments::Deployment::load(&root, "example-deployment").unwrap();
-        deployment.coordinates.insert(
-            super::super::RESTATE_ADMIN_URL_KEY.into(),
-            "https://restate-admin.example.invalid:9070".into(),
-        );
-        let cfg = ShipConfig::from_deployment(&deployment).unwrap();
-        let target = cfg.restate_register_target();
-        assert_eq!(target.deployment, "example-deployment");
-        assert_eq!(
-            target.admin_url,
-            Some("https://restate-admin.example.invalid:9070")
-        );
-
-        deployment
-            .coordinates
-            .remove(super::super::RESTATE_ADMIN_URL_KEY);
-        let cfg = ShipConfig::from_deployment(&deployment).unwrap();
-        assert_eq!(cfg.restate_register_target().admin_url, None);
-    }
-
-    #[test]
     fn a_missing_coordinate_names_the_deployments_config_file() {
         let err = ShipConfig::from_lookup("example-prod", |key| {
             (key == "NAVIGATOR_ENVIRONMENT").then(|| "production".to_string())
@@ -10724,10 +10039,6 @@ mod tests {
         assert_eq!(
             cfg.web_image("26.6.23"),
             "ghcr.io/example/navigator/neon-server:26.6.23"
-        );
-        assert_eq!(
-            cfg.workflows_image("26.6.23"),
-            "ghcr.io/example/navigator/navigator-workflows-service:26.6.23"
         );
     }
 
@@ -11019,34 +10330,16 @@ mod tests {
 
     #[test]
     fn mixed_engine_ship_rolls_both_service_deployments() {
-        let cfg = &sample_config();
         // Mixed-engine restarts and waits cover both selected application tiers.
         assert_eq!(
-            restart_deployments(cfg),
+            restart_deployments(),
             ["navigator-web", "workflows-service"]
         );
         assert_eq!(
-            rollout_wait_deployments(cfg),
+            rollout_wait_deployments(),
             ["navigator-web", "workflows-service"]
         );
         assert_eq!(web_binary_deployments(), ["navigator-web"]);
-    }
-
-    #[test]
-    fn workflows_worker_registration_is_required() {
-        // Every durable workflow registers with `workflows-service`, so a
-        // failed re-register must fail the ship — a stale handler list would
-        // silently drop invocations to a new service until a later successful
-        // registration.
-        let targets = reregister_targets(&sample_config());
-        assert_eq!(targets.len(), 1);
-        assert_eq!(targets[0].name, WORKFLOWS_DEPLOYMENT);
-        let err = apply_registration_result(
-            &targets[0],
-            Err(anyhow::anyhow!("registration unavailable")),
-        )
-        .expect_err("a registration failure must abort the ship");
-        assert!(err.to_string().contains(WORKFLOWS_DEPLOYMENT));
     }
 
     /// A realistic slice of a built stream: our two Deployments, two trigger
@@ -11269,56 +10562,6 @@ spec:
     }
 
     #[test]
-    fn embedded_workflows_manifest_retains_container_resources_and_rollout_contract() {
-        let subs = resolve_substitutions_for_deployment(
-            "example-production",
-            "26.7.15",
-            env_getter(FULL_ENV),
-        )
-        .expect("full env resolves");
-        let rendered = render_manifests_with(&subs).expect("render succeeds");
-        let manifests = kustomize_build(&rendered.path().join(GKE_KUSTOMIZE_SUBPATH))
-            .expect("rendered GKE manifests build");
-        let deployment = manifest_doc(&manifests, "Deployment", WORKFLOWS_DEPLOYMENT);
-        let containers = deployment["spec"]["template"]["spec"]["containers"]
-            .as_sequence()
-            .expect("workflows-service containers");
-        let worker = containers
-            .iter()
-            .find(|container| container["name"].as_str() == Some("worker"))
-            .expect("workflow worker container");
-        let forgejo_root = worker["env"]
-            .as_sequence()
-            .expect("worker env")
-            .iter()
-            .find(|entry| {
-                entry["name"].as_str() == Some(cloud::forgejo_forge::NAVIGATOR_FORGEJO_ROOT_URL_ENV)
-            })
-            .expect("worker Forgejo root URL");
-        assert_eq!(
-            forgejo_root["value"].as_str(),
-            Some("https://forge.example.invalid/")
-        );
-
-        for (name, cpu, memory) in [("worker", "100m", "256Mi"), ("envoy", "50m", "128Mi")] {
-            let container = containers
-                .iter()
-                .find(|container| container["name"].as_str() == Some(name))
-                .unwrap_or_else(|| panic!("{name} container must be rendered"));
-            assert_eq!(
-                container["resources"]["requests"]["cpu"].as_str(),
-                Some(cpu),
-                "{name} CPU request survives embedded render"
-            );
-            assert_eq!(
-                container["resources"]["requests"]["memory"].as_str(),
-                Some(memory),
-                "{name} memory request survives embedded render"
-            );
-        }
-    }
-
-    #[test]
     fn embedded_workloads_receive_pod_identity_for_telemetry() {
         let subs = resolve_substitutions_for_deployment(
             "example-production",
@@ -11330,9 +10573,7 @@ spec:
         let manifests = kustomize_build(&rendered.path().join(GKE_KUSTOMIZE_SUBPATH))
             .expect("rendered GKE manifests build");
 
-        for (deployment_name, container_name) in
-            [(WEB_DEPLOYMENT, "web"), (WORKFLOWS_DEPLOYMENT, "worker")]
-        {
+        for (deployment_name, container_name) in [(WEB_DEPLOYMENT, "web")] {
             let deployment = manifest_doc(&manifests, "Deployment", deployment_name);
             let container = deployment["spec"]["template"]["spec"]["containers"]
                 .as_sequence()
@@ -11424,35 +10665,6 @@ spec:
         assert!(
             saw_environment_project,
             "the environment project must still render into buckets / the GSA"
-        );
-    }
-
-    #[test]
-    fn workflows_url_derives_from_primary_domain_when_unset() {
-        // The 2026-06-10 ship symptom: a domain is configured but the
-        // explicit URL is not. The resolved URL must be the real
-        // ingress derived from the domain, never the
-        // `workflows.example.com` placeholder.
-        let cfg = ShipConfig {
-            primary_domain: "example.invalid".into(),
-            workflows_url: None,
-            ..sample_config()
-        };
-        assert_eq!(
-            cfg.workflows_url_resolved(),
-            "https://workflows.example.invalid/"
-        );
-    }
-
-    #[test]
-    fn workflows_url_prefers_explicit_override() {
-        let cfg = ShipConfig {
-            workflows_url: Some("https://workflows.example.invalid/".into()),
-            ..sample_config()
-        };
-        assert_eq!(
-            cfg.workflows_url_resolved(),
-            "https://workflows.example.invalid/"
         );
     }
 
@@ -11622,14 +10834,8 @@ spec:
 
     #[test]
     fn ship_consumes_the_shared_web_invariant_keys() {
-        let parsed =
-            shared_web_requirements(store::deployment::DeploymentCapabilities::default(), false);
-        for expected in [
-            "RESTATE_BROKER_URL",
-            "SENDGRID_API_KEY",
-            "DOCUSIGN_HMAC_KEY",
-            "SESSION_SECRET",
-        ] {
+        let parsed = shared_web_requirements(store::deployment::DeploymentCapabilities::default());
+        for expected in ["SENDGRID_API_KEY", "DOCUSIGN_HMAC_KEY", "SESSION_SECRET"] {
             assert!(
                 parsed.iter().any(|requirement| requirement
                     .any_of
@@ -11656,21 +10862,18 @@ spec:
     }
 
     #[test]
-    fn ship_requires_restate_ingress_credentials_only_for_the_automation_home() {
-        let ingress = req(&[&["RESTATE_INGRESS_URL", "RESTATE_AUTH_TOKEN"]]);
-        assert!(!shared_web_requirements(
-            store::deployment::DeploymentCapabilities::default(),
-            false
-        )
-        .contains(&ingress));
-        assert!(shared_web_requirements(
-            store::deployment::DeploymentCapabilities {
-                github_automation_home: true,
+    fn native_ship_never_requires_the_retained_engine_for_either_role() {
+        for github_automation_home in [false, true] {
+            let requirements = shared_web_requirements(store::deployment::DeploymentCapabilities {
+                github_automation_home,
                 ..Default::default()
-            },
-            false
-        )
-        .contains(&ingress));
+            });
+            assert!(requirements.iter().all(|requirement| requirement
+                .any_of
+                .iter()
+                .flatten()
+                .all(|key| !key.starts_with("RESTATE_"))));
+        }
     }
 
     #[test]
@@ -11902,10 +11105,9 @@ spec:
     }
 
     #[test]
-    fn web_and_worker_receive_the_deployment_secret_and_the_social_callback() {
-        // Social account tokens are sealed by `web` and opened by the
-        // `workflows-service` publisher, so both read the runtime KMS key and
-        // the social app values from the same deployment Secret.
+    fn native_application_receives_the_deployment_secret_and_social_callback() {
+        // The cohosted publisher reads the same runtime KMS and social app
+        // values as the application from its deployment Secret.
         let subs = resolve_substitutions_for_deployment(
             "example-production",
             "26.7.29",
@@ -11915,7 +11117,7 @@ spec:
         let rendered = render_manifests_with(&subs).expect("render succeeds");
         let manifests = kustomize_build(&rendered.path().join(GKE_KUSTOMIZE_SUBPATH))
             .expect("rendered GKE manifests build");
-        for (deployment, container) in [(WEB_DEPLOYMENT, "web"), (WORKFLOWS_DEPLOYMENT, "worker")] {
+        for (deployment, container) in [(WEB_DEPLOYMENT, "web")] {
             let container_spec = rendered_container(&manifests, deployment, container);
             let secrets: Vec<&str> = container_spec
                 .get("envFrom")
@@ -12137,13 +11339,10 @@ spec:
             .chain(INLINE_ENV_WEB_KEYS.iter().map(ToString::to_string))
             .chain(POSTGRES_WEB_KEYS.iter().map(ToString::to_string))
             .collect();
-        let required = shared_web_requirements(
-            store::deployment::DeploymentCapabilities {
-                github_automation_home: true,
-                ..Default::default()
-            },
-            false,
-        );
+        let required = shared_web_requirements(store::deployment::DeploymentCapabilities {
+            github_automation_home: true,
+            ..Default::default()
+        });
         let effective = effective_requirements(&required, &satisfied);
         let missing = unsatisfied_requirements(&effective, &satisfied);
         assert!(
@@ -13437,12 +12636,12 @@ spec:
     }
 
     #[test]
-    fn image_only_pins_both_deployments_to_one_published_tag() {
+    fn image_only_pins_the_native_application_to_the_published_tag() {
         let writes = image_only_image_writes(&sample_config(), "26.8.17");
         assert_eq!(
             writes.iter().map(|(d, _)| *d).collect::<Vec<_>>(),
-            vec![WEB_DEPLOYMENT, WORKFLOWS_DEPLOYMENT],
-            "both service deployments move, never one"
+            vec![WEB_DEPLOYMENT],
+            "the cohosted application moves as one deployment"
         );
         for (deployment, image) in &writes {
             assert!(
@@ -13480,7 +12679,7 @@ spec:
     }
 
     #[test]
-    fn a_completed_roll_verifies_public_assets_after_re_registering() {
+    fn a_completed_native_roll_verifies_public_assets() {
         let root = source_checkout();
         let events = std::cell::RefCell::new(Vec::new());
 
@@ -13489,10 +12688,6 @@ spec:
             &sample_config(),
             root.path(),
             false,
-            || {
-                events.borrow_mut().push("restate");
-                Ok(())
-            },
             |content_root, base_url| {
                 events.borrow_mut().push("assets");
                 assert_eq!(content_root, root.path().join("server/content"));
@@ -13503,7 +12698,7 @@ spec:
         )
         .expect("a live completed roll should verify its public origin");
 
-        assert_eq!(*events.borrow(), ["restate", "assets"]);
+        assert_eq!(*events.borrow(), ["assets"]);
     }
 
     #[test]
@@ -13516,10 +12711,6 @@ spec:
             &sample_config(),
             root.path(),
             false,
-            || {
-                events.borrow_mut().push("restate");
-                Ok(())
-            },
             |_, _| {
                 events.borrow_mut().push("assets");
                 Err(anyhow!("public origin is unreachable"))
@@ -13528,7 +12719,7 @@ spec:
         )
         .expect_err("an unreachable public origin must block completion");
 
-        assert_eq!(*events.borrow(), ["restate", "assets"]);
+        assert_eq!(*events.borrow(), ["assets"]);
         assert!(error
             .to_string()
             .contains("post-roll public asset verification"));
@@ -13536,7 +12727,7 @@ spec:
     }
 
     #[test]
-    fn a_deploy_only_tree_probes_the_embedded_asset_set_after_re_registering() {
+    fn a_deploy_only_tree_probes_the_embedded_asset_set_after_native_roll() {
         // ENG-552. The documented `--deployments-dir .` invocation from a tree
         // that carries `deployments/` and no application source used to fail
         // here with "content directory `./server/content` does not exist"
@@ -13550,10 +12741,6 @@ spec:
             &sample_config(),
             root.path(),
             false,
-            || {
-                events.borrow_mut().push("restate");
-                Ok(())
-            },
             |_, _| unreachable!("a deploy-only tree has no content tree to walk"),
             |base_url| {
                 events.borrow_mut().push("embedded");
@@ -13563,7 +12750,7 @@ spec:
         )
         .expect("a deploy-only roll verifies the embedded set instead of failing");
 
-        assert_eq!(*events.borrow(), ["restate", "embedded"]);
+        assert_eq!(*events.borrow(), ["embedded"]);
     }
 
     #[test]
@@ -13577,10 +12764,6 @@ spec:
             &sample_config(),
             root.path(),
             false,
-            || {
-                events.borrow_mut().push("restate");
-                Ok(())
-            },
             |_, _| unreachable!("a deploy-only tree has no content tree to walk"),
             |_| {
                 events.borrow_mut().push("embedded");
@@ -13589,7 +12772,7 @@ spec:
         )
         .expect_err("a missing embedded asset must block completion");
 
-        assert_eq!(*events.borrow(), ["restate", "embedded"]);
+        assert_eq!(*events.borrow(), ["embedded"]);
         assert!(error
             .to_string()
             .contains("post-roll public asset verification failed for deployment `example-prod`"));
@@ -13609,7 +12792,6 @@ spec:
                 &sample_config(),
                 root.path(),
                 true,
-                || Ok(()),
                 |_, _| unreachable!("dry-run probes no origin"),
                 |_| unreachable!("dry-run probes no origin"),
             )
@@ -13715,10 +12897,6 @@ spec:
             &sample_config(),
             root.path(),
             false,
-            || {
-                events.borrow_mut().push("restate");
-                Ok(())
-            },
             |_, _| {
                 events.borrow_mut().push("assets");
                 Ok(())
@@ -13729,7 +12907,7 @@ spec:
             },
         )
         .expect("restart-only completion does not need asset verification");
-        assert_eq!(*events.borrow(), ["restate"]);
+        assert!(events.borrow().is_empty());
     }
 
     /// [`ordered_deployment`] plus the cluster coordinate
@@ -14049,7 +13227,7 @@ spec:
         wait_job(&cfg, true, "navigator-migrate", "15m").unwrap();
         retire_automatic_mirror_recovery(&cfg, true).unwrap();
         ensure_ordered_service_objects(&cfg, true, true, true).unwrap();
-        retire_dbos_hosted_cronjobs(&cfg, true, &ordered_deployment()).unwrap();
+        retire_dbos_hosted_cronjobs(&cfg, true).unwrap();
         retire_firm_only_brand_certificates(&cfg, true).unwrap();
         ensure_manifest_images_published(
             &cfg,

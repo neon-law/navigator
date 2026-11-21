@@ -59,33 +59,15 @@ pub const REQUIRED_KEYS: &[&str] = &[
     CHANNEL_ENV,
 ];
 
-/// Required caller coordinates for the selected engine, in addition to common keys.
-///
-/// # Errors
-/// Returns an invalid EmailSummary engine selector.
-pub fn required_keys(
-    get: &impl Fn(&str) -> Option<String>,
-) -> Result<Vec<&'static str>, EmailSummaryConfigError> {
+/// Common provider coordinates and the native authenticated caller coordinates.
+#[must_use]
+pub fn required_keys() -> Vec<&'static str> {
     let mut keys = REQUIRED_KEYS.to_vec();
-    if dbos_selected(get)? {
-        keys.extend([
-            crate::trigger::DBOS_INGRESS_URL_ENV,
-            crate::trigger::DBOS_INGRESS_TOKEN_ENV,
-        ]);
-    } else {
-        keys.push(WORKFLOW_INGRESS_ENV);
-    }
-    Ok(keys)
-}
-
-fn dbos_selected(get: &impl Fn(&str) -> Option<String>) -> Result<bool, EmailSummaryConfigError> {
-    match non_empty(get(crate::trigger::EMAIL_SUMMARY_ENABLED_ENV)).as_deref() {
-        None | Some("false") => Ok(false),
-        Some("true") => Ok(true),
-        Some(_) => Err(EmailSummaryConfigError::InvalidBoolean(
-            crate::trigger::EMAIL_SUMMARY_ENABLED_ENV,
-        )),
-    }
+    keys.extend([
+        crate::trigger::DBOS_INGRESS_URL_ENV,
+        crate::trigger::DBOS_INGRESS_TOKEN_ENV,
+    ]);
+    keys
 }
 
 /// The provider account a summary receipt and its sender approvals are keyed
@@ -187,6 +169,20 @@ impl EmailSummaryConfig {
     pub fn from_lookup<F: Fn(&str) -> Option<String>>(
         get: F,
     ) -> Result<Option<Self>, EmailSummaryConfigError> {
+        Self::from_ingress_lookup(get, true)
+    }
+
+    /// Explicit retained-worker/operator configuration; never an application fallback.
+    pub fn from_legacy_lookup<F: Fn(&str) -> Option<String>>(
+        get: F,
+    ) -> Result<Option<Self>, EmailSummaryConfigError> {
+        Self::from_ingress_lookup(get, false)
+    }
+
+    fn from_ingress_lookup<F: Fn(&str) -> Option<String>>(
+        get: F,
+        dbos: bool,
+    ) -> Result<Option<Self>, EmailSummaryConfigError> {
         if !enabled(&get)? {
             return Ok(None);
         }
@@ -195,7 +191,6 @@ impl EmailSummaryConfig {
         let envelope_recipients = parse_recipients(&recipients)?;
         let inbound_public_key = required(&get, INBOUND_PUBLIC_KEY_ENV)?;
         let deployment = required(&get, DEPLOYMENT_ENV)?;
-        let dbos = dbos_selected(&get)?;
         let ingress_key = if dbos {
             crate::trigger::DBOS_INGRESS_URL_ENV
         } else {
@@ -374,7 +369,14 @@ mod tests {
             ),
             (INBOUND_PUBLIC_KEY_ENV, "public-key"),
             (DEPLOYMENT_ENV, "production"),
-            (WORKFLOW_INGRESS_ENV, "https://restate.example.test"),
+            (
+                crate::trigger::DBOS_INGRESS_URL_ENV,
+                "https://worker.example.test",
+            ),
+            (
+                crate::trigger::DBOS_INGRESS_TOKEN_ENV,
+                "synthetic-worker-token",
+            ),
             (GCP_PROJECT_ENV, "project"),
             (CHANNEL_ENV, "C123"),
             (FIRM_ID_ENV, "00000000-0000-4000-8000-000000000001"),
@@ -389,9 +391,8 @@ mod tests {
     #[test]
     fn dbos_summary_configuration_requires_no_restate_coordinate() {
         let mut values = enabled();
-        values.retain(|(key, _)| *key != WORKFLOW_INGRESS_ENV);
+        values.retain(|(key, _)| *key != crate::trigger::DBOS_INGRESS_URL_ENV);
         values.extend([
-            (crate::trigger::EMAIL_SUMMARY_ENABLED_ENV, "true"),
             (
                 crate::trigger::DBOS_INGRESS_URL_ENV,
                 "http://127.0.0.1:9083",
@@ -411,7 +412,7 @@ mod tests {
         ] {
             let mut incomplete = values.clone();
             incomplete.retain(|(key, _)| *key != missing);
-            incomplete.push((WORKFLOW_INGRESS_ENV, "https://restate.example.test"));
+            incomplete.push((WORKFLOW_INGRESS_ENV, "https://retained.example.test"));
             assert_eq!(
                 EmailSummaryConfig::from_lookup(lookup(&incomplete)),
                 Err(EmailSummaryConfigError::Missing(missing))
@@ -420,10 +421,9 @@ mod tests {
     }
 
     #[test]
-    fn dbos_summary_ingress_rejects_remote_plaintext_and_unknown_selector() {
+    fn native_summary_ingress_rejects_remote_plaintext_without_a_backend_selector() {
         let mut values = enabled();
         values.extend([
-            (crate::trigger::EMAIL_SUMMARY_ENABLED_ENV, "true"),
             (
                 crate::trigger::DBOS_INGRESS_URL_ENV,
                 "http://worker.example.test",
@@ -437,13 +437,6 @@ mod tests {
             EmailSummaryConfig::from_lookup(lookup(&values)),
             Err(EmailSummaryConfigError::InvalidIngress(
                 crate::trigger::DBOS_INGRESS_URL_ENV
-            ))
-        );
-        values.push((crate::trigger::EMAIL_SUMMARY_ENABLED_ENV, "invalid"));
-        assert_eq!(
-            EmailSummaryConfig::from_lookup(lookup(&values)),
-            Err(EmailSummaryConfigError::InvalidBoolean(
-                crate::trigger::EMAIL_SUMMARY_ENABLED_ENV
             ))
         );
     }
@@ -478,7 +471,7 @@ mod tests {
     /// dropping any one of them is refused by name.
     #[test]
     fn required_keys_are_exactly_what_an_enabled_lane_refuses_without() {
-        let keys = required_keys(&lookup(&enabled())).unwrap();
+        let keys = required_keys();
         let complete: Vec<_> = enabled()
             .into_iter()
             .filter(|(key, _)| *key == ENABLED_ENV || keys.contains(key))
@@ -533,12 +526,15 @@ mod tests {
     #[test]
     fn hosted_configuration_rejects_http_ingress() {
         let mut values = enabled();
-        values.retain(|(key, _)| *key != WORKFLOW_INGRESS_ENV);
-        values.push((WORKFLOW_INGRESS_ENV, "http://restate.example.test"));
+        values.retain(|(key, _)| *key != crate::trigger::DBOS_INGRESS_URL_ENV);
+        values.push((
+            crate::trigger::DBOS_INGRESS_URL_ENV,
+            "http://restate.example.test",
+        ));
         assert_eq!(
             EmailSummaryConfig::from_lookup(lookup(&values)),
             Err(EmailSummaryConfigError::InvalidIngress(
-                WORKFLOW_INGRESS_ENV
+                crate::trigger::DBOS_INGRESS_URL_ENV
             ))
         );
     }
@@ -546,8 +542,11 @@ mod tests {
     #[test]
     fn local_harness_may_use_http_ingress() {
         let mut values = enabled();
-        values.retain(|(key, _)| *key != WORKFLOW_INGRESS_ENV);
-        values.push((WORKFLOW_INGRESS_ENV, "http://127.0.0.1:9080"));
+        values.retain(|(key, _)| *key != crate::trigger::DBOS_INGRESS_URL_ENV);
+        values.push((
+            crate::trigger::DBOS_INGRESS_URL_ENV,
+            "http://127.0.0.1:9080",
+        ));
         values.push((CI_HARNESS_ENV, "1"));
         assert!(EmailSummaryConfig::from_lookup(lookup(&values)).is_ok());
     }
@@ -586,5 +585,26 @@ mod tests {
             .request_for(uuid::Uuid::now_v7(), "not-a-digest")
             .expect_err("a non-hex, non-64-char digest is invalid");
         assert!(matches!(error, SummaryError::InvalidRunConfig));
+    }
+    #[test]
+    fn retained_summary_configuration_is_explicit_and_does_not_require_native_ingress() {
+        let mut values = enabled();
+        values.retain(|(key, _)| {
+            !matches!(
+                *key,
+                crate::trigger::DBOS_INGRESS_URL_ENV | crate::trigger::DBOS_INGRESS_TOKEN_ENV
+            )
+        });
+        values.push((WORKFLOW_INGRESS_ENV, "https://retained.example.test"));
+        let config = EmailSummaryConfig::from_legacy_lookup(lookup(&values))
+            .unwrap()
+            .unwrap();
+        assert_eq!(config.workflow_ingress, "https://retained.example.test");
+        assert!(matches!(
+            EmailSummaryConfig::from_lookup(lookup(&values)),
+            Err(EmailSummaryConfigError::Missing(
+                crate::trigger::DBOS_INGRESS_URL_ENV
+            ))
+        ));
     }
 }

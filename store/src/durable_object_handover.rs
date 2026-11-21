@@ -580,12 +580,22 @@ impl RuntimeSelection {
     }
 }
 
-/// Enforce established ownership before providers, schedules or an endpoint start.
-/// Fresh application origin requires the complete canonical native profile. An
-/// activated two-object capture requires only those two callers to stay native.
+/// Require persisted, internally consistent object ownership for the native application.
+/// Missing or foreign history refuses startup; this never creates or activates a receipt.
 ///
 /// # Errors
-/// Missing/foreign epoch, unreadable provenance or contradictory engine selectors.
+/// Propagates unreadable or inconsistent origin and retained-object ownership.
+pub async fn require_native_runtime(
+    postgres: &PostgresDb,
+) -> Result<RuntimeSelection, HandoverError> {
+    runtime_ownership(postgres, true).await
+}
+
+/// Compatibility-worker admission retains explicit legacy selector validation.
+/// The native application calls [`require_native_runtime`] instead.
+///
+/// # Errors
+/// Refuses inconsistent ownership, malformed selectors or missing required native callers.
 pub async fn require_runtime_selection(
     postgres: &PostgresDb,
     lookup: impl Fn(&str) -> Option<String>,
@@ -602,10 +612,42 @@ pub async fn require_runtime_selection(
     {
         return Err(HandoverError::NativeProfile);
     }
+    let selection = runtime_ownership(postgres, false).await?;
+    if selection.legacy_objects() {
+        return Ok(selection);
+    }
+    if !crate::workflow_engine::dbos_executor(&lookup)
+        .map_err(|error| HandoverError::EngineSelection(error.0))?
+    {
+        return Err(HandoverError::NativeExecutor);
+    }
+    let missing = crate::workflow_engine::missing_dbos_flags(&lookup)
+        .map_err(|error| HandoverError::EngineSelection(error.0))?;
+    for selection in crate::workflow_engine::WORKFLOWS
+        .iter()
+        .filter(|selection| matches!(selection.name, "notation" | "project-slack"))
+    {
+        if missing.contains(&selection.flag) {
+            return Err(HandoverError::EngineSelection(selection.flag));
+        }
+    }
+    Ok(selection)
+}
+
+async fn runtime_ownership(
+    postgres: &PostgresDb,
+    require_native: bool,
+) -> Result<RuntimeSelection, HandoverError> {
+    let fresh = crate::postgres::native_origin::admits(postgres)
+        .await
+        .map_err(|error| match error {
+            crate::postgres::native_origin::OriginError::Storage => HandoverError::Storage,
+            _ => HandoverError::Conflict,
+        })?;
     let rows=sqlx::query("SELECT o.ownership_epoch,o.capture_id,h.capture_id AS header_id,h.capture_version,h.origin,h.source_environment,h.capture_sha256,h.notation_machines,h.slack_projects,h.slack_posted_events FROM durable_object_ownership o LEFT JOIN durable_object_handover h ON h.capture_id=o.capture_id")
         .fetch_all(postgres.pool()).await?;
     if rows.is_empty() {
-        if fresh {
+        if fresh || require_native {
             return Err(HandoverError::Conflict);
         }
         return Ok(RuntimeSelection {
@@ -653,21 +695,6 @@ pub async fn require_runtime_selection(
             }
         }
         _ => return Err(HandoverError::Conflict),
-    }
-    if !crate::workflow_engine::dbos_executor(&lookup)
-        .map_err(|error| HandoverError::EngineSelection(error.0))?
-    {
-        return Err(HandoverError::NativeExecutor);
-    }
-    let missing = crate::workflow_engine::missing_dbos_flags(&lookup)
-        .map_err(|error| HandoverError::EngineSelection(error.0))?;
-    for selection in crate::workflow_engine::WORKFLOWS
-        .iter()
-        .filter(|selection| matches!(selection.name, "notation" | "project-slack"))
-    {
-        if missing.contains(&selection.flag) {
-            return Err(HandoverError::EngineSelection(selection.flag));
-        }
     }
     Ok(RuntimeSelection {
         legacy_objects: false,

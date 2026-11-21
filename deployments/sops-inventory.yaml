@@ -38,6 +38,7 @@ common:
 # own project. The runtime KMS key seals Firm integration secrets and Brand
 # social account tokens, and stands alone from the Notion lane.
 independent:
+  NAVIGATOR_DBOS_INGRESS_TOKEN: the row's authenticated native workflow ingress bearer
   NAVIGATOR_RUNTIME_KMS_KEY: the row's own dedicated runtime KMS key resource name
   NAVIGATOR_IDENTITY_PLATFORM_API_KEY: the row's own Identity Platform browser key; turns on email/password sign-in
   NAVIGATOR_FORGEJO_PROVISIONER_TOKEN: the row's own Forgejo provisioning account token; turns on Firm organization provisioning

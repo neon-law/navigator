@@ -24,6 +24,21 @@ required-features = ["restate-compatibility"]
 [lib]
 path = "src/lib.rs"
 
+[[bin]]
+name = "general-nag"
+path = "src/bin/general-nag.rs"
+required-features = ["restate-compatibility"]
+
+[[bin]]
+name = "dri-digest-trigger"
+path = "src/bin/dri-digest-trigger.rs"
+required-features = ["restate-compatibility"]
+
+[[bin]]
+name = "notation-reset-trigger"
+path = "src/bin/notation-reset-trigger.rs"
+required-features = ["restate-compatibility"]
+
 [features]
 default = []
 restate-compatibility = ["dep:restate-sdk", "archives/restate-compatibility", "billing-workflows/restate-compatibility"]

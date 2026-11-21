@@ -15,7 +15,9 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, NaiveDate, Utc};
 use cloud::{StorageError, StorageService};
 use serde::{Deserialize, Serialize};
-use store::surreal::{SurrealConfig, SurrealDb};
+#[cfg(any(test, feature = "restate-compatibility"))]
+use store::surreal::SurrealConfig;
+use store::surreal::SurrealDb;
 
 use billing::gcp_cost::{
     adc_token_provider, billing_export_tables, BillingClient, CostReport, CostRow,
@@ -60,15 +62,27 @@ pub struct SnapshotSummary {
 /// A failure here propagates so the workflow
 /// step retries — the database or GCS being unreachable is transient.
 pub async fn open_resources() -> Result<(Option<SurrealDb>, Arc<dyn StorageService>)> {
-    let db = open_surreal_source(|key| std::env::var(key).ok()).await?;
+    ArchiveSource::Postgres
+        .postgres()
+        .await
+        .context("admit PostgreSQL archives")?;
+    Ok((None, open_storage().await?))
+}
+
+// The attributed retained handler uses this named boundary; normal workflows never read its selector.
+#[cfg(feature = "restate-compatibility")]
+pub(crate) async fn open_legacy_resources() -> Result<(Option<SurrealDb>, Arc<dyn StorageService>)>
+{
+    let db = open_legacy_surreal_source(|key| std::env::var(key).ok()).await?;
     let storage = open_storage().await?;
     Ok((db, storage))
 }
 
-pub(crate) async fn open_surreal_source(
+#[cfg(any(test, feature = "restate-compatibility"))]
+pub(crate) async fn open_legacy_surreal_source(
     get: impl Fn(&str) -> Option<String>,
 ) -> Result<Option<SurrealDb>> {
-    let source = ArchiveSource::from_lookup(&get)?;
+    let source = ArchiveSource::from_legacy_lookup(&get)?;
     if matches!(source, ArchiveSource::Postgres) {
         source
             .postgres()

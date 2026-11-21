@@ -55,6 +55,20 @@ impl SummaryProviders {
         if workflows::EmailSummaryConfig::from_lookup(&get)?.is_none() {
             return Ok(None);
         }
+        Self::build(&get).map(Some)
+    }
+
+    /// Retained compatibility-worker configuration with the original ingress contract.
+    pub fn from_legacy_lookup<F: Fn(&str) -> Option<String>>(
+        get: F,
+    ) -> anyhow::Result<Option<Self>> {
+        if workflows::EmailSummaryConfig::from_legacy_lookup(&get)?.is_none() {
+            return Ok(None);
+        }
+        Self::build(&get).map(Some)
+    }
+
+    fn build<F: Fn(&str) -> Option<String>>(get: &F) -> anyhow::Result<Self> {
         let metadata_url = workflows::harness_override(&get, "GOOGLE_METADATA_URL")
             .map_err(anyhow::Error::msg)?
             .unwrap_or_else(|| DEFAULT_METADATA_TOKEN_URL.to_string());
@@ -65,7 +79,7 @@ impl SummaryProviders {
         if let Some(base_url) = base_url {
             gemini = gemini.with_base_url(base_url);
         }
-        Ok(Some(Self { gemini }))
+        Ok(Self { gemini })
     }
 }
 

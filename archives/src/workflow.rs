@@ -66,6 +66,8 @@ use billing::gcp_cost::CostReport;
 
 use crate::digest::{render_archives_slack_with_failure, DiagnosticReport};
 use crate::postgres::{PostgresExport, POSTGRES_LANE};
+#[cfg(feature = "restate-compatibility")]
+use crate::runner::open_legacy_resources;
 use crate::runner::{cost_phase, open_resources, snapshot_selected, SnapshotSummary};
 use crate::snapshot::{APPLICATION_LANE, TELEMETRY_LANE};
 use crate::tables::ALL_TABLES;
@@ -247,14 +249,6 @@ impl DbosContext {
                 .ok_or_else(|| anyhow::anyhow!("DBOS Archives requires {key}"))
         };
         if let Some(path) = lookup("NAVIGATOR_ARCHIVE_WRITE_ONLY_CONFIG") {
-            anyhow::ensure!(
-                dbos_enabled(&lookup).map_err(anyhow::Error::msg)?,
-                "write-only archive scheduling requires selected DBOS"
-            );
-            anyhow::ensure!(
-                lookup("NAVIGATOR_ARCHIVE_SOURCE").is_none_or(|source| source == "postgres"),
-                "write-only archive scheduling accepts only PostgreSQL sources"
-            );
             let config = crate::write_only::operations::Config::read(std::path::Path::new(&path))?;
             required("NAVIGATOR_POSTGRES_HOST")?;
             if matches!(
@@ -597,12 +591,12 @@ impl ArchivesService {
             // step.
             let summary: SnapshotSummary = ctx
                 .run(|| async {
-                    let (db, storage) = open_resources().await?;
+                    let (db, storage) = open_legacy_resources().await?;
                     let mut summary =
                         snapshot_selected(db.as_ref(), storage.as_ref(), scheduled_for).await;
                     // Retain completed source outcomes for the digest.
                     // PostgreSQL failures terminate the run after notification.
-                    summary.postgres = crate::postgres::export_configured(
+                    summary.postgres = crate::postgres::export_legacy_configured(
                         |k| std::env::var(k).ok(),
                         storage.as_ref(),
                         scheduled_for,
@@ -1148,7 +1142,7 @@ mod tests {
                     configured(candidate)
                 }
             })
-            .is_err());
+            .is_ok());
         }
         config.capture = crate::write_only::operations::CaptureScope::Paired {
             coverage: serde_json::from_str(

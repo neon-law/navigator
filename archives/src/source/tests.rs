@@ -4,7 +4,7 @@ use cloud::StorageService;
 async fn enrolled_postgres_archives_need_no_surreal_coordinates() {
     store::test_support::with_postgres(async {
         for selected in [None, Some("postgres")] {
-            let source = crate::runner::open_surreal_source(|key| {
+            let source = crate::runner::open_legacy_surreal_source(|key| {
                 assert_eq!(key, "NAVIGATOR_ARCHIVE_SOURCE");
                 selected.map(str::to_owned)
             })
@@ -28,7 +28,7 @@ async fn enrolled_postgres_archives_need_no_surreal_coordinates() {
 
 #[tokio::test]
 async fn explicit_all_keeps_the_surreal_connection_requirement() {
-    let error = crate::runner::open_surreal_source(|key| {
+    let error = crate::runner::open_legacy_surreal_source(|key| {
         (key == "NAVIGATOR_ARCHIVE_SOURCE").then(|| "all".into())
     })
     .await

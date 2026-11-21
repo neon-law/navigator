@@ -1651,6 +1651,7 @@ jobs:
             build-args: |
               CRATE=archives
               BIN=trigger
+              FEATURES=restate-compatibility
           - image: navigator-ops
             alias: navigator-surreal-archive
             dockerfile: images/Containerfile.trigger
@@ -1665,12 +1666,14 @@ jobs:
             build-args: |
               CRATE=billing-workflows
               BIN=billing-digest-trigger
+              FEATURES=restate-compatibility
           - image: navigator-dri-digest-trigger
             dockerfile: images/Containerfile.trigger
             runner: blacksmith-4vcpu-ubuntu-2404
             build-args: |
               CRATE=workflows-service
               BIN=dri-digest-trigger
+              FEATURES=restate-compatibility
           - image: navigator-nightly-project-update-trigger
             dockerfile: images/Containerfile.trigger
             runner: blacksmith-4vcpu-ubuntu-2404
@@ -1683,12 +1686,14 @@ jobs:
             build-args: |
               CRATE=workflows-service
               BIN=notation-reset-trigger
+              FEATURES=restate-compatibility
           - image: navigator-general-nag
             dockerfile: images/Containerfile.trigger
             runner: blacksmith-4vcpu-ubuntu-2404
             build-args: |
               CRATE=workflows-service
               BIN=general-nag
+              FEATURES=restate-compatibility
           - image: navigator-social-publish-reconciler-trigger
             dockerfile: images/Containerfile.trigger
             runner: blacksmith-4vcpu-ubuntu-2404

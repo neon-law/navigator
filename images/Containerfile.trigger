@@ -25,6 +25,8 @@ RUN test -n "$CRATE" \
 # billing-workflows also ships `reconcile-trigger`, while the
 # SurrealDB archive selects `hudson`, the binary that owns `ops`.
 ARG BIN=trigger
+# Retained trigger targets require an explicit compatibility build.
+ARG FEATURES=
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends musl-tools pkg-config \
@@ -110,9 +112,11 @@ COPY skills             skills
 # dir, so that tree must be staged too (the 26.11.9 KIND fixture failed on it).
 COPY assumptions        assumptions
 
-RUN if [ "$CRATE" = "billing-workflows" ] && [ "$BIN" = "trigger" ]; then BIN=billing-canary-trigger; fi \
-    && cargo build --release --target x86_64-unknown-linux-musl -p "${CRATE}" --bin "${BIN}" \
-    && cp "target/x86_64-unknown-linux-musl/release/${BIN}" /trigger-bin
+RUN set -eu; \
+    if [ "$CRATE" = "billing-workflows" ] && [ "$BIN" = "trigger" ]; then BIN=billing-canary-trigger; fi; \
+    if [ -n "$FEATURES" ]; then set -- --features "$FEATURES"; else set --; fi; \
+    cargo build --locked --release --target x86_64-unknown-linux-musl -p "${CRATE}" --bin "${BIN}" "$@"; \
+    cp "target/x86_64-unknown-linux-musl/release/${BIN}" /trigger-bin
 
 # ---------- Stage 2: runtime ----------
 

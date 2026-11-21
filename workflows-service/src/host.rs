@@ -202,10 +202,6 @@ pub async fn run_embedded<F>(
 where
     F: FnOnce(&dbos::DBOS) -> dbos::Result<Vec<dbos_engine::ScheduleStarter>> + Send + 'static,
 {
-    anyhow::ensure!(
-        Engine::from_lookup(|key| std::env::var(key).ok())? == Engine::Dbos,
-        "Embedded workflows require NAVIGATOR_WORKFLOW_ENGINE=dbos"
-    );
     Box::pin(run_host(
         Box::pin(shutdown),
         Some(schedules),
@@ -236,26 +232,6 @@ fn restate_endpoint(
     }
 }
 
-#[cfg(not(feature = "restate-compatibility"))]
-fn require_native_routes(
-    engine: Engine,
-    lookup: impl Fn(&str) -> Option<String>,
-) -> anyhow::Result<()> {
-    anyhow::ensure!(
-        engine == Engine::Dbos,
-        "This artifact runs DBOS; retained Restate work requires the compatibility worker"
-    );
-    for workflow in store::workflow_engine::WORKFLOWS {
-        anyhow::ensure!(
-            dbos_engine::flag_enabled(workflow.flag, lookup(workflow.flag).as_deref())?,
-            "{} requires {}=true in the native worker",
-            workflow.name,
-            workflow.flag
-        );
-    }
-    Ok(())
-}
-
 // Erase host callbacks at the crate boundary so both roles share one compiled
 // startup implementation rather than monomorphizing the registry in the app.
 type RegisterExternal =
@@ -275,17 +251,21 @@ async fn run_host(
     let postgres = store::postgres::PostgresDb::application()
         .await
         .context("verify PostgreSQL worker authority")?;
-    let object_selection =
+    let native = mode == HostMode::Embedded || !cfg!(feature = "restate-compatibility");
+    #[cfg(not(feature = "restate-compatibility"))]
+    store::durable_object_handover::require_native_runtime(&postgres)
+        .await
+        .context("verify durable object engine ownership")?;
+    #[cfg(feature = "restate-compatibility")]
+    let object_selection = if native {
+        store::durable_object_handover::require_native_runtime(&postgres).await
+    } else {
         store::durable_object_handover::require_runtime_selection(&postgres, |key| {
             std::env::var(key).ok()
         })
         .await
-        .context("verify durable object engine ownership")?;
-    #[cfg(not(feature = "restate-compatibility"))]
-    anyhow::ensure!(
-        !object_selection.legacy_objects(),
-        "The native artifact requires verified durable object ownership; retain the compatibility worker until handover completes"
-    );
+    }
+    .context("verify durable object engine ownership")?;
     // Drives `DriDigest` and `GeneralNag` staging disclosure and the
     // production-only open-matters follow-up — the same flag the site-wide
     // "simulated projects" banner reads.
@@ -298,10 +278,20 @@ async fn run_host(
     // panics the first real Restate-signed request.
     install_crypto_provider();
     let lookup = |key: &str| std::env::var(key).ok();
-    let enabled = |flag| dbos_engine::flag_enabled(flag, lookup(flag).as_deref());
+    // Native registration is unconditional. Only the explicit standalone replay artifact
+    // retains the old caller-selection contract for retained invocations.
+    let enabled = |flag| {
+        if native {
+            Ok(true)
+        } else {
+            dbos_engine::flag_enabled(flag, lookup(flag).as_deref())
+        }
+    };
     let triage_dbos_enabled = enabled(workflows::trigger::INBOUND_TRIAGE_DBOS_ENABLED_ENV)?;
-    let inbox_attachment_dbos_enabled =
-        enabled(workflows::trigger::INBOX_ATTACHMENT_FILING_DBOS_ENABLED_ENV)?;
+    let inbox_attachment_dbos_enabled = dbos_engine::flag_enabled(
+        workflows::trigger::INBOX_ATTACHMENT_FILING_DBOS_ENABLED_ENV,
+        lookup(workflows::trigger::INBOX_ATTACHMENT_FILING_DBOS_ENABLED_ENV).as_deref(),
+    )?;
     anyhow::ensure!(
         !inbox_attachment_dbos_enabled || triage_dbos_enabled,
         "Inbox attachment filing requires the DBOS Inbox triage workflow"
@@ -309,14 +299,16 @@ async fn run_host(
     let youtube_dbos_enabled = enabled(workflows::trigger::YOUTUBE_COMMENTS_DBOS_ENABLED_ENV)?;
     let sandbox_credit_reset_enabled =
         enabled(workflows::trigger::SANDBOX_CREDIT_RESET_DBOS_ENABLED_ENV)?;
-    let engine = Engine::from_lookup(lookup).context("select the durable engine")?;
+    let engine = if native {
+        Engine::Dbos
+    } else {
+        Engine::from_lookup(lookup).context("select the retained replay engine")?
+    };
     anyhow::ensure!(
         engine == Engine::Dbos
             || !(youtube_dbos_enabled || triage_dbos_enabled || sandbox_credit_reset_enabled),
         "The enabled DBOS workflow routes require the DBOS executor"
     );
-    #[cfg(not(feature = "restate-compatibility"))]
-    require_native_routes(engine, lookup)?;
     let dbos_hosting = if engine == Engine::Dbos {
         let local_providers = local_providers::LocalProviders::from_lookup(
             mode,
@@ -326,37 +318,77 @@ async fn run_host(
         )
         .context("select native local providers")?;
         let settings = dbos_engine::Settings::from_lookup(lookup).context("configure DBOS")?;
-        let general_nag_enabled = workflows::dbos_engine::general_nag::enabled(lookup)
-            .context("read NAVIGATOR_DBOS_GENERAL_NAG_ENABLED")?;
-        let dri_digest_enabled = workflows::dbos_engine::dri_digest::enabled(lookup)
-            .context("read NAVIGATOR_DBOS_DRI_DIGEST_ENABLED")?;
-        let notation_reset_enabled = workflows::dbos_engine::notation_reset::enabled(lookup)
-            .context("read NAVIGATOR_DBOS_NOTATION_RESET_ENABLED")?;
+        let general_nag_enabled = if native {
+            true
+        } else {
+            workflows::dbos_engine::general_nag::enabled(lookup)
+                .context("read NAVIGATOR_DBOS_GENERAL_NAG_ENABLED")?
+        };
+        let dri_digest_enabled = if native {
+            true
+        } else {
+            workflows::dbos_engine::dri_digest::enabled(lookup)
+                .context("read NAVIGATOR_DBOS_DRI_DIGEST_ENABLED")?
+        };
+        let notation_reset_enabled = if native {
+            true
+        } else {
+            workflows::dbos_engine::notation_reset::enabled(lookup)
+                .context("read NAVIGATOR_DBOS_NOTATION_RESET_ENABLED")?
+        };
         let profit_digest_enabled =
             workflows::dbos_engine::profit_digest::configured(simulated_matters, lookup);
-        let archives_enabled = archives::workflow::dbos_enabled(lookup)
-            .map_err(anyhow::Error::msg)
-            .context("read NAVIGATOR_DBOS_ARCHIVES_ENABLED")?;
-        let reconcile_enabled = crate::dbos_reconcile::enabled(lookup)
-            .map_err(anyhow::Error::msg)
-            .context("read NAVIGATOR_DBOS_RECONCILE_INVOICES_ENABLED")?;
-        let finance_aggregate_enabled = crate::dbos_finance_aggregate::enabled(lookup)
-            .map_err(anyhow::Error::msg)
-            .context("read NAVIGATOR_DBOS_FINANCE_AGGREGATE_ENABLED")?;
-        let nightly_project_update_enabled = crate::dbos_nightly_project_update::enabled(lookup)
-            .map_err(anyhow::Error::msg)
-            .context("read NAVIGATOR_DBOS_NIGHTLY_PROJECT_UPDATE_ENABLED")?;
-        let email_summary_enabled = crate::dbos_email_summary::enabled(lookup)
-            .map_err(anyhow::Error::msg)
-            .context("read NAVIGATOR_DBOS_EMAIL_SUMMARY_ENABLED")?;
-        let inbound_message_alert_enabled = crate::dbos_inbound_message_alert::enabled(lookup)
-            .map_err(anyhow::Error::msg)
-            .context("read NAVIGATOR_DBOS_INBOUND_MESSAGE_ALERT_ENABLED")?;
+        let archives_enabled = if native {
+            true
+        } else {
+            archives::workflow::dbos_enabled(lookup)
+                .map_err(anyhow::Error::msg)
+                .context("read NAVIGATOR_DBOS_ARCHIVES_ENABLED")?
+        };
+        let reconcile_enabled = if native {
+            true
+        } else {
+            crate::dbos_reconcile::enabled(lookup)
+                .map_err(anyhow::Error::msg)
+                .context("read NAVIGATOR_DBOS_RECONCILE_INVOICES_ENABLED")?
+        };
+        let finance_aggregate_enabled = if native {
+            true
+        } else {
+            crate::dbos_finance_aggregate::enabled(lookup)
+                .map_err(anyhow::Error::msg)
+                .context("read NAVIGATOR_DBOS_FINANCE_AGGREGATE_ENABLED")?
+        };
+        let nightly_project_update_enabled = if native {
+            true
+        } else {
+            crate::dbos_nightly_project_update::enabled(lookup)
+                .map_err(anyhow::Error::msg)
+                .context("read NAVIGATOR_DBOS_NIGHTLY_PROJECT_UPDATE_ENABLED")?
+        };
+        let email_summary_enabled = if native {
+            true
+        } else {
+            crate::dbos_email_summary::enabled(lookup)
+                .map_err(anyhow::Error::msg)
+                .context("read NAVIGATOR_DBOS_EMAIL_SUMMARY_ENABLED")?
+        };
+        let inbound_message_alert_enabled = if native {
+            true
+        } else {
+            crate::dbos_inbound_message_alert::enabled(lookup)
+                .map_err(anyhow::Error::msg)
+                .context("read NAVIGATOR_DBOS_INBOUND_MESSAGE_ALERT_ENABLED")?
+        };
         // The Project Slack lane posts with each Project's owning Firm's bot
         // (ENG-392), so it needs no deployment-wide SLACK_BOT_TOKEN.
-        let project_slack_enabled = crate::dbos_project_slack::enabled(lookup)
-            .map_err(anyhow::Error::msg)
-            .context("read NAVIGATOR_DBOS_PROJECT_SLACK_ENABLED")?;
+        let project_slack_enabled = if native {
+            true
+        } else {
+            crate::dbos_project_slack::enabled(lookup)
+                .map_err(anyhow::Error::msg)
+                .context("read NAVIGATOR_DBOS_PROJECT_SLACK_ENABLED")?
+        };
         let project_slack_postgres = if project_slack_enabled {
             Some(
                 store::postgres::PostgresDb::from_env()
@@ -366,13 +398,20 @@ async fn run_host(
         } else {
             None
         };
-        let notation_enabled = crate::dbos_notation::enabled(lookup)
-            .map_err(anyhow::Error::msg)
-            .context("read NAVIGATOR_DBOS_NOTATION_ENABLED")?;
-        let (social_publisher_enabled, social_reconciler_enabled) =
+        let notation_enabled = if native {
+            true
+        } else {
+            crate::dbos_notation::enabled(lookup)
+                .map_err(anyhow::Error::msg)
+                .context("read NAVIGATOR_DBOS_NOTATION_ENABLED")?
+        };
+        let (social_publisher_enabled, social_reconciler_enabled) = if native {
+            (true, true)
+        } else {
             crate::dbos_social_publisher::enabled(lookup)
                 .map_err(anyhow::Error::msg)
-                .context("validate DBOS social registration flags")?;
+                .context("validate DBOS social registration flags")?
+        };
         let finance_claim_postgres =
             if finance_aggregate_enabled || notation_enabled || email_summary_enabled {
                 Some(
@@ -428,7 +467,7 @@ async fn run_host(
         } else {
             None
         };
-        let general_nag = if general_nag_enabled {
+        let general_nag = if native || general_nag_enabled {
             let source = surreal
                 .clone()
                 .context("GeneralNag database not configured")?;
@@ -445,7 +484,7 @@ async fn run_host(
         } else {
             None
         };
-        let notation_reset = if notation_reset_enabled {
+        let notation_reset = if native || notation_reset_enabled {
             let source = surreal
                 .clone()
                 .context("NotationReset database not configured")?;
@@ -504,7 +543,7 @@ async fn run_host(
             None
         };
         let dri_digest = if let Some(local) = &local_providers {
-            if dri_digest_enabled {
+            if native || dri_digest_enabled {
                 Some(
                     local.dri_digest(
                         surreal
@@ -516,6 +555,18 @@ async fn run_host(
             } else {
                 None
             }
+        } else if native {
+            Some(
+                workflows::dbos_engine::dri_digest::Context::from_lookup(
+                    surreal
+                        .clone()
+                        .context("DriDigest database not configured")?,
+                    notifier_from_env(),
+                    simulated_matters,
+                    lookup,
+                )
+                .context("validate DriDigest delivery configuration")?,
+            )
         } else {
             crate::dri_digest::dbos_context(
                 surreal.clone(),
@@ -525,8 +576,9 @@ async fn run_host(
             )
             .context("configure DBOS DriDigest")?
         };
-        let billing_canary = if workflows::dbos_engine::billing_canary::enabled(lookup)
-            .context("read NAVIGATOR_DBOS_BILLING_CANARY_ENABLED")?
+        let billing_canary = if native
+            || workflows::dbos_engine::billing_canary::enabled(lookup)
+                .context("read NAVIGATOR_DBOS_BILLING_CANARY_ENABLED")?
         {
             Some(if let Some(local) = &local_providers {
                 local.canary(&lookup)?
@@ -537,8 +589,9 @@ async fn run_host(
         } else {
             None
         };
-        let billing_digest = if workflows::dbos_engine::billing_digest::enabled(lookup)
-            .context("read NAVIGATOR_DBOS_BILLING_DIGEST_ENABLED")?
+        let billing_digest = if native
+            || workflows::dbos_engine::billing_digest::enabled(lookup)
+                .context("read NAVIGATOR_DBOS_BILLING_DIGEST_ENABLED")?
         {
             Some(
                 workflows::dbos_engine::billing_digest::Context::from_lookup(lookup)
@@ -547,7 +600,7 @@ async fn run_host(
         } else {
             None
         };
-        let archives_context = if archives_enabled {
+        let archives_context = if native || archives_enabled {
             Some(if let Some(local) = &local_providers {
                 local.archives()
             } else {
@@ -774,7 +827,13 @@ async fn run_host(
     let dbos_nightly_staging_messages_channel = staging_messages_channel.clone();
     // Nightly Folder convergence must remain available without Slack configuration.
     // The parent validates/posts Slack only after visiting the full Project roster.
-    let summary_providers = SummaryProviders::from_env().context("configure summary providers")?;
+    let summary_providers =
+        if native || crate::dbos_email_summary::enabled(lookup).map_err(anyhow::Error::msg)? {
+            SummaryProviders::from_env()
+        } else {
+            SummaryProviders::from_legacy_lookup(lookup)
+        }
+        .context("configure summary providers")?;
     #[cfg(feature = "restate-compatibility")]
     let email_summary = EmailSummaryService::new(
         surreal.clone(),

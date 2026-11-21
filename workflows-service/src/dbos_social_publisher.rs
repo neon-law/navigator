@@ -183,19 +183,11 @@ impl PublisherContext {
     }
 }
 
-/// How the reconciler's inbound-notice recovery reaches the alert, chosen by
-/// the `InboundMessageAlert` DBOS switch. The DBOS branch posts to the
-/// worker's own authenticated ingress; the Restate branch keeps the broker
-/// settings the Restate endpoint used while that switch is off.
+/// The native reconciler's authenticated inbound-notice recovery route.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AlertRoute {
-    /// The worker's DBOS ingress and bearer.
-    Dbos { ingress: String, token: String },
-    /// The Restate ingress and optional bearer.
-    Restate {
-        ingress: String,
-        token: Option<String>,
-    },
+pub struct AlertRoute {
+    ingress: String,
+    token: String,
 }
 
 /// The reconciler's dependencies: the store it reads due posts and notices
@@ -229,19 +221,15 @@ impl ReconcilerContext {
         get: impl Fn(&str) -> Option<String>,
     ) -> Result<Self, ServiceTargetError> {
         let alert_route = match workflows::trigger::service_target(
-            workflows::trigger::INBOUND_MESSAGE_ALERT_ENABLED_ENV,
-            get(workflows::trigger::INBOUND_MESSAGE_ALERT_ENABLED_ENV).as_deref(),
             get(workflows::trigger::DBOS_INGRESS_URL_ENV),
             get(workflows::trigger::DBOS_INGRESS_TOKEN_ENV),
         ) {
-            Ok(ServiceTarget::Dbos { ingress, token }) => Some(AlertRoute::Dbos { ingress, token }),
-            Ok(ServiceTarget::Restate) => get("RESTATE_BROKER_URL")
-                .map(|url| url.trim().to_owned())
-                .filter(|url| !url.is_empty())
-                .map(|ingress| AlertRoute::Restate {
-                    ingress,
-                    token: get("RESTATE_AUTH_TOKEN").filter(|token| !token.trim().is_empty()),
-                }),
+            Ok(ServiceTarget::Dbos { ingress, token }) => Some(AlertRoute { ingress, token }),
+            Ok(ServiceTarget::Restate) => {
+                return Err(ServiceTargetError::Missing(
+                    workflows::trigger::DBOS_INGRESS_URL_ENV,
+                ))
+            }
             Err(error) => return Err(error),
         };
         Ok(Self {
@@ -642,7 +630,7 @@ async fn recover_notice_step(
             let tick = tick.clone();
             async move {
                 match route {
-                    Some(AlertRoute::Dbos { ingress, token }) => {
+                    Some(AlertRoute { ingress, token }) => {
                         workflows::trigger::start_dbos_inbound_message_alert(
                             &ingress,
                             &token,
@@ -668,18 +656,6 @@ async fn recover_notice_step(
                         .await
                         .map_err(|_| dbos::Error::Application(SocialPublishDbosError::Dispatch))
                     }
-                    Some(AlertRoute::Restate { ingress, token }) => workflows::start_workflow(
-                        &ingress,
-                        token.as_deref(),
-                        "InboundMessageAlert",
-                        &format!("{message_id}:{tick}"),
-                        "run",
-                        &workflows::InboundMessageAlertRequest { message_id },
-                        true,
-                    )
-                    .await
-                    .map(|_| ())
-                    .map_err(|_| dbos::Error::Application(SocialPublishDbosError::Dispatch)),
                     None => Err(dbos::Error::Application(SocialPublishDbosError::Dispatch)),
                 }
             }

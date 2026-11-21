@@ -439,25 +439,37 @@ pub enum ServiceTargetError {
 /// [`ServiceTargetError::Switch`] for a switch other than `true` / `false`;
 /// [`ServiceTargetError::Missing`] for an absent or blank DBOS ingress
 /// setting while the switch is on.
-pub fn service_target(
+pub fn legacy_service_target(
     flag: &'static str,
     enabled: Option<&str>,
     dbos_ingress_url: Option<String>,
     dbos_ingress_token: Option<String>,
 ) -> Result<ServiceTarget, ServiceTargetError> {
     if crate::flags::flag_enabled(flag, enabled)? {
-        let ingress = dbos_ingress_url
-            .map(|url| url.trim().trim_end_matches('/').to_owned())
-            .filter(|url| !url.is_empty())
-            .ok_or(ServiceTargetError::Missing(DBOS_INGRESS_URL_ENV))?;
-        let token = dbos_ingress_token
-            .map(|token| token.trim().to_owned())
-            .filter(|token| !token.is_empty())
-            .ok_or(ServiceTargetError::Missing(DBOS_INGRESS_TOKEN_ENV))?;
-        Ok(ServiceTarget::Dbos { ingress, token })
+        service_target(dbos_ingress_url, dbos_ingress_token)
     } else {
         Ok(ServiceTarget::Restate)
     }
+}
+
+/// Resolve the normal application's native ingress without a legacy ownership selector.
+/// Missing configuration fails rather than falling back to another durable engine.
+///
+/// # Errors
+/// Returns the missing DBOS coordinate; never includes its value.
+pub fn service_target(
+    dbos_ingress_url: Option<String>,
+    dbos_ingress_token: Option<String>,
+) -> Result<ServiceTarget, ServiceTargetError> {
+    let ingress = dbos_ingress_url
+        .map(|url| url.trim().trim_end_matches('/').to_owned())
+        .filter(|url| !url.is_empty())
+        .ok_or(ServiceTargetError::Missing(DBOS_INGRESS_URL_ENV))?;
+    let token = dbos_ingress_token
+        .map(|token| token.trim().to_owned())
+        .filter(|token| !token.is_empty())
+        .ok_or(ServiceTargetError::Missing(DBOS_INGRESS_TOKEN_ENV))?;
+    Ok(ServiceTarget::Dbos { ingress, token })
 }
 
 /// The base URL of the worker's authenticated DBOS ingress. Ungated: every
@@ -528,14 +540,9 @@ pub const SOCIAL_PUBLISH_RECONCILER_ENABLED_ENV: &str =
 #[cfg(feature = "dbos")]
 /// Which durable ingress a thin daily trigger hands its run to.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TriggerTarget {
-    /// The worker's authenticated DBOS ingress; `ingress` has no trailing `/`.
-    Dbos { ingress: String, token: String },
-    /// The Restate ingress during the transition.
-    Restate {
-        ingress: String,
-        auth_token: Option<String>,
-    },
+pub struct TriggerTarget {
+    pub ingress: String,
+    pub token: String,
 }
 
 #[cfg(feature = "dbos")]
@@ -562,7 +569,6 @@ pub enum TriggerTargetError {
 /// [`TriggerTargetError::Switch`] for a switch other than `true` / `false`;
 /// [`TriggerTargetError::Missing`] for an absent or blank ingress setting.
 pub fn trigger_target(
-    flag: &'static str,
     lookup: impl Fn(&str) -> Option<String>,
 ) -> Result<TriggerTarget, TriggerTargetError> {
     let required = |name: &'static str| {
@@ -570,23 +576,16 @@ pub fn trigger_target(
             .filter(|value| !value.trim().is_empty())
             .ok_or(TriggerTargetError::Missing(name))
     };
-    if crate::dbos_engine::flag_enabled(flag, lookup(flag).as_deref())? {
-        let ingress = required(DBOS_INGRESS_URL_ENV)?
-            .trim_end_matches('/')
-            .to_owned();
-        if ingress.trim().is_empty() {
-            return Err(TriggerTargetError::Missing(DBOS_INGRESS_URL_ENV));
-        }
-        Ok(TriggerTarget::Dbos {
-            ingress,
-            token: required(DBOS_INGRESS_TOKEN_ENV)?,
-        })
-    } else {
-        Ok(TriggerTarget::Restate {
-            ingress: required(RESTATE_INGRESS_URL_ENV)?,
-            auth_token: lookup(RESTATE_AUTH_TOKEN_ENV),
-        })
+    let ingress = required(DBOS_INGRESS_URL_ENV)?
+        .trim_end_matches('/')
+        .to_owned();
+    if ingress.trim().is_empty() {
+        return Err(TriggerTargetError::Missing(DBOS_INGRESS_URL_ENV));
     }
+    Ok(TriggerTarget {
+        ingress,
+        token: required(DBOS_INGRESS_TOKEN_ENV)?,
+    })
 }
 
 #[cfg(feature = "dbos")]
@@ -672,10 +671,6 @@ pub async fn start_approved_inbox_filing(
     approval: &store::inbox_triage::FilingApproval,
 ) -> Result<(), TriggerError> {
     let target = service_target(
-        INBOUND_TRIAGE_DBOS_ENABLED_ENV,
-        std::env::var(INBOUND_TRIAGE_DBOS_ENABLED_ENV)
-            .ok()
-            .as_deref(),
         std::env::var(DBOS_INGRESS_URL_ENV).ok(),
         std::env::var(DBOS_INGRESS_TOKEN_ENV).ok(),
     )
@@ -692,16 +687,53 @@ pub async fn start_approved_inbox_filing(
     .await
 }
 
-/// Select one durable engine for a persisted inbound Message.
+/// Submit one persisted Message to its admitted native triage owner.
 pub async fn start_inbound_triage(message_id: uuid::Uuid) -> Result<(), String> {
+    start_inbound_triage_from_lookup(message_id, |key| std::env::var(key).ok()).await
+}
+
+/// Submit a persisted Message through the configured authenticated native ingress.
+///
+/// # Errors
+/// Missing native coordinates or a rejected/failed submission; never selects a legacy backend.
+pub async fn start_inbound_triage_from_lookup(
+    message_id: uuid::Uuid,
+    get: impl Fn(&str) -> Option<String>,
+) -> Result<(), String> {
+    let target = service_target(get(DBOS_INGRESS_URL_ENV), get(DBOS_INGRESS_TOKEN_ENV))
+        .map_err(|error| error.to_string())?;
+    let ServiceTarget::Dbos { ingress, token } = target else {
+        return Err("native triage ingress is unavailable".into());
+    };
+    start_dbos_at(
+        &ingress,
+        &token,
+        "/internal/dbos/inbound-triage",
+        &crate::InboundTriageRequest { message_id },
+    )
+    .await
+    .map_err(|error| error.to_string())
+}
+
+/// Retained compatibility-handler hook with its original ownership-selection contract.
+pub async fn start_inbound_triage_legacy(message_id: uuid::Uuid) -> Result<(), String> {
+    start_inbound_triage_legacy_from_lookup(message_id, |key| std::env::var(key).ok()).await
+}
+
+/// Explicit retained-handler configuration seam, preserving historical selection and wire identity.
+///
+/// # Errors
+/// Malformed retained ownership settings or a rejected/failed selected submission.
+pub async fn start_inbound_triage_legacy_from_lookup(
+    message_id: uuid::Uuid,
+    get: impl Fn(&str) -> Option<String>,
+) -> Result<(), String> {
     let request = crate::InboundTriageRequest { message_id };
-    let target = service_target(
+    let target = legacy_service_target(
         INBOUND_TRIAGE_DBOS_ENABLED_ENV,
-        std::env::var(INBOUND_TRIAGE_DBOS_ENABLED_ENV)
-            .ok()
-            .as_deref(),
-        std::env::var(DBOS_INGRESS_URL_ENV).ok(),
-        std::env::var(DBOS_INGRESS_TOKEN_ENV).ok(),
+        get(INBOUND_TRIAGE_DBOS_ENABLED_ENV).as_deref(),
+        get(DBOS_INGRESS_URL_ENV),
+        get(DBOS_INGRESS_TOKEN_ENV),
     )
     .map_err(|error| error.to_string())?;
     match target {
@@ -709,15 +741,13 @@ pub async fn start_inbound_triage(message_id: uuid::Uuid) -> Result<(), String> 
             start_dbos_at(&ingress, &token, "/internal/dbos/inbound-triage", &request).await
         }
         ServiceTarget::Restate => {
-            let Some(ingress) = std::env::var("RESTATE_BROKER_URL")
-                .ok()
-                .filter(|value| !value.trim().is_empty())
+            let Some(ingress) = get("RESTATE_BROKER_URL").filter(|value| !value.trim().is_empty())
             else {
                 return Ok(());
             };
             start_workflow(
                 &ingress,
-                std::env::var("RESTATE_AUTH_TOKEN").ok().as_deref(),
+                get("RESTATE_AUTH_TOKEN").as_deref(),
                 "InboundTriage",
                 &message_id.to_string(),
                 "run",
@@ -1164,8 +1194,6 @@ mod target_tests {
     use super::{dbos_owns_schedule, trigger_target, TriggerTarget, TriggerTargetError};
     use crate::dbos_engine::SettingsError;
 
-    const FLAG: &str = "NAVIGATOR_DBOS_RECONCILE_INVOICES_ENABLED";
-
     fn env<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
         move |name| {
             pairs
@@ -1176,103 +1204,43 @@ mod target_tests {
     }
 
     #[test]
-    fn trigger_target_stays_on_restate_until_the_workflow_switch_is_true() {
+    fn native_trigger_requires_credentials_without_reading_legacy_selectors() {
+        let target = trigger_target(|key| match key {
+            super::DBOS_INGRESS_URL_ENV => Some("http://worker:9083//".into()),
+            super::DBOS_INGRESS_TOKEN_ENV => Some("synthetic".into()),
+            _ => panic!("native trigger must not read another selector"),
+        })
+        .unwrap();
         assert_eq!(
-            trigger_target(FLAG, env(&[("RESTATE_INGRESS_URL", "http://restate:8080")])),
-            Ok(TriggerTarget::Restate {
-                ingress: "http://restate:8080".into(),
-                auth_token: None,
-            })
-        );
-        assert_eq!(
-            trigger_target(
-                FLAG,
-                env(&[
-                    (FLAG, "false"),
-                    ("RESTATE_INGRESS_URL", "https://restate.example.invalid"),
-                    ("RESTATE_AUTH_TOKEN", "tenant-bearer"),
-                    ("NAVIGATOR_DBOS_INGRESS_URL", "http://worker:9080"),
-                ])
-            ),
-            Ok(TriggerTarget::Restate {
-                ingress: "https://restate.example.invalid".into(),
-                auth_token: Some("tenant-bearer".into()),
-            })
-        );
-        assert_eq!(
-            trigger_target(FLAG, env(&[])),
-            Err(TriggerTargetError::Missing("RESTATE_INGRESS_URL"))
-        );
-    }
-
-    #[test]
-    fn trigger_target_on_dbos_requires_a_non_blank_ingress_and_bearer() {
-        assert_eq!(
-            trigger_target(
-                FLAG,
-                env(&[
-                    (FLAG, " true "),
-                    ("NAVIGATOR_DBOS_INGRESS_URL", "http://worker:9080//"),
-                    ("NAVIGATOR_DBOS_INGRESS_TOKEN", "worker-secret"),
-                ])
-            ),
-            Ok(TriggerTarget::Dbos {
-                ingress: "http://worker:9080".into(),
-                token: "worker-secret".into(),
-            })
+            target,
+            TriggerTarget {
+                ingress: "http://worker:9083".into(),
+                token: "synthetic".into()
+            }
         );
         for (pairs, missing) in [
+            (&[][..], super::DBOS_INGRESS_URL_ENV),
             (
-                &[(FLAG, "true"), ("NAVIGATOR_DBOS_INGRESS_TOKEN", "s")][..],
-                "NAVIGATOR_DBOS_INGRESS_URL",
+                &[(super::DBOS_INGRESS_URL_ENV, "///")][..],
+                super::DBOS_INGRESS_URL_ENV,
+            ),
+            (
+                &[(super::DBOS_INGRESS_URL_ENV, "http://worker")][..],
+                super::DBOS_INGRESS_TOKEN_ENV,
             ),
             (
                 &[
-                    (FLAG, "true"),
-                    ("NAVIGATOR_DBOS_INGRESS_URL", "  "),
-                    ("NAVIGATOR_DBOS_INGRESS_TOKEN", "s"),
+                    (super::DBOS_INGRESS_URL_ENV, "http://worker"),
+                    (super::DBOS_INGRESS_TOKEN_ENV, " "),
                 ][..],
-                "NAVIGATOR_DBOS_INGRESS_URL",
-            ),
-            (
-                &[
-                    (FLAG, "true"),
-                    ("NAVIGATOR_DBOS_INGRESS_URL", "///"),
-                    ("NAVIGATOR_DBOS_INGRESS_TOKEN", "s"),
-                ][..],
-                "NAVIGATOR_DBOS_INGRESS_URL",
-            ),
-            (
-                &[
-                    (FLAG, "true"),
-                    ("NAVIGATOR_DBOS_INGRESS_URL", "http://worker"),
-                ][..],
-                "NAVIGATOR_DBOS_INGRESS_TOKEN",
-            ),
-            (
-                &[
-                    (FLAG, "true"),
-                    ("NAVIGATOR_DBOS_INGRESS_URL", "http://worker"),
-                    ("NAVIGATOR_DBOS_INGRESS_TOKEN", " "),
-                ][..],
-                "NAVIGATOR_DBOS_INGRESS_TOKEN",
+                super::DBOS_INGRESS_TOKEN_ENV,
             ),
         ] {
             assert_eq!(
-                trigger_target(FLAG, env(pairs)),
+                trigger_target(env(pairs)),
                 Err(TriggerTargetError::Missing(missing))
             );
         }
-        assert_eq!(
-            trigger_target(FLAG, env(&[(FLAG, "yes")])),
-            Err(TriggerTargetError::Switch(SettingsError::Invalid(FLAG)))
-        );
-        assert_eq!(
-            trigger_target(FLAG, env(&[("RESTATE_INGRESS_URL", " ")]))
-                .unwrap_err()
-                .to_string(),
-            "RESTATE_INGRESS_URL must be set for the selected workflow ingress"
-        );
     }
 
     #[test]
@@ -1292,8 +1260,8 @@ mod target_tests {
 #[cfg(test)]
 mod service_target_tests {
     use super::{
-        service_target, social_publish_reconciler_workflow_id, social_publisher_workflow_id,
-        ServiceTarget, ServiceTargetError,
+        legacy_service_target as service_target, social_publish_reconciler_workflow_id,
+        social_publisher_workflow_id, ServiceTarget, ServiceTargetError,
     };
     use crate::flags::SettingsError;
     use chrono::TimeZone;
@@ -1417,5 +1385,43 @@ mod service_target_tests {
         )
         .await
         .expect("reconciler handoff accepted");
+    }
+}
+
+#[cfg(test)]
+mod native_target_tests {
+    use super::{
+        service_target, ServiceTarget, ServiceTargetError, DBOS_INGRESS_TOKEN_ENV,
+        DBOS_INGRESS_URL_ENV,
+    };
+
+    #[test]
+    fn native_manual_routing_needs_no_engine_or_timer_switch() {
+        assert_eq!(
+            service_target(
+                Some(" http://worker:9083/ ".into()),
+                Some(" secret ".into())
+            ),
+            Ok(ServiceTarget::Dbos {
+                ingress: "http://worker:9083".into(),
+                token: "secret".into()
+            })
+        );
+    }
+
+    #[test]
+    fn missing_native_credentials_never_select_a_legacy_backend() {
+        for (ingress, token, missing) in [
+            (None, Some("t"), DBOS_INGRESS_URL_ENV),
+            (Some(" "), Some("t"), DBOS_INGRESS_URL_ENV),
+            (Some("///"), Some("t"), DBOS_INGRESS_URL_ENV),
+            (Some("http://worker"), None, DBOS_INGRESS_TOKEN_ENV),
+            (Some("http://worker"), Some(" "), DBOS_INGRESS_TOKEN_ENV),
+        ] {
+            assert_eq!(
+                service_target(ingress.map(str::to_owned), token.map(str::to_owned)),
+                Err(ServiceTargetError::Missing(missing))
+            );
+        }
     }
 }

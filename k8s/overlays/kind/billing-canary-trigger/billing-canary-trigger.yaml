@@ -15,7 +15,7 @@
 #   kubectl create job --from=cronjob/billing-canary-trigger billing-canary-manual -n navigator
 #
 # Image `navigator-billing-canary-trigger:dev` is built from the shared
-# `images/Containerfile.trigger` (--build-arg CRATE=billing-workflows --build-arg BIN=billing-canary-trigger).
+# `images/Containerfile.trigger` (--build-arg CRATE=billing-workflows --build-arg BIN=billing-canary-trigger --build-arg FEATURES=restate-compatibility).
 apiVersion: batch/v1
 kind: CronJob
 metadata:

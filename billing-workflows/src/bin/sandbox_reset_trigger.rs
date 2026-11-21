@@ -18,34 +18,13 @@ async fn main() -> Result<()> {
 
     let now = chrono::Utc::now();
     let run_id = store::sandbox_usage::billing_period(now.year(), now.month());
-    let target = workflows::trigger::trigger_target(
-        workflows::trigger::SANDBOX_CREDIT_RESET_DBOS_ENABLED_ENV,
-        |name| std::env::var(name).ok(),
-    )
-    .context("selecting the SandboxCreditReset trigger ingress")?;
-    match target {
-        workflows::trigger::TriggerTarget::Dbos { ingress, token } => {
-            workflows::trigger::start_dbos_sandbox_credit_reset(&ingress, &token, &run_id)
-                .await
-                .context("triggering SandboxCreditReset through DBOS ingress")?;
-        }
-        workflows::trigger::TriggerTarget::Restate {
-            ingress,
-            auth_token,
-        } => {
-            let _response = workflows::start_workflow(
-                &ingress,
-                auth_token.as_deref(),
-                "SandboxCreditReset",
-                &run_id,
-                "run",
-                &serde_json::json!({}),
-                true, // one-way: accept the invocation and exit; Restate runs it.
-            )
-            .await
-            .context("triggering SandboxCreditReset workflow")?;
-        }
-    }
+    let target = workflows::trigger::trigger_target(|name| std::env::var(name).ok())
+        .context("selecting the SandboxCreditReset trigger ingress")?;
+    let workflows::trigger::TriggerTarget { ingress, token } = target;
+
+    workflows::trigger::start_dbos_sandbox_credit_reset(&ingress, &token, &run_id)
+        .await
+        .context("triggering SandboxCreditReset through DBOS ingress")?;
 
     // run_id (a billing month, "YYYY-MM") intentionally stays out of the
     // log lines: CodeQL's rust/cleartext-logging query flags any period

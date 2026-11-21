@@ -1,4 +1,4 @@
-//! Explicit receipt-preserving recovery on the selected `EmailSummary` engine.
+//! Native receipt-preserving recovery and explicit retained `EmailSummary` repair.
 //!
 //! DBOS queues an idempotent recovery operation through its authenticated ingress.
 //! Restate frees a completed invocation key before resubmitting the same request.
@@ -42,58 +42,70 @@ async fn redrive(
         .context("configure inbound email summary lane")?
         .with_context(|| "NAVIGATOR_SUMMARY_ENABLED is not set; nothing to redrive against")?;
     let target = workflows::trigger::service_target(
-        workflows::trigger::EMAIL_SUMMARY_ENABLED_ENV,
-        std::env::var(workflows::trigger::EMAIL_SUMMARY_ENABLED_ENV)
-            .ok()
-            .as_deref(),
         std::env::var(workflows::trigger::DBOS_INGRESS_URL_ENV).ok(),
         std::env::var(workflows::trigger::DBOS_INGRESS_TOKEN_ENV).ok(),
     )
     .context("configure the selected summary recovery ingress")?;
-    if let workflows::trigger::ServiceTarget::Dbos { ingress, token } = target {
-        let operation_id = recovery_id
-            .context("--recovery-id is required for DBOS; reuse it when retrying this operation")?;
-        let receipt = store::email_receipts::find_by_id(&surreal, receipt_id)
-            .await
-            .context("load the receipt")?
-            .context("receipt not found")?;
-        let request = config
-            .request_for(receipt_id, &receipt.raw_digest)
-            .context("build the summary request")?;
-        workflows::trigger::start_dbos_email_summary_recovery(
-            &ingress,
-            &token,
-            &workflows::trigger::EmailSummaryRecoveryRequest {
-                operation_id,
-                from_recovery,
-                after_failed_result: after_failed_result.map(str::to_owned),
-                request,
-            },
-        )
+    let workflows::trigger::ServiceTarget::Dbos { ingress, token } = target else {
+        bail!("native summary recovery ingress is unavailable");
+    };
+    let operation_id = recovery_id
+        .context("--recovery-id is required for DBOS; reuse it when retrying this operation")?;
+    let receipt = store::email_receipts::find_by_id(&surreal, receipt_id)
         .await
-        .context("queue the selected DBOS recovery")?;
-        println!("EmailSummary recovery queued");
-        return Ok(());
-    }
-    if recovery_id.is_some() || from_recovery.is_some() {
-        bail!("recovery identity options require the DBOS EmailSummary selection");
-    }
-    let admin_url = std::env::var("RESTATE_ADMIN_URL")
-        .context("RESTATE_ADMIN_URL is required to purge the completed invocation")?;
-    let admin_token = std::env::var("RESTATE_ADMIN_TOKEN")
-        .context("RESTATE_ADMIN_TOKEN is required to purge the completed invocation")?;
-    let auth_token = std::env::var("RESTATE_AUTH_TOKEN").ok();
-
-    redrive_with(
-        &surreal,
-        &admin_url,
-        &admin_token,
-        auth_token.as_deref(),
-        &config,
-        receipt_id,
-        after_failed_result,
+        .context("load the receipt")?
+        .context("receipt not found")?;
+    let request = config
+        .request_for(receipt_id, &receipt.raw_digest)
+        .context("build the summary request")?;
+    workflows::trigger::start_dbos_email_summary_recovery(
+        &ingress,
+        &token,
+        &workflows::trigger::EmailSummaryRecoveryRequest {
+            operation_id,
+            from_recovery,
+            after_failed_result: after_failed_result.map(str::to_owned),
+            request,
+        },
     )
     .await
+    .context("queue the selected DBOS recovery")?;
+    println!("EmailSummary recovery queued");
+    Ok(())
+}
+
+/// Explicit retained Restate repair; never selected from application feature settings.
+pub fn run_legacy(receipt: Uuid, after_failed_result: Option<&str>) -> Result<()> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("build tokio runtime")?;
+    runtime.block_on(async {
+        let surreal = crate::application_store()
+            .await
+            .context("verify PostgreSQL application authority")?;
+        let config =
+            workflows::EmailSummaryConfig::from_legacy_lookup(|key| std::env::var(key).ok())
+                .context("configure retained email summary lane")?
+                .context("NAVIGATOR_SUMMARY_ENABLED is not set; nothing to redrive against")?;
+        let receipt_id = receipt;
+        let admin_url = std::env::var("RESTATE_ADMIN_URL")
+            .context("RESTATE_ADMIN_URL is required to purge the completed invocation")?;
+        let admin_token = std::env::var("RESTATE_ADMIN_TOKEN")
+            .context("RESTATE_ADMIN_TOKEN is required to purge the completed invocation")?;
+        let auth_token = std::env::var("RESTATE_AUTH_TOKEN").ok();
+
+        redrive_with(
+            &surreal,
+            &admin_url,
+            &admin_token,
+            auth_token.as_deref(),
+            &config,
+            receipt_id,
+            after_failed_result,
+        )
+        .await
+    })
 }
 
 /// The testable core: every I/O boundary (the database, the admin API, the

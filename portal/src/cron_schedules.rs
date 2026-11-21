@@ -1,7 +1,6 @@
-//! Manual starts from the Cron schedules operations page.
+//! Manual DBOS starts from the Cron schedules operations page.
 //!
-//! Each control selects the workflow's configured durable engine. A manual
-//! invocation uses a unique key so an explicit run stays distinct from a scheduled slot.
+//! Manual identity stays distinct from scheduled slots; timer policy never changes the backend.
 
 use axum::{
     extract::Path,
@@ -13,92 +12,53 @@ use uuid::Uuid;
 struct ManualJob {
     slug: &'static str,
     service: &'static str,
-    dbos_flag: &'static str,
 }
 
 const MANUAL_JOBS: &[ManualJob] = &[
     ManualJob {
         slug: "archives",
         service: "Archives",
-        dbos_flag: "NAVIGATOR_DBOS_ARCHIVES_ENABLED",
     },
     ManualJob {
         slug: "billing-canary",
         service: "BillingCanary",
-        dbos_flag: "NAVIGATOR_DBOS_BILLING_CANARY_ENABLED",
     },
     ManualJob {
         slug: "billing-digest",
         service: "BillingDigest",
-        dbos_flag: "NAVIGATOR_DBOS_BILLING_DIGEST_ENABLED",
     },
     ManualJob {
         slug: "notation-reset",
         service: "NotationReset",
-        dbos_flag: "NAVIGATOR_DBOS_NOTATION_RESET_ENABLED",
     },
     ManualJob {
         slug: "reconcile-invoices",
         service: "ReconcileInvoices",
-        dbos_flag: "NAVIGATOR_DBOS_RECONCILE_INVOICES_ENABLED",
     },
 ];
 
-/// `POST /app/admin/schedules/:job/run` — queue one configured scheduled workflow.
+/// `POST /app/admin/schedules/:job/run` — queue one native scheduled workflow.
 pub async fn run(Path(slug): Path<String>) -> Response {
-    let broker = restate_broker_url();
-    let token = std::env::var("RESTATE_AUTH_TOKEN").ok();
-    let dbos_ingress = dbos_ingress_url();
-    let dbos_token = std::env::var("NAVIGATOR_DBOS_INGRESS_TOKEN").ok();
-    let Some(job) = MANUAL_JOBS.iter().find(|job| job.slug == slug) else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
-    let Ok(dbos_enabled) = workflows::dbos_engine::flag_enabled(
-        job.dbos_flag,
-        std::env::var(job.dbos_flag).ok().as_deref(),
-    ) else {
-        return redirect_with_notice(job.slug, "not_queued");
-    };
-    run_configured_with_dbos(
-        &slug,
-        broker.as_deref(),
-        token.as_deref(),
-        dbos_ingress.as_deref(),
-        dbos_token.as_deref(),
-        dbos_enabled,
-    )
-    .await
+    let ingress = std::env::var(workflows::trigger::DBOS_INGRESS_URL_ENV).ok();
+    let token = std::env::var(workflows::trigger::DBOS_INGRESS_TOKEN_ENV).ok();
+    run_configured(&slug, ingress.as_deref(), token.as_deref()).await
 }
 
-#[cfg(test)]
-async fn run_configured(slug: &str, broker: Option<&str>, token: Option<&str>) -> Response {
-    run_configured_with_dbos(slug, broker, token, None, None, false).await
-}
-
-async fn run_configured_with_dbos(
-    slug: &str,
-    broker: Option<&str>,
-    token: Option<&str>,
-    dbos_ingress: Option<&str>,
-    dbos_token: Option<&str>,
-    dbos_enabled: bool,
-) -> Response {
+async fn run_configured(slug: &str, ingress: Option<&str>, token: Option<&str>) -> Response {
     let Some(job) = MANUAL_JOBS.iter().find(|job| job.slug == slug) else {
         return StatusCode::NOT_FOUND.into_response();
     };
     let run_key = format!("manual-{}", Uuid::new_v4());
-    let queued = if dbos_enabled {
-        match (
-            dbos_ingress.filter(|url| !url.trim().is_empty()),
-            dbos_token.filter(|token| !token.trim().is_empty()),
-        ) {
-            (Some(ingress), Some(token)) => trigger_dbos(ingress, token, job, &run_key).await,
-            _ => Err(workflows::TriggerError::Transport),
+    let queued = match workflows::trigger::service_target(
+        ingress.map(str::to_owned),
+        token.map(str::to_owned),
+    ) {
+        Ok(workflows::trigger::ServiceTarget::Dbos { ingress, token }) => {
+            trigger_dbos(&ingress, &token, job, &run_key).await
         }
-    } else if let Some(broker) = broker {
-        trigger(broker, token, job, &run_key).await.map(|_| ())
-    } else {
-        Err(workflows::TriggerError::Transport)
+        Ok(workflows::trigger::ServiceTarget::Restate) | Err(_) => {
+            Err(workflows::TriggerError::Transport)
+        }
     };
     match queued {
         Ok(()) => {
@@ -111,7 +71,7 @@ async fn run_configured_with_dbos(
             redirect_with_notice(job.slug, "queued")
         }
         Err(error) => {
-            tracing::error!(job = job.slug, service = job.service, run_key, %error, "manual cron job was not queued");
+            tracing::error!(job=job.slug, service=job.service, run_key, %error, "manual cron job was not queued");
             redirect_with_notice(job.slug, "not_queued")
         }
     }
@@ -127,7 +87,7 @@ async fn trigger_dbos(
         workflows::trigger::start_dbos_reconcile(
             ingress,
             token,
-            &serde_json::json!({ "workflow_id": format!("{}:{run_key}", job.service) }),
+            &serde_json::json!({"workflow_id": format!("{}:{run_key}", job.service)}),
         )
         .await
     } else {
@@ -139,39 +99,6 @@ fn redirect_with_notice(slug: &str, outcome: &str) -> Response {
     Redirect::to(&format!("/app/admin/schedules?notice={outcome}:{slug}")).into_response()
 }
 
-async fn trigger(
-    broker: &str,
-    token: Option<&str>,
-    job: &ManualJob,
-    run_key: &str,
-) -> Result<String, workflows::TriggerError> {
-    workflows::start_workflow(
-        broker,
-        token,
-        job.service,
-        run_key,
-        "run",
-        &serde_json::json!({}),
-        true,
-    )
-    .await
-}
-
-/// The Restate ingress base URL from `RESTATE_BROKER_URL`, trimmed, or `None`
-/// when unset/empty (dev, local, and tests).
-pub(crate) fn restate_broker_url() -> Option<String> {
-    normalize_broker_url(std::env::var("RESTATE_BROKER_URL").ok())
-}
-
-fn dbos_ingress_url() -> Option<String> {
-    normalize_broker_url(std::env::var("NAVIGATOR_DBOS_INGRESS_URL").ok())
-}
-
-fn normalize_broker_url(url: Option<String>) -> Option<String> {
-    url.map(|url| url.trim_end_matches('/').to_string())
-        .filter(|url| !url.trim().is_empty())
-}
-
 #[cfg(test)]
 mod tests {
     use axum::{
@@ -179,9 +106,7 @@ mod tests {
         http::{header::LOCATION, StatusCode},
     };
 
-    use super::{
-        normalize_broker_url, run, run_configured, run_configured_with_dbos, trigger, MANUAL_JOBS,
-    };
+    use super::{run, run_configured, MANUAL_JOBS};
     use wiremock::{
         matchers::{body_partial_json, header, method, path_regex},
         Mock, MockServer, ResponseTemplate,
@@ -194,32 +119,6 @@ mod tests {
             .expect("redirect location")
             .to_str()
             .expect("ASCII redirect location")
-    }
-
-    #[tokio::test]
-    async fn trigger_queues_the_selected_workflow_with_a_manual_key() {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path_regex(r"^/BillingCanary/manual-[0-9a-f-]+/run/send$"))
-            .and(body_partial_json(serde_json::json!({})))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_string("{\"invocationId\":\"inv_x\"}"),
-            )
-            .mount(&server)
-            .await;
-        let job = MANUAL_JOBS
-            .iter()
-            .find(|job| job.slug == "billing-canary")
-            .unwrap();
-        let body = trigger(
-            &server.uri(),
-            None,
-            job,
-            "manual-4dc99f6d-55a4-4408-b8a0-0df5a8437f6e",
-        )
-        .await
-        .expect("ingress accepts invocation");
-        assert!(body.contains("inv_x"));
     }
 
     #[tokio::test]
@@ -240,15 +139,8 @@ mod tests {
                 .expect(1)
                 .mount(&dbos)
                 .await;
-            let response = run_configured_with_dbos(
-                job.slug,
-                Some(&restate.uri()),
-                None,
-                Some(&dbos.uri()),
-                Some("synthetic-dbos-token"),
-                true,
-            )
-            .await;
+            let response =
+                run_configured(job.slug, Some(&dbos.uri()), Some("synthetic-dbos-token")).await;
             assert!(location(&response).contains("notice=queued:"));
             assert!(restate.received_requests().await.unwrap().is_empty());
             let requests = dbos.received_requests().await.unwrap();
@@ -276,15 +168,7 @@ mod tests {
                 (Some(dbos.uri()), None),
                 (Some(dbos.uri()), Some("synthetic-token")),
             ] {
-                let response = run_configured_with_dbos(
-                    job.slug,
-                    Some(&restate.uri()),
-                    None,
-                    url.as_deref(),
-                    token,
-                    true,
-                )
-                .await;
+                let response = run_configured(job.slug, url.as_deref(), token).await;
                 assert!(location(&response).contains("notice=not_queued:"));
             }
             assert!(restate.received_requests().await.unwrap().is_empty());
@@ -302,13 +186,10 @@ mod tests {
             .expect(1)
             .mount(&server)
             .await;
-        let response = run_configured_with_dbos(
+        let response = run_configured(
             "reconcile-invoices",
-            Some("http://unused-restate"),
-            Some("legacy-token"),
             Some(&server.uri()),
             Some("dbos-secret"),
-            true,
         )
         .await;
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
@@ -324,100 +205,10 @@ mod tests {
             .expect(0)
             .mount(&server)
             .await;
-        let response = run_configured_with_dbos(
-            "reconcile-invoices",
-            Some(&server.uri()),
-            Some("legacy-token"),
-            None,
-            None,
-            true,
-        )
-        .await;
+        let response = run_configured("reconcile-invoices", None, None).await;
         server.verify().await;
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
         assert!(location(&response).ends_with("notice=not_queued:reconcile-invoices"));
-    }
-
-    #[tokio::test]
-    async fn reconcile_ingress_url_alone_does_not_select_dbos() {
-        let restate = MockServer::start().await;
-        let dbos = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path_regex(r"^/ReconcileInvoices/manual-[^/]+/run/send$"))
-            .respond_with(ResponseTemplate::new(200))
-            .expect(1)
-            .mount(&restate)
-            .await;
-        Mock::given(method("POST"))
-            .respond_with(ResponseTemplate::new(202))
-            .expect(0)
-            .mount(&dbos)
-            .await;
-        let response = run_configured_with_dbos(
-            "reconcile-invoices",
-            Some(&restate.uri()),
-            None,
-            Some(&dbos.uri()),
-            Some("dbos-secret"),
-            false,
-        )
-        .await;
-        restate.verify().await;
-        dbos.verify().await;
-        assert_eq!(response.status(), StatusCode::SEE_OTHER);
-        assert!(location(&response).ends_with("notice=queued:reconcile-invoices"));
-    }
-
-    #[tokio::test]
-    async fn run_covers_unknown_unavailable_accepted_and_rejected_jobs() {
-        let response = run(Path("unknown".to_string())).await;
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-
-        let response = run_configured("archives", None, None).await;
-        assert_eq!(response.status(), StatusCode::SEE_OTHER);
-        assert_eq!(
-            location(&response),
-            "/app/admin/schedules?notice=not_queued:archives"
-        );
-
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path_regex(r"^/BillingCanary/manual-[0-9a-f-]+/run/send$"))
-            .and(header("authorization", "Bearer secret"))
-            .respond_with(ResponseTemplate::new(200).set_body_string("accepted"))
-            .expect(1)
-            .mount(&server)
-            .await;
-        let broker =
-            normalize_broker_url(Some(format!("{}/", server.uri()))).expect("non-empty broker URL");
-
-        let response = run_configured("billing-canary", Some(&broker), Some("secret")).await;
-        assert_eq!(response.status(), StatusCode::SEE_OTHER);
-        assert_eq!(
-            location(&response),
-            "/app/admin/schedules?notice=queued:billing-canary"
-        );
-
-        let rejecting_server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .respond_with(ResponseTemplate::new(503).set_body_string("unavailable"))
-            .expect(1)
-            .mount(&rejecting_server)
-            .await;
-
-        let response = run_configured("billing-digest", Some(&rejecting_server.uri()), None).await;
-        assert_eq!(response.status(), StatusCode::SEE_OTHER);
-        assert_eq!(
-            location(&response),
-            "/app/admin/schedules?notice=not_queued:billing-digest"
-        );
-
-        assert_eq!(
-            normalize_broker_url(Some("https://restate.example.com////".to_string())).as_deref(),
-            Some("https://restate.example.com")
-        );
-        assert!(normalize_broker_url(Some("///".to_string())).is_none());
-        assert!(normalize_broker_url(None).is_none());
     }
 
     #[test]
@@ -435,5 +226,14 @@ mod tests {
                 job.name
             );
         }
+    }
+    #[tokio::test]
+    async fn unknown_and_unconfigured_manual_jobs_fail_without_a_backend_switch() {
+        assert_eq!(
+            run(Path("unknown".into())).await.status(),
+            StatusCode::NOT_FOUND
+        );
+        let response = run_configured("archives", None, None).await;
+        assert!(location(&response).ends_with("notice=not_queued:archives"));
     }
 }

@@ -657,12 +657,18 @@ pub fn unsatisfied_summary_keys(deployment: &Deployment) -> Result<Vec<&'static 
         return Ok(Vec::new());
     }
     let supplied = deployment.supplied_keys();
-    let required = summary::required_keys(&|key| deployment.coordinates.get(key).cloned())?;
+    let required = summary::required_keys();
+    super::ship::cohost_ingress(&|key| deployment.coordinates.get(key).cloned())
+        .context("validate native summary cohost ingress")?;
     Ok(required
         .iter()
         .copied()
         // `ops ship` renders the row's own name into both pods.
-        .filter(|key| *key != DEPLOYMENT_ENV && !supplied.contains(*key))
+        .filter(|key| {
+            *key != DEPLOYMENT_ENV
+                && *key != workflows::trigger::DBOS_INGRESS_URL_ENV
+                && !supplied.contains(*key)
+        })
         .collect())
 }
 
@@ -3227,7 +3233,7 @@ sops:
         );
         assert!(unsatisfied_summary_keys(&off).unwrap().is_empty());
 
-        let required = workflows::email_summary_config::required_keys(&|_| None).unwrap();
+        let required = workflows::email_summary_config::required_keys();
         let supplied: Vec<&str> = required
             .iter()
             .copied()

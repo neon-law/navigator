@@ -22,40 +22,19 @@ async fn main() -> Result<()> {
     let _telemetry = telemetry::init("navigator-reconcile-invoices-trigger");
 
     let run_id = chrono::Utc::now().format("%Y-%m-%d").to_string();
-    let target =
-        workflows::trigger::trigger_target("NAVIGATOR_DBOS_RECONCILE_INVOICES_ENABLED", |name| {
-            std::env::var(name).ok()
-        })
+    let target = workflows::trigger::trigger_target(|name| std::env::var(name).ok())
         .context("selecting the ReconcileInvoices trigger ingress")?;
-    match target {
-        workflows::trigger::TriggerTarget::Dbos { ingress, token } => {
-            workflows::trigger::start_dbos_reconcile(
-                &ingress,
-                &token,
-                &serde_json::json!({
-                    "workflow_id": format!("ReconcileInvoices:{run_id}")
-                }),
-            )
-            .await
-            .context("triggering ReconcileInvoices through DBOS ingress")?;
-        }
-        workflows::trigger::TriggerTarget::Restate {
-            ingress,
-            auth_token,
-        } => {
-            let _response = workflows::start_workflow(
-                &ingress,
-                auth_token.as_deref(),
-                "ReconcileInvoices",
-                &run_id,
-                "run",
-                &serde_json::json!({}),
-                true, // one-way: accept the invocation and exit; Restate runs it.
-            )
-            .await
-            .context("triggering ReconcileInvoices workflow")?;
-        }
-    }
+    let workflows::trigger::TriggerTarget { ingress, token } = target;
+
+    workflows::trigger::start_dbos_reconcile(
+        &ingress,
+        &token,
+        &serde_json::json!({
+            "workflow_id": format!("ReconcileInvoices:{run_id}")
+        }),
+    )
+    .await
+    .context("triggering ReconcileInvoices through DBOS ingress")?;
 
     tracing::info!(%run_id, "reconcile-invoices workflow triggered");
     println!("triggered ReconcileInvoices/{run_id}");

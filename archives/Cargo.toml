@@ -15,6 +15,7 @@ publish.workspace = true
 [[bin]]
 name = "trigger"
 path = "src/bin/trigger.rs"
+required-features = ["restate-compatibility"]
 
 [lib]
 name = "archives"

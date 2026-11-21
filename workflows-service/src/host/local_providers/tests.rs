@@ -88,7 +88,7 @@ fn local_capture_requires_the_actual_dev_embedded_simulated_harness() {
 }
 
 #[test]
-fn partial_hosts_keep_strict_provider_selection_even_with_explicit_delivery() {
+fn retired_selectors_cannot_bypass_explicit_delivery_conflicts() {
     use store::workflow_engine as engine;
     let keys = [
         engine::COHOST_ENV,
@@ -122,8 +122,7 @@ fn partial_hosts_keep_strict_provider_selection_even_with_explicit_delivery() {
                 true,
                 &get
             )
-            .unwrap()
-            .is_none());
+            .is_err());
         }
     }
     let invalid = |name: &str| {
@@ -139,7 +138,8 @@ fn partial_hosts_keep_strict_provider_selection_even_with_explicit_delivery() {
         true,
         &invalid
     )
-    .is_err());
+    .unwrap()
+    .is_some());
 }
 
 #[test]

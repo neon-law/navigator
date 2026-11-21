@@ -199,6 +199,7 @@ jobs:
           done
           test "$ready" = true
           cargo test -p workflows-service --features restate-compatibility --lib host::host_mode_tests
+          cargo test -p billing-workflows --features restate-compatibility --test trigger_ownership
       - name: Application and DBOS state survive image replacement and dump restore
         env:
           KUBECONFIG: /tmp/postgres-kind.config

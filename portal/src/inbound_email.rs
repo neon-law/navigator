@@ -1007,10 +1007,6 @@ pub(crate) async fn start_summary_workflow(
 ) -> Result<(), InboundError> {
     let request = summary_workflow_request(config, receipt)?;
     let target = workflows::trigger::service_target(
-        workflows::trigger::EMAIL_SUMMARY_ENABLED_ENV,
-        std::env::var(workflows::trigger::EMAIL_SUMMARY_ENABLED_ENV)
-            .ok()
-            .as_deref(),
         std::env::var(workflows::trigger::DBOS_INGRESS_URL_ENV).ok(),
         std::env::var(workflows::trigger::DBOS_INGRESS_TOKEN_ENV).ok(),
     )
@@ -1030,18 +1026,9 @@ pub(crate) async fn start_summary_workflow(
             .await
             .map_err(|error| InboundError::WorkflowStart(error.to_string()))
         }
-        workflows::trigger::ServiceTarget::Restate => workflows::start_workflow(
-            &config.workflow_ingress,
-            std::env::var("RESTATE_AUTH_TOKEN").ok().as_deref(),
-            "EmailSummary",
-            &receipt.id.to_string(),
-            "run",
-            &request,
-            true,
-        )
-        .await
-        .map(|_| ())
-        .map_err(|error| InboundError::WorkflowStart(error.to_string())),
+        workflows::trigger::ServiceTarget::Restate => Err(InboundError::WorkflowStart(
+            "native summary ingress is unavailable".into(),
+        )),
     };
     telemetry::record_email_stage(
         &receipt.id.to_string(),

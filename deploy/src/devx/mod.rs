@@ -1458,6 +1458,12 @@ fn dispatch_with_dns_provider(
             recovery_id,
             from_recovery,
         ),
+        crate::Command::Ops(crate::OpsCmd::EmailSummary(
+            crate::EmailSummaryCmd::RedriveLegacy {
+                receipt,
+                after_failed_result,
+            },
+        )) => email_summary_redrive::run_legacy(receipt, after_failed_result.as_deref()),
         crate::Command::Ops(crate::OpsCmd::EmailSummary(crate::EmailSummaryCmd::Health)) => {
             email_summary_delivery::health()
         }

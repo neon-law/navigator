@@ -1004,3 +1004,37 @@ async fn existing_esign_ledger_accepts_earlier_handover_migrations_without_nativ
     assert_eq!(receipts, 0, "no captured-source receipts were manufactured");
     cleanup(options, pg, operation).await;
 }
+
+#[tokio::test]
+async fn native_startup_without_selectors_still_requires_real_object_handover() {
+    let Some(options) = options() else { return };
+    let inactive = crate::test_support::PostgresFixture::create_capture_target(options.clone())
+        .await
+        .unwrap();
+    assert!(
+        crate::durable_object_handover::require_native_runtime(inactive.postgres())
+            .await
+            .is_err()
+    );
+    inactive.close().await.unwrap();
+
+    let active = crate::test_support::PostgresFixture::create(options)
+        .await
+        .unwrap();
+    assert!(
+        !crate::durable_object_handover::require_native_runtime(active.postgres())
+            .await
+            .unwrap()
+            .legacy_objects()
+    );
+    sqlx::query("DELETE FROM durable_object_ownership")
+        .execute(active.postgres().pool())
+        .await
+        .unwrap();
+    assert!(
+        crate::durable_object_handover::require_native_runtime(active.postgres())
+            .await
+            .is_err()
+    );
+    active.close().await.unwrap();
+}

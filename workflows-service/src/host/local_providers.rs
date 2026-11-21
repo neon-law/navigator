@@ -45,11 +45,6 @@ impl LocalProviders {
         {
             return Ok(None);
         }
-        if !store::workflow_engine::dbos_only(get).map_err(|error| {
-            anyhow::anyhow!("invalid native local engine selection: {}", error.0)
-        })? {
-            return Ok(None);
-        }
         anyhow::ensure!(
             !store::config::staging_from(get)
                 .map_err(|_| anyhow::anyhow!("invalid local staging identity"))?,

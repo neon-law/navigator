@@ -307,7 +307,17 @@ pub async fn export_configured<F: Fn(&str) -> Option<String>>(
     storage: &dyn StorageService,
     _scheduled_for: Option<DateTime<Utc>>,
 ) -> Option<PostgresExport> {
-    let source = match crate::source::ArchiveSource::from_lookup(&get) {
+    export_source(get, storage, crate::source::ArchiveSource::Postgres).await
+}
+
+/// Explicit retained SDK snapshot policy; never the normal application's source selector.
+#[cfg(any(test, feature = "restate-compatibility"))]
+pub(crate) async fn export_legacy_configured<F: Fn(&str) -> Option<String>>(
+    get: F,
+    storage: &dyn StorageService,
+    _scheduled_for: Option<DateTime<Utc>>,
+) -> Option<PostgresExport> {
+    let source = match crate::source::ArchiveSource::from_legacy_lookup(&get) {
         Ok(source) => source,
         Err(error) => {
             return Some(PostgresExport::Failed {
@@ -315,6 +325,14 @@ pub async fn export_configured<F: Fn(&str) -> Option<String>>(
             })
         }
     };
+    export_source(get, storage, source).await
+}
+
+async fn export_source<F: Fn(&str) -> Option<String>>(
+    get: F,
+    storage: &dyn StorageService,
+    source: crate::source::ArchiveSource,
+) -> Option<PostgresExport> {
     let host = get("NAVIGATOR_POSTGRES_HOST").filter(|host| !host.trim().is_empty());
     if host.is_none() {
         return if matches!(source, crate::source::ArchiveSource::Postgres)
@@ -1136,7 +1154,9 @@ mod tests {
                 _ => None,
             },
         ] {
-            assert!(export_configured(get, &storage, None).await.is_none());
+            assert!(export_legacy_configured(get, &storage, None)
+                .await
+                .is_none());
         }
         assert!(storage.list("").await.unwrap().is_empty());
     }
@@ -1816,5 +1836,18 @@ mod tests {
             .await
             .unwrap()
             .is_empty());
+    }
+    #[tokio::test]
+    async fn native_export_cannot_use_a_retained_selector_to_skip_postgres_admission() {
+        let root = tempfile::tempdir().unwrap();
+        let storage = cloud::FsStorage::new(root.path()).await.unwrap();
+        let get = |key: &str| (key == "NAVIGATOR_ARCHIVE_SOURCE").then(|| "all".into());
+        assert!(export_legacy_configured(get, &storage, None)
+            .await
+            .is_none());
+        let native = export_configured(get, &storage, None).await;
+        assert!(matches!(native, Some(PostgresExport::Failed { error })
+            if error.contains("NAVIGATOR_POSTGRES_HOST")));
+        assert!(storage.list("").await.unwrap().is_empty());
     }
 }

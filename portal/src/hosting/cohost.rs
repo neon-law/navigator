@@ -6,59 +6,6 @@ use std::{future::Future, sync::Arc};
 use tokio::sync::oneshot;
 use workflows::dbos_engine;
 
-/// Select the complete workflow host without changing individual workflow ownership.
-pub(super) fn enabled(
-    host_dbos: bool,
-    lookup: impl Fn(&str) -> Option<String>,
-) -> anyhow::Result<bool> {
-    let enabled = workflows::flags::flag_enabled(
-        "NAVIGATOR_WORKFLOWS_IN_WEB",
-        lookup("NAVIGATOR_WORKFLOWS_IN_WEB").as_deref(),
-    )?;
-    if enabled {
-        anyhow::ensure!(
-            host_dbos && dbos_engine::enabled(&lookup)?,
-            "NAVIGATOR_WORKFLOWS_IN_WEB requires NAVIGATOR_DBOS_ENABLED=true"
-        );
-        anyhow::ensure!(
-            workflows_service::engine::Engine::from_lookup(&lookup)?
-                == workflows_service::engine::Engine::Dbos,
-            "NAVIGATOR_WORKFLOWS_IN_WEB requires NAVIGATOR_WORKFLOW_ENGINE=dbos"
-        );
-    }
-    Ok(enabled)
-}
-
-#[cfg(test)]
-mod combined_workflow_tests {
-    use super::enabled;
-    #[test]
-    fn combined_host_requires_both_explicit_dbos_selections() {
-        let lookup = |values: &[(&str, &str)]| {
-            let values: Vec<_> = values
-                .iter()
-                .map(|(key, value)| (key.to_string(), value.to_string()))
-                .collect();
-            move |name: &str| {
-                values
-                    .iter()
-                    .find(|(key, _)| key == name)
-                    .map(|(_, value)| value.clone())
-            }
-        };
-        assert!(!enabled(true, |_| None).unwrap());
-        assert!(enabled(true, lookup(&[("NAVIGATOR_WORKFLOWS_IN_WEB", "typo")])).is_err());
-        let configured = [
-            ("NAVIGATOR_WORKFLOWS_IN_WEB", "true"),
-            ("NAVIGATOR_DBOS_ENABLED", "true"),
-            ("NAVIGATOR_WORKFLOW_ENGINE", "dbos"),
-        ];
-        assert!(enabled(true, lookup(&configured)).unwrap());
-        assert!(enabled(false, lookup(&configured)).is_err());
-        assert!(enabled(true, lookup(&configured[..2])).is_err());
-    }
-}
-
 pub(super) async fn run(
     host_dbos: bool,
     combined: bool,

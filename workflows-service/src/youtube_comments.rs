@@ -146,6 +146,8 @@ pub struct PollReport {
 /// steps; tests call them directly against a local store and mock server.
 #[derive(Clone)]
 pub struct YoutubeCommentsPollerService {
+    // Only the attributed compatibility handler sets this on its local clone.
+    legacy_hooks: bool,
     surreal: SurrealDb,
     kms: Arc<dyn cloud::RuntimeKms>,
     http: reqwest::Client,
@@ -158,6 +160,7 @@ impl YoutubeCommentsPollerService {
     #[must_use]
     pub fn new(surreal: SurrealDb, kms: Arc<dyn cloud::RuntimeKms>) -> Self {
         Self {
+            legacy_hooks: false,
             surreal,
             kms,
             http: reqwest::Client::builder()
@@ -268,7 +271,7 @@ impl YoutubeCommentsPollerService {
                 continue;
             };
             let received = self.ingest_comment(target, &comment, occurred).await?;
-            start_inbound_hooks(received.message_id).await?;
+            start_inbound_hooks(received.message_id, self.legacy_hooks).await?;
             outcome.record(if received.deduped {
                 IngestOutcome::Duplicate
             } else {
@@ -420,25 +423,34 @@ impl YoutubeCommentsPollerService {
     }
 }
 
-/// Start the same alert and triage workflows every inbound channel starts
-/// after a fresh ingest. Both are keyed by Message ID, so a repeated start
-/// attaches to the same durable workflow instead of duplicating work. A
-/// deployment without a broker configured is a no-op, exactly as in the
-/// portal's ingest paths.
+/// Start alert and triage for a newly persisted Message. Native dispatch requires
+/// authenticated ingress; the attributed SDK adapter preserves its retained route.
+/// Message-derived identities are unchanged across repeated submission.
 ///
 /// # Errors
-///
-/// A failed durable submission — the caller's journaled step retries it while
-/// ingest itself stays untouched.
-async fn start_inbound_hooks(message_id: Uuid) -> anyhow::Result<()> {
-    let alert_target = workflows::trigger::service_target(
-        workflows::trigger::INBOUND_MESSAGE_ALERT_ENABLED_ENV,
-        std::env::var(workflows::trigger::INBOUND_MESSAGE_ALERT_ENABLED_ENV)
-            .ok()
-            .as_deref(),
-        std::env::var(workflows::trigger::DBOS_INGRESS_URL_ENV).ok(),
-        std::env::var(workflows::trigger::DBOS_INGRESS_TOKEN_ENV).ok(),
-    )?;
+/// A rejected or failed durable submission is retried by the caller's existing step.
+async fn start_inbound_hooks(message_id: Uuid, legacy: bool) -> anyhow::Result<()> {
+    start_inbound_hooks_from_lookup(message_id, legacy, |key| std::env::var(key).ok()).await
+}
+
+async fn start_inbound_hooks_from_lookup(
+    message_id: Uuid,
+    legacy: bool,
+    get: impl Fn(&str) -> Option<String> + Copy,
+) -> anyhow::Result<()> {
+    let alert_target = if legacy {
+        workflows::trigger::legacy_service_target(
+            workflows::trigger::INBOUND_MESSAGE_ALERT_ENABLED_ENV,
+            get(workflows::trigger::INBOUND_MESSAGE_ALERT_ENABLED_ENV).as_deref(),
+            get(workflows::trigger::DBOS_INGRESS_URL_ENV),
+            get(workflows::trigger::DBOS_INGRESS_TOKEN_ENV),
+        )?
+    } else {
+        workflows::trigger::service_target(
+            get(workflows::trigger::DBOS_INGRESS_URL_ENV),
+            get(workflows::trigger::DBOS_INGRESS_TOKEN_ENV),
+        )?
+    };
     match &alert_target {
         ServiceTarget::Dbos { ingress, token } => {
             workflows::trigger::start_dbos_inbound_message_alert(
@@ -453,15 +465,15 @@ async fn start_inbound_hooks(message_id: Uuid) -> anyhow::Result<()> {
             .await?;
         }
         ServiceTarget::Restate => {
-            let Some(ingress) = std::env::var("RESTATE_BROKER_URL")
-                .ok()
-                .filter(|value| !value.trim().is_empty())
+            let Some(ingress) = get("RESTATE_BROKER_URL").filter(|value| !value.trim().is_empty())
             else {
-                return workflows::trigger::start_inbound_triage(message_id)
-                    .await
-                    .map_err(anyhow::Error::msg);
+                return workflows::trigger::start_inbound_triage_legacy_from_lookup(
+                    message_id, get,
+                )
+                .await
+                .map_err(anyhow::Error::msg);
             };
-            let auth = std::env::var("RESTATE_AUTH_TOKEN").ok();
+            let auth = get("RESTATE_AUTH_TOKEN");
             workflows::start_workflow(
                 &ingress,
                 auth.as_deref(),
@@ -474,9 +486,12 @@ async fn start_inbound_hooks(message_id: Uuid) -> anyhow::Result<()> {
             .await?;
         }
     }
-    workflows::trigger::start_inbound_triage(message_id)
-        .await
-        .map_err(anyhow::Error::msg)?;
+    if legacy {
+        workflows::trigger::start_inbound_triage_legacy_from_lookup(message_id, get).await
+    } else {
+        workflows::trigger::start_inbound_triage_from_lookup(message_id, get).await
+    }
+    .map_err(anyhow::Error::msg)?;
     Ok(())
 }
 
@@ -619,7 +634,8 @@ impl YoutubeCommentsPollerService {
         ctx: WorkflowContext<'_>,
         Json(_request): Json<PollRequest>,
     ) -> Result<Json<PollReport>, HandlerError> {
-        let service = self.clone();
+        let mut service = self.clone();
+        service.legacy_hooks = true;
         let targets = ctx
             .run(move || async move {
                 service
@@ -636,7 +652,8 @@ impl YoutubeCommentsPollerService {
             ..PollReport::default()
         };
         for (index, target) in targets.into_iter().enumerate() {
-            let service = self.clone();
+            let mut service = self.clone();
+            service.legacy_hooks = true;
             match ctx
                 .run(move || async move {
                     service
@@ -1007,3 +1024,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod hook_tests;

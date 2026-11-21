@@ -1,12 +1,4 @@
-# Opt-in Archives schedule on the DBOS executor inside `web`.
-#
-# `ops ship` adds this patch only for a deployment whose `config.toml` sets
-# `NAVIGATOR_DBOS_ARCHIVES_ENABLED = "true"`, which also requires
-# `NAVIGATOR_DBOS_ENABLED`. The same render
-# drops the Restate `archives-trigger` CronJob and deletes the live one, and
-# adds the `navigator-archive-coverage` ConfigMap from
-# `k8s/postgres/archive`. It must follow `web-postgres.yaml`, whose
-# `NAVIGATOR_POSTGRES_*` values say which server the archive reads.
+# Native paired PostgreSQL Archives resources. The patch follows web-postgres.yaml.
 #
 # Each 05:55 and 17:55 UTC run exports the whole `navigator` and `forgejo`
 # databases to Iceberg and publishes `postgres/_paired/<generation>.json`.

@@ -9,11 +9,8 @@ async fn main() -> Result<()> {
     let _ = dotenvy::dotenv();
     let _ = dotenvy::from_path(".devx/env");
     let _telemetry = telemetry::init("navigator-youtube-comments-poll-trigger");
-    let target = workflows::trigger::trigger_target(
-        workflows::trigger::YOUTUBE_COMMENTS_DBOS_ENABLED_ENV,
-        |name| std::env::var(name).ok(),
-    )
-    .context("selecting the YouTube comments trigger ingress")?;
+    let target = workflows::trigger::trigger_target(|name| std::env::var(name).ok())
+        .context("selecting the YouTube comments trigger ingress")?;
     let now = Utc::now();
     let tick = match &target {
         workflows::trigger::TriggerTarget::Dbos { .. } => dbos_tick(now),
@@ -22,26 +19,11 @@ async fn main() -> Result<()> {
         }
     };
     let request = workflows_service::youtube_comments::PollRequest { tick: tick.clone() };
-    match target {
-        workflows::trigger::TriggerTarget::Dbos { ingress, token } => {
-            workflows::trigger::start_dbos_youtube_comments(&ingress, &token, &request).await
-        }
-        workflows::trigger::TriggerTarget::Restate {
-            ingress,
-            auth_token,
-        } => workflows::start_workflow(
-            &ingress,
-            auth_token.as_deref(),
-            "YoutubeCommentsPoller",
-            &tick,
-            "run",
-            &request,
-            true,
-        )
+    let workflows::trigger::TriggerTarget { ingress, token } = target;
+
+    workflows::trigger::start_dbos_youtube_comments(&ingress, &token, &request)
         .await
-        .map(|_| ()),
-    }
-    .context("triggering the scheduled YouTube comments poll")?;
+        .context("triggering the scheduled YouTube comments poll")?;
     tracing::info!(workflow_service = "YoutubeCommentsPoller", %tick, "YouTube comments poll triggered");
     Ok(())
 }

@@ -275,7 +275,7 @@ type RestateFallback = (String, Option<String>);
 fn resolve_service_target(
     flag: &'static str,
 ) -> Result<workflows::trigger::ServiceTarget, HandlerError> {
-    workflows::trigger::service_target(
+    workflows::trigger::legacy_service_target(
         flag,
         std::env::var(flag).ok().as_deref(),
         std::env::var(workflows::trigger::DBOS_INGRESS_URL_ENV).ok(),

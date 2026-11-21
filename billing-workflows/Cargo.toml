@@ -21,6 +21,7 @@ path = "src/lib.rs"
 [[bin]]
 name = "billing-canary-trigger"
 path = "src/bin/billing_canary_trigger.rs"
+required-features = ["restate-compatibility"]
 
 [[bin]]
 name = "reconcile-trigger"
@@ -29,10 +30,15 @@ path = "src/bin/reconcile_trigger.rs"
 [[bin]]
 name = "billing-digest-trigger"
 path = "src/bin/billing_digest_trigger.rs"
+required-features = ["restate-compatibility"]
 
 [[bin]]
 name = "sandbox-credit-reset-trigger"
 path = "src/bin/sandbox_reset_trigger.rs"
+
+[[test]]
+name = "trigger_ownership"
+required-features = ["restate-compatibility"]
 
 [features]
 default = []

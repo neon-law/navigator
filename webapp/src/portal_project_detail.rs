@@ -714,10 +714,6 @@ async fn project_brand_chrome(
 #[cfg(feature = "server")]
 async fn queue_client_project_view(project_id: uuid::Uuid) {
     let target = workflows::trigger::service_target(
-        workflows::trigger::PROJECT_SLACK_ENABLED_ENV,
-        std::env::var(workflows::trigger::PROJECT_SLACK_ENABLED_ENV)
-            .ok()
-            .as_deref(),
         std::env::var(workflows::trigger::DBOS_INGRESS_URL_ENV).ok(),
         std::env::var(workflows::trigger::DBOS_INGRESS_TOKEN_ENV).ok(),
     );
@@ -735,26 +731,7 @@ async fn queue_client_project_view(project_id: uuid::Uuid) {
             .map_err(|error| error.to_string())
         }
         Ok(workflows::trigger::ServiceTarget::Restate) => {
-            let Some(broker) = std::env::var("RESTATE_BROKER_URL")
-                .ok()
-                .map(|url| url.trim_end_matches('/').to_string())
-                .filter(|url| !url.trim().is_empty())
-            else {
-                return;
-            };
-            let token = std::env::var("RESTATE_AUTH_TOKEN").ok();
-            workflows::start_workflow(
-                &broker,
-                token.as_deref(),
-                "project-slack",
-                &project_id.to_string(),
-                "client_project_view",
-                &serde_json::json!({}),
-                true,
-            )
-            .await
-            .map(|_| ())
-            .map_err(|error| error.to_string())
+            Err("native Project Slack ingress is unavailable".into())
         }
         Err(error) => Err(error.to_string()),
     };

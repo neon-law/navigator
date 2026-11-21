@@ -31,10 +31,6 @@ const INBOX: &str = "/app/inbox";
 /// configured is a no-op, as before.
 pub async fn start_inbound_message_alert(message_id: Uuid) -> Result<(), String> {
     let target = workflows::trigger::service_target(
-        workflows::trigger::INBOUND_MESSAGE_ALERT_ENABLED_ENV,
-        std::env::var(workflows::trigger::INBOUND_MESSAGE_ALERT_ENABLED_ENV)
-            .ok()
-            .as_deref(),
         std::env::var(workflows::trigger::DBOS_INGRESS_URL_ENV).ok(),
         std::env::var(workflows::trigger::DBOS_INGRESS_TOKEN_ENV).ok(),
     )
@@ -55,24 +51,7 @@ pub async fn start_inbound_message_alert(message_id: Uuid) -> Result<(), String>
             .map_err(|error| error.to_string())
         }
         workflows::trigger::ServiceTarget::Restate => {
-            let Some(ingress) = std::env::var("RESTATE_BROKER_URL")
-                .ok()
-                .filter(|value| !value.trim().is_empty())
-            else {
-                return Ok(());
-            };
-            workflows::start_workflow(
-                &ingress,
-                std::env::var("RESTATE_AUTH_TOKEN").ok().as_deref(),
-                "InboundMessageAlert",
-                &message_id.to_string(),
-                "run",
-                &request,
-                true,
-            )
-            .await
-            .map(|_| ())
-            .map_err(|error| error.to_string())
+            Err("native alert ingress is unavailable".into())
         }
     }
 }

@@ -2259,9 +2259,9 @@ enum EmailSummaryCmd {
     /// Read-only pipeline check: fail on overdue receipts or failed/unknown delivery.
     Health,
 
-    /// Recover one archived `EmailSummary` on its selected durable engine.
-    /// DBOS uses an explicit recovery identity and preserves recorded inputs/checkpoints.
-    /// Restate purges a completed invocation before resubmitting the same request.
+    /// Recover one archived `EmailSummary` through native DBOS.
+    /// Uses an explicit recovery identity and preserves recorded inputs/checkpoints.
+    /// Retained Restate repairs use the separate redrive-legacy operation.
     /// Confirmed failure notices require --after-failed-result; uncertain deliveries
     /// remain quarantined. Reads the target's PostgreSQL and summary configuration.
     /// Diagnostics contain status words only.
@@ -2276,11 +2276,19 @@ enum EmailSummaryCmd {
         #[arg(long, value_name = "ACTOR")]
         after_failed_result: Option<String>,
         /// Stable identity for this DBOS repair; repeat the same value after a lost response.
-        #[arg(long)]
+        #[arg(long, required = true)]
         recovery_id: Option<uuid::Uuid>,
         /// Repair the child of a previous recovery rather than its original run.
         #[arg(long, requires = "recovery_id")]
         from_recovery: Option<uuid::Uuid>,
+    },
+    /// Explicitly repair a retained Restate invocation; preserves the confirmed/unknown delivery guards.
+    /// This never chooses the normal application's workflow backend.
+    RedriveLegacy {
+        #[arg(long)]
+        receipt: uuid::Uuid,
+        #[arg(long, value_name = "ACTOR")]
+        after_failed_result: Option<String>,
     },
     /// List every delivery currently quarantined in `UNKNOWN`, the state
     /// `deliver_summary` records when Slack's response is lost, times out,
@@ -3888,6 +3896,49 @@ async fn run_synthetic_portfolio(target: Option<String>, apply: bool) -> ExitCod
 
 #[cfg(test)]
 mod command_boundary_tests {
+    #[test]
+    fn native_summary_repair_requires_identity_and_retained_repair_is_explicit() {
+        let receipt = "00000000-0000-0000-0000-000000000001";
+        let recovery = "00000000-0000-0000-0000-000000000002";
+        let native = [
+            "hudson",
+            "ops",
+            "email-summary",
+            "redrive",
+            "--receipt",
+            receipt,
+        ];
+        assert!(Cli::try_parse_from(native).is_err());
+        assert!(matches!(
+            Cli::try_parse_from(native.into_iter().chain(["--recovery-id", recovery]))
+                .unwrap()
+                .command,
+            Some(Command::Ops(OpsCmd::EmailSummary(
+                EmailSummaryCmd::Redrive {
+                    recovery_id: Some(_),
+                    ..
+                }
+            )))
+        ));
+        let retained = [
+            "hudson",
+            "ops",
+            "email-summary",
+            "redrive-legacy",
+            "--receipt",
+            receipt,
+        ];
+        assert!(matches!(
+            Cli::try_parse_from(retained).unwrap().command,
+            Some(Command::Ops(OpsCmd::EmailSummary(
+                EmailSummaryCmd::RedriveLegacy { .. }
+            )))
+        ));
+        assert!(
+            Cli::try_parse_from(retained.into_iter().chain(["--recovery-id", recovery])).is_err()
+        );
+    }
+
     use super::*;
 
     #[test]
