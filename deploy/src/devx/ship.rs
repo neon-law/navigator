@@ -3826,12 +3826,7 @@ fn image_only_steps(
 
     eprintln!("==> image-only roll: every navigator image → {tag}");
     for (deployment, image) in image_only_image_writes(cfg, tag) {
-        let mut cmd = kubectl(cfg);
-        cmd.arg("set")
-            .arg("image")
-            .arg(format!("deployment/{deployment}"))
-            .arg(format!("{deployment}={image}"));
-        exec(dry_run, &mut cmd)?;
+        exec(dry_run, &mut image_only_set_image(cfg, deployment, &image))?;
     }
 
     pin_cronjob_images(cfg, tag, None, dry_run)?;
@@ -3850,6 +3845,16 @@ fn image_only_steps(
         cfg.project_id
     );
     Ok(())
+}
+
+/// Construct the exact pinned write without executing it, so the rendered target is testable.
+fn image_only_set_image(cfg: &ShipConfig, deployment: &str, image: &str) -> Command {
+    let mut cmd = kubectl(cfg);
+    cmd.arg("set")
+        .arg("image")
+        .arg(format!("deployment/{deployment}"))
+        .arg(format!("web={image}"));
+    cmd
 }
 
 /// The `(Deployment, image)` pairs the narrow lane writes, in order.
@@ -4067,7 +4072,11 @@ fn roll(
     //     apply` can write.
     ensure_projected_objects_resolve(&manifests)?;
     ensure_ordered_service_objects(cfg, dry_run, true, true)?;
-    write_only_archives::verify(cfg, &|key| deployment.coordinates.get(key).cloned(), dry_run)?;
+    write_only_archives::verify(
+        cfg,
+        &|key| deployment.coordinates.get(key).cloned(),
+        dry_run,
+    )?;
     // 4c. Request the shared Firm certificate for this build's brand hosts
     //     now, so Google issues it while the release rolls, and keep the one
     //     serving today attached until it does; see `firm_certificate_roll`.
@@ -8093,10 +8102,17 @@ mod tests {
         reason = "one rendered contract checks both native trigger cadences, authentication and internal network routing"
     )]
     fn native_cron_triggers_preserve_cadences_and_reach_only_the_internal_cohost_service() {
-        let mixed = rendered_manifests(env_getter(FULL_ENV));
-        assert!(
-            !mixed.contains(&format!("name: {DBOS_INTERNAL_SERVICE}")),
-            "the mixed topology has no new internal endpoint or policy"
+        let default_native = rendered_manifests(env_getter(FULL_ENV));
+        let default_service = manifest_doc(&default_native, "Service", DBOS_INTERNAL_SERVICE);
+        let default_web = manifest_doc(&default_native, "Deployment", WEB_DEPLOYMENT);
+        assert_eq!(default_service["spec"]["type"].as_str(), Some("ClusterIP"));
+        assert_eq!(
+            default_service["spec"]["selector"]["app"].as_str(),
+            Some(WEB_DEPLOYMENT)
+        );
+        assert_eq!(
+            default_service["spec"]["selector"],
+            default_web["spec"]["selector"]["matchLabels"]
         );
         for port in [9083_u16, 9191] {
             let get = |key: &str| {
@@ -8159,7 +8175,7 @@ mod tests {
                 .into_iter()
                 .zip(["33 11 * * *", "*/15 * * * *"])
             {
-                let original = manifest_doc(&mixed, "CronJob", cronjob);
+                let original = manifest_doc(&default_native, "CronJob", cronjob);
                 let native = manifest_doc(&manifests, "CronJob", cronjob);
                 assert_eq!(native["spec"]["schedule"].as_str(), Some(cadence));
                 for key in [
@@ -8311,10 +8327,54 @@ mod tests {
             .expect("the complete native deployment needs no broker coordinate");
         assert_eq!(restart_deployments(), [WEB_DEPLOYMENT]);
         assert_eq!(rollout_wait_deployments(), [WEB_DEPLOYMENT]);
+        assert_eq!(web_binary_deployments(), [WEB_DEPLOYMENT]);
         assert_eq!(
             image_only_image_writes(&cfg, "26.1.1"),
             vec![(WEB_DEPLOYMENT, cfg.web_image("26.1.1"))]
         );
+    }
+
+    #[test]
+    fn image_only_write_targets_the_actual_rendered_web_container_in_the_pinned_namespace() {
+        let cfg = ShipConfig::from_lookup("synthetic-deployment", native_ship_env).unwrap();
+        let manifests = rendered_manifests(native_ship_env);
+        let writes = image_only_image_writes(&cfg, "26.9.16");
+        assert_eq!(
+            writes.len(),
+            1,
+            "native image-only writes cannot silently disappear"
+        );
+        for (deployment, image) in writes {
+            let rendered = manifest_doc(&manifests, "Deployment", deployment);
+            let containers = rendered["spec"]["template"]["spec"]["containers"]
+                .as_sequence()
+                .unwrap();
+            let application = containers
+                .iter()
+                .find(|container| container["name"].as_str() == Some("web"))
+                .expect("the native rendered deployment has its real web container");
+            let container = application["name"].as_str().unwrap();
+            assert_eq!(application["image"].as_str(), Some(image.as_str()));
+            let cmd = image_only_set_image(&cfg, deployment, &image);
+            assert_eq!(cmd.get_program(), "kubectl");
+            let actual: Vec<_> = cmd
+                .get_args()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect();
+            assert_eq!(
+                actual,
+                vec![
+                    "--context".to_owned(),
+                    cfg.context.clone(),
+                    "-n".to_owned(),
+                    cfg.namespace.clone(),
+                    "set".to_owned(),
+                    "image".to_owned(),
+                    format!("deployment/{deployment}"),
+                    format!("{container}={image}"),
+                ]
+            );
+        }
     }
 
     fn web_env_value(deployment: &serde_yaml::Value, name: &str) -> Option<String> {
@@ -9101,8 +9161,8 @@ mod tests {
 
     /// The full `networking.gke.io/managed-certificates` annotation ENG-808
     /// expects: the default brand, every other released key that still has
-    /// its own certificate in registry order, the workflows and Forgejo
-    /// services, then the Firm certificate — derived from the same
+    /// its own certificate in registry order, the Forgejo service, then the
+    /// Firm certificate — derived from the same
     /// [`views::brand::BrandKey::ALL`] the render reads, so this drifts with
     /// the registry rather than needing a hand-maintained string.
     fn expected_managed_certificates_annotation(public_host: &str) -> String {
@@ -9114,7 +9174,6 @@ mod tests {
                 .filter(|key| has_own_certificate(*key))
                 .map(brand_certificate_name),
         );
-        names.push("navigator-workflows".to_string());
         names.push("navigator-forgejo".to_string());
         names.push(firm_certificate_name(&firm_certificate_hosts(public_host)));
         names.join(",")
@@ -9374,7 +9433,7 @@ mod tests {
             );
             certificate_names.push(name);
         }
-        certificate_names.push("navigator-workflows".to_string());
+        certificate_names.push("navigator-forgejo".to_string());
         for name in &certificate_names {
             for domain in certificate_domains(&manifest_doc(&manifests, "ManagedCertificate", name))
             {
@@ -10510,20 +10569,6 @@ mod tests {
         assert_eq!(images_registry(Some("ghcr.io/acme")), "ghcr.io/acme");
     }
 
-    #[test]
-    fn mixed_engine_ship_rolls_both_service_deployments() {
-        // Mixed-engine restarts and waits cover both selected application tiers.
-        assert_eq!(
-            restart_deployments(),
-            ["navigator-web", "workflows-service"]
-        );
-        assert_eq!(
-            rollout_wait_deployments(),
-            ["navigator-web", "workflows-service"]
-        );
-        assert_eq!(web_binary_deployments(), ["navigator-web"]);
-    }
-
     /// A realistic slice of a built stream: our two Deployments, two trigger
     /// `CronJobs`, a third-party sidecar, and the KIND base's registry-less tag.
     const BUILT_STREAM: &str = "\
@@ -11196,14 +11241,16 @@ spec:
         );
     }
 
-    /// The Secret keys prod actually carries for the requirements the
-    /// manifest fixture does not supply as env. Enough to satisfy every
-    /// `WEB_REQUIREMENTS` entry that isn't manifest-provided.
+    /// Populated Secret keys satisfying the shared web requirements and
+    /// native executor authentication when the manifest supplies neither.
     fn satisfying_secret_keys() -> BTreeSet<String> {
         store::deployment::WEB_REQUIREMENTS
             .iter()
             .filter_map(|r| r.any_of.first())
             .flat_map(|alt| alt.iter().map(ToString::to_string))
+            .chain(std::iter::once(
+                workflows::trigger::DBOS_INGRESS_TOKEN_ENV.to_owned(),
+            ))
             .collect()
     }
 
@@ -11417,6 +11464,7 @@ spec:
         "HCAPTCHA_SECRET",
         "LINEAR_BACKLOG_READ_KEY",
         "NAVIGATOR_CREDENTIAL_ENVIRONMENT",
+        "NAVIGATOR_DBOS_INGRESS_TOKEN",
         "NAVIGATOR_ENVIRONMENT",
         "NAVIGATOR_FORGEJO_PROVISIONER_TOKEN",
         "NAVIGATOR_FORGE_BACKEND",
