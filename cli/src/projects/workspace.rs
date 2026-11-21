@@ -180,9 +180,7 @@ pub(super) async fn inspect(status: &serde_json::Value) -> serde_json::Value {
             (Ok(Some(_)), Ok(Some(_))) => "differs from source main; rerun setup",
             (_, Ok(None)) => "main is empty; rerun setup",
             (_, Err(detail)) => detail,
-            (Err(_), Ok(Some(_))) | (Ok(None), Ok(Some(_))) => {
-                "unverified: source main is unavailable"
-            }
+            (Err(_) | Ok(None), Ok(Some(_))) => "unverified: source main is unavailable",
         };
         let source = match refs.0 {
             Ok(Some(_)) => "main is present",
