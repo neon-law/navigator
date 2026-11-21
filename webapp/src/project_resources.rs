@@ -245,6 +245,7 @@ pub fn visible_resources(links: &ProjectResourceLinks, role: ViewerRole) -> Vec<
                 ResourceKind::PrivateSlackChannel => {
                     configured(links.private_slack_channel_id.as_ref())
                         .map(|id| format!("{SLACK_CHANNEL_PREFIX}{id}"))
+                        .or_else(|| configured(links.private_slack_channel_url.as_ref()))
                 }
                 ResourceKind::PrivateNotionPage => {
                     configured(links.private_notion_page_url.as_ref())
