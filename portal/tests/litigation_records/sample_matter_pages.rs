@@ -15,18 +15,22 @@ use store::persons::Role;
 use store::test_support::mem_surreal;
 use tower::ServiceExt;
 use uuid::Uuid;
+use views::brand::BrandKey;
 
-const SAMPLES: &[(&str, &str)] = &[
+const SAMPLES: &[(&str, BrandKey, &str)] = &[
     (
         store::seed::SAMPLE_LITIGATION_CODE,
+        BrandKey::Neon,
         include_str!("fixtures/sample-litigation.pages.yaml"),
     ),
     (
         store::seed::SAMPLE_ESTATE_CODE,
+        BrandKey::Vesta,
         include_str!("fixtures/sample-estate.pages.yaml"),
     ),
     (
         store::seed::SAMPLE_TRANSACTIONAL_CODE,
+        BrandKey::DeleteYourData,
         include_str!("fixtures/sample-transactional.pages.yaml"),
     ),
 ];
@@ -72,7 +76,7 @@ async fn fixture() -> Fixture {
     store::seed::seed_sample_portfolio(&surreal, &state.storage)
         .await
         .unwrap();
-    for (code, yaml) in SAMPLES {
+    for (code, _, yaml) in SAMPLES {
         let project = store::projects::find_by_code(&surreal, code)
             .await
             .unwrap()
@@ -102,13 +106,14 @@ async fn fixture() -> Fixture {
     }
 }
 
-async fn get(f: &Fixture, path: &str, cookie: &str) -> (StatusCode, String) {
+async fn get(f: &Fixture, host: &str, path: &str, cookie: &str) -> (StatusCode, String) {
     let response = f
         .app
         .clone()
         .oneshot(
             Request::builder()
                 .uri(path)
+                .header("host", host)
                 .header("cookie", cookie)
                 .body(Body::empty())
                 .unwrap(),
@@ -126,7 +131,7 @@ async fn get(f: &Fixture, path: &str, cookie: &str) -> (StatusCode, String) {
 /// that would repeat the show page's own tab never reaches a strip.
 #[test]
 fn every_sample_pages_block_passes_the_gate_shape_rules() {
-    for (code, yaml) in SAMPLES {
+    for (code, _, yaml) in SAMPLES {
         assert_eq!(rules::pages::shape_problems(yaml), Vec::new(), "{code}");
     }
 }
@@ -135,14 +140,14 @@ fn every_sample_pages_block_passes_the_gate_shape_rules() {
 async fn every_declared_sample_page_renders_in_both_lenses_from_seeded_records() {
     let f = fixture().await;
     let mut rendered = std::collections::BTreeMap::new();
-    for (code, yaml) in SAMPLES {
+    for (code, brand, yaml) in SAMPLES {
         for page in pages(yaml) {
             for (lens, cookie) in [
                 (Lens::Client, &f.client_cookie),
                 (Lens::Lawyer, &f.lawyer_cookie),
             ] {
                 let path = format!("/app/projects/{code}/{}", page.slug);
-                let (status, html) = get(&f, &path, cookie).await;
+                let (status, html) = get(&f, brand.canonical_host(), &path, cookie).await;
                 assert_eq!(
                     status,
                     StatusCode::OK,
