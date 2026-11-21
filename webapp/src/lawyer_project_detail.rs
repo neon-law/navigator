@@ -242,9 +242,7 @@ pub struct LawyerDetailView {
     pub csrf_token: String,
     /// The matter calendar's active sort, read from `?sort=`/`?dir=` and
     /// normalised to the advertised columns.
-    pub calendar_sort: String,
-    #[serde(default)]
-    pub calendar_expanded: bool,
+    pub calendar_sort: Option<String>,
     pub calendar_dir: String,
     /// The matter timeline: docket entries and open deadlines, in date order.
     #[serde(default)]
@@ -452,10 +450,9 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         |_| crate::project_calendar::CalendarQuery::default(),
         |axum::extract::Query(q)| q,
     );
-    let calendar_sort = crate::project_calendar::sort_field(
-        calendar_query.sort.as_deref(),
-        crate::project_calendar::MATTER_COLUMNS,
-    );
+    let calendar_sort = calendar_query.sort.as_deref().map(|sort| {
+        crate::project_calendar::sort_field(Some(sort), crate::project_calendar::MATTER_COLUMNS)
+    });
     let calendar_dir = crate::project_calendar::sort_dir(calendar_query.dir.as_deref());
     // The `?error=` flash a refused write's redirect carries, the write
     // forms' success flash, and the generate-invoice action's confirm step.
@@ -588,7 +585,7 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
                 .map_err(server_error)?,
         )
     } else {
-        Default::default()
+        crate::portal_project_detail::TrustView::default()
     };
 
     // Per-matter financial projections — Work in Progress and Outstanding
@@ -911,7 +908,6 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         asset_kind_choices: asset_kind_choices(),
         upload_limits: upload_form_limits(),
         csrf_token,
-        calendar_expanded: calendar_query.sort.is_some(),
         calendar_sort,
         calendar_dir,
         calendar_events,
@@ -1112,8 +1108,8 @@ pub fn LawyerProjectDetail() -> Element {
                 if let Some(flash) = view.flash.as_ref() {
                     Toast { message: flash.clone(), tone: ToastTone::Success }
                 }
-                // The Tasks panel renders its own refusal beside its forms.
-                if !matches!(view.active_tab, MatterTab::Tasks | MatterTab::Billing) && !(view.active_tab == MatterTab::Overview && has_stage) {
+                // The editable sections render their errors beside the form.
+                if !(matches!(view.active_tab, MatterTab::Tasks | MatterTab::Billing) || view.active_tab == MatterTab::Overview && has_stage) {
                     if let Some(error) = view.error.as_ref() {
                         p { class: "nav-form-error", role: "alert", "{error}" }
                     }
@@ -1212,7 +1208,7 @@ pub fn LawyerProjectDetail() -> Element {
                         }
                     },
                     MatterTab::Deadlines => rsx! {
-                        if view.calendar_expanded {
+                        if let Some(sort) = &view.calendar_sort {
                             a { class: "nav-link", href: "{current_page}", "View deadline details" }
                             crate::project_calendar::ProjectCalendar {
                                 section_class: "lawyer-detail__section project-calendar".to_string(),
@@ -1221,7 +1217,7 @@ pub fn LawyerProjectDetail() -> Element {
                                 columns: crate::project_calendar::MATTER_COLUMNS.to_vec(),
                                 path: MatterTab::Deadlines.href(&view.code),
                                 query_prefix: String::new(),
-                                sort: view.calendar_sort.clone(),
+                                sort: sort.clone(),
                                 dir: view.calendar_dir.clone(),
                                 events: view.calendar_events.clone(),
                             }
