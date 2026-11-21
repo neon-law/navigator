@@ -2068,3 +2068,14 @@ fn retained_operator_alias_refuses_changed_public_bytes_before_signing_them() {
         assert!(signed[0].starts_with("registry.example/"));
     }
 }
+
+#[test]
+fn startup_failure_exports_private_safe_logs_even_when_secondary_cleanup_fails() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let status = std::process::Command::new("python3")
+        .arg(root.join(".github/scripts/test-native-browser-cleanup.py"))
+        .arg(root.join(".github/scripts/native-browser-integration.sh"))
+        .status()
+        .expect("run the owned shell-child cleanup regression");
+    assert!(status.success());
+}

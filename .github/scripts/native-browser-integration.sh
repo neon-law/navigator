@@ -22,6 +22,7 @@ startup_started=false
 cleanup_failed=false
 role_pending="$private/role-pending.json"
 groups_drained=true
+cleanup_complete=false
 
 resources() {
   {
@@ -67,16 +68,64 @@ stop_browser() {
 
 redact() {
   python3 - "$private" "$public" <<'PY'
-import os, pathlib, re, sys
+import json, os, pathlib, re, sys
 source, target = map(pathlib.Path, sys.argv[1:])
 secrets = [value for key, value in os.environ.items() if value and
            any(word in key for word in ('PASSWORD', 'SECRET', 'TOKEN', 'ACCESS_KEY'))]
+# Keep discovered values in this mode-0600 private cache across teardown.
+# A second export must not forget credentials when down removes .devx/env.
+cache = source / '.redaction-secrets.json'
+incomplete = source / '.redaction-incomplete'
+if incomplete.exists():
+    raise ValueError('An earlier secret-discovery pass was incomplete; retain private logs')
+fd = os.open(incomplete, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+os.close(fd)
+if cache.exists():
+    retained = json.loads(cache.read_text())
+    if not isinstance(retained, list) or any(not isinstance(value, str) for value in retained):
+        raise ValueError('Private redaction cache is invalid')
+    secrets.extend(retained)
+# Parse generated assignment values without executing a partly written env file.
+# A malformed sensitive assignment refuses publication rather than leaking it.
+import shlex
+env_file = pathlib.Path('.devx/env')
+if env_file.is_file():
+    for line in env_file.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith('#'):
+            continue
+        match = re.fullmatch(r'(?:export\s+)?([A-Z_][A-Z0-9_]*)=(.*)', line)
+        sensitive = any(any(word in token for word in ('PASSWORD', 'SECRET', 'TOKEN', 'ACCESS_KEY'))
+                        for token in re.findall(r'\b[A-Z_][A-Z0-9_]*\b', line))
+        if '=' in line and sensitive and not match:
+            raise ValueError('Sensitive generated assignment has unsupported syntax')
+        if match and any(word in match[1] for word in ('PASSWORD', 'SECRET', 'TOKEN', 'ACCESS_KEY')):
+            values = shlex.split(match[2], comments=False, posix=True)
+            if len(values) > 1:
+                raise ValueError('Sensitive generated assignment cannot be safely redacted')
+            raw = match[2]
+            literal = (not values or raw == shlex.quote(values[0]) or
+                       re.fullmatch(r"'[^']*'", raw) or
+                       re.fullmatch(r'"(?:[^"\\$`]|\\["\\])*"', raw))
+            if not literal:
+                raise ValueError('Sensitive generated assignment is not a supported literal')
+            if values and values[0]:
+                secrets.append(values[0])
+secrets = sorted(set(secrets), key=len, reverse=True)
+fd = os.open(cache, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+with os.fdopen(fd, 'w') as saved:
+    os.fchmod(saved.fileno(), 0o600)
+    json.dump(secrets, saved)
+    saved.flush()
+    os.fsync(saved.fileno())
+incomplete.unlink()
 for path in source.glob('*.log'):
     if path.name.startswith('role-'):
         continue  # Role credentials exist only in the private process, never public raw logs.
     text = path.read_text(errors='replace')
     for value in sorted(secrets, key=len, reverse=True):
         text = text.replace(value, '[REDACTED]')
+    text = re.sub(r'([A-Za-z][A-Za-z0-9+.-]*://)[^/\s@]+@', r'\1[USERINFO REDACTED]@', text)
     text = re.sub(r'https?://[^\s?]+\?[^\s]+', '[URL QUERY REDACTED]', text)
     text = re.sub(r'[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]+', '[JWT REDACTED]', text)
     text = '\n'.join(line for line in text.splitlines() if not
@@ -132,9 +181,41 @@ stop_host() {
   fi
 }
 
+startup_alive() {
+  if kill -0 "$supervisor" 2>/dev/null; then return 0; fi
+  local startup_status=0
+  # This owned child has exited; reaping it cannot wait on a live process.
+  wait "$supervisor" || startup_status=$?
+  printf '\nQuickstart exited before readiness; child_exit=%s\n' "$startup_status" >> "$private/quickstart.log"
+  return 1
+}
+
+finalize_cleanup() {
+  secondary=$?
+  trap - EXIT INT TERM ERR
+  if ! $cleanup_complete; then
+    cleanup_failed=true
+    printf 'Cleanup interrupted; private supports retained\nprimary_exit=%s\nsecondary_exit=%s\n' \
+      "$result" "$secondary" >> "$private/cleanup.log"
+  fi
+  logs_exported=false
+  if redact; then logs_exported=true; else cleanup_failed=true; fi
+  if $logs_exported && $cleanup_complete && $groups_drained && ! $image_started && [ ! -f "$role_pending" ]; then
+    rm -rf "$private"
+  fi
+  if $cleanup_failed; then
+    echo 'Owned native browser cleanup did not complete cleanly' >&2
+    if [ "$result" -eq 0 ]; then result=1; fi
+  fi
+  exit "$result"
+}
+
 cleanup() {
   result=$?
   trap - EXIT INT TERM
+  trap finalize_cleanup ERR
+  # Export startup evidence before any teardown or secondary cleanup failure.
+  redact || cleanup_failed=true
   # A later attempt can prove drain; prior cleanup failure remains sticky.
   groups_drained=true
   stop_browser
@@ -184,7 +265,7 @@ cleanup() {
     fi
   fi
   if [ -f .devx/env ]; then
-    set -a; source .devx/env; set +a
+    # Cleanup needs only the owned kubeconfig, never execution of generated env.
     export KUBECONFIG="$root/.devx/kubeconfig"
     kubectl -n navigator get pods,jobs,pvc -o wide > "$private/workloads.log" 2>&1 || true
     kubectl -n navigator get events --sort-by=.lastTimestamp > "$private/events.log" 2>&1 || true
@@ -206,15 +287,8 @@ cleanup() {
     cleanup_failed=true
     echo 'Private role acceptance retains its owned tier and private cleanup receipts' >&2
   fi
-  redact || cleanup_failed=true
-  if $groups_drained && ! $image_started && [ ! -f "$role_pending" ]; then
-    rm -rf "$private"
-  fi
-  if $cleanup_failed; then
-    echo 'Owned native browser cleanup did not complete cleanly' >&2
-    if [ "$result" -eq 0 ]; then result=1; fi
-  fi
-  exit "$result"
+  cleanup_complete=true
+  finalize_cleanup
 }
 trap cleanup EXIT
 trap 'exit 130' INT
@@ -279,7 +353,7 @@ startup_started=true
 setsid target/debug/hudson quickstart > "$private/quickstart.log" 2>&1 &
 supervisor=$!
 for _ in $(seq 1 5400); do
-  kill -0 "$supervisor"
+  startup_alive
   if grep -q '^Preview: ' "$private/quickstart.log"; then break; fi
   sleep 1
 done
