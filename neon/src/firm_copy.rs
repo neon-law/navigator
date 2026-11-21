@@ -307,6 +307,7 @@ mod firm_copy_tests {
     /// page reports green on the half it cannot see.
     fn band_text(band: &Band) -> String {
         match band {
+            Band::Photos(items) => items.iter().map(|item| item.alt.as_str()).collect::<Vec<_>>().join(" "),
             Band::Enrollment { heading, body, steps, next_label, back_label, submit_label, booking_label, booking_body, .. } =>
                 format!("{heading} {body} {} {next_label} {back_label} {submit_label} {booking_label} {booking_body}", steps.join(" ")),
 

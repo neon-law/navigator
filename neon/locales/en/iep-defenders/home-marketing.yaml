@@ -18,6 +18,10 @@ hero_cta:
   label: Start with what your child is missing.
 skin: practice
 bands:
+  - kind: photos
+    items:
+      - asset_key: img/iep-defenders/classroom.jpg
+        alt: Teacher helping a student at a classroom board
   - kind: stats
     anchor: results
     overline: The record
@@ -115,6 +119,12 @@ bands:
           - - text: >-
                 If we can take the matter, we explain the scope, fees, and
                 next legal step before you decide how to proceed.
+  - kind: photos
+    items:
+      - asset_key: img/iep-defenders/sam-castor.jpg
+        alt: Sam Castor, Esq.
+      - asset_key: img/iep-defenders/david-gardner.jpg
+        alt: David Gardner, Esq.
   - kind: statement
     anchor: attorney
     overline: Sam Castor, Esq.

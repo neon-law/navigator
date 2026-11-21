@@ -199,6 +199,7 @@ pub struct TestimonialEntry {
 /// drifting into four private layouts.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub enum Band {
+    Photos(Vec<StepImage>),
     /// Anonymous contact intake followed by the signed-in booking handoff.
     Enrollment {
         heading: String,
@@ -805,6 +806,18 @@ pub(crate) fn Bands(
                                     LeadCaptureForm { copy: lead_copy.clone(), context: lead_context.clone(), submit_label: submit_label.clone() }
                                 }
                                 document::Script { src: "/public/js/enrollment-intake.js", defer: true }
+                            }
+                        }
+                    }
+                },
+                Band::Photos(items) => rsx! {
+                    div { class: "fm-photos",
+                        for photo in items.iter() {
+                            figure {
+                                img { src: "{photo.src}", alt: "{photo.alt}" }
+                                if items.len() > 1 {
+                                    figcaption { "{photo.alt}" }
+                                }
                             }
                         }
                     }

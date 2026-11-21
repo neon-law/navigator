@@ -504,14 +504,18 @@ fn card(copy: CardCopy) -> Card {
     }
 }
 
+fn marketing_image(image: views::locales::StepImageCopy) -> webapp::marketing_page::StepImage {
+    webapp::marketing_page::StepImage {
+        src: views::assets::asset_url(&image.asset_key),
+        alt: image.alt,
+    }
+}
+
 fn step(copy: StepCopy) -> Step {
     Step {
         title: copy.title,
         body: paragraphs_to_marketing(copy.body),
-        image: copy.image.map(|image| webapp::marketing_page::StepImage {
-            src: views::assets::asset_url(&image.asset_key),
-            alt: image.alt,
-        }),
+        image: copy.image.map(marketing_image),
     }
 }
 
@@ -669,6 +673,9 @@ fn services_band(copy: BandCopy, catalog: &views::locales::services::ServicesCat
 
 fn band(copy: BandCopy, catalog: Option<&views::locales::services::ServicesCatalog>) -> Band {
     match copy {
+        BandCopy::Photos { items } => {
+            Band::Photos(items.into_iter().map(marketing_image).collect())
+        }
         copy @ BandCopy::Enrollment { .. } => enrollment_band(copy),
         BandCopy::Statement {
             heading,
@@ -1595,8 +1602,13 @@ pub fn lex_tecnica_home(
 /// IEP Defenders' home is a marketing-page band sequence mirroring the
 /// firm's published iepdefenders.com structure, served through the same
 /// `HomeContent.marketing_page` seam as the other band-built homes.
-pub fn iep_home(branding: &views::brand::Branding, _deployment_host: Option<&str>) -> PageContent {
-    marketing_page(load_page(branding, "home-marketing"), None, branding)
+pub fn iep_home(branding: &views::brand::Branding, deployment_host: Option<&str>) -> PageContent {
+    let mut page = marketing_page(load_page(branding, "home-marketing"), None, branding);
+    // The photo originals are published to the staging asset origin.
+    if deployment_host.is_some_and(|host| !views::brand::is_staging_host(host)) {
+        page.bands.retain(|band| !matches!(band, Band::Photos(_)));
+    }
+    page
 }
 
 /// Same Day Legal opens with its legal services.
@@ -2514,6 +2526,38 @@ mod tests {
             .fee_note
             .contains("trust administration, and later updates require a separate quote"));
         assert_eq!(content.heading, "Your life is part of a larger story.");
+    }
+
+    #[test]
+    fn iep_staging_home_places_photos_before_results_and_founders_story() {
+        let brand = &views::brand::IEP_DEFENDERS_BRANDING;
+        let page = super::iep_home(brand, Some(brand.brand_key.staging_host()));
+        let photos: Vec<_> = page
+            .bands
+            .windows(2)
+            .filter_map(|pair| {
+                let [Band::Photos(images), following] = pair else {
+                    return None;
+                };
+                Some((images, following))
+            })
+            .collect();
+        let [(hero, Band::Stats { .. }), (portraits, Band::Statement { heading, .. })] =
+            photos.as_slice()
+        else {
+            panic!("photos should introduce the results and the founders' story");
+        };
+        assert_eq!(heading, "This work was personal from the beginning.");
+        assert_eq!(hero.len(), 1);
+        assert!(hero[0].src.ends_with("/classroom.jpg"));
+        assert_eq!(portraits.len(), 2);
+        assert!(portraits[0].src.ends_with("/sam-castor.jpg"));
+        assert!(portraits[1].src.ends_with("/david-gardner.jpg"));
+        let production = super::iep_home(brand, Some(brand.brand_key.canonical_host()));
+        assert!(!production
+            .bands
+            .iter()
+            .any(|band| matches!(band, Band::Photos(_))));
     }
 
     #[test]
