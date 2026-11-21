@@ -816,9 +816,9 @@
     "scenario": "immutable balanced exact-quantity postings; command deduplication; reversals; source provenance and timestamp triage",
     "runtime_tests": [
       {
-        "file": "store/tests/journal_startup_migration.rs",
+        "file": "store/src/journal_startup_migration/postgres_tests.rs",
         "function": "startup_import_preserves_identity_timestamps_and_reversal_order_then_retries",
-        "proves": "Legacy import preserves entry IDs and source insertion times, orders reversals and retries idempotently."
+        "proves": "Captured-format input preserves entry IDs and insertion times, orders reversals and retries idempotently on PostgreSQL."
       },
       {
         "file": "store/tests/firm_journal.rs",

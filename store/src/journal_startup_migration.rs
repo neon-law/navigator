@@ -2,10 +2,8 @@
 //! PostgreSQL is authoritative: conflicts refuse the import instead of overwriting it.
 use crate::firm_journal::{entry_digest, JournalEntry, JournalError};
 use crate::postgres::PostgresDb;
-use crate::surreal::SurrealDb;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::collections::BTreeSet;
-use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
 mod handoff;
@@ -14,13 +12,14 @@ pub use handoff::{
     JournalHandoff,
 };
 
-#[derive(Deserialize, SurrealValue)]
-struct LegacyEntry {
-    id: surrealdb::types::RecordId,
-    firm_id: String,
-    command_key: String,
-    payload: String,
-    inserted_at: Option<String>,
+mod source;
+pub use source::{capture, import, import_firm, triage};
+
+/// Read-only input to the single PostgreSQL importer. Implementations expose no write capability.
+#[async_trait::async_trait]
+trait ImportInput: Send + Sync {
+    async fn rows(&self, firm: Option<Uuid>) -> Result<Vec<CapturedJournalRow>, JournalError>;
+    async fn firm(&self, id: Uuid) -> anyhow::Result<Option<crate::firms::Firm>>;
 }
 
 /// Operator-visible triage contains identifiers and timestamps, never journal content.
@@ -53,45 +52,21 @@ fn item(entry: &JournalEntry, inserted_at: Option<String>, reason: TriageReason)
         inserted_at,
     }
 }
-/// Read bounded physical Source rows; the caller binds this once-read vector to its receipt.
-pub async fn capture(db: &SurrealDb) -> Result<Vec<CapturedJournalRow>, JournalError> {
-    capture_selected(db, None).await
-}
-async fn capture_selected(
-    db: &SurrealDb,
-    firm: Option<Uuid>,
-) -> Result<Vec<CapturedJournalRow>, JournalError> {
-    let mut result = db.query("SELECT id,firm_id,command_key,payload,IF inserted_at != NONE THEN <string>inserted_at ELSE NONE END AS inserted_at FROM journal_entry WHERE $firm = NONE OR firm_id = $firm LIMIT 1001")
-        .bind(("firm",firm.map(|id|id.to_string()))).await?.check()?;
-    let rows: Vec<LegacyEntry> = result.take(0)?;
-    if rows.len() > 1000 {
-        return Err(JournalError::Invalid(
-            "legacy journal import exceeds 1000-row review bound".into(),
-        ));
-    }
-    let captured = rows
-        .into_iter()
-        .map(|row| {
-            let id = crate::surreal::record_uuid(&row.id).ok_or_else(|| {
-                JournalError::Invalid("legacy Journal physical identity is invalid".into())
-            })?;
-            Ok(CapturedJournalRow {
-                id,
-                firm_id: row.firm_id,
-                command_key: row.command_key,
-                payload: row.payload,
-                inserted_at: row.inserted_at,
-            })
-        })
-        .collect::<Result<Vec<_>, JournalError>>()?;
-    handoff::parse_captured(&captured)?;
-    Ok(captured)
-}
 async fn read(
-    db: &SurrealDb,
+    input: &dyn ImportInput,
     firm: Option<Uuid>,
 ) -> Result<Vec<(JournalEntry, Option<String>)>, JournalError> {
-    handoff::parse_captured(&capture_selected(db, firm).await?)
+    let rows = input.rows(firm).await?;
+    require_review_bound(rows.len())?;
+    handoff::parse_captured(&rows)
+}
+fn require_review_bound(rows: usize) -> Result<(), JournalError> {
+    if rows > 1000 {
+        return Err(JournalError::Invalid(
+            "journal import exceeds 1000-row review bound".into(),
+        ));
+    }
+    Ok(())
 }
 fn classify_timestamps(rows: &[(JournalEntry, Option<String>)]) -> Vec<TriageItem> {
     let mut triage = Vec::new();
@@ -151,8 +126,11 @@ fn classify(
 }
 /// Read-only per-Firm timestamp triage, bounded to 1000 legacy rows.
 /// Missing source targets remain unresolved until the importer checks PostgreSQL.
-pub async fn triage(db: &SurrealDb, firm: Uuid) -> Result<Vec<TriageItem>, JournalError> {
-    let (mut pending, mut triage) = classify(read(db, Some(firm)).await?);
+async fn triage_input(
+    input: &dyn ImportInput,
+    firm: Uuid,
+) -> Result<Vec<TriageItem>, JournalError> {
+    let (mut pending, mut triage) = classify(read(input, Some(firm)).await?);
     let mut resolved = BTreeSet::new();
     loop {
         let before = pending.len();
@@ -181,29 +159,13 @@ pub async fn triage(db: &SurrealDb, firm: Uuid) -> Result<Vec<TriageItem>, Journ
     triage.sort_by_key(|row| row.entry_id);
     Ok(triage)
 }
-/// Import timestamped legacy entries atomically, preserving IDs and timestamps.
-/// Rows without insertion timestamps and dependent reversals remain in SurrealDB
-/// for triage. No timestamps are inferred, fabricated, or repaired automatically.
-pub async fn import(db: &SurrealDb, pg: &PostgresDb) -> Result<ImportReport, JournalError> {
-    import_selected(db, pg, None).await
-}
-
-/// Explicit operator import restricted to one Firm, with the same review bound.
-pub async fn import_firm(
-    db: &SurrealDb,
-    pg: &PostgresDb,
-    firm: Uuid,
-) -> Result<ImportReport, JournalError> {
-    import_selected(db, pg, Some(firm)).await
-}
-
 async fn import_selected(
-    db: &SurrealDb,
+    input: &dyn ImportInput,
     pg: &PostgresDb,
     firm: Option<Uuid>,
 ) -> Result<ImportReport, JournalError> {
     require_import_admission(pg).await?;
-    let (pending, mut triage) = classify(read(db, firm).await?);
+    let (pending, mut triage) = classify(read(input, firm).await?);
     let mut tx = pg.0.begin().await?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
         .execute(&mut *tx)
@@ -215,7 +177,7 @@ async fn import_selected(
     sqlx::query("SELECT pg_advisory_xact_lock(20261011200001)")
         .execute(&mut *tx)
         .await?;
-    lock_import_firms(db, pg, &mut tx, &pending).await?;
+    lock_import_firms(input, pg, &mut tx, &pending).await?;
     require_import_admission(pg).await?;
     let (mut pending, unresolved) = resolvable_reversals(&mut tx, pending).await?;
     triage.extend(unresolved);
@@ -238,7 +200,8 @@ async fn import_selected(
                     continue;
                 }
             }
-            count += usize::from(append_entry_on(&mut tx, &entry, &inserted_at, Some(db)).await?);
+            count +=
+                usize::from(append_entry_on(&mut tx, &entry, &inserted_at, Some(input)).await?);
         }
         if deferred.len() == before {
             triage.extend(deferred.into_iter().map(|(entry, timestamp)| {
@@ -264,7 +227,7 @@ async fn append_entry_on(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     entry: &JournalEntry,
     inserted_at: &str,
-    source: Option<&SurrealDb>,
+    source: Option<&dyn ImportInput>,
 ) -> Result<bool, JournalError> {
     let hash = entry_digest(entry)?;
     let existing: Vec<(Uuid, String, sqlx::types::Json<JournalEntry>)> = sqlx::query_as(
@@ -281,11 +244,11 @@ async fn append_entry_on(
         return Ok(false);
     }
     if let Some(source) = source {
-        let firm =
-            crate::postgres_mirror::from_source(crate::firms::find_by_id(source, entry.firm_id))
-                .await
-                .map_err(|_| JournalError::Invalid("legacy journal Firm lookup failed".into()))?
-                .ok_or_else(|| JournalError::Invalid("legacy journal Firm is missing".into()))?;
+        let firm = source
+            .firm(entry.firm_id)
+            .await
+            .map_err(|_| JournalError::Invalid("legacy journal Firm lookup failed".into()))?
+            .ok_or_else(|| JournalError::Invalid("legacy journal Firm is missing".into()))?;
         crate::firm_journal::ensure_firm_row(tx, &firm).await?;
     }
     sqlx::query("INSERT INTO journal_entry(id,firm_id,command_key,actor_id,occurred_at,memo,payload,digest,reversal_of,inserted_at,legacy_imported_at,legacy_inserted_at_known,legacy_inserted_at_source) VALUES($1,$2,$3,$4,$5::timestamptz,$6,$7,$8,$9,$10::timestamptz,now(),true,$10::text)")
@@ -545,7 +508,7 @@ fn captured_component(
 }
 
 async fn lock_import_firms(
-    source: &SurrealDb,
+    source: &dyn ImportInput,
     pg: &PostgresDb,
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     rows: &[(JournalEntry, String)],
@@ -576,7 +539,8 @@ async fn lock_import_firms(
                 "canonical Journal Firm is missing".into(),
             ));
         }
-        let firm = crate::postgres_mirror::from_source(crate::firms::find_by_id(source, id))
+        let firm = source
+            .firm(id)
             .await
             .map_err(|_| JournalError::Invalid("legacy Journal Firm lookup failed".into()))?
             .ok_or_else(|| JournalError::Invalid("legacy Journal Firm is missing".into()))?;
@@ -654,3 +618,6 @@ async fn validate_import_firms(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod postgres_tests;

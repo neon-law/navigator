@@ -18,52 +18,28 @@ pub enum JournalError {
     Postgres(#[from] sqlx::Error),
     #[error("journal encoding: {0}")]
     Encoding(#[from] serde_json::Error),
-    #[error("reconciliation evidence, audits, and signals require the PostgreSQL journal")]
-    RequiresPostgres,
 }
 
-/// The environment variable whose presence selects the PostgreSQL journal.
-pub const POSTGRES_HOST_ENV: &str = "NAVIGATOR_POSTGRES_HOST";
-
-/// Immutable Journal Entries. Ordinary applications use PostgreSQL; the
-/// explicitly constructed legacy variant remains available to migration tools.
+/// Immutable Journal Entries on the admitted PostgreSQL authority.
 #[derive(Debug, Clone)]
-pub enum JournalStore {
-    Postgres(PostgresDb),
-    Surreal(SurrealDb),
-}
+pub struct JournalStore(PostgresDb);
 impl JournalStore {
     /// Require PostgreSQL and its complete application activation history.
-    pub async fn from_env(_surreal: &SurrealDb) -> Result<Self, crate::postgres::PostgresError> {
-        Ok(Self::Postgres(PostgresDb::application().await?))
+    pub async fn from_env() -> Result<Self, crate::postgres::PostgresError> {
+        Ok(Self(PostgresDb::application().await?))
     }
+    /// The admitted PostgreSQL journal.
     #[must_use]
-    pub fn backend(&self) -> &'static str {
-        match self {
-            Self::Postgres(_) => "postgresql",
-            Self::Surreal(_) => "surrealdb",
-        }
-    }
-    /// The PostgreSQL journal, for commands that exist only there.
-    pub fn postgres(&self) -> Result<&PostgresDb, JournalError> {
-        match self {
-            Self::Postgres(pg) => Ok(pg),
-            Self::Surreal(_) => Err(JournalError::RequiresPostgres),
-        }
+    pub fn postgres(&self) -> &PostgresDb {
+        &self.0
     }
     /// The Firm's Journal Entries in insertion order.
     pub async fn entries(&self, firm: Uuid) -> Result<Vec<JournalEntry>, JournalError> {
-        match self {
-            Self::Postgres(pg) => entries(pg, firm).await,
-            Self::Surreal(surreal) => surreal_journal::entries(surreal, firm).await,
-        }
+        entries(&self.0, firm).await
     }
     /// See [`post`]. Retrying an identical key returns its identity.
     pub async fn post(&self, db: &SurrealDb, entry: &JournalEntry) -> Result<Uuid, JournalError> {
-        match self {
-            Self::Postgres(pg) => post(db, pg, entry).await,
-            Self::Surreal(surreal) => surreal_journal::execute(db, surreal, entry, true).await,
-        }
+        post(db, &self.0, entry).await
     }
     /// See [`preview`]. Nothing is persisted.
     pub async fn preview(
@@ -71,111 +47,10 @@ impl JournalStore {
         db: &SurrealDb,
         entry: &JournalEntry,
     ) -> Result<Uuid, JournalError> {
-        match self {
-            Self::Postgres(pg) => preview(db, pg, entry).await,
-            Self::Surreal(surreal) => surreal_journal::execute(db, surreal, entry, false).await,
-        }
+        preview(db, &self.0, entry).await
     }
 }
 
-/// SurrealDB `journal_entry` rows: the canonical serialized entry keyed by
-/// Firm and command key, with an RFC 3339 insertion timestamp.
-mod surreal_journal {
-    use super::{
-        check_command, entry_digest, validate_history, validate_posting_evidence,
-        validate_repayment, JournalEntry, JournalError,
-    };
-    use crate::surreal::{record_id, SurrealDb};
-    use serde::Deserialize;
-    use surrealdb::types::SurrealValue;
-    use uuid::Uuid;
-
-    const TABLE: &str = "journal_entry";
-
-    /// Serializes commands in this process, standing in for PostgreSQL's
-    /// Firm row lock while history checks read before they write.
-    static COMMANDS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
-    #[derive(Deserialize, SurrealValue)]
-    struct Row {
-        firm_id: String,
-        command_key: String,
-        payload: String,
-        inserted_at: Option<String>,
-    }
-
-    pub(super) async fn entries(
-        db: &SurrealDb,
-        firm: Uuid,
-    ) -> Result<Vec<JournalEntry>, JournalError> {
-        let mut result = db
-            .query("SELECT firm_id, command_key, payload, IF inserted_at != NONE THEN <string>inserted_at ELSE NONE END AS inserted_at FROM journal_entry WHERE firm_id = $firm")
-            .bind(("firm", firm.to_string()))
-            .await?
-            .check()?;
-        let rows: Vec<Row> = result.take(0)?;
-        let mut entries = Vec::with_capacity(rows.len());
-        for row in rows {
-            let entry: JournalEntry = serde_json::from_str(&row.payload)?;
-            if row.firm_id != entry.firm_id.to_string() || row.command_key != entry.key {
-                return Err(JournalError::Conflict);
-            }
-            entries.push((row.inserted_at, entry));
-        }
-        entries.sort_by(|(a, x), (b, y)| a.cmp(b).then(x.id.cmp(&y.id)));
-        Ok(entries.into_iter().map(|(_, entry)| entry).collect())
-    }
-
-    fn existing(all: &[JournalEntry], entry: &JournalEntry) -> Option<Result<Uuid, JournalError>> {
-        let found = all.iter().find(|e| e.key == entry.key)?;
-        Some(match (entry_digest(found), entry_digest(entry)) {
-            (Ok(a), Ok(b)) if a == b => Ok(found.id),
-            (Err(error), _) | (_, Err(error)) => Err(error),
-            _ => Err(JournalError::Conflict),
-        })
-    }
-
-    pub(super) async fn execute(
-        db: &SurrealDb,
-        journal: &SurrealDb,
-        entry: &JournalEntry,
-        commit: bool,
-    ) -> Result<Uuid, JournalError> {
-        check_command(db, entry).await?;
-        let _guard = COMMANDS.lock().await;
-        let all = entries(journal, entry.firm_id).await?;
-        if let Some(result) = existing(&all, entry) {
-            return result;
-        }
-        if all.iter().any(|e| e.id == entry.id) {
-            return Err(JournalError::Conflict);
-        }
-        validate_posting_evidence(db, entry).await?;
-        validate_repayment(entry, &all)?;
-        validate_history(entry, &all)?;
-        if !commit {
-            return Ok(entry.id);
-        }
-        let inserted = journal
-            .query("CREATE $id CONTENT {firm_id: $firm, command_key: $key, payload: $payload, inserted_at: $at}")
-            .bind(("id", record_id(TABLE, entry.id)))
-            .bind(("firm", entry.firm_id.to_string()))
-            .bind(("key", entry.key.clone()))
-            .bind(("payload", serde_json::to_string(entry)?))
-            .bind((
-                "at",
-                chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
-            ))
-            .await
-            .and_then(surrealdb::IndexedResults::check);
-        match inserted {
-            Ok(_) => Ok(entry.id),
-            // Another replica took the key first: identical content is a retry.
-            Err(error) => existing(&entries(journal, entry.firm_id).await?, entry)
-                .unwrap_or(Err(JournalError::Db(error))),
-        }
-    }
-}
 fn invalid(message: &str) -> JournalError {
     JournalError::Invalid(message.into())
 }
@@ -1913,14 +1788,13 @@ mod tests {
             return;
         };
         let pg = crate::postgres_mirror::tests::connect(&options, &database).await;
-        let source = crate::surreal::SurrealDb::uninitialized();
         PostgresDb::with_test_db(pg.clone(), async {
             assert!(matches!(
-                super::JournalStore::from_env(&source).await,
+                super::JournalStore::from_env().await,
                 Err(PostgresError::History)
             ));
             crate::postgres::fixtures::activate_application(&pg).await;
-            let journal = super::JournalStore::from_env(&source).await.unwrap();
+            let journal = super::JournalStore::from_env().await.unwrap();
             assert!(journal.entries(uuid::Uuid::nil()).await.unwrap().is_empty());
             sqlx::query(
                 "UPDATE mirror_backfill_run SET status = 'running', completed_at = NULL WHERE scope = 'application:1'",
@@ -1929,7 +1803,7 @@ mod tests {
             .await
             .unwrap();
             assert!(matches!(
-                super::JournalStore::from_env(&source).await,
+                super::JournalStore::from_env().await,
                 Err(PostgresError::History)
             ));
         })

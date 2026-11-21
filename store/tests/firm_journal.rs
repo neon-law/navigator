@@ -929,3 +929,39 @@ fn invoice_installments_remain_distinct_and_a_payment_can_allocate_across_projec
     }
     assert!(!compare(&second, &snapshot, true).reconciled());
 }
+
+#[tokio::test]
+async fn postgres_journal_store_preserves_preview_idempotency_and_reversal_boundaries() {
+    store::test_support::with_postgres(async {
+        let db = store::surreal::SurrealDb::uninitialized();
+        let journal = JournalStore::from_env().await.unwrap();
+        let firm = firm(&db).await;
+        let e = entry(firm, "manual:postgres");
+        assert_eq!(journal.preview(&db, &e).await.unwrap(), e.id);
+        assert!(journal.entries(firm).await.unwrap().is_empty());
+        let (a, b) = tokio::join!(journal.post(&db, &e), journal.post(&db, &e));
+        assert_eq!(a.unwrap(), e.id);
+        assert_eq!(b.unwrap(), e.id);
+        assert_eq!(journal.entries(firm).await.unwrap(), vec![e.clone()]);
+        let mut changed = e.clone();
+        changed.memo = "Different economic event".into();
+        assert!(matches!(
+            journal.post(&db, &changed).await,
+            Err(JournalError::Conflict)
+        ));
+        let reversal = e
+            .reversal(
+                "manual:postgres:reversal",
+                e.actor_id,
+                "2026-10-12T00:00:00Z",
+            )
+            .unwrap();
+        journal.post(&db, &reversal).await.unwrap();
+        let again = e
+            .reversal("manual:postgres:again", e.actor_id, "2026-10-12T00:00:00Z")
+            .unwrap();
+        assert!(journal.post(&db, &again).await.is_err());
+        assert_eq!(journal.entries(firm).await.unwrap(), vec![e, reversal]);
+    })
+    .await;
+}

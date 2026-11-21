@@ -15,9 +15,8 @@ on:
       - 'store/examples/postgres_callers/**'
       - 'store/src/postgres_mirror/**'
       - 'store/tests/firm_journal.rs'
-      - 'store/tests/firm_journal_compatibility.rs'
       - 'store/tests/support/firm_journal.rs'
-      - 'store/tests/journal_startup_migration.rs'
+      - 'store/src/journal_startup_migration/**'
       - 'store/src/postgres.rs'
       - 'store/tests/postgres_tooling.rs'
       - 'store/Cargo.toml'
@@ -47,9 +46,8 @@ on:
       - 'store/examples/postgres_callers/**'
       - 'store/src/postgres_mirror/**'
       - 'store/tests/firm_journal.rs'
-      - 'store/tests/firm_journal_compatibility.rs'
       - 'store/tests/support/firm_journal.rs'
-      - 'store/tests/journal_startup_migration.rs'
+      - 'store/src/journal_startup_migration/**'
       - 'store/src/postgres.rs'
       - 'store/tests/postgres_tooling.rs'
       - 'store/Cargo.toml'
@@ -152,7 +150,8 @@ jobs:
           KUBECONFIG: /tmp/postgres-kind.config
           NAVIGATOR_TEST_POSTGRES_PORT: '25432'
           NAV_REQUIRE_POSTGRES: '1'
-          # The embedded SurrealDB engine needs the ci lane's larger test-thread stack.
+          NAVIGATOR_FORBID_SURREAL: '1'
+          RUST_TEST_THREADS: '2'
           RUST_MIN_STACK: '33554432'
         run: |
           kubectl -n navigator port-forward service/postgres-spike 25432:5432 > /tmp/journal-port-forward.log 2>&1 &
@@ -162,9 +161,9 @@ jobs:
             if bash -c 'echo > /dev/tcp/127.0.0.1/25432' 2>/dev/null; then break; fi
             sleep 1
           done
-          cargo test -p store --features store/surreal-compatibility \
-            --test firm_journal --test firm_journal_compatibility \
-            --test journal_startup_migration --test postgres_tooling --test brand_move_mirror
+          cargo test -p store --lib journal_startup_migration::
+          cargo test -p store \
+            --test firm_journal --test postgres_tooling --test brand_move_mirror
       - name: JWT health detects optional ambiguity and pins before the first probe
         env:
           NAVIGATOR_FORBID_SURREAL: '1'

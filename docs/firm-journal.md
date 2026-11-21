@@ -1,11 +1,9 @@
 # Firm journal
 
-The Firm owns its authoritative journal. When `NAVIGATOR_POSTGRES_HOST` is set, PostgreSQL stores immutable Journal
-Entries, postings, structured source references, evidence snapshots, and reconciliation audits. Without it, Journal
-Entries live in SurrealDB's `journal_entry` table, and `list`, `statement`, `preview`, `post`, and `migration-triage`
-work unchanged. Reconciliation, audits, and signals require PostgreSQL; without it they answer `503
-journal_requires_postgresql`. The web server logs the selected backend once at boot. Project allocations identify which
-matter benefits from an entry. A Project statement includes only those allocations.
+The Firm owns its authoritative PostgreSQL journal. PostgreSQL stores immutable Journal Entries, postings, structured
+source references, evidence snapshots, and reconciliation audits. Ordinary requests require complete PostgreSQL
+application history. Missing or unavailable PostgreSQL fails admission. Project allocations identify which matter
+benefits from an entry. A Project statement includes only those allocations.
 
 Each Journal Entry has a Navigator UUID and command key. Bank and accounting provider IDs remain source references,
 scoped by provider, tenant, account, object type, external ID, and optional transfer locator. Xero invoice UUIDs,
@@ -67,20 +65,19 @@ evidence.
 
 ## Journal store
 
-Both stores run the same command checks: balance, ownership, evidence, repayment, history, and idempotent command keys.
-The SurrealDB store writes the canonical serialized entry with its insertion timestamp and serializes commands within
-one process; PostgreSQL adds the Firm row lock across replicas. A configured but unreachable PostgreSQL fails the
-request rather than falling back to SurrealDB.
+The PostgreSQL store checks balance, ownership, evidence, repayment, history, and idempotent command keys under the Firm
+row lock across replicas.
 
-## PostgreSQL startup
+## Journal import
 
 Configure discrete `NAVIGATOR_POSTGRES_HOST`, `PORT`, `USER`, `PASSWORD`, `DATABASE`, `SSLMODE`, and optional
-`ROOT_CERT` values. Production connections require verified TLS and a dedicated application role. Apply the canonical
-PostgreSQL schema with the operator connection before serving requests. Ordinary journal requests perform no DDL. The
-temporary startup importer copies existing Surreal Journal Entries before serving, preserving IDs and all recorded
-timestamps, skipping identical rows, and refusing conflicts. Missing insertion timestamps require triage and remain in
-SurrealDB until original timestamp evidence is established. Occurrence time never substitutes for insertion time. The
-importer never deletes the source. Other application tables still use SurrealDB.
+`ROOT_CERT` values. Production connections require verified TLS and a dedicated application role. Apply migrations
+through the operator authority boundary before serving requests. Ordinary journal requests perform no DDL.
+
+The explicit operator importer reads captured Journal Entries, preserving IDs and recorded timestamps, skipping
+identical rows, and refusing conflicts. Missing insertion timestamps require triage and remain in the source until
+original timestamp evidence is established. Occurrence time never substitutes for insertion time. The importer never
+deletes or rewrites the source and refuses replay once PostgreSQL owns the journal.
 
 ## Linked source signals and monitoring
 
