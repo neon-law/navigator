@@ -853,3 +853,37 @@ async fn sealed_scopes_reject_lifecycle_extension_without_changing_their_receipt
         super::require_scope(&pg, family).await.unwrap();
     }
 }
+
+/// Codec validity is separate from admitting an actual resource for application work.
+#[test]
+fn archived_scoped_receipt_and_checkpoint_shapes_validate_without_minting_authority() {
+    let family = Family::Satellites;
+    let mut capture = receipt(
+        family,
+        b"synthetic decoder input, not captured source authority",
+    );
+    for count in capture.table_counts.values_mut() {
+        *count = 2;
+    }
+    capture.validate(family).unwrap();
+    let raw = serde_json::json!({"source_rows":2,"target_rows":2,"differences":0,
+        "references_checked":true,"foreign_keys_checked":true,"references":[],
+        "reset_facts_checked":false,"reset_fact_differences":0});
+    for table in family.tables() {
+        let valid: super::Verification = serde_json::from_value(raw.clone()).unwrap();
+        assert!(valid.clean(family, 2, table));
+        let mut partial = raw.clone();
+        partial["references_checked"] = serde_json::json!(false);
+        let invalid: super::Verification = serde_json::from_value(partial).unwrap();
+        assert!(!invalid.clean(family, 2, table));
+        let mut mismatch = raw.clone();
+        mismatch["target_rows"] = serde_json::json!(1);
+        let invalid: super::Verification = serde_json::from_value(mismatch).unwrap();
+        assert!(!invalid.clean(family, 2, table));
+    }
+    capture.table_counts.remove("testimonial");
+    assert!(matches!(
+        capture.validate(family),
+        Err(FamilyError::Receipt)
+    ));
+}

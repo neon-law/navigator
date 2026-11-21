@@ -227,12 +227,20 @@ async fn postgres_paired_sources_fail_closed_and_rehydrate_from_iceberg() {
     let target_ledger = PostgresDb::connect(target_nav.connect_options().as_ref().clone())
         .await
         .unwrap();
-    require_scope(&source_ledger, Family::Satellites)
-        .await
-        .unwrap();
+    assert!(
+        matches!(
+            require_scope(&source_ledger, Family::Satellites).await,
+            Err(FamilyError::NativeOrigin(
+                store::postgres::native_origin::OriginError::Recovery
+            ))
+        ),
+        "synthetic receipt rows are not a known application database history"
+    );
     assert!(matches!(
         require_scope(&target_ledger, Family::Satellites).await,
-        Err(FamilyError::NotActive)
+        Err(FamilyError::NativeOrigin(
+            store::postgres::native_origin::OriginError::Recovery
+        ))
     ));
     let postgis_available: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'postgis')",
@@ -405,9 +413,15 @@ async fn postgres_paired_sources_fail_closed_and_rehydrate_from_iceberg() {
     )
     .await;
     assert_ledger_preserved(&navigator, &target_nav).await;
-    require_scope(&target_ledger, Family::Satellites)
-        .await
-        .unwrap();
+    assert!(
+        matches!(
+            require_scope(&target_ledger, Family::Satellites).await,
+            Err(FamilyError::NativeOrigin(
+                store::postgres::native_origin::OriginError::Recovery
+            ))
+        ),
+        "row copying never admits this unmigrated synthetic target"
+    );
     source_ledger.pool().close().await;
     target_ledger.pool().close().await;
     // Service-owned indexes and foreign keys are installed after its rows,

@@ -87,6 +87,7 @@ impl Capture {
         Ok(Self(
             extracted,
             Some(crate::coverage::PairedManifest {
+                format_version: 1,
                 generation,
                 databases,
                 cross_database_atomic: false,

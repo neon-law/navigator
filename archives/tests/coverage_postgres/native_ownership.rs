@@ -29,8 +29,7 @@ struct Domain {
 struct ProbeError;
 
 #[tokio::test]
-async fn canonical_native_owners_and_deleted_project_audit_restore_sdk_checkpoints_without_admission(
-) {
+async fn canonical_native_owners_and_deleted_project_audit_restore_with_real_sdk_checkpoints() {
     let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {
         assert_ne!(std::env::var("NAV_REQUIRE_POSTGRES").as_deref(), Ok("1"));
         return;
@@ -45,25 +44,23 @@ async fn canonical_native_owners_and_deleted_project_audit_restore_sdk_checkpoin
         );
     let admin = PgPool::connect_with(options.clone()).await.unwrap();
     // This constructor alone supplies known-fresh native ownership BEFORE any data.
-    let fixture = store::test_support::PostgresFixture::create(options)
+    let fixture = store::test_support::PostgresFixture::create(options.clone())
         .await
         .unwrap();
     let mut owned = Vec::new();
     let result=std::panic::AssertUnwindSafe(async {
         let id=Uuid::now_v7().simple().to_string();
-        for name in [format!("native_restore_{id}"),format!("native_forge_{id}"),format!("native_restore_forge_{id}")] {
+        for name in [format!("native_forge_{id}"),format!("native_restore_forge_{id}")] {
             sqlx::raw_sql(sqlx::AssertSqlSafe(format!("CREATE DATABASE {name}"))).execute(&admin).await.unwrap();
             owned.push((name.clone(), None));
             let pool=PgPool::connect_with(admin.connect_options().as_ref().clone().database(&name)).await.unwrap();
             owned.last_mut().unwrap().1=Some(pool);
         }
-        let target=owned[0].1.as_ref().unwrap();let forge=owned[1].1.as_ref().unwrap();let forge_target=owned[2].1.as_ref().unwrap();
-        // Schema-only target: no invented ownership epoch, fixture history or workflow rows.
-        sqlx::raw_sql(store::postgres_schema::canonical_schema()).execute(target).await.unwrap();
-        for pool in [forge,forge_target] {sqlx::raw_sql(FORGE_SCHEMA).execute(pool).await.unwrap();}
+        let forge=owned[0].1.as_ref().unwrap().clone();let forge_target=owned[1].1.as_ref().unwrap().clone();
+        for pool in [&forge,&forge_target] {sqlx::raw_sql(FORGE_SCHEMA).execute(pool).await.unwrap();}
         sqlx::query("INSERT INTO forge.repository VALUES(1,'synthetic',true,decode('00ff','hex'),'{\"native\":true}'::jsonb)")
-            .execute(forge).await.unwrap();
-        roundtrip(fixture.postgres(),target,forge,forge_target,&port).await;
+            .execute(&forge).await.unwrap();
+        roundtrip(fixture.postgres(),&options,&mut owned,&forge,&forge_target,&port,2).await;
     }).catch_unwind().await;
     let mut cleanup_failed = false;
     for (name, pool) in owned {
@@ -122,7 +119,7 @@ async fn parents(pg: &PostgresDb) -> (Uuid, Uuid, String) {
     sqlx::query("INSERT INTO firm(id,name,status,slug,entity_id) VALUES($1,'Synthetic Practice','active',$2,$3)")
         .bind(firm).bind(firm.to_string()).bind(entity).execute(pg.pool()).await.unwrap();
     let brand = format!("archive-{}", Uuid::now_v7().simple());
-    sqlx::query("INSERT INTO brand(name,brand_key,firm_id) VALUES('Synthetic Brand',$1,$2)")
+    sqlx::query("INSERT INTO brand(name,brand_key,firm_id) VALUES('Synthetic Brand '||$1,$1,$2)")
         .bind(&brand)
         .bind(firm)
         .execute(pg.pool())
@@ -186,13 +183,14 @@ async fn seed(pg: &PostgresDb) -> Domain {
     }
     let source = store::surreal::SurrealDb::uninitialized();
     let receipt = PostgresDb::with_test_db(pg.clone(), async {
+        let mailbox = format!("archive-{firm}@example.test");
         store::projects::delete_project_with_surreal(&source, projects[0])
             .await
             .unwrap();
         let receipt = store::email_receipts::ensure(
             &source,
             &store::email_receipts::NewEmailReceipt {
-                receiving_mailbox: "archive@example.test",
+                receiving_mailbox: &mailbox,
                 deployment: "synthetic",
                 firm_id: Some(firm),
                 provider_account: None,
@@ -310,40 +308,120 @@ async fn clear_sdk_target(pool: &PgPool) {
         .unwrap();
 }
 
-async fn roundtrip(
-    source_pg: &PostgresDb,
-    target: &PgPool,
-    forge: &PgPool,
-    forge_target: &PgPool,
+struct PreparedTarget {
+    pending: store::postgres::native_origin::recovery::PendingRecovery,
+    before_origin: serde_json::Value,
+    target_index: usize,
+}
+
+async fn prepare_target(
+    options: &PgConnectOptions,
+    owned: &mut Vec<(String, Option<PgPool>)>,
     port: &str,
-) {
-    let target_pg = PostgresDb::connect(target.connect_options().as_ref().clone())
+    domain: Domain,
+    paired: &archives::coverage::PairedManifest,
+    storage: &dyn StorageService,
+) -> PreparedTarget {
+    let marker = storage
+        .get(&format!("postgres/_paired/{}.json", paired.generation))
+        .await
+        .unwrap()
+        .bytes;
+    let creation = Uuid::new_v4();
+    let tier = store::postgres::native_origin::TierBinding {
+        tier_id: Uuid::new_v4(),
+        namespace_uid: Uuid::new_v4(),
+        cluster_name: "native-recovery-acceptance".into(),
+    };
+    let created = store::postgres::native_origin::create(options.clone(), creation, tier)
         .await
         .unwrap();
-    let result = std::panic::AssertUnwindSafe(roundtrip_on(
-        source_pg,
-        &target_pg,
-        forge,
-        forge_target,
-        port,
-    ))
-    .catch_unwind()
-    .await;
-    target_pg.pool().close().await;
-    if let Err(panic) = result {
-        std::panic::resume_unwind(panic);
+    let target_name = store::postgres::native_origin::database_name(creation).unwrap();
+    let target_index = owned.len();
+    owned.push((target_name, None));
+    let pending = created
+        .initialize_recovery(
+            store::postgres::native_origin::recovery::RecoveryInput::from_archive(
+                Uuid::new_v4(),
+                marker,
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let before_origin: serde_json::Value =
+        sqlx::query_scalar("SELECT to_jsonb(o) FROM database_origin o")
+            .fetch_one(pending.postgres().pool())
+            .await
+            .unwrap();
+    owned[target_index].1 = Some(pending.postgres().pool().clone());
+    {
+        let target_pg = pending.postgres();
+        sdk(target_pg, port, None, None, Arc::new(AtomicUsize::new(0))).await;
+        clear_sdk_target(target_pg.pool()).await;
+        assert!(
+            store::durable_object_handover::require_native_ownership(target_pg)
+                .await
+                .is_err()
+        );
+        assert!(matches!(
+            project_slack_deliveries::admission(
+                target_pg,
+                domain.retained,
+                "client_view",
+                "client-view"
+            )
+            .await,
+            Err(project_slack_deliveries::DeliveryError::HandoverRequired)
+        ));
+    }
+    PreparedTarget {
+        pending,
+        before_origin,
+        target_index,
     }
 }
 
-async fn roundtrip_on(
+async fn assert_creation_evidence(
     source_pg: &PostgresDb,
     target_pg: &PostgresDb,
+    before_origin: serde_json::Value,
+) {
+    let after_origin: serde_json::Value =
+        sqlx::query_scalar("SELECT to_jsonb(o) FROM database_origin o")
+            .fetch_one(target_pg.pool())
+            .await
+            .unwrap();
+    assert_eq!(
+        before_origin, after_origin,
+        "restoration never rewrites target creation evidence"
+    );
+    let source_origin: serde_json::Value =
+        sqlx::query_scalar("SELECT to_jsonb(o) FROM database_origin o")
+            .fetch_one(source_pg.pool())
+            .await
+            .unwrap();
+    assert_ne!(
+        after_origin["creation_operation"], source_origin["creation_operation"],
+        "source identity does not become target creation evidence"
+    );
+}
+
+async fn roundtrip(
+    source_pg: &PostgresDb,
+    options: &PgConnectOptions,
+    owned: &mut Vec<(String, Option<PgPool>)>,
     forge: &PgPool,
     forge_target: &PgPool,
     port: &str,
+    repeat: u8,
 ) {
-    restore::prepare_target_migration_ledger(source_pg.pool(), target_pg.pool()).await;
     let domain = seed(source_pg).await;
+    let empty_largeobject: i64 = sqlx::query_scalar("SELECT lo_create(0)::bigint")
+        .fetch_one(source_pg.pool())
+        .await
+        .unwrap();
+
     let calls = Arc::new(AtomicUsize::new(0));
     sdk(source_pg, port, Some(domain), None, Arc::clone(&calls)).await;
     assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -353,30 +431,17 @@ async fn roundtrip_on(
             .unwrap(),
         Some(domain.operation)
     );
-    sdk(target_pg, port, None, None, Arc::new(AtomicUsize::new(0))).await;
-    clear_sdk_target(target_pg.pool()).await;
-    assert!(
-        store::durable_object_handover::require_native_ownership(target_pg)
-            .await
-            .is_err()
-    );
-    assert!(matches!(
-        project_slack_deliveries::admission(
-            target_pg,
-            domain.retained,
-            "client_view",
-            "client-view"
-        )
-        .await,
-        Err(project_slack_deliveries::DeliveryError::HandoverRequired)
-    ));
     let nav = manifest(source_pg.pool()).await;
     let forge_manifest = manifest(forge).await;
     let dir = tempfile::tempdir().unwrap();
     let storage = ZeroDelete {
         inner: FsStorage::new(dir.path()).await.unwrap(),
     };
-    let base = "memory://native-ownership";
+    let base = match repeat {
+        2 => "memory://native-ownership",
+        1 => "file:///synthetic/native-ownership",
+        _ => "gs://synthetic.invalid/native-ownership",
+    };
     let paired = export_pair(
         source("navigator", source_pg.pool(), &nav),
         source("forgejo", forge, &forge_manifest),
@@ -389,29 +454,218 @@ async fn roundtrip_on(
         !paired.cross_database_atomic,
         "two databases do not share a recovery point"
     );
-    restore::restore_pair(
-        &paired,
-        &storage,
-        base,
-        target_pg.pool(),
-        forge_target,
-        target_pg,
-    )
-    .await;
-    assert!(matches!(
-        require_scope(target_pg, Family::Satellites).await,
-        Err(FamilyError::NativeOrigin(
-            store::postgres::native_origin::OriginError::Authority
-        ))
-    ));
-    restore::assert_database_equal(&paired.databases[0], source_pg.pool(), target_pg.pool()).await;
+    if repeat == 2 {
+        rejects_predicate_changed_during_pool_drain(
+            options, owned, port, domain, &paired, &storage, base,
+        )
+        .await;
+    }
+    let PreparedTarget {
+        pending,
+        before_origin,
+        target_index,
+    } = prepare_target(options, owned, port, domain, &paired, &storage).await;
+    archives::recovery::rehydrate(&pending, &storage, base)
+        .await
+        .unwrap();
+    restore::restore_forgejo(&paired, &storage, base, forge_target, pending.postgres()).await;
+    let store::postgres::native_origin::recovery::CompletedRecovery::Open(recovered) =
+        pending.verify_and_complete().await.unwrap()
+    else {
+        panic!("verified recovery must reopen this owned target");
+    };
+    let target_pg = recovered.postgres();
+    owned[target_index].1 = Some(target_pg.pool().clone());
+    assert_creation_evidence(source_pg, target_pg, before_origin).await;
+    require_scope(target_pg, Family::Satellites).await.unwrap();
+    let empty_restored:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_largeobject_metadata WHERE oid=$1::oid) AND NOT EXISTS(SELECT 1 FROM pg_largeobject WHERE loid=$1::oid)").bind(empty_largeobject).fetch_one(target_pg.pool()).await.unwrap();
+    assert!(
+        empty_restored,
+        "an empty large object has identity even without data pages"
+    );
+
+    restore::assert_native_database_equal(&paired.databases[0], source_pg.pool(), target_pg.pool())
+        .await;
     restore::assert_database_equal(&paired.databases[1], forge, forge_target).await;
     assert_native_projection(target_pg, domain).await;
     reject_target_only_fixed_reference(&paired.databases[0], source_pg.pool(), target_pg.pool())
         .await;
     check_incoherent_epoch(target_pg, domain).await;
+    let replayed = Arc::new(AtomicUsize::new(0));
+    sdk(target_pg, port, None, Some(domain), Arc::clone(&replayed)).await;
+    assert_eq!(
+        replayed.load(Ordering::SeqCst),
+        0,
+        "restored real SDK checkpoint/result must not rerun native admission"
+    );
     assert_native_projection(target_pg, domain).await;
     assert_identity_continuity(source_pg.pool(), target_pg.pool()).await;
+    if repeat > 0 {
+        let second = prepare_forgejo_target(options, owned).await;
+        Box::pin(roundtrip(
+            target_pg,
+            options,
+            owned,
+            forge,
+            &second,
+            port,
+            repeat - 1,
+        ))
+        .await;
+    }
+}
+
+/// Start from the same valid archive and fully rehydrated rows as the positive case.
+async fn rejects_predicate_changed_during_pool_drain(
+    options: &PgConnectOptions,
+    owned: &mut Vec<(String, Option<PgPool>)>,
+    port: &str,
+    domain: Domain,
+    paired: &archives::coverage::PairedManifest,
+    storage: &dyn StorageService,
+    base: &str,
+) {
+    use store::postgres::native_origin::{recovery::CompletedRecovery, OriginError};
+    let PreparedTarget {
+        pending,
+        before_origin,
+        target_index,
+    } = prepare_target(options, owned, port, domain, paired, storage).await;
+    archives::recovery::rehydrate(&pending, storage, base)
+        .await
+        .unwrap();
+    let creation = pending.creation_operation();
+    let pool = pending.postgres().pool().clone();
+    let mut held = pool.acquire().await.unwrap();
+    let expected: serde_json::Value =
+        sqlx::query_scalar("SELECT public.database_origin_schema_contract()")
+            .fetch_one(&mut *held)
+            .await
+            .unwrap();
+    let original: String = sqlx::query_scalar("SELECT prosrc FROM pg_proc WHERE oid='public.database_origin_schema_contract()'::regprocedure")
+        .fetch_one(&mut *held).await.unwrap();
+    let tamper = async move {
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            while !pool.is_closed() {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("completion must pass its preflight and request pool drain");
+        // Same result and function attributes: only its forbidden implementation changes.
+        let literal = serde_json::to_string(&expected)
+            .unwrap()
+            .replace('\'', "''");
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+            "CREATE OR REPLACE FUNCTION public.database_origin_schema_contract() RETURNS jsonb \
+             LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path=pg_catalog AS $tamper$ \
+             BEGIN RETURN '{literal}'::jsonb; END; $tamper$;"
+        )))
+        .execute(&mut *held)
+        .await
+        .unwrap();
+        let unchanged: serde_json::Value =
+            sqlx::query_scalar("SELECT public.database_origin_schema_contract()")
+                .fetch_one(&mut *held)
+                .await
+                .unwrap();
+        assert_eq!(
+            unchanged, expected,
+            "ledger output cannot be the refusal cause"
+        );
+        let changed: String = sqlx::query_scalar("SELECT prosrc FROM pg_proc WHERE oid='public.database_origin_schema_contract()'::regprocedure")
+            .fetch_one(&mut *held).await.unwrap();
+        assert_ne!(changed, original);
+        held.close().await.unwrap();
+    };
+    // No detached task can survive an assertion or fixture cleanup.
+    let (result, ()) = tokio::join!(pending.verify_and_complete(), tamper);
+    let refused = matches!(&result, Err(OriginError::Recovery));
+    let outcome = match &result {
+        Ok(CompletedRecovery::Open(_)) => "opened",
+        Ok(CompletedRecovery::CommitUnconfirmed { .. }) => "commit unconfirmed",
+        Ok(CompletedRecovery::ReopenUnconfirmed { .. }) => "reopen unconfirmed",
+        Err(_) => "refused",
+    };
+    if let Ok(CompletedRecovery::Open(native)) = &result {
+        native.postgres().pool().close().await;
+    }
+    assert!(
+        refused,
+        "post-drain definition tampering must refuse before completion: {outcome}"
+    );
+    assert_sealed_pending_target(options, creation, before_origin, owned, target_index).await;
+}
+
+async fn assert_sealed_pending_target(
+    options: &PgConnectOptions,
+    creation: Uuid,
+    before_origin: serde_json::Value,
+    owned: &mut [(String, Option<PgPool>)],
+    target_index: usize,
+) {
+    let name = store::postgres::native_origin::database_name(creation).unwrap();
+    let admin = PgPool::connect_with(options.clone()).await.unwrap();
+    let (oid, allowed): (i64, bool) =
+        sqlx::query_as("SELECT oid::bigint,datallowconn FROM pg_database WHERE datname=$1")
+            .bind(&name)
+            .fetch_one(&admin)
+            .await
+            .unwrap();
+    assert_eq!(Some(oid), before_origin["database_oid"].as_i64());
+    assert!(
+        !allowed,
+        "failed verification must retain its connection fence"
+    );
+    // Only this UUID-created negative fixture is reopened to inspect retained state.
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "ALTER DATABASE \"{name}\" ALLOW_CONNECTIONS true"
+    )))
+    .execute(&admin)
+    .await
+    .unwrap();
+    let inspect = PgPool::connect_with(options.clone().database(&name))
+        .await
+        .unwrap();
+    assert_eq!(owned[target_index].0, name);
+    owned[target_index].1 = Some(inspect.clone());
+    let pending: (bool, bool) = sqlx::query_as(
+        "SELECT completed_at IS NULL,verified_plan_sha256 IS NULL FROM database_recovery WHERE singleton",
+    ).fetch_one(&inspect).await.unwrap();
+    assert_eq!(pending, (true, true));
+    let origin: serde_json::Value = sqlx::query_scalar("SELECT to_jsonb(o) FROM database_origin o")
+        .fetch_one(&inspect)
+        .await
+        .unwrap();
+    assert_eq!(origin, before_origin);
+    inspect.close().await;
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "ALTER DATABASE \"{name}\" ALLOW_CONNECTIONS false"
+    )))
+    .execute(&admin)
+    .await
+    .unwrap();
+    admin.close().await;
+}
+
+async fn prepare_forgejo_target(
+    options: &PgConnectOptions,
+    owned: &mut Vec<(String, Option<PgPool>)>,
+) -> PgPool {
+    let admin = PgPool::connect_with(options.clone()).await.unwrap();
+    let name = format!("native_repeat_forge_{}", Uuid::new_v4().simple());
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!("CREATE DATABASE {name}")))
+        .execute(&admin)
+        .await
+        .unwrap();
+    owned.push((name.clone(), None));
+    let second = PgPool::connect_with(options.clone().database(&name))
+        .await
+        .unwrap();
+    owned.last_mut().unwrap().1 = Some(second.clone());
+    sqlx::raw_sql(FORGE_SCHEMA).execute(&second).await.unwrap();
+    admin.close().await;
+    second
 }
 
 async fn assert_native_projection(pg: &PostgresDb, domain: Domain) {
@@ -503,10 +757,11 @@ async fn reject_target_only_fixed_reference(
         .fetch_one(target).await.unwrap();
     sqlx::query("INSERT INTO spatial_ref_sys(srid,auth_name,auth_srid,srtext,proj4text) VALUES($1,'synthetic',1,'synthetic target-only reference','')")
         .bind(srid).execute(target).await.unwrap();
-    let refused =
-        std::panic::AssertUnwindSafe(restore::assert_database_equal(manifest, source, target))
-            .catch_unwind()
-            .await;
+    let refused = std::panic::AssertUnwindSafe(restore::assert_native_database_equal(
+        manifest, source, target,
+    ))
+    .catch_unwind()
+    .await;
     sqlx::query("DELETE FROM spatial_ref_sys WHERE srid=$1")
         .bind(srid)
         .execute(target)
@@ -516,7 +771,7 @@ async fn reject_target_only_fixed_reference(
         refused.is_err(),
         "fixed-reference conflict handling must never certify target-only rows"
     );
-    restore::assert_database_equal(manifest, source, target).await;
+    restore::assert_native_database_equal(manifest, source, target).await;
 }
 
 async fn assert_identity_continuity(source: &PgPool, restored: &PgPool) {
