@@ -6061,7 +6061,7 @@ PDF-BYTES\r\n\
         assert_eq!(document_bodies.len(), 2, "source plus one attachment");
         let source = document_bodies
             .iter()
-            .find(|body| body["slug"] == "mail/signing-1@example.test/source")
+            .find(|body| body["slug"] == "mail/signing-1-example.test/source")
             .expect("the raw message files as the source document");
         assert_eq!(source["content_type"], "message/rfc822");
         assert_eq!(source["mail_provenance"]["message_id"], parsed.source_ref);
@@ -6071,7 +6071,7 @@ PDF-BYTES\r\n\
         );
         let attachment = document_bodies
             .iter()
-            .find(|body| body["slug"] == "mail/signing-1@example.test/0")
+            .find(|body| body["slug"] == "mail/signing-1-example.test/0")
             .expect("the attachment files under its index");
         assert_eq!(attachment["filename"], "retainer.pdf");
         assert_eq!(attachment["content_type"], "application/pdf");
@@ -6109,7 +6109,7 @@ Date: Thu, 09 Oct 2025 14:03:00 +0000\r\n\
 Can I sign electronically?\r\n\
 > Quoted history\r\n";
         let parsed = parse_eml_for_filing(raw).expect("the message parses");
-        assert_eq!(parsed.message_ref.len(), 8 + 16, "sha256:<16 hex digits>");
+        assert_eq!(parsed.message_ref.len(), 7 + 16, "sha256:<16 hex digits>");
         assert!(parsed.message_ref.starts_with("sha256:"));
         assert_eq!(parsed.source_ref, format!("eml:{}", parsed.message_ref));
         assert_eq!(parsed.body, "Can I sign electronically?");
