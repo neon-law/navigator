@@ -1,5 +1,8 @@
 //! Fresh native test resources use the same creation capability and migrator.
-use super::{create_observed, database_name, identity, NativeDatabase, TierBinding};
+use super::{
+    create_database_on, database_name, identity, marker, stamp_creation, CreatedDatabase,
+    NativeDatabase, OriginError, TierBinding,
+};
 use crate::postgres::PostgresDb;
 use sqlx::postgres::PgConnectOptions;
 use sqlx::AssertSqlSafe;
@@ -15,43 +18,40 @@ pub(crate) async fn create(
     operation: Uuid,
     tier: TierBinding,
 ) -> anyhow::Result<NativeDatabase> {
+    tier.validate()?;
     let name = database_name(operation)?;
     let mut acknowledged = false;
-    let mut initialization_pool = None;
-    let created = create_observed(
-        admin_options,
-        operation,
-        tier.clone(),
-        || acknowledged = true,
-        |pg| initialization_pool = Some(pg.clone()),
-    )
-    .await;
-    let mut routed_pool = None;
+    let mut data_pool = None;
     let prepared = async {
-        let native = created?.initialize().await?;
-        let expected = identity(native.postgres()).await?;
+        create_database_on(admin, &name, || acknowledged = true).await?;
+        stamp_creation(admin, &name, operation).await?;
+        let oid: i64 =
+            sqlx::query_scalar("SELECT oid::bigint FROM pg_catalog.pg_database WHERE datname = $1")
+                .bind(&name)
+                .fetch_one(admin.pool())
+                .await?;
         let pg = PostgresDb::connect(fixture_options.database(&name)).await?;
-        routed_pool = Some(pg.clone());
-        // A separately routed transport must reach the exact resource this
-        // capability created, not merely a database with a matching name.
-        let actual = identity(&pg).await?;
-        if actual != expected || !super::admits(&pg).await? {
-            return Err(anyhow::Error::from(super::OriginError::Identity));
+        data_pool = Some(pg.clone());
+        // Validate the separate transport before letting it modify the schema.
+        if identity(&pg).await? != (name.clone(), oid, Some(marker(operation))) {
+            return Err(anyhow::Error::from(OriginError::Identity));
         }
-        Ok(NativeDatabase {
+        let native = CreatedDatabase {
             postgres: pg,
             operation,
             tier,
-        })
+            admin_options,
+        }
+        .initialize()
+        .await?;
+        if !super::admits(native.postgres()).await? {
+            return Err(anyhow::Error::from(OriginError::Identity));
+        }
+        Ok(native)
     }
     .await;
-    // The opaque creation resource may have failed after connecting. Its
-    // observed pool is retained solely to drain it before owned cleanup.
-    if let Some(pg) = initialization_pool {
-        pg.pool().close().await;
-    }
     if prepared.is_err() {
-        if let Some(pg) = routed_pool {
+        if let Some(pg) = data_pool {
             pg.pool().close().await;
         }
     }
@@ -80,6 +80,57 @@ pub(crate) async fn create(
 mod tests {
     use super::super::{identity, OriginError, TierBinding};
     use crate::postgres::PostgresDb;
+
+    #[tokio::test]
+    async fn a_single_admin_session_can_create_and_clean_up_through_separate_routes() {
+        use crate::test_support::PostgresFixture;
+        use tokio::net::{TcpListener, TcpStream};
+
+        crate::test_support::with_postgres(async {
+            let direct = PostgresDb::application().await.unwrap();
+            let options = direct.pool().connect_options().as_ref().clone();
+            let upstream = (options.get_host().to_owned(), options.get_port());
+            let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let forward = tokio::spawn(async move {
+                let (mut inbound, _) = listener.accept().await.unwrap();
+                // A second administrative session cannot use this transport.
+                drop(listener);
+                let mut database = TcpStream::connect(upstream).await.unwrap();
+                tokio::io::copy_bidirectional(&mut inbound, &mut database)
+                    .await
+                    .unwrap();
+            });
+
+            let fixture = PostgresFixture::create_with_connections(
+                options.clone().host("127.0.0.1").port(port),
+                options,
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                identity(fixture.postgres()).await.unwrap().0,
+                fixture.database()
+            );
+            fixture
+                .postgres()
+                .require_application_history()
+                .await
+                .unwrap();
+            let database = fixture.database().to_owned();
+            fixture.close().await.unwrap();
+            forward.await.unwrap();
+            let exists: bool = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_database WHERE datname = $1)",
+            )
+            .bind(database)
+            .fetch_one(direct.pool())
+            .await
+            .unwrap();
+            assert!(!exists);
+        })
+        .await;
+    }
 
     #[tokio::test]
     async fn duplicate_existing_native_fixture_never_adopts_or_drops_the_database() {
