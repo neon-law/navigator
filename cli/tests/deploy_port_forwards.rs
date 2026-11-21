@@ -82,6 +82,10 @@ fn native_browser_delegates_lifecycle_and_preserves_the_required_image_gate() {
             "native gate contains retired orchestration: {retired}"
         );
     }
+}
+
+#[test]
+fn native_browser_checks_isolation_and_executes_the_owned_image_after_host_drain() {
     let helper =
         fs::read_to_string(root().join(".github/scripts/native-browser-integration.sh")).unwrap();
     for boundary in [
@@ -166,7 +170,11 @@ fn every_uploaded_native_diagnostic_log_has_a_sanitized_producer() {
     assert!(paths.contains("/tmp/navigator-screenshots/"));
     let logs: Vec<_> = paths
         .lines()
-        .filter(|line| line.ends_with(".log"))
+        .filter(|line| {
+            std::path::Path::new(line.trim())
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("log"))
+        })
         .collect();
     assert!(
         !logs.is_empty(),
