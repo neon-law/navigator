@@ -11,13 +11,7 @@ async fn main() -> Result<()> {
     let _telemetry = telemetry::init("navigator-youtube-comments-poll-trigger");
     let target = workflows::trigger::trigger_target(|name| std::env::var(name).ok())
         .context("selecting the YouTube comments trigger ingress")?;
-    let now = Utc::now();
-    let tick = match &target {
-        workflows::trigger::TriggerTarget::Dbos { .. } => dbos_tick(now),
-        workflows::trigger::TriggerTarget::Restate { .. } => {
-            now.format("%Y-%m-%d-%H-%M").to_string()
-        }
-    };
+    let tick = dbos_tick(Utc::now());
     let request = workflows_service::youtube_comments::PollRequest { tick: tick.clone() };
     let workflows::trigger::TriggerTarget { ingress, token } = target;
 

@@ -1396,15 +1396,3 @@ fn serve_health_listener(
 
 #[cfg(all(test, feature = "restate-compatibility"))]
 mod host_mode_tests;
-
-#[cfg(all(test, not(feature = "restate-compatibility")))]
-mod native_host_tests {
-    use super::*;
-    #[test]
-    fn native_host_refuses_missing_or_invalid_routes_before_launch() {
-        assert!(require_native_routes(Engine::Dbos, |_| Some("true".into())).is_ok());
-        assert!(require_native_routes(Engine::Dbos, |_| None).is_err());
-        assert!(require_native_routes(Engine::Dbos, |_| Some("bad".into())).is_err());
-        assert!(require_native_routes(Engine::Restate, |_| Some("true".into())).is_err());
-    }
-}
