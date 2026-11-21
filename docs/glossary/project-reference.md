@@ -5,9 +5,9 @@ description: "A Project Reference names a Person or Entity a Project verified wi
 
 A [Project](project.md) naming a [Person](person.md) or an [Entity](entity.md) it has verified — a counterparty's
 officer, its registered agent, the signatory on the instrument, the adverse party, or the counterparty organization
-itself — with **no standing on the matter attached**. It is a relation, `RELATE
-project->project_reference->(person|entity)`, carrying only a `reason` (`counterparty_officer`, `registered_agent`,
-`signatory`, `adverse_party`, or `counterparty_entity`).
+itself — with **no standing on the matter attached**. PostgreSQL's `project_reference` row links the Project to a typed
+Person or Entity and records a `reason` (`counterparty_officer`, `registered_agent`, `signatory`, `adverse_party`, or
+`counterparty_entity`).
 
 A reference is deliberately not a [Person–Project Role](personproject-role.md). Every [participation](participation.md)
 value grants a lens on the matter, and a counterparty must never have one; yet the [Conflict-Check
@@ -25,7 +25,7 @@ Adversity is recorded against a referenced party: `POST /app/api/projects/{id}/r
 project adverse add`) lands a `manual`, full-confidence `adverse_to` [Relationship Edge](relationship-edge.md) from the
 client — the Project's Entity, or its client DRI — to the party, sourced to the [Relationship Log](relationship-log.md)
 row the write appends on the Project. Given what a reference needs, the verb records the `adverse_party` reference
-first.
+first. The audit entry, relationship row, and AGE edge commit in one PostgreSQL transaction.
 
 Each `reason` maps to the [Relationship Edge Kind](relationship-edge-kind.md) that describes the tie it records:
 

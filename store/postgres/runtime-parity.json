@@ -1488,16 +1488,28 @@
   },
   "relationship": {
     "scenario": "typed Person/Entity endpoints; confidence range; source provenance; tenant-filtered AGE traversal and rebuild",
-    "runtime_tests": [],
+    "runtime_tests": [
+      {
+        "file": "store/tests/project_adversity_native.rs",
+        "function": "age_failure_rolls_back_the_whole_adversity_command_without_touching_another_project",
+        "proves": "A real AGE write failure in an admitted native fixture rolls back the Project's audit row and relationship, preserves another Project's rows and graph, and permits retry with exact actor, manual confidence and audit-source provenance. This checks the command transaction, not restricted application-role or route authorization."
+      }
+    ],
     "remaining": [
-      "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
+      "Restricted application-role graph writes, cross-Firm/cross-Project route authorization, rebuild and deployed reconciliation require separate acceptance."
     ]
   },
   "relationship_log": {
     "scenario": "append-only provenance; scoped history; actor attribution; graph rebuild preserves evidence",
-    "runtime_tests": [],
+    "runtime_tests": [
+      {
+        "file": "store/tests/project_adversity_native.rs",
+        "function": "age_failure_rolls_back_the_whole_adversity_command_without_touching_another_project",
+        "proves": "A real AGE write failure in an admitted native fixture rolls back the Project's audit row and relationship, preserves another Project's rows and graph, and permits retry with exact actor, manual confidence and audit-source provenance. This checks the command transaction, not restricted application-role or route authorization."
+      }
+    ],
     "remaining": [
-      "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
+      "Broader append-only/refusal and scoped-history access, restricted-role execution, graph rebuild and deployed acceptance require their own evidence."
     ]
   },
   "review_document": {
