@@ -1597,3 +1597,43 @@ async fn saved_deployment_secret_changes_reconcile_to_clean_parity() {
     assert_eq!(mirrored.len(), 2, "PostgreSQL keys each row by its request");
     pg.0.close().await;
 }
+
+#[test]
+fn a_retired_false_field_is_dropped_but_a_true_one_still_blocks() {
+    use surrealdb::types::{Object, Value as Source};
+    let table = table("person_project_role").unwrap();
+    let row = |retired: bool| {
+        let mut fields = Object::new();
+        fields.insert(
+            "participation".to_owned(),
+            Source::String("attorney".into()),
+        );
+        fields.insert("is_staff_dri".to_owned(), Source::Bool(retired));
+        Source::Object(fields)
+    };
+    super::require_mapped_fields(table, &row(false), false).expect("a retired false field imports");
+    let error = super::require_mapped_fields(table, &row(true), false)
+        .expect_err("a retired field that holds a value still needs a destination");
+    assert!(error.to_string().contains("1 unmapped field"));
+}
+
+#[test]
+fn a_deadline_source_document_link_normalizes_to_a_uuid() {
+    let asset = Uuid::now_v7();
+    let row = serde_json::json!({
+        "id": Uuid::now_v7(),
+        "project_id": Uuid::now_v7(),
+        "due_at": "2026-11-13T23:59:00-05:00",
+        "authority_kind": "contract",
+        "authority": "Synthetic authority",
+        "source": "lawyer",
+        "source_document_id": format!("asset:u'{asset}'"),
+        "status": "open",
+        "calendar_role": "opponent",
+        "inserted_at": "2026-10-08T15:38:51.708104663+00:00",
+        "updated_at": "2026-10-30T18:49:44.307028441+00:00",
+    });
+    let (_, normalized) =
+        crate::postgres_mirror::records::normalized_record("project_deadlines", row).unwrap();
+    assert_eq!(normalized["source_document_id"], asset.to_string());
+}
