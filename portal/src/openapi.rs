@@ -1418,6 +1418,8 @@ fn canonical_document(base: &str) -> Value {
             } } } },
             "responses": {
               "200": { "description": "The claim after the write or an identical retry" },
+              "401": { "description": "No authenticated session" },
+              "403": { "description": "The session lacks lawyer-tier access" },
               "404": { "description": "Claim or Project outside the caller's scope" },
               "409": { "description": "A key or provider reference is already used" },
               "422": { "description": "Invalid claim evidence or transition" }

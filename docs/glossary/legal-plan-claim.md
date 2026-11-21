@@ -14,4 +14,4 @@ received. An estimate, claimed amount, approved outstanding amount, and confirme
 claim stays on the Project through closure. [Legal plans](../legal-plans.md#claims-and-collections) explains the
 operator workflow.
 
-The tables are `legal_plan_claim` and `legal_plan_claim_event`.
+The table is `legal_plan_claim`.

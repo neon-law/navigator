@@ -986,6 +986,20 @@
       {
         "action": "export",
         "schema": "public",
+        "name": "legal_plan_claim",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "legal_plan_claim_event",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
         "name": "letter",
         "kind": "table",
         "accessible": true
