@@ -218,7 +218,7 @@ async fn the_home_presents_navigator_and_links_to_its_page() {
     let body = body_string(anon_get(&app, "/").await).await;
     assert_eq!(body.matches("<h1").count(), 1);
     for text in [
-        "Legal work, with the lawyer in control.",
+        "Exacting Agentic Lawyering",
         r#"href="/notations/about""#,
         r#"href="/legal-aid""#,
     ] {
