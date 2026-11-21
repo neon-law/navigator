@@ -15054,7 +15054,7 @@
       "DEFINE INDEX OVERWRITE project_reference_tie ON project_reference FIELDS in, out, reason UNIQUE"
     ],
     "source_field_rules": [
-      "DEFINE FIELD OVERWRITE reason ON project_reference TYPE string ASSERT $value IN ['counterparty_officer', 'registered_agent', 'signatory', 'adverse_party', 'counterparty_entity']",
+      "DEFINE FIELD OVERWRITE reason ON project_reference TYPE string ASSERT $value IN ['counterparty_officer', 'registered_agent', 'signatory', 'adverse_party', 'counterparty_entity', 'government_official']",
       "DEFINE FIELD OVERWRITE inserted_at ON project_reference TYPE datetime DEFAULT time::now()",
       "DEFINE FIELD OVERWRITE updated_at ON project_reference TYPE datetime DEFAULT time::now()"
     ],

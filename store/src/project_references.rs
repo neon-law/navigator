@@ -5,7 +5,8 @@
 //!
 //! Every `person_project_role.participation` value grants a lens on the
 //! matter. A counterparty's officer, its registered agent, the signatory on
-//! the instrument, or the counterparty organization itself must be durable
+//! the instrument, the counterparty organization itself, or a government
+//! office's staff must be durable
 //! so the Conflict-Check Graph can collide a future matter with them.
 //! A reference grants no participation or access to the matter. The row
 //! is its own row — a PostgreSQL `project_reference` wherever PostgreSQL is
@@ -45,7 +46,7 @@ use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 pub use model::project_references::{is_reason, REASONS};
 pub use model::project_references::{
     REASON_ADVERSE_PARTY, REASON_COUNTERPARTY_ENTITY, REASON_COUNTERPARTY_OFFICER,
-    REASON_REGISTERED_AGENT, REASON_SIGNATORY,
+    REASON_GOVERNMENT_OFFICIAL, REASON_REGISTERED_AGENT, REASON_SIGNATORY,
 };
 
 const TABLE: &str = "project_reference";

@@ -1248,8 +1248,9 @@ DEFINE INDEX OVERWRITE entity_role_tie ON entity_role FIELDS in, out, role UNIQU
 -- `project_reference`: a Project names a Person or an Entity it has verified
 -- without giving them any standing on the matter — a counterparty's officer,
 -- its registered agent, the signatory on the instrument, the adverse party,
--- the counterparty organization itself. It is the one seam through which a
--- Project repository may record a counterparty, and it is deliberately not a
+-- the counterparty organization itself, or a government office's staff. It is
+-- the one seam through which a Project repository may record a counterparty,
+-- and it is deliberately not a
 -- `person_project_role`: every participation value grants a lens, and a
 -- reference grants nothing. `store::access` and the embedded Rego policy
 -- never read this table, and the portal party list never renders it; both
@@ -1258,7 +1259,7 @@ DEFINE INDEX OVERWRITE entity_role_tie ON entity_role FIELDS in, out, role UNIQU
 -- against a party it has first referenced here.
 DEFINE TABLE IF NOT EXISTS project_reference TYPE RELATION FROM project TO person|entity SCHEMAFULL PERMISSIONS NONE;
 DEFINE FIELD OVERWRITE reason ON project_reference TYPE string
-    ASSERT $value IN ['counterparty_officer', 'registered_agent', 'signatory', 'adverse_party', 'counterparty_entity'];
+    ASSERT $value IN ['counterparty_officer', 'registered_agent', 'signatory', 'adverse_party', 'counterparty_entity', 'government_official'];
 DEFINE FIELD OVERWRITE inserted_at ON project_reference TYPE datetime DEFAULT time::now();
 DEFINE FIELD OVERWRITE updated_at ON project_reference TYPE datetime DEFAULT time::now();
 -- One reference per (project, party, reason): the seed and the CLI re-run

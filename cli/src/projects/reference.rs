@@ -247,6 +247,18 @@ mod tests {
         };
         assert!(reference_record("acme", "signatory", &both).is_err());
         assert!(reference_record("acme", "co_counsel", &entity()).is_err());
+
+        let staff = PartyArgs {
+            person_email: Some("staff@example.com".into()),
+            person_name: Some("Agency Staff".into()),
+            entity_name: None,
+            entity_type: None,
+            jurisdiction: None,
+        };
+        let record = reference_record("acme", "government_official", &staff).unwrap();
+        assert_eq!(record["reason"], "government_official");
+        assert_eq!(record["person"]["email"], "staff@example.com");
+        assert!(record.get("entity").is_none());
     }
 
     #[test]

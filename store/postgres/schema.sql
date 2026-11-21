@@ -5302,6 +5302,10 @@ CREATE TRIGGER billing_annotation_review BEFORE UPDATE OR DELETE ON billing_anno
 
 ALTER TABLE matter_billing_batch ADD COLUMN trust_state TEXT CHECK (trust_state IS NULL OR (stripe_iolta AND trust_state ~ '^[A-Z]{2}$'));
 
+-- Migration: 20261121220000_admit_government_official_reference.sql
+ALTER TABLE project_reference DROP CONSTRAINT project_reference_reason;
+ALTER TABLE project_reference ADD CONSTRAINT project_reference_reason CHECK (reason IN ('counterparty_officer', 'registered_agent', 'signatory', 'adverse_party', 'counterparty_entity', 'government_official'));
+
 -- Migration: 20261122000200_create_legal_plan_claims.sql
 CREATE TABLE legal_plan_claim (
     id UUID PRIMARY KEY,
