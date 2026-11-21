@@ -345,7 +345,41 @@ async fn list_projects_is_scoped_to_the_caller() {
 
 #[tokio::test]
 async fn client_portal_uses_the_host_brand_for_the_list_detail_and_api() {
-    store::test_support::with_postgres(check_two_brand_portal()).await;
+    // Dioxus renders on its own task. Give that task and the Axum request the same
+    // owned database through the normal application environment in a fresh process.
+    const CHILD: &str = "NAVIGATOR_TWO_BRAND_PORTAL_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        check_two_brand_portal().await;
+        return;
+    }
+    store::test_support::with_postgres(async {
+        let pg = PostgresDb::application().await.unwrap();
+        let database: String = sqlx::query_scalar("SELECT current_database()")
+            .fetch_one(pg.pool())
+            .await
+            .unwrap();
+        let status = tokio::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "client_portal_uses_the_host_brand_for_the_list_detail_and_api",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env("NAVIGATOR_POSTGRES_HOST", "127.0.0.1")
+            .env(
+                "NAVIGATOR_POSTGRES_PORT",
+                std::env::var("NAVIGATOR_TEST_POSTGRES_PORT").unwrap(),
+            )
+            .env("NAVIGATOR_POSTGRES_DATABASE", database)
+            .env("NAVIGATOR_POSTGRES_USER", "postgres")
+            .env("NAVIGATOR_POSTGRES_PASSWORD", "synthetic")
+            .env("NAVIGATOR_POSTGRES_SSLMODE", "disable")
+            .status()
+            .await
+            .unwrap();
+        assert!(status.success(), "render the client and staff portals");
+    })
+    .await;
 }
 
 async fn seed_sibling_brand(fx: &Fixture) -> (store::projects::Project, store::projects::Project) {

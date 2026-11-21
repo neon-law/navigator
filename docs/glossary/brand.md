@@ -76,9 +76,9 @@ is refused while any `firm_brand` or `project.brand` value still names its key. 
 own served hosts, marketing pages, or fallback presentation. Editing the `neon` row changes the token stylesheet, not
 which hosts resolve to it.
 
-The client dashboard uses the serving Brand's name in the page title and its logo and colours in the portal. An uploaded
-`brand.logo_object_key` takes precedence over the compiled logo. Staff use their Firm's [Portal Theme
-Brand](portal-theme-brand.md). The legal footer identifies the Firm wearing the host's Brand.
+The client dashboard uses the serving Brand's logo and colours. An uploaded `brand.logo_object_key` takes precedence
+over the compiled logo. Staff use their Firm's [Portal Theme Brand](portal-theme-brand.md). The legal footer identifies
+the Firm wearing the host's Brand. The dashboard's browser tab is titled "Navigator | Projects".
 
 The `/app` inventory surfaces name a compiled brand's production website as its `www` host (`www.deleteyourdata.com`):
 `/app/admin/brands`, `/app/owner`, `/app/admin/firms/{id}`, the admin project directory, `/app/projects`, and
