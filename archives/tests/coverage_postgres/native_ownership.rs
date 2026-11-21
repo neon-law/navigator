@@ -455,10 +455,8 @@ async fn roundtrip(
         "two databases do not share a recovery point"
     );
     if repeat == 2 {
-        rejects_predicate_changed_during_pool_drain(
-            options, owned, port, domain, &paired, &storage, base,
-        )
-        .await;
+        rejects_mutations_during_pool_drain(options, owned, port, domain, &paired, &storage, base)
+            .await;
     }
     let PreparedTarget {
         pending,
@@ -516,7 +514,7 @@ async fn roundtrip(
 }
 
 /// Start from the same valid archive and fully rehydrated rows as the positive case.
-async fn rejects_predicate_changed_during_pool_drain(
+async fn rejects_mutations_during_pool_drain(
     options: &PgConnectOptions,
     owned: &mut Vec<(String, Option<PgPool>)>,
     port: &str,
@@ -593,6 +591,82 @@ async fn rejects_predicate_changed_during_pool_drain(
     assert!(
         refused,
         "post-drain definition tampering must refuse before completion: {outcome}"
+    );
+    assert_sealed_pending_target(options, creation, before_origin, owned, target_index).await;
+    rejects_helper_changed_during_pool_drain(options, owned, port, domain, paired, storage, base)
+        .await;
+}
+
+/// Reuse a valid archive and target; only an ordinary standalone helper body changes.
+async fn rejects_helper_changed_during_pool_drain(
+    options: &PgConnectOptions,
+    owned: &mut Vec<(String, Option<PgPool>)>,
+    port: &str,
+    domain: Domain,
+    paired: &archives::coverage::PairedManifest,
+    storage: &dyn StorageService,
+    base: &str,
+) {
+    use store::postgres::native_origin::{recovery::CompletedRecovery, OriginError};
+    let PreparedTarget {
+        pending,
+        before_origin,
+        target_index,
+    } = prepare_target(options, owned, port, domain, paired, storage).await;
+    archives::recovery::rehydrate(&pending, storage, base)
+        .await
+        .unwrap();
+    let creation = pending.creation_operation();
+    let pool = pending.postgres().pool().clone();
+    let mut held = pool.acquire().await.unwrap();
+    let original: String = sqlx::query_scalar(
+        "SELECT pg_get_functiondef('public.graph_project_attach(text)'::regprocedure)",
+    )
+    .fetch_one(&mut *held)
+    .await
+    .unwrap();
+    let tamper = async move {
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            while !pool.is_closed() {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("valid target must pass preflight and request pool drain");
+        sqlx::raw_sql("CREATE OR REPLACE FUNCTION public.graph_project_attach(seed text) RETURNS SETOF ag_catalog.agtype LANGUAGE plpgsql SET search_path=public,ag_catalog AS $tamper$ BEGIN RETURN NEXT '{\"kind\":\"synthetic-recovery-drift\"}'::agtype; END; $tamper$")
+            .execute(&mut *held).await.unwrap();
+        let output: String =
+            sqlx::query_scalar("SELECT v::text FROM public.graph_project_attach('{}') AS t(v)")
+                .fetch_one(&mut *held)
+                .await
+                .unwrap();
+        assert!(
+            output.contains("synthetic-recovery-drift"),
+            "the actual helper behavior changed"
+        );
+        let changed: String = sqlx::query_scalar(
+            "SELECT pg_get_functiondef('public.graph_project_attach(text)'::regprocedure)",
+        )
+        .fetch_one(&mut *held)
+        .await
+        .unwrap();
+        assert_ne!(changed, original);
+        held.close().await.unwrap();
+    };
+    let (result, ()) = tokio::join!(pending.verify_and_complete(), tamper);
+    let refused = matches!(&result, Err(OriginError::Recovery));
+    let outcome = match &result {
+        Ok(CompletedRecovery::Open(_)) => "opened",
+        Ok(CompletedRecovery::CommitUnconfirmed { .. }) => "commit unconfirmed",
+        Ok(CompletedRecovery::ReopenUnconfirmed { .. }) => "reopen unconfirmed",
+        Err(_) => "refused",
+    };
+    if let Ok(CompletedRecovery::Open(native)) = &result {
+        native.postgres().pool().close().await;
+    }
+    assert!(
+        refused,
+        "post-drain standalone helper drift must refuse: {outcome}"
     );
     assert_sealed_pending_target(options, creation, before_origin, owned, target_index).await;
 }

@@ -281,6 +281,28 @@ async fn observed(
     Ok(result)
 }
 
+/// Fingerprint standalone application behavior as well as direct trigger bodies.
+/// Extension routines remain the pinned-image contract; no source OID is portable.
+async fn routine_contracts(tx: &mut Transaction<'_, Postgres>) -> Result<Vec<Value>, OriginError> {
+    let routines: Vec<(String, String, String, String, String)> = sqlx::query_as(
+        "SELECT n.nspname::text,p.proname::text,pg_catalog.pg_get_function_identity_arguments(p.oid),p.prokind::text,CASE WHEN p.prokind IN ('f','p') THEN pg_catalog.pg_get_functiondef(p.oid) ELSE '' END FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname !~ '^pg_temp_' AND n.nspname !~ '^pg_toast' AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_depend d WHERE d.classid='pg_catalog.pg_proc'::regclass AND d.objid=p.oid AND d.refclassid='pg_catalog.pg_extension'::regclass AND d.deptype='e')",
+    ).fetch_all(&mut **tx).await?;
+    let mut contracts = Vec::with_capacity(routines.len());
+    for (schema, name, arguments, kind, definition) in routines {
+        if !matches!(kind.as_str(), "f" | "p") {
+            return refusal();
+        }
+        contracts.push(serde_json::json!([
+            "routine",
+            schema,
+            name,
+            arguments,
+            hex::encode(Sha256::digest(definition.as_bytes()))
+        ]));
+    }
+    Ok(contracts)
+}
+
 async fn constraints(tx: &mut Transaction<'_, Postgres>) -> Result<Vec<Value>, OriginError> {
     let disabled:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_catalog.pg_trigger t JOIN pg_catalog.pg_constraint c ON c.oid=t.tgconstraint WHERE c.contype='f' AND t.tgenabled NOT IN ('O','A'))").fetch_one(&mut **tx).await?;
     if disabled {
@@ -343,6 +365,7 @@ async fn constraints(tx: &mut Transaction<'_, Postgres>) -> Result<Vec<Value>, O
     definitions.extend(indexes);
     let triggers:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_array('trigger',t.tgrelid::regclass::text,t.tgname,t.tgenabled,pg_catalog.pg_get_triggerdef(t.oid,false),pg_catalog.pg_get_functiondef(t.tgfoid)) FROM pg_catalog.pg_trigger t JOIN pg_catalog.pg_class c ON c.oid=t.tgrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE NOT t.tgisinternal AND n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname !~ '^pg_temp_' AND n.nspname !~ '^pg_toast'").fetch_all(&mut **tx).await?;
     definitions.extend(triggers);
+    definitions.extend(routine_contracts(tx).await?);
     let inheritance:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_array('inherits',inhrelid::regclass::text,inhparent::regclass::text,inhseqno) FROM pg_catalog.pg_inherits").fetch_all(&mut **tx).await?;
     definitions.extend(inheritance);
     let tables:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_array('relation_options',c.oid::regclass::text,c.relrowsecurity,c.relforcerowsecurity,c.relreplident,c.relpersistence,c.relispartition,pg_catalog.pg_get_expr(c.relpartbound,c.oid),c.reloptions) FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE c.relkind IN ('r','p','m','v') AND n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname !~ '^pg_temp_' AND n.nspname !~ '^pg_toast'").fetch_all(&mut **tx).await?;
@@ -653,6 +676,47 @@ async fn verify_sequence(
 mod tests {
     use super::*;
     use crate::postgres::PostgresDb;
+
+    async fn recorded_routines(pg: &PostgresDb) -> Result<Vec<Value>, OriginError> {
+        let mut tx = pg.pool().begin().await?;
+        sqlx::query("SET LOCAL search_path=pg_catalog")
+            .execute(&mut *tx)
+            .await?;
+        let result = routine_contracts(&mut tx).await;
+        tx.rollback().await?;
+        result.map(|mut rows| {
+            rows.sort_by_key(Value::to_string);
+            rows
+        })
+    }
+
+    #[tokio::test]
+    async fn routine_contracts_detect_bodies_overloads_additions_removals_and_refuse_aggregates() {
+        crate::test_support::with_postgres(async {
+            let pg = PostgresDb::application().await.unwrap();
+            let initial = recorded_routines(&pg).await.unwrap();
+            assert!(initial.iter().any(|row| row[1] == "public" && row[2] == "graph_project_attach"));
+            assert!(!initial.iter().any(|row| row[1] == "ag_catalog" && row[2] == "cypher"), "extension implementation is not portable application DDL");
+            sqlx::raw_sql("CREATE FUNCTION public.recovery_routine_probe(value text) RETURNS text LANGUAGE sql IMMUTABLE AS $$ SELECT value $$")
+                .execute(pg.pool()).await.unwrap();
+            let added = recorded_routines(&pg).await.unwrap();
+            assert_ne!(added, initial, "an extra routine is not an equivalent catalog");
+            sqlx::raw_sql("CREATE OR REPLACE FUNCTION public.recovery_routine_probe(value text) RETURNS text LANGUAGE sql IMMUTABLE AS $$ SELECT value || 'changed' $$")
+                .execute(pg.pool()).await.unwrap();
+            let changed = recorded_routines(&pg).await.unwrap();
+            assert_ne!(changed, added, "same signature does not hide a changed body");
+            sqlx::raw_sql("CREATE FUNCTION public.recovery_routine_probe(value bigint) RETURNS bigint LANGUAGE sql IMMUTABLE AS $$ SELECT value $$")
+                .execute(pg.pool()).await.unwrap();
+            let overloaded = recorded_routines(&pg).await.unwrap();
+            assert_ne!(overloaded, changed, "identity arguments preserve overloads");
+            sqlx::raw_sql("DROP FUNCTION public.recovery_routine_probe(bigint); DROP FUNCTION public.recovery_routine_probe(text)")
+                .execute(pg.pool()).await.unwrap();
+            assert_eq!(recorded_routines(&pg).await.unwrap(), initial, "removal restores only the exact original routine set");
+            sqlx::raw_sql("CREATE AGGREGATE public.recovery_routine_sum(bigint) (SFUNC=pg_catalog.int8pl, STYPE=bigint, INITCOND='0')")
+                .execute(pg.pool()).await.unwrap();
+            assert!(matches!(recorded_routines(&pg).await, Err(OriginError::Recovery)), "unsupported standalone aggregates must refuse, not disappear from the contract");
+        }).await;
+    }
 
     #[tokio::test]
     async fn real_snapshot_fingerprints_preserve_duplicates_nulls_and_empty_target_extras_refuse() {

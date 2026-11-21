@@ -355,11 +355,12 @@ sequence safety, and records completion atomically. The target keeps its own cre
 history; archived source authority stays provenance. Runtime connection grants and workers require a separate operator
 action.
 
-Native activation requires a supported source plan and matching target shapes. Captured-source and unsupported upgrade
-archives retain their stored data and authority evidence without an activation plan. Materialized views, nondeferrable
-cross-table cycles, nondefault large-object ownership or ACLs, and objects exceeding the reader's declared limits
-require their own recovery procedure. Verification refusals after sealing keep connections closed. An unconfirmed commit
-or reopen requires explicit inspection before proceeding.
+Native activation requires a supported source plan and matching target shapes and application routine definitions.
+Captured-source and unsupported upgrade archives retain their stored data and authority evidence without an activation
+plan. Materialized views, nondeferrable cross-table cycles, standalone aggregates and window functions, nondefault
+large-object ownership or ACLs, and objects exceeding the reader's declared limits require their own recovery procedure.
+Verification refusals after sealing keep connections closed. An unconfirmed commit or reopen requires explicit
+inspection before proceeding.
 
 The native ownership drill exercises three consecutive recovery generations through memory, file and GCS-style URIs
 backed by local storage. It restores real SDK checkpoints without repeating completed work. This does not establish live
