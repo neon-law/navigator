@@ -16,4 +16,4 @@ records the decision. Declining records a reason on the row.
 
 - Vocabulary: [`store::plan_intake`](../../store/src/plan_intake.rs)
 
-PostgreSQL holds the queue in `plan_intake`.
+The table is `plan_intake`.

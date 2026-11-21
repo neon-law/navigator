@@ -816,8 +816,8 @@ pub async fn resolve_member(
     if row.status != Status::Staged.as_str() || row.take_started_at.is_some() {
         return Err(PlanIntakeError::NotStaged);
     }
-    let member = match (row.member_person_id, row.member_entity_id) {
-        (Some(person_id), Some(entity_id)) => {
+    let member =
+        if let (Some(person_id), Some(entity_id)) = (row.member_person_id, row.member_entity_id) {
             if !row
                 .member_email
                 .as_deref()
@@ -829,8 +829,7 @@ pub async fn resolve_member(
                 return Ok(());
             }
             (person_id, entity_id)
-        }
-        _ => {
+        } else {
             let name = row
                 .member_name
                 .as_deref()
@@ -849,8 +848,7 @@ pub async fn resolve_member(
             // Taking still requires the conflict check to complete.
             postgres::save_member(pg, &row).await?;
             (person.id, entity_id)
-        }
-    };
+        };
     let (summary, blocking, checked) = conflict_report(surreal, Some(member)).await?;
     row.conflict_summary = summary;
     row.conflict_blocking = blocking;
