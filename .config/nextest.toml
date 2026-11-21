@@ -41,7 +41,7 @@ test-group = "platform-certs"
 
 [[profile.default.overrides]]
 filter = '''
-binary(/^(mail_signatures|project_drive_folder_id|project_repository_url|project_resource_links|project_slack_channel|git_repo_schema|project_lifecycle|project_native_delete|brand_move_mirror|firm_journal|firm_anchor_native|firm_journal_api|api_reads|postgres_startup|entity_native_delete|practice_preview_native|native_cron_ingress|inbox_native_projects|object_handover|notation_native|project_slack|coverage_postgres|native_nightly_membership|no_delete_guard)$/)
+binary(/^(mail_signatures|project_drive_folder_id|project_repository_url|project_resource_links|project_slack_channel|git_repo_schema|project_lifecycle|project_native_delete|brand_move_mirror|firm_journal|contract_review_native|firm_anchor_native|firm_journal_api|api_reads|postgres_startup|entity_native_delete|practice_preview_native|native_cron_ingress|inbox_native_projects|object_handover|notation_native|project_slack|coverage_postgres|native_nightly_membership|no_delete_guard)$/)
 | test(/^workflow::native_tests::/)
 | test(=runner::tests::the_locked_lane_lands_each_slot_rerun_on_a_new_attempt_key)
 | test(=runner::tests::the_unlocked_lane_keeps_one_snapshot_key_per_slot_across_reruns)
@@ -72,6 +72,7 @@ binary(/^(mail_signatures|project_drive_folder_id|project_repository_url|project
 | (binary(=store) & test(=postgres::native_origin::fixture::tests::duplicate_existing_native_fixture_never_adopts_or_drops_the_database))
 | (binary(=store) & test(/^postgres::native_origin::recovery_plan::tests::/))
 | (binary(=store) & test(/^journal_startup_migration::postgres_tests::/))
+| (binary(=store) & test(/^contract_reviews::postgres_tests::/))
 '''
 test-group = "canonical-postgres-fixtures"
 

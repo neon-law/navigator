@@ -330,10 +330,9 @@ through the stages above. Four sources, in the order that usually pays off:
 `hudson ops doctor` is a shortcut for the cluster slice — it surfaces wedged trigger Jobs and unready workloads in plain
 language. Triage with it, then confirm against the evidence above.
 
-## Guardrails: keep a fixed bug fixed
+## Runtime checks
 
-We don't re-litigate the same outage. Every failure we've actually hit is pinned by a test or a manifest field so it
-can't silently recur; when you fix a new one, add its guard in the same PR.
+Tests and manifests enforce container inputs, workflow registration, trigger deadlines, and database admission.
 
 - **Every workspace member is in every workspace-building Containerfile.** Add a crate → add `COPY <crate> <crate>` to
   `images/Containerfile.{trigger,workflows-service,web}`. Guarded by
@@ -342,14 +341,11 @@ can't silently recur; when you fix a new one, add its guard in the same PR.
   `workflows_service::registry` tests (template filenames follow the separate snake_case convention `N103` enforces).
 - **Trigger CronJobs carry `activeDeadlineSeconds` + `startingDeadlineSeconds`** so a stuck Job can't wedge `Forbid`,
   and `start_workflow` has a 30s HTTP timeout so a hung ingress can't keep a trigger pod alive.
-- **Host `web` and the worker share one database inside their KIND tier.** The Restate worker journals each transition
-  to the store its own `NAVIGATOR_SURREAL_*` names — `navigator` in that cluster. Both `dev up` and `dev worktree-env`
-  put host `web` on the worker's database ([kind-local-dev](../.agents/skills/kind-local-dev/SKILL.md)), so every
-  Restate-backed flow (the retainer walk, contract review) reaches the worker. Point host `web` at any other database
-  and a Notation it commits is invisible to the worker, and the flow 500s with `journal: RecordNotFound`. The
-  `matter_open_restate` regression in `server/tests/` proves the flow reaches the matter when the databases agree. There
-  is currently no automated guard comparing host `web`'s and the worker's databases at `worktree-env status` or `ops
-  doctor` time; a mismatch surfaces only as the `journal: RecordNotFound` 500 above.
+- **The application and its native Notation worker use the same admitted PostgreSQL database.** The
+  `contract_review_hands_committed_notation_to_native_dbos` test in `server/tests/contract_review_native.rs` exercises
+  the committed-Notation handoff through authenticated DBOS HTTP ingress, persisted analysis and document links, and the
+  `lawyer_review` gate. Its owned fixture checks this application/runtime boundary; it does not establish deployment
+  configuration parity or completion of the retained Restate cutover.
 - **Debugging stays identifier-and-status only — never client content** (the standing no-content rule; see
   [observability](observability.md)).
 

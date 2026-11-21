@@ -1,74 +1,50 @@
-//! Opt-in PostgreSQL copies follow successful Contract Review commands.
-
+//! Native Contract Review fields, edits, timestamps, and independent review identities.
 use super::*;
-use crate::postgres_mirror::tests::fresh_schema;
+use crate::postgres::PostgresDb;
+use crate::surreal::SurrealDb;
 use chrono::{DateTime, SubsecRound, Utc};
 use serde_json::Value;
 use sqlx::Row;
-use tokio::process::Command;
+use std::sync::Arc;
 use uuid::Uuid;
 
-const PROBE: &str = "NAV_CONTRACT_REVIEW_MIRROR_PROBE";
-const TEST: &str = "contract_reviews::postgres_tests::lifecycle_probe";
-
-#[tokio::test]
-async fn command_lifecycle_is_mirrored_in_an_isolated_process() {
-    let Some((options, database)) = fresh_schema().await else {
-        return;
-    };
-    let output = Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", TEST, "--nocapture"])
-        .env(PROBE, "connected")
-        .env("NAVIGATOR_POSTGRES_HOST", "127.0.0.1")
-        .env("NAVIGATOR_POSTGRES_PORT", options.get_port().to_string())
-        .env("NAVIGATOR_POSTGRES_USER", "postgres")
-        .env("NAVIGATOR_POSTGRES_PASSWORD", "synthetic")
-        .env("NAVIGATOR_POSTGRES_DATABASE", database)
-        .env("NAVIGATOR_POSTGRES_SSLMODE", "disable")
-        .env_remove("NAVIGATOR_POSTGRES_ROOT_CERT")
-        .output()
+async fn assert_stored(pg: &PostgresDb, expected: &ContractReview) {
+    let row = sqlx::query("SELECT * FROM contract_review WHERE id=$1")
+        .bind(expected.id)
+        .fetch_one(pg.pool())
         .await
         .unwrap();
-    assert!(
-        output.status.success(),
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(String::from_utf8_lossy(&output.stdout).contains(&format!("test {TEST} ... ok")));
-}
-
-async fn assert_projection(pg: &crate::postgres::PostgresDb, source: &ContractReview) {
-    let row = sqlx::query("SELECT * FROM contract_review WHERE id=$1")
-        .bind(source.id)
-        .fetch_optional(&pg.0)
-        .await
-        .unwrap()
-        .expect("the command must mirror its committed review before returning");
-    assert_eq!(row.get::<Uuid, _>("notation_id"), source.notation_id);
-    assert_eq!(row.get::<Uuid, _>("playbook_id"), source.playbook_id);
-    assert_eq!(row.get::<Option<Uuid>, _>("asset_id"), source.asset_id);
-    assert_eq!(row.get::<Value, _>("findings"), source.findings);
-    assert_eq!(row.get::<String, _>("status"), source.status);
+    assert_eq!(row.get::<Uuid, _>("notation_id"), expected.notation_id);
+    assert_eq!(row.get::<Uuid, _>("playbook_id"), expected.playbook_id);
+    assert_eq!(row.get::<Option<Uuid>, _>("asset_id"), expected.asset_id);
+    assert_eq!(row.get::<Value, _>("findings"), expected.findings);
+    assert_eq!(row.get::<String, _>("status"), expected.status);
     assert_eq!(
         row.get::<Option<String>, _>("risk_summary"),
-        source.risk_summary
+        expected.risk_summary
     );
     assert_eq!(
         row.get::<DateTime<Utc>, _>("inserted_at"),
-        source.inserted_at.trunc_subsecs(6)
+        expected.inserted_at.trunc_subsecs(6)
     );
     assert_eq!(
         row.get::<DateTime<Utc>, _>("updated_at"),
-        source.updated_at.trunc_subsecs(6)
+        expected.updated_at.trunc_subsecs(6)
     );
 }
 
-async fn review_fixture(surreal: &crate::surreal::SurrealDb) -> NewContractReview {
-    let notation_id = crate::test_support::seed_notation(surreal).await;
-    let entity_id = crate::test_support::seed_entity(surreal).await;
+async fn review_fixture(pg: &PostgresDb, db: &SurrealDb) -> NewContractReview {
+    // Reuse the crate's canonical domain-row fixture, not its enrollment helper.
+    let (_, notation_id, _) = crate::postgres::fixtures::workflow_fixture(pg).await;
+    let entity_id = sqlx::query_scalar(
+        "SELECT p.entity_id FROM notation n JOIN project p ON p.id=n.project_id WHERE n.id=$1",
+    )
+    .bind(notation_id)
+    .fetch_one(pg.pool())
+    .await
+    .unwrap();
     let playbook_id = crate::playbooks::create(
-        surreal,
+        db,
         &crate::playbooks::NewPlaybook {
             entity_id,
             name: "Synthetic review playbook",
@@ -85,27 +61,64 @@ async fn review_fixture(surreal: &crate::surreal::SurrealDb) -> NewContractRevie
 }
 
 #[tokio::test]
-async fn lifecycle_probe() {
-    let mode = std::env::var(PROBE);
-    if mode.as_deref() == Ok("unavailable") {
-        source_commands_survive_mirror_outage().await;
-        return;
-    }
-    if mode.as_deref() != Ok("connected") {
-        return;
-    }
-    let pg = crate::postgres::PostgresDb::from_env().await.unwrap();
-    let surreal = crate::test_support::mem_surreal().await;
-    let first = review_fixture(&surreal).await;
-    let mut second = review_fixture(&surreal).await;
-    second.asset_id =
-        Some(crate::test_support::seed_body_asset(&surreal, b"Synthetic contract").await);
-    let id = create(&surreal, &first).await.unwrap();
-    let other = create(&surreal, &second).await.unwrap();
-    let original = by_id(&surreal, id).await.unwrap().unwrap();
-    assert_projection(&pg, &original).await;
-    let other_original = by_id(&surreal, other).await.unwrap().unwrap();
-    assert_projection(&pg, &other_original).await;
+async fn native_lifecycle_preserves_fields_timestamps_and_other_reviews() {
+    crate::test_support::with_postgres(async {
+        let pg = PostgresDb::application().await.unwrap();
+        let db = SurrealDb::uninitialized();
+        let directory = tempfile::tempdir().unwrap();
+        let storage: Arc<dyn cloud::StorageService> =
+            Arc::new(cloud::FsStorage::new(directory.path()).await.unwrap());
+        let first = review_fixture(&pg, &db).await;
+        let mut second = review_fixture(&pg, &db).await;
+        second.asset_id = Some(
+            crate::assets::ingest_content(&db, &storage, b"Synthetic contract", "text/plain")
+                .await
+                .unwrap(),
+        );
+        let id = create(&db, &first).await.unwrap();
+        let other = create(&db, &second).await.unwrap();
+        let original = by_id(&db, id).await.unwrap().unwrap();
+        let other_original = by_id(&db, other).await.unwrap().unwrap();
+        assert_eq!(original.notation_id, first.notation_id);
+        assert_eq!(original.playbook_id, first.playbook_id);
+        assert_eq!(original.asset_id, None);
+        assert_eq!(original.status, STATUS_PENDING);
+        assert!(findings_of(&original).unwrap().is_empty());
+        assert_eq!(other_original.asset_id, second.asset_id);
+        assert_stored(&pg, &original).await;
+        assert_stored(&pg, &other_original).await;
+        let approved = edit_review(&pg, &db, &original).await;
+        assert_eq!(
+            latest_for_notation(&db, first.notation_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .id,
+            id
+        );
+        assert_eq!(
+            latest_for_notation(&db, second.notation_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .id,
+            other
+        );
+        assert_missing(&pg, &db, &approved).await;
+        assert_eq!(
+            by_id(&db, other).await.unwrap(),
+            Some(other_original.clone())
+        );
+        assert_stored(&pg, &other_original).await;
+        assert_stored(&pg, &approved).await;
+        clear_and_reject(&pg, &db, &approved).await;
+        assert_eq!(by_id(&db, other).await.unwrap(), Some(other_original));
+    })
+    .await;
+}
+
+async fn edit_review(pg: &PostgresDb, db: &SurrealDb, original: &ContractReview) -> ContractReview {
+    let id = original.id;
     let mut findings = vec![Finding {
         clause_ref: "Synthetic section".into(),
         deviation: "Synthetic deviation".into(),
@@ -114,125 +127,92 @@ async fn lifecycle_probe() {
         attorney_note: None,
         accepted: false,
     }];
-    record_analysis(&surreal, id, "Synthetic analysis", &findings)
+    record_analysis(db, id, "Synthetic analysis", &findings)
         .await
         .unwrap();
-    let analyzed = by_id(&surreal, id).await.unwrap().unwrap();
-    assert_projection(&pg, &analyzed).await;
+    let analyzed = by_id(db, id).await.unwrap().unwrap();
+    assert_stored(pg, &analyzed).await;
     assert_eq!(analyzed.status, STATUS_ANALYZED);
     assert_eq!(analyzed.inserted_at, original.inserted_at);
+    assert!(analyzed.updated_at >= original.updated_at);
+    assert_eq!(analyzed.risk_summary.as_deref(), Some("Synthetic analysis"));
+    assert_eq!(findings_of(&analyzed).unwrap(), findings);
     findings[0].attorney_note = Some("Synthetic attorney note".into());
     findings[0].accepted = true;
-    update_findings(&surreal, id, &findings).await.unwrap();
-    assert_projection(&pg, &by_id(&surreal, id).await.unwrap().unwrap()).await;
-    update_risk_summary(&surreal, id, "Synthetic edited summary")
+    update_findings(db, id, &findings).await.unwrap();
+    let edited = by_id(db, id).await.unwrap().unwrap();
+    assert_eq!(findings_of(&edited).unwrap(), findings);
+    assert_stored(pg, &edited).await;
+    update_risk_summary(db, id, "Synthetic edited summary")
         .await
         .unwrap();
-    assert_projection(&pg, &by_id(&surreal, id).await.unwrap().unwrap()).await;
-    set_status(&surreal, id, STATUS_APPROVED).await.unwrap();
-    let approved = by_id(&surreal, id).await.unwrap().unwrap();
-    assert_projection(&pg, &approved).await;
+    let summary = by_id(db, id).await.unwrap().unwrap();
+    assert_eq!(
+        summary.risk_summary.as_deref(),
+        Some("Synthetic edited summary")
+    );
+    assert_eq!(
+        summary.status, STATUS_ANALYZED,
+        "risk editing leaves status untouched"
+    );
+    assert_eq!(findings_of(&summary).unwrap(), findings);
+    assert_stored(pg, &summary).await;
+    set_status(db, id, STATUS_APPROVED).await.unwrap();
+    let approved = by_id(db, id).await.unwrap().unwrap();
+    assert_stored(pg, &approved).await;
     assert_eq!(approved.status, STATUS_APPROVED);
+    assert_eq!(findings_of(&approved).unwrap(), findings);
+    assert!(acted_finding_indices(db, original.notation_id)
+        .await
+        .unwrap()
+        .is_empty());
     assert_eq!(approved.inserted_at, original.inserted_at);
-    assert_projection(&pg, &other_original).await;
-    assert_eq!(
-        latest_for_notation(&surreal, first.notation_id)
-            .await
-            .unwrap()
-            .unwrap()
-            .id,
-        id
-    );
-    assert_eq!(
-        latest_for_notation(&surreal, second.notation_id)
-            .await
-            .unwrap()
-            .unwrap()
-            .id,
-        other
-    );
+    assert_eq!(approved.notation_id, original.notation_id);
+    assert_eq!(approved.playbook_id, original.playbook_id);
+    assert_eq!(approved.asset_id, original.asset_id);
+    assert!(approved.updated_at >= summary.updated_at);
+    approved
+}
+
+async fn assert_missing(pg: &PostgresDb, db: &SurrealDb, approved: &ContractReview) {
     let missing = Uuid::new_v4();
-    sqlx::query(
-        "INSERT INTO contract_review (id, notation_id, playbook_id, asset_id, status, risk_summary, findings, inserted_at, updated_at) \
-         SELECT $2, notation_id, playbook_id, asset_id, status, risk_summary, findings, inserted_at, updated_at FROM contract_review WHERE id=$1",
-    ).bind(approved.id).bind(missing).execute(&pg.0).await.unwrap();
-    let mut sentinel = approved.clone();
-    sentinel.id = missing;
+    assert!(by_id(db, missing).await.unwrap().is_none());
+    let findings = findings_of(approved).unwrap();
     assert!(
-        matches!(record_analysis(&surreal, missing, "Synthetic", &findings).await, Err(ContractReviewError::NotFound(found)) if found == missing)
+        matches!(record_analysis(db,missing,"Synthetic",&findings).await,Err(ContractReviewError::NotFound(found)) if found==missing)
     );
     assert!(
-        matches!(update_findings(&surreal, missing, &findings).await, Err(ContractReviewError::NotFound(found)) if found == missing)
+        matches!(update_findings(db,missing,&findings).await,Err(ContractReviewError::NotFound(found)) if found==missing)
     );
     assert!(
-        matches!(update_risk_summary(&surreal, missing, "Synthetic").await, Err(ContractReviewError::NotFound(found)) if found == missing)
+        matches!(update_risk_summary(db,missing,"Synthetic").await,Err(ContractReviewError::NotFound(found)) if found==missing)
     );
     assert!(
-        matches!(set_status(&surreal, missing, STATUS_APPROVED).await, Err(ContractReviewError::NotFound(found)) if found == missing)
+        matches!(set_status(db,missing,STATUS_APPROVED).await,Err(ContractReviewError::NotFound(found)) if found==missing)
     );
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM contract_review")
-            .fetch_one(&pg.0)
+            .fetch_one(pg.pool())
             .await
             .unwrap(),
-        3
+        2
     );
-    assert!(by_id(&surreal, missing).await.unwrap().is_none());
-    assert_projection(&pg, &sentinel).await;
-    assert_projection(&pg, &approved).await;
-    pg.0.close().await;
+    assert!(by_id(db, missing).await.unwrap().is_none());
 }
 
-#[tokio::test]
-async fn unavailable_mirror_does_not_change_successful_source_writes() {
-    let output = Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", TEST, "--nocapture"])
-        .env(PROBE, "unavailable")
-        .env("NAVIGATOR_POSTGRES_HOST", "127.0.0.1")
-        .env("NAVIGATOR_POSTGRES_PORT", "1")
-        .env("NAVIGATOR_POSTGRES_USER", "synthetic")
-        .env("NAVIGATOR_POSTGRES_PASSWORD", "synthetic")
-        .env("NAVIGATOR_POSTGRES_DATABASE", "synthetic")
-        .env("NAVIGATOR_POSTGRES_SSLMODE", "disable")
-        .env_remove("NAVIGATOR_POSTGRES_ROOT_CERT")
-        .output()
-        .await
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(String::from_utf8_lossy(&output.stdout).contains(&format!("test {TEST} ... ok")));
-}
-
-async fn source_commands_survive_mirror_outage() {
-    let surreal = crate::test_support::mem_surreal().await;
-    let new = NewContractReview {
-        notation_id: Uuid::new_v4(),
-        playbook_id: Uuid::new_v4(),
-        asset_id: None,
-    };
-    let id = create(&surreal, &new).await.unwrap();
-    let original = by_id(&surreal, id).await.unwrap().unwrap();
-    record_analysis(&surreal, id, "Synthetic analysis", &[])
-        .await
-        .unwrap();
-    update_findings(&surreal, id, &[]).await.unwrap();
-    update_risk_summary(&surreal, id, "Synthetic edited summary")
-        .await
-        .unwrap();
-    set_status(&surreal, id, STATUS_REJECTED).await.unwrap();
-    let final_row = by_id(&surreal, id).await.unwrap().unwrap();
-    assert_eq!(final_row.id, id);
-    assert_eq!(final_row.notation_id, new.notation_id);
-    assert_eq!(final_row.playbook_id, new.playbook_id);
+async fn clear_and_reject(pg: &PostgresDb, db: &SurrealDb, approved: &ContractReview) {
+    update_findings(db, approved.id, &[]).await.unwrap();
+    set_status(db, approved.id, STATUS_REJECTED).await.unwrap();
+    let final_row = by_id(db, approved.id).await.unwrap().unwrap();
+    assert_eq!(final_row.id, approved.id);
+    assert_eq!(final_row.notation_id, approved.notation_id);
+    assert_eq!(final_row.playbook_id, approved.playbook_id);
     assert_eq!(final_row.status, STATUS_REJECTED);
     assert_eq!(
         final_row.risk_summary.as_deref(),
         Some("Synthetic edited summary")
     );
-    assert_eq!(final_row.inserted_at, original.inserted_at);
+    assert_eq!(final_row.inserted_at, approved.inserted_at);
     assert!(findings_of(&final_row).unwrap().is_empty());
+    assert_stored(pg, &final_row).await;
 }

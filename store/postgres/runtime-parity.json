@@ -255,17 +255,17 @@
     "runtime_tests": [
       {
         "file": "store/src/contract_reviews/postgres_tests.rs",
-        "function": "command_lifecycle_is_mirrored_in_an_isolated_process",
-        "proves": "Successful creates and all analysis, findings, risk-summary and status edits project exact Contract Review fields into PostgreSQL; missing source IDs retain NotFound and leave target-only evidence unchanged; Notation links remain distinct."
+        "function": "native_lifecycle_preserves_fields_timestamps_and_other_reviews",
+        "proves": "Reviewed native test source requires actual PostgreSQL CRUD and independent stored-field checks for Notation, Playbook, Asset, findings, status, risk summary and timestamps; analysis, attorney edits, approval/rejection and finding removal preserve identity and the other Review. Only a genuinely absent UUID returns NotFound."
       },
       {
-        "file": "store/src/contract_reviews/postgres_tests.rs",
-        "function": "unavailable_mirror_does_not_change_successful_source_writes",
-        "proves": "All five source commands retain their committed result when the optional PostgreSQL mirror is unavailable."
+        "file": "server/tests/contract_review_native.rs",
+        "function": "contract_review_hands_committed_notation_to_native_dbos",
+        "proves": "Reviewed test source requires committed native Notation handoff through authenticated real DBOS HTTP ingress, analyzed Review, two unaccepted findings, risk summary and document link, current Project Template and Entity pinning, and NoPlaybook with zero Notations."
       }
     ],
     "remaining": [
-      "Application reads, authorization decisions, parent-reference reconciliation and deployment cutover remain outside this write-hook acceptance."
+      "Cross-Project and cross-Firm authorization/refusal, runtime admission during damaged or unavailable history, provider effects and deployment cutover require their own evidence."
     ]
   },
   "credential": {
