@@ -122,8 +122,8 @@ explicit recovery. It never resets retained history or replaces receipts.
 
 The `.github/workflows/deploy.yml` browser gate provisions its native tier through the ordinary quickstart CLI, then
 requires exact-image nonroot, native admission, persisted DBOS workflow replay across host/image restart, and all three
-hydrated browser suites. Independent practice previews use owned PostgreSQL fixtures. Explicit
-compatibility suites retain their own Source/Restate fixtures; a focused local pass does not certify the full gate.
+hydrated browser suites. Independent practice previews use owned PostgreSQL fixtures. Explicit compatibility suites
+retain their own Source/Restate fixtures; a focused local pass does not certify the full gate.
 
 ```bash
 cargo run -p hudson -- dev postgres-bootstrap --path "$PWD"

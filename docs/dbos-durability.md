@@ -519,7 +519,7 @@ Selected flags and local captures do not establish that these operational gates 
 
 The deployment integration job provisions a native KIND tier through `hudson quickstart`, with the complete native
 selector profile. It verifies native admission and persisted DBOS checkpoint replay across host/image restart. The host
-drains before the exact built application image starts as its nonroot user. All three
-hydrated browser suites run against that image, including authenticated repository Draft provenance and restart checks.
-Independent practice previews use owned PostgreSQL fixtures. These checks do not select a production deployment's
-engine or dispose of retained workflow state; compatibility suites remain explicit.
+drains before the exact built application image starts as its nonroot user. All three hydrated browser suites run
+against that image, including authenticated repository Draft provenance and restart checks. Independent practice
+previews use owned PostgreSQL fixtures. These checks do not select a production deployment's engine or dispose of
+retained workflow state; compatibility suites remain explicit.
