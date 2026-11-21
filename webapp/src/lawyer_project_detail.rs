@@ -141,7 +141,7 @@ fn matter_fact_grid(view: &LawyerDetailView) -> Element {
 
 fn project_page_link(tab: &crate::sections::page::PageTab, current: &str) -> Element {
     use crate::components::resource_mark::{
-        BillingGlyph, DeadlinesGlyph, OnboardingGlyph, OverviewGlyph, PageGlyph,
+        BillingGlyph, DeadlinesGlyph, OnboardingGlyph, OverviewGlyph,
     };
     let icon_class = "project-resources__mark".to_string();
     let icon = match MatterTab::from_path(&tab.href) {
@@ -149,7 +149,7 @@ fn project_page_link(tab: &crate::sections::page::PageTab, current: &str) -> Ele
         Some(MatterTab::Onboarding) => rsx! { OnboardingGlyph { class: icon_class } },
         Some(MatterTab::Deadlines) => rsx! { DeadlinesGlyph { class: icon_class } },
         Some(MatterTab::Billing) => rsx! { BillingGlyph { class: icon_class } },
-        _ => rsx! { PageGlyph { class: icon_class } },
+        _ => return rsx! {},
     };
     rsx! {
         a {

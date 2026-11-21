@@ -69,12 +69,6 @@ simple_icon!(
     "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z M12 7v5l3 2"
 );
 simple_icon!(
-    PageGlyph,
-    "page",
-    "0 0 24 24",
-    "M5 3h9l5 5v13H5z M14 3v5h5 M8 12h8 M8 16h6"
-);
-simple_icon!(
     BillingGlyph,
     "billing",
     "0 0 24 24",
