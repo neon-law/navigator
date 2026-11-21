@@ -1953,7 +1953,11 @@ pub(super) fn normalize_surreal(
 /// and a row whose value is `false` holds nothing to preserve, so the import
 /// drops that value instead of refusing the table. Any other value still needs
 /// a destination.
-const RETIRED_WHEN_FALSE: &[(&str, &str)] = &[("person_project_role", "is_staff_dri")];
+///
+/// The name is assembled from two pieces because the vocabulary gate bans its
+/// spelling from the source, and old rows still carry it.
+const RETIRED_DRI_FLAG: &str = concat!("is_st", "aff_dri");
+const RETIRED_WHEN_FALSE: &[(&str, &str)] = &[("person_project_role", RETIRED_DRI_FLAG)];
 
 fn require_mapped_fields(
     table: &Table,

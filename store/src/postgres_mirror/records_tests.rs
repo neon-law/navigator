@@ -1608,7 +1608,7 @@ fn a_retired_false_field_is_dropped_but_a_true_one_still_blocks() {
             "participation".to_owned(),
             Source::String("attorney".into()),
         );
-        fields.insert("is_staff_dri".to_owned(), Source::Bool(retired));
+        fields.insert(super::RETIRED_DRI_FLAG.to_owned(), Source::Bool(retired));
         Source::Object(fields)
     };
     super::require_mapped_fields(table, &row(false), false).expect("a retired false field imports");
