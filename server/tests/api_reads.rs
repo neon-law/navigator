@@ -348,15 +348,20 @@ async fn client_portal_uses_the_host_brand_for_the_list_detail_and_api() {
     store::test_support::with_postgres(check_two_brand_portal()).await;
 }
 
-async fn check_two_brand_portal() {
-    let fx = build_fixture().await;
+async fn seed_sibling_brand(fx: &Fixture) -> (store::projects::Project, store::projects::Project) {
     let pg = PostgresDb::application().await.unwrap();
     let project = store::projects::find_by_id(&fx.surreal, fx.project_id)
         .await
         .unwrap()
         .unwrap();
-    let firm: Uuid = sqlx::query_scalar("INSERT INTO firm(name,slug,status,entity_id) VALUES ('Example Firm','example-firm','active',$1) RETURNING id")
-            .bind(project.entity_id).fetch_one(pg.pool()).await.unwrap();
+    let firm: Uuid = sqlx::query_scalar(
+        "INSERT INTO firm(name,slug,status,entity_id)
+         VALUES ('Example Firm','example-firm','active',$1) RETURNING id",
+    )
+    .bind(project.entity_id)
+    .fetch_one(pg.pool())
+    .await
+    .unwrap();
     sqlx::query("INSERT INTO brand(name,brand_key) VALUES ('Sibling Brand','delete-your-data')")
         .execute(pg.pool())
         .await
@@ -383,6 +388,7 @@ async fn check_two_brand_portal() {
         project.id,
         &store::projects::UpdateProjectCommand {
             firm_id: Some(firm),
+            brand: Some(project.brand.clone()),
             ..Default::default()
         },
     )
@@ -402,6 +408,17 @@ async fn check_two_brand_portal() {
     )
     .await
     .unwrap();
+    (project, sibling)
+}
+
+async fn response_text(response: axum::response::Response) -> String {
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    String::from_utf8(bytes.to_vec()).unwrap()
+}
+
+async fn check_two_brand_portal() {
+    let fx = build_fixture().await;
+    let (project, sibling) = seed_sibling_brand(&fx).await;
     let sessions = SessionStore::new(KEY);
     let login = |auth: &str| {
         sessions
@@ -454,16 +471,7 @@ async fn check_two_brand_portal() {
         for path in ["/app/projects?brand=all", "/app/api/projects"] {
             let response = request(host, path, &client).await.unwrap();
             assert_eq!(response.status(), StatusCode::OK, "{host}{path}");
-            let body = String::from_utf8(
-                response
-                    .into_body()
-                    .collect()
-                    .await
-                    .unwrap()
-                    .to_bytes()
-                    .to_vec(),
-            )
-            .unwrap();
+            let body = response_text(response).await;
             assert!(
                 body.contains(&visible.code) && !body.contains(&hidden.code),
                 "{host}{path}"
@@ -496,16 +504,7 @@ async fn check_two_brand_portal() {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let body = String::from_utf8(
-            response
-                .into_body()
-                .collect()
-                .await
-                .unwrap()
-                .to_bytes()
-                .to_vec(),
-        )
-        .unwrap();
+        let body = response_text(response).await;
         assert!(body.contains("brand-delete-your-data-tokens.css"));
         assert!(body.contains(&project.code) && body.contains(&sibling.code));
     }

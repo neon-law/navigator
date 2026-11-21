@@ -76,11 +76,9 @@ is refused while any `firm_brand` or `project.brand` value still names its key. 
 own served hosts, marketing pages, or fallback presentation. Editing the `neon` row changes the token stylesheet, not
 which hosts resolve to it.
 
-An uploaded logo also renders on `/app`, not only on the public site: `webapp::app_chrome::resolve_app_brand_mark`
-prefers the resolved brand's `brand.logo_object_key` over the compiled `SiteBrand.logo_href` in the navbar mark,
-resolved by the same portal-wide request layer that resolves [`FirmFooterModel`](firm-brand.md). The `/app` document
-title is deliberately unaffected — every `/app/*` page's tab title still leads with "Navigator", because `/app` is the
-firm's own internal tool rather than a client-facing surface a white-label deploy needs to rebrand in the reader's eyes.
+The client dashboard uses the serving Brand's name in the page title and its logo and colours in the portal. An uploaded
+`brand.logo_object_key` takes precedence over the compiled logo. Staff use their Firm's [Portal Theme
+Brand](portal-theme-brand.md). The legal footer identifies the Firm wearing the host's Brand.
 
 The `/app` inventory surfaces name a compiled brand's production website as its `www` host (`www.deleteyourdata.com`):
 `/app/admin/brands`, `/app/owner`, `/app/admin/firms/{id}`, the admin project directory, `/app/projects`, and

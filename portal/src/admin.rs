@@ -7798,6 +7798,7 @@ mod tests {
             let response = super::project_view_as_client(
                 S(state.clone()),
                 session.map(Ext),
+                axum::http::HeaderMap::new(),
                 cookies.clone(),
                 P(code),
             )
@@ -7810,6 +7811,7 @@ mod tests {
         let entered = super::project_view_as_client(
             S(state.clone()),
             Some(Ext(session_for(&lawyer))),
+            axum::http::HeaderMap::new(),
             cookies.clone(),
             P(code.clone()),
         )
@@ -7829,6 +7831,7 @@ mod tests {
         let nested = super::project_view_as_client(
             S(state.clone()),
             Some(Ext(effective.clone())),
+            axum::http::HeaderMap::new(),
             tower_cookies::Cookies::default(),
             P(code),
         )
