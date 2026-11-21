@@ -62,11 +62,10 @@ pub async fn call(
         // `visible_projects` would answer the same way for a `None`
         // `person_id`, but there is no role to ask it with.
         ReadScope::Unlinked => Vec::new(),
-        ReadScope::Membership { person_id, role } => {
-            store::access::visible_projects(surreal, Some(*person_id), *role)
-                .await
-                .map_err(ToolError::Database)?
-        }
+        ReadScope::Membership { person_id, role } => super::portal_access()
+            .visible_projects(surreal, Some(*person_id), *role)
+            .await
+            .map_err(ToolError::Database)?,
         ReadScope::Deployment => store::projects::all(surreal)
             .await
             .map_err(|error| ToolError::Database(error.to_string()))?,

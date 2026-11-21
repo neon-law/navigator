@@ -29,7 +29,6 @@ use store::persons::Role;
 use store::review_documents::STATUS_DRAFT;
 
 use crate::session::SessionData;
-use store::access::can_see_project_as_client;
 
 /// Resolve `(project_id, doc_id)` to a client-visible review document,
 /// or a `404` response. Enforces, in order: the document exists, it
@@ -57,7 +56,8 @@ async fn visible_review_document(
         return Err(not_found());
     }
 
-    let visible = can_see_project_as_client(surreal, session.person_id, project_id)
+    let visible = crate::client_portal::access()
+        .can_see_project_as_client(surreal, session.person_id, session.role, project_id)
         .await
         .unwrap_or(false);
     if !visible {
@@ -168,7 +168,7 @@ pub enum ReviewCommentError {
 /// scope, and attribute a comment identically.
 ///
 /// Access is **client-lens**: the caller must participate in the document's
-/// matter through the client side ([`can_see_project_as_client`]) — the same
+/// matter through the client side ([`store::access::ClientPortal::can_see_project_as_client`]) — the same
 /// gate the read-only review surface enforces, so a firm-side-only lawyer sees
 /// a 404 here exactly as on the portal. `direction` is derived from the
 /// caller's role: a client's comment flows inbound, a lawyer/admin comment the
@@ -201,7 +201,8 @@ pub async fn create_review_comment(
             return Err(ReviewCommentError::NotFound);
         }
     }
-    let visible = can_see_project_as_client(surreal, person_id, notation.project_id)
+    let visible = crate::client_portal::access()
+        .can_see_project_as_client(surreal, person_id, role, notation.project_id)
         .await
         .unwrap_or(false);
     if !visible || doc.status == STATUS_DRAFT {

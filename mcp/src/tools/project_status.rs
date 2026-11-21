@@ -67,11 +67,10 @@ pub async fn call(
     // before the project row is ever read, so an unauthorized caller
     // never learns whether the id even exists.
     let viewer = match scope {
-        ReadScope::Membership { person_id, role } => {
-            store::access::matter_viewer(surreal, Some(*person_id), *role, args.project_id)
-                .await
-                .map_err(ToolError::Database)?
-        }
+        ReadScope::Membership { person_id, role } => super::portal_access()
+            .matter_viewer(surreal, Some(*person_id), *role, args.project_id)
+            .await
+            .map_err(ToolError::Database)?,
         // The directory lens is metadata-only, and neither an unlinked
         // caller nor an unauthenticated one has a participation boundary
         // to check against. No scope here may reach matter contents.

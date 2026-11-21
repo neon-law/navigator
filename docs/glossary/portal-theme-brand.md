@@ -1,13 +1,11 @@
 ---
 title: "Portal Theme Brand"
-description: "A Portal Theme Brand is the one Brand a Firm owns whose look its authenticated portal wears."
+description: "A Portal Theme Brand supplies the colours, logo, and name in the Firm team’s workbench."
 ---
 
-The one [Brand](brand.md) a [Firm](firm.md) picks for its authenticated portal. `firm.portal_theme_brand_key` holds that
-Brand's [Brand Key](brand-key.md), or nothing. Every `/app` page reached through a host whose Brand the Firm wears then
-draws that Brand's tokens stylesheet, logo, and name, whichever of the Firm's Brands the host resolved to. The portal
-looks like the client's firm, not like the storefront the login came through. With no Portal Theme Brand set, each host
-keeps its own Brand's look.
+A [Firm](firm.md) can select one of its [Brands](brand.md) for the portal its clerks, lawyers, admins, and owners use.
+`firm.portal_theme_brand_key` holds the selected [Brand Key](brand-key.md). With no selection, each host wears its own
+Brand. Clients use the Brand of the host where they sign in and see their Projects for that Brand.
 
 A Brand that keeps its own portal look (`BrandKey::keeps_own_portal_look`, today Daybridge) skips the theme: its host's
 `/app` pages wear its own tokens, logo, and name even when its Firm names a Portal Theme Brand.

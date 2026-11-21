@@ -100,6 +100,66 @@ impl MatterViewer {
     }
 }
 
+/// Project access through the Brand resolved by the serving host.
+#[derive(Clone, Copy)]
+pub struct ClientPortal<'a> {
+    pub brand: &'a str,
+}
+
+impl ClientPortal<'_> {
+    /// The existing role-specific list, narrowed to the host for clients.
+    pub async fn visible_projects(
+        self,
+        db: &SurrealDb,
+        person: Option<Uuid>,
+        role: Role,
+    ) -> Result<Vec<Project>, String> {
+        let mut projects = visible_projects(db, person, role).await?;
+        if role == Role::Client {
+            projects.retain(|project| self.contains(project));
+        }
+        Ok(projects)
+    }
+
+    #[must_use]
+    pub fn contains(self, project: &Project) -> bool {
+        project.brand == self.brand
+    }
+
+    pub async fn matter_viewer(
+        self,
+        db: &SurrealDb,
+        person: Option<Uuid>,
+        role: Role,
+        project_id: Uuid,
+    ) -> Result<Option<MatterViewer>, String> {
+        let viewer = matter_viewer(db, person, role, project_id).await?;
+        if role != Role::Client || viewer.is_none() {
+            return Ok(viewer);
+        }
+        let project = projects::find_by_id(db, project_id)
+            .await
+            .map_err(|error| project_lookup_failed(&error))?;
+        Ok(viewer.filter(|_| project.is_some_and(|row| self.contains(&row))))
+    }
+
+    pub async fn can_see_project_as_client(
+        self,
+        db: &SurrealDb,
+        person: Option<Uuid>,
+        role: Role,
+        project_id: Uuid,
+    ) -> Result<bool, String> {
+        if role != Role::Client {
+            return can_see_project_as_client(db, person, project_id).await;
+        }
+        Ok(self
+            .matter_viewer(db, person, Role::Client, project_id)
+            .await?
+            .is_some())
+    }
+}
+
 /// Resolve who this caller is to this matter, or `None` if they may not see it
 /// at all.
 ///

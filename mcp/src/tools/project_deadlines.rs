@@ -186,10 +186,11 @@ async fn require_participant(
     role: Role,
     project_id: Uuid,
 ) -> Result<(), ToolError> {
-    let allowed = store::access::can_see_project(surreal, Some(person_id), role, project_id)
+    let viewer = super::portal_access()
+        .matter_viewer(surreal, Some(person_id), role, project_id)
         .await
         .map_err(ToolError::Database)?;
-    if allowed {
+    if viewer.is_some() {
         Ok(())
     } else {
         Err(ToolError::NotFound(format!("project_id={project_id}")))

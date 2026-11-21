@@ -2,7 +2,7 @@
 //! (#641 Phase 3, portal cluster) — the read-only "Your Projects" dashboard.
 //!
 //! The successor to the `portal::project_list_response`. It scopes the
-//! signed-in client's matters through `store::access::visible_projects_as_client`
+//! signed-in client's matters through `store::access::ClientPortal::visible_projects`
 //! (the visibility layer relocated to `store` in #733 so a `#[server]` function
 //! can reach it), aggregates the open/closed KPI summary, and renders the
 //! dashboard cards. Read-only — the client clicks a card to the project detail
@@ -67,7 +67,7 @@ pub struct ClientProjectsView {
 }
 
 /// Fetch the signed-in client's projects dashboard: scope the matters through
-/// `store::access::visible_projects_as_client` and aggregate the KPI summary —
+/// `store::access::ClientPortal::visible_projects` and aggregate the KPI summary —
 /// the same command boundary `project_list_response` used, now server-side of
 /// a Dioxus render.
 #[server]
@@ -92,9 +92,17 @@ pub async fn list_client_projects() -> Result<ClientProjectsView, ServerFnError>
     let person_id = person_id.and_then(|raw| raw.parse::<uuid::Uuid>().ok());
 
     let surreal = consume_context::<store::surreal::SurrealDb>();
-    let projects = store::access::visible_projects_as_client(&surreal, person_id)
-        .await
-        .map_err(|e| ServerFnError::new(e.clone()))?;
+    let axum::Extension(brand) = dioxus_fullstack_core::FullstackContext::extract::<
+        axum::Extension<views::brand::BrandKey>,
+        _,
+    >()
+    .await?;
+    let projects = store::access::ClientPortal {
+        brand: brand.as_str(),
+    }
+    .visible_projects(&surreal, person_id, store::persons::Role::Client)
+    .await
+    .map_err(|e| ServerFnError::new(e.clone()))?;
 
     let summary = ClientProjectsSummary {
         open_projects: projects

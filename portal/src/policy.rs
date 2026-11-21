@@ -221,7 +221,16 @@ pub async fn require_policy(
         Ok(decision) if decision.allow => {
             let mut req = req;
             if let Some(session) = session {
+                let client =
+                    session.role == store::persons::Role::Client && session.scope.is_none();
                 req.extensions_mut().insert(session);
+                if client && !crate::wants_json(&path) {
+                    if !crate::client_portal::admits_page(&mut req).await? {
+                        use axum::response::IntoResponse;
+                        return Ok(crate::fallback_not_found(req).await.into_response());
+                    }
+                    crate::client_portal::apply_host_mark(&mut req).await;
+                }
             }
             Ok(next.run(req).await)
         }

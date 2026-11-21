@@ -37,6 +37,12 @@ tiers and anonymous, the participation vocabulary, the seeded people, and the Re
   different decisions. `participation` is also not the `disclosures` table (conflicts of interest), which flows the
   other direction.
 
+- Limit client reads and writes to Projects with client participation on the host-resolved Brand. Apply
+  that boundary to counts, links, API and agent reads, and resources addressed by their own ID. In Dioxus, read the host
+  Brand from the request extension. Preserve Firm-tier participation, supervision, and oversight.
+- Test with one client on Projects under two Brands of one Firm. Switch hosts and verify the list, a direct URL, and an
+  API read. Test the Firm theme independently of Project access.
+
 ## Boundaries
 
 - The Rego decision point (embedded policy, `require_policy` middleware): [[opa-policy]] and `docs/rego-policy.md`.

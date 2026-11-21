@@ -1146,10 +1146,8 @@ impl BrandKey {
     pub const LEX_TECNICA_FAMILY: &'static [Self] =
         &[Self::LexTecnica, Self::IepDefenders, Self::SameDayLegal];
 
-    /// Whether this brand's own `/app` look is kept even when its Firm names a
-    /// [Portal Theme Brand](../../docs/glossary/portal-theme-brand.md): a client
-    /// signing in through it sees its own palette, logo, and name, not the
-    /// Firm's shared theme.
+    /// Whether signed-in Firm team members on this Brand's host always see its own palette, logo, and name
+    /// even when the Firm selects a [Portal Theme Brand](../../docs/glossary/portal-theme-brand.md).
     #[must_use]
     pub fn keeps_own_portal_look(self) -> bool {
         matches!(self, Self::Daybridge)

@@ -564,13 +564,13 @@ async fn the_readme_participation_claim_matches_the_seeded_rows() {
     );
 }
 
-/// The deck's "all three matters" claim is true for the client.
+/// The fixture client participates in every sample matter the deck names.
 ///
 /// Derived from `sample_matter_codes()` rather than the number three, so a
 /// fourth sample matter fails the deck's wording instead of silently narrowing
 /// what this checks.
 #[tokio::test]
-async fn the_client_sees_every_sample_matter_the_deck_promises() {
+async fn the_client_participates_in_every_sample_matter_the_deck_promises() {
     let surreal = mem_surreal().await;
     let storage = storage().await;
     store::seed::seed_environment_with(
@@ -606,7 +606,7 @@ async fn the_client_sees_every_sample_matter_the_deck_promises() {
                 .unwrap()
                 .iter()
                 .any(|row| row.person_id == client),
-            "the Using deck tells the room every seeded matter is in the client's list, but \
+            "the Using deck says the client participates in every seeded matter, but \
              `{code}` carries no client row",
         );
     }
