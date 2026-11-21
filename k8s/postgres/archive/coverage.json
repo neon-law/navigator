@@ -480,6 +480,13 @@
       {
         "action": "export",
         "schema": "public",
+        "name": "database_recovery",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
         "name": "dbos_workflow_request",
         "kind": "table",
         "accessible": true
