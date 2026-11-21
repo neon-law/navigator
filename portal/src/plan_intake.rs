@@ -45,7 +45,7 @@ pub async fn plan_resolve_member_post(
     };
     let pg = match PostgresDb::from_env().await {
         Ok(pg) => pg,
-        Err(error) => return review_error(error.into()),
+        Err(error) => return review_error(&error.into()),
     };
     let brand = views::brand::brand_key();
     match plan_intake::resolve_member(
@@ -60,7 +60,7 @@ pub async fn plan_resolve_member_post(
     .await
     {
         Ok(()) => Redirect::to(PLAN_INTAKE_PATH).into_response(),
-        Err(error) => review_error(error),
+        Err(error) => review_error(&error),
     }
 }
 
@@ -76,31 +76,32 @@ pub async fn plan_accept_post(
     };
     let pg = match PostgresDb::from_env().await {
         Ok(pg) => pg,
-        Err(error) => return review_error(error.into()),
+        Err(error) => return review_error(&error.into()),
     };
     let input = plan_intake::AcceptInput {
         attestation: form.attestation.as_deref() == Some("yes"),
         acting_person_id: actor_id,
         brand: views::brand::brand_key().as_str().to_owned(),
         code: form.code.trim().to_owned(),
-        name: form.name.and_then(nonblank),
-        plan_case_number: form.plan_case_number.and_then(nonblank),
+        name: form.name.as_deref().and_then(nonblank),
+        plan_case_number: form.plan_case_number.as_deref().and_then(nonblank),
         plan_matter_type: form.plan_matter_type.trim().to_owned(),
         plan_state: form
             .plan_state
+            .as_deref()
             .and_then(nonblank)
             .map(|state| state.to_ascii_lowercase()),
     };
     let accepted = match plan_intake::accept(&db, &pg, staged_id, &input).await {
         Ok(accepted) => accepted,
-        Err(error) => return review_error(error),
+        Err(error) => return review_error(&error),
     };
     match store::projects::find_by_id(&db, accepted.project_id).await {
         Ok(Some(project)) => {
             Redirect::to(&format!("/app/projects/{}", project.code)).into_response()
         }
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(error) => review_error(error.into()),
+        Err(error) => review_error(&error.into()),
     }
 }
 
@@ -116,7 +117,7 @@ pub async fn plan_decline_post(
     };
     let pg = match PostgresDb::from_env().await {
         Ok(pg) => pg,
-        Err(error) => return review_error(error.into()),
+        Err(error) => return review_error(&error.into()),
     };
     match plan_intake::decline_from_review(
         &db,
@@ -129,14 +130,14 @@ pub async fn plan_decline_post(
     .await
     {
         Ok(_) => Redirect::to(PLAN_INTAKE_PATH).into_response(),
-        Err(error) => review_error(error),
+        Err(error) => review_error(&error),
     }
 }
 
-fn review_error(error: PlanIntakeError) -> Response {
+fn review_error(error: &PlanIntakeError) -> Response {
     use store::projects::OpenMatterError;
 
-    let message = match &error {
+    let message = match error {
         PlanIntakeError::NotFound => return StatusCode::NOT_FOUND.into_response(),
         PlanIntakeError::Open(OpenMatterError::BlockingConflict(_)) => {
             "The conflict check found a blocking conflict. Review the assignment before proceeding."
@@ -161,7 +162,7 @@ fn review_error(error: PlanIntakeError) -> Response {
     crate::inbox::redirect_error(PLAN_INTAKE_PATH, &message)
 }
 
-fn nonblank(value: String) -> Option<String> {
+fn nonblank(value: &str) -> Option<String> {
     let trimmed = value.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_owned())
 }
