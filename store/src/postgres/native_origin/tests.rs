@@ -540,7 +540,12 @@ fn future_schema(gated: bool) -> sqlx::migrate::Migrator {
         "CREATE TABLE native_origin_upgrade_probe(id UUID PRIMARY KEY);"
     };
     migrations.push(sqlx::migrate::Migration::new(
-        20_261_120_000_000,
+        migrations
+            .iter()
+            .map(|entry| entry.version)
+            .max()
+            .and_then(|version| version.checked_add(1))
+            .expect("bounded future fixture version"),
         "synthetic native upgrade".into(),
         sqlx::migrate::MigrationType::Simple,
         AssertSqlSafe(sql).into_sql_str(),
@@ -565,7 +570,7 @@ fn compiled_schema_contract_is_isolated_from_owned_values_and_future_runners() {
     assert_eq!(schema_contract(), expected);
 }
 
-async fn wait_for(pg: &PostgresDb, sql: &'static str) {
+async fn wait_for(pg: &PostgresDb, sql: &str) {
     tokio::time::timeout(std::time::Duration::from_secs(20), async {
         loop {
             let ready: bool = sqlx::query_scalar(AssertSqlSafe(sql))
@@ -648,7 +653,14 @@ async fn migration_commit_before_upgrade_completion_recovers_only_the_same_bound
         .unwrap();
     wait_for(
         pg,
-        "SELECT EXISTS(SELECT 1 FROM _sqlx_migrations WHERE version=20261120000000 AND success)",
+        &format!(
+            "SELECT EXISTS(SELECT 1 FROM _sqlx_migrations WHERE version={} AND success)",
+            future_schema(true)
+                .iter()
+                .map(|entry| entry.version)
+                .max()
+                .unwrap()
+        ),
     )
     .await;
     let completed: bool = sqlx::query_scalar(

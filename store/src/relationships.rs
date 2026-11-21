@@ -295,6 +295,19 @@ async fn record_in_postgres(
     let from_name = endpoint_name(db, input.from, input.from_id).await?;
     let to_name = endpoint_name(db, input.to, input.to_id).await?;
     let mut transaction = postgres.pool().begin().await?;
+    let relationship = record_on(&mut transaction, input, from_name, to_name).await?;
+    transaction.commit().await?;
+    Ok(relationship)
+}
+
+/// Persist a validated relationship and its AGE edge on the caller's connection.
+pub(crate) async fn record_on(
+    connection: &mut sqlx::PgConnection,
+    input: &NewRelationship,
+    from_name: Option<String>,
+    to_name: Option<String>,
+) -> Result<Relationship, RelationshipError> {
+    validate_new_relationship(input)?;
     let inserted = sqlx::query(
         "INSERT INTO \"relationship\" (id, \"in\", \"out\", kind, confidence_pct, \
          source_kind, source_id, detail, inserted_at, updated_at) \
@@ -313,7 +326,7 @@ async fn record_in_postgres(
             .map(|id| serde_json::json!(id.to_string()).to_string()),
     )
     .bind(&input.detail)
-    .fetch_one(&mut *transaction)
+    .fetch_one(&mut *connection)
     .await?;
 
     let relationship = Relationship {
@@ -330,8 +343,7 @@ async fn record_in_postgres(
         updated_at: inserted.try_get("updated_at")?,
     };
 
-    write_edge(&mut transaction, input, from_name, to_name).await?;
-    transaction.commit().await?;
+    write_edge(connection, input, from_name, to_name).await?;
     Ok(relationship)
 }
 
@@ -368,6 +380,8 @@ async fn write_edge(
         serde_json::json!({
             "from_id": input.from_id.to_string(),
             "to_id": input.to_id.to_string(),
+            "from_kind": input.from.table(),
+            "to_kind": input.to.table(),
             "kind": input.kind,
             "confidence_pct": input.confidence_pct,
             "source_kind": input.source_kind,
@@ -382,7 +396,7 @@ async fn write_edge(
 /// One endpoint's display name, read through its admitted accessor. A row that is
 /// gone reads as `None`, and the vertex projects with no name — the
 /// explanation falls back to the id until the next rebuild.
-async fn endpoint_name(
+pub(crate) async fn endpoint_name(
     db: &SurrealDb,
     endpoint: Endpoint,
     id: Uuid,

@@ -5,9 +5,9 @@
 //! the Conflict-Check Graph splits their relationships across both.
 //! [`merge`] folds the duplicate into the Person to keep.
 //!
-//! Under PostgreSQL People authority the SurrealDB records move first, then
-//! one PostgreSQL transaction moves every row that links the dropped Person
-//! and deletes it.
+//! PostgreSQL People authority moves relational and tagged references, derives
+//! participation from the kept Person's tier, and maintains the AGE projection
+//! in one transaction. The explicit Source compatibility path remains separate.
 
 use uuid::Uuid;
 

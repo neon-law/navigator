@@ -610,7 +610,7 @@ async fn lock_merge_people(
     tx: &mut Transaction<'_, Postgres>,
     keep_id: Uuid,
     drop_id: Uuid,
-) -> Result<(), crate::person_merge::PersonMergeError> {
+) -> Result<Role, crate::person_merge::PersonMergeError> {
     let mut locked = [keep_id, drop_id];
     locked.sort();
     for id in locked {
@@ -650,6 +650,22 @@ async fn lock_merge_people(
             return Err(PersonError::EmailTaken.into());
         }
     }
+    Role::parse(&keep.1)
+        .ok_or_else(|| PersonError::Postgres("the kept Person has an invalid role".into()).into())
+}
+
+/// Rewrite typed Person links without replacing their row or other JSON fields.
+async fn relink_tagged_people(
+    transaction: &mut Transaction<'_, Postgres>,
+    keep_id: Uuid,
+    drop_id: Uuid,
+) -> Result<(), PersonError> {
+    for (table, column) in crate::postgres_mirror::records::authoritative_tagged_person_links() {
+        sqlx::query(AssertSqlSafe(format!(
+            "UPDATE \"{table}\" SET \"{column}\" = jsonb_set(\"{column}\", '{{id,Uuid}}', to_jsonb($1::text), false) WHERE \"{column}\"->>'tb'='person' AND \"{column}\"->'id'->>'Uuid'=$2::text"
+        )))
+        .bind(keep_id).bind(drop_id).execute(&mut **transaction).await.map_err(database)?;
+    }
     Ok(())
 }
 
@@ -659,7 +675,7 @@ pub(crate) async fn merge_rows(
     drop_id: Uuid,
 ) -> Result<(), crate::person_merge::PersonMergeError> {
     let mut tx = pg.0.begin().await.map_err(database)?;
-    lock_merge_people(&mut tx, keep_id, drop_id).await?;
+    let kept_role = lock_merge_people(&mut tx, keep_id, drop_id).await?;
     for flag in ["is_lawyer_dri", "is_client_dri"] {
         sqlx::query(AssertSqlSafe(format!(
             "UPDATE person_project_role SET {flag} = true WHERE person_id = $1 AND project_id IN \
@@ -734,8 +750,21 @@ pub(crate) async fn merge_rows(
     .execute(&mut *tx)
     .await
     .map_err(database)?;
+    sqlx::query("UPDATE person_project_role SET participation=$1 WHERE person_id=$2")
+        .bind(crate::projects::participation_for_role(kept_role))
+        .bind(keep_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(database)?;
+    relink_tagged_people(&mut tx, keep_id, drop_id).await?;
     move_subjects(&mut tx, keep_id, drop_id).await?;
     sqlx::query("DELETE FROM person WHERE id = $1")
+        .bind(drop_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(database)?;
+    sqlx::query("SELECT public.graph_merge_person($1,$2)")
+        .bind(keep_id)
         .bind(drop_id)
         .execute(&mut *tx)
         .await

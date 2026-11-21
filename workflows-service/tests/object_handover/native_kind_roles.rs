@@ -25,6 +25,9 @@ const GLOBALS: [&str; 4] = [
     "durable_object_ownership",
 ];
 
+#[path = "native_kind_roles/graph.rs"]
+mod graph;
+
 #[path = "native_kind_roles/process.rs"]
 mod process;
 use process::{execute, healthy, run, Health};
@@ -924,6 +927,7 @@ async fn run_phases(
     .await;
     phase_completed(2);
     app_retains_normal_project_delivery_operations(&runtime, &executor, &first).await;
+    graph::runtime_graph_and_merge(&runtime, &target, &first).await;
     phase_completed(3);
     let before = snapshot(&unadmitted_pg).await;
     unadmitted_owner_refuses_actual_operator_capture(

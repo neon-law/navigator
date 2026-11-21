@@ -6,22 +6,27 @@ use sqlx::{AssertSqlSafe, SqlSafeStr};
 use std::time::Duration;
 use uuid::Uuid;
 
-const VERSION: i64 = 20_261_120_000_000;
 const MIGRATION_GATE: i64 = 617_250_021;
 
-fn runner() -> Migrator {
+fn runner() -> Result<Migrator, OriginError> {
     let mut entries = embedded_migrator().iter().cloned().collect::<Vec<_>>();
+    let version = entries
+        .iter()
+        .map(|entry| entry.version)
+        .max()
+        .and_then(|version| version.checked_add(1))
+        .ok_or(OriginError::Upgrade)?;
     entries.push(Migration::new(
-        VERSION,
+        version,
         "fixed origin transport fixture".into(),
         MigrationType::Simple,
         AssertSqlSafe("SELECT pg_advisory_xact_lock(617250021); SELECT 1;").into_sql_str(),
         false,
     ));
-    Migrator::with_migrations(entries)
+    Ok(Migrator::with_migrations(entries))
 }
 
-async fn observed(pg: &PostgresDb, sql: &'static str) -> Result<(), OriginError> {
+async fn observed(pg: &PostgresDb, sql: &str) -> Result<(), OriginError> {
     tokio::time::timeout(Duration::from_secs(20), async {
         loop {
             let ready: bool = sqlx::query_scalar(AssertSqlSafe(sql))
@@ -51,9 +56,15 @@ pub(crate) async fn pending(native: &NativeDatabase) -> Result<Uuid, OriginError
         .bind(MIGRATION_GATE)
         .execute(&mut *gate)
         .await?;
+    let planned = runner()?;
+    let version = planned
+        .iter()
+        .map(|entry| entry.version)
+        .max()
+        .ok_or(OriginError::Upgrade)?;
     let worker_pg = pg.clone();
     let mut task = tokio::spawn(async move {
-        upgrade::upgrade_with(&worker_pg, creation, &tier, operation, &runner()).await
+        upgrade::upgrade_with(&worker_pg, creation, &tier, operation, &planned).await
     });
     let result=async {
         observed(&pg,"SELECT EXISTS(SELECT 1 FROM database_origin_upgrade WHERE completed_at IS NULL)").await?;
@@ -61,7 +72,7 @@ pub(crate) async fn pending(native: &NativeDatabase) -> Result<Uuid, OriginError
         sqlx::query("SELECT upgrade_operation FROM database_origin_upgrade WHERE upgrade_operation=$1 FOR UPDATE")
             .bind(operation).fetch_one(&mut *receipt).await?;
         sqlx::query("SELECT pg_advisory_unlock($1)").bind(MIGRATION_GATE).execute(&mut *gate).await?;
-        observed(&pg,"SELECT EXISTS(SELECT 1 FROM _sqlx_migrations WHERE version=20261120000000 AND success)").await?;
+        observed(&pg,&format!("SELECT EXISTS(SELECT 1 FROM _sqlx_migrations WHERE version={version} AND success)")).await?;
         let completed:bool=sqlx::query_scalar("SELECT completed_at IS NOT NULL FROM database_origin_upgrade WHERE upgrade_operation=$1")
             .bind(operation).fetch_one(pg.pool()).await?;
         if completed {return Err(OriginError::Upgrade);}
@@ -87,7 +98,7 @@ pub(crate) async fn complete(native: &NativeDatabase, operation: Uuid) -> Result
         native.operation(),
         native.tier(),
         operation,
-        &runner(),
+        &runner()?,
     )
     .await
 }

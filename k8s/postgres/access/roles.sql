@@ -83,6 +83,40 @@ REVOKE ALL ON ALL TABLES IN SCHEMA ag_catalog FROM navigator_app;
 ALTER ROLE navigator_owner IN DATABASE :"navigator_database" SET session_preload_libraries = 'age';
 ALTER ROLE navigator_app IN DATABASE :"navigator_database" SET session_preload_libraries = 'age';
 
+-- Canonical graph helpers execute as the non-superuser migration owner.
+-- The application keeps SELECT only on AGE labels; it never gains raw Cypher
+-- mutation, graph clearing, or access to the private loader implementations.
+DO $$
+DECLARE object RECORD; signature TEXT;
+BEGIN
+    IF to_regnamespace('navigator_graph') IS NOT NULL THEN
+        ALTER SCHEMA navigator_graph OWNER TO navigator_owner;
+        FOR object IN SELECT c.oid::regclass AS name,c.relkind FROM pg_class c
+            WHERE c.relnamespace='navigator_graph'::regnamespace AND c.relkind IN ('r','p','v','m','f','S') LOOP
+            EXECUTE format('ALTER %s %s OWNER TO navigator_owner',
+                CASE WHEN object.relkind='S' THEN 'SEQUENCE' ELSE 'TABLE' END,object.name);
+        END LOOP;
+        GRANT USAGE ON SCHEMA navigator_graph TO navigator_owner,navigator_app;
+        GRANT SELECT ON ALL TABLES IN SCHEMA navigator_graph TO navigator_app;
+        REVOKE INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER ON ALL TABLES IN SCHEMA navigator_graph FROM navigator_app;
+    END IF;
+    FOREACH signature IN ARRAY ARRAY['public.graph_ensure_vertices(text,text)',
+        'public.graph_load_edges(text,text)','public.graph_merge_person(uuid,uuid)'] LOOP
+        IF to_regprocedure(signature) IS NOT NULL THEN
+            EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO navigator_app',signature::regprocedure);
+        END IF;
+    END LOOP;
+    FOREACH signature IN ARRAY ARRAY['public.graph_load_vertices(text,text)','public.graph_load_edges_raw(text,text)',
+        'public.graph_ensure_vertices_raw(text,text)','public.graph_clear_navigator()',
+        'public.graph_canonical_vertex(text,jsonb)','public.graph_canonical_edge(text,jsonb)',
+        'public.graph_require_unfiltered_sources()','public.graph_insert_canonical_edge(text,jsonb)'] LOOP
+        IF to_regprocedure(signature) IS NOT NULL THEN
+            EXECUTE format('REVOKE ALL ON FUNCTION %s FROM PUBLIC, navigator_app',signature::regprocedure);
+        END IF;
+    END LOOP;
+END;
+$$;
+
 -- A Person's email is `citext` (case-insensitive equality and uniqueness).
 -- The extension is trusted, so the migration also creates it when absent.
 CREATE EXTENSION IF NOT EXISTS citext;

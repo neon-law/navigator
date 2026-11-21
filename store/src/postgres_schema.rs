@@ -1725,6 +1725,10 @@ mod tests {
                 "20261119180000_add_firm_esign_provider.sql",
                 include_str!("../postgres/migrations/20261119180000_add_firm_esign_provider.sql"),
             ),
+            (
+                "20261121010000_close_native_person_graph_writes.sql",
+                include_str!("../postgres/migrations/20261121010000_close_native_person_graph_writes.sql"),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

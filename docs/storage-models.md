@@ -35,9 +35,10 @@ Activated PostgreSQL rows cannot be overwritten or deleted by replaying an older
 ## People
 
 `store::persons` uses `store::postgres::people`. Person and mailbox claims commit together, aliases retain claim
-ownership, and a merge moves PostgreSQL references transactionally. Identity detail uses `store::postgres::identity`:
-addresses, credentials, email tokens, entities, delegates, external identities, and phones. The people directory reads
-the `person_directory` and `firm_visible_person` views.
+ownership. A merge moves relational and tagged Person references, derives participation from the kept tier, and updates
+AGE in the same transaction. A conflicting tagged holding refuses the merge instead of discarding either line. Identity
+detail uses `store::postgres::identity`: addresses, credentials, email tokens, entities, delegates, external identities,
+and phones. The people directory reads the `person_directory` and `firm_visible_person` views.
 
 ## Tenancy
 
@@ -51,8 +52,10 @@ primary when the Person exists and has no primary calendar.
 PostgreSQL holds `entity_role`, `relationship`, `project_reference`, `disclosure`, and the append-only
 `relationship_log`. Edges are projected into `navigator_graph`, and conflict checks traverse Apache AGE. Relationship
 Log entries remain distinct from graph edges; their actor and Project references must exist before an append. Explicit
-historical import preserves native graph rows. Follow the [AGE graph runbook](age-graph-runbook.md) for extension setup,
-migrations, backfill, and parity.
+historical import preserves native graph rows. Runtime graph helpers derive properties from canonical rows under the
+non-superuser migration owner; the application cannot write AGE labels directly, clear the graph, or execute raw
+loaders. RLS-enabled source tables require an explicit compatible projector; privileged helpers refuse them. Follow the
+[AGE graph runbook](age-graph-runbook.md) for extension setup, migrations, backfill, and parity.
 
 ## Project lifecycle
 
