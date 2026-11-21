@@ -387,8 +387,8 @@ pub fn BillingTab(
                         fieldset {
                             legend { "{row.hours} hours · {row.attorney} · {row.date}" }
                             p { "Jujutsu change " code { "{row.change_id}" } }
-                            label { "Invoice description or reason for denial"
-                                input { name: "note", required: true, maxlength: "2000" }
+                            label { class: "nav-label", "Invoice description or reason for denial"
+                                input { class: "nav-input", name: "note", required: true, maxlength: "2000" }
                             }
                             div { class: "lawyer-detail__actions",
                                 button { class: "nav-btn", r#type: "submit", name: "decision", value: "bill", "Approve billable time" }

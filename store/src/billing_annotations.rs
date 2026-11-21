@@ -1,4 +1,4 @@
-//! Reviewable Jujutsu time. Only an approved annotation creates a Time Entry.
+//! Stores time submitted for lawyer review.
 use chrono::{NaiveDate, Utc};
 use serde::Deserialize;
 use sqlx::Row;
