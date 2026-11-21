@@ -53,6 +53,38 @@ mod inbox_triage;
 #[path = "common/private_chart.rs"]
 mod private_chart;
 
+/// Record response status and structural failure markers, never input values or raw HTML.
+async fn failure_page_context(c: &Client) -> String {
+    let result = c.execute(
+        r#"const navigation = performance.getEntriesByType('navigation').at(-1);
+        const body = document.body;
+        const text = body?.textContent ?? '';
+        const knownErrors = ['client email must contain an @', 'choose an onboarding template',
+          'this brand is not worn by a firm', 'that onboarding template was not found',
+          "We're unable to start this intake online. Please contact our office to proceed."];
+        return {
+          path: location.pathname,
+          navigation_status: navigation?.responseStatus ?? null,
+          error_query_present: new URLSearchParams(location.search).has('error'),
+          logout_links: document.querySelectorAll("a[href^='/auth/logout']").length,
+          lenses: Array.from(document.querySelectorAll('[data-lens]')).map(e => e.dataset.lens)
+            .filter(v => ['client', 'lawyer', 'clerk'].includes(v)),
+          workbench_failed: text.includes('Failed to load the workbench.'),
+          internal_response: text.trim() === 'internal',
+          forbidden_response: text.trim().toLowerCase() === 'forbidden',
+          known_start_refusals: knownErrors.filter(error => text.includes(error)),
+          start_form: !!document.querySelector('form.admin-form'),
+          csrf_field: !!document.querySelector('input[name="csrf"],input[name="_csrf"],input[name="csrf_token"]'),
+          body_tags: Array.from(body?.children ?? []).slice(0, 12).map(e => e.tagName)
+        };"#,
+        vec![],
+    ).await;
+    match result {
+        Ok(value) => value.to_string(),
+        Err(_) => "failure page context unavailable".into(),
+    }
+}
+
 /// Browser fixtures require activated PostgreSQL history before creating any records.
 async fn postgres_browser_store() -> anyhow::Result<store::surreal::SurrealDb> {
     store::postgres::PostgresDb::application()
@@ -1350,7 +1382,9 @@ async fn lawyer_walks_the_full_retainer_questionnaire_end_to_end() {
         }
         assert!(
             started.elapsed() <= Duration::from_secs(10),
-            "never landed on /app/lawyer/notations/:id/step; last URL was {url}",
+            "never landed on /app/lawyer/notations/:id/step; last path {}; {}",
+            url.path(),
+            failure_page_context(&c).await,
         );
         tokio::time::sleep(Duration::from_millis(200)).await;
     };
@@ -2219,7 +2253,9 @@ async fn lawyer_walks_the_whole_questionnaire_with_the_keyboard_alone() {
         }
         assert!(
             started.elapsed() <= Duration::from_secs(10),
-            "never landed on the first question; last URL was {url}",
+            "never landed on the first question; last path {}; {}",
+            url.path(),
+            failure_page_context(&c).await,
         );
         tokio::time::sleep(Duration::from_millis(200)).await;
     };
@@ -2944,7 +2980,8 @@ async fn lawyer_user_can_hit_every_admin_route() {
             .unwrap();
         assert!(
             !nav_links.is_empty(),
-            "expected the signed-in nav on {route}; got no /auth/logout links — was access denied?",
+            "expected the signed-in nav on {route}; no /auth/logout links; {}",
+            failure_page_context(&c).await,
         );
         assert!(
             c.find_all(Locator::Css(".error-page"))
@@ -3371,7 +3408,12 @@ async fn capture_inbox_frames(
 }
 
 async fn activate_inbox_link(c: &Client, selector: &str) {
-    c.find(Locator::Css(selector)).await.unwrap();
+    let link = c.find(Locator::Css(selector)).await;
+    assert!(
+        link.is_ok(),
+        "Inbox link {selector} is missing; {}",
+        failure_page_context(c).await
+    );
     // The local macOS driver can drop native input. Activate the actual anchor
     // through its DOM click, as the questionnaire harness does for submission.
     c.execute(
@@ -6166,11 +6208,16 @@ async fn every_sample_matter_page_renders_in_the_client_and_lawyer_lens() {
             c.goto(&format!("{}/app/projects/{code}/{slug}", base_url()))
                 .await
                 .unwrap();
-            c.wait()
+            let rendered = c
+                .wait()
                 .at_most(Duration::from_secs(10))
                 .for_element(Locator::Css(&format!("[data-lens='{lens}']")))
-                .await
-                .unwrap_or_else(|_| panic!("/app/projects/{code}/{slug} renders the {lens} lens"));
+                .await;
+            assert!(
+                rendered.is_ok(),
+                "/app/projects/{code}/{slug} renders the {lens} lens; {}",
+                failure_page_context(&c).await
+            );
             let boundary = c
                 .find_all(Locator::Css("[data-section='boundary_note']"))
                 .await
@@ -6272,7 +6319,9 @@ async fn lawyer_walks_the_basic_will_through_the_matter_workflow() {
         }
         assert!(
             started.elapsed() <= Duration::from_secs(10),
-            "never landed on /app/lawyer/notations/:id/step; last URL was {url}",
+            "never landed on /app/lawyer/notations/:id/step; last path {}; {}",
+            url.path(),
+            failure_page_context(&c).await,
         );
         tokio::time::sleep(Duration::from_millis(200)).await;
     };
@@ -6507,7 +6556,7 @@ async fn repository_draft_inventory_and_open_pin_the_image_git_commit_and_body()
         .await
         .unwrap();
     let unrelated = seed_browser_project_on_firm(&db, Some(firm), "Synthetic Private Draft").await;
-    let draft_code = format!("synthetic-git-{}", Uuid::now_v7().simple());
+    let draft_code = format!("synthetic_git_{}", Uuid::now_v7().simple());
     assert!(
         store::templates::resolve(&db, Some(project.id), &draft_code)
             .await
@@ -6549,9 +6598,7 @@ async fn repository_draft_inventory_and_open_pin_the_image_git_commit_and_body()
         &csrf,
     )
     .await;
-    let (status, opened) =
-        git_draft::request(&browser, &create, Some((payload.clone(), &csrf))).await;
-    assert_eq!(status, 201, "real repository import must open a Notation");
+    let opened = git_draft::open_notation(&browser, &create, payload.clone(), &csrf).await;
     let first_id = opened["notation_id"]
         .as_str()
         .expect("created Notation UUID");
@@ -6572,8 +6619,7 @@ async fn repository_draft_inventory_and_open_pin_the_image_git_commit_and_body()
         &first_digest,
     )
     .await;
-    let (status, opened) = git_draft::request(&browser, &create, Some((payload, &csrf))).await;
-    assert_eq!(status, 201);
+    let opened = git_draft::open_notation(&browser, &create, payload, &csrf).await;
     let second_id = opened["notation_id"]
         .as_str()
         .expect("second Notation UUID");
