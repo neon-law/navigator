@@ -78,7 +78,7 @@ impl Drop for Group {
 /// Long-lived owned port-forward, sharing the same bounded process-group drain.
 pub(super) struct Forward {
     group: Group,
-    _private: tempfile::TempDir,
+    private: tempfile::TempDir,
 }
 
 impl Forward {
@@ -102,8 +102,28 @@ impl Forward {
                 health: Arc::clone(health),
                 status: None,
             },
-            _private: private,
+            private,
         }
+    }
+
+    /// No command arguments, raw output, or connection settings leave this owned file.
+    pub(super) fn diagnostic(&mut self) -> serde_json::Value {
+        use std::io::{Read as _, Seek as _};
+        let status = self.group.child.try_wait();
+        let mut tail = Vec::new();
+        if let Ok(mut file) = std::fs::File::open(self.private.path().join("stderr")) {
+            let _ = file.seek(std::io::SeekFrom::End(-8192));
+            let _ = file.take(8192).read_to_end(&mut tail);
+        }
+        let text = String::from_utf8_lossy(&tail).to_ascii_lowercase();
+        serde_json::json!({
+            "leader_running": matches!(&status, Ok(None)),
+            "leader_exit_code": status.ok().flatten().and_then(|value| value.code()),
+            "group_absent": absent(self.group.pid),
+            "connection_reset": text.contains("connection reset by peer"),
+            "lost_pod_connection": text.contains("lost connection to pod"),
+            "broken_pipe": text.contains("broken pipe"),
+        })
     }
 
     pub(super) fn close(&mut self) -> bool {
@@ -126,7 +146,7 @@ pub(super) fn execute(
     execute_with_budget(health, command, input, Duration::from_secs(180))
 }
 
-fn execute_with_budget(
+pub(super) fn execute_with_budget(
     health: &Health,
     command: &mut Command,
     input: Option<&[u8]>,
@@ -281,6 +301,48 @@ mod tests {
         assert!(child.stop());
         assert!(absent(child.pid));
     }
+    #[test]
+    fn forward_diagnostics_hide_private_output_and_drain_the_owned_group() {
+        let health = Arc::new(AtomicBool::new(true));
+        let mut forward = super::Forward::start(
+            &health,
+            Command::new("/bin/sh")
+                .args([
+                    "-c",
+                    "printf '%s\\n' \"$PRIVATE_FORWARD_MARKER\" 'connection reset by peer' >&2; sleep 30 & wait",
+                    "private-forward-argv-marker",
+                ])
+                .env("PRIVATE_FORWARD_MARKER", "synthetic-private-forward-marker"),
+        );
+        let pid = forward.group.pid;
+        let until = Instant::now() + Duration::from_secs(2);
+        let diagnostic = loop {
+            let diagnostic = forward.diagnostic();
+            if diagnostic["connection_reset"] == true {
+                break diagnostic;
+            }
+            assert!(
+                Instant::now() < until,
+                "owned forward did not write its diagnostic"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        assert_eq!(diagnostic["leader_running"], true);
+        assert_eq!(diagnostic["group_absent"], false);
+        let encoded = serde_json::to_string(&diagnostic).unwrap();
+        for private in [
+            "synthetic-private-forward-marker",
+            "private-forward-argv-marker",
+            "PRIVATE_FORWARD_MARKER",
+            "connection reset by peer",
+        ] {
+            assert!(!encoded.contains(private));
+        }
+        assert!(forward.close());
+        assert!(absent(pid));
+        assert!(healthy(&health));
+    }
+
     #[test]
     fn forced_cleanup_never_reports_natural_command_success() {
         let health = Arc::new(AtomicBool::new(true));

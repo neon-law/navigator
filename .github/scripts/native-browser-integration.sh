@@ -263,15 +263,16 @@ for suite in report['rust-suites'].values():
 selected.sort()
 assert selected == [
     'native_kind_roles::process::tests::forced_cleanup_never_reports_natural_command_success',
+    'native_kind_roles::process::tests::forward_diagnostics_hide_private_output_and_drain_the_owned_group',
     'native_kind_roles::process::tests::nonreading_stdin_and_descendants_have_a_bounded_owned_lifetime',
     'native_kind_roles::process::tests::unproved_kill_refuses_dependent_cleanup_then_reaps_the_owned_probe',
-], 'All three exact owned-process failure probes must exist'
+], 'All four exact owned-process failure probes must exist'
 PROCESS_CENSUS
 cargo nextest run --binaries-metadata "$private/role-binaries-metadata.json" \
   --cargo-metadata "$private/role-cargo-metadata.json" --profile ci --retries 0 --test-threads 1 \
   -E 'binary(=object_handover) & test(/^native_kind_roles::process::tests::/)' \
   > "$private/role-process-probes.log" 2>&1
-printf '%s\n' 'native-kind-role-process-probes:3-nonignored-complete' > "$public/role-process-probes.txt"
+printf '%s\n' 'native-kind-role-process-probes:4-nonignored-complete' > "$public/role-process-probes.txt"
 # The operator path/hash is unchanged by test compilation and reused below.
 test "$(sha256sum "$NAV_NATIVE_KIND_HUDSON" | cut -d ' ' -f 1)" = "$NAV_NATIVE_KIND_HUDSON_SHA256"
 startup_started=true

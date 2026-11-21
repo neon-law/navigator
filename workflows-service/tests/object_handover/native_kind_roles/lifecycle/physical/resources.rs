@@ -75,6 +75,58 @@ impl Scratch {
         pod
     }
 
+    /// Read only the exact owned Pod; never export env, spec, or raw PostgreSQL logs.
+    pub fn diagnostic(&self, tier: &Tier) -> Value {
+        let (ok, bytes, _) = super::super::super::process::execute_with_budget(
+            &tier.health,
+            &mut tier.kubectl(&["get", "pod", &self.name, "-o", "json"]),
+            None,
+            Duration::from_secs(5),
+        );
+        let pod = serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null);
+        let owned = ok
+            && self.pod_uid.is_some()
+            && pod["metadata"]["uid"].as_str() == self.pod_uid.as_deref()
+            && pod["metadata"]["labels"][OWNER_LABEL] == tier.operation;
+        if !owned {
+            return json!({"owned_pod_observed":false});
+        }
+        let (probe_ok, probe, _) = super::super::super::process::execute_with_budget(
+            &tier.health,
+            &mut tier.kubectl(&[
+                "exec", &self.name, "-c", "recovery", "--", "/bin/sh", "-ec",
+                "running=false; panic=false; shutdown=false; \
+                 if pg_ctl --pgdata=/restore/pgdata status >/dev/null 2>&1; then running=true; fi; \
+                 if grep -q 'PANIC:' /restore/resume.log 2>/dev/null; then panic=true; fi; \
+                 if grep -q 'database system is shut down' /restore/resume.log 2>/dev/null; then shutdown=true; fi; \
+                 printf '{\"running\":%s,\"panic_seen\":%s,\"shutdown_seen\":%s}' \
+                 \"$running\" \"$panic\" \"$shutdown\"",
+            ]),
+            None,
+            Duration::from_secs(5),
+        );
+        let postgres = if probe_ok {
+            serde_json::from_slice::<Value>(&probe).unwrap_or(Value::Null)
+        } else {
+            Value::Null
+        };
+        let status = &pod["status"]["containerStatuses"][0];
+        let terminated = &status["state"]["terminated"];
+        let previous = &status["lastState"]["terminated"];
+        json!({
+            "owned_pod_observed":true,
+            "postgres":postgres,
+            "phase":pod["status"]["phase"],
+            "restart_count":status["restartCount"],
+            "running":status["state"].get("running").is_some(),
+            "exit_code":terminated["exitCode"],
+            "oom_killed":terminated["reason"] == "OOMKilled",
+            "previous_exit_code":previous["exitCode"],
+            "previous_oom_killed":previous["reason"] == "OOMKilled",
+            "evicted":pod["status"]["reason"] == "Evicted",
+        })
+    }
+
     pub fn exec(&self, tier: &Tier, args: &[&str]) -> Vec<u8> {
         self.verify(tier);
         let mut cmd = tier.kubectl(&["exec", &self.name, "-c", "recovery", "--"]);

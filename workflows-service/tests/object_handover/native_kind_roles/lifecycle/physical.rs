@@ -552,6 +552,19 @@ impl Fixture {
     }
 
     async fn finish(&mut self) -> bool {
+        if !self.success {
+            // Collect before closing pools/forward or deleting the owned scratch Pod.
+            // Diagnostic failure must not replace the original test panic.
+            let diagnostic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let forward = self.forward.as_mut().map(process::Forward::diagnostic);
+                let scratch = self.scratch.diagnostic(&self.tier);
+                json!({"forward":forward,"scratch":scratch})
+            }));
+            match diagnostic {
+                Ok(value) => eprintln!("native-physical-failure-diagnostic:{value}"),
+                Err(_) => eprintln!("native-physical-failure-diagnostic:unavailable"),
+            }
+        }
         if let Some(worker) = self.worker.take() {
             if tokio::time::timeout(DEADLINE, worker.shutdown())
                 .await
