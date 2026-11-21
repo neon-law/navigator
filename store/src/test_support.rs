@@ -1104,9 +1104,30 @@ async fn prepare_postgres_fixture(
     Ok(pg)
 }
 
-/// Each actor walk uses its own enrolled PostgreSQL database, with no Source handle.
+/// Each actor walk uses a genuine fresh-native Origin, with no Source handle.
 pub fn with_postgres(
     test: impl std::future::Future<Output = ()>,
+) -> impl std::future::Future<Output = ()> {
+    with_postgres_history(test, FixtureHistory::Native)
+}
+
+/// Exercise captured-enrollment validation using explicit synthetic history.
+/// No Database Origin or native object ownership is installed. The same owned
+/// scope, panic cleanup, and required-PostgreSQL rules apply as [`with_postgres`].
+pub fn with_captured_postgres(
+    test: impl std::future::Future<Output = ()>,
+) -> impl std::future::Future<Output = ()> {
+    with_postgres_history(test, FixtureHistory::Captured)
+}
+
+enum FixtureHistory {
+    Native,
+    Captured,
+}
+
+fn with_postgres_history(
+    test: impl std::future::Future<Output = ()>,
+    history: FixtureHistory,
 ) -> impl std::future::Future<Output = ()> {
     let test = Box::pin(test);
     async move {
@@ -1127,7 +1148,11 @@ pub fn with_postgres(
             .database(&database)
             .ssl_mode(PgSslMode::Disable)
             .options([("session_preload_libraries", "age")]);
-        let fixture = PostgresFixture::create(options).await.unwrap();
+        let fixture = match history {
+            FixtureHistory::Native => PostgresFixture::create(options).await,
+            FixtureHistory::Captured => PostgresFixture::create_capture_target(options).await,
+        }
+        .unwrap();
         let result = std::panic::AssertUnwindSafe(PostgresDb::with_test_db(
             fixture.postgres().clone(),
             test,

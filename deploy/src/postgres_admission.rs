@@ -44,9 +44,10 @@ mod tests {
 
     #[tokio::test]
     async fn admission_requires_every_current_scope_without_source_access() {
-        store::test_support::with_postgres(async {
+        store::test_support::with_captured_postgres(async {
             assert!(verify().await.is_ok());
             let pg = PostgresDb::from_env().await.unwrap();
+            assert!(!store::postgres::native_origin::admits(&pg).await.unwrap());
             sqlx::query("DELETE FROM mirror_backfill_checkpoint WHERE run_id IN (SELECT id FROM mirror_backfill_run WHERE scope='application:1')")
                 .execute(pg.pool()).await.unwrap();
             assert!(matches!(verify().await, Err(PostgresError::History)));
