@@ -1,10 +1,9 @@
 head_title: "{site_name} | Agreed divorce services"
 meta_description: >-
-  A brighter way to move on. Daybridge Divorce Law offers joint
-  representation where permitted after conflict review and informed written
-  consent. A one-time $333 fee for a mutual split. The court sets its own
-  schedule. Attorney advertisement.
-title: Divorce for couples who agree
+  Divorce sucks. Daybridge Divorce Law does it fairly and as quickly as the
+  court allows: $200 if you agree, $500 if you do not, plus court fees and $50
+  per motion. The court sets its own schedule. Attorney advertisement.
+title: Divorce, at a fair price
 hero_mark: scales
 tagline: A shared plan for separate futures.
 hero_lines:
@@ -13,11 +12,10 @@ hero_lines:
   - text: to move on
     accent_words: 0
 hero_lead: >-
-  You both agree it is time. We keep our part moving, so each of you can move
-  on. Daybridge represents the couple in an agreed divorce where joint
-  representation is permitted, after conflict review and informed written
-  consent. We help you turn common ground into clear documents and practical
-  next steps. Guieb & Shook PC is the law firm you would retain.
+  Nobody wants a divorce. We keep it fair and keep our part moving, whether you
+  agree or not. Where both of you agree, joint representation may be permitted
+  after conflict review and informed written consent. Guieb & Shook PC is the law
+  firm you would retain.
 hero_cta:
   href: https://calendar.notion.so/meet/nick-shook/or15n4yy7
   label: Book Consultation
@@ -68,15 +66,19 @@ bands:
           - - text: >-
                 If a conflict prevents us from continuing for both of you, we
                 stop the joint work and explain the need for separate counsel.
-                We do not take one spouse's side against the other in this
-                joint engagement. Contested proceedings are outside its scope.
+                We do not take one spouse's side against the other in a joint
+                engagement. A contested divorce is a separate engagement for one
+                of you.
   - kind: statement
-    heading: One fee for a mutual split
-    lead: A one-time $333 fee.
+    heading: Two plain prices
+    lead: $200 if you agree. $500 if you do not.
     body:
       - - text: >-
-            Your written retainer defines the work. The fee pays for legal
-            work, not a particular result.
+            A contested divorce adds $50 for each motion, against a $1,000
+            retainer from which we bill the flat fee and each motion and refund
+            what is left. Court filing fees are separate and go to the court. Your
+            written retainer defines the work. The fee pays for legal work, not a
+            particular result.
   - kind: cards
     anchor: about
     overline: About

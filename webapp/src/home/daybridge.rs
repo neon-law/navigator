@@ -1,8 +1,8 @@
-//! Daybridge Divorce Law: a crossing at sunrise, three service commitments, one short path forward.
+//! Daybridge Divorce Law: a crossing at sunrise, two plain prices, and one way to start.
 
 use super::sibling_practice::{SiblingPractice, SiblingPractices};
 use super::HomeContent;
-use crate::components::is_external_href;
+use crate::components::{is_external_href, TestimonialCard, TestimonialSection};
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -11,27 +11,41 @@ use serde::{Deserialize, Serialize};
 pub struct DaybridgeContent {
     pub eyebrow: String,
     pub fee_label: String,
-    pub fee_price: String,
-    pub fee_unit: String,
-    pub fee_body: String,
-    pub fee_note: String,
-    pub response_heading: String,
-    pub response_body: String,
-    pub motions_heading: String,
-    pub motions_body: String,
+    pub agreed_label: String,
+    pub agreed_price: String,
+    pub agreed_unit: String,
+    pub agreed_body: String,
+    pub contested_label: String,
+    pub contested_price: String,
+    pub contested_unit: String,
+    pub contested_body: String,
     pub costs_heading: String,
     pub costs_body: String,
-    pub process_label: String,
-    pub process_heading: String,
-    pub steps: Vec<[String; 2]>,
+    pub story_heading: String,
+    pub story_body: String,
+    pub joint_heading: String,
+    pub joint_body: String,
+    pub testimonials_heading: String,
+    pub account_heading: String,
+    pub account_body: String,
+    pub signup_label: String,
+    pub signin_label: String,
     pub closing_heading: String,
     pub closing_body: String,
     #[serde(default)]
     pub sibling_practices: Vec<SiblingPractice>,
 }
 
+/// Where "Create your account" lands a new client: their matters.
+const SIGNUP_HREF: &str = "/auth/signup?return_to=/app/projects";
+const SIGNIN_HREF: &str = "/auth/login?return_to=/app/projects";
+
 #[component]
-pub(super) fn DaybridgeHome(content: HomeContent, daybridge: DaybridgeContent) -> Element {
+pub(super) fn DaybridgeHome(
+    content: HomeContent,
+    daybridge: DaybridgeContent,
+    #[props(default)] testimonials: Vec<TestimonialCard>,
+) -> Element {
     let contact_external = is_external_href(&content.contact_href);
     rsx! {
         div { class: "daybridge-home",
@@ -48,6 +62,12 @@ pub(super) fn DaybridgeHome(content: HomeContent, daybridge: DaybridgeContent) -
                         rel: if contact_external { Some("noopener noreferrer") } else { None },
                         "{content.contact_label}"
                     }
+                    a { class: "nav-btn nav-btn--secondary daybridge-cta", href: SIGNUP_HREF,
+                        "{daybridge.signup_label}"
+                    }
+                    p { class: "daybridge-signin",
+                        a { href: SIGNIN_HREF, "{daybridge.signin_label}" }
+                    }
                 }
                 aside { class: "daybridge-fee", "aria-label": "{daybridge.fee_label}",
                     img {
@@ -57,41 +77,44 @@ pub(super) fn DaybridgeHome(content: HomeContent, daybridge: DaybridgeContent) -
                         width: "640",
                         height: "560",
                     }
+                }
+            }
+            section { class: "daybridge-prices", "aria-label": "{daybridge.fee_label}",
+                div {
+                    p { class: "daybridge-eyebrow", "{daybridge.agreed_label}" }
                     p { class: "daybridge-price",
-                        "{daybridge.fee_price}"
-                        span { "{daybridge.fee_unit}" }
+                        "{daybridge.agreed_price}"
+                        span { "{daybridge.agreed_unit}" }
                     }
-                    p { class: "daybridge-fee__body", "{daybridge.fee_body}" }
-                    p { class: "daybridge-note", "{daybridge.fee_note}" }
+                    p { "{daybridge.agreed_body}" }
+                }
+                div {
+                    p { class: "daybridge-eyebrow", "{daybridge.contested_label}" }
+                    p { class: "daybridge-price",
+                        "{daybridge.contested_price}"
+                        span { "{daybridge.contested_unit}" }
+                    }
+                    p { "{daybridge.contested_body}" }
                 }
             }
-            section { class: "daybridge-promises", "aria-label": "How Daybridge works",
-                article {
-                    h2 { "{daybridge.response_heading}" }
-                    p { "{daybridge.response_body}" }
-                }
-                article {
-                    h2 { "{daybridge.motions_heading}" }
-                    p { "{daybridge.motions_body}" }
-                }
-                article {
-                    h2 { "{daybridge.costs_heading}" }
-                    p { "{daybridge.costs_body}" }
-                }
+            section { class: "daybridge-story",
+                h2 { "{daybridge.costs_heading}" }
+                p { "{daybridge.costs_body}" }
+                h2 { "{daybridge.story_heading}" }
+                p { "{daybridge.story_body}" }
+                h2 { "{daybridge.joint_heading}" }
+                p { "{daybridge.joint_body}" }
             }
-            section { class: "daybridge-process", "aria-labelledby": "daybridge-process-title",
-                p { class: "daybridge-eyebrow", "{daybridge.process_label}" }
-                h2 { id: "daybridge-process-title", "{daybridge.process_heading}" }
-                ol {
-                    for (index, step) in daybridge.steps.iter().enumerate() {
-                        li {
-                            span { "{index + 1}" }
-                            div {
-                                h3 { "{step[0]}" }
-                                p { "{step[1]}" }
-                            }
-                        }
-                    }
+            TestimonialSection {
+                heading: daybridge.testimonials_heading.clone(),
+                lead: String::new(),
+                cards: testimonials,
+            }
+            section { class: "daybridge-account", "aria-labelledby": "daybridge-account-title",
+                h2 { id: "daybridge-account-title", "{daybridge.account_heading}" }
+                p { "{daybridge.account_body}" }
+                a { class: "nav-btn nav-btn--primary daybridge-cta", href: SIGNUP_HREF,
+                    "{daybridge.signup_label}"
                 }
             }
             SiblingPractices { cards: daybridge.sibling_practices.clone() }
@@ -133,10 +156,11 @@ mod tests {
                     },
                     daybridge: DaybridgeContent {
                         fee_label: "Attorney fee".into(),
-                        fee_price: "$5,000".into(),
-                        fee_unit: " one-time fee".into(),
-                        motions_heading: "An agreement you both understand".into(),
+                        agreed_price: "$5,000".into(),
+                        agreed_unit: " one-time fee".into(),
+                        contested_price: "$9,000".into(),
                         costs_heading: "A shared path forward".into(),
+                        signup_label: "Create your account".into(),
                         sibling_practices: vec![SiblingPractice {
                             heading: "After the divorce is final".into(),
                             href: "https://estate.example.com".into(),
@@ -152,7 +176,13 @@ mod tests {
         dom.rebuild_in_place();
         let html = dioxus_ssr::render(&dom);
         assert!(html.contains("$5,000"), "{html}");
+        assert!(html.contains("$9,000"), "{html}");
         assert!(html.contains("one-time fee"), "{html}");
+        assert!(
+            html.contains(r#"href="/auth/signup?return_to=/app/projects""#),
+            "{html}"
+        );
+        assert!(!html.contains("<ol") && !html.contains("<li"), "{html}");
         assert!(html.contains("A shared path forward"), "{html}");
         assert!(
             html.contains("/public/brand/daybridge/crossing.svg"),

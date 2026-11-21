@@ -9,6 +9,9 @@ draws that Brand's tokens stylesheet, logo, and name, whichever of the Firm's Br
 looks like the client's firm, not like the storefront the login came through. With no Portal Theme Brand set, each host
 keeps its own Brand's look.
 
+A Brand that keeps its own portal look (`BrandKey::keeps_own_portal_look`, today Daybridge) skips the theme: its host's
+`/app` pages wear its own tokens, logo, and name even when its Firm names a Portal Theme Brand.
+
 The Firm must own the Brand (`brand.firm_id`). `store::firms::update` refuses any other key, and only a caller who may
 edit the Firm sets it: Owner, or that Firm's own Admin (`FirmCapability::ManageMembership`). It is set on the Firm edit
 page at `/app/admin/firms/{id}/edit`, or with `hudson site firm theme <slug> <brand-key>` (`--clear` removes it).

@@ -1,4 +1,4 @@
-/* Daybridge stays calm and direct: a crossing at sunrise, three commitments, one path forward. */
+/* Daybridge stays calm and direct: a crossing at sunrise, two plain prices, one way to start. */
 .daybridge-home {
   --daybridge-rule: #E7CF9C;
   --daybridge-ink: var(--nav-color-text);
@@ -48,7 +48,7 @@
   font-size: clamp(1.1rem, 2vw, 1.35rem);
 }
 
-.daybridge-cta { margin-top: 1.4rem; border-radius: 999px; }
+.daybridge-cta { margin: 1.4rem .75rem 0 0; border-radius: 999px; }
 
 .daybridge-fee { container-type: inline-size; }
 
@@ -69,36 +69,30 @@
   letter-spacing: 0;
 }
 
-.daybridge-fee__body { margin: 0; font-size: 1.05rem; }
-.daybridge-note { margin: .25rem 0 0; color: var(--nav-color-text-muted); font-size: .85rem; }
 
-.daybridge-promises {
+.daybridge-prices {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   border-block: 1px solid var(--daybridge-rule);
 }
 
-.daybridge-promises article { padding: 2.5rem clamp(1.25rem, 3vw, 2.5rem); }
-.daybridge-promises article + article { border-left: 1px solid var(--daybridge-rule); }
+.daybridge-prices > div { padding: 3rem clamp(1.25rem, 3vw, 2.5rem); }
+.daybridge-prices > div + div { border-left: 1px solid var(--daybridge-rule); }
+.daybridge-prices .daybridge-price { margin-top: .75rem; font-size: clamp(3.5rem, 7vw, 6rem); }
+.daybridge-prices .daybridge-price span { display: block; margin: .6rem 0 0; font-size: 1.05rem; }
+.daybridge-prices p:last-child { margin: 1rem 0 0; color: var(--nav-color-text-muted); }
 
-.daybridge-promises h2 { margin: 0 0 1rem; font-size: clamp(1.7rem, 3vw, 2.35rem); line-height: 1.05; }
-.daybridge-promises p { margin: 0; color: var(--nav-color-text-muted); }
+.daybridge-story { max-width: 44rem; margin: 0 auto; padding: clamp(4rem, 8vw, 7rem) 0; }
+.daybridge-story h2 { margin: 2.5rem 0 .75rem; font-size: clamp(1.7rem, 3vw, 2.35rem); line-height: 1.05; }
+.daybridge-story h2:first-child { margin-top: 0; }
+.daybridge-story p { margin: 0; color: var(--nav-color-text-muted); font-size: 1.1rem; }
 
-.daybridge-process { padding: clamp(4rem, 8vw, 7rem) 0; }
-.daybridge-process > h2 { max-width: 16ch; margin: 1rem 0 3rem; font-size: clamp(2.5rem, 5vw, 4.5rem); line-height: 1; }
-.daybridge-process ol { max-width: 48rem; margin: 0 0 0 auto; padding: 0; list-style: none; }
+.daybridge-account { max-width: 44rem; margin: 0 auto; padding: 0 0 clamp(3rem, 6vw, 5rem); }
+.daybridge-account h2 { margin: 0 0 .75rem; font-size: clamp(1.7rem, 3vw, 2.35rem); }
+.daybridge-account p { color: var(--nav-color-text-muted); }
 
-.daybridge-process li {
-  display: grid;
-  grid-template-columns: 3rem 1fr;
-  gap: 1.25rem;
-  padding: 1.75rem 0;
-  border-top: 1px solid var(--daybridge-rule);
-}
-
-.daybridge-process li > span { color: var(--nav-color-primary); font-weight: 750; }
-.daybridge-process h3 { margin: 0 0 .5rem; font-size: 1.65rem; }
-.daybridge-process li p { margin: 0; color: var(--nav-color-text-muted); }
+.daybridge-signin { margin: 1rem 0 0; font-size: .95rem; }
+.daybridge-signin a { color: var(--nav-color-link); font-weight: 650; }
 
 .daybridge-home .sibling-practices {
   margin-bottom: clamp(3rem, 6vw, 5rem);
@@ -130,8 +124,8 @@
 
 @media (max-width: 760px) {
   .daybridge-hero { grid-template-columns: 1fr; }
-  .daybridge-promises { grid-template-columns: 1fr; }
-  .daybridge-promises article + article { border-top: 1px solid var(--daybridge-rule); border-left: 0; }
+  .daybridge-prices { grid-template-columns: 1fr; }
+  .daybridge-prices > div + div { border-top: 1px solid var(--daybridge-rule); border-left: 0; }
   .daybridge-closing { align-items: flex-start; flex-direction: column; }
 }
 .daybridge-hero .home-call { margin-right: .75rem; }

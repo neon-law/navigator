@@ -253,6 +253,9 @@ pub async fn firm_portal_theme_brand(
     surreal: &store::surreal::SurrealDb,
     host: views::brand::BrandKey,
 ) -> Option<views::brand::BrandKey> {
+    if host.keeps_own_portal_look() {
+        return None;
+    }
     let firm_id = store::firms::firm_id_for_brand_key(surreal, host.as_str())
         .await
         .ok()??;

@@ -1229,19 +1229,25 @@ fn daybridge_content(
     webapp::home::DaybridgeContent {
         eyebrow: copy.eyebrow,
         fee_label: copy.fee_label,
-        fee_price: copy.fee_price,
-        fee_unit: copy.fee_unit,
-        fee_body: copy.fee_body,
-        fee_note: copy.fee_note,
-        response_heading: copy.response_heading,
-        response_body: copy.response_body,
-        motions_heading: copy.motions_heading,
-        motions_body: copy.motions_body,
+        agreed_label: copy.agreed_label,
+        agreed_price: copy.agreed_price,
+        agreed_unit: copy.agreed_unit,
+        agreed_body: copy.agreed_body,
+        contested_label: copy.contested_label,
+        contested_price: copy.contested_price,
+        contested_unit: copy.contested_unit,
+        contested_body: copy.contested_body,
         costs_heading: copy.costs_heading,
         costs_body: copy.costs_body,
-        process_label: copy.process_label,
-        process_heading: copy.process_heading,
-        steps: copy.steps,
+        story_heading: copy.story_heading,
+        story_body: copy.story_body,
+        joint_heading: copy.joint_heading,
+        joint_body: copy.joint_body,
+        testimonials_heading: copy.testimonials_heading,
+        account_heading: copy.account_heading,
+        account_body: copy.account_body,
+        signup_label: copy.signup_label,
+        signin_label: copy.signin_label,
         closing_heading: copy.closing_heading,
         closing_body: copy.closing_body,
         sibling_practices: sibling_practices(copy.sibling_practices, deployment_host),
@@ -3393,9 +3399,15 @@ mod tests {
         );
         let text = content.hero_lead.to_lowercase();
         assert!(text.contains("daybridge divorce law"), "{text}");
-        assert!(text.contains("one-time $333 fee"), "{text}");
-        assert!(text.contains("mutual split"), "{text}");
-        for stale_fee in ["$500 setup", "$10 a day", "$50 each", "$5,000 per day"] {
+        assert!(text.contains("$200 if you agree"), "{text}");
+        assert!(text.contains("$500 if you do not"), "{text}");
+        for stale_fee in [
+            "$333",
+            "mutual split",
+            "$500 setup",
+            "$10 a day",
+            "$5,000 per day",
+        ] {
             assert!(!text.contains(stale_fee), "{text}");
         }
         assert!(!text.contains("we guarantee"), "{text}");
@@ -3403,6 +3415,32 @@ mod tests {
             text.contains("no result or timeline is promised"),
             "and says so plainly: {text}"
         );
+    }
+
+    /// Daybridge's home states both prices in plain words, sends a visitor to
+    /// sign up or book, and promises no speed the court does not control.
+    #[test]
+    fn daybridge_home_states_both_prices_and_the_ways_to_start() {
+        let branding =
+            views::brand::BrandKey::Daybridge.resolve_branding(&views::brand::DEFAULT_BRANDING);
+        let home = home(branding);
+        let d = home.daybridge.as_ref().expect("Daybridge offer");
+        assert_eq!(d.agreed_price, "$200");
+        assert_eq!(d.contested_price, "$500");
+        assert!(d.contested_unit.contains("$50 per motion"), "{d:?}");
+        assert!(d.contested_body.contains("$1,000 retainer"), "{d:?}");
+        assert!(d.costs_body.contains("court"), "{d:?}");
+        assert!(!d.signup_label.is_empty() && !d.signin_label.is_empty());
+        assert!(
+            home.heading.starts_with("Divorce sucks"),
+            "{}",
+            home.heading
+        );
+        let text = format!("{} {} {}", home.lead, d.story_body, d.joint_body).to_lowercase();
+        assert!(text.contains("court sets its own schedule"), "{text}");
+        for promise in ["we guarantee", "guaranteed", "fast divorce"] {
+            assert!(!text.contains(promise), "{text}");
+        }
     }
 
     // --- ENG-744…749: the practice brands, and the lines that bind them ---

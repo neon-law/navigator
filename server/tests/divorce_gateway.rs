@@ -57,8 +57,8 @@ async fn get_on_host(app: &Router, path: &str, host: Option<&str>) -> (StatusCod
 }
 
 /// `GET /divorce` on a Neon host returns 200, wears Neon chrome, and carries
-/// the approved original copy — the destination named factually, the exact
-/// $333 one-time fee, and a destination-named CTA whose href resolves to
+/// the approved original copy — the destination named factually, the two
+/// plain prices, and a destination-named CTA whose href resolves to
 /// this deployment's own Daybridge host.
 #[tokio::test]
 async fn the_gateway_renders_on_neon_hosts_with_neon_chrome_and_the_approved_copy() {
@@ -70,10 +70,10 @@ async fn the_gateway_renders_on_neon_hosts_with_neon_chrome_and_the_approved_cop
         for expected in [
             "<title>Neon Law | Divorce</title>",
             r#"content="Neon Law | Divorce" property="og:title""#,
-            "A brighter way through divorce.",
+            "Divorce sucks",
             "Daybridge Divorce Law",
             "Guieb &#38; Shook PC",
-            "one-time $333 fee",
+            "$200 if you agree",
             "No result or timeline is promised",
             "Visit Daybridge Divorce Law",
             "site-footer",

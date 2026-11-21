@@ -70,24 +70,26 @@ fn assert_own_brand_head(html: &str, host: &str) {
 }
 
 #[tokio::test]
-async fn daybridge_home_leads_with_pace_and_keeps_the_fee_and_limits() {
+async fn daybridge_home_is_plain_spoken_and_features_both_prices() {
     for host in HOSTS {
         let html = page(host, "/").await;
         assert_own_brand_head(&html, host);
         for expected in [
             "Daybridge Divorce Law",
-            "A brighter way to move on.",
+            "Divorce sucks. We make it fair and keep it moving.",
             "Prefer to write first?",
             r#"href="https://calendar.notion.so/meet/nick-shook/or15n4yy7""#,
             r#"href="tel:+15108002090""#,
-            "We keep our part moving",
-            "The court sets its own schedule.",
+            r#"href="/auth/signup?return_to=/app/projects""#,
+            r#"href="/auth/login?return_to=/app/projects""#,
+            "Book Consultation",
+            "$200",
+            "$500",
+            "flat fee, plus $50 per motion",
+            "$1,000 retainer",
+            "The court charges its own filing fees",
+            "The court sets its own schedule",
             "/public/brand/daybridge/crossing.svg",
-            "$333",
-            "one-time fee",
-            "mutual split",
-            "represents the couple",
-            "conflict review",
             "informed written consent",
             "/public/brand/daybridge/logo.svg",
             "/public/css/daybridge.css",
@@ -103,16 +105,15 @@ async fn daybridge_home_leads_with_pace_and_keeps_the_fee_and_limits() {
         let footer = html.split("<footer").nth(1).expect("shared footer");
         assert!(footer.contains("www.guiebshook.com"), "{host}: {footer}");
         assert!(!footer.contains("Lex Tecnica"), "{host}: {footer}");
+        let main = html.split("<footer").next().expect("page body");
+        assert!(
+            !main.contains("<ol") && !main.contains("<li"),
+            "{host} home must not use list views"
+        );
         let lower = html.to_lowercase();
-        for forbidden in [
-            "guaranteed result",
-            "without delay",
-            "fast divorce",
-            "$1,111",
-        ] {
+        for forbidden in ["guaranteed result", "without delay", "$333", "mutual split"] {
             assert!(!lower.contains(forbidden), "{host} publishes {forbidden:?}");
         }
-        assert!(!html.contains("$10") && !html.contains("$500") && !html.contains("$50 each"));
     }
 }
 
@@ -122,14 +123,14 @@ async fn daybridge_services_explain_scope_timing_and_costs() {
         let html = page(host, "/services").await;
         assert_own_brand_head(&html, host);
         for expected in [
-            "Divorce for couples who agree",
+            "Divorce, at a fair price",
             "Your agreement in writing",
             "The court sets its",
             "Papers and filing steps",
             "Joint representation starts with clarity",
             "separate counsel",
-            "One fee for a mutual split",
-            "A one-time $333 fee.",
+            "Two plain prices",
+            "$200 if you agree. $500 if you do not.",
             "not a particular result",
         ] {
             assert!(html.contains(expected), "{host} missing {expected:?}");
@@ -174,8 +175,8 @@ async fn daybridge_llms_txt_indexes_its_own_pages() {
             "{host} llms.txt must name Daybridge as its own site: {body}"
         );
         assert!(
-            body.contains("one-time $333 fee"),
-            "{host} llms.txt summary must explain the mutual-split fee: {body}"
+            body.contains("$200 if you agree"),
+            "{host} llms.txt summary must state the prices: {body}"
         );
         assert!(
             body.contains(&format!("https://{host}/)")),

@@ -164,6 +164,22 @@ pub struct ProfileView {
     /// configures none.
     #[serde(default)]
     pub logo: Option<crate::components::AppLogo>,
+    /// Neon Law's own profile page, where the viewer's settings apply across
+    /// every brand. Empty on Neon's own host, which already is that page.
+    #[serde(default)]
+    pub account_settings_href: String,
+}
+
+/// The shared account-settings page on Neon Law's host, or empty when this
+/// request is already on it.
+#[cfg(feature = "server")]
+fn account_settings_href() -> String {
+    if views::brand::brand_key() == views::brand::BrandKey::Neon {
+        return String::new();
+    }
+    let host = std::env::var("NAVIGATOR_PUBLIC_HOST").ok();
+    let origin = views::brand::BrandKey::Neon.public_home_href_for(host.as_deref());
+    format!("{origin}{PROFILE_PATH}")
 }
 
 /// The caller's own prefilled fields.
@@ -298,6 +314,7 @@ async fn load_profile(role: ViewerRole) -> Result<ProfileView, ServerFnError> {
             role,
             fields: None,
             logo,
+            account_settings_href: account_settings_href(),
         });
     };
 
@@ -312,6 +329,7 @@ async fn load_profile(role: ViewerRole) -> Result<ProfileView, ServerFnError> {
             role,
             fields: None,
             logo,
+            account_settings_href: account_settings_href(),
         });
     };
 
@@ -345,6 +363,7 @@ async fn load_profile(role: ViewerRole) -> Result<ProfileView, ServerFnError> {
             signature,
         }),
         logo,
+        account_settings_href: account_settings_href(),
     })
 }
 
@@ -585,6 +604,13 @@ fn render_profile(resource: &Resource<Result<ProfileView, ServerFnError>>) -> El
         main { id: "profile", class: "nav-theme",
             header { class: "page-header",
                 h1 { "Your profile" }
+            }
+            if !view.account_settings_href.is_empty() {
+                p { class: "nav-muted",
+                    "Settings that apply across every brand live on "
+                    a { href: "{view.account_settings_href}", "your Neon Law account page" }
+                    "."
+                }
             }
             match &view.fields {
                 Some(fields) => rsx! {

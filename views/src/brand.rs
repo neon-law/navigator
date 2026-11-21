@@ -926,8 +926,8 @@ pub static DAYBRIDGE_BRANDING: Branding = Branding {
     base_url: "",
     primary_domain: "daybridgedivorce.com",
     firm_disclaimer: "Attorney advertisement. Nothing here is legal advice without a signed retainer for an active project. Past results do not guarantee future outcomes.",
-    mission_description: "Daybridge Divorce Law is operated by Guieb & Shook PC for couples who agree. Joint representation is subject to applicable rules, conflict review, and informed written consent. A one-time $333 fee covers a mutual split within the written retainer. Contested work is outside the joint engagement. Attorney advertisement; no result is promised.",
-    service_description: "Agreed divorce for couples through Daybridge Divorce Law, operated by Guieb & Shook PC Joint representation where permitted after conflict review and informed written consent. A one-time $333 fee for a mutual split. The written retainer defines the work.",
+    mission_description: "Daybridge Divorce Law is operated by Guieb & Shook PC for people ending a marriage, whether they agree or not. The fee is $200 if you agree and $500 if you do not, plus court filing fees and $50 per motion under a written retainer. Joint representation of an agreed divorce is subject to applicable rules, conflict review, and informed written consent. Attorney advertisement; no result is promised.",
+    service_description: "Divorce through Daybridge Divorce Law, operated by Guieb & Shook PC. $200 if you agree, $500 if you do not, plus court fees and $50 per motion. The written retainer defines the work.",
     portal_only: false,
     brand_key: BrandKey::Daybridge,
 };
@@ -1145,6 +1145,15 @@ impl BrandKey {
     /// The brands Lex Tecnica, Ltd. trades under.
     pub const LEX_TECNICA_FAMILY: &'static [Self] =
         &[Self::LexTecnica, Self::IepDefenders, Self::SameDayLegal];
+
+    /// Whether this brand's own `/app` look is kept even when its Firm names a
+    /// [Portal Theme Brand](../../docs/glossary/portal-theme-brand.md): a client
+    /// signing in through it sees its own palette, logo, and name, not the
+    /// Firm's shared theme.
+    #[must_use]
+    pub fn keeps_own_portal_look(self) -> bool {
+        matches!(self, Self::Daybridge)
+    }
 
     /// The compiled keys whose hosts currently serve a public site. The
     /// remaining registered keys are built and staged, but intentionally stay
@@ -2402,6 +2411,14 @@ pub fn deployed_release() -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
+    /// Daybridge's `/app` pages wear Daybridge, even though its Firm names a
+    /// shared Portal Theme Brand; no other brand opts out.
+    #[test]
+    fn only_daybridge_keeps_its_own_portal_look() {
+        for key in BrandKey::ALL {
+            assert_eq!(key.keeps_own_portal_look(), *key == BrandKey::Daybridge);
+        }
+    }
 
     /// LAW-329: a notation is filled from the Firm's office in its
     /// jurisdiction; a jurisdiction with no office falls back to the one
