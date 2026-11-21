@@ -243,19 +243,17 @@ fn auto_merge_is_automatic_for_ready_same_repository_pull_requests() {
 
 /// Blacksmith is for CI and deploy build jobs only.
 #[test]
-fn quickstart_and_stress_test_use_standard_runners() {
-    for file in ["quickstart.yml", "firm-anchor-stress-test.yml"] {
-        let source = std::fs::read_to_string(repo_root().join(".github/workflows").join(file))
-            .unwrap_or_else(|error| panic!("read {file}: {error}"));
-        assert!(
-            !source.contains("blacksmith"),
-            "{file} must not use Blacksmith"
-        );
-        assert!(
-            source.contains("runs-on: ubuntu-24.04"),
-            "{file} must run on ubuntu-24.04"
-        );
-    }
+fn quickstart_uses_a_standard_runner() {
+    let source = std::fs::read_to_string(repo_root().join(".github/workflows/quickstart.yml"))
+        .expect("read quickstart.yml");
+    assert!(
+        !source.contains("blacksmith"),
+        "quickstart must not use Blacksmith"
+    );
+    assert!(
+        source.contains("runs-on: ubuntu-24.04"),
+        "quickstart must run on ubuntu-24.04"
+    );
 }
 
 /// Exercise the workflow shell instead of only checking its spelling. The CLI

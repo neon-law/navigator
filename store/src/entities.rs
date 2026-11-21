@@ -1,54 +1,17 @@
-//! The `entities` table — a legal organization (LLC, trust,
-//! corporation) or the `Human` entity standing for a solo natural
-//! person — and every query that reads or writes an `entity` row.
+//! PostgreSQL-backed legal organizations and the Entity conflict-graph nodes.
 //!
-//! # This table lives in SurrealDB
+//! `entity_commands` validates referenced Entity Types and Jurisdictions and
+//! decides which names identify the Firm's own Entity. Namesakes remain valid;
+//! only the normalized `firm_anchor_key` has exclusive ownership.
 //!
-//! One table carries both the full row and the node the conflict graph
-//! traverses.
+//! PostgreSQL's `entity_firm_anchor_key` unique index serializes competing
+//! ownership writes. A collision is [`EntityError::FirmAnchorTaken`]. Protected
+//! update and delete statements preserve ownership across competing mutations.
+//! The native Entity integration tests exercise the accessors and HTTP doors.
 //!
-//! `entity_type_id` and `jurisdiction_id` are real `record<>` links. The
-//! engine does **not** validate a link, so `entity_commands` reads both
-//! rows back before any write that stores one, exactly as
-//! `store::credentials` does.
-//!
-//! # The firm anchor is a schema guarantee, not a lock
-//!
-//! `firm_anchor_key` is the one field no caller sets from user input.
-//! The firm's own Entity may not be forked, renamed, or deleted.
-//! SurrealDB has no advisory lock, and a multi-statement query is not one
-//! transaction, so the invariant lives
-//! in the schema: `entity_commands` computes this key — the lowercased
-//! name, and only for a row it judges to be an anchor — and every write
-//! that mints it first claims [`CLAIM_TABLE`], a table whose *record id
-//! is that key*.
-//!
-//! The claim is the first half of the guarantee. The UNIQUE
-//! `entity_firm_anchor` index reads like the guard and is not one under
-//! concurrency: racers writing distinct entity rows never collide on an
-//! index entry, so eight of them mint two anchors
-//! (`store/tests/firm_anchor_race.rs`). Writing one identical *record*
-//! key is far stronger, but the engine can still report two successful
-//! `CREATE`s while this table is empty.
-//!
-//! ENG-312 measured the gap directly: two racers read the claim as free,
-//! both return `CLAIMED`, and neither retries. With one claim row already
-//! present, the same raced creates produced no fork on either the embedded
-//! or the server engine. `take_claim` therefore primes the claim table before
-//! the first real `CREATE`, so the real claim never races on the engine's
-//! empty-table first write. A second creator can still succeed at the raw
-//! engine claim on an empty table; the empty-table reproduction remains in
-//! the race harness, while the protected path always claims a populated
-//! table.
-//!
-//! The window is the first mint on a fresh database. The race test keeps
-//! that empty-table shape deliberately, and
-//! `.github/workflows/firm-anchor-stress-test.yml` watches it under the
-//! instrumented Linux runner profile.
-//!
-//! Deciding *what counts as* an anchor stays in `entity_commands` with
-//! `is_firm_anchor`, because it reads configuration. This module writes
-//! what it is told and reports the collision as [`EntityError::FirmAnchorTaken`].
+//! Explicit Source compatibility writes use the keyed [`CLAIM_TABLE`] claim
+//! and shared retry policy. Historical capture/import retains those records;
+//! ordinary native access uses the admitted PostgreSQL pool.
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -344,9 +307,6 @@ async fn take_claim(db: &SurrealDb, id: Uuid, key: Option<&str>) -> Result<bool,
     prime_claim_table(db).await?;
     let holder = firm_anchor_holder(db, key).await?;
     if holder == Some(id) {
-        anchor_trace(&format!(
-            "id={id} holder={holder:?} exit=skip-holder-is-self"
-        ));
         return Ok(false);
     }
     let outcome = writing(|| {
@@ -355,19 +315,7 @@ async fn take_claim(db: &SurrealDb, id: Uuid, key: Option<&str>) -> Result<bool,
             .bind(("firm_anchor_key", key.to_string()))
     })
     .await;
-    match outcome {
-        Ok(_) => {
-            // Keep the raw engine success visible to the stress-test trace. The
-            // empty-table raw reproduction remains a direct control even
-            // though the protected path primes the table first.
-            anchor_trace(&format!("id={id} holder={holder:?} exit=CLAIMED"));
-            Ok(true)
-        }
-        Err(error) => {
-            anchor_trace(&format!("id={id} holder={holder:?} exit=refused {error:?}"));
-            Err(error)
-        }
-    }
+    outcome.map(|_| true)
 }
 
 /// Ensure a real claim never performs the claim table's first write.
@@ -382,15 +330,6 @@ async fn prime_claim_table(db: &SurrealDb) -> Result<(), EntityError> {
     })
     .await
     .map(|_| ())
-}
-
-/// ENG-312 diagnostic. Off unless `NAV_ANCHOR_TRACE` is set, so ordinary
-/// runs are untouched; the stress-test lane sets it to catch which branch each
-/// racer left `take_claim` through when the anchor forks.
-fn anchor_trace(message: &str) {
-    if std::env::var_os("NAV_ANCHOR_TRACE").is_some() {
-        eprintln!("ANCHOR {message}");
-    }
 }
 
 /// Give back a claim taken for a write that then did not land, so a
