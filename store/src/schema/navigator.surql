@@ -1223,40 +1223,10 @@ DEFINE INDEX OVERWRITE social_oauth_attempt_state ON social_oauth_attempt FIELDS
 DEFINE INDEX OVERWRITE brand_name ON brand FIELDS name UNIQUE;
 DEFINE INDEX OVERWRITE brand_key_unique ON brand FIELDS brand_key UNIQUE;
 
--- `firm_anchor`: the row that serializes minting the anchor, and the
--- reason the UNIQUE index above is no longer the whole guard.
---
--- The index does not enforce across concurrent transactions on the
--- embedded engine. Eight racers minting the anchor into a free slot land
--- *two* rows: each transaction writes its own `entity` record key and its
--- own index entry, and the optimistic layer conflicts on record keys, not
--- on index entries — so nothing makes the racers collide.
--- `store/tests/firm_anchor_race.rs` reproduces it against the unguarded
--- write and pins the guarded one.
---
--- This table makes them collide. Its **record id is the anchor key**, so
--- every racer minting the same anchor writes one identical record key and
--- the engine refuses all but one. `CREATE` rather than `UPSERT` is what
--- turns that into a refusal instead of a silent overwrite, and it reports
--- `ErrorDetails::AlreadyExists` — a typed detail, which is what
--- `store::entities::classify_write` matches on rather than prose.
---
--- "Refuses all but one" is true in the steady state and NOT absolute.
--- ENG-312 measured two concurrent `CREATE`s of this same record id both
--- reporting success while this table is still **empty** — about one
--- double-commit per 160,000 eight-way raced creates, on both the embedded
--- and the server engine, with no retry involved. Once any claim row
--- exists, 480,000 raced creates produced no fork. The exposure is
--- therefore the first mint on a fresh database, not ongoing operation.
--- Do not read the paragraph above as a guarantee the engine gives.
---
--- `store::entities` writes one reserved, inert sentinel row before a real
--- claim, so the first real claim never races on an empty table. Its race test
--- deliberately asserts the table is empty before the writers begin; the
--- sentinel is part of the claim seam, not a prewarmed test fixture. A direct
--- raw-claim experiment can still observe the empty-table double-commit.
---
--- The index stays as the backstop for a fork that is not a race.
+-- Source compatibility writers claim one record key per normalized anchor name.
+-- A claim uses CREATE and reports typed AlreadyExists instead of overwriting a holder.
+-- Writers prime a reserved sentinel before the first claim because an empty claim table
+-- does not serialize concurrent first writes. The Entity uniqueness index is a backstop.
 DEFINE TABLE IF NOT EXISTS firm_anchor SCHEMAFULL PERMISSIONS NONE;
 DEFINE FIELD OVERWRITE entity_id ON firm_anchor TYPE record<entity>;
 
