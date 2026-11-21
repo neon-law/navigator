@@ -29,24 +29,55 @@ fn object_dbos_lookup(key: &str) -> Option<String> {
     }
 }
 
+fn native_dbos_lookup(key: &str) -> Option<String> {
+    use store::workflow_engine::{COHOST_ENV, DBOS_ENABLED_ENV, ENGINE_ENV, WORKFLOWS};
+    if key == ENGINE_ENV {
+        Some("dbos".into())
+    } else if [COHOST_ENV, DBOS_ENABLED_ENV].contains(&key)
+        || WORKFLOWS.iter().any(|selection| selection.flag == key)
+    {
+        Some("true".into())
+    } else {
+        None
+    }
+}
+
+async fn object_fixture(
+    options: sqlx::postgres::PgConnectOptions,
+    active: bool,
+) -> store::test_support::PostgresFixture {
+    let fixture = if active {
+        store::test_support::PostgresFixture::create(options).await
+    } else {
+        store::test_support::PostgresFixture::create_capture_target(options).await
+    }
+    .unwrap();
+    assert_eq!(
+        store::postgres::native_origin::admits(fixture.postgres())
+            .await
+            .unwrap(),
+        active
+    );
+    fixture
+}
+
 #[tokio::test]
 async fn verified_object_activation_removes_only_the_two_legacy_sdk_http_services() {
     let Some(options) = object_fixture_options() else {
         return;
     };
     for active in [false, true] {
-        let fixture = if active {
-            store::test_support::PostgresFixture::create(options.clone()).await
-        } else {
-            store::test_support::PostgresFixture::create_capture_target(options.clone()).await
-        }
-        .unwrap();
-        let selection = store::durable_object_handover::require_runtime_selection(
-            fixture.postgres(),
-            object_dbos_lookup,
-        )
-        .await
-        .unwrap();
+        let fixture = object_fixture(options.clone(), active).await;
+        let selection =
+            store::durable_object_handover::require_runtime_selection(fixture.postgres(), |key| {
+                if active {
+                    native_dbos_lookup(key)
+                } else {
+                    object_dbos_lookup(key)
+                }
+            })
+            .await
+            .unwrap();
         let source = store::surreal::SurrealDb::uninitialized();
         let directory = tempfile::tempdir().unwrap();
         let storage = Arc::new(cloud::FsStorage::new(directory.path()).await.unwrap());

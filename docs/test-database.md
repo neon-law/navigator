@@ -21,9 +21,11 @@ docker run -d --name test-postgres --shm-size=256m -p 127.0.0.1:25432:5432 \
 docker exec -i test-postgres psql -U postgres -d smoke -v ON_ERROR_STOP=1 < store/postgres/schema.sql
 ```
 
-The shared unit-test server hosts isolated test databases. `PostgresFixture::create` owns a uniquely created database
-with canonical schema and known-empty synthetic test admission before any data. Its consuming cleanup drops only that
-resource. This test seam does not establish a production Database Origin or backfill retained history.
+The shared unit-test server hosts isolated test databases. `PostgresFixture::create` uses the native creation capability
+and embedded migrations to record a fresh [Database Origin](glossary/database-origin.md) before any data. It writes no
+captured-import completion receipts. Its consuming cleanup drops only that owned resource. Explicit capture-target and
+unactivated fixtures retain their separate admission contracts. These fixtures do not certify Kubernetes role
+boundaries, production cutover, or recovery.
 
 ## Fresh KIND application tiers
 

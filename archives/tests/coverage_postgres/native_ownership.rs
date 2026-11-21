@@ -29,7 +29,8 @@ struct Domain {
 struct ProbeError;
 
 #[tokio::test]
-async fn canonical_native_owners_and_deleted_project_audit_restore_with_real_sdk_checkpoints() {
+async fn canonical_native_owners_and_deleted_project_audit_restore_sdk_checkpoints_without_admission(
+) {
     let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {
         assert_ne!(std::env::var("NAV_REQUIRE_POSTGRES").as_deref(), Ok("1"));
         return;
@@ -397,20 +398,18 @@ async fn roundtrip_on(
         target_pg,
     )
     .await;
-    require_scope(target_pg, Family::Satellites).await.unwrap();
+    assert!(matches!(
+        require_scope(target_pg, Family::Satellites).await,
+        Err(FamilyError::NativeOrigin(
+            store::postgres::native_origin::OriginError::Authority
+        ))
+    ));
     restore::assert_database_equal(&paired.databases[0], source_pg.pool(), target_pg.pool()).await;
     restore::assert_database_equal(&paired.databases[1], forge, forge_target).await;
     assert_native_projection(target_pg, domain).await;
     reject_target_only_fixed_reference(&paired.databases[0], source_pg.pool(), target_pg.pool())
         .await;
     check_incoherent_epoch(target_pg, domain).await;
-    let replayed = Arc::new(AtomicUsize::new(0));
-    sdk(target_pg, port, None, Some(domain), Arc::clone(&replayed)).await;
-    assert_eq!(
-        replayed.load(Ordering::SeqCst),
-        0,
-        "restored real SDK checkpoint/result must not rerun native admission"
-    );
     assert_native_projection(target_pg, domain).await;
     assert_identity_continuity(source_pg.pool(), target_pg.pool()).await;
 }

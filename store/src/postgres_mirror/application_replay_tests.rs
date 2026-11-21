@@ -1,11 +1,12 @@
-//! Native Application rows remain owned even under forced legacy replay modes.
+//! Captured-enrollment applications preserve later native rows under forced legacy replay modes.
 
 use super::*;
 
 #[tokio::test]
 async fn active_application_replay_preserves_native_rows_without_source_access() {
-    crate::test_support::with_postgres(async {
+    crate::test_support::with_captured_postgres(async {
         let pg = PostgresDb::application().await.unwrap();
+        assert!(!crate::postgres::native_origin::admits(&pg).await.unwrap());
         let offline = SurrealDb::uninitialized();
         let address = crate::addresses::create(
             &offline,
