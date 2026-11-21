@@ -23,3 +23,6 @@ The table is `database_origin_upgrade`.
 
 Schema: [`database_origin`](../../store/postgres/schema.sql) and
 [`database_origin_upgrade`](../../store/postgres/schema.sql).
+
+A pending [Database Recovery](database-recovery.md) retains its own creation identity and blocks admission. Unverified
+archive input cannot establish recovery completion or transfer source authority.

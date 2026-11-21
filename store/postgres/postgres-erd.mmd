@@ -336,6 +336,17 @@ erDiagram
         json to_schema_contract
         uuid upgrade_operation
     }
+    database_recovery {
+        datetime completed_at
+        uuid creation_operation
+        datetime inserted_at
+        string manifest_bytes
+        string manifest_sha256
+        uuid recovery_operation
+        boolean singleton
+        string source_identity_bytes
+        string verified_plan_sha256
+    }
     dbos_workflow_request {
         datetime inserted_at
         string request_fingerprint
@@ -2227,6 +2238,7 @@ erDiagram
     jurisdiction }o--|| credential : references
     person }o--|| credential : references
     database_origin }o--|| database_origin_upgrade : references
+    database_origin }o--|| database_recovery : references
     document_chain_archive }o--|| document_chain_archive_item : references
     project }o--|| document_upload_session : references
     firm }o--|| docusign_completion : references

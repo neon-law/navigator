@@ -13,6 +13,8 @@ use uuid::Uuid;
 
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) mod fixture;
+pub mod recovery;
+pub mod recovery_plan;
 mod upgrade;
 pub use upgrade::upgrade;
 #[cfg(any(test, feature = "test-support"))]
@@ -63,6 +65,8 @@ pub enum OriginError {
     Upgrade,
     #[error("another Database Origin upgrade holds the resource")]
     Busy,
+    #[error("Database recovery is pending or its provenance is unavailable")]
+    Recovery,
 }
 
 impl From<sqlx::Error> for OriginError {
@@ -77,6 +81,7 @@ pub struct CreatedDatabase {
     postgres: PostgresDb,
     operation: Uuid,
     tier: TierBinding,
+    admin_options: PgConnectOptions,
 }
 
 /// A fully initialized resource. Dropping this handle never deletes its database.
@@ -160,7 +165,7 @@ async fn create_observed(
     }
     admin.pool().close().await;
     result.map_err(|_| OriginError::Creation)?;
-    let postgres = PostgresDb::connect(admin_options.database(&name))
+    let postgres = PostgresDb::connect(admin_options.clone().database(&name))
         .await
         .map_err(|_| OriginError::Creation)?;
     observe_connection(&postgres);
@@ -174,6 +179,7 @@ async fn create_observed(
         postgres,
         operation,
         tier,
+        admin_options,
     })
 }
 
@@ -184,11 +190,38 @@ impl CreatedDatabase {
     /// # Errors
     /// Incomplete migrations, mixed enrollment, changed database identity or storage failure.
     pub async fn initialize(self) -> Result<NativeDatabase, OriginError> {
+        self.initialize_with_recovery(None).await
+    }
+
+    async fn initialize_with_recovery(
+        self,
+        recovery: Option<&recovery::RecoveryInput>,
+    ) -> Result<NativeDatabase, OriginError> {
+        self.initialize_through(None, recovery).await
+    }
+
+    async fn initialize_through(
+        self,
+        through: Option<i64>,
+        recovery: Option<&recovery::RecoveryInput>,
+    ) -> Result<NativeDatabase, OriginError> {
         self.postgres
-            .migrate_embedded(None)
+            .migrate_embedded(through)
             .await
             .map_err(|_| OriginError::Migration)?;
-        require_schema(&self.postgres).await?;
+        let mut initial_schema = schema_contract();
+        if let Some(version) = through {
+            initial_schema
+                .as_array_mut()
+                .ok_or(OriginError::Migration)?
+                .retain(|entry| {
+                    entry
+                        .get(0)
+                        .and_then(serde_json::Value::as_i64)
+                        .is_some_and(|v| v <= version)
+                });
+        }
+        require_schema_for(&self.postgres, &initial_schema).await?;
         require_no_captured_history(&self.postgres).await?;
         let (name, oid, actual_marker) = identity(&self.postgres).await?;
         if name != database_name(self.operation)?
@@ -199,9 +232,20 @@ impl CreatedDatabase {
         let mut transaction = self.postgres.pool().begin().await?;
         sqlx::query("INSERT INTO public.database_origin(singleton,format_version,origin,creation_operation,database_name,database_oid,tier_id,namespace_uid,cluster_name,schema_contract,authority_contract) VALUES(true,1,'fresh_native',$1,$2,$3,$4,$5,$6,$7,$8)")
             .bind(self.operation).bind(name).bind(oid).bind(self.tier.tier_id).bind(self.tier.namespace_uid)
-            .bind(&self.tier.cluster_name).bind(schema_contract()).bind(authority_contract())
+            .bind(&self.tier.cluster_name).bind(initial_schema).bind(authority_contract())
             .execute(&mut *transaction).await?;
-        crate::durable_object_handover::initialize_fresh_on(&mut transaction).await?;
+        if let Some(input) = recovery {
+            recovery::record_pending(&mut transaction, self.operation, input).await?;
+            sqlx::query(AssertSqlSafe(format!(
+                "COMMENT ON DATABASE \"{}\" IS '{}'",
+                database_name(self.operation)?,
+                input.target_marker(self.operation)
+            )))
+            .execute(&mut *transaction)
+            .await?;
+        } else {
+            crate::durable_object_handover::initialize_fresh_on(&mut transaction).await?;
+        }
         transaction.commit().await?;
         Ok(NativeDatabase {
             postgres: self.postgres,
@@ -300,10 +344,6 @@ fn authority_contract() -> serde_json::Value {
         .collect::<Vec<_>>())
 }
 
-async fn require_schema(pg: &PostgresDb) -> Result<(), OriginError> {
-    require_schema_for(pg, &schema_contract()).await
-}
-
 async fn schema_attestation(pg: &PostgresDb) -> Result<serde_json::Value, OriginError> {
     let actual: Option<serde_json::Value> =
         sqlx::query_scalar("SELECT public.database_origin_schema_contract()")
@@ -337,8 +377,9 @@ async fn identity(pg: &PostgresDb) -> Result<(String, i64, Option<String>), Orig
         .fetch_one(pg.pool()).await?)
 }
 
-/// Check a complete fresh-native origin. Absence preserves captured-source
-/// admission; an invalid present origin is an error, never a fallback.
+/// Check a complete fresh-native origin. Its absence on a recognized schema
+/// preserves captured-source admission. Unknown schemas, damaged recovery fences
+/// and invalid present origins are errors, never a fallback.
 ///
 /// # Errors
 /// Unknown version, mixed histories, schema/authority drift or foreign database.
@@ -353,6 +394,7 @@ struct Origin {
 }
 
 async fn origin(pg: &PostgresDb) -> Result<Option<Origin>, OriginError> {
+    recovery::require_no_pending(pg).await?;
     let exists: bool =
         sqlx::query_scalar("SELECT to_regclass('public.database_origin') IS NOT NULL")
             .fetch_one(pg.pool())
@@ -382,7 +424,10 @@ async fn origin(pg: &PostgresDb) -> Result<Option<Origin>, OriginError> {
         || name != database_name(operation)?
         || row.try_get::<String, _>("database_name")? != name
         || row.try_get::<i64, _>("database_oid")? != oid
-        || actual_marker.as_deref() != Some(marker(operation).as_str())
+        || (actual_marker.as_deref() != Some(marker(operation).as_str())
+            && !actual_marker
+                .as_deref()
+                .is_some_and(|m| m.starts_with(&format!("{}:recovery:", marker(operation)))))
         || row.try_get::<serde_json::Value, _>("authority_contract")? != authority_contract()
     {
         return Err(OriginError::Authority);

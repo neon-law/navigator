@@ -57,10 +57,11 @@ iceberg.workspace = true
 
 futures.workspace = true
 
-[dev-dependencies]
 arrow_array58.workspace = true
 arrow_cast58.workspace = true
 arrow_schema58.workspace = true
+
+[dev-dependencies]
 store = { workspace = true, features = ["test-support"] }
 tempfile.workspace = true
 

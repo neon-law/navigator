@@ -282,6 +282,13 @@
     },
     {
       "extra_column": null,
+      "extra_table": "database_recovery",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
       "extra_table": "dbos_workflow_request",
       "missing_column": null,
       "missing_table": null,
@@ -2179,7 +2186,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 184,
+    "table_count": 185,
     "tables": {
       "address": {
         "columns": {
@@ -2806,6 +2813,29 @@
           ]
         ],
         "name": "database_origin_upgrade",
+        "references": [
+          "database_origin"
+        ]
+      },
+      "database_recovery": {
+        "columns": {
+          "completed_at": "TIMESTAMPTZ",
+          "creation_operation": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "manifest_bytes": "BYTEA",
+          "manifest_sha256": "TEXT",
+          "recovery_operation": "UUID",
+          "singleton": "BOOLEAN",
+          "source_identity_bytes": "BYTEA",
+          "verified_plan_sha256": "TEXT"
+        },
+        "foreign_keys": [
+          [
+            "creation_operation",
+            "database_origin"
+          ]
+        ],
+        "name": "database_recovery",
         "references": [
           "database_origin"
         ]
