@@ -141,7 +141,6 @@ async fn same_day_legal_home_leads_to_free_setup_and_separate_attorney_options()
         for expected in [
             "<title>Same Day Legal | Home</title>",
             "fm-page--same-day-legal",
-            r##"class="nav-btn nav-btn--primary fm-hero__cta" href="#mcp-setup""##,
             r#"id="mcp-setup""#,
             r#"href="/auth/signup""#,
             "https://neonlaw.com/app/mcp",
@@ -152,6 +151,14 @@ async fn same_day_legal_home_leads_to_free_setup_and_separate_attorney_options()
         ] {
             assert!(home.contains(expected), "{host} is missing {expected:?}");
         }
+        let html = scraper::Html::parse_document(&home);
+        let hero_links = scraper::Selector::parse(".fm-hero a").unwrap();
+        let first_action = html.select(&hero_links).next().expect("homepage action");
+        assert_eq!(first_action.attr("href"), Some("#mcp-setup"), "{host}");
+        assert!(first_action
+            .value()
+            .classes()
+            .any(|c| c == "nav-btn--primary"));
         assert!(!home.contains("data-enrollment-intake"));
         let (status, _) = get_on_host(&app, "/app/projects", Some(host)).await;
         assert_eq!(status, StatusCode::SEE_OTHER);
