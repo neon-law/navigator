@@ -2411,7 +2411,7 @@ pub fn deployed_release() -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    /// Daybridge's client portal wears Daybridge, even though its Firm names a
+    /// Daybridge's `/app` pages wear Daybridge, even though its Firm names a
     /// shared Portal Theme Brand; no other brand opts out.
     #[test]
     fn only_daybridge_keeps_its_own_portal_look() {
