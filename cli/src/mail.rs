@@ -3245,22 +3245,21 @@ fn parse_eml_for_filing(raw: &[u8]) -> Option<ParsedEmlFile> {
     message.from()?;
     let date = message.date()?;
     let occurred_at = chrono::DateTime::from_timestamp(date.to_timestamp(), 0)?.to_rfc3339();
-    let message_ref = match message
+    let message_ref = if let Some(id) = message
         .message_id()
         .map(str::trim)
         .filter(|id| !id.is_empty())
     {
-        Some(id) => id.trim_matches(['<', '>']).to_string(),
-        None => {
-            let digest = sha2::Sha256::digest(raw);
-            format!(
-                "sha256:{:02x}",
-                digest
-                    .iter()
-                    .take(8)
-                    .fold(0_u128, |acc, byte| (acc << 8) | u128::from(*byte))
-            )
-        }
+        id.trim_matches(['<', '>']).to_string()
+    } else {
+        let digest = sha2::Sha256::digest(raw);
+        format!(
+            "sha256:{:02x}",
+            digest
+                .iter()
+                .take(8)
+                .fold(0_u128, |acc, byte| (acc << 8) | u128::from(*byte))
+        )
     };
     let body = message.body_text(0).map_or_else(String::new, |text| {
         model::correspondence::strip_quoted(&text)
