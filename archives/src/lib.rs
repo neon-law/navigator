@@ -28,6 +28,7 @@ pub mod tables;
 #[doc(hidden)]
 pub mod test_support;
 pub mod workflow;
+pub mod write_only;
 
 pub use self::iceberg::{
     arrow_schema_to_iceberg, author_iceberg_for_prefix, author_snapshot, AuthoredMetadata,
@@ -54,3 +55,5 @@ pub use tables::{fetch_batch, ALL_TABLES};
 #[cfg(feature = "restate-compatibility")]
 pub use workflow::ArchivesService;
 pub use workflow::{RunReport, RunRequest};
+
+mod write;

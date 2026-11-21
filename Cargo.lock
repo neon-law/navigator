@@ -5723,6 +5723,7 @@ name = "hudson"
 version = "26.11.21-rc.3"
 dependencies = [
  "anyhow",
+ "archives",
  "assert_cmd",
  "async-trait",
  "axum",

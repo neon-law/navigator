@@ -55,6 +55,10 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    anyhow::ensure!(
+        std::env::var_os("NAVIGATOR_ARCHIVE_WRITE_ONLY_CONFIG").is_none(),
+        "write-only archive scheduling requires selected DBOS"
+    );
     let ingress = std::env::var("RESTATE_INGRESS_URL")
         .context("RESTATE_INGRESS_URL must be set (the Restate ingress endpoint)")?;
     // Optional bearer — present only when targeting Restate Cloud.

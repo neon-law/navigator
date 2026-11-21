@@ -25,6 +25,7 @@ mod journal;
 use cli::lsp_download;
 mod lsp_publish;
 use cli::mail;
+mod archives_ops;
 mod mcp_bridge;
 mod notation_import;
 mod notation_kinds;
@@ -1701,6 +1702,9 @@ enum OpsCmd {
     /// Reports contain only counts and UUIDs.
     #[command(subcommand)]
     Postgres(postgres_mirror::PostgresCmd),
+    /// Create-only archive transport and separate read/verification operations.
+    #[command(subcommand)]
+    Archives(archives_ops::ArchivesCmd),
     /// Check a `deployments/` tree without changing anything or decrypting
     /// anything. Every row loads, no decrypted file sits beside an encrypted
     /// one, every `.sops.yaml` rule agrees with the key its row declares, and
@@ -3525,9 +3529,11 @@ fn run() -> ExitCode {
             | OpsCmd::Firms { .. }
             | OpsCmd::PrivateTerms { .. }
             | OpsCmd::Postgres(_)
+            | OpsCmd::Archives(_)
             | OpsCmd::Sas(_)),
         ) => match action {
             OpsCmd::Postgres(command) => postgres_mirror::run(command),
+            OpsCmd::Archives(command) => runtime().block_on(archives_ops::run(command)),
             OpsCmd::Firms { action } => match action {
                 FirmsAction::Doctor => firms_doctor::run(),
             },

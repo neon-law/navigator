@@ -396,7 +396,7 @@ pub async fn export_configured<F: Fn(&str) -> Option<String>>(
 }
 
 /// One-connection pool for a coverage source, which reads in one transaction.
-async fn reader_pool(options: sqlx::postgres::PgConnectOptions) -> Result<PgPool> {
+pub(super) async fn reader_pool(options: sqlx::postgres::PgConnectOptions) -> Result<PgPool> {
     Ok(sqlx::postgres::PgPoolOptions::new()
         .max_connections(1)
         .acquire_timeout(std::time::Duration::from_secs(30))
@@ -424,6 +424,7 @@ pub async fn export_generation_with(
     scheduled_for: Option<DateTime<Utc>>,
     after_table: &dyn AfterTable,
 ) -> Result<PostgresGeneration> {
+    let locked = crate::write::policy(storage).await?;
     let mut prior = std::collections::HashMap::new();
     for table in tables {
         if let Some((bytes, _)) =
@@ -440,15 +441,24 @@ pub async fn export_generation_with(
     } else {
         run_at.format("%H%M%S").to_string()
     };
-    let generation_prefix = format!("dt={}/run={run}", run_at.date_naive());
+    let generation_prefix = if locked {
+        // A retry may read changed rows: claim a new immutable attempt instead
+        // of replacing a generation that a reader may already hold.
+        format!(
+            "dt={}/run={run}/attempt={}",
+            run_at.date_naive(),
+            uuid::Uuid::new_v4()
+        )
+    } else {
+        format!("dt={}/run={run}", run_at.date_naive())
+    };
 
     let mut entries = Vec::with_capacity(extracted.tables.len());
     for (table, rows, bytes) in &extracted.tables {
         let sha256 = sha256_hex(bytes);
         let key =
             format!("{POSTGRES_LANE}/{table}/data/{generation_prefix}/snapshot-{sha256}.parquet");
-        storage
-            .put(&key, bytes, "application/vnd.apache.parquet")
+        crate::write::object(storage, &key, bytes, "application/vnd.apache.parquet")
             .await
             .with_context(|| format!("upload {key}"))?;
         entries.push(PostgresTableEntry {
@@ -469,10 +479,14 @@ pub async fn export_generation_with(
         tables: entries,
     };
     let manifest = serde_json::to_vec_pretty(&generation).context("serialize generation")?;
-    storage
-        .put(&generation.manifest_key, &manifest, "application/json")
-        .await
-        .with_context(|| format!("publish {}", generation.manifest_key))?;
+    crate::write::object(
+        storage,
+        &generation.manifest_key,
+        &manifest,
+        "application/json",
+    )
+    .await
+    .with_context(|| format!("publish {}", generation.manifest_key))?;
     tracing::info!(
         tables = generation.tables.len(),
         cutoff_at = %generation.cutoff_at,
@@ -482,14 +496,14 @@ pub async fn export_generation_with(
     Ok(generation)
 }
 
-struct Extracted {
-    cutoff_at: DateTime<Utc>,
-    snapshot: String,
-    server_version: String,
-    tables: Vec<(String, usize, Vec<u8>)>,
+pub(super) struct Extracted {
+    pub(super) cutoff_at: DateTime<Utc>,
+    pub(super) snapshot: String,
+    pub(super) server_version: String,
+    pub(super) tables: Vec<(String, usize, Vec<u8>)>,
 }
 
-async fn extract(
+pub(super) async fn extract(
     pool: &PgPool,
     tables: &[&str],
     after_table: &dyn AfterTable,

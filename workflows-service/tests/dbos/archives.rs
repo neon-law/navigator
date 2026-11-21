@@ -143,6 +143,7 @@ async fn archives_registered_workflow_retries_accepted_notice_without_duplicate_
         .start_with(
             RunRequest {
                 scheduled_for: Some(slot),
+                write_only: None,
             },
             dbos::StartOptions {
                 workflow_id: Some(&id),

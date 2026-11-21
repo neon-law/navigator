@@ -260,6 +260,55 @@ enum GcsCredentials {
 }
 
 impl GcsStorage {
+    /// Reader/control-plane operation. Never call from a create-only writer.
+    /// Returns bucket metadata for independent project/UBLA/retention verification.
+    pub async fn archive_policy_for_verifier(&self) -> Result<serde_json::Value, StorageError> {
+        let bucket = self
+            .client
+            .get_bucket(&GetBucketRequest {
+                bucket: (*self.bucket).clone(),
+                ..Default::default()
+            })
+            .await
+            .map_err(|_| {
+                StorageError::Unsupported("archive verifier bucket metadata unavailable")
+            })?;
+        serde_json::to_value(bucket)
+            .map_err(|_| StorageError::Unsupported("archive verifier bucket metadata is invalid"))
+    }
+
+    /// Resolve a known immutable attempt key using verifier credentials only.
+    pub async fn archive_generation_for_verifier(&self, key: &str) -> Result<u64, StorageError> {
+        let object = self
+            .client
+            .get_object(&GetObjectRequest {
+                bucket: (*self.bucket).clone(),
+                object: key.to_owned(),
+                ..Default::default()
+            })
+            .await
+            .map_err(|_| StorageError::Unsupported("archive verifier inventory unavailable"))?;
+        u64::try_from(object.generation)
+            .ok()
+            .filter(|generation| *generation > 0)
+            .ok_or(StorageError::Unsupported(
+                "archive verifier generation invalid",
+            ))
+    }
+
+    /// Strict archive operations honor ADC failure instead of switching to an
+    /// ambient operator gcloud identity. Writer/verifier use separate ADC bindings.
+    pub async fn archive_from_adc(bucket: String) -> Result<Self, StorageError> {
+        let client_config = ClientConfig::default().with_auth().await.map_err(|_| {
+            StorageError::Unsupported("archive ADC unavailable; identity fallback is forbidden")
+        })?;
+        Ok(Self {
+            client: Arc::new(GcsClient::new(client_config)),
+            bucket: Arc::new(bucket),
+            emulator: false,
+        })
+    }
+
     pub async fn new_from_config(cfg: GcsStorageConfig) -> Result<Self, StorageError> {
         // If an endpoint override is set (emulator), skip auth entirely —
         // this branch must never touch ADC discovery or the metadata
@@ -1395,5 +1444,57 @@ mod tests {
         })
         .unwrap_err();
         assert!(matches!(err, StorageError::MissingEnv(_)), "got {err:?}");
+    }
+}
+
+#[cfg(test)]
+mod archive_identity_tests {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    /// Invalid explicit ADC must not become a working, broader gcloud identity.
+    #[tokio::test]
+    async fn invalid_explicit_archive_adc_never_uses_an_available_operator_gcloud() {
+        const CHILD: &str = "NAVIGATOR_ARCHIVE_ADC_CHILD";
+        const TEST: &str = "gcs::archive_identity_tests::invalid_explicit_archive_adc_never_uses_an_available_operator_gcloud";
+        if std::env::var_os(CHILD).is_some() {
+            assert!(
+                super::GcsStorage::archive_from_adc("synthetic-archive".into())
+                    .await
+                    .is_err()
+            );
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let credentials = root.path().join("invalid-adc.json");
+        std::fs::write(&credentials, b"{synthetic-invalid-adc").unwrap();
+        let gcloud = root.path().join("gcloud");
+        std::fs::write(&gcloud, b"#!/bin/sh\nprintf invoked > \"$NAVIGATOR_GCLOUD_SENTINEL\"\nprintf 'synthetic-not-a-credential\\n'\n").unwrap();
+        std::fs::set_permissions(&gcloud, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let sentinel = root.path().join("operator-identity-used");
+        let mut child = tokio::process::Command::new(std::env::current_exe().unwrap());
+        child
+            .env_clear()
+            .args(["--exact", TEST, "--nocapture"])
+            .current_dir(root.path())
+            .kill_on_drop(true)
+            .env(CHILD, "1")
+            .env("PATH", root.path())
+            .env("GOOGLE_APPLICATION_CREDENTIALS", &credentials)
+            .env("NAVIGATOR_GCLOUD_SENTINEL", &sentinel)
+            .env("NAVIGATOR_FORBID_SURREAL", "1")
+            .env("RUST_MIN_STACK", "33554432");
+        let output = tokio::time::timeout(std::time::Duration::from_secs(10), child.output())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "isolated ADC rejection failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            !sentinel.exists(),
+            "archive auth must not probe/use the operator gcloud identity"
+        );
     }
 }

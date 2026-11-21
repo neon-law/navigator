@@ -239,6 +239,7 @@ pub async fn export_pair(
     if navigator.name != "navigator" || forgejo.name != "forgejo" {
         bail!("paired coverage requires navigator and forgejo source identities");
     }
+    crate::write::policy(storage).await?;
     let generation = uuid::Uuid::new_v4();
     let mut databases = Vec::new();
     let mut objects = Vec::new();
@@ -251,9 +252,7 @@ pub async fn export_pair(
         bail!("paired sources must connect to distinct databases");
     }
     for (key, bytes) in objects {
-        storage
-            .put(&key, &bytes, "application/vnd.apache.parquet")
-            .await?;
+        crate::write::object(storage, &key, &bytes, "application/vnd.apache.parquet").await?;
     }
     for database in &mut databases {
         let lane = format!("postgres/{}/_paired/{generation}", database.database);
@@ -332,12 +331,12 @@ async fn write_paired_manifest(
     Ok(manifest.clone())
 }
 
-struct ExtractedDatabase {
-    manifest: DatabaseManifest,
-    objects: Vec<(String, Vec<u8>)>,
+pub(super) struct ExtractedDatabase {
+    pub(super) manifest: DatabaseManifest,
+    pub(super) objects: Vec<(String, Vec<u8>)>,
 }
 
-async fn extract_database(
+pub(super) async fn extract_database(
     source: DatabaseSource<'_>,
     generation: uuid::Uuid,
 ) -> Result<ExtractedDatabase> {

@@ -897,6 +897,7 @@ fn ops_help_lists_operator_members() {
     assert_eq!(
         command_names(&output),
         vec![
+            "archives",
             "assets",
             "brand-readiness",
             "call-script",
