@@ -79,6 +79,8 @@ pub(crate) async fn review_annotation(
     Path((code, id)): Path<(String, Uuid)>,
     Form(input): Form<AnnotationReview>,
 ) -> Response {
+    use store::time_entries::TimeEntryError;
+
     let Some(session) = session.filter(|s| s.viewing_as_dri.is_none()) else {
         return not_found_response();
     };
@@ -104,14 +106,22 @@ pub(crate) async fn review_annotation(
             Some("Billing is unavailable. Try again shortly."),
         );
     };
-    use store::time_entries::TimeEntryError;
-    match store::billing_annotations::review(&pg,project.id,actor,id,input.decision,&input.note).await {
-        Ok(()) => back_to_billing(&code,Some("Billing review recorded."),None),
-        Err(TimeEntryError::Conflict) => back_to_billing(&code,None,Some("This annotation is no longer awaiting review.")),
-        Err(TimeEntryError::Invalid("contingency agreement has no hourly fee")) => back_to_billing(&code,None,Some("The contingency agreement has no hourly fee. Record the time at no charge or deny it.")),
-        Err(TimeEntryError::Invalid("missing hourly rate")) => back_to_billing(&code,None,Some("Set the hourly rate for the date of service before approving billable time.")),
-        Err(e) => back_to_billing(&code,None,Some(&flash_for_entry(&e))),
-    }
+    let result =
+        store::billing_annotations::review(&pg, project.id, actor, id, input.decision, &input.note)
+            .await;
+    let error = match result {
+        Ok(()) => return back_to_billing(&code, Some("Billing review recorded."), None),
+        Err(TimeEntryError::Conflict) => "This annotation is no longer awaiting review.".to_owned(),
+        Err(TimeEntryError::Invalid("contingency agreement has no hourly fee")) => {
+            "The contingency agreement has no hourly fee. Record the time at no charge or deny it."
+                .to_owned()
+        }
+        Err(TimeEntryError::Invalid("missing hourly rate")) => {
+            "Set the hourly rate for the date of service before approving billable time.".to_owned()
+        }
+        Err(error) => flash_for_entry(&error),
+    };
+    back_to_billing(&code, None, Some(&error))
 }
 
 /// The log-time control on the Billing tab: what was done, when, for how
