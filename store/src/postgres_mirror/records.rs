@@ -1744,6 +1744,18 @@ pub(crate) fn authoritative_person_links() -> impl Iterator<Item = (&'static str
         })
 }
 
+/// Financial tagged Person links share canonical preservation metadata with import.
+pub(crate) fn financial_tagged_person_links() -> impl Iterator<Item = (&'static str, &'static str)>
+{
+    TAGGED_REFERENCES
+        .iter()
+        .filter_map(|(table, field, parents)| {
+            (matches!(*table, "cap_table_holding" | "fiduciary_role")
+                && parents.contains(&"person"))
+            .then_some((*table, *field))
+        })
+}
+
 /// Recover a declared reference field from the canonical preservation metadata.
 pub(crate) fn reference_field(name: &str, field: &str) -> Option<&'static str> {
     if name == "asset" {
