@@ -4,7 +4,7 @@ meta_description: >-
   your paperwork, and a lawyer: data removal, privacy protection, credit and
   dark web monitoring, identity theft insurance, unclaimed property, basic form
   filings such as forming an LLC, attorney review, and limited changes to a
-  Vesta estate plan, for $29/mo or $290/year. A single attorney review is $50.
+  Vesta estate plan, for $29/mo or $290/year. Ad hoc attorney review starts at $50.
   Coming to iPhone and Android. Attorney advertisement.
 title: Same Day Legal
 hero_mark: helm
@@ -137,8 +137,8 @@ bands:
                 lawyer reviews free work.
         href: "https://github.com/neon-law/navigator"
         href_label: Get Navigator
-      - title: One attorney review
-        chips: ["$50"]
+      - title: Ad hoc attorney review
+        chips: ["From $50"]
         body:
           - - text: >-
                 A licensed attorney reviews one document or question you
@@ -182,7 +182,7 @@ bands:
         body:
           - - text: >-
                 A licensed attorney reviews a document or question you
-                prepared. Without a subscription, one review is $50.
+                prepared. Without a subscription, reviews start at $50.
       - title: Private legal sandbox
         chips: ["$5 of usage included monthly"]
         body:

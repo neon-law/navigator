@@ -16,8 +16,9 @@ engagement. Government fees for a filing are separate. Monitoring and insurance 
 activation. The subscription includes $5 a month of model usage in the [Legal Sandbox](legal-sandbox.md). The `/app`
 page previews the coming iPhone and Android apps and hosts enrollment.
 
-A client chooses one of two ways to pay: the subscription, or a single attorney review for $50 paid once. A client who
-wants neither can prepare their own filings with Navigator, the free and open-source MCP tool, with no lawyer review.
+A client chooses one of two ways to pay: the subscription, or an ad hoc attorney review starting at $50, paid once. A
+client who wants neither can prepare their own filings with Navigator, the free and open-source MCP tool, with no lawyer
+review.
 
 The subscription bills through the same Purchase offerings as [DeleteYourData.com](brand.md)
 (`delete-your-data-monthly`, `delete-your-data-annual`). Neon's `/same-day-legal` link, and the retired `/nautilus`

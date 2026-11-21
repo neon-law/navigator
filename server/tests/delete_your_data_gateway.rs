@@ -131,8 +131,9 @@ async fn the_gateway_is_404_on_every_non_neon_brand_host() {
 }
 
 #[tokio::test]
-async fn same_day_legal_has_separate_services_and_app_pages() {
-    let app = app(state().await);
+async fn same_day_legal_home_leads_to_free_setup_and_separate_attorney_options() {
+    let app =
+        app(portal::test_support::app_state(store::surreal::SurrealDb::uninitialized()).await);
     let app_path = views::brand::SAME_DAY_LEGAL_APP_PATH;
     for host in ["sameday.neonlaw.com", "staging-sameday.neonlaw.com"] {
         let (status, home) = get_on_host(&app, "/", Some(host)).await;
@@ -140,10 +141,14 @@ async fn same_day_legal_has_separate_services_and_app_pages() {
         for expected in [
             "<title>Same Day Legal | Home</title>",
             "fm-page--same-day-legal",
-            "What is your legal need?",
-            "Start an LLC",
-            r#"href="/app""#,
-            "Email Same Day Legal",
+            r##"class="nav-btn nav-btn--primary fm-hero__cta" href="#mcp-setup""##,
+            r#"id="mcp-setup""#,
+            r#"href="/auth/signup""#,
+            "https://neonlaw.com/app/mcp",
+            r#"href="https://github.com/neon-law/navigator""#,
+            r#"href="/app#pricing""#,
+            "From $50",
+            r#"href="mailto:"#,
         ] {
             assert!(home.contains(expected), "{host} is missing {expected:?}");
         }
@@ -164,7 +169,7 @@ async fn same_day_legal_has_separate_services_and_app_pages() {
             "Vesta Estate Planning",
             "$29/mo",
             "$290/year",
-            "$50",
+            "From $50",
             "forming an LLC",
             "Lex Tecnica, Ltd.",
             r##"href="#enrollment""##,

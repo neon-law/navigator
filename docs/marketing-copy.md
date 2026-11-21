@@ -274,9 +274,10 @@ links use the same Notion booking calendar as Neon and Vesta. Plus Jakarta Sans 
 Pricing uses the shared `PricingSection` with the brand palette and typeface. The cloak crossing an internet grid is
 decorative; reduced-motion preferences disable animation. The Solana section carries the approved request-record and
 litigation copy. The page uses the same footer treatment as Neon and Vesta. The same subscription is sold as [Same Day
-Legal](glossary/same-day-legal.md), a brand of Lex Tecnica, Ltd. Its home asks “What is your legal need?” and lists
-common legal services and attorney contact. The `/app` page carries the subscription and enrollment. Both pages use the
-`same_day_legal` skin, the Lex Tecnica brand kit in monochrome with Cormorant SC display type.
+Legal](glossary/same-day-legal.md), a brand of Lex Tecnica, Ltd. Its home leads with free MCP setup, account signup, and
+a first public Template lookup. Visitors can request a single attorney review or explore the subscription. The `/app`
+page carries the subscription and enrollment. Both pages use the `same_day_legal` skin, the Lex Tecnica brand kit in
+monochrome with Cormorant SC display type.
 
 An `app_preview` band on `/app` draws an iPhone in its body proportions, listing every check as an equal peer: data
 removal, privacy protection, credit monitoring, dark web monitoring, identity theft insurance, unclaimed property,
@@ -284,7 +285,7 @@ estate planning, and basic form filings. Its `android_items` draw a Pixel beside
 view; screens are labelled illustrative. The page sells the subscription as cancel-anytime at $29/mo or $290/year, with
 LLC formation, the contract-template library, attorney review, and limited changes to a Vesta estate plan included. Its
 listing price and pricing cards resolve from DeleteYourData's home catalog. A second band offers the alternatives:
-Navigator, free, with no lawyer review, or one attorney review for $50 paid once. The store badges read "Coming soon"
+Navigator, free, with no lawyer review, or ad hoc attorney review starting at $50. The store badges read "Coming soon"
 and link nowhere until the apps are published. Its CTA opens a three-step public contact intake before sign-in; the
 signed-in page exposes the configured enrollment booking link. Legal work begins under a written engagement with Lex
 Tecnica, Ltd. Neon's `/same-day-legal` and retired `/nautilus` paths answer a 301 to the Same Day Legal host.

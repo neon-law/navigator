@@ -1,16 +1,66 @@
 head_title: "{site_name} | Home"
 meta_description: >-
-  Explore legal services for starting a business, planning your estate, preparing
-  court papers, and reviewing contracts. Contact an attorney about your next step.
-title: ""
-tagline: What is your legal need?
+  Prepare your own business filing with free tools in your AI assistant. Choose
+  ad hoc attorney review from $50 or ongoing help for $29 per month.
+title: Free tools for your business filing
+tagline: Get your paperwork ready before the new year.
 hero_lead: >-
-  Explore common legal needs or tell us what you need help with.
+  Connect Navigator to your AI assistant to find templates for your business
+  paperwork. You prepare and submit your own filing. Government filing fees are separate.
 hero_cta:
-  href: /app
-  label: Explore the app
+  href: "#mcp-setup"
+  label: Set up the free MCP
 skin: same_day_legal
 bands:
+  - kind: steps
+    anchor: mcp-setup
+    overline: ""
+    heading: Set up Navigator in your AI assistant
+    items:
+      - title: Start with a free account
+        body:
+          - - text: Create your free account
+              href: /auth/signup
+            - text: " or "
+            - text: sign in
+              href: "/auth/login?return_to=/%23mcp-setup"
+            - text: ". Come back to Free MCP setup after signup. Public templates are available before you sign in."
+      - title: Connect the tool
+        body:
+          - - text: "In your assistant’s connector settings, add a custom MCP server. Paste "
+            - text: https://neonlaw.com/app/mcp
+              code: true
+            - text: " and choose Streamable HTTP if asked."
+          - - text: "The hosted service limits how often you can call it. Prefer to run it yourself? "
+            - text: Get the open-source project
+              href: https://github.com/neon-law/navigator
+            - text: "."
+      - title: Find a filing template
+        body:
+          - - text: "Try this in chat, using your own state. "
+            - text: "List Navigator’s public templates. Which ones could help me form an LLC in Nevada?"
+              code: true
+  - kind: cards
+    anchor: attorney-options
+    overline: ""
+    heading: Want an attorney’s help?
+    description: Legal work begins when you and the firm agree to a written engagement.
+    pricing_style: true
+    items:
+      - title: Ad hoc attorney review
+        chips: ["From $50"]
+        cadence: one time
+        body:
+          - - text: A lawyer reviews one document or question. You agree on the fee and pay once before the review begins.
+        href: "mailto:{firm_email}"
+        href_label: Contact us for one review
+      - title: Ongoing help
+        chips: ["$29"]
+        cadence: per month
+        body:
+          - - text: The plan includes attorney review, basic filings such as LLC formation, and privacy services.
+        href: /app#pricing
+        href_label: See plan details and pricing
   - kind: cards
     anchor: needs
     overline: ""
@@ -43,11 +93,3 @@ bands:
       - title: Respond to a dispute
         body:
           - - text: Discuss what happened, any deadlines, and your options.
-  - kind: cta
-    heading: Talk through your next step
-    body: >-
-      Email our team to ask about your legal need. We’ll help you find the next step.
-    email: "{firm_email}"
-    action:
-      href: "mailto:{firm_email}"
-      label: Email Same Day Legal

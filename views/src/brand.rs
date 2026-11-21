@@ -673,10 +673,10 @@ pub static SAME_DAY_LEGAL_BRANDING: Branding = Branding {
         logo_href: "/public/brand/same-day-legal/logo.svg",
         social_image: "",
         nav: &[
+            NavLink::leaf("Free MCP setup", "/#mcp-setup"),
+            NavLink::leaf("Attorney options", "/#attorney-options"),
             NavLink::leaf("Legal services", "/#needs"),
             NavLink::leaf("Mobile app", SAME_DAY_LEGAL_APP_PATH),
-            NavLink::leaf("Pricing", "/app#pricing"),
-            NavLink::leaf("Get started", "/app#enrollment"),
         ],
         is_law_firm: true,
         legal_entity: LEX_TECNICA_LEGAL_ENTITY,
@@ -695,8 +695,8 @@ pub static SAME_DAY_LEGAL_BRANDING: Branding = Branding {
     base_url: "",
     primary_domain: "sameday.neonlaw.com",
     firm_disclaimer: "Attorney advertisement. Same Day Legal is a service of Lex Tecnica, Ltd. Subscribing does not by itself create an attorney-client relationship; legal work begins under a written engagement. Data removal does not guarantee compliance or prevent a future leak.",
-    mission_description: "Same Day Legal is one subscription from Lex Tecnica, Ltd. for privacy, paperwork, and lawyer help: data removal, privacy protection and monitoring, identity theft insurance, unclaimed property, basic form filings such as forming an LLC, attorney review, and limited changes to an estate plan made with Vesta Estate Planning, for $29/mo or $290/year. A single attorney review without a subscription is $50.",
-    service_description: "Same Day Legal from Lex Tecnica, Ltd.: $29/mo or $290/year for privacy protection, monitoring, form filings, attorney review, and limited estate plan changes, or $50 for a single attorney review. Government fees are separate.",
+    mission_description: "Same Day Legal is one subscription from Lex Tecnica, Ltd. for privacy, paperwork, and lawyer help: data removal, privacy protection and monitoring, identity theft insurance, unclaimed property, basic form filings such as forming an LLC, attorney review, and limited changes to an estate plan made with Vesta Estate Planning, for $29/mo or $290/year. Ad hoc attorney review starts at $50.",
+    service_description: "Same Day Legal from Lex Tecnica, Ltd.: $29/mo or $290/year for privacy protection, monitoring, form filings, attorney review, and limited estate plan changes, or ad hoc attorney review from $50. Government fees are separate.",
     portal_only: false,
     brand_key: BrandKey::SameDayLegal,
 };
