@@ -1,5 +1,5 @@
 ALTER TABLE time_entry DROP CONSTRAINT time_entry_source_check;
-ALTER TABLE time_entry ADD CHECK (source IN ('timer','manual','jujutsu'));
+ALTER TABLE time_entry ADD CONSTRAINT time_entry_source_check CHECK (source IN ('timer', 'manual', 'jujutsu'));
 
 CREATE TABLE billing_annotation (
     id UUID PRIMARY KEY,
@@ -15,9 +15,10 @@ CREATE TABLE billing_annotation (
     review_note TEXT CHECK (length(btrim(review_note)) BETWEEN 1 AND 2000),
     entry_id UUID UNIQUE REFERENCES time_entry(id),
     UNIQUE (project_id, change_id),
-    FOREIGN KEY (project_id, attorney_id) REFERENCES person_project_role(project_id,person_id),
-    CHECK ((reviewed_by IS NULL AND reviewed_at IS NULL AND review_note IS NULL AND entry_id IS NULL)
-        OR (reviewed_by IS NOT NULL AND reviewed_at IS NOT NULL AND review_note IS NOT NULL))
+    FOREIGN KEY (project_id, attorney_id) REFERENCES person_project_role (project_id, person_id),
+    CONSTRAINT billing_annotation_review_evidence CHECK (
+        (reviewed_by IS NULL AND reviewed_at IS NULL AND review_note IS NULL AND entry_id IS NULL) OR (reviewed_by IS NOT NULL AND reviewed_at IS NOT NULL AND review_note IS NOT NULL)
+    )
 );
 CREATE FUNCTION protect_billing_annotation() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
@@ -32,5 +33,4 @@ $$;
 CREATE TRIGGER billing_annotation_review BEFORE UPDATE OR DELETE ON billing_annotation
     FOR EACH ROW EXECUTE FUNCTION protect_billing_annotation();
 
-ALTER TABLE matter_billing_batch ADD COLUMN trust_state TEXT
-    CHECK (trust_state IS NULL OR (stripe_iolta AND trust_state ~ '^[A-Z]{2}$'));
+ALTER TABLE matter_billing_batch ADD COLUMN trust_state TEXT CHECK (trust_state IS NULL OR (stripe_iolta AND trust_state ~ '^[A-Z]{2}$'));

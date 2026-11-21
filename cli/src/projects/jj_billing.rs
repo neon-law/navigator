@@ -77,9 +77,10 @@ pub async fn stage(revision: &str) -> Result<()> {
             .as_str()
             .context("missing change description")?,
     )?;
-    let (base, token) = match crate::remote::matching_stored_session(&host)? {
-        crate::remote::MatchingSession::Valid(base, token) => (base, token),
-        _ => anyhow::bail!("sign in to the host in navigator.yaml before staging time"),
+    let crate::remote::MatchingSession::Valid(base, token) =
+        crate::remote::matching_stored_session(&host)?
+    else {
+        anyhow::bail!("sign in to the host in navigator.yaml before staging time")
     };
     let project_id = surfaces::resolve_project_id(&base, &token, &project).await?;
     let body = serde_json::json!({

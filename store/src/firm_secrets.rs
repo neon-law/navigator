@@ -737,6 +737,7 @@ pub struct TrustRoute {
 }
 
 impl TrustRoute {
+    #[must_use]
     pub fn credential_kind(&self) -> IntegrationSecretKind {
         if self.dedicated_nevada {
             IntegrationSecretKind::StripeNevadaAppKey
@@ -745,6 +746,7 @@ impl TrustRoute {
         }
     }
 
+    #[must_use]
     pub fn matches_batch(&self, batch: &crate::billing_batches::MatterBillingBatch) -> bool {
         // Nevada was the sole trust destination before batches recorded their state.
         batch.stripe_iolta
@@ -752,7 +754,8 @@ impl TrustRoute {
             && batch.stripe_account_id.as_ref() == Some(&self.account)
     }
 
-    pub fn bind_preview(&self, digest: String) -> String {
+    #[must_use]
+    pub fn bind_preview(&self, digest: &str) -> String {
         format!("{digest}/{}/{}", self.state, self.account)
     }
 }

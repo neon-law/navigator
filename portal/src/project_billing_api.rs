@@ -415,7 +415,7 @@ pub(crate) async fn generate_invoice(
         project.firm_id,
     );
     let preview_digest = match &route {
-        Some(route) => route.bind_preview(preview_digest),
+        Some(route) => route.bind_preview(&preview_digest),
         None => preview_digest,
     };
     if expected_preview_digest.is_some_and(|expected| expected != preview_digest) {

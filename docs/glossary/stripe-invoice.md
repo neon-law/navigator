@@ -6,4 +6,6 @@ description: An invoice draft created in the Stripe account configured for a Fir
 Navigator creates an unsent Stripe draft from a [Matter Billing Batch](matter-billing-batch.md). Each Firm maps a
 Project's governing state to its own reviewed trust destination. The batch retains the state, Stripe account, and
 invoice identifiers so that a retry keeps its destination. Time Entries and Project Costs stay reserved for
-reconciliation.
+reconciliation. Before sending a draft, the lawyer verifies the fee agreement, ownership of the payment, the bank
+account receiving the payout, and how processor fees and reversals are funded. A Stripe account identifier alone does
+not establish those facts.

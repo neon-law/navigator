@@ -367,7 +367,7 @@ pub fn BillingTab(
 
             section { class: "lawyer-detail__subsection",
                 h3 { "Client funds" }
-                p { "Receive client funds in the reviewed trust account for this matter’s state. Verify the cleared matter balance and resolve any dispute before approving a draw to operating." }
+                p { "Deposit client advances for fees and costs in the reviewed trust account for this matter. Before collecting a payment, check who owns it under the agreement and governing rules." }
                 if trust.any {
                     p { strong { "{trust.held}" } " held for this matter in the Xero mirror." }
                 } else {
@@ -666,7 +666,7 @@ pub fn BillingTab(
                     h3 { "Client trust" }
                     p { class: "nav-muted",
                         "Held for this Project in the firm's pooled client trust account, mirrored \
-                         from Xero. Review the Firm journal and cleared bank activity before authorizing a draw."
+                         from Xero. Before transferring earned fees to operating, check the invoice, the cleared matter balance and any disputed or reserved funds."
                     }
                     ul {
                         li { "Held: {trust.held}" }
@@ -701,9 +701,9 @@ fn confirm_step(code: &str, csrf: &str, generate: &GenerateInvoiceView) -> Eleme
     rsx! {
         p { class: "nav-muted",
             {match generate.stripe_iolta {
-                Some(true) => "This creates an unsent draft in the Firm’s state trust account for this matter.",
+                Some(true) => "This creates an unsent Stripe draft. Before sending it, verify that the payment belongs in the selected trust account. Review earned fees and reimbursement of costs the Firm already paid separately.",
                 Some(false) => "An operating-account draft requires reconciliation.",
-                None => "This records a receivable in Xero. Collect client funds through the verified state trust account.",
+                None => "This records a receivable in Xero. Confirm the proper destination before requesting payment.",
             }}
         }
         if let Some(state)=&generate.trust_state { p { strong { "Trust destination: {state}" } } }
@@ -1184,7 +1184,7 @@ pub(crate) async fn read_generate(
         project.firm_id,
     );
     let digest = match &route {
-        Some(route) => route.bind_preview(digest),
+        Some(route) => route.bind_preview(&digest),
         None => digest,
     };
     let mut lines = Vec::new();
