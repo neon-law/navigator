@@ -280,9 +280,10 @@ fn projects_help_lists_the_project_workspace_verbs() {
     let setup = unwrapped(&help(&["project", "setup", "--help"]));
     assert!(setup.contains("--all"));
     assert!(setup.contains("--json"));
-    assert!(
-        setup.contains("Complete an existing Project's Drive, GitHub, Slack, Notion, and shared")
-    );
+    assert!(setup.contains("workspace and integrations"));
+    let invite = unwrapped(&help(&["project", "invite", "--help"]));
+    assert!(invite.contains("unsent portal invitation"));
+    assert!(invite.contains("--draft-id"));
     let set = unwrapped(&help(&["project", "set", "--help"]));
     assert!(set.contains("live"));
 }
