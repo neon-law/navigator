@@ -6738,6 +6738,27 @@ async fn upload_document_door(
         }
         None => None,
     };
+    // The mail lane's retry safety (LAW-470): a partially-failed batch
+    // re-filing the same message re-uses the document the matter already
+    // holds — the same (project, filename, sha256) key the sync lane's
+    // `already_filed` probe uses — instead of writing a second copy under
+    // the mail slug. Identical bytes under a different filename remain a
+    // different document, per `find_filed_copy`'s contract.
+    let sha_hex = store::assets::sha256_hex(&bytes);
+    match store::assets::find_filed_copy(&state.surreal, id, filename, &sha_hex).await {
+        Ok(Some(existing)) => {
+            let pointer = document_pointer(
+                &state.surreal,
+                id,
+                existing.slug.as_deref().unwrap_or(slug),
+                existing.kind.as_deref().unwrap_or(kind),
+            )
+            .await?;
+            return Ok((StatusCode::OK, Json(pointer)).into_response());
+        }
+        Ok(None) => {}
+        Err(error) => return Err(ApiError::Asset(error)),
+    };
     let args = store::documents::IngestArgs {
         project_id: id,
         source: store::documents::source::UPLOAD,
@@ -8212,12 +8233,9 @@ async fn file_eml_reference(
         ));
     }
     if !attachment_documents.is_empty() {
-        let attachments = store::assets::find_by_ids(
-            &state.surreal,
-            &attachment_documents,
-        )
-        .await
-        .map_err(ApiError::Asset)?;
+        let attachments = store::assets::find_by_ids(&state.surreal, &attachment_documents)
+            .await
+            .map_err(ApiError::Asset)?;
         if attachments.len() != attachment_documents.len()
             || attachments
                 .iter()
