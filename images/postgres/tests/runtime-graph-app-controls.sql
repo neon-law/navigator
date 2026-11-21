@@ -15,60 +15,60 @@ DO $$ BEGIN
   RAISE EXCEPTION 'validated wrappers have wrong owner/configuration'; END IF;
 END $$;
 INSERT INTO person(id,name,email,role) VALUES
- ('10000000-0000-4000-8000-000000000001','Synthetic graph first','graph-first@example.test','client'),
- ('10000000-0000-4000-8000-000000000002','Synthetic graph second','graph-second@example.test','client');
+ ('a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c1','Synthetic graph first','graph-first@example.test','client'),
+ ('a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c2','Synthetic graph second','graph-second@example.test','client');
 -- Equal UUIDs in distinct canonical tables must remain distinct graph vertices.
 INSERT INTO entity_type(id,name) VALUES
- ('10000000-0000-4000-8000-000000000010','Synthetic graph Entity kind');
+ ('a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5ca','Synthetic graph Entity kind');
 INSERT INTO jurisdiction(id,name) VALUES
- ('10000000-0000-4000-8000-000000000011','Synthetic graph jurisdiction');
+ ('a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5cb','Synthetic graph jurisdiction');
 INSERT INTO entity(id,name,entity_type_id,jurisdiction_id) VALUES
- ('10000000-0000-4000-8000-000000000001','Synthetic graph Entity first',
-  '10000000-0000-4000-8000-000000000010','10000000-0000-4000-8000-000000000011'),
- ('10000000-0000-4000-8000-000000000002','Synthetic graph Entity second',
-  '10000000-0000-4000-8000-000000000010','10000000-0000-4000-8000-000000000011');
+ ('a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c1','Synthetic graph Entity first',
+  'a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5ca','a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5cb'),
+ ('a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c2','Synthetic graph Entity second',
+  'a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5ca','a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5cb');
 INSERT INTO relationship(id,confidence_pct,detail,inserted_at,kind,source_id,source_kind,updated_at,"in","out") VALUES
- ('synthetic-runtime-graph-edge',100,'Synthetic exact provenance',now(),'adverse_to',to_jsonb('10000000-0000-4000-8000-000000000003'::text),'manual',now(),
- '{"tb":"person","id":{"Uuid":"10000000-0000-4000-8000-000000000001"}}',
- '{"tb":"person","id":{"Uuid":"10000000-0000-4000-8000-000000000002"}}');
+ ('synthetic-runtime-graph-edge',100,'Synthetic exact provenance',now(),'adverse_to',to_jsonb('a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c3'::text),'manual',now(),
+ '{"tb":"person","id":{"Uuid":"a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c1"}}',
+ '{"tb":"person","id":{"Uuid":"a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c2"}}');
 DO $$
 DECLARE payload jsonb; item jsonb; graph_before jsonb; n bigint; denied boolean; command text; label text;
 BEGIN
  SELECT count(*) INTO n FROM navigator_graph."Person" WHERE properties::text::jsonb->>'id' IN
- ('10000000-0000-4000-8000-000000000001','10000000-0000-4000-8000-000000000002');
+ ('a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c1','a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c2');
  IF n<>0 THEN RAISE EXCEPTION 'NEW vertex proof was preseeded'; END IF;
- PERFORM graph_ensure_vertices('person','{"rows":[{"id":"10000000-0000-4000-8000-000000000001","name":"caller cannot forge name"},{"id":"10000000-0000-4000-8000-000000000002"}]}');
+ PERFORM graph_ensure_vertices('person','{"rows":[{"id":"a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c1","name":"caller cannot forge name"},{"id":"a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c2"}]}');
  SELECT count(*) INTO n FROM navigator_graph."Person" WHERE properties::text::jsonb->>'id' IN
- ('10000000-0000-4000-8000-000000000001','10000000-0000-4000-8000-000000000002');
+ ('a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c1','a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c2');
  IF n<>2 THEN RAISE EXCEPTION 'actual App did not create BOTH vertices'; END IF;
  IF NOT EXISTS(SELECT 1 FROM navigator_graph."Person" WHERE properties::text::jsonb @>
- '{"id":"10000000-0000-4000-8000-000000000001","name":"Synthetic graph first"}') THEN
+ '{"id":"a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c1","name":"Synthetic graph first"}') THEN
   RAISE EXCEPTION 'vertex properties were not canonically derived'; END IF;
  -- Project the Entity twins after Persons exist: neither label may satisfy the other.
  SELECT count(*) INTO n FROM navigator_graph."Entity" WHERE properties::text::jsonb->>'id' IN
- ('10000000-0000-4000-8000-000000000001','10000000-0000-4000-8000-000000000002');
+ ('a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c1','a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c2');
  IF n<>0 THEN RAISE EXCEPTION 'NEW Entity proof was preseeded'; END IF;
- PERFORM graph_ensure_vertices('entity','{"rows":[{"id":"10000000-0000-4000-8000-000000000001","name":"caller cannot forge Entity name"},{"id":"10000000-0000-4000-8000-000000000002"}]}');
+ PERFORM graph_ensure_vertices('entity','{"rows":[{"id":"a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c1","name":"caller cannot forge Entity name"},{"id":"a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c2"}]}');
  SELECT count(*) INTO n FROM navigator_graph."Entity" WHERE properties::text::jsonb->>'id' IN
- ('10000000-0000-4000-8000-000000000001','10000000-0000-4000-8000-000000000002');
+ ('a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c1','a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c2');
  IF n<>2 THEN RAISE EXCEPTION 'actual App did not create BOTH Entity twins'; END IF;
  IF NOT EXISTS(SELECT 1 FROM navigator_graph."Entity" WHERE properties::text::jsonb @>
- '{"id":"10000000-0000-4000-8000-000000000001","name":"Synthetic graph Entity first"}') THEN
+ '{"id":"a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c1","name":"Synthetic graph Entity first"}') THEN
   RAISE EXCEPTION 'Entity vertex properties were not canonically derived'; END IF;
- item:='{"from_id":"10000000-0000-4000-8000-000000000001","to_id":"10000000-0000-4000-8000-000000000002","from_kind":"person","to_kind":"person","kind":"adverse_to","confidence_pct":100,"source_kind":"manual","source_id":"10000000-0000-4000-8000-000000000003","detail":"Synthetic exact provenance"}';
+ item:='{"from_id":"a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c1","to_id":"a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c2","from_kind":"person","to_kind":"person","kind":"adverse_to","confidence_pct":100,"source_kind":"manual","source_id":"a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c3","detail":"Synthetic exact provenance"}';
  -- A legitimate first effect followed by forged provenance must roll back the WHOLE statement.
  payload:=jsonb_build_object('rows',jsonb_build_array(item,jsonb_set(item,'{confidence_pct}','17')));
  denied:=false;
  BEGIN PERFORM * FROM graph_load_edges('relationship',payload::text);
  EXCEPTION WHEN check_violation THEN denied:=true; END;
  IF NOT denied THEN RAISE EXCEPTION 'forged provenance accepted'; END IF;
- IF EXISTS(SELECT 1 FROM navigator_graph."RELATIONSHIP" WHERE properties::text::jsonb->>'source_id'='10000000-0000-4000-8000-000000000003') THEN
+ IF EXISTS(SELECT 1 FROM navigator_graph."RELATIONSHIP" WHERE properties::text::jsonb->>'source_id'='a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c3') THEN
   RAISE EXCEPTION 'failed multirow projection left a prefix edge'; END IF;
  -- A distinct forged source UUID must also refuse, not merely altered confidence.
  SELECT coalesce(jsonb_agg(to_jsonb(edge) ORDER BY edge.id),'[]'::jsonb)
  INTO graph_before FROM navigator_graph."RELATIONSHIP" edge;
  payload:=jsonb_build_object('rows',jsonb_build_array(item,
-  jsonb_set(item,'{source_id}',to_jsonb('10000000-0000-4000-8000-000000000004'::text))));
+  jsonb_set(item,'{source_id}',to_jsonb('a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c4'::text))));
  denied:=false;
  BEGIN PERFORM * FROM graph_load_edges('relationship',payload::text);
  EXCEPTION WHEN check_violation THEN denied:=true; END;
@@ -79,22 +79,22 @@ BEGIN
  ) THEN RAISE EXCEPTION 'forged source batch changed graph or left a valid prefix'; END IF;
  PERFORM * FROM graph_load_edges('relationship',jsonb_build_object('rows',jsonb_build_array(item))::text);
  SELECT count(*) INTO n FROM navigator_graph."RELATIONSHIP" WHERE properties::text::jsonb @>
- '{"source_id":"10000000-0000-4000-8000-000000000003","detail":"Synthetic exact provenance","confidence_pct":100,"kind":"adverse_to"}';
+ '{"source_id":"a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c3","detail":"Synthetic exact provenance","confidence_pct":100,"kind":"adverse_to"}';
  IF n<>1 THEN RAISE EXCEPTION 'actual NEW edge/provenance missing'; END IF;
  -- Physical graph endpoint IDs must name Person labels, despite equal property UUIDs.
  SELECT count(*) INTO n FROM navigator_graph."RELATIONSHIP" edge
  JOIN navigator_graph."Person" a ON a.id::text=edge.start_id::text
  JOIN navigator_graph."Person" z ON z.id::text=edge.end_id::text
- WHERE edge.properties::text::jsonb->>'source_id'='10000000-0000-4000-8000-000000000003'
- AND a.properties::text::jsonb->>'id'='10000000-0000-4000-8000-000000000001'
- AND z.properties::text::jsonb->>'id'='10000000-0000-4000-8000-000000000002';
+ WHERE edge.properties::text::jsonb->>'source_id'='a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c3'
+ AND a.properties::text::jsonb->>'id'='a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c1'
+ AND z.properties::text::jsonb->>'id'='a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c2';
  IF n<>1 THEN RAISE EXCEPTION 'canonical relationship did not retain Person to Person endpoints'; END IF;
  SELECT count(*) INTO n FROM navigator_graph."RELATIONSHIP" edge
  JOIN navigator_graph."Entity" entity ON entity.id::text=edge.start_id::text OR entity.id::text=edge.end_id::text
- WHERE edge.properties::text::jsonb->>'source_id'='10000000-0000-4000-8000-000000000003';
+ WHERE edge.properties::text::jsonb->>'source_id'='a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c3';
  IF n<>0 THEN RAISE EXCEPTION 'equal UUID redirected canonical relationship to Entity'; END IF;
  denied:=false;
- BEGIN PERFORM graph_ensure_vertices('person','{"rows":[{"id":"10000000-0000-4000-8000-000000000099"}]}');
+ BEGIN PERFORM graph_ensure_vertices('person','{"rows":[{"id":"a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5cf"}]}');
  EXCEPTION WHEN foreign_key_violation THEN denied:=true; END;
  IF NOT denied THEN RAISE EXCEPTION 'invented absent vertex accepted'; END IF;
  FOREACH label IN ARRAY ARRAY['Person','Entity','Project','Firm','HAS_ROLE','RELATIONSHIP','WORKS_ON','MEMBER_OF','HANDLES'] LOOP
