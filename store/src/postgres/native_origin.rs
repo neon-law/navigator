@@ -121,6 +121,15 @@ pub async fn create(
     create_observed(admin_options, operation, tier, || {}, |_| {}).await
 }
 
+// Fixed labels and booleans only: no options, SQL, identifiers or error chains.
+fn creation_phase(phase: &'static str) {
+    tracing::debug!(target: "navigator_native_origin_transport", phase);
+}
+
+fn creation_outcome(phase: &'static str, success: bool) {
+    tracing::debug!(target: "navigator_native_origin_transport", phase, success);
+}
+
 /// Observe acknowledged creation and connected resources without adopting a target.
 async fn create_observed(
     admin_options: PgConnectOptions,
@@ -131,50 +140,69 @@ async fn create_observed(
 ) -> Result<CreatedDatabase, OriginError> {
     tier.validate()?;
     let name = database_name(operation)?;
+    creation_phase("create.admin_connect.begin");
     let admin = PostgresDb::connect(admin_options.clone())
         .await
         .map_err(|_| OriginError::Creation)?;
+    creation_phase("create.admin_connect.end");
+    creation_phase("create.database.begin");
     // Both identifiers derive solely from a validated UUID, not user SQL.
     let result = sqlx::query(AssertSqlSafe(format!(
         "CREATE DATABASE \"{name}\" TEMPLATE template0 ALLOW_CONNECTIONS false"
     )))
     .execute(admin.pool())
     .await;
+    creation_outcome("create.database.end", result.is_ok());
     if result.is_ok() {
         observe_created();
+        creation_phase("create.database.acknowledged");
         // Keep runtime roles out until the provisioner deliberately grants them
         // access after migration and native-origin initialization.
+        creation_phase("create.fence.begin");
         let fenced = sqlx::query(AssertSqlSafe(format!(
             "REVOKE ALL ON DATABASE \"{name}\" FROM PUBLIC"
         )))
         .execute(admin.pool())
         .await;
+        creation_outcome("create.fence.end", fenced.is_ok());
         if fenced.is_err() {
+            creation_phase("create.admin_close.fence_failure.begin");
             admin.pool().close().await;
+            creation_phase("create.admin_close.fence_failure.end");
             return Err(OriginError::Creation);
         }
+        creation_phase("create.allow_connections.begin");
         let opened = sqlx::query(AssertSqlSafe(format!(
             "ALTER DATABASE \"{name}\" ALLOW_CONNECTIONS true"
         )))
         .execute(admin.pool())
         .await;
+        creation_outcome("create.allow_connections.end", opened.is_ok());
         if opened.is_err() {
+            creation_phase("create.admin_close.open_failure.begin");
             admin.pool().close().await;
+            creation_phase("create.admin_close.open_failure.end");
             return Err(OriginError::Creation);
         }
     }
+    creation_phase("create.admin_close.begin");
     admin.pool().close().await;
+    creation_phase("create.admin_close.end");
     result.map_err(|_| OriginError::Creation)?;
+    creation_phase("create.target_connect.begin");
     let postgres = PostgresDb::connect(admin_options.clone().database(&name))
         .await
         .map_err(|_| OriginError::Creation)?;
     observe_connection(&postgres);
+    creation_phase("create.target_connect.end");
+    creation_phase("create.marker.begin");
     sqlx::query(AssertSqlSafe(format!(
         "COMMENT ON DATABASE \"{name}\" IS '{}'",
         marker(operation)
     )))
     .execute(postgres.pool())
     .await?;
+    creation_phase("create.marker.end");
     Ok(CreatedDatabase {
         postgres,
         operation,

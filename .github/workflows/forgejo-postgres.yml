@@ -13,6 +13,8 @@ jobs:
       CARGO_PROFILE_DEV_DEBUG: "0"
       KUBECONFIG: /tmp/forgejo-kind.config
       NAVIGATOR_KIND_CLUSTER: forgejo-smoke
+      # Fixed phase names and booleans only; do not enable SQL/client debug logs.
+      RUST_LOG: info,navigator_native_origin_transport=debug
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: azure/setup-kubectl@bda439f5f36b99b262ebdcd3613869bddb064c8e # v5

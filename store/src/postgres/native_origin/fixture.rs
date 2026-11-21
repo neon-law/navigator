@@ -26,18 +26,26 @@ pub(crate) async fn create(
         |pg| initialization_pool = Some(pg.clone()),
     )
     .await;
+    super::creation_outcome("fixture.create.end", created.is_ok());
+    super::creation_outcome("fixture.creation.acknowledged", acknowledged);
     let mut routed_pool = None;
     let prepared = async {
-        let native = created?.initialize().await?;
+        let created = created?;
+        super::creation_phase("fixture.initialize.begin");
+        let native = created.initialize().await?;
+        super::creation_phase("fixture.initialize.end");
         let expected = identity(native.postgres()).await?;
+        super::creation_phase("fixture.data_connect.begin");
         let pg = PostgresDb::connect(fixture_options.database(&name)).await?;
         routed_pool = Some(pg.clone());
+        super::creation_phase("fixture.data_connect.end");
         // A separately routed transport must reach the exact resource this
         // capability created, not merely a database with a matching name.
         let actual = identity(&pg).await?;
         if actual != expected || !super::admits(&pg).await? {
             return Err(anyhow::Error::from(super::OriginError::Identity));
         }
+        super::creation_phase("fixture.data_identity_admission.end");
         Ok(NativeDatabase {
             postgres: pg,
             operation,
@@ -48,19 +56,25 @@ pub(crate) async fn create(
     // The opaque creation resource may have failed after connecting. Its
     // observed pool is retained solely to drain it before owned cleanup.
     if let Some(pg) = initialization_pool {
+        super::creation_phase("fixture.initialization_pool_close.begin");
         pg.pool().close().await;
+        super::creation_phase("fixture.initialization_pool_close.end");
     }
     if prepared.is_err() {
         if let Some(pg) = routed_pool {
+            super::creation_phase("fixture.failed_data_pool_close.begin");
             pg.pool().close().await;
+            super::creation_phase("fixture.failed_data_pool_close.end");
         }
     }
     match prepared {
         Ok(native) => Ok(native),
         Err(error) if acknowledged => {
+            super::creation_phase("fixture.owned_drop.begin");
             let cleanup = sqlx::query(AssertSqlSafe(format!("DROP DATABASE \"{name}\"")))
                 .execute(admin.pool())
                 .await;
+            super::creation_outcome("fixture.owned_drop.end", cleanup.is_ok());
             match cleanup {
                 Ok(_) => Err(error),
                 Err(cleanup) => {
