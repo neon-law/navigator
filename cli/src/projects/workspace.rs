@@ -78,9 +78,15 @@ pub(super) async fn finish(base: &str, token: &str, id: Uuid, code: &str) -> Res
         verified_manifest = verify_project_main(root, origin, &main, base, code).await?;
         let current = get(base, token, id).await?;
         ensure!(
-            current.repository_remotes.origin.as_deref() == Some(origin),
-            "Project repository authority changed; retry setup"
+            current.repository_remotes.origin.as_deref() == Some(origin)
+                && current.firm_id == project.firm_id
+                && current.brand == project.brand
+                && matches!(current.status.as_str(), "pitch" | "open"),
+            "Project repository authority, ownership, or lifecycle changed; retry setup"
         );
+        verified_manifest
+            .check_live_ownership(current.firm_id, Some(&current.brand))
+            .map_err(anyhow::Error::msg)?;
         crate::github_setup::protect_project(&target)
             .await
             .context("GitHub branch protection and required check are incomplete; an authorized repository administrator can rerun setup")?;
@@ -444,6 +450,33 @@ async fn sync_mirror(dir: &Path, origin: &str, mirror: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_new_github_workspace_includes_its_required_review_files() -> Result<()> {
+        let fixture = tempfile::tempdir()?;
+        let root = fixture.path();
+        repository::emit_scaffold_for(
+            root,
+            "sample-workspace",
+            "example.test",
+            "lawyer@example.com",
+            "client@example.com",
+            model::forge::ForgeBackend::GitHub,
+        )?;
+        for path in [
+            ".github/CODEOWNERS",
+            ".github/workflows/ci.yml",
+            ".github/workflows/cd.yml",
+            ".github/workflows/automerge.yml",
+        ] {
+            assert!(root.join(path).is_file(), "new workspace needs {path}");
+        }
+        assert_eq!(
+            repository::validate_gate(root, Some("sample-workspace"), false).errors,
+            0
+        );
+        Ok(())
+    }
 
     #[tokio::test]
     async fn an_empty_mirror_catches_up_on_retry_without_rewriting_main() -> Result<()> {

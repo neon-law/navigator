@@ -2256,6 +2256,10 @@ async fn reconcile_inner(
         {
             contents
         } else {
+            ensure!(
+                update_workflows,
+                "restore .github/CODEOWNERS through a reviewed Project change before retrying setup"
+            );
             create_codeowners = true;
             DEFAULT_CODEOWNERS.to_string()
         };
@@ -5137,6 +5141,48 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(labels))
             .mount(server)
             .await;
+    }
+
+    #[tokio::test]
+    async fn workspace_setup_refuses_to_write_missing_codeowners_to_protected_main() {
+        let server = MockServer::start().await;
+        let client = test_client(&server);
+        let mut project = live_repository_json("enabled");
+        project["private"] = serde_json::json!(true);
+        mount_reads_with_repository(
+            &server,
+            &live_ruleset(),
+            Vec::new(),
+            REQUIRED_CHECK_WORKFLOW,
+            project,
+        )
+        .await;
+        Mock::given(method("GET"))
+            .and(path("/repos/acme/navigator/contents/.github/CODEOWNERS"))
+            .respond_with(ResponseTemplate::new(404))
+            .with_priority(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let error = reconcile_inner(
+            CLIENT_POLICY,
+            &client,
+            false,
+            None,
+            project_repository::DEFAULT_WORKFLOW_HOME,
+        )
+        .await
+        .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("through a reviewed Project change"));
+        assert!(server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .all(|request| request.method.as_str() == "GET"));
     }
 
     /// LAW-10: `scaffold` writes `.github/workflows/ci.yml` as a thin caller
