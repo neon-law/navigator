@@ -3150,7 +3150,7 @@ async fn upload_and_file_eml(
             None,
             None,
             Some("message/rfc822"),
-            Some(&format!("mail/{slug_ref}/source")),
+            Some(&format!("mail/{slug_ref}/source.eml")),
             None,
             None,
             None,
@@ -3160,11 +3160,8 @@ async fn upload_and_file_eml(
         .await?;
     let mut attachment_ids = Vec::with_capacity(parsed.attachments.len());
     for (index, attachment) in parsed.attachments.iter().enumerate() {
-        let filename = if attachment.filename.is_empty() {
-            format!("attachment-{index}")
-        } else {
-            attachment.filename.clone()
-        };
+        let (filename, attachment_slug) =
+            mail_attachment_identity(&slug_ref, index, &attachment.filename);
         let pointer = client
             .upload_bytes_with_details(
                 &filename,
@@ -3173,7 +3170,7 @@ async fn upload_and_file_eml(
                 None,
                 None,
                 Some(&attachment.content_type),
-                Some(&format!("mail/{slug_ref}/{index}")),
+                Some(&attachment_slug),
                 None,
                 None,
                 None,
@@ -3333,6 +3330,29 @@ fn mail_slug_ref(message_ref: &str) -> String {
             }
         })
         .collect()
+}
+
+/// The upload client refuses a slug that does not end with the uploaded
+/// filename's extension (`model::documents::validate_document_slug`), so
+/// mail attachment slugs carry the part's extension; an extensionless part
+/// gains `.bin` in both the filename and the slug.
+fn mail_attachment_identity(slug_ref: &str, index: usize, part_filename: &str) -> (String, String) {
+    let file_extension = std::path::Path::new(part_filename)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .filter(|extension| !extension.is_empty());
+    let extension = match file_extension {
+        Some(extension) => format!(".{extension}"),
+        None => ".bin".to_string(),
+    };
+    let filename = if part_filename.is_empty() {
+        format!("attachment-{index}{extension}")
+    } else if file_extension.is_some() {
+        part_filename.to_string()
+    } else {
+        format!("{part_filename}{extension}")
+    };
+    (filename, format!("mail/{slug_ref}/{index}{extension}"))
 }
 
 struct GmailSource<'a> {
@@ -6073,7 +6093,7 @@ PDF-BYTES\r\n\
         assert_eq!(bodies.len(), 2, "source plus one attachment");
         let source = bodies
             .iter()
-            .find(|body| body["slug"] == "mail/signing-1-example.test/source")
+            .find(|body| body["slug"] == "mail/signing-1-example.test/source.eml")
             .expect("the raw message files as the source document");
         assert_eq!(source["content_type"], "message/rfc822");
         assert_eq!(source["mail_provenance"]["message_id"], parsed.source_ref);
@@ -6083,7 +6103,7 @@ PDF-BYTES\r\n\
         );
         let attachment = bodies
             .iter()
-            .find(|body| body["slug"] == "mail/signing-1-example.test/0")
+            .find(|body| body["slug"] == "mail/signing-1-example.test/0.pdf")
             .expect("the attachment files under its index");
         assert_eq!(attachment["filename"], "retainer.pdf");
         assert_eq!(attachment["content_type"], "application/pdf");
