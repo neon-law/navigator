@@ -674,16 +674,6 @@ pub async fn require_runtime_selection(
     })
 }
 
-/// Enroll only a newly minted, exclusively owned native fixture before any
-/// application data exists. This does not construct a captured-source receipt.
-#[cfg(any(test, feature = "test-support"))]
-pub(crate) async fn initialize_fresh_native(postgres: &PostgresDb) -> Result<(), sqlx::Error> {
-    let mut transaction = postgres.pool().begin().await?;
-    initialize_fresh_on(&mut transaction).await?;
-    transaction.commit().await?;
-    Ok(())
-}
-
 // Only the two exclusively-created resource constructors call this transaction
 // seam; no public connection or environment setting can initialize ownership.
 pub(crate) async fn initialize_fresh_on(

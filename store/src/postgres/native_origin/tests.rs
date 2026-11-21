@@ -836,8 +836,7 @@ async fn fresh_origin_and_object_epoch_commit_atomically_and_boot_requires_every
 }
 
 #[tokio::test]
-async fn activated_object_epoch_holds_only_two_selectors_and_invalid_or_unavailable_epochs_refuse()
-{
+async fn fresh_fixture_requires_full_native_profile_and_invalid_or_unavailable_epochs_refuse() {
     let Some(options) = options() else { return };
     let inactive = crate::test_support::PostgresFixture::create_capture_target(options.clone())
         .await
@@ -859,6 +858,12 @@ async fn activated_object_epoch_holds_only_two_selectors_and_invalid_or_unavaila
         "NAVIGATOR_WORKFLOW_ENGINE" => Some("dbos".into()),
         _ => None,
     };
+    assert!(matches!(
+        crate::durable_object_handover::require_runtime_selection(active.postgres(), lookup).await,
+        Err(crate::durable_object_handover::HandoverError::NativeProfile)
+    ));
+    let values = full_native_lookup();
+    let lookup = |key: &str| values.get(key).cloned();
     assert!(
         !crate::durable_object_handover::require_runtime_selection(active.postgres(), lookup)
             .await

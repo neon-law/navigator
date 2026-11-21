@@ -351,10 +351,11 @@ async fn injected_store_refuses_damaged_history_and_closed_pool_without_fallback
         let pg = PostgresDb::application().await.unwrap();
         let providers = local();
         let context = providers.general_nag(SurrealDb::uninitialized(), pg.clone());
-        sqlx::query("DELETE FROM mirror_backfill_checkpoint")
+        let damaged_schema = sqlx::query("UPDATE public._sqlx_migrations SET success=false WHERE version=(SELECT max(version) FROM public._sqlx_migrations)")
             .execute(pg.pool())
             .await
             .unwrap();
+        assert_eq!(damaged_schema.rows_affected(), 1, "the owned native schema attestation must actually be damaged");
         assert!(context.counts.read().await.is_err());
         pg.pool().close().await;
         assert!(context.counts.read().await.is_err());

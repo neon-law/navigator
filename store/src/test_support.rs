@@ -1,8 +1,8 @@
 //! Shared synthetic infrastructure for workspace tests and explicit development smoke harnesses.
 //!
 //! PostgreSQL actor tests use [`with_postgres`]: each walk owns a freshly
-//! created database with canonical schema and empty-history enrollment before
-//! fixture data. [`PostgresFixture`] exposes that same lifecycle to a harness
+//! created database admitted through the production fresh-native creation and
+//! migration path before fixture data. [`PostgresFixture`] exposes that same lifecycle to a harness
 //! which must pass explicit connection options or share its database with a
 //! child process. Ordinary application startup never calls these constructors.
 //!
@@ -901,8 +901,9 @@ pub async fn ingest_fi_message_on(
 
 /// An exclusively owned, freshly created synthetic PostgreSQL database.
 ///
-/// Default construction installs canonical schema and empty-history receipts
-/// before fixture data; `create_unactivated` leaves history absent for admission tests.
+/// Default construction creates and initializes a genuine fresh-native Database
+/// Origin through the production creation capability, without captured-history
+/// receipts. `create_unactivated` leaves history absent for admission tests.
 /// Construction never accepts an existing target database. Call `close`
 /// after all consumers have drained; it drops only this resource's minted name.
 pub struct PostgresFixture {
@@ -912,7 +913,6 @@ pub struct PostgresFixture {
 }
 
 enum FixtureInitialization {
-    Native,
     CaptureTarget,
     SchemaOnly,
 }
@@ -937,12 +937,36 @@ impl PostgresFixture {
         admin_options: sqlx::postgres::PgConnectOptions,
         fixture_options: sqlx::postgres::PgConnectOptions,
     ) -> anyhow::Result<Self> {
-        Self::create_owned(
+        let admin = crate::postgres::PostgresDb::connect(admin_options.clone())
+            .await
+            .context("connect synthetic fixture administration")?;
+        let operation = Uuid::now_v7();
+        let database = crate::postgres::native_origin::database_name(operation)?;
+        let tier = crate::postgres::native_origin::TierBinding {
+            tier_id: Uuid::new_v4(),
+            namespace_uid: Uuid::new_v4(),
+            cluster_name: "synthetic-native-fixture".into(),
+        };
+        let prepared = crate::postgres::native_origin::fixture::create(
+            &admin,
             admin_options,
             fixture_options,
-            FixtureInitialization::Native,
+            operation,
+            tier,
         )
         .await
+        .with_context(|| format!("initialize owned synthetic fixture {database}"));
+        match prepared {
+            Ok(native) => Ok(Self {
+                admin,
+                pg: native.postgres().clone(),
+                database,
+            }),
+            Err(error) => {
+                admin.pool().close().await;
+                Err(error)
+            }
+        }
     }
 
     /// Create a fresh application fixture without native object ownership, for
@@ -1064,10 +1088,6 @@ async fn prepare_postgres_fixture(
             .execute(pg.pool()).await.context("apply synthetic fixture canonical schema")?;
         if matches!(initialization, FixtureInitialization::SchemaOnly) {
             return anyhow::Ok(());
-        }
-        if matches!(initialization, FixtureInitialization::Native) {
-            crate::durable_object_handover::initialize_fresh_native(&pg).await
-                .context("initialize exclusively fresh native object ownership")?;
         }
         sqlx::query("INSERT INTO mirror_backfill_run(id,batch_size,status,scope,completed_at) VALUES ($1,1,'completed','global',now())")
             .bind(Uuid::new_v4()).execute(pg.pool()).await

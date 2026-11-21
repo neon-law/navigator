@@ -86,10 +86,11 @@ async fn application_scope_rechecks_history_and_never_falls_back_to_another_admi
             PostgresDb::with_test_db(admitted.clone(), async {
                 PostgresDb::with_application_db(damaged.clone(), async {
                     // An owned negative fixture models an incomplete restored proof after entry.
-                    sqlx::query("DELETE FROM mirror_backfill_checkpoint")
+                    let damaged_schema = sqlx::query("UPDATE public._sqlx_migrations SET success=false WHERE version=(SELECT max(version) FROM public._sqlx_migrations)")
                         .execute(damaged.pool())
                         .await
                         .unwrap();
+                    assert_eq!(damaged_schema.rows_affected(), 1, "the owned native schema attestation must actually be damaged");
                     assert!(matches!(
                         PostgresDb::application().await,
                         Err(PostgresError::History)
@@ -240,10 +241,11 @@ async fn calendar_and_brand_management_use_the_owning_application_pool() {
                     .unwrap();
                     assert_eq!(count, 0, "ambient {table} must remain untouched");
                 }
-                sqlx::query("DELETE FROM mirror_backfill_checkpoint")
+                let damaged_schema = sqlx::query("UPDATE public._sqlx_migrations SET success=false WHERE version=(SELECT max(version) FROM public._sqlx_migrations)")
                     .execute(owned.pool())
                     .await
                     .unwrap();
+                assert_eq!(damaged_schema.rows_affected(), 1, "the owned native schema attestation must actually be damaged");
                 assert!(matches!(
                     crate::firms::set_calendar_owner(
                         &db,

@@ -11,6 +11,8 @@ use sqlx::postgres::PgConnectOptions;
 use sqlx::{AssertSqlSafe, Row};
 use uuid::Uuid;
 
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) mod fixture;
 mod upgrade;
 pub use upgrade::upgrade;
 #[cfg(any(test, feature = "test-support"))]
@@ -111,6 +113,17 @@ pub async fn create(
     operation: Uuid,
     tier: TierBinding,
 ) -> Result<CreatedDatabase, OriginError> {
+    create_observed(admin_options, operation, tier, || {}, |_| {}).await
+}
+
+/// Observe acknowledged creation and connected resources without adopting a target.
+async fn create_observed(
+    admin_options: PgConnectOptions,
+    operation: Uuid,
+    tier: TierBinding,
+    mut observe_created: impl FnMut(),
+    mut observe_connection: impl FnMut(&PostgresDb),
+) -> Result<CreatedDatabase, OriginError> {
     tier.validate()?;
     let name = database_name(operation)?;
     let admin = PostgresDb::connect(admin_options.clone())
@@ -123,6 +136,7 @@ pub async fn create(
     .execute(admin.pool())
     .await;
     if result.is_ok() {
+        observe_created();
         // Keep runtime roles out until the provisioner deliberately grants them
         // access after migration and native-origin initialization.
         let fenced = sqlx::query(AssertSqlSafe(format!(
@@ -149,6 +163,7 @@ pub async fn create(
     let postgres = PostgresDb::connect(admin_options.database(&name))
         .await
         .map_err(|_| OriginError::Creation)?;
+    observe_connection(&postgres);
     sqlx::query(AssertSqlSafe(format!(
         "COMMENT ON DATABASE \"{name}\" IS '{}'",
         marker(operation)

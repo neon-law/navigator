@@ -775,3 +775,81 @@ fn sdk_wire_codec_matches_native_capture_fixture() {
         restate_sdk::serde::Serialize::serialize(&restate_sdk::serde::Json(seen.clone())).unwrap();
     assert_eq!(sdk.as_ref(), serde_json::to_vec(&seen).unwrap());
 }
+
+/// The controlled wire fixture passes the production capture parser, import,
+/// and activation parity checks before two native callers can be selected.
+#[tokio::test]
+async fn captured_object_epoch_holds_two_selectors_and_invalid_or_unavailable_epochs_refuse() {
+    with_fixture(true, |pg, _url| async move {
+        let db = SurrealDb::uninitialized();
+        let first = matter(&db).await;
+        let source = Source::controlled(Uuid::new_v4(), first.project);
+        let capture = source.capture(&pg).await;
+        let receipt = durable_object_handover::import(&pg, &capture, true).await.unwrap();
+        assert!(receipt.committed && !receipt.native_activation);
+        source.activate(&pg, &capture).await.unwrap();
+        let provenance: (String, bool) = sqlx::query_as(
+            "SELECT h.origin,EXISTS(SELECT 1 FROM database_origin) FROM durable_object_ownership o JOIN durable_object_handover h ON h.capture_id=o.capture_id WHERE o.singleton",
+        ).fetch_one(pg.pool()).await.unwrap();
+        assert_eq!(provenance, ("captured_source".into(), false));
+        let lookup = |key: &str| match key {
+            "NAVIGATOR_DBOS_ENABLED"
+            | "NAVIGATOR_DBOS_NOTATION_ENABLED"
+            | "NAVIGATOR_DBOS_PROJECT_SLACK_ENABLED" => Some("true".into()),
+            "NAVIGATOR_WORKFLOW_ENGINE" => Some("dbos".into()),
+            _ => None,
+        };
+        assert!(
+            !durable_object_handover::require_runtime_selection(&pg, lookup)
+                .await
+                .unwrap()
+                .legacy_objects()
+        );
+        assert!(
+            durable_object_handover::require_runtime_selection(&pg, |key| {
+                if key == "NAVIGATOR_DBOS_PROJECT_SLACK_ENABLED" {
+                    Some("false".into())
+                } else {
+                    lookup(key)
+                }
+            })
+            .await
+            .is_err()
+        );
+        for (key, value) in [
+            ("NAVIGATOR_WORKFLOW_ENGINE", None),
+            ("NAVIGATOR_WORKFLOW_ENGINE", Some("restate")),
+            ("NAVIGATOR_WORKFLOW_ENGINE", Some("invalid")),
+            ("NAVIGATOR_DBOS_ENABLED", None),
+            ("NAVIGATOR_DBOS_ENABLED", Some("false")),
+            ("NAVIGATOR_DBOS_ENABLED", Some("invalid")),
+        ] {
+            assert!(durable_object_handover::require_runtime_selection(
+                &pg,
+                |candidate| if candidate == key {
+                    value.map(str::to_owned)
+                } else {
+                    lookup(candidate)
+                }
+            )
+            .await
+            .is_err());
+        }
+        sqlx::query("UPDATE durable_object_ownership SET ownership_epoch=$1")
+            .bind(Uuid::nil())
+            .execute(pg.pool())
+            .await
+            .unwrap();
+        assert!(
+            durable_object_handover::require_runtime_selection(&pg, lookup)
+                .await
+                .is_err()
+        );
+        pg.pool().close().await;
+        assert!(
+            durable_object_handover::require_runtime_selection(&pg, lookup)
+                .await
+                .is_err()
+        );
+    }).await;
+}

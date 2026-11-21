@@ -67,6 +67,8 @@ binary(/^(mail_signatures|project_drive_folder_id|project_repository_url|project
 | (binary(=store) & test(/^(entity_roles|relationships)::tests::/))
 | binary(=sandbox_usage_ledger)
 | binary(=document_folder)
+| binary(=postgres_native_fixture)
+| (binary(=store) & test(=postgres::native_origin::fixture::tests::duplicate_existing_native_fixture_never_adopts_or_drops_the_database))
 '''
 test-group = "canonical-postgres-fixtures"
 
