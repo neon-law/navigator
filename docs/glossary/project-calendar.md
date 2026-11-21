@@ -16,10 +16,10 @@ owner. A re-run creates no second calendar. A missing recorded calendar is repor
 The opted-in DBOS membership job checks recorded calendars after setup and rechecks assignments in each five-minute
 slot. A Project participant needs the matching Firm role, a confirmed address in the owner's Google Workspace domain,
 and successful Workspace delegation. Clerks also require a supervising Lawyer DRI. Eligible participants receive reader
-access. Eligible Clerks and Admins are invited to events organized by the Project Calendar, including recurring series.
-Google controls invitations on events organized elsewhere. The job preserves existing manual grants and guests and
-removes the direct access and event guests it added when an assignment ends. It refuses automatic sharing on calendars
-with public or domain-wide access.
+access. Eligible Clerks, Lawyers, and Admins are invited to events organized by the Project Calendar, including
+recurring series. Google controls invitations on events organized elsewhere. The job preserves existing manual grants
+and guests and removes the direct access and event guests it added when an assignment ends. It refuses automatic sharing
+on calendars with public or domain-wide access.
 
 Closing the Project makes every writer a reader and clears the [Booking Link](booking-link.md); the calendar and its
 events are kept as part of the matter's record. The matter page links the calendar to the firm side only, as a

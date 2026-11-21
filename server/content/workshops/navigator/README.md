@@ -131,6 +131,22 @@ Have each attendee sign in with the role relevant to their work. Keep the browse
 
 ## Work the litigation matter
 
+### Project Calendar invitations
+
+The matter has one private, shared Project Calendar. When you check a proposed time, use your own calendar and the
+shared calendar for this matter.
+
+With calendar membership sync enabled, assigning a Clerk, Lawyer, or Admin to the Project adds that person to events
+organized by its calendar. Ending the assignment removes the event invitations Navigator added. Calendar reader access
+and event invitations are separate. Check the guest list on the event to see who was invited.
+
+---
+
+On a synthetic Project with a connected Google Workspace, open a test event organized by the Project Calendar. Assign a
+Lawyer with a confirmed Firm Workspace address. After the next five-minute sync, open the event and find the Lawyer on
+its guest list. End the assignment and verify that the next sync removes the Lawyer and keeps a manually invited guest.
+An assigned Clerk also needs a supervising Lawyer DRI.
+
 ### The four nouns in one workflow
 
 1. **Project** — Cruller v. Prine, the matter that owns the work.
