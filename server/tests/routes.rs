@@ -24135,3 +24135,256 @@ async fn twilio_sms_joins_the_summary_lane_and_dedupes_redelivery() {
     assert!(normalized.body.contains("Can we move Thursday's call?"));
     assert!(normalized.body.contains("from +15550199999"));
 }
+
+/// A message over the old ~2 MiB wall, with a real attachment: bytes ride
+/// the document lane (buffered door), and the filing request carries only
+/// references — the LAW-470 end-to-end shape.
+fn oversize_eml_fixture() -> Vec<u8> {
+    let attachment = vec![0xAB; 8 * 1024 * 1024];
+    let mut raw = Vec::new();
+    raw.extend_from_slice(
+        b"From: Client <client@example.test>\r\n\
+To: Lawyer <lawyer@example.test>\r\n\
+Subject: Engagement enclosures\r\n\
+Date: Thu, 09 Oct 2025 14:03:00 +0000\r\n\
+Message-ID: <law470-router@example.test>\r\n\
+Content-Type: multipart/mixed; boundary=\"BOUND\"\r\n\
+\r\n\
+--BOUND\r\n\
+Content-Type: text/plain\r\n\
+\r\n\
+Attached are the executed enclosures.\r\n\
+--BOUND\r\n\
+Content-Type: application/pdf\r\n\
+Content-Disposition: attachment; filename=\"enclosure.pdf\"\r\n\
+\r\n",
+    );
+    raw.extend_from_slice(&attachment);
+    raw.extend_from_slice(b"\r\n--BOUND--\r\n");
+    raw
+}
+
+async fn upload_document(
+    app: &axum::Router,
+    bearer: &str,
+    project_id: Uuid,
+    filename: &str,
+    bytes: &[u8],
+    content_type: &str,
+    slug: &str,
+) -> Uuid {
+    let body = serde_json::json!({
+        "filename": filename,
+        "content_base64": base64::engine::general_purpose::STANDARD.encode(bytes),
+        "content_type": content_type,
+        "kind": "letter",
+        "visibility": "internal",
+        "slug": slug,
+    });
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/app/api/projects/{project_id}/documents"))
+                .header("content-type", "application/json")
+                .header(header::AUTHORIZATION, bearer)
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::CREATED,
+        "the document door files {filename}"
+    );
+    let json: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    json["current_version"]["asset_id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn an_eml_reference_filing_files_an_oversized_message_end_to_end() {
+    let (state, surreal) = state_with_engines().await;
+    let app = server::neon_router(
+        state.clone(),
+        std::path::Path::new(portal::DEFAULT_PUBLIC_DIR),
+    );
+    let project_id = store::test_support::seed_project_surreal(&surreal, "law470-router").await;
+    let bearer = bearer_common::bearer_new_person(
+        &surreal,
+        "law470-lawyer@example.test",
+        store::persons::Role::Lawyer,
+        Some((project_id, "lawyer")),
+    )
+    .await;
+
+    let raw = oversize_eml_fixture();
+    assert!(
+        raw.len() > 2 * 1024 * 1024,
+        "the fixture clears the old wall"
+    );
+    let message_ref = "signing-router";
+    let source_asset = upload_document(
+        &app,
+        &bearer,
+        project_id,
+        "signing-router.eml",
+        &raw,
+        "message/rfc822",
+        &format!("mail/{message_ref}/source"),
+    )
+    .await;
+    let attachment_asset = upload_document(
+        &app,
+        &bearer,
+        project_id,
+        "enclosure.pdf",
+        b"PDF-BYTES",
+        "application/pdf",
+        &format!("mail/{message_ref}/0"),
+    )
+    .await;
+
+    let filing_request = serde_json::json!({
+        "source_document": source_asset,
+        "attachment_documents": [attachment_asset],
+        "source_ref": "eml:law470-router@example.test",
+        "from": "Client <client@example.test>",
+        "to": "Lawyer <lawyer@example.test>",
+        "subject": "Engagement enclosures",
+        "text_body": "Attached are the executed enclosures.",
+        "occurred_at": "2025-10-09T14:03:00Z",
+    });
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/app/api/projects/{project_id}/mail/eml"))
+                .header("content-type", "application/json")
+                .header(header::AUTHORIZATION, bearer.clone())
+                .body(Body::from(filing_request.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let json: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    assert_eq!(json["deduped"], false);
+
+    // The Communication points at the source document (LAW-469), and the
+    // source document holds the original bytes.
+    let filed = store::communications::for_project(&surreal, project_id)
+        .await
+        .unwrap();
+    assert_eq!(filed.len(), 1);
+    assert_eq!(filed[0].asset_id, Some(source_asset));
+    let source = store::assets::find_by_id(&surreal, source_asset)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(source.slug.as_deref(), Some("mail/signing-router/source"));
+    assert_eq!(
+        state.storage.get(&source.storage_key).await.unwrap().bytes,
+        raw
+    );
+
+    // Filing the same message again dedups: the message row is not
+    // duplicated and reports `deduped`.
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/app/api/projects/{project_id}/mail/eml"))
+                .header("content-type", "application/json")
+                .header(header::AUTHORIZATION, bearer)
+                .body(Body::from(filing_request.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    assert_eq!(json["deduped"], true);
+    assert_eq!(
+        store::communications::for_project(&surreal, project_id)
+            .await
+            .unwrap()
+            .len(),
+        1,
+        "the replay wrote no second Communication"
+    );
+}
+
+#[tokio::test]
+async fn an_oversized_raw_eml_refuses_as_the_doors_classified_json() {
+    let (state, surreal) = state_with_engines().await;
+    let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
+    let project_id = store::test_support::seed_project_surreal(&surreal, "law470-raw").await;
+    let bearer = bearer_common::bearer_new_person(
+        &surreal,
+        "law470-raw-lawyer@example.test",
+        store::persons::Role::Lawyer,
+        Some((project_id, "lawyer")),
+    )
+    .await;
+
+    // The legacy raw variant still files a small message (older CLIs keep
+    // working).
+    let small = b"From: Client <client@example.test>\r\n\
+To: Lawyer <lawyer@example.test>\r\n\
+Subject: Small raw\r\n\
+Date: Thu, 09 Oct 2025 14:03:00 +0000\r\n\
+Message-ID: <law470-raw@example.test>\r\n\
+\r\n\
+Filing raw still works.\r\n";
+    let raw_request = serde_json::json!({
+        "raw_base64": base64::engine::general_purpose::STANDARD.encode(small),
+    });
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/app/api/projects/{project_id}/mail/eml"))
+                .header("content-type", "application/json")
+                .header(header::AUTHORIZATION, bearer.clone())
+                .body(Body::from(raw_request.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    // An oversized raw payload fails as the door's classified JSON — never
+    // axum's bare 413.
+    let oversized = vec![0x41; portal::inbound_email::MAX_INBOUND_MESSAGE_BYTES + 1];
+    let raw_request = serde_json::json!({
+        "raw_base64": base64::engine::general_purpose::STANDARD.encode(oversized),
+    });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/app/api/projects/{project_id}/mail/eml"))
+                .header("content-type", "application/json")
+                .header(header::AUTHORIZATION, bearer)
+                .body(Body::from(raw_request.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    let body = body_string(resp).await;
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["error"], "message_too_large");
+    assert!(
+        json["message"].as_str().unwrap().contains("bytes"),
+        "the classified message names the limit: {body}"
+    );
+}
