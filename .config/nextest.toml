@@ -66,6 +66,7 @@ binary(/^(mail_signatures|project_drive_folder_id|project_repository_url|project
 | (binary(=workflows) & test(=dbos_engine::dri_digest::tests::native_source_keeps_all_projects_and_both_dri_sides))
 | (binary(=store) & test(/^(entity_roles|relationships)::tests::/))
 | binary(=sandbox_usage_ledger)
+| binary(=document_folder)
 '''
 test-group = "canonical-postgres-fixtures"
 
