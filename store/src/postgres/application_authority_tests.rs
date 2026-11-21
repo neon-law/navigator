@@ -1126,6 +1126,13 @@ async fn accepted_plan_notices_open_one_pitch_per_provider_case() {
             assert!(matches!(plan_intake::accept(&source, &pg, staged.id, &input).await, Err(PlanIntakeError::MissingMemberAnchor)));
             assert!(matches!(plan_intake::resolve_member(&source, &pg, staged.id, outsider.id, &brand, None, email).await, Err(PlanIntakeError::NotFound)));
             plan_intake::resolve_member(&source, &pg, staged.id, lawyer.id, &brand, None, email).await.unwrap();
+            let anchored = plan_intake::find_by_id(&source, staged.id).await.unwrap().unwrap();
+            sqlx::query("UPDATE plan_intake SET conflict_checked=false WHERE id=$1")
+                .bind(staged.id).execute(pg.pool()).await.unwrap();
+            plan_intake::resolve_member(&source, &pg, staged.id, lawyer.id, &brand, None, email).await.unwrap();
+            let reviewed = plan_intake::find_by_id(&source, staged.id).await.unwrap().unwrap();
+            assert!(reviewed.conflict_checked);
+            assert_eq!(reviewed.member_entity_id, anchored.member_entity_id);
             if legacy {
                 input.plan_case_number = Some("CERT-OLD".into());
                 assert!(matches!(plan_intake::accept(&source, &pg, staged.id, &input).await, Err(PlanIntakeError::MissingCaseNumber)));
@@ -1146,7 +1153,7 @@ async fn accepted_plan_notices_open_one_pitch_per_provider_case() {
                     refused,
                     PlanIntakeError::Deadline(crate::project_deadlines::DeadlineError::Postgres(
                         super::matter::MatterAuthorityError::Query(ref error)
-                    )) if error.as_database_error().and_then(|error| error.code()).as_deref() == Some("23514")
+                    )) if error.as_database_error().and_then(sqlx::error::DatabaseError::code).as_deref() == Some("23514")
                 ), "{refused:?}");
                 let partial = projects::find_by_code(&source, &input.code).await.unwrap().unwrap();
                 assert_eq!(partial.id, staged.id);

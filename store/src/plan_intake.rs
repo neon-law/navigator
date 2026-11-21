@@ -555,8 +555,7 @@ async fn member_person(
     Ok(person)
 }
 
-/// The pre-write conflict report for the member anchor. Unanchored notices
-/// stage with an explanatory note instead of a check.
+/// The pre-write conflict report for the confirmed member.
 async fn conflict_report(
     surreal: &SurrealDb,
     member: Option<(Uuid, Uuid)>,
@@ -568,16 +567,7 @@ async fn conflict_report(
                 .map_err(PlanIntakeError::Conflict)?;
             Ok((report.summary_lines(), report.has_blocking(), true))
         }
-        None => Ok((
-            vec![
-                "The notice printed neither a member contact email nor a member \
-                 name, so no member person anchors the matter and the conflict \
-                 check has not run."
-                    .to_string(),
-            ],
-            false,
-            false,
-        )),
+        None => Ok((Vec::new(), false, false)),
     }
 }
 
@@ -826,33 +816,42 @@ pub async fn resolve_member(
     if row.status != Status::Staged.as_str() || row.take_started_at.is_some() {
         return Err(PlanIntakeError::NotStaged);
     }
-    if row.member_person_id.is_some() && row.member_entity_id.is_some() {
-        return if row
-            .member_email
-            .as_deref()
-            .is_some_and(|confirmed| confirmed.eq_ignore_ascii_case(email.trim()))
-        {
-            Ok(())
-        } else {
-            Err(PlanIntakeError::ConflictingMember)
-        };
-    }
-    let name = row
-        .member_name
-        .as_deref()
-        .or(name)
-        .ok_or(PlanIntakeError::InvalidMember)?;
-    let person = member_person(surreal, name, email).await?;
-    if !same_member_name(&person.name, name) {
-        return Err(PlanIntakeError::ConflictingMember);
-    }
-    let entity_id = create_human_entity(surreal, name).await?;
-    let (summary, blocking, checked) =
-        conflict_report(surreal, Some((person.id, entity_id))).await?;
-    row.member_name = Some(name.to_owned());
-    row.member_email = Some(email.trim().to_ascii_lowercase());
-    row.member_person_id = Some(person.id);
-    row.member_entity_id = Some(entity_id);
+    let member = match (row.member_person_id, row.member_entity_id) {
+        (Some(person_id), Some(entity_id)) => {
+            if !row
+                .member_email
+                .as_deref()
+                .is_some_and(|confirmed| confirmed.eq_ignore_ascii_case(email.trim()))
+            {
+                return Err(PlanIntakeError::ConflictingMember);
+            }
+            if row.conflict_checked {
+                return Ok(());
+            }
+            (person_id, entity_id)
+        }
+        _ => {
+            let name = row
+                .member_name
+                .as_deref()
+                .or(name)
+                .ok_or(PlanIntakeError::InvalidMember)?;
+            let person = member_person(surreal, name, email).await?;
+            if !same_member_name(&person.name, name) {
+                return Err(PlanIntakeError::ConflictingMember);
+            }
+            let entity_id = create_human_entity(surreal, name).await?;
+            row.member_name = Some(name.to_owned());
+            row.member_email = Some(email.trim().to_ascii_lowercase());
+            row.member_person_id = Some(person.id);
+            row.member_entity_id = Some(entity_id);
+            // Keep the anchor if the graph is temporarily unavailable.
+            // Taking still requires the conflict check to complete.
+            postgres::save_member(pg, &row).await?;
+            (person.id, entity_id)
+        }
+    };
+    let (summary, blocking, checked) = conflict_report(surreal, Some(member)).await?;
     row.conflict_summary = summary;
     row.conflict_blocking = blocking;
     row.conflict_checked = checked;
@@ -1856,10 +1855,7 @@ mod tests {
         assert!(staged.member_person_id.is_none());
         assert!(staged.member_entity_id.is_none());
         assert!(!staged.conflict_checked);
-        assert!(staged
-            .conflict_summary
-            .iter()
-            .any(|line| line.contains("conflict check has not run")));
+        assert!(staged.conflict_summary.is_empty());
     }
 
     #[tokio::test]

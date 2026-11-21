@@ -143,6 +143,10 @@ fn review_error(error: &PlanIntakeError) -> Response {
             "The conflict check found a blocking conflict. Review the assignment before proceeding."
                 .to_owned()
         }
+        PlanIntakeError::Conflict(_) => {
+            "The conflict check could not finish. The referral is still staged for review."
+                .to_owned()
+        }
         PlanIntakeError::Db(_)
         | PlanIntakeError::Postgres(_)
         | PlanIntakeError::Sql(_)

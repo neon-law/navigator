@@ -338,9 +338,13 @@ fn member_fields(row: &PlanRowView) -> Vec<Field> {
         );
     }
     fields.push(
-        Field::email("Verified member email", "member_email", "")
-            .id(format!("plan-{id}-member-email"))
-            .required(),
+        Field::email(
+            "Verified member email",
+            "member_email",
+            row.member_email.clone().unwrap_or_default(),
+        )
+        .id(format!("plan-{id}-member-email"))
+        .required(),
     );
     fields
 }
