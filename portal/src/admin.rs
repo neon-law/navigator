@@ -2223,6 +2223,7 @@ async fn admin_person_welcome(
 async fn project_view_as_client(
     State(state): State<AdminState>,
     session: Option<Extension<SessionData>>,
+    headers: HeaderMap,
     cookies: tower_cookies::Cookies,
     Path(project_code): Path<String>,
 ) -> Response {
@@ -2281,6 +2282,22 @@ async fn project_view_as_client(
         )
     ) {
         return not_found_response();
+    }
+    // Host-only cookies cannot start a preview on another Brand. Send staff
+    // to the matter there while they still have their own session.
+    if !crate::client_portal::access().contains(&project) {
+        let authority = headers
+            .get(header::HOST)
+            .and_then(|host| host.to_str().ok());
+        let base = crate::openapi::base_url_for(authority);
+        let Some(origin) = crate::client_portal::project_origin(&project.brand, &base) else {
+            return (
+                StatusCode::CONFLICT,
+                "Open this Project on its Brand's portal to preview it as a client.",
+            )
+                .into_response();
+        };
+        return Redirect::to(&format!("{origin}/app/projects/{}", project.code)).into_response();
     }
     let client_id = match store::projects::participations_for_project(&state.surreal, project.id)
         .await

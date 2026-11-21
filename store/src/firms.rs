@@ -100,8 +100,7 @@ pub struct Firm {
     /// written before `entity_id` existed.
     pub entity_id: Option<Uuid>,
     /// The [Portal Theme Brand](../../docs/glossary/portal-theme-brand.md):
-    /// the key of one Brand this Firm owns, whose tokens, logo, and name every
-    /// `/app` page reached through one of the Firm's hosts wears. `None`
+    /// the key of one Brand this Firm owns for its staff portal's tokens, logo, and name. `None`
     /// keeps the host's own Brand.
     pub portal_theme_brand_key: Option<String>,
     pub inserted_at: String,

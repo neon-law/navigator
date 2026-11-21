@@ -2193,10 +2193,10 @@ async fn list_projects_door(
         }];
         return Ok((StatusCode::OK, Json(lookup)).into_response());
     }
-    let projects =
-        store::access::visible_projects(&state.surreal, authed.0.person_id, authed.0.role)
-            .await
-            .map_err(ApiError::Db)?;
+    let projects = crate::client_portal::access()
+        .visible_projects(&state.surreal, authed.0.person_id, authed.0.role)
+        .await
+        .map_err(ApiError::Db)?;
     let projects = projects
         .into_iter()
         .map(|project| project_payload(authed.0.role, project))
@@ -3361,14 +3361,17 @@ async fn participates_as_firm(state: &ApiState, lawyer: &LawyerSession, project_
 
 /// Whether `authed` may see matter `project_id`, in either lens.
 async fn can_see(state: &ApiState, authed: &AuthedSession, project_id: Uuid) -> bool {
-    store::access::can_see_project(
-        &state.surreal,
-        authed.0.person_id,
-        authed.0.role,
-        project_id,
-    )
-    .await
-    .unwrap_or(false)
+    crate::client_portal::access()
+        .matter_viewer(
+            &state.surreal,
+            authed.0.person_id,
+            authed.0.role,
+            project_id,
+        )
+        .await
+        .ok()
+        .flatten()
+        .is_some()
 }
 
 /// Query for `GET /app/api/projects/{id}/documents`.
@@ -3517,35 +3520,48 @@ struct SeedRequest {
 /// endpoint string is refused before the body is even parsed further.
 pub(crate) const SEED_ENDPOINT: &str = "/app/api/seed";
 
-/// Backstop the project-keyed API with the Admin's Firm and participation scope.
-pub(crate) async fn scope_admin_project_request(
+/// Scope Project API routes to the Admin's Firm access or the client's Brand and participation.
+pub(crate) async fn scope_project_request(
     State(surreal): State<store::surreal::SurrealDb>,
     params: Result<axum::extract::RawPathParams, axum::extract::rejection::RawPathParamsRejection>,
     request: Request,
     next: Next,
 ) -> Response {
-    let admin = request
-        .extensions()
-        .get::<SessionData>()
-        .filter(|session| session.role == store::persons::Role::Admin);
+    let session = request.extensions().get::<SessionData>();
     let route = request.extensions().get::<axum::extract::MatchedPath>();
-    if let (Some(admin), Some(route), Ok(params)) = (admin, route, params) {
+    if let (Some(session), Some(route), Ok(params)) = (session, route, params) {
         if route.as_str().starts_with("/app/api/projects/{id}") {
             let project_id = params.iter().find_map(|(key, value)| {
                 (key == "id").then(|| value.parse::<Uuid>().ok()).flatten()
             });
             if let Some(project_id) = project_id {
-                let result = store::projects::can_access_as_lawyer_in_surreal(
-                    &surreal,
-                    admin.person_id,
-                    admin.role,
-                    project_id,
-                )
-                .await;
+                let result = match session.role {
+                    store::persons::Role::Admin => {
+                        store::projects::can_access_as_lawyer_in_surreal(
+                            &surreal,
+                            session.person_id,
+                            session.role,
+                            project_id,
+                        )
+                        .await
+                        .map_err(|error| error.to_string())
+                    }
+                    store::persons::Role::Client if session.scope.is_none() => {
+                        crate::client_portal::access()
+                            .can_see_project_as_client(
+                                &surreal,
+                                session.person_id,
+                                session.role,
+                                project_id,
+                            )
+                            .await
+                    }
+                    _ => return next.run(request).await,
+                };
                 match result {
                     Ok(true) => {}
                     Ok(false) => return ApiError::NotFound.into_response(),
-                    Err(error) => return ApiError::Db(error.to_string()).into_response(),
+                    Err(error) => return ApiError::Db(error).into_response(),
                 }
             }
         }
@@ -5858,7 +5874,7 @@ async fn create_deletion_request(
 ) -> Result<Response, ApiError> {
     let outcome = crate::expunge_request_route::request_document_deletion(
         &state.surreal,
-        authed.0.person_id,
+        &authed.0,
         id,
         None,
     )

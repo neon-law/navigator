@@ -343,6 +343,174 @@ async fn list_projects_is_scoped_to_the_caller() {
     .await;
 }
 
+#[tokio::test]
+async fn client_portal_uses_the_host_brand_for_the_list_detail_and_api() {
+    store::test_support::with_postgres(check_two_brand_portal()).await;
+}
+
+async fn check_two_brand_portal() {
+    let fx = build_fixture().await;
+    let pg = PostgresDb::application().await.unwrap();
+    let project = store::projects::find_by_id(&fx.surreal, fx.project_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let firm: Uuid = sqlx::query_scalar("INSERT INTO firm(name,slug,status,entity_id) VALUES ('Example Firm','example-firm','active',$1) RETURNING id")
+            .bind(project.entity_id).fetch_one(pg.pool()).await.unwrap();
+    sqlx::query("INSERT INTO brand(name,brand_key) VALUES ('Sibling Brand','delete-your-data')")
+        .execute(pg.pool())
+        .await
+        .unwrap();
+    for key in ["neon", "delete-your-data"] {
+        store::firms::move_brand(&fx.surreal, Role::Owner, None, key, firm)
+            .await
+            .unwrap();
+    }
+    store::firms::update(
+        &fx.surreal,
+        Role::Owner,
+        None,
+        firm,
+        &store::firms::FirmEdit {
+            portal_theme_brand_key: Some(Some("delete-your-data".into())),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    store::projects::update_project(
+        &fx.surreal,
+        project.id,
+        &store::projects::UpdateProjectCommand {
+            firm_id: Some(firm),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let sibling = store::projects::create(
+        &fx.surreal,
+        &store::projects::NewProject {
+            code: "sibling-matter".into(),
+            name: "Sibling Matter".into(),
+            brand: "delete-your-data".into(),
+            firm_id: Some(firm),
+            status: "open".into(),
+            entity_id: project.entity_id,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let sessions = SessionStore::new(KEY);
+    let login = |auth: &str| {
+        sessions
+            .decode(auth.strip_prefix("Bearer ").unwrap())
+            .unwrap()
+    };
+    let client = login(&fx.client);
+    let lawyer = login(&fx.lawyer);
+    let clerk = login(&fx.clerk);
+    for id in [project.id, sibling.id] {
+        store::projects::designate_dri_in_surreal(
+            &fx.surreal,
+            id,
+            lawyer.person_id.unwrap(),
+            store::projects::DriSide::Lawyer,
+        )
+        .await
+        .unwrap();
+        store::projects::add_participation(&fx.surreal, id, clerk.person_id.unwrap(), "clerk")
+            .await
+            .unwrap();
+    }
+    store::projects::add_participation(
+        &fx.surreal,
+        sibling.id,
+        client.person_id.unwrap(),
+        "client",
+    )
+    .await
+    .unwrap();
+    let request = |host: &str, path: &str, session: &portal::SessionData| {
+        let cookie = format!(
+            "{}={}",
+            portal::session::SESSION_COOKIE_NAME,
+            sessions.encode(session)
+        );
+        fx.app.clone().oneshot(
+            Request::builder()
+                .uri(path)
+                .header("host", host)
+                .header("cookie", cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+    };
+    for (host, visible, hidden) in [
+        ("www.neonlaw.com", &project, &sibling),
+        ("www.deleteyourdata.com", &sibling, &project),
+    ] {
+        for path in ["/app/projects?brand=all", "/app/api/projects"] {
+            let response = request(host, path, &client).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{host}{path}");
+            let body = String::from_utf8(
+                response
+                    .into_body()
+                    .collect()
+                    .await
+                    .unwrap()
+                    .to_bytes()
+                    .to_vec(),
+            )
+            .unwrap();
+            assert!(
+                body.contains(&visible.code) && !body.contains(&hidden.code),
+                "{host}{path}"
+            );
+            if path.starts_with("/app/projects") {
+                assert!(body.contains(&format!("brand-{}-tokens.css", visible.brand)));
+            }
+        }
+        for path in [
+            format!("/app/projects/{}", hidden.code),
+            format!("/app/projects/{}/documents.zip", hidden.code),
+            format!("/app/api/projects/{}", hidden.id),
+        ] {
+            assert_eq!(
+                request(host, &path, &client).await.unwrap().status(),
+                StatusCode::NOT_FOUND,
+                "{host}{path}"
+            );
+        }
+        assert_eq!(
+            request(host, &format!("/app/api/projects/{}", visible.id), &client)
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+    }
+    for staff in [&clerk, &lawyer] {
+        let response = request("www.neonlaw.com", "/app/projects", staff)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = String::from_utf8(
+            response
+                .into_body()
+                .collect()
+                .await
+                .unwrap()
+                .to_bytes()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(body.contains("brand-delete-your-data-tokens.css"));
+        assert!(body.contains(&project.code) && body.contains(&sibling.code));
+    }
+}
+
 /// The Firm-private integration coordinates are the reason
 /// `/app/api/projects` serializes a narrower struct for a client caller.
 /// Navigator stores an address only, so a leaked private Notion URL or a

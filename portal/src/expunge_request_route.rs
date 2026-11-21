@@ -26,7 +26,6 @@ use uuid::Uuid;
 
 use crate::admin::AdminState;
 use crate::session::SessionData;
-use store::access::can_see_project_as_client;
 
 fn is_admin(session: Option<&SessionData>) -> bool {
     session.is_some_and(|s| s.role.is_admin_tier())
@@ -91,10 +90,11 @@ pub struct DeletionRequestOutcome {
 /// on the document alone, passes `None`.
 pub async fn request_document_deletion(
     surreal: &store::surreal::SurrealDb,
-    person_id: Option<Uuid>,
+    session: &SessionData,
     doc_id: Uuid,
     expected_project_id: Option<Uuid>,
 ) -> Result<DeletionRequestOutcome, RequestDeletionError> {
+    let person_id = session.person_id;
     let doc = store::assets::find_by_id(surreal, doc_id)
         .await
         .map_err(RequestDeletionError::Asset)?
@@ -107,7 +107,10 @@ pub async fn request_document_deletion(
             return Err(RequestDeletionError::NotFound);
         }
     }
-    match can_see_project_as_client(surreal, person_id, project_id).await {
+    match crate::client_portal::access()
+        .can_see_project_as_client(surreal, person_id, session.role, project_id)
+        .await
+    {
         Ok(true) => {}
         Ok(false) => return Err(RequestDeletionError::NotFound),
         Err(e) => return Err(RequestDeletionError::Db(e)),
@@ -155,8 +158,10 @@ pub async fn client_request(
     let Some(project_id) = store::projects::id_for_code(&state.surreal, &project_code).await else {
         return not_found();
     };
-    let person_id = session.as_deref().and_then(|s| s.person_id);
-    match request_document_deletion(&state.surreal, person_id, doc_id, Some(project_id)).await {
+    let Some(Extension(session)) = session else {
+        return not_found();
+    };
+    match request_document_deletion(&state.surreal, &session, doc_id, Some(project_id)).await {
         Ok(_) => {
             Redirect::to(&crate::dioxus_app::project_show_path(&state.surreal, project_id).await)
                 .into_response()

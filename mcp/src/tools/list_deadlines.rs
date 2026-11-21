@@ -26,11 +26,10 @@ pub async fn call(
     _arguments: &Value,
 ) -> Result<Value, ToolError> {
     let projects = match scope {
-        ReadScope::Membership { person_id, role } => {
-            store::access::visible_projects(surreal, Some(*person_id), *role)
-                .await
-                .map_err(ToolError::Database)?
-        }
+        ReadScope::Membership { person_id, role } => super::portal_access()
+            .visible_projects(surreal, Some(*person_id), *role)
+            .await
+            .map_err(ToolError::Database)?,
         // A directory is deliberately metadata-only, and no identity cannot
         // establish a participation boundary. Neither scope may read matter
         // contents through this tool.

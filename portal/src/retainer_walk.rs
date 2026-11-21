@@ -817,6 +817,8 @@ pub(crate) async fn send_intake(
     }
 
     let base_url = workflows::email::base_url_from_env();
+    let base_url =
+        crate::client_portal::project_origin(&project.brand, &base_url).unwrap_or(base_url);
     let link = format!(
         "{base_url}/app/projects/{}/intake/{notation_id}",
         project.code

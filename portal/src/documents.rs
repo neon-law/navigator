@@ -73,12 +73,14 @@ pub async fn download(
         )
         .await
     } else {
-        store::access::can_see_project_as_client(
-            &state.surreal,
-            session.person_id,
-            notation_row.project_id,
-        )
-        .await
+        crate::client_portal::access()
+            .can_see_project_as_client(
+                &state.surreal,
+                session.person_id,
+                session.role,
+                notation_row.project_id,
+            )
+            .await
     };
     match decision {
         Ok(true) => {}

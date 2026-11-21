@@ -275,7 +275,7 @@ pub async fn firm_portal_theme_brand(
 }
 
 /// The navbar's mark in `theme`'s look — its logo, name, and tokens — on a
-/// request the `host` brand answers: what every `/app` page wears when the
+/// request the `host` brand answers: what firm-side pages wear when the
 /// host's Firm names `theme` as its Portal Theme Brand. The logo links to
 /// `theme`'s own home, an absolute URL because the portal's host is not that
 /// brand's. When the two brands are the same this is

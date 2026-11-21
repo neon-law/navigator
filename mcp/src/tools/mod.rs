@@ -578,6 +578,12 @@ pub enum ReadScope {
     Unlinked,
 }
 
+fn portal_access() -> store::access::ClientPortal<'static> {
+    store::access::ClientPortal {
+        brand: views::brand::brand_key().as_str(),
+    }
+}
+
 impl ReadScope {
     /// `true` when this caller reads from the firm's side of the house.
     ///

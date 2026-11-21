@@ -134,6 +134,7 @@ pub mod canonical_host;
 pub mod ci_auth;
 pub mod clauses;
 pub mod cli_auth;
+mod client_portal;
 pub mod config;
 pub mod content_loader;
 pub mod contract_review;
@@ -1020,7 +1021,7 @@ pub fn bootstrap_with_forgejo_oidc(
             })
             .route_layer(axum::middleware::from_fn_with_state(
                 state.surreal.clone(),
-                crate::api::scope_admin_project_request,
+                crate::api::scope_project_request,
             ))
             .layer(axum::Extension(state.attachment_scanner.clone()))
             .layer(axum::middleware::from_fn_with_state(
@@ -2771,7 +2772,7 @@ fn is_probe_path(path: &str) -> bool {
 /// footer (`/app`'s and the public chrome's) draws from, and the
 /// [`webapp::app_chrome::AppBrandMark`] the `/app` navbar draws from (ENG-590:
 /// preferring an uploaded brand logo over the compiled one). When that Firm
-/// names a Portal Theme Brand, the mark is that Brand's on every path. Runs inside
+/// names a Portal Theme Brand, it supplies the firm-side mark. Runs inside
 /// `host_layer` so the resolved [`views::brand::BrandKey`] is already on the
 /// request, and wraps the whole merged router once rather than per route, so
 /// every per-route layer that reads either extension — `inject_app_brand_mark`
@@ -2795,9 +2796,6 @@ async fn inject_resolved_firm_context(
         chrono::Utc::now().year()
     })
     .await;
-    // One theme per Firm: every `/app` page, a matter's included, wears the
-    // Firm's Portal Theme Brand when it names one, else the brand the
-    // request's host resolves to — never the matter's own brand.
     let mark = match webapp::app_chrome::firm_portal_theme_brand(&surreal, current).await {
         Some(theme) => {
             webapp::app_chrome::resolve_theme_brand_mark(
@@ -2810,6 +2808,7 @@ async fn inject_resolved_firm_context(
         }
         None => webapp::app_chrome::resolve_app_brand_mark(&surreal, current).await,
     };
+    request.extensions_mut().insert(surreal);
     request.extensions_mut().insert(model);
     request.extensions_mut().insert(mark);
     next.run(request).await

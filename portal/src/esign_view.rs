@@ -96,12 +96,14 @@ pub async fn sign_get(
         )
         .await
     } else {
-        store::access::can_see_project_as_client(
-            &state.surreal,
-            session.person_id,
-            notation_row.project_id,
-        )
-        .await
+        crate::client_portal::access()
+            .can_see_project_as_client(
+                &state.surreal,
+                session.person_id,
+                session.role,
+                notation_row.project_id,
+            )
+            .await
     };
     match decision {
         Ok(true) => {}
@@ -249,7 +251,11 @@ async fn return_url_for(
         return format!("{base}/app/lawyer/notations/{notation_id}/step");
     }
     match store::projects::find_by_id(&state.surreal, notation_row.project_id).await {
-        Ok(Some(project)) => format!("{base}/app/projects/{}", project.code),
+        Ok(Some(project)) => {
+            let origin = crate::client_portal::project_origin(&project.brand, base);
+            let origin = origin.as_deref().unwrap_or(base);
+            format!("{origin}/app/projects/{}", project.code)
+        }
         _ => format!("{base}/app/projects"),
     }
 }
