@@ -1341,3 +1341,15 @@
   .fm-phone__check { padding: .4rem .7rem; font-size: .75rem; }
   .fm-phone__check-text span { font-size: .68rem; }
 }
+
+.fm-photos {
+  display: flex;
+  justify-content: center;
+  gap: 1rem;
+  margin: 2rem auto;
+  max-width: 64rem;
+  padding-inline: 1rem;
+}
+.fm-photos figure { min-width: 0; margin: 0; text-align: center; }
+.fm-photos img { display: block; max-width: 100%; height: auto; }
+.fm-photos figure:not(:only-child) img { width: 15rem; aspect-ratio: 2 / 3; object-fit: cover; }

@@ -669,6 +669,15 @@ fn services_band(copy: BandCopy, catalog: &views::locales::services::ServicesCat
 
 fn band(copy: BandCopy, catalog: Option<&views::locales::services::ServicesCatalog>) -> Band {
     match copy {
+        BandCopy::Photos { items } => Band::Photos(
+            items
+                .into_iter()
+                .map(|image| webapp::marketing_page::StepImage {
+                    src: views::assets::asset_url(&image.asset_key),
+                    alt: image.alt,
+                })
+                .collect(),
+        ),
         copy @ BandCopy::Enrollment { .. } => enrollment_band(copy),
         BandCopy::Statement {
             heading,
@@ -1603,8 +1612,13 @@ pub fn lex_tecnica_home(
 /// IEP Defenders' home is a marketing-page band sequence mirroring the
 /// firm's published iepdefenders.com structure, served through the same
 /// `HomeContent.marketing_page` seam as the other band-built homes.
-pub fn iep_home(branding: &views::brand::Branding, _deployment_host: Option<&str>) -> PageContent {
-    marketing_page(load_page(branding, "home-marketing"), None, branding)
+pub fn iep_home(branding: &views::brand::Branding, deployment_host: Option<&str>) -> PageContent {
+    let mut page = marketing_page(load_page(branding, "home-marketing"), None, branding);
+    // The photo originals are published to the staging asset origin.
+    if deployment_host.is_some_and(|host| !views::brand::is_staging_host(host)) {
+        page.bands.retain(|band| !matches!(band, Band::Photos(_)));
+    }
+    page
 }
 
 /// Same Day Legal opens with its legal services.
