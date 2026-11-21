@@ -6758,7 +6758,7 @@ async fn upload_document_door(
         }
         Ok(None) => {}
         Err(error) => return Err(ApiError::Asset(error)),
-    };
+    }
     let args = store::documents::IngestArgs {
         project_id: id,
         source: store::documents::source::UPLOAD,
@@ -6778,7 +6778,7 @@ async fn upload_document_door(
         secondary_storage_key: None,
         visibility,
     };
-    let filed = match {
+    let revision = {
         let identity = store::documents::DocumentIdentity {
             slug: Some(slug),
             published_at: None,
@@ -6819,7 +6819,8 @@ async fn upload_document_door(
                 .await
             }
         }
-    } {
+    };
+    let filed = match revision {
         Ok(filed) => filed,
         Err(store::assets::RevisionError::HeadConflict { current, .. }) => {
             return Ok(head_conflict_response(current.as_ref()));
@@ -7865,7 +7866,6 @@ async fn eml_upload_door(
     Path(id): Path<Uuid>,
     Json(input): Json<EmlUploadRequest>,
 ) -> Result<Response, ApiError> {
-    use base64::Engine as _;
     let in_scope = store::access::can_see_project_as_lawyer(
         &state.surreal,
         lawyer.0.person_id,
@@ -7912,6 +7912,16 @@ async fn eml_upload_door(
         ))
         .await;
     }
+    file_raw_eml(&state, id, &lawyer, input).await
+}
+
+async fn file_raw_eml(
+    state: &ApiState,
+    id: Uuid,
+    lawyer: &LawyerSession,
+    input: EmlUploadRequest,
+) -> Result<Response, ApiError> {
+    use base64::Engine as _;
     let Some(raw_base64) = input.raw_base64.as_deref() else {
         return Ok(bad_request(
             "missing_payload",
@@ -7936,7 +7946,7 @@ async fn eml_upload_door(
     }
     let mailbox = match input.mailbox {
         Some(mailbox) => Some(mailbox),
-        None => filing_lawyer_mailbox(&state.surreal, &lawyer).await?,
+        None => filing_lawyer_mailbox(&state.surreal, lawyer).await?,
     };
     let mut parsed = match crate::eml_filing::parse_eml(&raw, mailbox.as_deref()) {
         Ok(parsed) => parsed,
@@ -7999,7 +8009,7 @@ async fn eml_upload_door(
             .into_response());
     }
     Box::pin(file_parsed_eml(
-        &state, id, &lawyer, parsed, kind, visibility, &raw,
+        state, id, lawyer, parsed, kind, visibility, &raw,
     ))
     .await
 }
@@ -8217,6 +8227,38 @@ async fn file_eml_reference(
         )
             .into_response());
     }
+    file_validated_eml_reference(
+        state,
+        project_id,
+        lawyer,
+        source_document,
+        attachment_documents,
+        source_ref,
+        from,
+        to,
+        subject,
+        text_body,
+        occurred_at,
+        mailbox,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn file_validated_eml_reference(
+    state: &ApiState,
+    project_id: Uuid,
+    lawyer: &LawyerSession,
+    source_document: Uuid,
+    attachment_documents: Vec<Uuid>,
+    source_ref: &str,
+    from: &str,
+    to: Option<&str>,
+    subject: Option<&str>,
+    text_body: &str,
+    occurred_at: &str,
+    mailbox: Option<String>,
+) -> Result<Response, ApiError> {
     let source = store::assets::find_by_id(&state.surreal, source_document)
         .await
         .map_err(ApiError::Asset)?;

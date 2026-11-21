@@ -6057,8 +6057,21 @@ PDF-BYTES\r\n\
             .filter(|request| request.url.path() == documents_door)
             .map(|request| serde_json::from_slice(&request.body).unwrap())
             .collect();
-        assert_eq!(document_bodies.len(), 2, "source plus one attachment");
-        let source = document_bodies
+        assert_filed_eml_documents(&document_bodies, &parsed);
+
+        // The filing request carries references and headers only — never the
+        // MIME bytes (LAW-470).
+        let filing = requests
+            .iter()
+            .find(|request| request.url.path() == eml_door)
+            .expect("one filing request");
+        let filing_body: serde_json::Value = serde_json::from_slice(&filing.body).unwrap();
+        assert_reference_filing_body(&filing_body);
+    }
+
+    fn assert_filed_eml_documents(bodies: &[serde_json::Value], parsed: &ParsedEmlFile) {
+        assert_eq!(bodies.len(), 2, "source plus one attachment");
+        let source = bodies
             .iter()
             .find(|body| body["slug"] == "mail/signing-1-example.test/source")
             .expect("the raw message files as the source document");
@@ -6068,31 +6081,24 @@ PDF-BYTES\r\n\
             source["mail_provenance"]["subject"],
             json!("Signing question")
         );
-        let attachment = document_bodies
+        let attachment = bodies
             .iter()
             .find(|body| body["slug"] == "mail/signing-1-example.test/0")
             .expect("the attachment files under its index");
         assert_eq!(attachment["filename"], "retainer.pdf");
         assert_eq!(attachment["content_type"], "application/pdf");
+    }
 
-        // The filing request carries references and headers only — never the
-        // MIME bytes (LAW-470).
-        let filing = requests
-            .iter()
-            .find(|request| request.url.path() == eml_door)
-            .expect("one filing request");
-        let filing_body: serde_json::Value = serde_json::from_slice(&filing.body).unwrap();
-        assert!(filing_body.get("raw_base64").is_none(), "{filing_body}");
-        assert!(filing_body["source_document"].is_string(), "{filing_body}");
+    fn assert_reference_filing_body(body: &serde_json::Value) {
+        assert!(body.get("raw_base64").is_none(), "{body}");
+        assert!(body["source_document"].is_string(), "{body}");
         assert_eq!(
-            filing_body["attachment_documents"]
-                .as_array()
-                .map_or(0, Vec::len),
+            body["attachment_documents"].as_array().map_or(0, Vec::len),
             1
         );
-        assert_eq!(filing_body["source_ref"], "eml:signing-1@example.test");
-        assert_eq!(filing_body["from"], "Client <client@example.test>");
-        assert_eq!(filing_body["text_body"], "Can I sign electronically?");
+        assert_eq!(body["source_ref"], "eml:signing-1@example.test");
+        assert_eq!(body["from"], "Client <client@example.test>");
+        assert_eq!(body["text_body"], "Can I sign electronically?");
     }
 
     #[test]
