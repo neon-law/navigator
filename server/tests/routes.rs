@@ -24295,32 +24295,42 @@ async fn an_eml_reference_filing_files_an_oversized_message_end_to_end() {
             raw
         );
 
-        // Filing the same message again dedups: the message row is not
-        // duplicated and reports `deduped`.
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!("/app/api/projects/{project_id}/mail/eml"))
-                    .header("content-type", "application/json")
-                    .header(header::AUTHORIZATION, bearer)
-                    .body(Body::from(filing_request.to_string()))
-                    .unwrap(),
-            )
+        assert_eml_filing_replay_is_deduped(app, &bearer, project_id, filing_request, &surreal)
+            .await;
+    })
+    .await;
+}
+
+async fn assert_eml_filing_replay_is_deduped(
+    app: axum::Router,
+    bearer: &str,
+    project_id: uuid::Uuid,
+    filing_request: serde_json::Value,
+    surreal: &store::surreal::SurrealDb,
+) {
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/app/api/projects/{project_id}/mail/eml"))
+                .header("content-type", "application/json")
+                .header(header::AUTHORIZATION, bearer)
+                .body(Body::from(filing_request.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    assert_eq!(json["deduped"], true);
+    assert_eq!(
+        store::communications::for_project(surreal, project_id)
             .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-        let json: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
-        assert_eq!(json["deduped"], true);
-        assert_eq!(
-            store::communications::for_project(&surreal, project_id)
-                .await
-                .unwrap()
-                .len(),
-            1,
-            "the replay wrote no second Communication"
-        );
-    });
+            .unwrap()
+            .len(),
+        1,
+        "the replay wrote no second Communication"
+    );
 }
 
 #[tokio::test]
@@ -24390,5 +24400,6 @@ Filing raw still works.\r\n";
             json["message"].as_str().unwrap().contains("bytes"),
             "the classified message names the limit: {body}"
         );
-    });
+    })
+    .await;
 }
