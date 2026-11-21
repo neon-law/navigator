@@ -1479,18 +1479,7 @@ pub(crate) fn token_from_to(to: &str, parse_host: &str) -> Option<String> {
 /// body — `pub(crate)` because the Jev question's body excerpt (LAW-347)
 /// sends the sender's own words, never the quoted thread.
 pub(crate) fn strip_quoted(body: &str) -> String {
-    let mut kept = Vec::new();
-    for line in body.lines() {
-        let trimmed = line.trim_start();
-        if line == "-- "
-            || line.starts_with('>')
-            || (trimmed.starts_with("On ") && trimmed.ends_with("wrote:"))
-        {
-            break;
-        }
-        kept.push(line);
-    }
-    kept.join("\n").trim_end().to_string()
+    model::correspondence::strip_quoted(body)
 }
 
 /// Ensure a subject carries a single `Re:` prefix for the relay.

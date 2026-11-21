@@ -43,8 +43,26 @@ const MAIL_DIRECTORY: &str = "mail";
 /// is not passed: mail correspondence is served correspondence.
 const DEFAULT_PARSE_UPLOAD_KIND: &str = "letter";
 
+const PARSE_HELP: &str = "\
+How a local .eml files:
+  The message is parsed locally, then its bytes travel through the document
+  lane into object storage — never inside the filing request. The full raw
+  message files as a matter document (mail/<message ref>/source,
+  message/rfc822), each attachment as one under mail/<message ref>/<index>,
+  and the Communication request carries only headers, text, and references
+  to those documents. Re-filing the same message dedups: already-held
+  documents are reused, and the Communication reports deduped instead of
+  writing twice, so a retry after a partial failure is safe.
+
+Size limits (the document lane's, stated, never raised):
+  25 MiB per document kind on the buffered door; up to 1 GiB through the
+  resumable streaming lane, which this command routes automatically. An
+  oversized file is refused client-side before any request, with the limit
+  named. A refusal from Navigator prints its message alongside the status.";
+
 const DRAFT_HELP: &str = "\
 Signature:
+
   When the authenticated deployment is reachable, the draft wears the attorney's
   stored signature row (resolved by the sending Gmail account), and stderr
   prints the provenance line naming its source and revision. Offline, the
@@ -228,6 +246,7 @@ pub enum MailAction {
     },
     /// File one message as a matter Communication: a Gmail web-URL message, a
     /// local .eml, or a PDF/file path through the document-upload lane.
+    #[command(after_long_help = PARSE_HELP)]
     Parse {
         /// Gmail web URL (copied from the browser), a local .eml path, or a
         /// local PDF/file path to upload as a document.
@@ -3065,44 +3084,275 @@ async fn parse_eml_file(
         crate::projects::surfaces::resolve_project_id(&base, &navigator_token, project_code)
             .await?;
     let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
-    let filed = post_eml(&base, &navigator_token, project_id, &bytes, kind, None).await?;
+    // Parse client-side first: nothing that cannot file (not MIME, no date,
+    // no body) reaches the network, and no request below ever carries the
+    // .eml bytes — they travel through the document lane into object
+    // storage, and the filing request carries only references (LAW-470).
+    let parsed = parse_eml_for_filing(&bytes)
+        .ok_or_else(|| anyhow!("{} is not a fileable email message", path.display()))?;
+    let client = crate::remote::DocumentClient::connect(host, project_code).await?;
+    let filed = upload_and_file_eml(
+        &client,
+        &base,
+        &navigator_token,
+        project_id,
+        &parsed,
+        &bytes,
+        kind,
+    )
+    .await?;
     let summary = eml_filing_summary(&filed);
     println!("Filed {} as a Communication", path.display());
     if summary.deduped {
         println!("Already filed (deduped on {})", summary.source_ref);
     }
-    if summary.attachments_filed > 0 {
+    if !parsed.attachments.is_empty() {
         println!(
             "Filed {} attachment(s) as documents",
-            summary.attachments_filed
+            parsed.attachments.len()
         );
     }
     summary.print_skipped();
     Ok(())
 }
 
-/// Post a raw .eml to the door, which parses and files it server-side, so a
-/// local .eml files without any per-machine Gmail OAuth setup. The door
-/// decides direction from the signed-in lawyer's own address; `kind` is the
-/// asset-lane kind its attachments file under.
-async fn post_eml(
+/// Upload the raw `.eml` and each attachment through the document lane, then
+/// file the Communication through the reference variant — the whole network
+/// flow of `parse_eml_file`, testable against a mock server. No request
+/// below ever carries the base64 `.eml`: the source and attachment uploads
+/// carry the bytes themselves (which the buffered door dedups on
+/// (project, filename, sha256)), and the filing request carries only
+/// headers, text, `source_ref`, and the document references.
+async fn upload_and_file_eml(
+    client: &crate::remote::DocumentClient,
     base: &str,
     navigator_token: &str,
     project_id: Uuid,
+    parsed: &ParsedEmlFile,
     bytes: &[u8],
     kind: &str,
-    mailbox: Option<&str>,
 ) -> Result<serde_json::Value> {
-    post_eml_with_source(
-        base,
-        navigator_token,
-        project_id,
-        bytes,
-        kind,
-        mailbox,
-        None,
-    )
-    .await
+    let slug_ref = mail_slug_ref(&parsed.message_ref);
+    // The full original message lands as a matter document (LAW-469):
+    // buffered up to the per-kind cap (25 MiB), the resumable streaming
+    // lane above it to 1 GiB.
+    let provenance = json!({
+        "message_id": parsed.source_ref,
+        "sender": parsed.from,
+        "received_at": parsed.occurred_at,
+        "subject": parsed.subject,
+    });
+    let source_pointer = client
+        .upload_bytes_with_details(
+            &format!("{slug_ref}.eml"),
+            bytes,
+            kind,
+            None,
+            None,
+            Some("message/rfc822"),
+            Some(&format!("mail/{slug_ref}/source.eml")),
+            None,
+            None,
+            None,
+            &crate::remote::DocumentExecution::default(),
+            Some(provenance.clone()),
+        )
+        .await?;
+    let mut attachment_ids = Vec::with_capacity(parsed.attachments.len());
+    for (index, attachment) in parsed.attachments.iter().enumerate() {
+        let (filename, attachment_slug) =
+            mail_attachment_identity(&slug_ref, index, &attachment.filename);
+        let pointer = client
+            .upload_bytes_with_details(
+                &filename,
+                &attachment.bytes,
+                kind,
+                None,
+                None,
+                Some(&attachment.content_type),
+                Some(&attachment_slug),
+                None,
+                None,
+                None,
+                &crate::remote::DocumentExecution::default(),
+                Some(provenance.clone()),
+            )
+            .await?;
+        attachment_ids.push(pointer.current_version.asset_id);
+    }
+    // File the Communication: headers, text, source_ref, and document
+    // references only — no MIME bytes — so the request stays far under any
+    // body limit at any message size. Re-filing the same message dedups on
+    // (channel, source_ref) and reports `deduped`.
+    let request = json!({
+        "source_document": source_pointer.current_version.asset_id,
+        "attachment_documents": attachment_ids,
+        "source_ref": parsed.source_ref,
+        "from": parsed.from,
+        "to": parsed.to,
+        "subject": parsed.subject,
+        "text_body": parsed.body,
+        "occurred_at": parsed.occurred_at,
+    });
+    let response = reqwest::Client::new()
+        .post(format!("{base}/app/api/projects/{project_id}/mail/eml"))
+        .bearer_auth(navigator_token)
+        .json(&request)
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+        .context("file the .eml through the mail/eml door")?;
+    if !response.status().is_success() {
+        return Err(refused("file the .eml", response).await);
+    }
+    response.json().await.context("read the door's response")
+}
+
+/// One local `.eml` parsed for filing — the shape the reference request
+/// carries and the document lane uploads. Mirrors the door's own parse
+/// (`portal/src/eml_filing.rs`) field for field, so the same message files
+/// to the same Communication through either variant during the transition.
+struct ParsedEmlFile {
+    /// `<Message-ID>` without the angle brackets, else the content digest.
+    message_ref: String,
+    /// `eml:<message_ref>`, the id the message dedups on.
+    source_ref: String,
+    from: String,
+    to: String,
+    subject: Option<String>,
+    /// RFC 3339 instant the message was sent or received.
+    occurred_at: String,
+    /// Plain-text body, quoted history and signature stripped.
+    body: String,
+    attachments: Vec<ParsedEmlAttachment>,
+}
+
+struct ParsedEmlAttachment {
+    filename: String,
+    content_type: String,
+    bytes: Vec<u8>,
+}
+
+/// Parse raw `.eml` bytes for filing, the CLI-side twin of the door's
+/// `parse_eml`. `None` when the bytes are not MIME, carry no date, or have
+/// neither body nor attachments — refusals that stay local.
+fn parse_eml_for_filing(raw: &[u8]) -> Option<ParsedEmlFile> {
+    use sha2::Digest as _;
+    let message = mail_parser::MessageParser::default().parse(raw)?;
+    message.from()?;
+    let date = message.date()?;
+    let occurred_at = chrono::DateTime::from_timestamp(date.to_timestamp(), 0)?.to_rfc3339();
+    let message_ref = if let Some(id) = message
+        .message_id()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+    {
+        id.trim_matches(['<', '>']).to_string()
+    } else {
+        let digest = sha2::Sha256::digest(raw);
+        format!(
+            "sha256:{:02x}",
+            digest
+                .iter()
+                .take(8)
+                .fold(0_u128, |acc, byte| (acc << 8) | u128::from(*byte))
+        )
+    };
+    let body = message.body_text(0).map_or_else(String::new, |text| {
+        model::correspondence::strip_quoted(&text)
+    });
+    let from = address_list_text(message.from());
+    let to = address_list_text(message.to());
+    let html = message.body_html(0).unwrap_or_default();
+    let mut attachments = Vec::new();
+    for part in message.attachments() {
+        let filename = part.attachment_name().unwrap_or_default().to_string();
+        let content_type = part.content_type().map_or_else(
+            || "application/octet-stream".to_string(),
+            |mime| format!("{}/{}", mime.ctype(), mime.subtype().unwrap_or_default()),
+        );
+        let shown = part
+            .content_type()
+            .is_some_and(|mime| mime.ctype().eq_ignore_ascii_case("image"))
+            && part
+                .content_id()
+                .is_some_and(|id| html.contains(&format!("cid:{id}")));
+        if shown {
+            continue;
+        }
+        attachments.push(ParsedEmlAttachment {
+            filename,
+            content_type,
+            bytes: part.decoded().into_owned(),
+        });
+    }
+    if body.is_empty() && attachments.is_empty() {
+        return None;
+    }
+    Some(ParsedEmlFile {
+        source_ref: format!("eml:{message_ref}"),
+        message_ref,
+        from,
+        to,
+        subject: message.subject().map(str::to_string),
+        occurred_at,
+        body,
+        attachments,
+    })
+}
+
+/// Addresses as `Name <addr>`, comma-joined — the shape the raw door files.
+fn address_list_text(address: Option<mail_parser::AddressList<'_>>) -> String {
+    address.map_or_else(String::new, |list| {
+        list.mailboxes()
+            .map(|mailbox| match (mailbox.name(), mailbox.address()) {
+                (Some(name), Some(addr)) => format!("{name} <{addr}>"),
+                (Some(name), None) => name.to_string(),
+                (None, Some(addr)) => addr.to_string(),
+                (None, None) => String::new(),
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    })
+}
+
+/// The slug fragment a message files under: its message reference with every
+/// character outside the door's slug alphabet folded to `-` — the same fold
+/// `file_eml_documents` applies server-side.
+fn mail_slug_ref(message_ref: &str) -> String {
+    message_ref
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect()
+}
+
+/// The upload client refuses a slug that does not end with the uploaded
+/// filename's extension (`model::documents::validate_document_slug`), so
+/// mail attachment slugs carry the part's extension; an extensionless part
+/// gains `.bin` in both the filename and the slug.
+fn mail_attachment_identity(slug_ref: &str, index: usize, part_filename: &str) -> (String, String) {
+    let file_extension = std::path::Path::new(part_filename)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .filter(|extension| !extension.is_empty());
+    let extension = match file_extension {
+        Some(extension) => format!(".{extension}"),
+        None => ".bin".to_string(),
+    };
+    let filename = if part_filename.is_empty() {
+        format!("attachment-{index}{extension}")
+    } else if file_extension.is_some() {
+        part_filename.to_string()
+    } else {
+        format!("{part_filename}{extension}")
+    };
+    (filename, format!("mail/{slug_ref}/{index}{extension}"))
 }
 
 struct GmailSource<'a> {
@@ -3142,8 +3392,9 @@ async fn post_eml_with_source(
     response.json().await.context("read the door's response")
 }
 
-/// Report the status and local guidance for known refusal codes. Server
-/// message fields may contain private input, so they never enter diagnostics.
+/// Report the status and the door's own explanation for a refusal. The
+/// door's messages name the limit or the exact problem (LAW-470); the
+/// local guidance below covers refusals that arrive without a message.
 async fn refused(action: &str, mut response: reqwest::Response) -> anyhow::Error {
     let status = response.status();
     let reason = refusal_reason(&mut response).await.unwrap_or_default();
@@ -3157,6 +3408,7 @@ async fn refusal_reason(response: &mut reqwest::Response) -> Option<String> {
     #[derive(Deserialize)]
     struct Refusal {
         error: String,
+        message: Option<String>,
     }
     let mut body = Vec::with_capacity(MAX_REFUSAL_BYTES);
     while let Some(chunk) = response.chunk().await.ok()? {
@@ -3166,6 +3418,16 @@ async fn refusal_reason(response: &mut reqwest::Response) -> Option<String> {
         body.extend_from_slice(&chunk);
     }
     let refusal: Refusal = serde_json::from_slice(&body).ok()?;
+    // The door's message names the limit or the exact problem (LAW-470) —
+    // say it with the status instead of only a refusal code.
+    if let Some(message) = refusal
+        .message
+        .as_deref()
+        .map(str::trim)
+        .filter(|message| !message.is_empty())
+    {
+        return Some(format!(": {}: {message}", refusal.error));
+    }
     let guidance = match refusal.error.as_str() {
         "kind_required" => "A document kind is required for attachments; pass --kind.",
         "invalid_kind" => "Choose a supported --kind value.",
@@ -5736,6 +5998,177 @@ see docs/mail-cli.md#provision-gmail-for-navigator-mail."
     }
 
     #[tokio::test]
+    async fn a_reference_filing_uploads_documents_and_files_only_references() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let project_id = Uuid::now_v7();
+        let client = crate::remote::DocumentClient::for_check_tests(server.uri(), project_id);
+        let documents_door = format!("/app/api/projects/{project_id}/documents");
+        let eml_door = format!("/app/api/projects/{project_id}/mail/eml");
+        let pointer = |bytes: &[u8]| {
+            json!({
+                "kind": "letter",
+                "visibility": "internal",
+                "current_version": {
+                    "version": 1,
+                    "asset_id": Uuid::now_v7(),
+                    "created_at": "2026-11-20T12:00:00Z",
+                    "sha256": model::documents::sha256_hex(bytes),
+                    "size_bytes": bytes.len()
+                }
+            })
+        };
+        Mock::given(method("POST"))
+            .and(path(&documents_door))
+            .respond_with(ResponseTemplate::new(201).set_body_json(pointer(b"x")))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(&eml_door))
+            .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+                "source_ref": "eml:signing-1@example.test",
+                "direction": "inbound",
+                "deduped": false,
+                "communication_id": Uuid::now_v7(),
+                "attachments": [],
+                "filed": [],
+                "skipped": []
+            })))
+            .mount(&server)
+            .await;
+
+        let raw = b"\
+From: Client <client@example.test>\r\n\
+To: Lawyer <lawyer@example.test>\r\n\
+Subject: Signing question\r\n\
+Date: Thu, 09 Oct 2025 14:03:00 +0000\r\n\
+Message-ID: <signing-1@example.test>\r\n\
+Content-Type: multipart/mixed; boundary=\"BOUND\"\r\n\
+\r\n\
+--BOUND\r\n\
+Content-Type: text/plain\r\n\
+\r\n\
+Can I sign electronically?\r\n\
+--BOUND\r\n\
+Content-Type: application/pdf\r\n\
+Content-Disposition: attachment; filename=\"retainer.pdf\"\r\n\
+\r\n\
+PDF-BYTES\r\n\
+--BOUND--\r\n";
+        let parsed = parse_eml_for_filing(raw).expect("the message parses");
+        assert_eq!(parsed.attachments.len(), 1);
+        upload_and_file_eml(
+            &client,
+            &server.uri(),
+            "navigator-token",
+            project_id,
+            &parsed,
+            raw,
+            "letter",
+        )
+        .await
+        .unwrap();
+
+        let requests = server.received_requests().await.unwrap();
+        let document_bodies: Vec<serde_json::Value> = requests
+            .iter()
+            .filter(|request| request.url.path() == documents_door)
+            .map(|request| serde_json::from_slice(&request.body).unwrap())
+            .collect();
+        assert_filed_eml_documents(&document_bodies, &parsed);
+
+        // The filing request carries references and headers only — never the
+        // MIME bytes (LAW-470).
+        let filing = requests
+            .iter()
+            .find(|request| request.url.path() == eml_door)
+            .expect("one filing request");
+        let filing_body: serde_json::Value = serde_json::from_slice(&filing.body).unwrap();
+        assert_reference_filing_body(&filing_body);
+    }
+
+    fn assert_filed_eml_documents(bodies: &[serde_json::Value], parsed: &ParsedEmlFile) {
+        assert_eq!(bodies.len(), 2, "source plus one attachment");
+        let source = bodies
+            .iter()
+            .find(|body| body["slug"] == "mail/signing-1-example.test/source.eml")
+            .expect("the raw message files as the source document");
+        assert_eq!(source["content_type"], "message/rfc822");
+        assert_eq!(source["mail_provenance"]["message_id"], parsed.source_ref);
+        assert_eq!(
+            source["mail_provenance"]["subject"],
+            json!("Signing question")
+        );
+        let attachment = bodies
+            .iter()
+            .find(|body| body["slug"] == "mail/signing-1-example.test/0.pdf")
+            .expect("the attachment files under its index");
+        assert_eq!(attachment["filename"], "retainer.pdf");
+        assert_eq!(attachment["content_type"], "application/pdf");
+        // Attachments carry the message's provenance — the marker that
+        // scopes the door's retry dedup to the mail lane.
+        assert_eq!(
+            attachment["mail_provenance"]["message_id"],
+            parsed.source_ref
+        );
+    }
+
+    fn assert_reference_filing_body(body: &serde_json::Value) {
+        assert!(body.get("raw_base64").is_none(), "{body}");
+        assert!(body["source_document"].is_string(), "{body}");
+        assert_eq!(
+            body["attachment_documents"].as_array().map_or(0, Vec::len),
+            1
+        );
+        assert_eq!(body["source_ref"], "eml:signing-1@example.test");
+        assert_eq!(body["from"], "Client <client@example.test>");
+        assert_eq!(body["text_body"], "Can I sign electronically?");
+    }
+
+    #[test]
+    fn parse_eml_for_filing_mirrors_the_doors_field_shapes() {
+        // The body strips quoted history; a digest reference stands in when
+        // the Message-ID is missing.
+        let raw = b"\
+From: Client <client@example.test>\r\n\
+To: Lawyer <lawyer@example.test>\r\n\
+Subject: Question\r\n\
+Date: Thu, 09 Oct 2025 14:03:00 +0000\r\n\
+\r\n\
+Can I sign electronically?\r\n\
+> Quoted history\r\n";
+        let parsed = parse_eml_for_filing(raw).expect("the message parses");
+        assert_eq!(parsed.message_ref.len(), 7 + 16, "sha256:<16 hex digits>");
+        assert!(parsed.message_ref.starts_with("sha256:"));
+        assert_eq!(parsed.source_ref, format!("eml:{}", parsed.message_ref));
+        assert_eq!(parsed.body, "Can I sign electronically?");
+        assert_eq!(parsed.from, "Client <client@example.test>");
+        assert_eq!(parsed.to, "Lawyer <lawyer@example.test>");
+        assert_eq!(parsed.subject.as_deref(), Some("Question"));
+        assert!(parsed.occurred_at.starts_with("2025-10-09T14:03:00"));
+        assert!(parsed.attachments.is_empty());
+
+        // Not MIME, no date, and no body at all stay local refusals.
+        assert!(parse_eml_for_filing(b"not a message").is_none());
+        assert!(parse_eml_for_filing(b"From: a@example.test\r\n\r\nno date\r\n").is_none());
+        assert!(parse_eml_for_filing(
+            b"From: a@example.test\r\nDate: Thu, 09 Oct 2025 14:03:00 +0000\r\n\r\n\r\n"
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn mail_slug_ref_folds_everything_outside_the_slug_alphabet() {
+        assert_eq!(
+            mail_slug_ref("signing-1@example.test"),
+            "signing-1-example.test"
+        );
+        assert_eq!(mail_slug_ref("plain-id"), "plain-id");
+    }
+
+    #[tokio::test]
     async fn an_eml_refusal_names_the_doors_reason_and_the_kind_is_sent() {
         use wiremock::matchers::{body_partial_json, method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -5751,12 +6184,13 @@ see docs/mail-cli.md#provision-gmail-for-navigator-mail."
             .expect(1)
             .mount(&server)
             .await;
-        let error = post_eml(
+        let error = post_eml_with_source(
             &server.uri(),
             "navigator-token",
             Uuid::nil(),
             b"From: lawyer@example.test\r\n\r\nbody\r\n",
             "letter",
+            None,
             None,
         )
         .await
@@ -5772,16 +6206,43 @@ see docs/mail-cli.md#provision-gmail-for-navigator-mail."
     }
 
     #[tokio::test]
-    async fn mail_refusals_suppress_structured_private_values() {
+    async fn a_refusal_prints_the_doors_message_and_a_bare_body_falls_back_to_guidance() {
         use wiremock::matchers::method;
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
+        // The door's message names the limit or the exact problem (LAW-470):
+        // it is operator-facing text, and it reaches the operator with the
+        // status and the classified code.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(413).set_body_json(json!({
+                "error": "message_too_large",
+                "message": "The raw .eml is 8000000 bytes; the filing door accepts at most \
+                            3000000 bytes (the inbound-message cap). File it through the \
+                            document lane instead — `navigator mail parse` does.",
+            })))
+            .mount(&server)
+            .await;
+        let response = reqwest::Client::new()
+            .post(server.uri())
+            .send()
+            .await
+            .unwrap();
+        let error = refused("file the .eml", response).await.to_string();
+        assert!(error.contains("refused: 413"), "{error}");
+        assert!(error.contains("message_too_large"), "{error}");
+        assert!(
+            error.contains("accepts at most 3000000 bytes"),
+            "the door's limit text reaches the operator: {error}"
+        );
+
+        // A refusal without a message falls back to the classified guidance;
+        // an unknown code without a message stays bare.
         for code in ["kind_required", "SYNTHETIC_PRIVATE_CODE"] {
             let server = MockServer::start().await;
             Mock::given(method("POST"))
                 .respond_with(ResponseTemplate::new(400).set_body_json(json!({
                     "error": code,
-                    "message": "SYNTHETIC_PRIVATE_MESSAGE",
                 })))
                 .mount(&server)
                 .await;
@@ -5791,7 +6252,6 @@ see docs/mail-cli.md#provision-gmail-for-navigator-mail."
                 .await
                 .unwrap();
             let error = refused("file the .eml", response).await.to_string();
-            assert!(!error.contains("SYNTHETIC_PRIVATE"), "{error}");
             if code == "kind_required" {
                 assert!(error.contains("kind_required"), "{error}");
                 assert!(error.contains("--kind"), "{error}");

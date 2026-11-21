@@ -9,6 +9,27 @@
 
 use chrono::NaiveDate;
 
+/// Strip quoted reply history and trailing signatures from an email body —
+/// cut at the first Gmail-style attribution line, the first quoted (`>`)
+/// line, or the `-- ` signature delimiter. Shared by every path that files
+/// an email's text as a Communication — the portal's raw `.eml` door and the
+/// CLI's reference filings (LAW-470) — so both variants file the same body.
+#[must_use]
+pub fn strip_quoted(body: &str) -> String {
+    let mut kept = Vec::new();
+    for line in body.lines() {
+        let trimmed = line.trim_start();
+        if line == "-- "
+            || line.starts_with('>')
+            || (trimmed.starts_with("On ") && trimmed.ends_with("wrote:"))
+        {
+            break;
+        }
+        kept.push(line);
+    }
+    kept.join("\n").trim_end().to_string()
+}
+
 /// One calendar date a message names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct DetectedDate {
