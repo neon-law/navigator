@@ -368,6 +368,8 @@ async fn write_edge(
         serde_json::json!({
             "from_id": input.from_id.to_string(),
             "to_id": input.to_id.to_string(),
+            "from_kind": input.from.table(),
+            "to_kind": input.to.table(),
             "kind": input.kind,
             "confidence_pct": input.confidence_pct,
             "source_kind": input.source_kind,

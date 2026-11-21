@@ -1730,6 +1730,10 @@ mod tests {
                 include_str!("../postgres/migrations/20261121000000_create_database_recovery.sql"),
             ),
             ("20261121100000_create_billing_annotation.sql", include_str!("../postgres/migrations/20261121100000_create_billing_annotation.sql")),
+            (
+                "20261121110000_close_native_graph_writers.sql",
+                include_str!("../postgres/migrations/20261121110000_close_native_graph_writers.sql"),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());
