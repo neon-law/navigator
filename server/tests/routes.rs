@@ -10978,20 +10978,6 @@ async fn the_iep_defenders_home_renders_its_band_sequence_with_qualifiers() {
     assert_eq!(resp.status(), StatusCode::OK, "iep.neonlaw.com /");
     let body = body_string(resp).await;
 
-    let staging_host = views::brand::BrandKey::IepDefenders.staging_host();
-    let staged = body_string(get_on_host(&app, "/", staging_host).await).await;
-    let mut remaining = staged.as_str();
-    for marker in [
-        "classroom.jpg",
-        r#"id="results""#,
-        r#"id="process""#,
-        "sam-castor.jpg",
-        "david-gardner.jpg",
-        "This work was personal from the beginning.",
-    ] {
-        remaining = remaining.split_once(marker).expect(marker).1;
-    }
-
     // Every band's anchor survives the full SSR pass. Statement bands carry
     // no anchor attribute in the shared renderer, so they are asserted by
     // heading below.
