@@ -1611,7 +1611,7 @@ pub fn iep_home(branding: &views::brand::Branding, deployment_host: Option<&str>
     page
 }
 
-/// Same Day Legal opens with its legal services.
+/// Same Day Legal's free MCP setup and optional attorney services.
 pub fn same_day_legal_home(
     branding: &views::brand::Branding,
     _deployment_host: Option<&str>,
@@ -2747,7 +2747,7 @@ mod tests {
             "Unclaimed property",
             "Estate planning",
             "Vesta Estate Planning",
-            "$50",
+            "From $50",
             "Lex Tecnica, Ltd.",
             "App Store",
             "Google Play",

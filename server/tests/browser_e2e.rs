@@ -180,15 +180,24 @@ async fn enrollment_intake_preserves_answers_and_reviews_before_sign_in() {
     c.goto(&format!("{origin}/"))
         .await
         .expect("Same Day Legal home");
-    wait_for_text(&c, "What is your legal need?", Duration::from_secs(20)).await;
-    c.find(Locator::Css(".fm-hero a[href='/app']"))
+    c.find(Locator::Css(".fm-hero a[href='#mcp-setup']"))
         .await
-        .expect("mobile app link")
+        .expect("free setup link")
+        .click()
+        .await
+        .unwrap();
+    assert_eq!(c.current_url().await.unwrap().fragment(), Some("mcp-setup"));
+    c.find(Locator::Css("#mcp-setup a[href='/auth/signup']"))
+        .await
+        .expect("free account link");
+    c.find(Locator::Css("#attorney-options a[href='/app#pricing']"))
+        .await
+        .expect("subscription pricing link")
         .click()
         .await
         .unwrap();
     assert_eq!(c.current_url().await.unwrap().path(), "/app");
-    c.find(Locator::Css(".fm-hero a[href='#enrollment']"))
+    c.find(Locator::Css("#pricing a[href='#enrollment']"))
         .await
         .expect("enrollment link")
         .click()

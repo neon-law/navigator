@@ -641,6 +641,7 @@ pub fn MarketingPage(
             .as_ref()
             .is_some_and(|cta| cta.href.starts_with("tel:"));
     let hero_tel = crate::components::site_footer::tel_href(&hero_phone);
+    let setup_first = content.skin == PageSkin::SameDayLegal && content.hero_cta.is_some();
     let hero_day_rate = content.bands.iter().find_map(|band| match band {
         Band::Cards {
             items,
@@ -709,12 +710,12 @@ pub fn MarketingPage(
                             } else if !content.hero_lead.is_empty() {
                                 p { class: "fm-hero__lead commitment-hero__lead", "{content.hero_lead}" }
                             }
-                            if hero_calls {
+                            if hero_calls && !setup_first {
                                 a { class: "nav-btn nav-btn--primary fm-hero__cta home-call", href: "{hero_tel}", "Call {hero_phone}" }
                             }
                             if let Some(cta) = content.hero_cta.as_ref() {
                                 a {
-                                    class: if hero_calls {
+                                    class: if hero_calls && !setup_first {
                                         "nav-btn nav-btn--secondary fm-hero__cta commitment-hero__cta"
                                     } else {
                                         "nav-btn nav-btn--primary fm-hero__cta commitment-hero__cta"
@@ -722,6 +723,9 @@ pub fn MarketingPage(
                                     href: "{cta.href}",
                                     "{cta.label}"
                                 }
+                            }
+                            if hero_calls && setup_first {
+                                a { class: "home-call", href: "{hero_tel}", "Call {hero_phone}" }
                             }
                         }
                         if let Some(badge) = hero_day_rate {
