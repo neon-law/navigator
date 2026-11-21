@@ -79,3 +79,13 @@ fn an_operator_verb_is_not_in_the_lean_navigator() {
         .assert()
         .failure();
 }
+
+#[test]
+fn mail_parse_help_states_the_document_lane_limits() {
+    // LAW-470: the long help says where the bytes go and where the caps sit,
+    // so an oversized refusal is legible before it happens.
+    let long = help(&["mail", "parse", "--help"]);
+    assert!(long.contains("25 MiB per document kind"), "{long}");
+    assert!(long.contains("1 GiB"), "{long}");
+    assert!(long.contains("object storage"), "{long}");
+}
