@@ -1172,9 +1172,8 @@ jobs:
       # ---------- chromedriver-driven browser tests ----------
       # The full browser suite (login + admin-routes + retainer-walker)
       # plus the axe-core WCAG A/AA accessibility gate against the live
-      # KIND web server. A guard step greps for `skipping browser test:`
-      # and fails the job if the tests self-skipped (harness unreachable)
-      # instead of passing green by accident.
+      # KIND web server. Check all three JUnit suites and the streamed output
+      # because a test that logs a skip and returns appears as passed in JUnit.
       # `grant-lawyer` and four fixtures in the browser suite connect to
       # the SAME SurrealDB the in-cluster `web` reads (persons moved there
       # with ENG-19), reached from the runner the same way the local loop
@@ -1465,12 +1464,7 @@ jobs:
       - name: assert browser/accessibility tests did not self-skip
         timeout-minutes: 90
         run: |
-          if grep -q "skipping browser test:" /tmp/e2e.log; then
-              echo "::error::a browser/accessibility test self-skipped — the KIND harness was unreachable, so the suite passed without asserting"
-              grep -n "skipping browser test:" /tmp/e2e.log || true
-              exit 1
-          fi
-          echo "confirmed: no 'skipping browser test:' line — every browser/accessibility test executed for real"
+          python3 scripts/check-browser-results.py target/nextest/ci/junit.xml /tmp/e2e.log
 
       # Always publish the JUnit report so the FLAKY trend is visible even on
       # a green deploy (a flake papered over by a retry still shows here); on

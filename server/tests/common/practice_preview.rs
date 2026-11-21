@@ -11,6 +11,10 @@ pub struct PracticePreview {
 
 impl PracticePreview {
     pub async fn start() -> Self {
+        Self::for_brands(&[BrandKey::Aegis, BrandKey::Groundwork, BrandKey::Vesta]).await
+    }
+
+    pub async fn for_brands(brands: &[BrandKey]) -> Self {
         // PostgreSQL carries every record the preview reads; the Surreal handle
         // is an unconnected placeholder, as in the other browser fixtures.
         store::postgres::PostgresDb::application()
@@ -24,7 +28,7 @@ impl PracticePreview {
         let mut listeners = Vec::new();
         let mut ports = std::collections::BTreeMap::new();
         let mut sites = Vec::new();
-        for key in [BrandKey::Aegis, BrandKey::Groundwork, BrandKey::Vesta] {
+        for &key in brands {
             let listener = TcpListener::bind("127.0.0.1:0")
                 .await
                 .expect("preview listener");
