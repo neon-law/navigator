@@ -82,15 +82,6 @@
 .daybridge-prices .daybridge-price span { display: block; margin: .6rem 0 0; font-size: 1.05rem; }
 .daybridge-prices p:last-child { margin: 1rem 0 0; color: var(--nav-color-text-muted); }
 
-.daybridge-story { max-width: 44rem; margin: 0 auto; padding: clamp(4rem, 8vw, 7rem) 0; }
-.daybridge-story h2 { margin: 2.5rem 0 .75rem; font-size: clamp(1.7rem, 3vw, 2.35rem); line-height: 1.05; }
-.daybridge-story h2:first-child { margin-top: 0; }
-.daybridge-story p { margin: 0; color: var(--nav-color-text-muted); font-size: 1.1rem; }
-
-.daybridge-account { max-width: 44rem; margin: 0 auto; padding: 0 0 clamp(3rem, 6vw, 5rem); }
-.daybridge-account h2 { margin: 0 0 .75rem; font-size: clamp(1.7rem, 3vw, 2.35rem); }
-.daybridge-account p { color: var(--nav-color-text-muted); }
-
 .daybridge-signin { margin: 1rem 0 0; font-size: .95rem; }
 .daybridge-signin a { color: var(--nav-color-link); font-weight: 650; }
 

@@ -1,14 +1,14 @@
-head_title: "{site_name} | Divorce sucks. Here is a fair price."
+head_title: "{site_name} | Flat-fee divorce representation"
 meta_description: >-
-  Divorce sucks, and nobody wants it. Daybridge Divorce Law does it as fairly
-  and as quickly as the court allows: $200 if you agree, $500 if you do not,
-  plus court fees and $50 per motion. Attorney advertisement.
-heading: Divorce sucks. We make it fair and keep it moving.
+  Daybridge Divorce Law charges $500 if you agree. $5,000 for up to two years if you do not. After two years,
+  continued representation costs $5 a day. Court fees and discovery expenses, including expert fees, are
+  separate.
+  Attorney advertisement.
+heading: Talk through your next steps in a divorce.
 lead: >-
-  Nobody actually wants this. We are doing the best we can to make it fair and
-  as quick as the court allows, at a price that does not make a hard year
-  harder. Make an account, tell us where things stand, and book a time with a
-  lawyer whenever you are ready.
+  Whether you and your spouse agree or still have decisions to make, you can
+  talk with a lawyer about what matters to you. We use software and AI for
+  routine paperwork so your lawyer has more time to listen and explain your options.
 contact_label: Book Consultation
 lead_heading: Prefer to write first?
 lead_intro: >-
@@ -20,48 +20,26 @@ daybridge:
   eyebrow: Daybridge Divorce Law
   fee_label: What a divorce costs with us
   agreed_label: If you agree
-  agreed_price: "$200"
+  agreed_price: "$500"
   agreed_unit: flat fee
   agreed_body: >-
-    You settle the big things together. We write it down, file it, and see it
-    through to a judgment the court signs. One price, no hourly meter.
+    If you and your spouse agree on the terms, we prepare and file your papers
+    and guide you through the court’s decision. Court fees and discovery expenses, including expert fees, are
+    separate.
   contested_label: If you do not agree
-  contested_price: "$500"
-  contested_unit: flat fee, plus $50 per motion
+  contested_price: "$5,000"
+  contested_unit: flat fee for up to two years, then $5 a day while we represent you
   contested_body: >-
-    We stand with you, and only you. We ask for a $1,000 retainer up front, bill
-    the $500 and each motion against it as we go, and give back what is left.
-  costs_heading: What you pay besides us
-  costs_body: >-
-    The court charges its own filing fees, usually a few hundred dollars, and
-    that money goes to the court, not to us. If you cannot afford them, we help
-    you ask the court to waive them.
-  story_heading: Why we do it this way
-  story_body: >-
-    We have handled divorces in Washington, California, Nevada, and New York,
-    from expensive ones to ones for people with nothing left to fight over. We
-    use software behind the scenes so we can spend our time with you instead of
-    on paperwork. You get a flat price you can read before you commit, and no
-    surprise at the end.
-  joint_heading: Agreeing does not always mean one lawyer
-  joint_body: >-
-    If you both agree, we may be able to represent the two of you together, after
-    a conflict check and each of you giving informed written consent. If we
-    cannot, or if that changes, we represent one of you and the other should have
-    their own lawyer. The court sets its own schedule either way, and no lawyer
-    can promise you a result.
+    Your lawyer represents you individually when there are issues to resolve.
+    The flat fee includes motions within the agreed work. Court fees and discovery expenses, including expert
+    fees, are separate.
   testimonials_heading: What our clients say
-  account_heading: Start with an account
-  account_body: >-
-    An account keeps your documents, your questions, and your case status in one
-    place, and it is the fastest way to get going. Creating one does not make you
-    our client.
   signup_label: Create your account
   signin_label: Already have an account? Sign in
-  closing_heading: There is life on the other side.
+  closing_heading: What would you like to ask a lawyer?
   closing_body: >-
-    Book a time to talk now, or make your account and start your intake. Either
-    way, we will tell you plainly what we need to begin.
+    You can come to a consultation with questions still open. Tell us what you and your
+    spouse have settled and what feels uncertain. We can explain the next step and what the fee covers.
   sibling_practices:
     - brand: vesta
       eyebrow: After the divorce is final

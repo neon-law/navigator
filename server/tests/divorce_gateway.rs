@@ -70,10 +70,9 @@ async fn the_gateway_renders_on_neon_hosts_with_neon_chrome_and_the_approved_cop
         for expected in [
             "<title>Neon Law | Divorce</title>",
             r#"content="Neon Law | Divorce" property="og:title""#,
-            "Divorce sucks",
             "Daybridge Divorce Law",
             "Guieb &#38; Shook PC",
-            "$200 if you agree",
+            "$500 if you agree",
             "No result or timeline is promised",
             "Visit Daybridge Divorce Law",
             "site-footer",

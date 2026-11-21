@@ -1237,15 +1237,7 @@ fn daybridge_content(
         contested_price: copy.contested_price,
         contested_unit: copy.contested_unit,
         contested_body: copy.contested_body,
-        costs_heading: copy.costs_heading,
-        costs_body: copy.costs_body,
-        story_heading: copy.story_heading,
-        story_body: copy.story_body,
-        joint_heading: copy.joint_heading,
-        joint_body: copy.joint_body,
         testimonials_heading: copy.testimonials_heading,
-        account_heading: copy.account_heading,
-        account_body: copy.account_body,
         signup_label: copy.signup_label,
         signin_label: copy.signin_label,
         closing_heading: copy.closing_heading,
@@ -3399,8 +3391,11 @@ mod tests {
         );
         let text = content.hero_lead.to_lowercase();
         assert!(text.contains("daybridge divorce law"), "{text}");
-        assert!(text.contains("$200 if you agree"), "{text}");
-        assert!(text.contains("$500 if you do not"), "{text}");
+        assert!(text.contains("$500 if you agree"), "{text}");
+        assert!(
+            text.contains("$5,000 for up to two years if you do not"),
+            "{text}"
+        );
         for stale_fee in [
             "$333",
             "mutual split",
@@ -3425,19 +3420,11 @@ mod tests {
             views::brand::BrandKey::Daybridge.resolve_branding(&views::brand::DEFAULT_BRANDING);
         let home = home(branding);
         let d = home.daybridge.as_ref().expect("Daybridge offer");
-        assert_eq!(d.agreed_price, "$200");
-        assert_eq!(d.contested_price, "$500");
-        assert!(d.contested_unit.contains("$50 per motion"), "{d:?}");
-        assert!(d.contested_body.contains("$1,000 retainer"), "{d:?}");
-        assert!(d.costs_body.contains("court"), "{d:?}");
+        assert_eq!(d.agreed_price, "$500");
+        assert_eq!(d.contested_price, "$5,000");
+        assert!(d.contested_unit.contains("two years"));
         assert!(!d.signup_label.is_empty() && !d.signin_label.is_empty());
-        assert!(
-            home.heading.starts_with("Divorce sucks"),
-            "{}",
-            home.heading
-        );
-        let text = format!("{} {} {}", home.lead, d.story_body, d.joint_body).to_lowercase();
-        assert!(text.contains("court sets its own schedule"), "{text}");
+        let text = home.lead.to_lowercase();
         for promise in ["we guarantee", "guaranteed", "fast divorce"] {
             assert!(!text.contains(promise), "{text}");
         }

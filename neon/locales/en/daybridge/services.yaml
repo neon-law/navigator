@@ -1,8 +1,7 @@
 head_title: "{site_name} | Agreed divorce services"
 meta_description: >-
-  Divorce sucks. Daybridge Divorce Law does it fairly and as quickly as the
-  court allows: $200 if you agree, $500 if you do not, plus court fees and $50
-  per motion. The court sets its own schedule. Attorney advertisement.
+  $500 if you agree. $5,000 for up to two years if you do not. After two years, continued representation costs
+  $5 a day. Court fees and discovery expenses, including expert fees, are separate. Attorney advertisement.
 title: Divorce, at a fair price
 hero_mark: scales
 tagline: A shared plan for separate futures.
@@ -12,8 +11,8 @@ hero_lines:
   - text: to move on
     accent_words: 0
 hero_lead: >-
-  Nobody wants a divorce. We keep it fair and keep our part moving, whether you
-  agree or not. Where both of you agree, joint representation may be permitted
+  You can talk with a lawyer about the decisions ahead. Where both of you agree, joint representation may be
+  permitted
   after conflict review and informed written consent. Guieb & Shook PC is the law
   firm you would retain.
 hero_cta:
@@ -71,12 +70,12 @@ bands:
                 of you.
   - kind: statement
     heading: Two plain prices
-    lead: $200 if you agree. $500 if you do not.
+    lead: $500 if you agree. $5,000 for up to two years if you do not. After two years, continued representation costs $5 a day.
     body:
       - - text: >-
-            A contested divorce adds $50 for each motion, against a $1,000
-            retainer from which we bill the flat fee and each motion and refund
-            what is left. Court filing fees are separate and go to the court. Your
+            The $1,000 upfront retainer counts toward the contested flat fee. Motions are included.
+            We refund any unused retainer. Court fees and discovery expenses, including expert fees, are
+            separate. Your
             written retainer defines the work. The fee pays for legal work, not a
             particular result.
   - kind: cards
@@ -94,8 +93,7 @@ bands:
       - title: The firm
         body:
           - - text: >-
-                Daybridge Divorce Law is a trade name of Guieb & Shook PC
-                Guieb & Shook PC
+                Daybridge Divorce Law is a trade name of Guieb & Shook PC. It
                 is the law firm you would retain.
   - kind: cta
     heading: Start with your common ground

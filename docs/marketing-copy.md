@@ -62,16 +62,11 @@ Daybridge Divorce Law (`daybridge/`):
 | `neon/locales/en/daybridge/home.yaml` | `/` agreed divorce for couples |
 | `neon/locales/en/daybridge/services.yaml` | `/services` scope, timing, and cost disclosures |
 
-Daybridge charges $200 for an agreed divorce and $500 for a contested one, plus the court's filing fees and $50 per
-motion. A contested matter opens with a $1,000 retainer that the flat fee and each motion are billed against, and the
-remainder is refunded. The home page is plain-spoken: divorce is hard, nobody wants it, and the firm makes it fair and
-keeps it moving while the court sets its own schedule. The copy states no turnaround time. The two prices are the
-largest type on the page, in prose rather than list or card rows. The hero and the closing offer the brand's phone line,
-the Notion booking calendar, and account creation, which lands a new client on their matters. Published testimonials sit
-between the story and the closing. A sibling-practice card points to Vesta Estate Planning for a review after the
-divorce is final, under a separate engagement and without a price. Joint representation of an agreed divorce is subject
-to applicable rules, conflict review, and informed written consent. Agreement and consent alone do not establish
-eligibility for joint representation.
+Daybridge charges $500 for an agreed divorce or $5,000 for up to two years of contested representation. After two years,
+continued contested representation costs $5 a day. Motions are included. Court fees and discovery expenses, including
+expert fees, are separate. The homepage offers a consultation and account creation. Its header links to published
+testimonials. The sibling-practice card links to Vesta Estate Planning for a review after divorce under a separate
+engagement. The services page explains the limits on joint representation.
 
 [Nevada conflict rules](https://www.leg.state.nv.us/courtrules/rpc.html) restrict claims between clients in the same
 proceeding. The copy preserves that limit.
