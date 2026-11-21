@@ -2171,13 +2171,13 @@ fn service_images_with(
     )?;
     replace_in_tree(
         &rendered.path().join("k8s/postgres/mirror"),
-        "image: navigator-surreal-archive ",
-        &format!("image: {}/navigator-surreal-archive:{tag} ", cfg.registry()),
+        "image: navigator-ops ",
+        &format!("image: {}/navigator-ops:{tag} ", cfg.registry()),
     )?;
     replace_in_tree(
         &rendered.path().join("k8s/postgres/admission"),
-        "image: navigator-surreal-archive ",
-        &format!("image: {}/navigator-surreal-archive:{tag} ", cfg.registry()),
+        "image: navigator-ops ",
+        &format!("image: {}/navigator-ops:{tag} ", cfg.registry()),
     )?;
     let Some(digest_file) = digest_file else {
         if dry_run {
@@ -8022,6 +8022,22 @@ mod tests {
     }
 
     #[test]
+    fn neutral_operator_digest_refuses_a_retained_source_alias() {
+        let legacy = format!("sha256:{}", "a".repeat(64));
+        let neutral = format!("sha256:{}", "b".repeat(64));
+        let mut digests =
+            std::collections::BTreeMap::from([("navigator-surreal-archive".to_owned(), legacy)]);
+        assert!(
+            digest_for_image(&digests, "navigator-ops", "registry.example/navigator-ops").is_err()
+        );
+        digests.insert("navigator-ops".to_owned(), neutral.clone());
+        assert_eq!(
+            digest_for_image(&digests, "navigator-ops", "registry.example/navigator-ops").unwrap(),
+            neutral
+        );
+    }
+
+    #[test]
     fn admission_and_operator_jobs_use_the_selected_release_digest() {
         for service in [
             "postgres/mirror/production",
@@ -8041,7 +8057,7 @@ mod tests {
             .join(GKE_KUSTOMIZE_SUBPATH)
             .join(service_name);
         let cfg = sample_config();
-        let reference = format!("{}/navigator-surreal-archive", cfg.registry());
+        let reference = format!("{}/navigator-ops", cfg.registry());
         let digest = format!("sha256:{}", "a".repeat(64));
         service_images_with(
             &rendered,
@@ -11191,6 +11207,7 @@ spec:
             "navigator-archives-trigger",
             "navigator-billing-digest-trigger",
             "navigator-surreal-archive",
+            "navigator-ops",
             "navigator-workflows-service",
         ] {
             assert!(

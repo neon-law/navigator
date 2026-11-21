@@ -3,7 +3,7 @@
 #
 # It backfills rows written before the mirror was enabled and repairs any
 # write the mirror missed, then exits non-zero if drift remains. The image is
-# the placeholder `navigator-surreal-archive`, the release image that carries
+# the placeholder `navigator-ops`, the release image that carries
 # `hudson`, the operator CLI; the operator pins it to the release being reconciled
 # (see docs/postgres-kubernetes.md). It reads SurrealDB through the
 # deployment Secret's `NAVIGATOR_SURREAL_*` keys and writes PostgreSQL as the
@@ -35,7 +35,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: reconcile
-          image: navigator-surreal-archive # pin-exempt: placeholder the operator replaces with the release image
+          image: navigator-ops # pin-exempt: placeholder the operator replaces with the release image
           imagePullPolicy: IfNotPresent
           # A contract test keeps this invocation and the recovery CronJob aligned.
           args:

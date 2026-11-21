@@ -174,13 +174,12 @@ receipts through PostgreSQL alone. Neither deployment settings nor a successful 
 registered authority history.
 
 `k8s/postgres/mirror/mirror-reconcile-job.yaml` runs `reconcile --json` once, as `navigator_app`. It reads SurrealDB
-through the deployment Secret's `NAVIGATOR_SURREAL_*` keys. The image is the placeholder `navigator-surreal-archive`.
-That is the release image that carries the `hudson` operator CLI. Pin it to the release being inspected, then create the
-Job:
+through the deployment Secret's `NAVIGATOR_SURREAL_*` keys. The image is the placeholder `navigator-ops`. That is the
+release image that carries the `hudson` operator CLI. Pin it to the release being inspected, then create the Job:
 
 ```bash
 kubectl kustomize examples/deploy/k8s/gke/postgres/mirror/<env> | place \
-  | kubectl set image --local -f - reconcile=<registry>/navigator-surreal-archive@<release-digest> -o yaml \
+  | kubectl set image --local -f - reconcile=<registry>/navigator-ops@<release-digest> -o yaml \
   | kubectl --context <context> -n "$NS" create -f -
 kubectl --context <context> -n "$NS" wait --for=condition=complete \
   job/navigator-postgres-mirror-reconcile --timeout=30m

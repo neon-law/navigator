@@ -32,7 +32,7 @@ spec:
               type: RuntimeDefault
           containers:
             - name: reconcile
-              image: YOUR_IMAGE_REGISTRY/navigator-surreal-archive:YY.M.D
+              image: YOUR_IMAGE_REGISTRY/navigator-ops:YY.M.D
               imagePullPolicy: IfNotPresent
               # A contract test keeps this invocation and the recovery CronJob aligned.
               args:
