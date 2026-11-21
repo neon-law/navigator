@@ -31,6 +31,7 @@ pub mod forge_github;
 pub mod gate;
 pub mod ics;
 pub mod jj;
+pub mod jj_billing;
 pub mod jj_log;
 pub mod lifecycle;
 pub mod lifecycle_read;

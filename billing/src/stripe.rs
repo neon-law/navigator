@@ -10,6 +10,7 @@ pub struct StripeInvoiceClient<'a> {
     client: Client,
     base: Url,
     key: &'a str,
+    connected_trust: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -59,7 +60,22 @@ impl<'a> StripeInvoiceClient<'a> {
             base: Url::parse("https://api.stripe.com/v1/")
                 .map_err(|_| provider_error("Stripe API configuration invalid"))?,
             key,
+            connected_trust: None,
         })
+    }
+
+    /// Scope every request, including customer creation, to a reviewed trust account.
+    pub async fn on_connected_trust(mut self, id: &str) -> Result<Self, BillingError> {
+        if !stripe_identifier(id, "acct_") || self.account_id().await? == id {
+            return Err(provider_error(
+                "a separate connected trust account is required",
+            ));
+        }
+        self.connected_trust = Some(id.to_string());
+        if self.account_id().await? != id {
+            return Err(provider_error("Stripe trust account identity mismatch"));
+        }
+        Ok(self)
     }
 
     pub async fn account_id(&self) -> Result<String, BillingError> {
@@ -74,11 +90,10 @@ impl<'a> StripeInvoiceClient<'a> {
 
     /// Create and confirm an unsent draft. All writes use the batch's stable
     /// key and explicitly attach items to the invoice they belong to.
-    pub async fn create_draft(
+    pub async fn create_trust_draft(
         &self,
         batch: Uuid,
         request: &InvoiceRequest,
-        iolta: bool,
     ) -> Result<InvoiceId, BillingError> {
         let due = request
             .due_date
@@ -104,14 +119,6 @@ impl<'a> StripeInvoiceClient<'a> {
         if customer.livemode != live || !customer.id.starts_with("cus_") {
             return Err(provider_error("Stripe returned an invalid customer"));
         }
-        let description = if iolta {
-            request.reference.clone()
-        } else {
-            format!(
-                "{}. Operating account. This is not IOLTA billing.",
-                request.reference
-            )
-        };
         let invoice: StripeObject = self
             .call(
                 Method::POST,
@@ -122,7 +129,7 @@ impl<'a> StripeInvoiceClient<'a> {
                     ("auto_advance", "false"),
                     ("collection_method", "send_invoice"),
                     ("due_date", &due),
-                    ("description", &description),
+                    ("description", &request.reference),
                     ("pending_invoice_items_behavior", "exclude"),
                     ("metadata[navigator_batch_id]", &batch.to_string()),
                 ],
@@ -188,6 +195,9 @@ impl<'a> StripeInvoiceClient<'a> {
             .request(method, url)
             .bearer_auth(self.key)
             .header("Stripe-Version", "2026-10-28.endive");
+        if let Some(account) = &self.connected_trust {
+            request = request.header("Stripe-Account", account);
+        }
         if let Some(key) = key {
             request = request.header("Idempotency-Key", key).form(fields);
         }
@@ -217,11 +227,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_operating_draft_is_labeled_and_items_attach_to_the_exact_invoice() {
+    async fn a_trust_draft_keeps_all_items_in_the_reviewed_connected_account() {
         let server = MockServer::start().await;
+        let account_read = Mock::given(matchers::method("GET")).and(matchers::path("/v1/account"));
+        account_read
+            .respond_with(|request: &wiremock::Request| {
+                let account = if request.headers.get("Stripe-Account").is_some() {
+                    "acct_Trust"
+                } else {
+                    "acct_Platform"
+                };
+                ResponseTemplate::new(200).set_body_json(json!({"id":account}))
+            })
+            .mount(&server)
+            .await;
         let batch = Uuid::nil();
         let mut client = StripeInvoiceClient::new("sk_test_synthetic", false).unwrap();
         client.base = Url::parse(&format!("{}/v1/", server.uri())).unwrap();
+        let client = client.on_connected_trust("acct_Trust").await.unwrap();
 
         for (path, step, object_id) in [
             ("customers", "customer", "cus_synthetic"),
@@ -229,6 +252,7 @@ mod tests {
             ("invoiceitems", "item/0", "ii_synthetic"),
         ] {
             let mut mock = Mock::given(matchers::method("POST"))
+                .and(matchers::header("Stripe-Account", "acct_Trust"))
                 .and(matchers::path(format!("/v1/{path}")))
                 .and(matchers::header(
                     "Authorization",
@@ -239,9 +263,7 @@ mod tests {
                     format!("{batch}/{step}"),
                 ));
             if step == "invoice" {
-                mock = mock
-                    .and(matchers::body_string_contains("auto_advance=false"))
-                    .and(matchers::body_string_contains("This+is+not+IOLTA+billing"));
+                mock = mock.and(matchers::body_string_contains("auto_advance=false"));
             }
             if step == "item/0" {
                 mock = mock
@@ -257,6 +279,7 @@ mod tests {
         }
         Mock::given(matchers::method("GET"))
             .and(matchers::path("/v1/invoices/in_synthetic"))
+            .and(matchers::header("Stripe-Account", "acct_Trust"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "id": "in_synthetic", "livemode": false, "auto_advance": false,
                 "status": "draft", "currency": "usd", "total": 1234
@@ -265,7 +288,7 @@ mod tests {
             .mount(&server)
             .await;
         let draft = client
-            .create_draft(
+            .create_trust_draft(
                 batch,
                 &InvoiceRequest {
                     contact_id: None,
@@ -281,7 +304,6 @@ mod tests {
                     issued_date: None,
                     due_date: chrono::NaiveDate::from_ymd_opt(2026, 11, 30),
                 },
-                false,
             )
             .await
             .unwrap();

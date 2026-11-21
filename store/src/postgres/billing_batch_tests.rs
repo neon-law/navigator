@@ -98,6 +98,7 @@ fn synthetic_batch(
         contact_email: "synthetic@example.invalid".into(),
         xero_contact_id: Some("synthetic-contact".into()),
         stripe_account_id: None,
+        trust_state: None,
         stripe_iolta: false,
         stripe_invoice_id: None,
         due_date: now.date_naive(),

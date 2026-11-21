@@ -23,14 +23,17 @@ A Project's Jujutsu repository declares its governing jurisdiction as `project.j
 Run `navigator project sync` to project that code to the Project before generating an invoice. An absent declaration
 leaves the current Project jurisdiction in place.
 
-For Nevada, the Project's Firm supplies `STRIPE_NEVADA_APP_KEY` through the Firm integration secret settings. A missing
-credential disables Nevada invoice creation. A Project without a jurisdiction can use the Firm's
-`STRIPE_OPERATING_APP_KEY` when configured. Operating drafts identify themselves as outside IOLTA billing. Each
-deployment has its own Firm secrets. Staging accepts a sandbox key and routes synthetic data to Stripe's sandbox.
-Production accepts a live key.
+Each payment destination belongs to one Firm and one state. Before enabling collection, verify the payout bank, client
+ownership, and how the processor handles fees and chargebacks. Keep the bank verification in the private Firm record.
+Configure `NAVIGATOR_STRIPE_TRUST_ROUTES` in that deployment with a JSON array. Each entry has the Firm UUID in `firm`,
+the two-letter `state`, and the verified Stripe account ID in `account`. Account IDs must be distinct across
+destinations. A missing mapping leaves only the Xero receivable workflow available.
 
-The operating route requires `STRIPE_DEFAULT` in the deployment environment, and the Nevada route requires
-`STRIPE_NEVADA`. Only presence matters. Each route also needs its own Firm integration secret.
+Connected accounts use the Firm's platform credential (`STRIPE_OPERATING_APP_KEY`) with `STRIPE_DEFAULT` enabled. Every
+customer, draft, and invoice item request targets the selected connected account. The platform's own account cannot be
+selected. A dedicated Nevada credential uses `dedicated_nevada: true` in its route, `STRIPE_NEVADA`, and the Firm's
+`STRIPE_NEVADA_APP_KEY`. Its authenticated account ID must match the registered destination. Staging accepts sandbox
+credentials. Production accepts live credentials.
 
 Navigator creates an unsent draft on the authenticated Stripe account and reserves the underlying work for review. The
 billing batch retains the account and invoice identity so a retry cannot silently move to a different account. A Stripe
@@ -216,3 +219,29 @@ for them. A simulated-matters deployment folds in the staging disclosure, the sa
   full integration catalog.
 - [`docusign-esignature.md`](docusign-esignature.md) — the sibling e-signature integration (one app, two environments).
   [`deployment-secrets.md`](deployment-secrets.md) — how production secrets are rendered.
+
+## Staging time from Jujutsu
+
+In a private Project checkout, add a final trailer to the change description. Give each block of actual work its own
+UUID. This example records twelve minutes. Anyone who can read the repository can read the trailer.
+
+```text
+Update the template
+
+Billing-Time: 0.2 2026-11-20 00000000-0000-4000-8000-000000000001
+```
+
+Run `navigator project jj stage-time` while that change is current, or select it with `--revision`. The signed-in
+timekeeper attests to their own time. The command reads the Project and host from `navigator.yaml`. A rebase keeps the
+original entry. Reusing its UUID with changed hours, date, timekeeper, or change identity requires review.
+
+On the Project's Billing tab, review the time against the engagement and check for overlap with manual or timer entries.
+Enter the client-facing description and approve the time, record it at no charge, or deny it with an internal reason. An
+active contingency term permits hourly approval only at its agreed hybrid rate. Record eligible court fees as
+receipt-backed Project Costs. Review the signed agreement for when each reimbursement is due.
+
+The invoice preview contains approved billable work and confirmed costs. A lawyer reviews its lines and destination
+before generating the batch. Review an unsent Stripe draft in the mapped account before release. To apply an advance,
+verify the client's cleared and undisputed funds for this matter, the earned fee or incurred expense, and any required
+notice. Allocate the verified transfer to the invoice and reconcile it in the Firm journal. Request only the remainder
+from the client.

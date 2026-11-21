@@ -2937,6 +2937,14 @@ fn canonical_document(base: &str) -> Value {
             "responses": { "401": { "description": "Authenticated session required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "403": { "description": "Lawyer tier required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "404": { "description": "No such task on this Project, or the caller does not participate", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "200": { "description": "The updated task; audit event appended", "content": { "application/json": { "schema": { "type": "object" } } } }, "422": { "description": "The transition is not valid from the current state", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } } }
           }
         },
+        "/app/api/projects/{id}/billing-annotations": {
+          "post": {
+            "summary": "Stage the authenticated timekeeper's Jujutsu billing annotation",
+            "parameters": [{"name":"id","in":"path","required":true,"schema":{"type":"string","format":"uuid"}}],
+            "requestBody": {"required":true,"content":{"application/json":{"schema":{"type":"object","additionalProperties":false,"required":["id","change_id","commit_id","tenths","performed_on"],"properties":{"id":{"type":"string","format":"uuid"},"change_id":{"type":"string","pattern":"^[k-z]{32}$"},"commit_id":{"type":"string","pattern":"^([0-9a-f]{40}|[0-9a-f]{64})$"},"tenths":{"type":"integer","minimum":1,"maximum":240},"performed_on":{"type":"string","format":"date"}}}}}},
+            "responses":{"204":{"description":"Staged or already recorded"},"404":{"description":"No firm-side participation"},"409":{"description":"Conflicting source or time"},"422":{"description":"Invalid annotation"}}
+          }
+        },
         "/app/api/projects/{id}/time-entries": {
           "get": {
             "summary": "List a matter's time entries",

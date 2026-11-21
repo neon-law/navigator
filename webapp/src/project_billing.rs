@@ -43,6 +43,16 @@ pub struct TimeEntryRow {
     pub billing_status: String,
 }
 
+/// Source and service date awaiting a lawyer's billing decision.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnnotationRow {
+    pub id: String,
+    pub change_id: String,
+    pub attorney: String,
+    pub hours: String,
+    pub date: String,
+}
+
 /// One of the matter's invoices, read from the local Xero mirror — the same
 /// rows the client page's client-safe `InvoiceView` renders. The Xero invoice
 /// id is deliberately not carried into the row; the status is the mirror's
@@ -170,6 +180,8 @@ pub struct GenerateInvoiceView {
     /// Stripe draft destination, when this matter uses Stripe.
     #[serde(default)]
     pub stripe_iolta: Option<bool>,
+    #[serde(default)]
+    pub trust_state: Option<String>,
 }
 
 /// The human word and chip tone for an entry's billing status. `Reserved`
@@ -198,6 +210,7 @@ fn status_tone(billing_status: &str) -> BadgeTone {
 fn source_label(source: &str) -> &'static str {
     match source {
         "timer" => "Timer",
+        "jujutsu" => "Jujutsu",
         _ => "Manual",
     }
 }
@@ -334,6 +347,7 @@ pub fn BillingTab(
     confirming: bool,
     timer: Option<TimerView>,
     entries: Vec<TimeEntryRow>,
+    #[props(default)] annotations: Vec<AnnotationRow>,
     fees: FeeStructureView,
     invoices: Vec<InvoiceRow>,
     expenses: Vec<ExpenseRow>,
@@ -351,6 +365,40 @@ pub fn BillingTab(
                 p { class: "nav-form-error", role: "alert", "{error}" }
             }
 
+            section { class: "lawyer-detail__subsection",
+                h3 { "Client funds" }
+                p { "Receive client funds in the reviewed trust account for this matter’s state. Verify the cleared matter balance and resolve any dispute before approving a draw to operating." }
+                if trust.any {
+                    p { strong { "{trust.held}" } " held for this matter in the Xero mirror." }
+                } else {
+                    p { class: "nav-muted", "No trust activity appears in the matter mirror." }
+                }
+            }
+            section { class: "lawyer-detail__subsection matter-billing-review",
+                h3 { "Time awaiting review" }
+                if annotations.is_empty() {
+                    p { class: "nav-muted", "No Jujutsu time awaits review. Stage an annotated change with "
+                        code { "navigator project jj stage-time" } "." }
+                }
+                for row in &annotations {
+                    form { key: "{row.id}", class: "nav-form",
+                        method: "post", action: "/app/projects/{code}/billing-annotations/{row.id}/review",
+                        input { r#type: "hidden", name: "_csrf", value: "{csrf}" }
+                        fieldset {
+                            legend { "{row.hours} hours · {row.attorney} · {row.date}" }
+                            p { "Jujutsu change " code { "{row.change_id}" } }
+                            label { "Invoice description or reason for denial"
+                                input { name: "note", required: true, maxlength: "2000" }
+                            }
+                            div { class: "lawyer-detail__actions",
+                                button { class: "nav-btn", r#type: "submit", name: "decision", value: "bill", "Approve billable time" }
+                                button { class: "nav-btn nav-btn--secondary", r#type: "submit", name: "decision", value: "no_charge", "Record at no charge" }
+                                button { class: "nav-btn nav-btn--secondary", r#type: "submit", name: "decision", value: "deny", "Deny" }
+                            }
+                        }
+                    }
+                }
+            }
             section { class: "lawyer-detail__subsection matter-billing-time",
                 h3 { "Time" }
                 if timer.is_some() {
@@ -453,7 +501,7 @@ pub fn BillingTab(
                 if let Some(fee) = fees.flat_fee.clone() {
                     p { "Flat fee agreed: {fee} — billed as one line covering the matter's unbilled time." }
                 } else {
-                    p { class: "nav-muted", "No flat fee is agreed — the matter bills hourly." }
+                    p { class: "nav-muted", "No flat fee is recorded. The signed engagement governs hourly and contingent fees." }
                 }
                 p { class: "nav-muted",
                     "Captured time always keeps the rate it was created with; a later rate change \
@@ -618,7 +666,7 @@ pub fn BillingTab(
                     h3 { "Client trust" }
                     p { class: "nav-muted",
                         "Held for this Project in the firm's pooled client trust account, mirrored \
-                         from Xero. Xero is the books."
+                         from Xero. Review the Firm journal and cleared bank activity before authorizing a draw."
                     }
                     ul {
                         li { "Held: {trust.held}" }
@@ -653,11 +701,12 @@ fn confirm_step(code: &str, csrf: &str, generate: &GenerateInvoiceView) -> Eleme
     rsx! {
         p { class: "nav-muted",
             {match generate.stripe_iolta {
-                Some(true) => "This creates an unsent draft in the Stripe account for Nevada.",
-                Some(false) => "This creates an unsent draft in the Firm's operating account. This is not IOLTA billing.",
-                None => "Raising writes one invoice to the Firm's Xero ledger. This is what it composes:",
+                Some(true) => "This creates an unsent draft in the Firm’s state trust account for this matter.",
+                Some(false) => "An operating-account draft requires reconciliation.",
+                None => "This records a receivable in Xero. Collect client funds through the verified state trust account.",
             }}
         }
+        if let Some(state)=&generate.trust_state { p { strong { "Trust destination: {state}" } } }
         div { class: "nav-table-wrap",
             table { class: "nav-table matter-billing-generate-preview",
                 thead {
@@ -786,7 +835,14 @@ pub(crate) async fn read_billing(
     let entries = store::time_entries::list_for_project(pg, project_id)
         .await
         .map_err(crate::lawyer_project_detail::server_error)?;
-    let attorney_ids: Vec<uuid::Uuid> = entries.iter().map(|row| row.attorney_id).collect();
+    let pending = store::billing_annotations::pending(pg, project_id)
+        .await
+        .map_err(crate::lawyer_project_detail::server_error)?;
+    let attorney_ids: Vec<uuid::Uuid> = entries
+        .iter()
+        .map(|row| row.attorney_id)
+        .chain(pending.iter().map(|row| row.attorney_id))
+        .collect();
     let names: std::collections::HashMap<uuid::Uuid, String> =
         store::persons::find_by_ids(surreal, &attorney_ids)
             .await
@@ -852,7 +908,21 @@ pub(crate) async fn read_billing(
         .map_err(crate::lawyer_project_detail::server_error)?
         .map(crate::portal_project_detail::format_usd);
 
+    let annotations = pending
+        .into_iter()
+        .map(|row| AnnotationRow {
+            id: row.id.to_string(),
+            change_id: row.change_id,
+            attorney: names
+                .get(&row.attorney_id)
+                .cloned()
+                .unwrap_or_else(|| "Unknown timekeeper".to_owned()),
+            hours: format!("{}.{}", row.tenths / 10, row.tenths % 10),
+            date: row.performed_on.to_string(),
+        })
+        .collect();
     Ok(BillingReads {
+        annotations,
         entry_rows,
         invoice_rows,
         expense_rows,
@@ -894,6 +964,7 @@ pub(crate) async fn mirrored_invoice_rows(
 /// The Billing tab's assembled rows and fee structures.
 #[cfg(feature = "server")]
 pub(crate) struct BillingReads {
+    pub annotations: Vec<AnnotationRow>,
     pub entry_rows: Vec<TimeEntryRow>,
     pub invoice_rows: Vec<InvoiceRow>,
     pub expense_rows: Vec<ExpenseRow>,
@@ -956,42 +1027,40 @@ pub(crate) async fn read_generate(
     project: &store::projects::Project,
 ) -> Result<GenerateInvoiceView, ServerFnError> {
     use crate::lawyer_project_detail::server_error;
-    use store::firm_secrets::{self, IntegrationSecretKind};
+    use store::firm_secrets;
     let project_id = project.id;
     let pending = store::billing_batches::pending_for_project(pg, project_id)
         .await
         .map_err(server_error)?;
-    let kind = if let Some(batch) = &pending {
-        batch.stripe_account_id.as_ref().map(|_| {
-            if batch.stripe_iolta {
-                IntegrationSecretKind::StripeNevadaAppKey
-            } else {
-                IntegrationSecretKind::StripeOperatingAppKey
-            }
-        })
-    } else {
-        firm_secrets::stripe_kind_for_project(surreal, project)
-            .await
-            .map_err(server_error)?
-    };
-    let mut stripe_iolta = None;
-    if let Some(kind) = kind {
-        let iolta = kind == IntegrationSecretKind::StripeNevadaAppKey;
+    let route = firm_secrets::stripe_trust_route(surreal, project)
+        .await
+        .map_err(server_error)?;
+    let stripe_pending = pending.as_ref().filter(|b| b.stripe_account_id.is_some());
+    if stripe_pending.is_some_and(|batch| {
+        route
+            .as_ref()
+            .is_none_or(|route| !route.matches_batch(batch))
+    }) {
+        return Ok(GenerateInvoiceView {
+            note: Some(
+                "Review the existing draft and its trust destination before collection.".into(),
+            ),
+            ..Default::default()
+        });
+    }
+    let route = route.filter(|_| pending.is_none() || stripe_pending.is_some());
+    let stripe_iolta = route.as_ref().map(|_| true);
+    if let Some(route) = &route {
         let available = match project.firm_id {
-            Some(firm) => firm_secrets::stripe_credential_configured(surreal, firm, kind)
-                .await
-                .map_err(server_error)?,
+            Some(firm) => {
+                firm_secrets::stripe_credential_configured(surreal, firm, route.credential_kind())
+                    .await
+                    .map_err(server_error)?
+            }
             None => false,
         };
-        if available {
-            stripe_iolta = Some(iolta);
-        } else if iolta || pending.is_some() {
-            return Ok(GenerateInvoiceView {
-                note: Some(
-                    "Stripe billing requires an enabled route and a Firm credential.".to_string(),
-                ),
-                ..GenerateInvoiceView::default()
-            });
+        if !available {
+            return Ok(GenerateInvoiceView { note:Some("Configure the Firm credential for this state's trust account before creating a Stripe draft.".into()), ..Default::default()});
         }
     }
     if pending
@@ -1036,9 +1105,14 @@ pub(crate) async fn read_generate(
             // next raise sends, so there is nothing fresh to fingerprint.
             digest: String::new(),
             stripe_iolta,
+            trust_state: batch.trust_state,
         });
     }
 
+    let costs_only =
+        store::billing_batches::costs_only(pg, project_id, chrono::Utc::now().date_naive())
+            .await
+            .map_err(server_error)?;
     let entries = store::time_entries::unbilled_billable(pg, project_id)
         .await
         .map_err(server_error)?;
@@ -1051,6 +1125,8 @@ pub(crate) async fn read_generate(
     let agreed_fee_cents = store::attorney_rates::flat_fee_cents(pg, project_id)
         .await
         .map_err(server_error)?;
+    let agreed_fee_cents = agreed_fee_cents.filter(|_| !costs_only);
+    let entries = if costs_only { Vec::new() } else { entries };
     let billed_fee_cents = store::billing_batches::flat_fee_billed_cents(pg, project_id)
         .await
         .map_err(server_error)?;
@@ -1107,6 +1183,10 @@ pub(crate) async fn read_generate(
         stripe_iolta,
         project.firm_id,
     );
+    let digest = match &route {
+        Some(route) => route.bind_preview(digest),
+        None => digest,
+    };
     let mut lines = Vec::new();
     let mut total_cents: i64 = 0;
     if let Some(fee_cents) = flat_fee_cents {
@@ -1143,6 +1223,7 @@ pub(crate) async fn read_generate(
         note: None,
         digest,
         stripe_iolta,
+        trust_state: route.map(|route| route.state),
     })
 }
 
@@ -1607,6 +1688,7 @@ mod tests {
                 flat_fee: false,
                 digest: "digest-of-the-reviewed-compose".to_string(),
                 stripe_iolta: None,
+                trust_state: None,
             },
             true,
         );
@@ -2139,6 +2221,7 @@ mod tests {
                 contact_email: "synthetic-client@example.com".into(),
                 xero_contact_id: None,
                 stripe_account_id: None,
+                trust_state: None,
                 stripe_iolta: false,
                 stripe_invoice_id: None,
                 due_date: (chrono::Utc::now() + chrono::Duration::days(14)).date_naive(),

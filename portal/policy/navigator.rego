@@ -453,6 +453,16 @@ route_allow if {
     is_lawyer(input.session)
 }
 
+route_allow if {
+    input.path[0] == "app"
+    input.path[1] == "api"
+    input.path[2] == "projects"
+    input.path[4] == "billing-annotations"
+    count(input.path) == 5
+    input.method == "POST"
+    is_lawyer(input.session)
+}
+
 # Time tracking: the Billing tab's time surface. GET/POST at
 # /app/api/projects/{id}/time-entries, POST .../time-entries/{entry_id}/
 # {invoice,write-off} on one entry, the durable Timer at

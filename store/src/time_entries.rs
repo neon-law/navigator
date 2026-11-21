@@ -46,6 +46,7 @@ pub enum TimeEntryError {
 pub enum TimeEntrySource {
     Timer,
     Manual,
+    Jujutsu,
 }
 
 impl TimeEntrySource {
@@ -54,6 +55,7 @@ impl TimeEntrySource {
         match self {
             Self::Timer => "timer",
             Self::Manual => "manual",
+            Self::Jujutsu => "jujutsu",
         }
     }
 }
@@ -146,6 +148,7 @@ pub fn entry_amount_cents(minutes: i32, rate_cents_per_hour: i32) -> i64 {
 fn parse_source(raw: &str) -> Result<TimeEntrySource, TimeEntryError> {
     match raw {
         "timer" => Ok(TimeEntrySource::Timer),
+        "jujutsu" => Ok(TimeEntrySource::Jujutsu),
         "manual" => Ok(TimeEntrySource::Manual),
         _ => Err(TimeEntryError::Invalid("source")),
     }
@@ -872,6 +875,96 @@ mod tests {
                 rate_cents_per_hour: 25_000,
                 source: TimeEntrySource::Manual,
             }
+        }
+
+        #[tokio::test]
+        async fn billing_annotation_review_is_atomic_and_rewrites_do_not_duplicate_time() {
+            use crate::billing_annotations::{pending, review, stage, Annotation, Decision};
+            let Some((options, database)) = fresh_schema().await else {
+                return;
+            };
+            let pg = connect(&options, &database).await;
+            let seed = seed(&pg).await;
+            let project = seed.project_id;
+            let actor = seed.attorney;
+            let mut a = Annotation {
+                id: Uuid::new_v4(),
+                change_id: "k".repeat(32),
+                commit_id: "a".repeat(40),
+                tenths: 2,
+                performed_on: "2026-01-01".parse().unwrap(),
+            };
+            stage(&pg, project, actor, &a).await.unwrap();
+            a.commit_id = "b".repeat(40);
+            stage(&pg, project, actor, &a).await.unwrap();
+            a.tenths = 3;
+            assert!(matches!(
+                stage(&pg, project, actor, &a).await,
+                Err(TimeEntryError::Conflict)
+            ));
+            assert_eq!(pending(&pg, project).await.unwrap().len(), 1);
+            assert!(unbilled_billable(&pg, project).await.unwrap().is_empty());
+            assert!(review(
+                &pg,
+                Uuid::new_v4(),
+                actor,
+                a.id,
+                Decision::Bill,
+                "Reviewed exhibit"
+            )
+            .await
+            .is_err());
+            assert!(review(
+                &pg,
+                project,
+                actor,
+                a.id,
+                Decision::Bill,
+                "Reviewed exhibit"
+            )
+            .await
+            .is_err());
+            crate::attorney_rates::set_hourly_rate(
+                &pg,
+                crate::attorney_rates::NewAttorneyRate {
+                    person_id: actor,
+                    project_id: Some(project),
+                    hourly_rate_cents: 25000,
+                    effective_on: a.performed_on,
+                },
+            )
+            .await
+            .unwrap();
+            let approve = || {
+                review(
+                    &pg,
+                    project,
+                    actor,
+                    a.id,
+                    Decision::Bill,
+                    "Reviewed exhibit",
+                )
+            };
+            let (one, two) = tokio::join!(approve(), approve());
+            assert_ne!(one.is_ok(), two.is_ok());
+            let entries = unbilled_billable(&pg, project).await.unwrap();
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].minutes, 12);
+            assert_eq!(entries[0].rate_cents_per_hour, 25000);
+            assert_eq!(entries[0].source, TimeEntrySource::Jujutsu);
+            assert_eq!(entries[0].description, "Reviewed exhibit");
+            for (letter, decision) in [('m', Decision::Deny), ('p', Decision::NoCharge)] {
+                a.id = Uuid::new_v4();
+                a.change_id = letter.to_string().repeat(32);
+                stage(&pg, project, actor, &a).await.unwrap();
+                review(&pg, project, actor, a.id, decision, "Internal review")
+                    .await
+                    .unwrap();
+                stage(&pg, project, actor, &a).await.unwrap();
+            }
+            assert!(pending(&pg, project).await.unwrap().is_empty());
+            assert_eq!(list_for_project(&pg, project).await.unwrap().len(), 2);
+            assert_eq!(unbilled_billable(&pg, project).await.unwrap().len(), 1);
         }
 
         #[tokio::test]

@@ -960,6 +960,10 @@ fn register_project_routes(r: Router<AdminState>) -> Router<AdminState> {
         // serve. The handlers redirect (303) back to the Billing tab's path
         // on the workbench; the confirm step rides `?confirm=1`.
         .route(
+            &format!("{prefix}/{{project_code}}/billing-annotations/{{id}}/review"),
+            post(crate::project_billing_forms::review_annotation),
+        )
+        .route(
             &format!("{prefix}/{{project_code}}/time-entries"),
             post(crate::project_billing_forms::log_time),
         )

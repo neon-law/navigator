@@ -309,6 +309,8 @@ pub struct LawyerDetailView {
     /// native; empty without a configured deployment, like the tasks above).
     #[serde(default)]
     pub billing_entries: Vec<TimeEntryRow>,
+    #[serde(default)]
+    pub billing_annotations: Vec<crate::project_billing::AnnotationRow>,
     /// The Billing tab's resolved fee structure — the reader's hourly rate
     /// on this matter and the matter's agreed flat fee, server-formatted.
     #[serde(default)]
@@ -676,27 +678,31 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
     // absence rule as the tasks and stage: a deployment without PostgreSQL
     // renders the workbench without them; a read failure inside a configured
     // deployment is a 500.
-    let (billing_entries, billing_fees, billing_invoices, billing_expenses) = match pg.as_ref() {
-        Some(pg) => {
-            let reads = crate::project_billing::read_billing(&surreal, pg, id, person_id).await?;
-            (
-                reads.entry_rows,
-                reads.fees,
-                reads.invoice_rows,
-                reads.expense_rows,
-            )
-        }
-        None => (
-            Vec::new(),
-            crate::project_billing::FeeStructureView::default(),
-            // Invoices mirror in Surreal, independent of PostgreSQL — the
-            // workbench keeps showing them (and their payment state) even in
-            // a deployment that has not configured the time and expense
-            // store. Only the PostgreSQL-only reads degrade to empty.
-            crate::project_billing::mirrored_invoice_rows(&surreal, id).await?,
-            Vec::new(),
-        ),
-    };
+    let (billing_annotations, billing_entries, billing_fees, billing_invoices, billing_expenses) =
+        match pg.as_ref() {
+            Some(pg) => {
+                let reads =
+                    crate::project_billing::read_billing(&surreal, pg, id, person_id).await?;
+                (
+                    reads.annotations,
+                    reads.entry_rows,
+                    reads.fees,
+                    reads.invoice_rows,
+                    reads.expense_rows,
+                )
+            }
+            None => (
+                Vec::new(),
+                Vec::new(),
+                crate::project_billing::FeeStructureView::default(),
+                // Invoices mirror in Surreal, independent of PostgreSQL — the
+                // workbench keeps showing them (and their payment state) even in
+                // a deployment that has not configured the time and expense
+                // store. Only the PostgreSQL-only reads degrade to empty.
+                crate::project_billing::mirrored_invoice_rows(&surreal, id).await?,
+                Vec::new(),
+            ),
+        };
     let running_timer = match (pg.as_ref(), person_id) {
         (Some(pg), Some(person_id)) => {
             crate::project_billing::read_timer(&surreal, pg, person_id, id).await?
@@ -940,6 +946,7 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         task_assignees,
         stage,
         billing_entries,
+        billing_annotations,
         billing_fees,
         billing_invoices,
         billing_expenses,
@@ -1392,6 +1399,7 @@ pub fn LawyerProjectDetail() -> Element {
                             confirming: view.confirm_generate,
                             timer: view.running_timer.clone(),
                             entries: view.billing_entries.clone(),
+                            annotations: view.billing_annotations.clone(),
                             fees: view.billing_fees.clone(),
                             invoices: view.billing_invoices.clone(),
                             expenses: view.billing_expenses.clone(),

@@ -242,6 +242,7 @@ pub mod schema;
 pub mod seed;
 pub mod sent_emails;
 
+pub mod billing_annotations;
 pub mod signature_webhook_journal;
 pub mod signatures;
 pub mod social_account_selections;

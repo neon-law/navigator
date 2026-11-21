@@ -1588,6 +1588,12 @@ pub enum ProjectEnvelopeCmd {
 
 #[derive(Subcommand)]
 pub enum ProjectJjCmd {
+    /// Stage your annotated work for lawyer review on the Project's Billing tab.
+    StageTime {
+        /// One Jujutsu revision containing a Billing-Time trailer.
+        #[arg(long, default_value = "@")]
+        revision: String,
+    },
     /// Show the checkout's history in lawyer terms: each change's
     /// description, author, and time, with an explicit warning on a
     /// conflicted change. Requires `navigator project repository jj` on the
@@ -3312,6 +3318,18 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
         } => projects::setup::run(host.host.as_deref(), project_code.as_deref(), all, json).await,
         ProjectsCmd::Skill { action } => run_project_skill(action).await,
         ProjectsCmd::Jj { action } => match action {
+            ProjectJjCmd::StageTime { revision } => {
+                match projects::jj_billing::stage(&revision).await {
+                    Ok(()) => {
+                        println!("Time staged for review in Project Billing.");
+                        ExitCode::SUCCESS
+                    }
+                    Err(error) => {
+                        eprintln!("navigator: {error:#}");
+                        ExitCode::FAILURE
+                    }
+                }
+            }
             ProjectJjCmd::Log { dir } => match projects::jj_log::run(&dir) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => {
