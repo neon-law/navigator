@@ -6743,21 +6743,27 @@ async fn upload_document_door(
     // holds — the same (project, filename, sha256) key the sync lane's
     // `already_filed` probe uses — instead of writing a second copy under
     // the mail slug. Identical bytes under a different filename remain a
-    // different document, per `find_filed_copy`'s contract.
-    let sha_hex = store::assets::sha256_hex(&bytes);
-    match store::assets::find_filed_copy(&state.surreal, id, filename, &sha_hex).await {
-        Ok(Some(existing)) => {
-            let pointer = document_pointer(
-                &state.surreal,
-                id,
-                existing.slug.as_deref().unwrap_or(slug),
-                existing.kind.as_deref().unwrap_or(kind),
-            )
-            .await?;
-            return Ok((StatusCode::OK, Json(pointer)).into_response());
+    // different document, per `find_filed_copy`'s contract. The probe is
+    // scoped to uploads that carry mail provenance: that marker is the mail
+    // lane, and every other upload keeps the door's create-always behavior
+    // (the docusign lifecycle deliberately files a second copy of the same
+    // bytes with different semantics).
+    if input.mail_provenance.is_some() {
+        let sha_hex = store::assets::sha256_hex(&bytes);
+        match store::assets::find_filed_copy(&state.surreal, id, filename, &sha_hex).await {
+            Ok(Some(existing)) => {
+                let pointer = document_pointer(
+                    &state.surreal,
+                    id,
+                    existing.slug.as_deref().unwrap_or(slug),
+                    existing.kind.as_deref().unwrap_or(kind),
+                )
+                .await?;
+                return Ok((StatusCode::OK, Json(pointer)).into_response());
+            }
+            Ok(None) => {}
+            Err(error) => return Err(ApiError::Asset(error)),
         }
-        Ok(None) => {}
-        Err(error) => return Err(ApiError::Asset(error)),
     }
     let args = store::documents::IngestArgs {
         project_id: id,

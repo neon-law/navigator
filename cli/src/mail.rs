@@ -6107,6 +6107,12 @@ PDF-BYTES\r\n\
             .expect("the attachment files under its index");
         assert_eq!(attachment["filename"], "retainer.pdf");
         assert_eq!(attachment["content_type"], "application/pdf");
+        // Attachments carry the message's provenance — the marker that
+        // scopes the door's retry dedup to the mail lane.
+        assert_eq!(
+            attachment["mail_provenance"]["message_id"],
+            parsed.source_ref
+        );
     }
 
     fn assert_reference_filing_body(body: &serde_json::Value) {
