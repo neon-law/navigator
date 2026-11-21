@@ -457,6 +457,20 @@
     "scope": "Lead evidence history",
     "through": "lead_id is the typed source link; orphaned historical events remain reportable, and history cannot be rewritten or cascaded away"
   },
+  "legal_plan_claim": {
+    "migration_slice": "legal-plan-collections",
+    "parity_scenario": "closed Project claims retain verified benefits and reconcile confirmed cash once",
+    "scope": "project",
+    "target_only": true,
+    "through": "project_id and legal_plan_id in the same Firm"
+  },
+  "legal_plan_claim_event": {
+    "migration_slice": "legal-plan-collections",
+    "parity_scenario": "one evidence row per event key and provider reference reservation",
+    "scope": "project",
+    "target_only": true,
+    "through": "claim_id -> legal_plan_claim.project_id"
+  },
   "letter": {
     "migration_slice": "communications-storage",
     "parity_scenario": "same-Mailroom round trip; incoming and outgoing; optional Project id preserved",

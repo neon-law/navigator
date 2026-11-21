@@ -450,6 +450,20 @@
     },
     {
       "extra_column": null,
+      "extra_table": "legal_plan_claim",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "legal_plan_claim_event",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
       "extra_table": "mail_signature",
       "missing_column": null,
       "missing_table": null,
@@ -2193,7 +2207,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 186,
+    "table_count": 188,
     "tables": {
       "address": {
         "columns": {
@@ -4320,6 +4334,54 @@
         "name": "legal_plan",
         "references": [
           "firm"
+        ]
+      },
+      "legal_plan_claim": {
+        "columns": {
+          "id": "UUID",
+          "legal_plan_id": "UUID",
+          "plan_case_number": "TEXT",
+          "project_id": "UUID",
+          "state": "JSONB"
+        },
+        "foreign_keys": [
+          [
+            "legal_plan_id",
+            "legal_plan"
+          ],
+          [
+            "project_id",
+            "project"
+          ]
+        ],
+        "name": "legal_plan_claim",
+        "references": [
+          "legal_plan",
+          "project"
+        ]
+      },
+      "legal_plan_claim_event": {
+        "columns": {
+          "actor_id": "UUID",
+          "claim_id": "UUID",
+          "event": "JSONB",
+          "id": "UUID",
+          "legal_plan_id": "UUID",
+          "occurred_on": "DATE",
+          "recorded_at": "TIMESTAMPTZ",
+          "reference": "TEXT",
+          "reference_kind": "TEXT"
+        },
+        "foreign_keys": [
+          [
+            "actor_id",
+            "person"
+          ]
+        ],
+        "name": "legal_plan_claim_event",
+        "references": [
+          "legal_plan_claim",
+          "person"
         ]
       },
       "letter": {

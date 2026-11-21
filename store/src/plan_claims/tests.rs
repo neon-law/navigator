@@ -1,0 +1,193 @@
+use super::*;
+
+fn date(value: &str) -> NaiveDate {
+    value.parse().unwrap()
+}
+
+fn claim(service: Service, authorization: Option<Authorization>) -> Work {
+    Work {
+        service,
+        benefit: "SYNTHETIC".into(),
+        performed_on: date("2026-11-01"),
+        attorney_minutes: Some(90),
+        time_entry_ids: Vec::new(),
+        authorization,
+    }
+}
+
+#[test]
+fn legal_ease_cap_excludes_pending_minutes_and_arag_requires_its_own_service_path() {
+    let work = claim(
+        Service::LegalEasePaymentAuthorization,
+        Some(Authorization::CappedHours {
+            reference: "sample-authorization".into(),
+            rate_cents_per_hour: 12_000,
+            covered_minutes: 60,
+            pending_minutes: 30,
+        }),
+    );
+    assert_eq!(work.estimate().unwrap(), Some(12_000));
+    assert!(work.validate("ARAG", date("2026-11-21")).is_err());
+    assert!(work.validate("LegalEASE", date("2026-11-21")).is_ok());
+    assert_eq!(
+        claim(Service::AragAdviceOnly, None).estimate().unwrap(),
+        None
+    );
+    let fixed = claim(
+        Service::LegalEaseLegalGuard,
+        Some(Authorization::FixedFee {
+            reference: "sample-written-fixed-fee".into(),
+            cents: 9_500,
+        }),
+    );
+    assert_eq!(fixed.estimate().unwrap(), Some(9_500));
+    assert!(fixed.validate("Legal Ease", date("2026-11-21")).is_ok());
+    assert!(fixed
+        .validate("Legal Ease ARAG", date("2026-11-21"))
+        .is_err());
+}
+
+#[test]
+fn approved_outstanding_uses_net_cash_and_denial_preserves_the_partial_payment() {
+    let mut claim = ClaimState::new(claim(
+        Service::AragAdviceOnly,
+        Some(Authorization::FixedFee {
+            reference: "sample-benefit".into(),
+            cents: 12_000,
+        }),
+    ));
+    let now = date("2026-11-21");
+    claim.apply(now, &Event::Prepared).unwrap();
+    claim
+        .apply(
+            now,
+            &Event::Submission {
+                provider_reference: "sample-claim".into(),
+                claimed_cents: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(claim.claimed_cents, None);
+    assert_eq!(claim.outstanding(), None);
+    assert_eq!(claim.net_cents, 0);
+    claim
+        .apply(
+            now,
+            &Event::Approval {
+                reference: "sample-approval".into(),
+                cents: 10_000,
+            },
+        )
+        .unwrap();
+    claim
+        .apply(
+            now,
+            &Event::Payment {
+                reference: "sample-payment".into(),
+                cents: 5_000,
+            },
+        )
+        .unwrap();
+    claim
+        .apply(
+            now,
+            &Event::Reversal {
+                reference: "sample-refund".into(),
+                cents: 1_000,
+            },
+        )
+        .unwrap();
+    assert_eq!(claim.outstanding(), Some(6_000));
+    assert_eq!(claim.net_cents, 4_000);
+    claim
+        .apply(
+            now,
+            &Event::Denial {
+                reference: "sample-denial".into(),
+            },
+        )
+        .unwrap();
+    assert_eq!(claim.outstanding(), None);
+    assert_eq!(claim.net_cents, 4_000);
+    claim
+        .apply(
+            now,
+            &Event::Correction {
+                provider_reference: "sample-correction".into(),
+                claimed_cents: Some(6_000),
+            },
+        )
+        .unwrap();
+    assert_eq!(claim.net_cents, 4_000);
+    assert_eq!(claim.outstanding(), None);
+}
+
+#[test]
+fn the_rate_includes_unpaid_work_and_reports_cash_with_unknown_time_separately() {
+    let now = date("2026-11-21");
+    let row = |minutes, net_cents| {
+        let mut work = claim(Service::AragRepresentation, None);
+        work.attorney_minutes = minutes;
+        let mut state = ClaimState::new(work);
+        state.net_cents = net_cents;
+        ReviewRow {
+            id: Uuid::new_v4(),
+            code: "sample-matter".into(),
+            plan: "ARAG".into(),
+            state: Json(state),
+            recorded_this_week: true,
+            net_collected_this_week_cents: net_cents,
+        }
+    };
+    let worklist = summarize(
+        now,
+        vec![row(Some(60), 12_000), row(Some(60), 0), row(None, 500)],
+        true,
+    )
+    .unwrap();
+    let plan = &worklist.plans["ARAG"];
+    assert_eq!(plan.attorney_minutes, 120);
+    assert_eq!(plan.net_collected_cents, 12_500);
+    assert_eq!(plan.net_collected_without_attorney_time_cents, 500);
+    assert_eq!(plan.net_collected_per_attorney_hour_cents, Some(6_000));
+    assert_eq!(plan.net_collected_this_week_cents, 12_500);
+    assert_eq!(plan.claims_missing_attorney_time, 1);
+}
+
+#[test]
+fn a_receipt_establishes_submission_without_pricing_missing_coverage() {
+    let on = date("2026-11-21");
+    let mut state = ClaimState::new(claim(Service::AragAdviceOnly, None));
+    assert!(state.apply(on, &Event::Prepared).is_err());
+    state
+        .apply(
+            on,
+            &Event::Submission {
+                provider_reference: "sample-claim".into(),
+                claimed_cents: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(state.stage, Stage::Submitted);
+    assert_eq!(state.claimed_cents, None);
+    assert_eq!(state.net_cents, 0);
+    state
+        .apply(
+            on,
+            &Event::Payment {
+                reference: "example-payment".into(),
+                cents: 2_000,
+            },
+        )
+        .unwrap();
+    state
+        .apply(
+            on,
+            &Event::Reversal {
+                reference: "example-reversal".into(),
+                cents: 2_000,
+            },
+        )
+        .unwrap();
+    assert_eq!(state.net_cents, 0);
+}

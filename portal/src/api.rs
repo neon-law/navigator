@@ -6,6 +6,8 @@ mod firm_assumptions_api;
 mod firm_journal_api;
 #[path = "legal_plans_api.rs"]
 mod legal_plans_api;
+#[path = "plan_claims_api.rs"]
+mod plan_claims_api;
 #[path = "relationship_log_api.rs"]
 mod relationship_log_api;
 
@@ -310,6 +312,21 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             "PATCH",
             "/app/api/projects/{id}/legal-plan",
             patch(legal_plans_api::set_project),
+        ),
+        (
+            "GET",
+            "/app/api/projects/{id}/legal-plan-claims",
+            get(plan_claims_api::list),
+        ),
+        (
+            "POST",
+            "/app/api/projects/{id}/legal-plan-claims",
+            post(plan_claims_api::record),
+        ),
+        (
+            "GET",
+            "/app/api/firms/{id}/legal-plan-collections",
+            get(plan_claims_api::worklist),
         ),
         (
             "POST",

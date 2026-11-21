@@ -1289,6 +1289,7 @@ route_allow if {
     input.path[2] == "projects"
     input.method == "GET"
     count(input.path) <= 5
+    not project_claims_path
     is_authenticated(input.session)
 }
 
@@ -2249,4 +2250,39 @@ route_allow if {
     input.path[4] == "blank"
     input.method == "GET"
     is_lawyer(input.session)
+}
+
+# Project Claims require both firm membership and firm-side Project participation.
+project_claims_path if {
+    count(input.path) == 5
+    array.slice(input.path, 0, 3) == ["app", "api", "projects"]
+    input.path[4] == "legal-plan-claims"
+}
+
+firm_collections_path if {
+    count(input.path) == 5
+    array.slice(input.path, 0, 3) == ["app", "api", "firms"]
+    input.path[4] == "legal-plan-collections"
+}
+
+route_allow if {
+    project_claims_path
+    input.method in {"GET", "POST"}
+    is_lawyer(input.session)
+}
+
+route_allow if {
+    firm_collections_path
+    input.method == "GET"
+    is_lawyer(input.session)
+}
+
+ci_matter_content_denied if {
+    firm_collections_path
+    input.session.source == "ci"
+}
+
+ci_matter_content_denied if {
+    project_claims_path
+    input.session.source == "ci"
 }

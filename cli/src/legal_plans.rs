@@ -8,8 +8,11 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use clap::{Args, Subcommand};
-use serde_json::{Map, Value};
+use chrono::NaiveDate;
+use clap::{Args, Subcommand, ValueEnum};
+use serde::Serialize;
+use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::{
@@ -21,6 +24,12 @@ use crate::{
 pub enum LegalPlansCmd {
     /// The Firm's plans: portal, contact, and service levels.
     List,
+    /// Review completed work and unpaid claims, grouped by Legal Plan.
+    Collections {
+        /// Read Firm-wide totals without Project details (requires Firm plan-metrics access).
+        #[arg(long)]
+        totals_only: bool,
+    },
     /// Add a plan to the Firm's vocabulary.
     Create {
         /// The plan's name, unique in the Firm, for example `ARAG`.
@@ -148,6 +157,18 @@ async fn firm_command(base: &str, token: &str, firm: &str, action: LegalPlansCmd
     let client = reqwest::Client::new();
     match action {
         LegalPlansCmd::List => call(client.get(route).bearer_auth(token), "list").await,
+        LegalPlansCmd::Collections { totals_only } => {
+            let route = format!("{base}/app/api/firms/{firm}/legal-plan-collections");
+            call(
+                client
+                    .get(route)
+                    .query(&[("totals_only", totals_only)])
+                    .bearer_auth(token),
+                "collections",
+            )
+            .await
+        }
+
         LegalPlansCmd::Create {
             name,
             portal,
@@ -171,23 +192,35 @@ async fn firm_command(base: &str, token: &str, firm: &str, action: LegalPlansCmd
 
 /// The Project's API route, from `--project` or this checkout's
 /// `navigator.yaml`.
-async fn project_route(host: Option<&str>, project: Option<&str>) -> Result<(String, String)> {
+async fn project_route(
+    host: Option<&str>,
+    project: Option<&str>,
+) -> Result<(String, String, Uuid)> {
     let local = manifest::read(Path::new("."));
     let project = project
         .or_else(|| local.as_ref().and_then(|m| m.project.as_deref()))
         .ok_or_else(|| anyhow!("pass --project or run from a Project checkout"))?;
     let host = host.or_else(|| local.as_ref().and_then(|m| m.host.as_deref()));
     let (base, token) = remote::resolve(host)?;
-    let id = surfaces::resolve_project_id(&base, &token, project).await?;
-    Ok((format!("{base}/app/api/projects/{id}/legal-plan"), token))
+    let id = match Uuid::parse_str(project) {
+        Ok(id) => id,
+        Err(_) => surfaces::resolve_project_id(&base, &token, project).await?,
+    };
+    Ok((format!("{base}/app/api/projects/{id}"), token, id))
 }
 
 /// `navigator project legal-plan show`: the matter's plan, Plan Case
 /// Number, and plan dates.
 pub async fn show(host: Option<&str>, project: Option<&str>) -> ExitCode {
     let result = async {
-        let (route, token) = project_route(host, project).await?;
-        call(reqwest::Client::new().get(route).bearer_auth(token), "show").await
+        let (route, token, _) = project_route(host, project).await?;
+        call(
+            reqwest::Client::new()
+                .get(format!("{route}/legal-plan"))
+                .bearer_auth(token),
+            "show",
+        )
+        .await
     }
     .await;
     finish("project legal-plan", result)
@@ -202,10 +235,10 @@ pub async fn set(host: Option<&str>, project: Option<&str>, fields: &PlanFields)
                 "name at least one field to set, for example --case-number"
             ));
         }
-        let (route, token) = project_route(host, project).await?;
+        let (route, token, _) = project_route(host, project).await?;
         call(
             reqwest::Client::new()
-                .patch(route)
+                .patch(format!("{route}/legal-plan"))
                 .bearer_auth(token)
                 .json(&patch),
             "set",
@@ -214,6 +247,274 @@ pub async fn set(host: Option<&str>, project: Option<&str>, fields: &PlanFields)
     }
     .await;
     finish("project legal-plan", result)
+}
+
+#[derive(Subcommand)]
+pub enum ClaimCmd {
+    /// List the Project's claims and their evidence history.
+    Status,
+    /// Record completed work and its verified fee terms, if available.
+    Work(ClaimWork),
+    /// Record verified or updated coverage terms.
+    Authorize {
+        #[command(flatten)]
+        claim: ExistingClaim,
+        #[command(flatten)]
+        terms: ClaimTerms,
+    },
+    /// Prepare covered work for the lawyer's manual filing.
+    Prepare(ExistingClaim),
+    /// Confirm an already-filed claim.
+    Submit(ClaimSubmission),
+    /// Confirm a corrected filing for the same claim.
+    Correct(ClaimSubmission),
+    /// Record the provider's approval.
+    Approve(ClaimAmountEvidence),
+    /// Record the provider's denial.
+    Deny {
+        #[command(flatten)]
+        claim: ExistingClaim,
+        /// Identifier of the provider decision.
+        #[arg(long)]
+        reference: String,
+    },
+    /// Confirm an actual payment; a claim can have several remittance lines.
+    Pay(ClaimAmountEvidence),
+    /// Confirm a refund or payment reversal.
+    Reverse(ClaimAmountEvidence),
+    /// Apply one lawyer-confirmed claim event from a private JSON file or stdin.
+    Record {
+        /// JSON file path, or '-' for stdin.
+        #[arg(long)]
+        input: std::path::PathBuf,
+    },
+}
+
+#[derive(Args)]
+pub struct ExistingClaim {
+    /// Claim UUID printed by 'claim work' or 'claim status'.
+    #[arg(long)]
+    claim: Uuid,
+    /// Date of the event (YYYY-MM-DD).
+    #[arg(long)]
+    on: NaiveDate,
+}
+
+#[derive(Args)]
+pub struct ClaimSubmission {
+    #[command(flatten)]
+    claim: ExistingClaim,
+    /// Claim reference from the provider's filing confirmation.
+    #[arg(long)]
+    provider_reference: String,
+    /// Filed amount in cents, if confirmed.
+    #[arg(long)]
+    claimed_cents: Option<i32>,
+}
+
+#[derive(Args)]
+pub struct ClaimAmountEvidence {
+    #[command(flatten)]
+    claim: ExistingClaim,
+    /// Provider decision or remittance evidence identifier.
+    #[arg(long)]
+    reference: String,
+    /// Confirmed amount in cents.
+    #[arg(long)]
+    cents: i32,
+}
+
+#[derive(Serialize, Copy, Clone, ValueEnum)]
+#[serde(rename_all = "snake_case")]
+enum ClaimService {
+    AragAdviceOnly,
+    AragRepresentation,
+    LegalEaseLegalGuard,
+    LegalEasePaymentAuthorization,
+}
+
+#[derive(Args)]
+pub struct ClaimWork {
+    /// Verified coverage and submission path for the completed service.
+    #[arg(long, value_enum)]
+    service: ClaimService,
+    /// Verified provider benefit or benefit code.
+    #[arg(long)]
+    benefit: String,
+    /// Service completion date (YYYY-MM-DD).
+    #[arg(long)]
+    performed_on: NaiveDate,
+    /// Actual attorney minutes when matching Time Entries are unavailable.
+    #[arg(long, conflicts_with = "time_entry")]
+    attorney_minutes: Option<i32>,
+    /// Existing Time Entry UUID. Repeat for multiple entries.
+    #[arg(long)]
+    time_entry: Vec<Uuid>,
+    /// Stable label to distinguish multiple claims for the same benefit, service, and date.
+    #[arg(long, default_value = "default")]
+    work_key: String,
+    #[command(flatten)]
+    terms: ClaimTerms,
+}
+
+#[derive(Args)]
+pub struct ClaimTerms {
+    /// Identifier of the case-specific written approval or verified plan benefit.
+    #[arg(long)]
+    authorization_reference: Option<String>,
+    /// Case-specific approved fixed fee in cents.
+    #[arg(
+        long,
+        requires = "authorization_reference",
+        conflicts_with = "rate_cents_per_hour"
+    )]
+    fixed_cents: Option<i32>,
+    /// Approved hourly rate in cents.
+    #[arg(long, requires_all = ["authorization_reference", "covered_minutes"])]
+    rate_cents_per_hour: Option<i32>,
+    /// Maximum authorized minutes for this work.
+    #[arg(long, requires = "rate_cents_per_hour")]
+    covered_minutes: Option<i32>,
+    /// Additional minutes awaiting written authorization.
+    #[arg(long, requires = "rate_cents_per_hour")]
+    pending_minutes: Option<i32>,
+}
+
+impl ClaimTerms {
+    fn evidence(&self) -> Result<Option<Value>> {
+        match (&self.authorization_reference, self.fixed_cents, self.rate_cents_per_hour) {
+            (Some(reference), Some(cents), None) =>
+                Ok(Some(json!({"type": "fixed_fee", "reference": reference, "cents": cents}))),
+            (Some(reference), None, Some(rate)) => Ok(Some(json!({
+                "type": "capped_hours", "reference": reference, "rate_cents_per_hour": rate,
+                "covered_minutes": self.covered_minutes, "pending_minutes": self.pending_minutes.unwrap_or_default()
+            }))),
+            (None, None, None) => Ok(None),
+            _ => Err(anyhow!("supply a verified authorization reference and either a fixed fee or capped hourly terms")),
+        }
+    }
+}
+
+fn claim_key(value: &Value) -> Uuid {
+    let digest = Sha256::digest(value.to_string());
+    let mut bytes = [0; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x80;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    Uuid::from_bytes(bytes)
+}
+
+fn claim_event(claim: Uuid, on: NaiveDate, event: Value) -> Value {
+    let event_id = claim_key(&json!(["navigator-plan-claim-event", claim, on, event]));
+    json!({"claim_id": claim, "event_id": event_id, "occurred_on": on, "event": event})
+}
+
+impl ExistingClaim {
+    fn event(self, event: Value) -> Value {
+        claim_event(self.claim, self.on, event)
+    }
+}
+
+impl ClaimSubmission {
+    fn event(self, kind: &str) -> Value {
+        self.claim.event(json!({
+            "type": kind, "provider_reference": self.provider_reference, "claimed_cents": self.claimed_cents,
+        }))
+    }
+}
+
+impl ClaimAmountEvidence {
+    fn event(self, kind: &str) -> Value {
+        self.claim
+            .event(json!({"type": kind, "reference": self.reference, "cents": self.cents}))
+    }
+}
+
+impl ClaimCmd {
+    fn into_body(self, project: Uuid) -> Result<Option<Value>> {
+        let body = match self {
+            Self::Status => return Ok(None),
+            Self::Work(work) => {
+                let claim = claim_key(&json!([
+                    "navigator-plan-claim",
+                    project,
+                    work.service,
+                    work.benefit,
+                    work.performed_on,
+                    work.work_key,
+                ]));
+                let mut entries = work.time_entry;
+                entries.sort_unstable();
+                claim_event(
+                    claim,
+                    work.performed_on,
+                    json!({
+                        "type": "work_recorded", "work": {
+                            "service": work.service, "benefit": work.benefit, "performed_on": work.performed_on,
+                            "attorney_minutes": work.attorney_minutes, "time_entry_ids": entries,
+                            "authorization": work.terms.evidence()?,
+                        }
+                    }),
+                )
+            }
+            Self::Authorize { claim, terms } => {
+                let authorization = terms
+                    .evidence()?
+                    .ok_or_else(|| anyhow!("supply verified authorization terms"))?;
+                claim.event(
+                    json!({"type": "authorization_confirmed", "authorization": authorization}),
+                )
+            }
+            Self::Prepare(claim) => claim.event(json!({"type": "prepared"})),
+            Self::Submit(submission) => submission.event("submission"),
+            Self::Correct(submission) => submission.event("correction"),
+            Self::Approve(evidence) => evidence.event("approval"),
+            Self::Deny { claim, reference } => {
+                claim.event(json!({"type": "denial", "reference": reference}))
+            }
+            Self::Pay(evidence) => evidence.event("payment"),
+            Self::Reverse(evidence) => evidence.event("reversal"),
+            Self::Record { input } => {
+                let decoded = if input == Path::new("-") {
+                    serde_json::from_reader(std::io::stdin().lock())
+                } else {
+                    let file = std::fs::File::open(input).context("open private claim event")?;
+                    serde_json::from_reader(file)
+                };
+                decoded.map_err(|_| anyhow!("claim event must be valid JSON"))?
+            }
+        };
+        Ok(Some(body))
+    }
+}
+
+pub async fn claim(host: Option<&str>, project: Option<&str>, action: ClaimCmd) -> ExitCode {
+    let result = async {
+        let (route, token, id) = project_route(host, project).await?;
+        claim_command(&route, &token, id, action).await
+    }
+    .await;
+    finish("project legal-plan claim", result)
+}
+
+async fn claim_command(
+    project_route: &str,
+    token: &str,
+    project: Uuid,
+    action: ClaimCmd,
+) -> Result<Value> {
+    let route = format!("{project_route}/legal-plan-claims");
+    let client = reqwest::Client::new();
+    match action.into_body(project)? {
+        None => call(client.get(route).bearer_auth(token), "claim status").await,
+        Some(body) => {
+            call(
+                client.post(route).bearer_auth(token).json(&body),
+                "claim record",
+            )
+            .await
+        }
+    }
 }
 
 #[cfg(test)]
@@ -339,5 +640,155 @@ mod tests {
         .unwrap_err();
         assert!(refused.to_string().contains("legal plan list refused: 404"));
         assert_eq!(finish("legal-plans", Err(refused)), ExitCode::FAILURE);
+    }
+}
+
+#[cfg(test)]
+mod collections_tests {
+    use super::*;
+    use clap::Parser;
+    use wiremock::matchers::{body_json, header, method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[derive(Parser)]
+    struct ClaimCli {
+        #[command(subcommand)]
+        action: ClaimCmd,
+    }
+
+    fn parse(args: &[&str]) -> ClaimCmd {
+        ClaimCli::try_parse_from(std::iter::once("claim").chain(args.iter().copied()))
+            .unwrap()
+            .action
+    }
+
+    #[test]
+    fn navigator_project_registers_the_documented_work_command() {
+        use crate::commands::Cli;
+        assert!(Cli::try_parse_from([
+            "navigator",
+            "project",
+            "legal-plan",
+            "claim",
+            "--project",
+            "synthetic-matter",
+            "work",
+            "--service",
+            "arag-advice-only",
+            "--benefit",
+            "SAMPLE",
+            "--performed-on",
+            "2026-11-01",
+            "--attorney-minutes",
+            "30",
+        ])
+        .is_ok());
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)] // One CLI walk exercises the documented actions.
+    async fn claim_cli_sends_typed_work_through_payment_and_loads_the_worklist() {
+        let server = MockServer::start().await;
+        let firm = Uuid::now_v7();
+        let project = Uuid::now_v7();
+        let project_path = format!("/app/api/projects/{project}");
+        let route = format!("{}{project_path}", server.uri());
+        let work = [
+            "work",
+            "--service",
+            "legal-ease-payment-authorization",
+            "--benefit",
+            "SAMPLE",
+            "--performed-on",
+            "2026-11-01",
+            "--attorney-minutes",
+            "90",
+            "--authorization-reference",
+            "sample-authorization",
+            "--rate-cents-per-hour",
+            "12000",
+            "--covered-minutes",
+            "60",
+            "--pending-minutes",
+            "30",
+        ];
+        let initial = parse(&work).into_body(project).unwrap().unwrap();
+        assert_eq!(initial, parse(&work).into_body(project).unwrap().unwrap());
+        assert_eq!(
+            initial["event"]["work"]["authorization"],
+            json!({
+                "type": "capped_hours", "reference": "sample-authorization", "rate_cents_per_hour": 12000,
+                "covered_minutes": 60, "pending_minutes": 30,
+            })
+        );
+        let claim_id = initial["claim_id"].as_str().unwrap();
+        let prepare = ["prepare", "--claim", claim_id, "--on", "2026-11-01"];
+        let submit = [
+            "submit",
+            "--claim",
+            claim_id,
+            "--on",
+            "2026-11-01",
+            "--provider-reference",
+            "sample-confirmation",
+            "--claimed-cents",
+            "12000",
+        ];
+        let pay = [
+            "pay",
+            "--claim",
+            claim_id,
+            "--on",
+            "2026-11-09",
+            "--reference",
+            "sample-payment",
+            "--cents",
+            "7000",
+        ];
+        for (args, expected) in [
+            (&work[..], initial.clone()),
+            (
+                &prepare[..],
+                parse(&prepare).into_body(project).unwrap().unwrap(),
+            ),
+            (
+                &submit[..],
+                parse(&submit).into_body(project).unwrap().unwrap(),
+            ),
+            (&pay[..], parse(&pay).into_body(project).unwrap().unwrap()),
+        ] {
+            Mock::given(method("POST"))
+                .and(path(format!("{project_path}/legal-plan-claims")))
+                .and(header("authorization", "Bearer token"))
+                .and(body_json(&expected))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&expected))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let response = claim_command(&route, "token", project, parse(args))
+                .await
+                .unwrap();
+            assert_eq!(response, expected);
+        }
+        let report = json!({"plans": {"Legal Ease": {"net_collected_cents": 7000}}});
+        Mock::given(method("GET"))
+            .and(path(format!(
+                "/app/api/firms/{firm}/legal-plan-collections"
+            )))
+            .and(query_param("totals_only", "false"))
+            .and(header("authorization", "Bearer token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&report))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let result = firm_command(
+            &server.uri(),
+            "token",
+            &firm.to_string(),
+            LegalPlansCmd::Collections { totals_only: false },
+        )
+        .await
+        .unwrap();
+        assert_eq!(result, report);
     }
 }
