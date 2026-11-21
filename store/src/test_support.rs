@@ -78,10 +78,11 @@ pub async fn brand_id_with_key(surreal: &crate::surreal::SurrealDb, key: &str) -
     rows.first().and_then(crate::surreal::record_uuid)
 }
 
-/// The current project-scoped template version for `code` with no body and
-/// no commit — the shape of a row written before
-/// [`crate::templates::save_version`] required both, which it now refuses
-/// to write. For a test that covers how a body-less version reads.
+/// Seed a current Project-scoped Template with no body or source commit.
+/// This bodyless row exercises retained-data reads; ordinary `save_version`
+/// requires a pinned body and commit for a Project-scoped version.
+/// PostgreSQL uses normal Template authority admission. Explicit Source reads
+/// retain the Source fixture; failed PostgreSQL admission never falls back.
 pub async fn seed_unpinned_project_template(
     surreal: &crate::surreal::SurrealDb,
     project_id: Uuid,
@@ -91,24 +92,34 @@ pub async fn seed_unpinned_project_template(
     kind: Option<&str>,
 ) -> crate::templates::Template {
     let id = Uuid::now_v7();
-    surreal
-        .query(
-            "CREATE $id SET code = $code, title = $title, respondent_type = $respondent, \
-             project_id = $project, is_current = true, kind = $kind, current_key = $key",
-        )
-        .bind(("id", crate::surreal::record_id(crate::templates::TABLE, id)))
-        .bind(("code", code.to_string()))
-        .bind(("title", title.to_string()))
-        .bind(("respondent", respondent_type.to_string()))
-        .bind((
-            "project",
-            crate::surreal::record_id(crate::projects::PROJECT_TABLE, project_id),
-        ))
-        .bind(("kind", kind.map(str::to_string)))
-        .bind(("key", crate::templates::current_key(Some(project_id), code)))
+    if let Some(pg) = crate::postgres::matter::authority_for(crate::templates::TABLE)
         .await
-        .and_then(surrealdb::IndexedResults::check)
-        .expect("seed unpinned project template");
+        .expect("admit the fixture Template authority")
+    {
+        sqlx::query("INSERT INTO template(id,code,title,respondent_type,project_id,is_current,kind,current_key,inserted_at,updated_at) VALUES($1,$2,$3,$4,$5,true,$6,$7,now(),now())")
+            .bind(id).bind(code).bind(title).bind(respondent_type).bind(project_id)
+            .bind(kind).bind(crate::templates::current_key(Some(project_id), code))
+            .execute(pg.pool()).await.expect("seed unpinned project template in PostgreSQL");
+    } else {
+        surreal
+            .query(
+                "CREATE $id SET code = $code, title = $title, respondent_type = $respondent, \
+                 project_id = $project, is_current = true, kind = $kind, current_key = $key",
+            )
+            .bind(("id", crate::surreal::record_id(crate::templates::TABLE, id)))
+            .bind(("code", code.to_string()))
+            .bind(("title", title.to_string()))
+            .bind(("respondent", respondent_type.to_string()))
+            .bind((
+                "project",
+                crate::surreal::record_id(crate::projects::PROJECT_TABLE, project_id),
+            ))
+            .bind(("kind", kind.map(str::to_string)))
+            .bind(("key", crate::templates::current_key(Some(project_id), code)))
+            .await
+            .and_then(surrealdb::IndexedResults::check)
+            .expect("seed unpinned project template");
+    }
     crate::templates::find_by_id(surreal, id)
         .await
         .expect("read unpinned project template")
