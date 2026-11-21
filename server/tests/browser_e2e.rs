@@ -165,17 +165,19 @@ const SAME_DAY_LEGAL_BASE_URL_ENV: &str = "NAV_SAME_DAY_LEGAL_BASE_URL";
 /// The enrollment intake collects contact details before sign-in and keeps them when going Back.
 #[tokio::test]
 async fn enrollment_intake_preserves_answers_and_reviews_before_sign_in() {
-    // The intake lives on Same Day Legal's own host, which the harness does
-    // not serve under `base_url()`; Neon's `/nautilus` only redirects there.
-    let Some(origin) = env::var(SAME_DAY_LEGAL_BASE_URL_ENV)
-        .ok()
-        .filter(|url| !url.trim().is_empty())
-    else {
-        eprintln!("skipping the enrollment intake test: set {SAME_DAY_LEGAL_BASE_URL_ENV}");
-        return;
-    };
     let Some(c) = new_client_or_skip().await else {
         return;
+    };
+    let preview;
+    let origin = match env::var(SAME_DAY_LEGAL_BASE_URL_ENV) {
+        Ok(url) if !url.trim().is_empty() => url,
+        _ => {
+            preview = practice_preview::PracticePreview::for_brands(&[
+                views::brand::BrandKey::SameDayLegal,
+            ])
+            .await;
+            preview.sites[0].1.clone()
+        }
     };
     c.goto(&format!("{origin}/"))
         .await
