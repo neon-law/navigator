@@ -209,6 +209,8 @@ pub struct DatabaseManifest {
     pub non_mvcc_relations: Vec<Relation>,
     pub iceberg_metadata_keys: Vec<String>,
     pub schemas: Vec<TableSchema>,
+    #[serde(default)]
+    pub recovery_plan: Option<store::postgres::native_origin::recovery_plan::RecoveryPlan>,
 }
 
 /// Column input types needed by a source-specific schema/restore procedure.
@@ -221,6 +223,8 @@ pub struct TableSchema {
 /// Both sources completed. This is explicitly not a shared recovery point.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PairedManifest {
+    #[serde(default)]
+    pub format_version: u32,
     pub generation: uuid::Uuid,
     pub databases: Vec<DatabaseManifest>,
     pub cross_database_atomic: bool,
@@ -284,6 +288,7 @@ pub async fn export_pair(
         }
     }
     let manifest = PairedManifest {
+        format_version: 1,
         generation,
         databases,
         cross_database_atomic: false,
@@ -342,7 +347,7 @@ pub(super) async fn extract_database(
 ) -> Result<ExtractedDatabase> {
     let mut objects = Vec::new();
     let mut tx = source.pool.begin().await?;
-    sqlx::raw_sql("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY; SET LOCAL search_path = pg_catalog; SET LOCAL row_security = off; SET LOCAL statement_timeout = '300s'")
+    sqlx::raw_sql("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY; SET LOCAL search_path = pg_catalog; SET LOCAL row_security = off; SET LOCAL statement_timeout = '300s'; SET LOCAL TimeZone='UTC'; SET LOCAL DateStyle='ISO, YMD'; SET LOCAL extra_float_digits=3; SET LOCAL bytea_output='hex'; SET LOCAL IntervalStyle='iso_8601'; SET LOCAL lc_monetary='C'")
         .execute(&mut *tx).await?;
     let (cutoff_at, snapshot, database_name, server_version): (chrono::DateTime<chrono::Utc>, String, String, String) =
         sqlx::query_as(
@@ -391,6 +396,24 @@ pub(super) async fn extract_database(
         });
         objects.push((key, bytes));
     }
+    let mut recovery_plan = if source.name == "navigator" {
+        match store::postgres::native_origin::recovery_plan::capture(&mut tx).await {
+            Ok(plan) => plan,
+            // Coverage and the raw authority rows remain recoverable evidence
+            // during an unsupported or pending upgrade. They authorize no native
+            // activation; catalog/storage failures still fail the generation.
+            Err(
+                store::postgres::native_origin::OriginError::Recovery
+                | store::postgres::native_origin::OriginError::Identity,
+            ) => None,
+            Err(error) => return Err(error.into()),
+        }
+    } else {
+        None
+    };
+    if let Some(plan) = &mut recovery_plan {
+        bind_exported_sequences(plan, &schemas, &tables, &objects)?;
+    }
     tx.rollback().await?;
     let column_schema_sha256 = crate::postgres::sha256_hex(&serde_json::to_vec(&schemas)?);
     let manifest = DatabaseManifest {
@@ -416,8 +439,49 @@ pub(super) async fn extract_database(
             .collect(),
         iceberg_metadata_keys: Vec::new(),
         schemas,
+        recovery_plan,
     };
     Ok(ExtractedDatabase { manifest, objects })
+}
+
+fn bind_exported_sequences(
+    plan: &mut store::postgres::native_origin::recovery_plan::RecoveryPlan,
+    schemas: &[TableSchema],
+    tables: &[crate::postgres::PostgresTableEntry],
+    objects: &[(String, Vec<u8>)],
+) -> Result<()> {
+    use arrow::array::{Array as _, BooleanArray, Int64Array};
+    for ((schema, entry), (_, bytes)) in schemas.iter().zip(tables).zip(objects) {
+        if schema.relation.kind != RelationKind::Sequence {
+            continue;
+        }
+        let mut reader = parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(
+            bytes::Bytes::copy_from_slice(bytes),
+        )?
+        .build()?;
+        let batch = reader
+            .next()
+            .transpose()?
+            .context("sequence Parquet state missing")?;
+        if batch.num_rows() != 1 || reader.next().is_some() {
+            bail!("invalid sequence export rows");
+        }
+        let last = batch
+            .column_by_name("last_value")
+            .and_then(|a| a.as_any().downcast_ref::<Int64Array>())
+            .context("sequence last value")?
+            .value(0);
+        let called = batch
+            .column_by_name("is_called")
+            .and_then(|a| a.as_any().downcast_ref::<BooleanArray>())
+            .context("sequence called")?
+            .value(0);
+        plan.bind_exported_sequence(&schema.relation.schema, &schema.relation.name, last, called)?;
+        if entry.rows != 1 {
+            bail!("sequence manifest rows differ");
+        }
+    }
+    Ok(())
 }
 
 fn hex_component(value: &str) -> String {
@@ -446,6 +510,7 @@ mod tests {
         let generation = uuid::Uuid::new_v4();
         let key = format!("postgres/_paired/{generation}.json");
         let committed = PairedManifest {
+            format_version: 1,
             generation,
             databases: Vec::new(),
             cross_database_atomic: false,

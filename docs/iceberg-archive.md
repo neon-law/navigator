@@ -342,6 +342,29 @@ self-hosted server that runs AGE and DBOS:
 Use the Iceberg archive for queries, audits, long-term retention, and row-level recovery into an isolated database. Use
 the physical backups to bring the server back.
 
+### Native logical recovery
+
+A [Database Recovery](glossary/database-recovery.md) binds an archive to a newly created target with its own Database
+Origin. The archive writer and the write-only verifier do not activate a target. Recovery uses a separately authorized
+reader that can fetch and list archive objects; the create-only backup credential does not provide that access.
+
+Create the target through `native_origin::create` and `initialize_recovery` with the actual paired marker. Prepare the
+matching DBOS schema without running workflows. `archives::recovery::rehydrate` restores rows while admission remains
+blocked. `verify_and_complete` seals the resource, independently checks its schema, relation inventory, data and
+sequence safety, and records completion atomically. The target keeps its own creation identity and real migration
+history; archived source authority stays provenance. Runtime connection grants and workers require a separate operator
+action.
+
+Native activation requires a supported source plan and matching target shapes. Captured-source and unsupported upgrade
+archives retain their stored data and authority evidence without an activation plan. Materialized views, nondeferrable
+cross-table cycles, nondefault large-object ownership or ACLs, and objects exceeding the reader's declared limits
+require their own recovery procedure. Verification refusals after sealing keep connections closed. An unconfirmed commit
+or reopen requires explicit inspection before proceeding.
+
+The native ownership drill exercises three consecutive recovery generations through memory, file and GCS-style URIs
+backed by local storage. It restores real SDK checkpoints without repeating completed work. This does not establish live
+GCP access, external-effect replay, Forgejo service recovery or a shared recovery point.
+
 ## Post-provisioning drill
 
 CI proves the writer, the attempt-key scheme, and the project seam against fakes; a locked bucket in a second GCP

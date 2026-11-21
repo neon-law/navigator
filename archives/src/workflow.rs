@@ -1521,10 +1521,12 @@ mod tests {
             non_mvcc_relations: Vec::new(),
             iceberg_metadata_keys: Vec::new(),
             schemas: Vec::new(),
+            recovery_plan: None,
         };
         let mut summary = empty_summary();
         summary.postgres = Some(crate::postgres::PostgresExport::Paired(
             crate::coverage::PairedManifest {
+                format_version: 1,
                 generation: uuid::Uuid::new_v4(),
                 databases: vec![
                     database("navigator", "100:100:"),

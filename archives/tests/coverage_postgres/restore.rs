@@ -67,9 +67,11 @@ async fn restore_database(
             assert!(
                 matches!(
                     require_scope(ledger, Family::Satellites).await,
-                    Err(FamilyError::Receipt)
+                    Err(FamilyError::NativeOrigin(
+                        store::postgres::native_origin::OriginError::Recovery
+                    ))
                 ),
-                "a restored run without all checkpoint proofs must not activate authority"
+                "partial receipt rows cannot activate an unknown unmigrated database"
             );
         }
     }
@@ -274,8 +276,55 @@ async fn restore_largeobjects(
 /// Compare every stored relation, including target-only rows and recomputed columns.
 /// AGE catalogs are reconstructed by native DDL and have different physical OIDs.
 pub(super) async fn assert_database_equal(db: &DatabaseManifest, source: &PgPool, target: &PgPool) {
+    assert_relations_equal(db, source, target, false).await;
+}
+
+pub(super) async fn assert_native_database_equal(
+    db: &DatabaseManifest,
+    source: &PgPool,
+    target: &PgPool,
+) {
+    assert_relations_equal(db, source, target, true).await;
+    let evidence: Vec<u8> = sqlx::query_scalar(
+        "SELECT source_identity_bytes FROM database_recovery WHERE completed_at IS NOT NULL",
+    )
+    .fetch_one(target)
+    .await
+    .unwrap();
+    let retained: store::postgres::native_origin::recovery_plan::RecoveryPlan =
+        serde_json::from_slice(&evidence).unwrap();
+    assert_eq!(
+        db.recovery_plan.as_ref(),
+        Some(&retained),
+        "source lineage and logical values remain exact immutable provenance"
+    );
+    let origin: serde_json::Value = sqlx::query_scalar("SELECT to_jsonb(o) FROM database_origin o")
+        .fetch_one(source)
+        .await
+        .unwrap();
+    assert_eq!(retained.source_origin, origin);
+}
+
+async fn assert_relations_equal(
+    db: &DatabaseManifest,
+    source: &PgPool,
+    target: &PgPool,
+    native: bool,
+) {
     for schema in &db.schemas {
         if schema.relation.schema == "ag_catalog" {
+            continue;
+        }
+        if native
+            && schema.relation.schema == "public"
+            && [
+                "database_origin",
+                "database_origin_upgrade",
+                "database_recovery",
+                "_sqlx_migrations",
+            ]
+            .contains(&schema.relation.name.as_str())
+        {
             continue;
         }
         let relation = format!(
@@ -327,4 +376,23 @@ pub(super) async fn prepare_target_migration_ledger(source: &PgPool, target: &Pg
             "schema-only target must not fabricate applied migrations"
         );
     }
+}
+
+pub(super) async fn restore_forgejo(
+    paired: &PairedManifest,
+    storage: &dyn StorageService,
+    base: &str,
+    target: &PgPool,
+    ledger: &PostgresDb,
+) {
+    let io = iceberg::io::FileIO::new_with_memory();
+    for object in storage.list("").await.unwrap() {
+        let bytes = storage.get(&object.key).await.unwrap().bytes;
+        io.new_output(format!("{base}/{}", object.key))
+            .unwrap()
+            .write(bytes.into())
+            .await
+            .unwrap();
+    }
+    restore_database(&paired.databases[1], target, storage, base, &io, ledger).await;
 }

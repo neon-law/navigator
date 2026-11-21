@@ -57,3 +57,6 @@ pub use workflow::ArchivesService;
 pub use workflow::{RunReport, RunRequest};
 
 mod write;
+
+/// Explicit logical native recovery over a separately authorized archive reader.
+pub mod recovery;

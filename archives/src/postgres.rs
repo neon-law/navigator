@@ -50,6 +50,7 @@ pub const POSTGRES_LANE: &str = "postgres/navigator";
 pub const POSTGRES_TABLES: &[&str] = &[
     "database_origin",
     "database_origin_upgrade",
+    "database_recovery",
     "journal_entry",
     "journal_posting",
     "journal_source_reference",
