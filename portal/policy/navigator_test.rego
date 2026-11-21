@@ -3554,3 +3554,19 @@ test_billing_annotation_staging_requires_lawyer_tier if {
     not authz.allow with input as {"path": path, "method": "POST", "session": clerk_session}
     not authz.allow with input as {"path": path, "method": "POST", "session": null}
 }
+
+test_legal_plan_claims_require_lawyer_tier if {
+    path := ["app", "api", "projects", "sample", "legal-plan-claims"]
+    every method in ["GET", "POST"] {
+        authz.allow with input as {"path": path, "method": method, "session": lawyer_session}
+        not authz.allow with input as {"path": path, "method": method, "session": client_session}
+        not authz.allow with input as {"path": path, "method": method, "session": clerk_session}
+    }
+}
+
+test_legal_plan_collections_require_lawyer_tier if {
+    path := ["app", "api", "firms", "sample", "legal-plan-collections"]
+    authz.allow with input as {"path": path, "method": "GET", "session": lawyer_session}
+    not authz.allow with input as {"path": path, "method": "GET", "session": client_session}
+    not authz.allow with input as {"path": path, "method": "GET", "session": clerk_session}
+}

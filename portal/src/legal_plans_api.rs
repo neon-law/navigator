@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 /// Refuse with 404 unless the session holds `capability` on `firm` — the
 /// same answer as an unknown Firm, so a Firm boundary discloses nothing.
-async fn authorize(
+pub(super) async fn authorize(
     state: &ApiState,
     session: &crate::SessionData,
     firm: Uuid,
@@ -35,7 +35,7 @@ async fn authorize(
 /// Legal Plans are PostgreSQL-native; without PostgreSQL the request fails
 /// with `503 legal_plans_unavailable` rather than answering from anywhere
 /// else.
-async fn plan_store() -> Result<store::postgres::PostgresDb, Response> {
+pub(super) async fn plan_store() -> Result<store::postgres::PostgresDb, Response> {
     store::postgres::PostgresDb::from_env().await.map_err(|_| {
         (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -119,7 +119,7 @@ struct ProjectPlan {
 
 /// The Project and its Firm, refused as 404 unless the session belongs to
 /// that Firm. A Project with no Firm has no plan vocabulary to link into.
-async fn firm_project(
+pub(super) async fn firm_project(
     state: &ApiState,
     session: &crate::SessionData,
     project_id: Uuid,

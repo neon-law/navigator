@@ -1075,6 +1075,24 @@ erDiagram
         string reporting_requirements
         int turnaround_sla_days
     }
+    legal_plan_claim {
+        uuid id
+        uuid legal_plan_id
+        string plan_case_number
+        uuid project_id
+        json state
+    }
+    legal_plan_claim_event {
+        uuid actor_id
+        uuid claim_id
+        json event
+        uuid id
+        uuid legal_plan_id
+        datetime occurred_on
+        datetime recorded_at
+        string reference
+        string reference_kind
+    }
     letter {
         string direction
         uuid id
@@ -2322,6 +2340,10 @@ erDiagram
     firm }o--|| journal_source_snapshot : references
     journal_source_reference }o--|| journal_source_snapshot : references
     firm }o--|| legal_plan : references
+    legal_plan }o--|| legal_plan_claim : references
+    project }o--|| legal_plan_claim : references
+    legal_plan_claim }o--|| legal_plan_claim_event : references
+    person }o--|| legal_plan_claim_event : references
     mailroom }o--|| letter : references
     address }o--|| mailroom : references
     person }o--|| matter_billing_batch : references

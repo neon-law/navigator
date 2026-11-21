@@ -1999,6 +1999,15 @@ pub enum CommunicationCmd {
 #[derive(Subcommand)]
 #[allow(clippy::large_enum_variant)]
 pub enum LegalPlanCmd {
+    /// Read or record private evidence for a Legal Plan Claim.
+    Claim {
+        #[arg(long)]
+        project: Option<String>,
+        #[command(flatten)]
+        host: HostOpt,
+        #[command(subcommand)]
+        action: legal_plans::ClaimCmd,
+    },
     /// The matter's plan, Plan Case Number, and plan dates.
     Show {
         /// Project code. Defaults to project.name in navigator.yaml.
@@ -3014,6 +3023,11 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
             }
         },
         ProjectsCmd::LegalPlan { action } => match action {
+            LegalPlanCmd::Claim {
+                project,
+                host,
+                action,
+            } => legal_plans::claim(host.host.as_deref(), project.as_deref(), action).await,
             LegalPlanCmd::Show { project, host } => {
                 legal_plans::show(host.host.as_deref(), project.as_deref()).await
             }

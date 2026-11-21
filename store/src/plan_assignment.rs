@@ -68,6 +68,33 @@ impl PlanProvider {
     }
 }
 
+/// Recognize a provider in the Firm's plan name. Mixed provider names are
+/// ambiguous, even when one of the names is an exact match.
+#[must_use]
+pub fn provider_for_plan_name(name: &str) -> Option<PlanProvider> {
+    let lowered = name.to_ascii_lowercase();
+    let words: Vec<_> = lowered
+        .split(|c: char| !c.is_ascii_alphabetic())
+        .filter(|word| !word.is_empty())
+        .collect();
+    let mut providers = [
+        (words.contains(&"arag"), PlanProvider::Arag),
+        (
+            words.contains(&"legalease") || words.windows(2).any(|pair| pair == ["legal", "ease"]),
+            PlanProvider::LegalEase,
+        ),
+        (
+            words.contains(&"legalshield")
+                || words.windows(2).any(|pair| pair == ["legal", "shield"]),
+            PlanProvider::LegalShield,
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(matches, provider)| matches.then_some(provider));
+    let provider = providers.next()?;
+    providers.next().is_none().then_some(provider)
+}
+
 /// The provider a sender address belongs to. The sender's domain is one of
 /// the provider's domains or a subdomain of one — the same suffix rule the
 /// claims-agent vendor route uses.

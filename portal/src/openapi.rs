@@ -1397,6 +1397,45 @@ fn canonical_document(base: &str) -> Value {
             }
           }
         },
+        "/app/api/projects/{id}/legal-plan-claims": {
+          "get": {
+            "summary": "Read a private Project's claims and evidence",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "responses": { "200": { "description": "The Project's claims and structured evidence" }, "404": { "description": "Project outside the caller's Firm and participation scope" } }
+          },
+          "post": {
+            "summary": "Record one lawyer-confirmed claim event",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "requestBody": { "required": true, "content": { "application/json": { "schema": {
+              "type": "object", "required": ["claim_id", "event_id", "occurred_on", "event"], "properties": {
+                "claim_id": { "type": "string", "format": "uuid" },
+                "event_id": { "type": "string", "format": "uuid" },
+                "occurred_on": { "type": "string", "format": "date" },
+                "event": { "type": "object", "required": ["type"], "properties": {
+                  "type": { "type": "string", "enum": ["work_recorded", "authorization_confirmed", "prepared", "submission", "approval", "denial", "correction", "payment", "reversal"] }
+                } }
+              }
+            } } } },
+            "responses": {
+              "200": { "description": "The claim after the write or an identical retry" },
+              "401": { "description": "No authenticated session" },
+              "403": { "description": "The session lacks lawyer-tier access" },
+              "404": { "description": "Claim or Project outside the caller's scope" },
+              "409": { "description": "A key or provider reference is already used" },
+              "422": { "description": "Invalid claim evidence or transition" }
+            }
+          }
+        },
+        "/app/api/firms/{id}/legal-plan-collections": {
+          "get": {
+            "summary": "Review plan claims and confirmed net collections",
+            "parameters": [
+              { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+              { "name": "totals_only", "in": "query", "description": "Firm aggregate without Project details, with Firm plan-metrics access", "schema": { "type": "boolean", "default": false } }
+            ],
+            "responses": { "200": { "description": "Plan worklist or Firm aggregates" }, "404": { "description": "Firm outside the caller's scope" } }
+          }
+        },
         "/app/api/projects/{id}/legal-plan": {
           "get": {
             "summary": "Read how a Project is paid",

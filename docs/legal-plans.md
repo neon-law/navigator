@@ -68,6 +68,95 @@ directory. A Firm member without directory access can run `list` with the UUID.
 5. **Claim.** When the matter completes, or a plan's early-claim rule allows, file the claim the plan's way (see the
    table). Then record `--closed-on`.
 
+## Claims and collections
+
+Record covered work as a [Legal Plan Claim](glossary/legal-plan-claim.md) on the Project, including after closure. Match
+confirmation against the Firm, plan, Plan Case Number, and claim reference. If the reference or case is ambiguous, check
+the provider record before recording evidence. A case number alone can identify several claims.
+
+- **ARAG advice only.** For a covered consultation followed by declining representation, review the CaseAssist
+  coverage, service date, and actual time. In Get Paid, find the CaseAssist case and look for Decline → Decline
+  Services. Enter the advice date and actual time, and use an accurate decline reason. Ask ARAG for the correct option
+  if none fits. Record the consultation benefit and use `arag_advice_only`; use `arag_representation` for covered work
+  under an accepted representation. The attorney checks the current portal and attests before submitting.
+- **LegalEASE.** Check the LAMP case and written authorization. Use `legal_ease_legal_guard` for an insured referral
+  with its claim form, and `legal_ease_payment_authorization` for the separate non-LegalGuard route. Use the authorized
+  fixed fee or approved rate and covered minutes for that case. Track additional minutes as pending until written
+  approval. Follow the [provider's payment instructions](https://www.legaleaseplan.com/page/provider-info).
+
+The lawyer submits through the provider's process. Keep any required receipt or supporting file under the approved
+manual filing process. Navigator records the evidence reference, date, and amount when known.
+
+Run these commands from the Project checkout or pass `--project <code-or-uuid>` before the action. Pass `--host <host>`
+before the action if needed. The amounts in this example are synthetic.
+
+```bash
+navigator project legal-plan claim work --service arag-advice-only --benefit SAMPLE-CONSULT \
+  --performed-on 2026-11-01 --attorney-minutes 30 \
+  --authorization-reference sample-benefit --fixed-cents 8000
+navigator project legal-plan claim prepare --claim <claim-uuid> --on 2026-11-01
+navigator project legal-plan claim submit --claim <claim-uuid> --on 2026-11-02 \
+  --provider-reference sample-claim --claimed-cents 8000
+navigator project legal-plan claim pay --claim <claim-uuid> --on 2026-11-10 \
+  --reference sample-remittance --cents 8000
+navigator project legal-plan claim status
+```
+
+Use the claim UUID printed by `work` for later actions. If two claims share the same benefit, service type, and
+completion date, give them distinct, stable `--work-key` labels. Retry an action with the same arguments and evidence
+date. Use `--time-entry <uuid>` in place of `--attorney-minutes` to reuse recorded time. Use `--rate-cents-per-hour`,
+`--covered-minutes`, and `--pending-minutes` for a capped authorization.
+
+For structured imports, `navigator project legal-plan claim record --input -` reads one JSON event from stdin. Use the
+same claim UUID for every event on that claim and a new event UUID for each new action. A retry uses the original event
+UUID with its original payload.
+
+This synthetic ARAG consultation example supplies an explicitly verified fixed benefit. Amounts are integer cents. Use
+existing `time_entry_ids` from the Project or enter actual `attorney_minutes`. For a capped authorization, use
+`authorization.type = "capped_hours"` with `reference`, `rate_cents_per_hour`, `covered_minutes`, and `pending_minutes`.
+If terms are missing, omit `authorization` and review the claim before preparation.
+
+```json
+{
+  "claim_id": "959fd8d0-6a88-4f4d-9ed2-d02f6827d6e0",
+  "event_id": "c030db25-a7fa-433d-ac9a-f6cc8b88d9f0",
+  "occurred_on": "2026-11-01",
+  "event": {
+    "type": "work_recorded",
+    "work": {
+      "service": "arag_advice_only",
+      "benefit": "SAMPLE-CONSULT",
+      "performed_on": "2026-11-01",
+      "attorney_minutes": 30,
+      "authorization": {"type": "fixed_fee", "reference": "sample-benefit", "cents": 8000}
+    }
+  }
+}
+```
+
+Reuse the outer fields with a fresh event UUID and the date of each action.
+
+| Event `type` | Fields in `event` | When to record it |
+| -- | -- | -- |
+| `authorization_confirmed` | `authorization` | The provider verifies or revises the benefit terms. |
+| `prepared` | None | The completed work has a verified payable amount and is ready for manual filing. |
+| `submission` | `provider_reference`, optional `claimed_cents` | The lawyer confirms the filing. |
+| `approval` | `reference`, `cents` | The provider confirms the amount approved. |
+| `denial` | `reference` | The provider denies the claim or the remaining balance. |
+| `correction` | `provider_reference`, optional `claimed_cents` | The lawyer confirms a corrected filing. |
+| `payment` | `reference`, `cents` | Confirm one payment per remittance line. |
+| `reversal` | `reference`, `cents` | A refund or reversal is confirmed. Use its own evidence reference. |
+
+Run `navigator legal-plans --firm <firm> collections` during the weekly billing review. The worklist groups the caller’s
+participating Projects by plan. Review eligible completed work awaiting filing, missing terms, submission age,
+outstanding approvals, denials, and closed plan Projects that still need reconciliation. Closing a Project does not
+establish eligibility. `collections --totals-only` gives a Firm plan-metrics operator the aggregate across the Firm
+without Project details.
+
+Net cash is confirmed collections less confirmed reversals. The worklist shows net cash for the last seven days and to
+date. The to-date cents-per-attorney-hour rate includes known minutes on unpaid work. Cash without known attorney time
+is reported separately from the rate, and pending additional minutes cannot increase the authorized estimate.
+
 ## Correspondence
 
 Plan email is matter correspondence, so log it as a [Communication](glossary/communication.md) on the Project. Each
