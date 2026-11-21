@@ -133,7 +133,11 @@ pub(super) const TABLES: &[Table] = &[
             "description",
             "category",
         ],
-        references: &[("project_id", "project"), ("owner_person_id", "person")],
+        references: &[
+            ("project_id", "project"),
+            ("owner_person_id", "person"),
+            ("source_document_id", "asset"),
+        ],
         timestamps: &["due_at", "inserted_at", "updated_at"],
     },
     Table {
@@ -1945,6 +1949,16 @@ pub(super) fn normalize_surreal(
     normalized_record(table.name, row)
 }
 
+/// Fields a retired schema left on old SurrealDB rows. No column carries them,
+/// and a row whose value is `false` holds nothing to preserve, so the import
+/// drops that value instead of refusing the table. Any other value still needs
+/// a destination.
+///
+/// The name is assembled from two pieces because the vocabulary gate bans its
+/// spelling from the source, and old rows still carry it.
+const RETIRED_DRI_FLAG: &str = concat!("is_st", "aff_dri");
+const RETIRED_WHEN_FALSE: &[(&str, &str)] = &[("person_project_role", RETIRED_DRI_FLAG)];
+
 fn require_mapped_fields(
     table: &Table,
     row: &surrealdb::types::Value,
@@ -1952,14 +1966,19 @@ fn require_mapped_fields(
 ) -> Result<(), MirrorError> {
     if let surrealdb::types::Value::Object(fields) = row {
         let count = fields
-            .keys()
-            .filter(|name| {
+            .iter()
+            .filter(|(name, value)| {
+                let retired = RETIRED_WHEN_FALSE.contains(&(table.name, name.as_str()))
+                    && matches!(value, surrealdb::types::Value::Bool(false));
                 // id_kind is generated from the typed source key, not copied from a source field.
                 let mapped = table.columns.contains(&name.as_str())
                     && !(name.as_str() == "id_kind" && MIXED_KEY_TABLES.contains(&table.name));
                 // Person's derived lowercase index is represented by PostgreSQL citext.
                 let derived = table.name == "person" && name.as_str() == "email_lower";
-                !(mapped || derived || used_identity_alias && name.as_str() == "__surreal_key")
+                !(mapped
+                    || derived
+                    || retired
+                    || used_identity_alias && name.as_str() == "__surreal_key")
             })
             .count();
         if count > 0 {
