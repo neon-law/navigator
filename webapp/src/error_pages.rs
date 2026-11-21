@@ -177,6 +177,7 @@ static GORP_FACES: LazyLock<String> = LazyLock::new(|| {
 pub fn standalone_document(title: &str, brand_name: &str, body_html: &str) -> String {
     let full_title = escape_attr(&format!("{brand_name} | {title}"));
     let stylesheet = escape_attr(THEME_STYLESHEET_HREF);
+    let tokens = crate::brand_style::brand_tokens_href(views::brand::brand_key().as_str());
     // The faces go last in the head, not first: `<meta charset>` must stay
     // within the document's first 1024 bytes, and a face block carrying two
     // absolute bucket URLs is large enough to push it out.
@@ -189,6 +190,7 @@ pub fn standalone_document(title: &str, brand_name: &str, body_html: &str) -> St
          <meta name=\"robots\" content=\"noindex\">\
          <title>{full_title}</title>\
          <link rel=\"stylesheet\" href=\"{stylesheet}\">\
+         <link rel=\"stylesheet\" href=\"{tokens}\">\
          {faces}\
          </head><body>{body_html}</body></html>"
     )
