@@ -1120,7 +1120,16 @@ pub fn with_captured_postgres(
     with_postgres_history(test, FixtureHistory::Captured)
 }
 
+/// Run an owned, genuinely migrated schema-only target for historical input
+/// parser/transaction tests. No capture enrollment or Database Origin is minted.
+pub fn with_unactivated_postgres(
+    test: impl std::future::Future<Output = ()>,
+) -> impl std::future::Future<Output = ()> {
+    with_postgres_history(test, FixtureHistory::SchemaOnly)
+}
+
 enum FixtureHistory {
+    SchemaOnly,
     Native,
     Captured,
 }
@@ -1149,6 +1158,7 @@ fn with_postgres_history(
             .ssl_mode(PgSslMode::Disable)
             .options([("session_preload_libraries", "age")]);
         let fixture = match history {
+            FixtureHistory::SchemaOnly => PostgresFixture::create_unactivated(options).await,
             FixtureHistory::Native => PostgresFixture::create(options).await,
             FixtureHistory::Captured => PostgresFixture::create_capture_target(options).await,
         }

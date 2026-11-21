@@ -28,19 +28,12 @@ async fn authorize(
     Ok(())
 }
 /// The PostgreSQL journal, admitted only with complete application history.
-async fn journal_store(state: &ApiState) -> Result<journal::JournalStore, ApiError> {
-    journal::JournalStore::from_env(&state.surreal)
+async fn journal_store() -> Result<journal::JournalStore, ApiError> {
+    journal::JournalStore::from_env()
         .await
         .map_err(|_| ApiError::Db("PostgreSQL journal unavailable".into()))
 }
 fn journal_error(error: &journal::JournalError) -> Response {
-    if matches!(error, journal::JournalError::RequiresPostgres) {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({"error":"journal_requires_postgresql"})),
-        )
-            .into_response();
-    }
     let status = match error {
         journal::JournalError::Invalid(_) => StatusCode::UNPROCESSABLE_ENTITY,
         journal::JournalError::Conflict => StatusCode::CONFLICT,
@@ -58,7 +51,7 @@ pub(super) async fn list(
     Path(firm): Path<Uuid>,
 ) -> Result<Response, ApiError> {
     authorize(&state, &session, firm).await?;
-    Ok(match journal_store(&state).await?.entries(firm).await {
+    Ok(match journal_store().await?.entries(firm).await {
         Ok(entries) => Json(entries).into_response(),
         Err(e) => journal_error(&e),
     })
@@ -84,7 +77,7 @@ pub(super) async fn statement(
             return Err(ApiError::NotFound);
         }
     }
-    let store = journal_store(&state).await?;
+    let store = journal_store().await?;
     let result = async {
         let entries = store.entries(firm).await?;
         Ok::<_, journal::JournalError>((
@@ -114,11 +107,8 @@ pub(super) async fn audits(
     Query(query): Query<AuditQuery>,
 ) -> Result<Response, ApiError> {
     authorize(&state, &session, firm).await?;
-    let store = journal_store(&state).await?;
-    let audits = match store.postgres() {
-        Ok(pg) => journal::audits(pg, firm, query.job_id).await,
-        Err(error) => Err(error),
-    };
+    let store = journal_store().await?;
+    let audits = journal::audits(store.postgres(), firm, query.job_id).await;
     Ok(match audits {
         Ok(audits) => Json(audits).into_response(),
         Err(error) => journal_error(&error),
@@ -130,17 +120,16 @@ pub(super) async fn migration_triage(
     Path(firm): Path<Uuid>,
 ) -> Result<Response, ApiError> {
     authorize(&state, &session, firm).await?;
-    // This authenticated, Firm-authorized migration endpoint is the only
-    // request path that opens the explicitly configured legacy source.
-    let Ok(source) = store::surreal::connect_from_env().await else {
-        return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
-    };
-    Ok(
-        match store::journal_startup_migration::triage(&source, firm).await {
-            Ok(rows) => Json(rows).into_response(),
-            Err(error) => journal_error(&error),
-        },
-    )
+    // Native Origin proves this database has no Source migration obligation.
+    // Captured installations are admitted only after the persisted Application
+    // handoff proves all captured Journal rows represented, with no unresolved
+    // rows or integrity differences. Pending/unknown history is not a clean report.
+    match store::postgres::PostgresDb::application().await {
+        Ok(_) => {
+            Ok(Json(Vec::<store::journal_startup_migration::TriageItem>::new()).into_response())
+        }
+        Err(_) => Ok(StatusCode::SERVICE_UNAVAILABLE.into_response()),
+    }
 }
 pub(super) async fn post(
     State(state): State<ApiState>,
@@ -169,7 +158,7 @@ async fn apply_command(
     if entry.firm_id != firm || Some(entry.actor_id) != session.person_id {
         return Err(ApiError::Forbidden);
     }
-    let store = journal_store(&state).await?;
+    let store = journal_store().await?;
     let result = if preview {
         store.preview(&state.surreal, &entry).await
     } else {
@@ -208,11 +197,8 @@ pub(super) async fn reconcile(
     {
         return Err(ApiError::Forbidden);
     }
-    let store = journal_store(&state).await?;
-    let audit = match store.postgres() {
-        Ok(pg) => journal::reconcile(&state.surreal, pg, &request).await,
-        Err(error) => Err(error),
-    };
+    let store = journal_store().await?;
+    let audit = journal::reconcile(&state.surreal, store.postgres(), &request).await;
     Ok(match audit {
         Ok(audit) => Json(audit).into_response(),
         Err(e) => journal_error(&e),
@@ -2113,11 +2099,6 @@ mod tests {
     async fn journal_errors_map_to_their_response_statuses() {
         let cases = [
             (
-                journal::JournalError::RequiresPostgres,
-                StatusCode::SERVICE_UNAVAILABLE,
-                "journal_requires_postgresql",
-            ),
-            (
                 journal::JournalError::Invalid("synthetic".into()),
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "journal_command_refused",
@@ -2294,11 +2275,8 @@ pub(super) async fn signals(
     Query(query): Query<SignalQuery>,
 ) -> Result<Response, ApiError> {
     authorize(&state, &session, firm).await?;
-    let store = journal_store(&state).await?;
-    let signals = match store.postgres() {
-        Ok(pg) => journal::signals(pg, firm, query.after).await,
-        Err(error) => Err(error),
-    };
+    let store = journal_store().await?;
+    let signals = journal::signals(store.postgres(), firm, query.after).await;
     Ok(match signals {
         Ok(signals) => Json(signals).into_response(),
         Err(error) => journal_error(&error),

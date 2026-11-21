@@ -77,9 +77,9 @@ the `navigator_app` PostgreSQL login and the DBOS login, and it keeps the export
 `NAVIGATOR_ARCHIVES_BUCKET` and write access to that bucket for `web`'s service account. An enabled schedule fails the
 boot without PostgreSQL or the bucket. Until the flag is on, nothing is exported, so nothing is ever purged.
 
-A `workflows-service` worker with no PostgreSQL login, as the GKE example ships it, journals its sends to SurrealDB.
-They reach PostgreSQL, and then the export, only when `hudson ops postgres mirror reconcile` or its recurring Job runs.
-Giving the worker the `navigator_app` login writes them to PostgreSQL directly.
+Every process that records outbound attempts needs the `navigator_app` PostgreSQL login and completed application
+history. Missing PostgreSQL or history fails audit recording after delivery has been attempted. Mirror reconciliation is
+an operator import tool; it does not replace direct recording.
 
 Register the table in BigQuery once, as a BigLake Iceberg table over the current metadata file:
 

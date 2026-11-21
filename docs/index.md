@@ -127,8 +127,8 @@ cannot decay the way the old seven-line stub did.
 
 ## Billing, trust, and e-signature
 
-- [`firm-journal.md`](firm-journal.md) — the Firm-owned journal (PostgreSQL, or SurrealDB without it), selected
-  evidence, and reconciliation.
+- [`firm-journal.md`](firm-journal.md) — the Firm-owned PostgreSQL journal, selected evidence, reconciliation, and
+  operator imports.
 - [`trust-accounting.md`](trust-accounting.md) — the client trust (IOLTA) mirror: one pooled account per state,
   each matter's held balance, and one withdrawal split across the invoices it settles.
 - [`xero-billing.md`](xero-billing.md) — Xero billing setup, invoice flow, and production cutover.
