@@ -28,6 +28,7 @@ chrono.workspace = true
 cloud.workspace = true
 dioxus-core.workspace = true
 dioxus-server.workspace = true
+model.workspace = true
 dbos.workspace = true
 dotenvy.workspace = true
 ephemeris.workspace = true

@@ -8941,6 +8941,7 @@ dependencies = [
  "live-inquiry",
  "mail-parser",
  "mcp",
+ "model",
  "opentelemetry",
  "opentelemetry_sdk",
  "p256 0.14.0",

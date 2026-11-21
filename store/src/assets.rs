@@ -2955,6 +2955,37 @@ pub async fn file_revision_with_provenance(
     file_revision_inner(db, storage, args, identity, Some(provenance), None, bytes).await
 }
 
+/// [`file_revision_with_provenance`] with a compare-and-swap (LAW-284):
+/// the mail-lane upload path (`navigator mail parse`) files a `.eml`
+/// source document or one of its attachments with
+/// [`crate::documents::MailProvenance`] stamped, while honoring the
+/// caller's `expected_head` exactly as [`file_revision_with_expected_head`]
+/// does. The one caller is the CLI's document-lane upload of mail bytes.
+///
+/// # Errors
+/// [`RevisionError`] when a rule rejects the write, the expected head no
+/// longer matches, or on a storage or database failure.
+pub async fn file_revision_with_provenance_and_expected_head(
+    db: &SurrealDb,
+    storage: &Arc<dyn StorageService>,
+    args: &crate::documents::IngestArgs<'_>,
+    identity: &crate::documents::DocumentIdentity<'_>,
+    provenance: &crate::documents::MailProvenance<'_>,
+    expected_head: Option<&ExpectedHead>,
+    bytes: &[u8],
+) -> Result<Filed, RevisionError> {
+    file_revision_inner(
+        db,
+        storage,
+        args,
+        identity,
+        Some(provenance),
+        expected_head,
+        bytes,
+    )
+    .await
+}
+
 pub(crate) fn preserve_drive_metadata(
     identity: &mut crate::documents::DocumentIdentity<'_>,
     head: &Asset,

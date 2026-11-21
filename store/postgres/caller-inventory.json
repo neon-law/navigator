@@ -16012,6 +16012,7 @@
       "features/src/journey.rs",
       "features/src/lib.rs",
       "mcp/src/tools/create_person.rs",
+      "model/src/correspondence.rs",
       "model/src/document_pointers.rs",
       "model/src/mail_attachments.rs",
       "model/src/question_registry.rs",
