@@ -724,18 +724,114 @@ pub async fn revoke_twilio_auth_token_by_ref(
     Ok(())
 }
 
-/// Select the Firm credential kind for a Project's governing jurisdiction.
-pub async fn stripe_kind_for_project(
+/// A state trust destination. Nevada can use its dedicated Firm credential.
+/// Other states use an explicitly configured connected account on the Firm's Stripe platform.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TrustRoute {
+    firm: Uuid,
+    pub state: String,
+    pub account: String,
+    #[serde(default)]
+    pub dedicated_nevada: bool,
+}
+
+impl TrustRoute {
+    #[must_use]
+    pub fn credential_kind(&self) -> IntegrationSecretKind {
+        if self.dedicated_nevada {
+            IntegrationSecretKind::StripeNevadaAppKey
+        } else {
+            IntegrationSecretKind::StripeOperatingAppKey
+        }
+    }
+
+    #[must_use]
+    pub fn matches_batch(&self, batch: &crate::billing_batches::MatterBillingBatch) -> bool {
+        // Nevada was the sole trust destination before batches recorded their state.
+        batch.stripe_iolta
+            && batch.trust_state.as_deref().unwrap_or("NV") == self.state
+            && batch.stripe_account_id.as_ref() == Some(&self.account)
+    }
+
+    #[must_use]
+    pub fn bind_preview(&self, digest: &str) -> String {
+        format!("{digest}/{}/{}", self.state, self.account)
+    }
+}
+
+fn trust_route(
+    firm: Option<Uuid>,
+    state: Option<&str>,
+    config: Option<&str>,
+) -> Result<Option<TrustRoute>, SecretStoreError> {
+    let routes: Vec<TrustRoute> =
+        serde_json::from_str(config.unwrap_or("[]")).map_err(|_| SecretStoreError::InvalidKind)?;
+    let mut destinations = std::collections::HashSet::new();
+    let mut states = std::collections::HashSet::new();
+    for route in &routes {
+        if (route.dedicated_nevada && route.state != "NV")
+            || route.state.len() != 2
+            || !route.state.bytes().all(|b| b.is_ascii_uppercase())
+            || !route
+                .account
+                .strip_prefix("acct_")
+                .is_some_and(|id| !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric()))
+            || !destinations.insert(&route.account)
+            || !states.insert((route.firm, &route.state))
+        {
+            return Err(SecretStoreError::InvalidKind);
+        }
+    }
+    Ok(routes
+        .into_iter()
+        .find(|route| Some(route.firm) == firm && Some(route.state.as_str()) == state))
+}
+
+pub async fn stripe_trust_route(
     surreal: &SurrealDb,
     project: &crate::projects::Project,
-) -> Result<Option<IntegrationSecretKind>, crate::jurisdictions::JurisdictionError> {
-    let Some(id) = project.jurisdiction_id else {
-        return Ok(Some(IntegrationSecretKind::StripeOperatingAppKey));
+) -> Result<Option<TrustRoute>, SecretStoreError> {
+    let jurisdiction = match project.jurisdiction_id {
+        Some(id) => crate::jurisdictions::find_by_id(surreal, id)
+            .await
+            .map_err(|_| SecretStoreError::InvalidKind)?,
+        None => None,
     };
-    let jurisdiction = crate::jurisdictions::find_by_id(surreal, id).await?;
-    Ok(jurisdiction
-        .filter(|jurisdiction| jurisdiction.code == "NV")
-        .map(|_| IntegrationSecretKind::StripeNevadaAppKey))
+    let state = jurisdiction
+        .as_ref()
+        .filter(|j| j.jurisdiction_type == crate::jurisdictions::JURISDICTION_TYPE_STATE)
+        .map(|j| j.code.as_str());
+    let config = std::env::var("NAVIGATOR_STRIPE_TRUST_ROUTES").ok();
+    trust_route(project.firm_id, state, config.as_deref())
+}
+
+#[cfg(test)]
+mod trust_route_tests {
+    use super::*;
+    #[test]
+    fn trust_routes_are_separate_by_firm_and_state_and_refuse_shared_destinations() {
+        let id = Uuid::new_v4();
+        let route = serde_json::json!({"firm":id,"state":"CA","account":"acct_A"});
+        let config = serde_json::json!([route]).to_string();
+        assert_eq!(
+            trust_route(Some(id), Some("CA"), Some(&config))
+                .unwrap()
+                .unwrap()
+                .account,
+            "acct_A"
+        );
+        for (firm, state) in [
+            (Some(id), None),
+            (Some(Uuid::new_v4()), Some("CA")),
+            (Some(id), Some("US")),
+        ] {
+            assert!(trust_route(firm, state, Some(&config)).unwrap().is_none());
+        }
+        let duplicate =
+            serde_json::json!([route,{"firm":id,"state":"WA","account":"acct_A"}]).to_string();
+        assert!(trust_route(Some(id), Some("CA"), Some(&duplicate)).is_err());
+    }
 }
 
 /// Whether the deployment enables a Stripe billing route. The environment

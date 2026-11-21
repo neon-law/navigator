@@ -311,21 +311,27 @@ pub(crate) async fn generate_invoice(
         }
         return raise_batch(surreal, pg, provider, project_id, batch, actor_id).await;
     }
-    let stripe_iolta = if let Some(batch) = &pending {
-        Some(batch.stripe_iolta)
-    } else {
-        store::firm_secrets::stripe_kind_for_project(surreal, &project)
-            .await
-            .map_err(|_| InvoiceGenerationError::StripeUnavailable)?
-            .map(|kind| kind == store::firm_secrets::IntegrationSecretKind::StripeNevadaAppKey)
-    };
-    let stripe_key = match stripe_iolta {
-        Some(iolta) => stripe_credential(surreal, project.firm_id, iolta).await?,
+    if pending.as_ref().is_some_and(|batch| !batch.stripe_iolta) {
+        return Err(InvoiceGenerationError::ReconciliationRequired);
+    }
+    let route = store::firm_secrets::stripe_trust_route(surreal, &project)
+        .await
+        .map_err(|_| InvoiceGenerationError::StripeUnavailable)?;
+    if let Some(batch) = &pending {
+        let Some(route) = &route else {
+            return Err(InvoiceGenerationError::ReconciliationRequired);
+        };
+        if !route.matches_batch(batch) {
+            return Err(InvoiceGenerationError::ReconciliationRequired);
+        }
+    }
+    let stripe_iolta = route.as_ref().map(|_| true);
+    let stripe_key = match &route {
+        Some(route) => stripe_credential(surreal, project.firm_id, route.credential_kind()).await?,
         None => None,
     };
-    let stripe = stripe_key
-        .as_ref()
-        .map(|key| {
+    let stripe = match (&stripe_key, &route) {
+        (Some(key), Some(route)) => {
             use store::config::{sample_matters, staging_from, DeploymentEnvironment};
             let mode = DeploymentEnvironment::from_env()
                 .map_err(|_| InvoiceGenerationError::StripeUnavailable)?;
@@ -334,10 +340,19 @@ pub(crate) async fn generate_invoice(
             let staging = staging_from(|key| std::env::var(key).ok())
                 .map_err(|_| InvoiceGenerationError::StripeUnavailable)?;
             let live = mode == DeploymentEnvironment::Production && !simulated && !staging;
-            billing::stripe::StripeInvoiceClient::new(key.expose_for_provider_call(), live)
-                .map_err(|_| InvoiceGenerationError::StripeUnavailable)
-        })
-        .transpose()?;
+            let client =
+                billing::stripe::StripeInvoiceClient::new(key.expose_for_provider_call(), live)?;
+            Some(if route.dedicated_nevada {
+                if client.account_id().await? != route.account {
+                    return Err(InvoiceGenerationError::StripeUnavailable);
+                }
+                client
+            } else {
+                client.on_connected_trust(&route.account).await?
+            })
+        }
+        _ => None,
+    };
     if (stripe_iolta == Some(true) || pending.is_some()) && stripe.is_none() {
         return Err(InvoiceGenerationError::StripeUnavailable);
     }
@@ -348,6 +363,7 @@ pub(crate) async fn generate_invoice(
         return Err(InvoiceGenerationError::BillingUnavailable);
     }
 
+    let costs_only = store::billing_batches::costs_only(pg, project_id, now.date_naive()).await?;
     let entries = time_entries::unbilled_billable(pg, project_id).await?;
     let unbilled_costs = costs::list_for_project(pg, project_id)
         .await?
@@ -355,6 +371,8 @@ pub(crate) async fn generate_invoice(
         .filter(|cost| cost.amount_status == "confirmed" && cost.billing_status == "unbilled")
         .collect::<Vec<_>>();
     let agreed_fee_cents = attorney_rates::flat_fee_cents(pg, project_id).await?;
+    let agreed_fee_cents = agreed_fee_cents.filter(|_| !costs_only);
+    let entries = if costs_only { Vec::new() } else { entries };
     let billed_fee_cents = billing_batches::flat_fee_billed_cents(pg, project_id).await?;
     let flat_fee_cents =
         agreed_fee_cents.and_then(|fee| (fee > billed_fee_cents).then_some(fee - billed_fee_cents));
@@ -396,6 +414,10 @@ pub(crate) async fn generate_invoice(
         stripe.as_ref().and(stripe_iolta),
         project.firm_id,
     );
+    let preview_digest = match &route {
+        Some(route) => route.bind_preview(&preview_digest),
+        None => preview_digest,
+    };
     if expected_preview_digest.is_some_and(|expected| expected != preview_digest) {
         return Err(InvoiceGenerationError::PreviewChanged);
     }
@@ -445,6 +467,7 @@ pub(crate) async fn generate_invoice(
             contact_email: party.email.clone(),
             xero_contact_id: contact,
             stripe_account_id,
+            trust_state: route.as_ref().map(|route| route.state.clone()),
             stripe_iolta: stripe_iolta == Some(true),
             stripe_invoice_id: None,
             due_date,
@@ -473,16 +496,11 @@ pub(crate) async fn generate_invoice(
 async fn stripe_credential(
     surreal: &store::surreal::SurrealDb,
     firm: Option<Uuid>,
-    iolta: bool,
+    kind: store::firm_secrets::IntegrationSecretKind,
 ) -> Result<Option<store::firm_secrets::ResolvedCredential>, InvoiceGenerationError> {
-    use store::firm_secrets::{IntegrationProvider, IntegrationSecretKind, SecretStoreError};
+    use store::firm_secrets::{IntegrationProvider, SecretStoreError};
     let Some(firm) = firm else {
         return Ok(None);
-    };
-    let kind = if iolta {
-        IntegrationSecretKind::StripeNevadaAppKey
-    } else {
-        IntegrationSecretKind::StripeOperatingAppKey
     };
     if !store::firm_secrets::stripe_billing_enabled(kind) {
         return Ok(None);
@@ -523,9 +541,7 @@ async fn raise_stripe_draft(
             return Err(InvoiceGenerationError::ReconciliationRequired);
         }
         let request = request_for_batch(&batch, &line_items);
-        let id = stripe
-            .create_draft(batch.id, &request, batch.stripe_iolta)
-            .await?;
+        let id = stripe.create_trust_draft(batch.id, &request).await?;
         billing_batches::attach_stripe_draft(pg, batch.id, &id.0).await?;
         id.0
     };
@@ -971,6 +987,7 @@ mod tests {
             contact_email: "client@example.com".into(),
             xero_contact_id: Some("synthetic-resolved-contact".into()),
             stripe_account_id: None,
+            trust_state: None,
             stripe_iolta: false,
             stripe_invoice_id: None,
             due_date: "2026-11-14".parse().unwrap(),

@@ -668,6 +668,7 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             "/app/api/projects/{id}/tasks/{task_id}/transition",
             post(crate::project_tasks_api::transition),
         ),
+        ("POST", "/app/api/projects/{id}/billing-annotations", post(crate::time_tracking_api::stage_annotation)),
         (
             "GET",
             "/app/api/projects/{id}/time-entries",

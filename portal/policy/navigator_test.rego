@@ -3546,3 +3546,11 @@ test_cli_render_inputs_require_a_lawyer_session if {
         not authz.allow with input as {"path": path, "method": "GET", "session": null}
     }
 }
+
+test_billing_annotation_staging_requires_lawyer_tier if {
+    path := ["app", "api", "projects", "synthetic", "billing-annotations"]
+    authz.allow with input as {"path": path, "method": "POST", "session": lawyer_session}
+    not authz.allow with input as {"path": path, "method": "POST", "session": client_session}
+    not authz.allow with input as {"path": path, "method": "POST", "session": clerk_session}
+    not authz.allow with input as {"path": path, "method": "POST", "session": null}
+}

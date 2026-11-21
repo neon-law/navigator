@@ -528,7 +528,7 @@ fn regorus_matches_every_checked_in_policy_decision() {
     // The Forgejo mirror repair route admits Admin and denies Lawyer and Client: 701 + 3 = 704.
     assert_eq!(
         test_names.len(),
-        704,
+        705,
         "the policy decision inventory changed; review every new or removed rule"
     );
 

@@ -67,6 +67,63 @@ async fn firm_side_viewer(
     )
 }
 
+#[derive(Deserialize)]
+pub(crate) struct AnnotationReview {
+    decision: store::billing_annotations::Decision,
+    note: String,
+}
+
+pub(crate) async fn review_annotation(
+    State(db): State<store::surreal::SurrealDb>,
+    session: Option<Extension<SessionData>>,
+    Path((code, id)): Path<(String, Uuid)>,
+    Form(input): Form<AnnotationReview>,
+) -> Response {
+    use store::time_entries::TimeEntryError;
+
+    let Some(session) = session.filter(|s| s.viewing_as_dri.is_none()) else {
+        return not_found_response();
+    };
+    let Some(actor) = session.person_id else {
+        return not_found_response();
+    };
+    let Some(project) = store::projects::find_by_code(&db, &code)
+        .await
+        .ok()
+        .flatten()
+    else {
+        return not_found_response();
+    };
+    if !firm_side_viewer(&db, &session, project.id).await {
+        return not_found_response();
+    }
+    let Ok(pg) =
+        crate::time_tracking_api::prepared_store(&db, "review_annotation", project.id).await
+    else {
+        return back_to_billing(
+            &code,
+            None,
+            Some("Billing is unavailable. Try again shortly."),
+        );
+    };
+    let result =
+        store::billing_annotations::review(&pg, project.id, actor, id, input.decision, &input.note)
+            .await;
+    let error = match result {
+        Ok(()) => return back_to_billing(&code, Some("Billing review recorded."), None),
+        Err(TimeEntryError::Conflict) => "This annotation is no longer awaiting review.".to_owned(),
+        Err(TimeEntryError::Invalid("contingency agreement has no hourly fee")) => {
+            "The contingency agreement has no hourly fee. Record the time at no charge or deny it."
+                .to_owned()
+        }
+        Err(TimeEntryError::Invalid("missing hourly rate")) => {
+            "Set the hourly rate for the date of service before approving billable time.".to_owned()
+        }
+        Err(error) => flash_for_entry(&error),
+    };
+    back_to_billing(&code, None, Some(&error))
+}
+
 /// The log-time control on the Billing tab: what was done, when, for how
 /// long, and whether it bills. The attorney is the reader — the form carries
 /// no attorney picker, so the rate that freezes onto the entry is the
@@ -444,7 +501,7 @@ pub(crate) async fn generate_invoice(
 fn raise_confirmation(receipt: &crate::project_billing_api::InvoiceReceipt) -> String {
     if let Some(iolta) = receipt.stripe_iolta {
         return if iolta {
-            "The draft is ready for review in the Stripe account for Nevada.".to_string()
+            "The draft is ready for review in the state trust account for this matter.".to_string()
         } else {
             "Stripe draft created for lawyer review. This is not IOLTA billing.".to_string()
         };
@@ -713,7 +770,7 @@ mod tests {
         };
         assert_eq!(
             raise_confirmation(&iolta),
-            "The draft is ready for review in the Stripe account for Nevada."
+            "The draft is ready for review in the state trust account for this matter."
         );
         let not_iolta = crate::project_billing_api::InvoiceReceipt {
             stripe_iolta: Some(false),
@@ -1337,7 +1394,7 @@ mod end_to_end_tests {
         iolta_receipt.stripe_iolta = Some(true);
         assert_eq!(
             raise_confirmation(&iolta_receipt),
-            "The draft is ready for review in the Stripe account for Nevada."
+            "The draft is ready for review in the state trust account for this matter."
         );
         iolta_receipt.stripe_iolta = Some(false);
         assert_eq!(

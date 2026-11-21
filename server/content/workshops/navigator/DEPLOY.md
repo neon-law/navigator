@@ -1814,7 +1814,7 @@ Court Rules 78 and 217 govern approved trust depositories and pooled interest-be
 
 | Payment route | Stripe account | Bank destination |
 | --- | --- | --- |
-| Operating | Firm operating account | Operating bank |
+| Earned draw | Authorized bank transfer | Firm operating account |
 | Nevada trust | Firm Nevada account | Nevada IOLTA |
 | Another state's trust | Firm account for that state | Approved IOLTA for that state |
 
@@ -1822,24 +1822,23 @@ Court Rules 78 and 217 govern approved trust depositories and pooled interest-be
 
 A standard Stripe account allows one payout bank per settlement currency. Stripe chooses the payout destination for the
 account's USD balance, so a common USD account cannot select a different IOLTA for each invoice. Use a separate Stripe
-account for each approved trust destination. Navigator implements Nevada first. Verify the applicable rules before
-adding another route.
+account for each approved trust destination. Verify the applicable rules and payout bank before enabling a route.
 
 [Stripe payout limits](https://support.stripe.com/questions/can-i-add-more-than-one-bank-account-for-payouts)
 
 ### Turn on the route and set the Firm key
 
-- `STRIPE_DEFAULT` enables the operating route.
+- `STRIPE_DEFAULT` enables the Firm platform credential for connected trust accounts.
 - `STRIPE_NEVADA` enables the Nevada route.
 - Set each credential in the Firm's Integration Secrets.
 - Sync `project.jurisdiction: NV` from the Project repository's `navigator.yaml`.
 
 ---
 
-The environment variables are presence checks. Use sandbox credentials with synthetic data in staging and live
-credentials in production. Nevada uses the Firm's `STRIPE_NEVADA_APP_KEY`; its operating account uses
-`STRIPE_OPERATING_APP_KEY`. A missing Nevada credential blocks the Nevada draft. An operating draft carries an explicit
-disclosure that it is outside IOLTA billing.
+Set `NAVIGATOR_STRIPE_TRUST_ROUTES` to the reviewed Firm, state and Stripe account mappings. Use sandbox credentials in
+staging and live credentials in production. A dedicated Nevada route verifies its account against the mapped ID. Each
+connected route uses the state's account on every Stripe request. The operating account receives authorized draws after
+the firm verifies its entitlement and the available funds for that matter.
 
 ### Verify before accepting trust payments
 

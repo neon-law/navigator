@@ -233,6 +233,13 @@
     },
     {
       "extra_column": null,
+      "extra_table": "billing_annotation",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
       "extra_table": "brand_letterhead",
       "missing_column": null,
       "missing_table": null,
@@ -2186,7 +2193,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 185,
+    "table_count": 186,
     "tables": {
       "address": {
         "columns": {
@@ -2462,6 +2469,47 @@
         "foreign_keys": [],
         "name": "billed_call",
         "references": []
+      },
+      "billing_annotation": {
+        "columns": {
+          "attorney_id": "UUID",
+          "change_id": "TEXT",
+          "commit_id": "TEXT",
+          "entry_id": "UUID",
+          "id": "UUID",
+          "performed_on": "DATE",
+          "project_id": "UUID",
+          "review_note": "TEXT",
+          "reviewed_at": "TIMESTAMPTZ",
+          "reviewed_by": "UUID",
+          "staged_at": "TIMESTAMPTZ",
+          "tenths": "INTEGER"
+        },
+        "foreign_keys": [
+          [
+            "attorney_id",
+            "person"
+          ],
+          [
+            "entry_id",
+            "time_entry"
+          ],
+          [
+            "project_id",
+            "project"
+          ],
+          [
+            "reviewed_by",
+            "person"
+          ]
+        ],
+        "name": "billing_annotation",
+        "references": [
+          "person",
+          "person_project_role",
+          "project",
+          "time_entry"
+        ]
       },
       "blog_video": {
         "columns": {
@@ -4348,6 +4396,7 @@
           "stripe_invoice_id": "TEXT",
           "stripe_iolta": "BOOLEAN",
           "total_cents": "BIGINT",
+          "trust_state": "TEXT",
           "updated_at": "TIMESTAMPTZ",
           "xero_contact_id": "TEXT",
           "xero_invoice_id": "TEXT"

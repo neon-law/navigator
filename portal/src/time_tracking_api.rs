@@ -276,6 +276,30 @@ pub(crate) async fn list_entries(
     }
 }
 
+/// Stage the authenticated timekeeper's attestation. Review supplies the invoice wording.
+pub(crate) async fn stage_annotation(
+    State(state): State<ApiState>,
+    LawyerSession(session): LawyerSession,
+    Path(project_id): Path<Uuid>,
+    Json(input): Json<store::billing_annotations::Annotation>,
+) -> Result<Response, ApiError> {
+    if session.viewing_as_dri.is_some() {
+        return Err(ApiError::Forbidden);
+    }
+    let actor = session.person_id.ok_or(ApiError::Forbidden)?;
+    ensure_firm_side(&state, Some(actor), session.role, project_id).await?;
+    let pg = match prepared_store(&state.surreal, "stage_annotation", project_id).await {
+        Ok(pg) => pg,
+        Err(response) => return Ok(response),
+    };
+    Ok(
+        match store::billing_annotations::stage(&pg, project_id, actor, &input).await {
+            Ok(()) => StatusCode::NO_CONTENT.into_response(),
+            Err(e) => entry_error(&e, "stage_annotation", project_id, None),
+        },
+    )
+}
+
 /// `POST /app/api/projects/{id}/time-entries` — log time by hand. The rate is
 /// never taken from the wire: it is resolved from the attorney's fee
 /// structure for the performed date and frozen onto the row.

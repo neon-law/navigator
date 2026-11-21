@@ -141,6 +141,20 @@ erDiagram
         int tenths
         datetime updated_at
     }
+    billing_annotation {
+        uuid attorney_id
+        string change_id
+        string commit_id
+        uuid entry_id
+        uuid id
+        datetime performed_on
+        uuid project_id
+        string review_note
+        datetime reviewed_at
+        uuid reviewed_by
+        datetime staged_at
+        int tenths
+    }
     blog_video {
         string brand_key
         int height
@@ -1105,6 +1119,7 @@ erDiagram
         string stripe_invoice_id
         boolean stripe_iolta
         int total_cents
+        string trust_state
         datetime updated_at
         string xero_contact_id
         string xero_invoice_id
@@ -2225,6 +2240,10 @@ erDiagram
     person }o--|| attorney_rate : references
     project }o--|| attorney_rate : references
     asset }o--|| authority : references
+    person }o--|| billing_annotation : references
+    person_project_role }o--|| billing_annotation : references
+    project }o--|| billing_annotation : references
+    time_entry }o--|| billing_annotation : references
     brand }o--|| blog_video : references
     firm }o--|| brand : references
     asset }o--|| communication : references

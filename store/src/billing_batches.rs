@@ -32,6 +32,18 @@ pub enum BillingBatchError {
     Database(#[from] sqlx::Error),
 }
 
+/// A conventional contingency agreement reserves fees for recovery. Current invoices may
+/// itemize eligible costs. A signed hybrid term can additionally permit hourly billing.
+pub async fn costs_only(
+    pg: &PostgresDb,
+    project: Uuid,
+    on: chrono::NaiveDate,
+) -> Result<bool, BillingBatchError> {
+    Ok(sqlx::query_scalar::<_,bool>("SELECT rate_cents_per_hour IS NULL FROM contingency_term
+        WHERE project_id=$1 AND effective_on<=$2 ORDER BY effective_on DESC, inserted_at DESC, id DESC LIMIT 1")
+        .bind(project).bind(on).fetch_optional(&pg.0).await?.unwrap_or(false))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MatterBillingBatch {
     pub id: Uuid,
@@ -46,6 +58,7 @@ pub struct MatterBillingBatch {
     pub xero_contact_id: Option<String>,
     pub stripe_account_id: Option<String>,
     pub stripe_iolta: bool,
+    pub trust_state: Option<String>,
     pub stripe_invoice_id: Option<String>,
     /// The payment deadline frozen when the batch is created.
     pub due_date: chrono::NaiveDate,
@@ -80,6 +93,7 @@ fn from_row(row: &sqlx::postgres::PgRow) -> Result<MatterBillingBatch, sqlx::Err
         xero_contact_id: row.try_get("xero_contact_id")?,
         stripe_account_id: row.try_get("stripe_account_id")?,
         stripe_iolta: row.try_get("stripe_iolta")?,
+        trust_state: row.try_get("trust_state")?,
         stripe_invoice_id: row.try_get("stripe_invoice_id")?,
         due_date: row.try_get("due_date")?,
         first_attempted_at: row.try_get("first_attempted_at")?,
@@ -120,8 +134,8 @@ async fn insert_in_tx(
     batch: &MatterBillingBatch,
 ) -> Result<MatterBillingBatch, BillingBatchError> {
     let row = sqlx::query(
-        "INSERT INTO matter_billing_batch(id,project_id,status,reference,line_items,total_cents,currency,entry_ids,cost_ids,xero_invoice_id,flat_fee_cents,actor_id,inserted_at,updated_at,contact_name,contact_email,first_attempted_at,xero_contact_id,due_date,stripe_account_id,stripe_iolta,stripe_invoice_id) \
-         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22) RETURNING *",
+        "INSERT INTO matter_billing_batch(id,project_id,status,reference,line_items,total_cents,currency,entry_ids,cost_ids,xero_invoice_id,flat_fee_cents,actor_id,inserted_at,updated_at,contact_name,contact_email,first_attempted_at,xero_contact_id,due_date,stripe_account_id,stripe_iolta,stripe_invoice_id,trust_state) \
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23) RETURNING *",
     )
     .bind(batch.id)
     .bind(batch.project_id)
@@ -145,6 +159,7 @@ async fn insert_in_tx(
     .bind(&batch.stripe_account_id)
     .bind(batch.stripe_iolta)
     .bind(&batch.stripe_invoice_id)
+    .bind(&batch.trust_state)
     .fetch_one(&mut **tx)
     .await
     .map_err(|error| {
