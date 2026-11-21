@@ -1473,19 +1473,19 @@ pub enum ProjectsCmd {
         #[command(subcommand)]
         action: projects::pages_init::PagesCmd,
     },
-    /// Complete an existing Project's Drive, GitHub, Slack, Notion, and shared
-    /// Google Calendar setup. A closed Project's calendar is made read-only.
+    /// Complete a Project's workspace and integrations.
     ///
-    /// Each resource is attempted through the logged-in deployment's existing
-    /// authenticated door and reported separately. A failed resource is safe
-    /// to retry; already-recorded provider identities are never replaced.
+    /// Single-Project setup verifies source history, branch protection, any
+    /// required mirror, and the local Jujutsu checkout. All-mode setup
+    /// reconciles integration resources. A closed Project's calendar is
+    /// made read-only. Failed resources are reported and safe to retry.
     Setup {
         /// Project code. Defaults to `navigator.yaml`'s `project.name` when
         /// run from a Project repository root; required otherwise, unless
         /// `--all` is supplied.
         #[arg(conflicts_with = "all")]
         project_code: Option<String>,
-        /// Complete every Project visible to this login.
+        /// Reconcile integrations for every visible Project.
         #[arg(long)]
         all: bool,
         /// Emit one JSON result per Project and resource.
@@ -1494,7 +1494,7 @@ pub enum ProjectsCmd {
         #[command(flatten)]
         host: HostOpt,
     },
-    /// Save an unsent Gmail invitation for the participating Legal Plan member.
+    /// Prepare an unsent portal invitation for a Legal Plan member.
     Invite {
         /// Project code.
         project_code: String,
