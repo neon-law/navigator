@@ -10818,7 +10818,7 @@ const LIVE_HOME_CONTRACTS: &[(views::brand::BrandKey, LiveHomeContract)] = &[
         views::brand::BrandKey::Neon,
         LiveHomeContract {
             title: "<title>Neon Law | Home</title>",
-            copy: "Legal work, with the lawyer in control.",
+            copy: "Exacting Agentic Lawyering",
         },
     ),
     (
@@ -11193,7 +11193,7 @@ async fn the_delete_your_data_host_renders_its_own_home_catalog() {
     assert_eq!(neon_resp.status(), StatusCode::OK);
     let neon_body = body_string(neon_resp).await;
     assert!(
-        neon_body.contains("Legal work, with the lawyer in control."),
+        neon_body.contains("Exacting Agentic Lawyering"),
         "{neon_body}"
     );
     assert!(
@@ -11227,7 +11227,7 @@ async fn the_delete_your_data_host_renders_its_own_home_catalog() {
         "{delete_your_data_body}"
     );
     assert!(
-        !delete_your_data_body.contains("Legal work, with the lawyer in control."),
+        !delete_your_data_body.contains("Exacting Agentic Lawyering"),
         "{delete_your_data_body}"
     );
     assert!(!delete_your_data_body.contains("data-enrollment-intake"));

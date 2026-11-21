@@ -40,7 +40,7 @@ Feature: Public routing on the firm's own host
 
     Examples:
       | host                           | brand                    | title                                      | copy                                  |
-      | staging.neonlaw.com            | Neon Law                 | Neon Law \| Home                           | Legal work, with the lawyer in control. |
+      | staging.neonlaw.com            | Neon Law                 | Neon Law \| Home                           | Exacting Agentic Lawyering |
       | staging.deleteyourdata.com     | DeleteYourData.com       | DeleteYourData.com \| Home                  | Your Life. Less Exposed.               |
       | staging.vestaestateplanning.com | Vesta Estate Planning    | Vesta Estate Planning \| Home    | Your life is part of a larger story.   |
       | staging.misericordialaw.com     | Misericordia Injury Law  | Misericordia Injury Law \| Home  | You were hurt. We are here to listen.  |

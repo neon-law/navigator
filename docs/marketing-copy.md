@@ -289,7 +289,7 @@ and link nowhere until the apps are published. Its CTA opens a three-step public
 signed-in page exposes the configured enrollment booking link. Legal work begins under a written engagement with Lex
 Tecnica, Ltd. Neon's `/same-day-legal` and retired `/nautilus` paths answer a 301 to the Same Day Legal host.
 
-Neon’s home at `/` presents Navigator under “Legal work, with the lawyer in control.” It explains Projects, Notations,
+Neon’s home at `/` presents Navigator with the heading **Exacting Agentic Lawyering**. It explains Projects, Notations,
 and Lawyer Review and links to the Navigator page, Notation library, and Legal Aid.
 
 The header links to Navigator at `/navigator` , Notations at `/notations` , and Legal Aid at `/legal-aid` . Hosted

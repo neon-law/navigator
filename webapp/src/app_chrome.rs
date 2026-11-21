@@ -91,7 +91,6 @@ pub fn app_destinations(role: ViewerRole) -> Vec<AppNavLink> {
             crate::brand_blog_posts::APP_PATH,
         ));
     }
-    destinations.push(AppNavLink::new("Purchases", "/purchases"));
     destinations.push(AppNavLink::new("Profile", APP_PROFILE_HREF));
     destinations.push(AppNavLink::new("Sign out", APP_SIGN_OUT_HREF));
     destinations
@@ -100,10 +99,8 @@ pub fn app_destinations(role: ViewerRole) -> Vec<AppNavLink> {
 /// The `/` palette's destinations for a viewer of `role`, in render order.
 ///
 /// The navbar's own list, minus Sign out — leaving is an act, not a search
-/// result — plus the admin clause library, which the navbar row deliberately
-/// omits but an admin reaches from here. Nothing else is added: a client sees
-/// destinations their role's navbar already shows, so the palette never
-/// advertises a door that answers 403.
+/// result — plus Purchases and the admin clause library, which the navbar row
+/// deliberately omits. A client sees only doors their role may open.
 ///
 /// Pure, so the role→palette mapping is unit-tested directly rather than
 /// through rendered pages.
@@ -113,6 +110,10 @@ pub fn palette_destinations(role: ViewerRole) -> Vec<AppNavLink> {
         .into_iter()
         .filter(|link| link.href != APP_SIGN_OUT_HREF)
         .collect();
+    destinations.insert(
+        destinations.len() - 1,
+        AppNavLink::new("Purchases", "/purchases"),
+    );
     if role.is_admin_tier() {
         // The tier-gated rows sit before the personal ones, as the navbar's
         // own order does — Clauses joins Content, not the rows after Profile.
@@ -414,18 +415,11 @@ mod tests {
     fn a_client_is_offered_no_firm_workspace() {
         assert_eq!(
             labels(ViewerRole::Client),
-            ["Projects", "Purchases", "Profile", "Sign out"]
+            ["Projects", "Profile", "Sign out"]
         );
         assert_eq!(
             labels(ViewerRole::Clerk),
-            [
-                "Projects",
-                "Team",
-                "Inbox",
-                "Purchases",
-                "Profile",
-                "Sign out"
-            ]
+            ["Projects", "Team", "Inbox", "Profile", "Sign out"]
         );
     }
 
@@ -437,42 +431,18 @@ mod tests {
         for role in [ViewerRole::Clerk, ViewerRole::Lawyer] {
             assert_eq!(
                 labels(role),
-                [
-                    "Projects",
-                    "Team",
-                    "Inbox",
-                    "Purchases",
-                    "Profile",
-                    "Sign out"
-                ],
+                ["Projects", "Team", "Inbox", "Profile", "Sign out"],
                 "rank {}",
                 role.authority_rank()
             );
         }
         assert_eq!(
             labels(ViewerRole::Admin),
-            [
-                "Projects",
-                "Team",
-                "Inbox",
-                "Content",
-                "Purchases",
-                "Profile",
-                "Sign out"
-            ]
+            ["Projects", "Team", "Inbox", "Content", "Profile", "Sign out"]
         );
         assert_eq!(
             labels(ViewerRole::Owner),
-            [
-                "Projects",
-                "Team",
-                "Inbox",
-                "Firm",
-                "Content",
-                "Purchases",
-                "Profile",
-                "Sign out"
-            ]
+            ["Projects", "Team", "Inbox", "Firm", "Content", "Profile", "Sign out"]
         );
     }
 
@@ -495,7 +465,6 @@ mod tests {
                 "/app/inbox",
                 "/app/owner",
                 "/app/admin/blog",
-                "/purchases",
                 "/app/profile",
                 "/auth/logout"
             ]
@@ -604,12 +573,10 @@ mod tests {
         }
     }
 
-    /// The palette carries the navbar's destinations minus Sign out — leaving
-    /// is an act, not a search result — and, for the admin tier, the clause
-    /// library the row deliberately omits. Owner's list shows the full shape:
-    /// the row order preserved, Firm and Content from the navbar, Clauses last.
+    /// The palette carries the navbar's destinations minus Sign out, plus
+    /// Purchases and, for the admin tier, the clause library.
     #[test]
-    fn the_palette_lists_the_navbar_minus_sign_out() {
+    fn the_palette_adds_purchases_and_admin_clauses() {
         let hrefs = |role: ViewerRole| -> Vec<String> {
             palette_destinations(role)
                 .into_iter()
@@ -643,8 +610,8 @@ mod tests {
         );
     }
 
-    /// A client's palette is what their own navbar already shows, minus Sign
-    /// out: Projects, Purchases, and Profile. Never a firm home,
+    /// A client's palette adds Purchases to their navbar, minus Sign out.
+    /// Never a firm home,
     /// the inbox, or an admin door — the palette must not advertise a 403.
     #[test]
     fn a_client_palette_lists_no_firm_or_admin_destination() {

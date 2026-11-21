@@ -2780,7 +2780,7 @@ mod tests {
     #[test]
     fn neon_home_presents_navigator_as_software() {
         let content = neon_home(&views::brand::DEFAULT_BRANDING, None);
-        assert_eq!(content.tagline, "Legal work, with the lawyer in control.");
+        assert_eq!(content.tagline, "Exacting Agentic Lawyering");
         assert!(content.hero_cta.is_none(), "the platform page is retired");
         let kinds: Vec<&str> = content
             .bands

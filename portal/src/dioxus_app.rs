@@ -1026,11 +1026,9 @@ async fn inject_csrf_token(mut req: Request, next: Next) -> Response {
 }
 
 /// Build a public page's auth-aware header utility links, matching the
-/// navbar's auth block (`views::layout`): for a signed-in viewer, Portal plus
-/// the role-gated Clerk / Lawyer / Admin workspace links and Sign out; for an
-/// anonymous visitor, Sign in. Labels are resolved in `locale` (the app-route
-/// hrefs — `/app/projects`, `/auth/login` — are not localized). Pure, so the
-/// role→links mapping is unit-tested directly.
+/// navbar's auth block (`views::layout`): for a signed-in viewer, Projects and
+/// Sign out; for an anonymous visitor, Sign in. Pure, so the role→links mapping
+/// is unit-tested directly.
 ///
 /// Sign in is offered on every property, not just the firm's own host: every
 /// property signs into the one Navigator portal, so a visitor who lands on a
@@ -1045,11 +1043,8 @@ pub(crate) fn public_utility_links(
     if session.is_none() {
         return vec![link("Sign in", "/auth/login")];
     }
-    // Matter work and personal purchase management remain reachable at every
-    // tier, so a role change never hides the cancellation door.
     vec![
         link("Projects", "/app/projects"),
-        link("Purchases", "/purchases"),
         link("Sign out", "/auth/logout"),
     ]
 }
@@ -5833,7 +5828,7 @@ mod tests {
     }
 
     /// Public utility links match the navbar: anonymous → Sign in;
-    /// signed-in → Projects, Purchases, and Sign out at every tier.
+    /// signed-in → Projects and Sign out at every tier.
     #[test]
     fn public_utility_links_match_the_navigation_auth_block() {
         use crate::session::SessionData;
@@ -5847,8 +5842,7 @@ mod tests {
         // into the same portal the firm does.
         assert_eq!(hrefs(public_utility_links(None)), ["/auth/login"]);
 
-        // Role-specific work stays behind route authorization; personal
-        // purchases and cancellation remain reachable at every tier.
+        // Role-specific work stays behind route authorization.
         let session = |role| SessionData::fresh("viewer", role);
         for role in [
             Role::Client,
@@ -5859,14 +5853,21 @@ mod tests {
         ] {
             assert_eq!(
                 hrefs(public_utility_links(Some(&session(role)))),
-                ["/app/projects", "/purchases", "/auth/logout"],
+                ["/app/projects", "/auth/logout"],
                 "{role:?} gets the one matter surface"
             );
         }
 
-        // The visible label comes from the catalog, not a hard-coded string.
+        // The visible labels match the reduced header.
         let anon = public_utility_links(None);
         assert_eq!(anon[0].label, "Sign in");
+        assert_eq!(
+            public_utility_links(Some(&session(Role::Client)))
+                .into_iter()
+                .map(|link| link.label)
+                .collect::<Vec<_>>(),
+            ["Projects", "Sign out"]
+        );
     }
 
     /// The stamp rewrites the opening `<html>` tag whatever the SSR shell was:
