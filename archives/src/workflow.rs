@@ -1181,6 +1181,63 @@ mod tests {
     }
 
     #[test]
+    fn native_write_only_configuration_needs_no_retired_selector_and_keeps_postgres_only() {
+        const CHILD: &str = "NAVIGATOR_TEST_ARCHIVE_NATIVE_CONFIG_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            assert!(std::env::var_os(DBOS_ENABLED_ENV).is_none());
+            let request = RunRequest::configured(None);
+            let source = std::env::var("NAVIGATOR_ARCHIVE_SOURCE").ok();
+            if source.as_deref().is_none_or(|source| source == "postgres") {
+                let input =
+                    request.expect("native write-only input must not require a retired selector");
+                let write_only = input
+                    .write_only
+                    .expect("explicit mounted configuration is selected");
+                assert_eq!(
+                    write_only.config_sha256,
+                    write_only.config.digest().unwrap()
+                );
+                assert!(write_only.reuse_local.is_none());
+            } else {
+                assert!(
+                    request.is_err(),
+                    "write-only requests must remain PostgreSQL-only"
+                );
+            }
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("archive-config.json");
+        let config = crate::write_only::operations::Config {
+            format_version: 1,
+            local_root: root.path().canonicalize().unwrap(),
+            source_project_number: None,
+            source_identity_sha256: "a".repeat(64),
+            capture: crate::write_only::operations::CaptureScope::RegisteredNavigator,
+            destinations: Vec::new(),
+        };
+        std::fs::write(&path, serde_json::to_vec(&config).unwrap()).unwrap();
+        for source in [None, Some("postgres"), Some("all"), Some("surreal")] {
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+            child.args([
+                "--exact",
+                "workflow::tests::native_write_only_configuration_needs_no_retired_selector_and_keeps_postgres_only",
+                "--test-threads=1",
+            ]).env_clear()
+                .env(CHILD, "1")
+                .env("NAVIGATOR_ARCHIVE_WRITE_ONLY_CONFIG", &path)
+                .env("NAVIGATOR_FORBID_SURREAL", "1");
+            if let Some(source) = source {
+                child.env("NAVIGATOR_ARCHIVE_SOURCE", source);
+            }
+            assert!(
+                child.status().unwrap().success(),
+                "isolated native configuration boundary failed"
+            );
+        }
+    }
+
+    #[test]
     fn existing_requests_and_journaled_summaries_still_decode() {
         let request: RunRequest = serde_json::from_str("{}").unwrap();
         assert!(request.scheduled_for.is_none());
@@ -1867,10 +1924,6 @@ impl RunRequest {
     fn configured_inner(scheduled_for: Option<DateTime<Utc>>) -> anyhow::Result<Self> {
         let write_only = match std::env::var("NAVIGATOR_ARCHIVE_WRITE_ONLY_CONFIG") {
             Ok(path) => {
-                anyhow::ensure!(
-                    dbos_enabled(|key| std::env::var(key).ok()).map_err(anyhow::Error::msg)?,
-                    "write-only archive scheduling requires selected DBOS"
-                );
                 anyhow::ensure!(
                     matches!(
                         std::env::var("NAVIGATOR_ARCHIVE_SOURCE").as_deref(),
