@@ -3909,18 +3909,6 @@ a.nav-link:hover {
   padding: 0;
 }
 
-/* Overview's jump menu: one wrapping row of in-page links above the first
- * section. */
-.lawyer-detail__jump {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.25rem 1rem;
-  margin: 0 0 1rem;
-  padding-bottom: 0.75rem;
-  border-bottom: 1px solid var(--nav-color-border);
-  font-size: 0.9rem;
-}
-
 /* The summary strip's fact values — a count or a due date reads at a glance,
  * so the value carries the tile and the title stays small above it. */
 .lawyer-detail__fact-value {
@@ -4813,23 +4801,39 @@ a.lawyer-detail__fact-value:focus-visible {
   font: 500 0.42em/1 var(--nav-font-mono, monospace);
 }
 
-.lawyer-detail__actions {
-  align-items: center;
+.project-toolbar {
+  flex-wrap: nowrap;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 0.25rem;
 }
 
-.lawyer-detail__resource-action {
-  width: 2.8rem;
-  height: 2.8rem;
-  min-width: 2.8rem;
-  padding: 0.65rem;
+.project-toolbar .nav-btn {
+  flex: none;
+  box-sizing: border-box;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  min-width: 2.8rem;
+  height: 2.8rem;
+  padding: 0.65rem;
+  white-space: nowrap;
 }
 
-.lawyer-detail__resource-action .project-resources__mark {
+.project-toolbar .project-resources__mark {
   width: 1.3rem;
   height: 1.3rem;
+}
+
+.nav-theme .project-toolbar a[aria-current="page"] {
+  background: var(--nav-color-primary);
+  color: var(--nav-color-on-primary);
+  border-color: var(--nav-color-primary);
+}
+
+.project-toolbar .nav-btn:is(:hover, :focus-visible) {
+  border-color: var(--nav-color-primary);
 }
 
 .lawyer-detail__resource-action-form {

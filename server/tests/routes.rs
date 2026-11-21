@@ -9546,7 +9546,7 @@ async fn lawyer_projects_list_defaults_to_pitch_and_active_and_filters_by_status
 
 /// The list carries code, name, Brand, and status only; the matter's show
 /// page carries when it was opened and its last commit, labelled in UTC. The
-/// last commit degrades to an em dash when no GitHub forge is configured (the
+/// last commit is omitted when no GitHub forge is configured (the
 /// case in every test process).
 #[tokio::test]
 async fn lawyer_project_show_page_carries_opened_and_last_commit_in_utc() {
@@ -9577,9 +9577,9 @@ async fn lawyer_project_show_page_carries_opened_and_last_commit_in_utc() {
     let show = get(format!("/app/projects/{code}")).await.unwrap();
     assert_eq!(show.status(), StatusCode::OK);
     let body = body_string(show).await;
-    assert!(body.contains("Opened: <time datetime="), "{body}");
+    assert!(body.contains("Opened <time datetime="), "{body}");
     assert!(body.contains(" UTC<!--#--></time>"), "{body}");
-    assert!(body.contains("Last commit: <!--node-id"), "{body}");
+    assert!(!body.contains("Last commit"), "{body}");
 }
 
 /// Every Project already carries a required `brand` (ENG-587); the lawyer
@@ -13110,14 +13110,23 @@ async fn every_firm_tier_can_view_an_assigned_matter_as_its_client() {
             "{role:?}: {detail_body}"
         );
         if role.is_lawyer_tier() {
-            assert!(
-                detail_body.contains(&format!("/app/admin/entities/{entity_id}/edit")),
-                "{role:?}: {detail_body}"
-            );
-            assert!(
-                detail_body.contains("Edit entity"),
-                "{role:?}: {detail_body}"
-            );
+            let edit_path = format!("/app/projects/{}/edit", project.code);
+            assert!(detail_body.contains(&edit_path), "{role:?}: {detail_body}");
+            let edit = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(edit_path)
+                        .header(header::COOKIE, &cookie)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(edit.status(), StatusCode::OK);
+            assert!(body_string(edit)
+                .await
+                .contains(&format!("/app/admin/entities/{entity_id}/edit")));
         }
 
         let preview = app
@@ -18560,7 +18569,7 @@ async fn lawyer_project_notation_board_lists_started_and_never_started_templates
     let response = app
         .oneshot(
             Request::builder()
-                .uri(format!("/app/projects/{project_code}"))
+                .uri(format!("/app/projects/{project_code}/documents"))
                 .header("cookie", cookie)
                 .body(Body::empty())
                 .unwrap(),
@@ -18783,7 +18792,9 @@ async fn project_detail_page_renders_an_empty_matter_calendar() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri(format!("/app/projects/{project_code}?sort=event&dir=asc"))
+                .uri(format!(
+                    "/app/projects/{project_code}/deadlines?sort=event&dir=asc"
+                ))
                 .header("cookie", &cookie)
                 .body(Body::empty())
                 .unwrap(),
@@ -18807,13 +18818,13 @@ async fn project_detail_page_renders_an_empty_matter_calendar() {
     assert!(calendar.contains("Event (asc)"), "{calendar}");
     assert!(
         calendar.contains(&format!(
-            "/app/projects/{project_code}?sort=event&#38;dir=desc"
+            "/app/projects/{project_code}/deadlines?sort=event&#38;dir=desc"
         )),
         "{calendar}"
     );
     assert!(
         calendar.contains(&format!(
-            "/app/projects/{project_code}?sort=date&#38;dir=asc"
+            "/app/projects/{project_code}/deadlines?sort=date&#38;dir=asc"
         )),
         "{calendar}"
     );
@@ -18869,7 +18880,7 @@ async fn project_calendar_renders_an_appearance_only_for_a_participant() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/app/projects/{project_code}"))
+                .uri(format!("/app/projects/{project_code}/deadlines"))
                 .header("cookie", &cookie)
                 .body(Body::empty())
                 .unwrap(),
@@ -18901,7 +18912,7 @@ async fn project_calendar_renders_an_appearance_only_for_a_participant() {
     let denied = app
         .oneshot(
             Request::builder()
-                .uri(format!("/app/projects/{project_code}"))
+                .uri(format!("/app/projects/{project_code}/deadlines"))
                 .header("cookie", &outsider_cookie)
                 .body(Body::empty())
                 .unwrap(),
@@ -18933,7 +18944,7 @@ async fn project_detail_calendar_falls_back_to_its_leftmost_column() {
         .oneshot(
             Request::builder()
                 .uri(format!(
-                    "/app/projects/{project_code}?sort=project&dir=sideways"
+                    "/app/projects/{project_code}/deadlines?sort=project&dir=sideways"
                 ))
                 .header("cookie", &cookie)
                 .body(Body::empty())
@@ -18948,7 +18959,7 @@ async fn project_detail_calendar_falls_back_to_its_leftmost_column() {
     assert!(calendar.contains("Date (asc)"), "{calendar}");
     assert!(
         calendar.contains(&format!(
-            "/app/projects/{project_code}?sort=date&#38;dir=desc"
+            "/app/projects/{project_code}/deadlines?sort=date&#38;dir=desc"
         )),
         "{calendar}"
     );

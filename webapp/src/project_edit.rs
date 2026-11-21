@@ -569,6 +569,9 @@ fn edit_body(view: &ProjectEditView) -> Element {
             csrf_token: Some(view.csrf_token.clone()),
             fields,
             extra_fields: Some(rsx! {
+                if let Some(id) = &view.entity_id {
+                    a { class: "nav-link", href: "/app/admin/entities/{id}/edit", "Edit linked entity" }
+                }
                 {slack_card}
                 {notion_card}
                 {drive_card(&view.drive_folder_id)}

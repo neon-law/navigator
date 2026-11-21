@@ -124,7 +124,7 @@ async fn matter_page(f: &Fixture) -> String {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/app/projects/{}", f.code))
+                .uri(format!("/app/projects/{}/deadlines", f.code))
                 .header("cookie", &f.lawyer_cookie)
                 .body(Body::empty())
                 .unwrap(),

@@ -494,7 +494,7 @@ mod tests {
                 updated_at: "2026-11-17T00:00:00Z".into(),
                 sources: vec![(
                     "Deadline".into(),
-                    "/app/projects/synthetic#deadline-example".into(),
+                    "/app/projects/synthetic/deadlines#deadline-example".into(),
                 )],
                 ..Default::default()
             },
@@ -510,7 +510,7 @@ mod tests {
         });
         assert!(html.contains("Ready to retry"));
         assert!(html.contains("Confirm the Calendar ID"));
-        assert!(html.contains("/app/projects/synthetic#deadline-example"));
+        assert!(html.contains("/app/projects/synthetic/deadlines#deadline-example"));
         let (pending, history) = html.split_once("Resolved handoffs").unwrap();
         assert!(!pending.contains("Completed synthetic review"));
         assert!(history.contains("Completed synthetic review"));

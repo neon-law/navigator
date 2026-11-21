@@ -146,7 +146,7 @@ fn DeadlineRow(entry: Entry) -> Element {
     rsx! {
         li {
             "{due} · "
-            a { href: "/app/projects/{entry.project_code}#deadline-{entry.id}", "{entry.title}" }
+            a { href: "/app/projects/{entry.project_code}/deadlines#deadline-{entry.id}", "{entry.title}" }
             " · "
             a { href: "/app/projects/{entry.project_code}", "{entry.project_name}" }
             if !entry.authority.is_empty() { p { "{entry.authority}" } }
@@ -191,7 +191,7 @@ mod tests {
             .collect();
         assert!(order.windows(2).all(|pair| pair[0] < pair[1]));
         for expected in [
-            "href=\"/app/projects/synthetic-matter#deadline-a\"",
+            "href=\"/app/projects/synthetic-matter/deadlines#deadline-a\"",
             "Synthetic scheduling order",
             "Moves to May 6 if the order is entered.",
         ] {

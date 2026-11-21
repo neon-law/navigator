@@ -39,7 +39,7 @@ use crate::lawyer_project_participation::{
 use crate::lawyer_project_testimonial::{admin_testimonial_card, AdminTestimonialView};
 use crate::people::ViewerRole;
 use crate::project_billing::{BillingTab, GenerateInvoiceView, MatterTimer, TimeEntryRow};
-use crate::project_stages::{MatterStageView, StageChip, StageSection};
+use crate::project_stages::{MatterStageView, StageSection};
 use crate::project_tasks::{AssigneeChoice, TaskRow, TasksTab};
 
 #[cfg(feature = "server")]
@@ -74,10 +74,6 @@ pub use crate::sections::page::MatterTab;
 /// render from the projections the server fn derives through
 /// `store::matter_financials`.
 fn matter_fact_grid(view: &LawyerDetailView) -> Element {
-    let next_due = view.deadlines.first().map(|row| row.due.clone());
-    let deadline_count = view.deadlines.len();
-    let document_count = view.documents.len();
-    let people_count = view.participations.len();
     let open_tasks = view.tasks.iter().filter(|row| row.state != "done").count();
     let overdue_tasks = view
         .tasks
@@ -88,10 +84,7 @@ fn matter_fact_grid(view: &LawyerDetailView) -> Element {
     let wip = view.wip.clone();
     let outstanding = view.outstanding.clone();
     let unread_inbox = view.unread_inbox;
-    let has_facts = deadline_count > 0
-        || document_count > 0
-        || people_count > 0
-        || open_tasks > 0
+    let has_facts = open_tasks > 0
         || unread_inbox > 0
         || view.trust.any
         || wip.is_some()
@@ -126,26 +119,6 @@ fn matter_fact_grid(view: &LawyerDetailView) -> Element {
                         }
                     }
                 }
-                if deadline_count > 0 {
-                    FactCard { title: "Open deadlines".to_string(),
-                        span { class: "lawyer-detail__fact-value", "{deadline_count}" }
-                    }
-                }
-                if let Some(due) = next_due {
-                    FactCard { title: "Next deadline".to_string(),
-                        span { class: "lawyer-detail__fact-value", "{due}" }
-                    }
-                }
-                if document_count > 0 {
-                    FactCard { title: "Documents".to_string(),
-                        span { class: "lawyer-detail__fact-value", "{document_count}" }
-                    }
-                }
-                if people_count > 0 {
-                    FactCard { title: "Project people".to_string(),
-                        span { class: "lawyer-detail__fact-value", "{people_count}" }
-                    }
-                }
                 if view.trust.any {
                     FactCard { title: "Trust held".to_string(),
                         span { class: "lawyer-detail__fact-value", "{trust_held}" }
@@ -162,6 +135,28 @@ fn matter_fact_grid(view: &LawyerDetailView) -> Element {
                     }
                 }
             }
+        }
+    }
+}
+
+fn project_page_link(tab: &crate::sections::page::PageTab, current: &str) -> Element {
+    use crate::components::resource_mark::{
+        BillingGlyph, DeadlinesGlyph, OnboardingGlyph, OverviewGlyph, PageGlyph,
+    };
+    let icon_class = "project-resources__mark".to_string();
+    let icon = match MatterTab::from_path(&tab.href) {
+        Some(MatterTab::Overview) => rsx! { OverviewGlyph { class: icon_class } },
+        Some(MatterTab::Onboarding) => rsx! { OnboardingGlyph { class: icon_class } },
+        Some(MatterTab::Deadlines) => rsx! { DeadlinesGlyph { class: icon_class } },
+        Some(MatterTab::Billing) => rsx! { BillingGlyph { class: icon_class } },
+        _ => rsx! { PageGlyph { class: icon_class } },
+    };
+    rsx! {
+        a {
+            href: "{tab.href}", title: "{tab.label}", aria_label: "{tab.label}",
+            aria_current: (tab.href == current).then_some("page"),
+            class: "nav-btn nav-btn--secondary project-toolbar__page",
+            {icon}
         }
     }
 }
@@ -183,7 +178,6 @@ pub struct LawyerDetailView {
     /// (`store::projects::Project::brand`) — `"neon"` or
     /// `"delete-your-data"` today.
     pub brand: String,
-    pub entity_id: Option<String>,
     pub entity_name: Option<String>,
     /// `store::projects::Project::inserted_at` (RFC 3339): when the matter
     /// was opened.
@@ -262,6 +256,8 @@ pub struct LawyerDetailView {
     /// The matter calendar's active sort, read from `?sort=`/`?dir=` and
     /// normalised to the advertised columns.
     pub calendar_sort: String,
+    #[serde(default)]
+    pub calendar_expanded: bool,
     pub calendar_dir: String,
     /// The matter timeline: docket entries and open deadlines, in date order.
     #[serde(default)]
@@ -273,7 +269,7 @@ pub struct LawyerDetailView {
     #[serde(default)]
     pub past_deadlines: Vec<crate::project_deadlines::DeadlineRow>,
     /// The matter's firm-internal notes (the `note` channel), oldest first —
-    /// rendered as a section on the Overview tab.
+    /// rendered with the Communications log.
     #[serde(default)]
     pub notes: Vec<CommunicationRow>,
     /// Every logged email, text, and call on this matter, oldest first — the
@@ -548,7 +544,6 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
     let entity = store::entities::find_by_id(&surreal, project.entity_id)
         .await
         .map_err(server_error)?;
-    let entity_id = entity.as_ref().map(|entity| entity.id.to_string());
     let entity_name = entity.map(|entity| entity.name);
     let (repository_url, last_committed_at) = project_source(&surreal, &project).await;
     let onboarding_status = store::projects::onboarding_status(&surreal, id)
@@ -630,7 +625,7 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
     // other read here. A zero projection is left out like any other fact the
     // matter does not have. The same handle feeds the task store below.
     let pg = dashboard_postgres().await.map_err(server_error)?;
-    let financials = match pg.as_ref() {
+    let financials = match pg.as_ref().filter(|_| active_tab == MatterTab::Overview) {
         Some(pg) => Some(
             store::matter_financials::for_project(&surreal, pg, id)
                 .await
@@ -655,19 +650,22 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         None => Vec::new(),
     };
 
-    let pending_handoffs =
+    let pending_handoffs = if active_tab == MatterTab::Tasks {
         store::task_handoffs::for_project(pg.as_ref(), viewer, id, &project.code, true)
             .await
             .map_err(server_error)?
             .into_iter()
             .map(crate::project_tasks::HandoffRow::from)
-            .collect();
+            .collect()
+    } else {
+        Vec::new()
+    };
 
     // The stage surface's read — where the matter sits in the Firm's
     // workflow. Same absence rule as the task rows: a deployment without
     // PostgreSQL renders the workbench without a stage; a read failure
     // inside a configured deployment is a 500.
-    let stage = match pg.as_ref() {
+    let stage = match pg.as_ref().filter(|_| active_tab == MatterTab::Overview) {
         Some(pg) => crate::project_stages::read_stage(&surreal, pg, &project).await?,
         None => MatterStageView::default(),
     };
@@ -709,7 +707,7 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         }
         _ => None,
     };
-    let invoice_generate = match pg.as_ref() {
+    let invoice_generate = match pg.as_ref().filter(|_| active_tab == MatterTab::Billing) {
         Some(pg) => crate::project_billing::read_generate(&surreal, pg, &project).await?,
         None => GenerateInvoiceView::default(),
     };
@@ -807,9 +805,13 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
             }
         })
         .collect();
-    let notations = project_notation_board(&surreal, &storage, id)
-        .await
-        .map_err(server_error)?;
+    let notations = if active_tab == MatterTab::Documents {
+        project_notation_board(&surreal, &storage, id)
+            .await
+            .map_err(server_error)?
+    } else {
+        Vec::new()
+    };
 
     // The participation ledger: the rows, plus the linked people in one batched
     // query so the system tier is visible without conflating it with
@@ -843,25 +845,28 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
     let deadline_groups =
         crate::project_deadlines::deadline_groups(&stored_deadlines, chrono::Utc::now(), false);
 
-    // The Overview notes section and the Communications tab read the
+    // The Communications tab reads the
     // firm-visible thread once; the projection splits notes from
     // correspondence so the render never matches channel discriminators.
-    let thread = store::communications::for_project(&surreal, id)
-        .await
-        .map_err(server_error)?;
-    let author_ids: Vec<uuid::Uuid> = thread
-        .iter()
-        .filter_map(|row| row.author_person_id)
-        .collect();
-    let authors: std::collections::HashMap<uuid::Uuid, String> =
-        store::persons::find_by_ids(&surreal, &author_ids)
+    let (notes, correspondence) = if active_tab == MatterTab::Communications {
+        let thread = store::communications::for_project(&surreal, id)
             .await
-            .map_err(server_error)?
-            .into_iter()
-            .map(|person| (person.id, person.name))
+            .map_err(server_error)?;
+        let author_ids: Vec<uuid::Uuid> = thread
+            .iter()
+            .filter_map(|row| row.author_person_id)
             .collect();
-    let (notes, correspondence) =
-        crate::lawyer_project_communications::communication_views(&thread, &authors);
+        let authors: std::collections::HashMap<uuid::Uuid, String> =
+            store::persons::find_by_ids(&surreal, &author_ids)
+                .await
+                .map_err(server_error)?
+                .into_iter()
+                .map(|person| (person.id, person.name))
+                .collect();
+        crate::lawyer_project_communications::communication_views(&thread, &authors)
+    } else {
+        (Vec::new(), Vec::new())
+    };
 
     // The summary grid's correspondence tile: unread Inbox conversations on
     // this matter, a read-only count over the Inbox's own read-state. The
@@ -889,7 +894,6 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         )
         .into(),
         brand: project.brand,
-        entity_id,
         entity_name,
         opened_at: project.inserted_at,
         last_committed_at,
@@ -933,6 +937,7 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         asset_kind_choices: asset_kind_choices(),
         upload_limits: upload_form_limits(),
         csrf_token,
+        calendar_expanded: calendar_query.sort.is_some(),
         calendar_sort,
         calendar_dir,
         calendar_events,
@@ -1031,21 +1036,9 @@ pub fn LawyerProjectDetail() -> Element {
 
     let is_admin = view.role.is_admin_tier();
     let csrf = view.csrf_token.clone();
-    // Precompute the header's optional fields — a dash for the absent ones —
-    // rather than interpolate method chains inside an rsx format string.
-    let dash = |v: &Option<String>| v.clone().unwrap_or_else(|| "—".to_string());
-    let entity_disp = dash(&view.entity_name);
-    // Each side reads as one line whatever its size, so a matter with two
-    // accountable lawyers says so in the place a reader already looks.
-    let names = |v: &[String]| {
-        if v.is_empty() {
-            "—".to_string()
-        } else {
-            v.join(", ")
-        }
-    };
-    let lawyer_dri_disp = names(&view.lawyer_dris);
-    let client_dri_disp = names(&view.client_dris);
+    let lawyer_dri_disp = view.lawyer_dris.join(", ");
+    let client_dri_disp = view.client_dris.join(", ");
+    let current_page = view.active_tab.href(&view.code);
     // Who may govern each side, mirroring `store::participation::authorize` so
     // the page renders exactly the controls the command would honour. An empty
     // lawyer set is the bootstrap case: a lawyer already on this workbench may
@@ -1068,59 +1061,33 @@ pub fn LawyerProjectDetail() -> Element {
         }
         main { id: "lawyer-project", class: "nav-theme lawyer-detail",
             header { class: "page-header",
-                crate::sections::page::MatterHeading {
-                    name: view.name.clone(),
-                    code: view.code.clone(),
-                    tabs: view.page_tabs.clone(),
-                    current: view.active_tab.href(&view.code),
+                h1 { class: "project-heading",
+                    span { "{view.name}" }
+                    span { class: "project-heading__code", "{view.code}" }
                 }
-                p { class: "nav-muted",
-                    "Status: {view.status}"
-                    StageChip { current: view.stage.current.as_ref().map(|row| row.label.clone()) }
-                    " · Brand: {brand_disp}"
-                    " · Entity: {entity_disp}"
-                    " · Lawyer DRI: {lawyer_dri_disp}"
-                    " · Client DRI: {client_dri_disp}"
-                    " · Opened: "
-                    crate::components::UtcTime { at: view.opened_at.clone() }
-                    " · Last commit: "
-                    if let Some(at) = view.last_committed_at.clone() {
-                        crate::components::UtcTime { at }
-                    } else {
-                        "—"
+                nav { class: "lawyer-detail__actions project-toolbar", "aria-label": "Project actions",
+                    for tab in &view.page_tabs {
+                        {project_page_link(tab, &current_page)}
                     }
-                    if view.missing_offboarding_letter {
-                        " "
-                        span { class: "matter-flag",
-                            title: "This closed project has no offboarding letter on file.",
-                            "no offboarding letter"
-                        }
-                    }
-                }
-                // Every action on the matter in one bar, apart from the facts
-                // above it: a reader scanning the facts never has to pick the
-                // links out of the prose.
-                nav { class: "lawyer-detail__actions", "aria-label": "Project actions",
-                    a { class: "nav-btn nav-btn--primary lawyer-detail__resource-action", href: "/app/projects/{view.code}/notations/new", title: "New notation", aria_label: "New notation",
+                    a { class: "nav-btn nav-btn--secondary lawyer-detail__resource-action", href: "/app/projects/{view.code}/notations/new", title: "New notation", aria_label: "New notation",
                         crate::components::resource_mark::ClipboardPlusGlyph { class: "project-resources__mark".to_string() }
                     }
-                    a { class: "nav-btn nav-btn--secondary lawyer-detail__resource-action", href: "/app/projects/{view.code}/edit", title: "Project settings", aria_label: "Project settings",
-                        crate::components::resource_mark::GearGlyph { class: "project-resources__mark".to_string() }
+                    a { class: "nav-btn nav-btn--secondary lawyer-detail__resource-action", href: "/app/projects/{view.code}/edit", title: "Edit project", aria_label: "Edit project",
+                        crate::components::resource_mark::PencilGlyph { class: "project-resources__mark".to_string() }
                     }
-                    for kind in [crate::project_resources::ResourceKind::PrivateSlackChannel] {
-                        if let Some(resource) = view.resources.resources.iter().find(|resource| resource.kind == kind) {
-                            a {
-                                key: "{kind.name()}",
-                                class: "nav-btn nav-btn--secondary lawyer-detail__resource-action",
-                                href: "{resource.url}",
-                                title: kind.label(),
-                                aria_label: kind.label(),
-                                target: "_blank",
-                                rel: "noopener noreferrer",
-                                crate::components::resource_mark::ResourceMarkGlyph {
-                                    mark: kind.mark(),
-                                    class: "project-resources__mark".to_string(),
-                                }
+                    for resource in &view.resources.resources {
+                        a {
+                            key: "{resource.kind.name()}",
+                            "data-resource": resource.kind.name(),
+                            class: "nav-btn nav-btn--secondary lawyer-detail__resource-action",
+                            href: "{resource.url}",
+                            title: resource.kind.label(),
+                            aria_label: resource.kind.label(),
+                            target: "_blank",
+                            rel: "noopener noreferrer",
+                            crate::components::resource_mark::ResourceMarkGlyph {
+                                mark: resource.kind.mark(),
+                                class: "project-resources__mark".to_string(),
                             }
                         }
                     }
@@ -1135,11 +1102,6 @@ pub fn LawyerProjectDetail() -> Element {
                             crate::components::resource_mark::GitRepositoryGlyph {
                                 class: "project-resources__mark".to_string(),
                             }
-                        }
-                    }
-                    if let Some(entity_id) = view.entity_id.as_ref() {
-                        a { class: "nav-btn nav-btn--secondary lawyer-detail__resource-action", href: "/app/admin/entities/{entity_id}/edit", title: "Edit entity", aria_label: "Edit entity",
-                            crate::components::resource_mark::PencilGlyph { class: "project-resources__mark".to_string() }
                         }
                     }
                     if view.role.is_lawyer_tier() {
@@ -1181,83 +1143,46 @@ pub fn LawyerProjectDetail() -> Element {
                 }
             }
 
-            if view.active_tab == MatterTab::Overview {
-                crate::project_tasks::PendingHandoffs {
-                    code: view.code.clone(),
-                    rows: view.pending_handoffs.clone(),
-                }
-            }
-            {matter_fact_grid(&view)}
-
             {
                 match view.active_tab {
                     MatterTab::Overview => rsx! {
-                        // Overview is the matter's whole narrative on one
-                        // page; the menu takes a reader straight to a part of
-                        // it. Each target is a wrapper here, so the shared
-                        // panels stay free of this page's anchors.
-                        nav { class: "lawyer-detail__jump", "aria-label": "On this page",
-                            a { class: "nav-link", href: "#stage", "Case stage" }
-                            a { class: "nav-link", href: "#resources", "Resources" }
-                            a { class: "nav-link", href: "#deadlines", "Deadlines" }
-                            a { class: "nav-link", href: "#calendar", "Calendar" }
-                            a { class: "nav-link", href: "#notations", "Notations" }
-                            a { class: "nav-link", href: "#notes", "Notes" }
-                        }
-
-                        crate::sections::page::CustomPagePanels { tabs: view.page_tabs.clone() }
-
-                        details { id: "stage", open: view.error.is_some(),
-                            summary { "Case stage" }
-                            StageSection {
-                                code: view.code.clone(),
-                                csrf: csrf.clone(),
-                                stage: view.stage.clone(),
-                                error: view.error.clone(),
+                        p { class: "nav-muted",
+                            "Status: {view.status}"
+                            if !view.lawyer_dris.is_empty() { " · Lawyer DRI: {lawyer_dri_disp}" }
+                            if !view.client_dris.is_empty() { " · Client DRI: {client_dri_disp}" }
+                            if let Some(stage) = &view.stage.current { " · {stage.label}" }
+                            if view.missing_offboarding_letter {
+                                span { class: "matter-flag", "Missing offboarding letter" }
                             }
                         }
-
-                        div { id: "resources",
-                            crate::project_resources::ProjectResourcesPanel { view: view.resources.clone() }
-                        }
-
-                        crate::project_deadlines::ProjectDeadlinesPanel {
-                            section_class: "lawyer-detail__section".to_string(),
-                            rows: view.deadlines.clone(),
-                            past: view.past_deadlines.clone(),
+                        {matter_fact_grid(&view)}
+                        crate::sections::page::CustomPagePanels { tabs: view.page_tabs.clone() }
+                        details { open: view.error.is_some(),
+                            summary { "Project details" }
+                            nav { class: "lawyer-detail__actions", aria_label: "Project records",
+                                for tab in [MatterTab::Tasks, MatterTab::Documents, MatterTab::Communications, MatterTab::Participants] {
+                                    a { href: tab.href(&view.code), "{tab.label()}" }
+                                }
+                            }
+                            p { class: "nav-muted",
+                                "{brand_disp}"
+                                if let Some(entity) = &view.entity_name { " · {entity}" }
+                                " · Opened " crate::components::UtcTime { at: view.opened_at.clone() }
+                                if let Some(at) = &view.last_committed_at {
+                                    " · Last commit " crate::components::UtcTime { at: at.clone() }
+                                }
+                            }
+                            if !view.stage.definitions.is_empty() || !view.stage.history.is_empty() {
+                                StageSection {
+                                    code: view.code.clone(), csrf: csrf.clone(),
+                                    stage: view.stage.clone(), error: view.error.clone(),
+                                }
+                            }
                         }
 
                         if is_admin && !view.client_dris.is_empty() {
                             {admin_testimonial_card(&view.code, &csrf, view.testimonial.as_ref())}
                         }
-
-                        {integrations_section(&view)}
-
-                        // The matter timeline: every docket entry on this matter's cases
-                        // joined with every open deadline, in date order. Documents,
-                        // participations, and notations stay out of it.
-                        div { id: "calendar",
-                        crate::project_calendar::ProjectCalendar {
-                            section_class: "lawyer-detail__section project-calendar".to_string(),
-                            heading: "Calendar".to_string(),
-                            empty_message: "No calendar events scheduled for this project.".to_string(),
-                            columns: crate::project_calendar::MATTER_COLUMNS.to_vec(),
-                            path: format!("/app/projects/{}", view.code),
-                            query_prefix: String::new(),
-                            sort: view.calendar_sort.clone(),
-                            dir: view.calendar_dir.clone(),
-                            events: view.calendar_events.clone(),
-                        }
-                        }
-
-                        div { id: "notations",
-                            ProjectNotationBoard { rows: view.notations.clone() }
-                        }
-
-                        // The firm's internal observations about this matter:
-                        // the note channel of the correspondence log, kept on
-                        // Overview where the matter's full narrative lives.
-                        div { id: "notes", {notes_tab(&view)} }
 
                         // Closing a matter is bespoke: it is asked for by email and opened
                         // by the lawyer DRI, never fired from a button here. Every firm
@@ -1319,8 +1244,23 @@ pub fn LawyerProjectDetail() -> Element {
                             rows: view.deadlines.clone(),
                             past: view.past_deadlines.clone(),
                         }
+                        details { id: "calendar", open: view.calendar_expanded,
+                            summary { "View calendar timeline" }
+                            crate::project_calendar::ProjectCalendar {
+                                section_class: "lawyer-detail__section project-calendar".to_string(),
+                                heading: "Calendar timeline".to_string(),
+                                empty_message: "No calendar events scheduled for this project.".to_string(),
+                                columns: crate::project_calendar::MATTER_COLUMNS.to_vec(),
+                                path: MatterTab::Deadlines.href(&view.code),
+                                query_prefix: String::new(),
+                                sort: view.calendar_sort.clone(),
+                                dir: view.calendar_dir.clone(),
+                                events: view.calendar_events.clone(),
+                            }
+                        }
                     },
                     MatterTab::Tasks => rsx! {
+                        crate::project_tasks::PendingHandoffs { code: view.code.clone(), rows: view.pending_handoffs.clone() }
                         TasksTab {
                             code: view.code.clone(),
                             csrf: csrf.clone(),
@@ -1330,8 +1270,9 @@ pub fn LawyerProjectDetail() -> Element {
                             error: view.error.clone(),
                         }
                     },
-                    MatterTab::Communications => rsx! { {communications_tab(&view)} },
+                    MatterTab::Communications => rsx! { {communications_tab(&view)} {notes_tab(&view)} },
                     MatterTab::Documents => rsx! {
+                        ProjectNotationBoard { rows: view.notations.clone() }
                         section { class: "lawyer-detail__section project-documents",
                             h2 { "Documents" }
                             {documents_table(&view)}
@@ -1392,6 +1333,7 @@ pub fn LawyerProjectDetail() -> Element {
                         }
                     },
                     MatterTab::Billing => rsx! {
+                        {integrations_section(&view)}
                         BillingTab {
                             code: view.code.clone(),
                             csrf: csrf.clone(),
@@ -1510,6 +1452,26 @@ mod tests {
     }
 
     #[test]
+    fn only_the_open_page_is_marked_current_in_the_toolbar() {
+        let current = MatterTab::Billing.href("synthetic");
+        for tab in [
+            MatterTab::Overview,
+            MatterTab::Onboarding,
+            MatterTab::Deadlines,
+            MatterTab::Billing,
+        ] {
+            let html =
+                dioxus_ssr::render_element(project_page_link(&tab.page_tab("synthetic"), &current));
+            assert!(html.contains(&format!(r#"aria-label="{}""#, tab.label())));
+            assert!(html.contains("<svg"));
+            assert_eq!(
+                html.contains(r#"aria-current="page""#),
+                tab == MatterTab::Billing
+            );
+        }
+    }
+
+    #[test]
     fn fact_grid_skips_empty_matters() {
         let html = dioxus_ssr::render_element(matter_fact_grid(&LawyerDetailView::default()));
         assert!(!html.contains("lawyer-detail__summary"), "{html}");
@@ -1545,13 +1507,7 @@ mod tests {
             "{html}"
         );
         assert!(html.contains("1 overdue"), "{html}");
-        // Two deadline tiles: the open count and the soonest due date.
-        assert!(html.contains("Open deadlines"), "{html}");
-        assert!(html.contains("Next deadline"), "{html}");
-        assert!(html.contains("Monday, March 14, 2026"), "{html}");
-        // No documents or people on this view — no tiles for them.
-        assert!(!html.contains("Documents"), "{html}");
-        assert!(!html.contains("Project people"), "{html}");
+        assert!(!html.contains("Next deadline"), "{html}");
         assert!(html.contains("Trust held"), "{html}");
         assert!(html.contains("$5,000"), "{html}");
     }

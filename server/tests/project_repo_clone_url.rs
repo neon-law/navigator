@@ -164,7 +164,7 @@ async fn lawyer_sees_the_external_repository_page() {
     let (actions, _) = after_label.split_once("</nav>").unwrap();
     // Use the stored URL verbatim, without appending a suffix.
     assert!(actions.contains(&format!(r#"href="{REPOSITORY_URL}""#)));
-    assert!(actions.contains(">Source repository<"));
+    assert!(actions.contains(r#"aria-label="Source repository""#));
     assert!(!html.contains("navigator git"));
 }
 

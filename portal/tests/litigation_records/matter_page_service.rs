@@ -150,7 +150,7 @@ async fn a_lawyer_records_service_and_the_document_history_lists_it() {
 }
 
 #[tokio::test]
-async fn the_communications_tab_lists_logged_email_and_overview_carries_the_notes() {
+async fn the_communications_tab_groups_logged_email_and_matter_notes() {
     let f = fixture().await;
 
     store::communications::log_note(
@@ -206,9 +206,9 @@ async fn the_communications_tab_lists_logged_email_and_overview_carries_the_note
         "{html}"
     );
     assert!(html.contains("with client@example.com"), "{html}");
-    // The firm-internal note stays on Overview, never on this tab.
+
     assert!(
-        !html.contains("Reviewed the answered interrogatories"),
+        html.contains("Reviewed the answered interrogatories"),
         "{html}"
     );
 
@@ -232,8 +232,8 @@ async fn the_communications_tab_lists_logged_email_and_overview_carries_the_note
     )
     .into_owned();
     assert!(
-        html.contains("Reviewed the answered interrogatories this morning."),
+        !html.contains("Reviewed the answered interrogatories this morning."),
         "{html}"
     );
-    assert!(html.contains("Interrogatories review"), "{html}");
+    assert!(!html.contains("Interrogatories review"), "{html}");
 }

@@ -168,13 +168,13 @@ pub async fn for_project(
             if let Some(id) = handoff.communication_id {
                 sources.push(SourceLink {
                     label: "Internal Communication".into(),
-                    href: format!("{root}#communication-{id}"),
+                    href: format!("{root}/communications#communication-{id}"),
                 });
             }
             if let Some(id) = handoff.deadline_id {
                 sources.push(SourceLink {
                     label: "Deadline".into(),
-                    href: format!("{root}#deadline-{id}"),
+                    href: format!("{root}/deadlines#deadline-{id}"),
                 });
             }
             if let Some(issue) = handoff.issue {

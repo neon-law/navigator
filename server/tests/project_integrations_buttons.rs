@@ -175,7 +175,7 @@ async fn lawyer_sees_the_internal_slack_button_and_the_optional_external_one() {
     .unwrap();
 
     let html = get_as(&f.app, &f.project_code, &f.lawyer_cookie).await;
-    assert!(html.contains("Resources"));
+    assert!(html.contains(r#"aria-label="Project actions""#));
     assert!(html.contains(INTERNAL));
     assert!(html.contains(r#"data-resource="private-slack-channel""#));
     assert!(html.contains("Private Slack channel"));
@@ -231,7 +231,12 @@ async fn lawyer_sees_the_xero_button_pointing_at_the_raised_invoice() {
     .await
     .unwrap();
 
-    let html = get_as(&f.app, &f.project_code, &f.lawyer_cookie).await;
+    let html = get_as(
+        &f.app,
+        &format!("{}/billing", f.project_code),
+        &f.lawyer_cookie,
+    )
+    .await;
     assert!(html.contains(&format!(
         "https://go.xero.com/AccountsReceivable/View.aspx?InvoiceID={XERO_ID}"
     )));

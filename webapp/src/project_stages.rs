@@ -62,23 +62,6 @@ pub struct MatterStageView {
     pub history: Vec<StageEventRow>,
 }
 
-/// The stage chip in the matter header — where the matter sits in the
-/// Firm's workflow, or `not set` until the Firm places it. Deliberately
-/// distinct from the lifecycle `Status` the header renders beside it:
-/// a stage moves as the work moves; the lifecycle status does not.
-#[component]
-pub fn StageChip(current: Option<String>) -> Element {
-    match current {
-        Some(label) => rsx! {
-            " · Stage: "
-            Badge { tone: BadgeTone::Active, "{label}" }
-        },
-        None => rsx! {
-            " · Stage: not set"
-        },
-    }
-}
-
 /// The Overview tab's stage surface: where the matter sits in the Firm's
 /// workflow, the control that moves it, and the audited trail of where it
 /// has been. A Case Stage is Firm-authored workflow placement — never the
@@ -486,18 +469,6 @@ mod tests {
             current: None,
             history: Vec::new(),
         }
-    }
-
-    #[test]
-    fn the_header_chip_names_the_stage_or_owns_the_absence() {
-        let placed = dioxus_ssr::render_element(rsx! {
-            StageChip { current: Some("Discovery".to_string()) }
-        });
-        assert!(placed.contains("Stage:"), "{placed}");
-        assert!(placed.contains(">Discovery</span>"), "{placed}");
-
-        let unplaced = dioxus_ssr::render_element(rsx! { StageChip { current: None } });
-        assert!(unplaced.contains("Stage: not set"), "{unplaced}");
     }
 
     #[test]
