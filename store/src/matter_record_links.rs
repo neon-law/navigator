@@ -53,6 +53,23 @@ pub(crate) async fn require_party(
     }
 }
 
+/// Keep a native party alive until its caller's record transaction finishes.
+/// Recheck here because public validation can precede a concurrent Person merge.
+pub(crate) async fn lock_party_on(
+    connection: &mut sqlx::PgConnection,
+    party: Party,
+) -> Result<bool, crate::postgres::matter::MatterAuthorityError> {
+    let sql = match party.kind {
+        Endpoint::Person => "SELECT id FROM public.person WHERE id=$1 FOR KEY SHARE",
+        Endpoint::Entity => "SELECT id FROM public.entity WHERE id=$1 FOR KEY SHARE",
+    };
+    let found: Option<Uuid> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+        .bind(party.id)
+        .fetch_optional(connection)
+        .await?;
+    Ok(found.is_some())
+}
+
 /// The union record link a [`Party`] is stored as.
 pub(crate) fn party_record(party: Party) -> surrealdb::types::RecordId {
     crate::surreal::record_id(party.kind.table(), party.id)

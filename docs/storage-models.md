@@ -35,9 +35,11 @@ Activated PostgreSQL rows cannot be overwritten or deleted by replaying an older
 ## People
 
 `store::persons` uses `store::postgres::people`. Person and mailbox claims commit together, aliases retain claim
-ownership, and a merge moves PostgreSQL references transactionally. Identity detail uses `store::postgres::identity`:
-addresses, credentials, email tokens, entities, delegates, external identities, and phones. The people directory reads
-the `person_directory` and `firm_visible_person` views.
+ownership, and a merge moves PostgreSQL references transactionally. Cap Table Holding and Fiduciary Role writes lock
+their typed Person or Entity in the same transaction as their row write. Person merges retarget financial Person links
+before deleting the duplicate; a unique collision refuses the transaction, and same-UUID Entity links remain distinct.
+Identity detail uses `store::postgres::identity`: addresses, credentials, email tokens, entities, delegates, external
+identities, and phones. The people directory reads the `person_directory` and `firm_visible_person` views.
 
 ## Tenancy
 

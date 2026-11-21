@@ -653,6 +653,21 @@ async fn lock_merge_people(
     Ok(())
 }
 
+/// Move financial Person links; relationship projection remains a separate merge concern.
+async fn relink_financial_person_links(
+    transaction: &mut Transaction<'_, Postgres>,
+    keep_id: Uuid,
+    drop_id: Uuid,
+) -> Result<(), PersonError> {
+    for (table, column) in crate::postgres_mirror::records::financial_tagged_person_links() {
+        sqlx::query(AssertSqlSafe(format!(
+            "UPDATE \"{table}\" SET \"{column}\" = jsonb_set(\"{column}\", '{{id,Uuid}}', to_jsonb($1::text), false) WHERE \"{column}\"->>'tb'='person' AND \"{column}\"->'id'->>'Uuid'=$2::text"
+        )))
+        .bind(keep_id).bind(drop_id).execute(&mut **transaction).await.map_err(database)?;
+    }
+    Ok(())
+}
+
 pub(crate) async fn merge_rows(
     pg: &PostgresDb,
     keep_id: Uuid,
@@ -734,6 +749,7 @@ pub(crate) async fn merge_rows(
     .execute(&mut *tx)
     .await
     .map_err(database)?;
+    relink_financial_person_links(&mut tx, keep_id, drop_id).await?;
     move_subjects(&mut tx, keep_id, drop_id).await?;
     sqlx::query("DELETE FROM person WHERE id = $1")
         .bind(drop_id)

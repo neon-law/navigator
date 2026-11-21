@@ -172,12 +172,36 @@ async fn persist(
             inserted_at: inserted_at.to_owned(),
             updated_at: now,
         };
-        let stored: PgRow = match matter::upsert(&pg, TABLE, &row).await {
+        let mut transaction = pg
+            .pool()
+            .begin()
+            .await
+            .map_err(MatterAuthorityError::from)?;
+        if !crate::matter_record_links::lock_party_on(&mut transaction, fields.fiduciary).await? {
+            let noun = match fields.fiduciary.kind {
+                Endpoint::Person => "Person",
+                Endpoint::Entity => "Entity",
+            };
+            return Err(FiduciaryRoleError::Invalid(format!(
+                "the fiduciary names no such {noun}"
+            )));
+        }
+        let stored: PgRow = match matter::upsert_on(
+            &mut *transaction,
+            TABLE,
+            serde_json::to_value(row).map_err(MatterAuthorityError::from)?,
+        )
+        .await
+        {
             Err(MatterAuthorityError::Conflict(index)) if index == SLOT_INDEX => {
                 return Err(slot_taken(fields));
             }
             stored => stored?,
         };
+        transaction
+            .commit()
+            .await
+            .map_err(MatterAuthorityError::from)?;
         return stored
             .into_role()
             .ok_or(FiduciaryRoleError::WriteReturnedNothing);
