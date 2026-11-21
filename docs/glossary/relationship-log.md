@@ -6,13 +6,12 @@ description: "A Relationship Log is an append-only audit trail of relationship c
 Append-only audit trail of relationship changes — entries like `person joined entity` or `project closed`. The source of
 truth for "what changed when" outside of normal table rows.
 
-It is **not** the [Conflict-Check Graph](conflict-check-graph.md): a Relationship Log row is one-sided (an actor acted
-on a subject), whereas the graph's edges are two-sided [Relationship Edges](relationship-edge.md). The log *feeds* the
-graph — an LLM can parse a row's free-form detail into typed edges — and the graph writes back to the log when lawyers
-acknowledge a conflict override.
+A Relationship Log entry records an actor’s action on a subject. Explicit authorized commands create typed [Relationship
+Edges](relationship-edge.md) between two endpoints in the [Conflict-Check Graph](conflict-check-graph.md). Automation
+records identity and log entries without creating typed edges.
 
-The relational model is the PostgreSQL `relationship_log` table. Its active append path is described in [SurrealDB
-compatibility](../surreal-compatibility.md#relationship-log).
+The relational model is the PostgreSQL `relationship_log` table. Its append path is described in [Storage
+models](../storage-models.md#relationship-graph).
 
 An operator appends rows through the `relationship_log` model of `navigator site import`, keyed by the subject Person's
 email, the action, and the detail, so re-importing an identical row appends nothing. `navigator project docket ingest`
@@ -30,9 +29,7 @@ the same observation without appending it twice.
 
 The Project graph shows the Project's observations, the lawyer's own graph shows their Project and attorney
 observations, and the Firm graph shows its Project and Firm observations to Firm members. Graph views show the subject
-and type. The audit entry holds the detail. A logged observation grants no participation. The target design gives every
-row all three anchors — the Project (optional), the recording attorney, and the Firm — so each row appears in all three
-graphs; see [Relationship Edge](relationship-edge.md).
+and type. The audit entry holds the detail. A logged observation grants no participation.
 
 - Schema and queries: [`store::relationship_logs`](../../store/src/relationship_logs.rs) — Lives
   in: `relationship_log` table

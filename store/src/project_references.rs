@@ -473,39 +473,63 @@ pub async fn record_adversity(
             .map(|row| Party::person(row.person_id))
             .ok_or(AdversityError::NoClientDri)?,
     };
-    let log = crate::relationship_logs::record(
-        db,
-        &crate::relationship_logs::NewRelationshipLog {
-            actor_person_id: command.actor_person_id,
-            subject_type: PROJECT_TABLE.to_string(),
-            subject_id: project.id,
-            action: ADVERSITY_RECORDED_ACTION.to_string(),
-            detail: format!(
-                "{}:{} adverse_to {}:{}",
-                from.kind.table(),
-                from.id,
-                command.party.kind.table(),
-                command.party.id
-            ),
-            project_id: Some(project.id),
-        },
-    )
-    .await?;
-    Ok(crate::relationships::record(
-        db,
-        &NewRelationship {
-            from: from.kind,
-            from_id: from.id,
-            to: command.party.kind,
-            to_id: command.party.id,
-            kind: crate::relationships::KIND_ADVERSE_TO.to_string(),
-            confidence_pct: 100,
-            source_kind: crate::relationships::SOURCE_MANUAL.to_string(),
-            source_id: Some(log.id),
-            detail: Some(format!("recorded on project {}", project.code)),
-        },
-    )
-    .await?)
+    let log_input = crate::relationship_logs::NewRelationshipLog {
+        actor_person_id: command.actor_person_id,
+        subject_type: PROJECT_TABLE.to_string(),
+        subject_id: project.id,
+        action: ADVERSITY_RECORDED_ACTION.to_string(),
+        detail: format!(
+            "{}:{} adverse_to {}:{}",
+            from.kind.table(),
+            from.id,
+            command.party.kind.table(),
+            command.party.id
+        ),
+        project_id: Some(project.id),
+    };
+    let mut input = NewRelationship {
+        from: from.kind,
+        from_id: from.id,
+        to: command.party.kind,
+        to_id: command.party.id,
+        kind: crate::relationships::KIND_ADVERSE_TO.to_string(),
+        confidence_pct: 100,
+        source_kind: crate::relationships::SOURCE_MANUAL.to_string(),
+        source_id: None,
+        detail: Some(format!("recorded on project {}", project.code)),
+    };
+    if let Some(postgres) = authority().await? {
+        return record_adversity_on(db, &postgres, &log_input, &mut input).await;
+    }
+    let log = crate::relationship_logs::record(db, &log_input).await?;
+    input.source_id = Some(log.id);
+    Ok(crate::relationships::record(db, &input).await?)
+}
+
+async fn record_adversity_on(
+    db: &SurrealDb,
+    postgres: &PostgresDb,
+    log_input: &crate::relationship_logs::NewRelationshipLog,
+    input: &mut NewRelationship,
+) -> Result<Relationship, AdversityError> {
+    let from_name = crate::relationships::endpoint_name(db, input.from, input.from_id).await?;
+    let to_name = crate::relationships::endpoint_name(db, input.to, input.to_id).await?;
+    let mut transaction = postgres
+        .pool()
+        .begin()
+        .await
+        .map_err(crate::relationships::RelationshipError::from)?;
+    let log = crate::relationship_logs::record_on(&mut *transaction, Uuid::now_v7(), log_input)
+        .await
+        .map_err(crate::relationship_logs::RelationshipLogError::from)?;
+    input.source_id = Some(log.id);
+    let relationship =
+        crate::relationships::record_on(&mut transaction, input, from_name, to_name).await?;
+    transaction
+        .commit()
+        .await
+        .map_err(crate::relationships::RelationshipError::from)?;
+    Ok(relationship)
 }
 
 #[cfg(test)]
