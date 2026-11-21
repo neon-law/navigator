@@ -1,0 +1,31 @@
+# Explicit operator-owned configuration and persistent receipts; ship creates neither input.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: navigator-web
+  namespace: navigator
+spec:
+  template:
+    spec:
+      containers:
+        - name: web
+          env:
+            - name: NAVIGATOR_ARCHIVE_WRITE_ONLY_CONFIG
+              $patch: replace
+              value: /etc/navigator/archive-write-only/config.json
+          volumeMounts:
+            - name: archive-write-only-config
+              mountPath: /etc/navigator/archive-write-only
+              readOnly: true
+            - name: archive-write-only-receipts
+              mountPath: /var/lib/navigator/iceberg
+      volumes:
+        - name: archive-write-only-config
+          configMap:
+            name: navigator-archive-write-only-config
+            items:
+              - key: config.json
+                path: config.json
+        - name: archive-write-only-receipts
+          persistentVolumeClaim:
+            claimName: navigator-archive-write-only

@@ -83,6 +83,8 @@ use workflows::email_summary_config::{
 };
 
 use super::registry;
+
+mod write_only_archives;
 use super::{require_auth, require_tools, run};
 
 /// In-cluster Deployment + container names. These are workspace
@@ -437,12 +439,19 @@ where
     store::config::staging_from(&get).map_err(|_| {
         anyhow::anyhow!("NAVIGATOR_STAGING must be exactly true or false when configured")
     })?;
+    let write_only = write_only_archives::enabled(&get)?;
     let mut substitutions = base_substitutions(deployment, tag, &get)?;
     substitutions.extend(
         PLAINTEXT_SUBSTITUTIONS
             .iter()
             .map(|&(token, env)| {
-                if matches!(env, "RESTATE_IDENTITY_KEY" | "NAVIGATOR_WORKFLOWS_HOST") {
+                if write_only && env == "NAVIGATOR_ARCHIVES_BUCKET" {
+                    Ok(Substitution {
+                        token: write_only_archives::LEGACY_BUCKET_ENV_LINE,
+                        env,
+                        value: String::new(),
+                    })
+                } else if matches!(env, "RESTATE_IDENTITY_KEY" | "NAVIGATOR_WORKFLOWS_HOST") {
                     Ok(Substitution {
                         token,
                         env,
@@ -470,7 +479,7 @@ where
     });
     substitutions.extend(dbos_schedule_substitutions(deployment, &get)?);
     substitutions.push(timer_env_substitution(&get)?);
-    substitutions.extend(archives_substitutions());
+    substitutions.extend(archives_substitutions(&get)?);
     substitutions.extend(replica_substitutions(deployment, &get)?);
     substitutions.push(native_topology_patch(deployment, &get)?);
     substitutions.extend(cohost_resource_substitutions(&get)?);
@@ -784,11 +793,28 @@ const POSTGRES_ARCHIVE_PASSWORD: &str = "NAVIGATOR_POSTGRES_ARCHIVE_PASSWORD";
 const ARCHIVES_SERVICE_OBJECT: (&str, &str) = ("secret", "navigator-postgres-archive");
 
 /// Native Archives receives its read-only PostgreSQL login and reviewed coverage manifest.
-fn archives_substitutions() -> Vec<Substitution> {
-    vec![
-        Substitution { token: ARCHIVES_WEB_PATCH_TOKEN, env: "NAVIGATOR_POSTGRES_ARCHIVE_USER", value: "  - path: postgres/web/web-archives.yaml\n    target:\n      kind: Deployment\n      name: navigator-web\n".into() },
-        Substitution { token: ARCHIVES_COVERAGE_RESOURCE_TOKEN, env: "NAVIGATOR_POSTGRES_ARCHIVE_USER", value: "  - ../../../../k8s/postgres/archive\n".into() },
-    ]
+fn archives_substitutions<F>(get: &F) -> Result<Vec<Substitution>>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let mut paths = web_patch_entry("postgres/web/web-archives.yaml");
+    if write_only_archives::enabled(get)? {
+        paths.push_str(&web_patch_entry(
+            "postgres/web/web-archives-write-only.yaml",
+        ));
+    }
+    Ok(vec![
+        Substitution {
+            token: ARCHIVES_WEB_PATCH_TOKEN,
+            env: "NAVIGATOR_POSTGRES_ARCHIVE_USER",
+            value: paths,
+        },
+        Substitution {
+            token: ARCHIVES_COVERAGE_RESOURCE_TOKEN,
+            env: "NAVIGATOR_POSTGRES_ARCHIVE_USER",
+            value: "  - ../../../../k8s/postgres/archive\n".into(),
+        },
+    ])
 }
 
 /// The whole-line placeholder in `web-dbos.yaml` that becomes the schedule
@@ -806,6 +832,7 @@ where
     F: Fn(&str) -> Option<String>,
 {
     use std::fmt::Write as _;
+    let write_only = write_only_archives::enabled(get)?;
     let mut env = String::new();
     let mut rendered = BTreeSet::new();
     let mut substitutions = Vec::new();
@@ -819,6 +846,9 @@ where
             });
         }
         for key in schedule.coordinates {
+            if write_only && schedule.name == "Archives" && *key == "NAVIGATOR_ARCHIVES_BUCKET" {
+                continue;
+            }
             let value = required_coordinate(deployment, key, get)
                 .with_context(|| format!("{} requires {key}", schedule.name))?;
             if rendered.insert(*key) {
@@ -943,6 +973,15 @@ where
 
 /// The secret each switched-on schedule needs before `web` can boot with it.
 fn require_dbos_schedule_prerequisites(deployment: &super::deployments::Deployment) -> Result<()> {
+    ensure!(
+        !deployment.encrypted_keys.contains(write_only_archives::ENV),
+        "NAVIGATOR_ARCHIVE_WRITE_ONLY_CONFIG belongs in deployment coordinates, not the environment Secret"
+    );
+    let write_only = write_only_archives::enabled(&|key| deployment.coordinates.get(key).cloned())?;
+    ensure!(
+        !write_only || !deployment.encrypted_keys.contains("NAVIGATOR_ARCHIVE_SOURCE"),
+        "write-only NAVIGATOR_ARCHIVE_SOURCE belongs in deployment coordinates, not the environment Secret"
+    );
     ensure!(
         deployment
             .encrypted_keys
@@ -4028,6 +4067,7 @@ fn roll(
     //     apply` can write.
     ensure_projected_objects_resolve(&manifests)?;
     ensure_ordered_service_objects(cfg, dry_run, true, true)?;
+    write_only_archives::verify(cfg, &|key| deployment.coordinates.get(key).cloned(), dry_run)?;
     // 4c. Request the shared Firm certificate for this build's brand hosts
     //     now, so Google issues it while the release rolls, and keep the one
     //     serving today attached until it does; see `firm_certificate_roll`.
@@ -8331,6 +8371,148 @@ mod tests {
     /// export reads: the archive login, Forgejo's credentials, the archive
     /// bucket, and the reviewed coverage manifest as a `ConfigMap`. The
     /// Restate trigger leaves the render and the live one is deleted.
+    #[test]
+    fn explicit_write_only_archive_path_mounts_readonly_config_and_persistent_shared_receipts() {
+        let get = env_getter(FULL_ENV);
+        let manifests = rendered_manifests(|key| match key {
+            "NAVIGATOR_ARCHIVES_BUCKET" => None,
+            write_only_archives::ENV => Some(write_only_archives::PATH.into()),
+            _ => get(key),
+        });
+        let web = manifest_doc(&manifests, "Deployment", WEB_DEPLOYMENT);
+        assert_eq!(
+            web_env_value(&web, write_only_archives::ENV).as_deref(),
+            Some(write_only_archives::PATH)
+        );
+        assert!(web_env_value(&web, "NAVIGATOR_ARCHIVES_BUCKET").is_none());
+        let pod = &web["spec"]["template"]["spec"];
+        let entries = pod["containers"][0]["env"].as_sequence().unwrap();
+        let config_env: Vec<_> = entries
+            .iter()
+            .filter(|entry| entry["name"].as_str() == Some(write_only_archives::ENV))
+            .collect();
+        assert_eq!(config_env.len(), 1);
+        assert!(config_env[0].get("valueFrom").is_none());
+        let mounts = pod["containers"][0]["volumeMounts"].as_sequence().unwrap();
+        let config = mounts
+            .iter()
+            .find(|v| v["name"].as_str() == Some("archive-write-only-config"))
+            .unwrap();
+        assert_eq!(
+            config["mountPath"].as_str(),
+            Some("/etc/navigator/archive-write-only")
+        );
+        assert_eq!(config["readOnly"].as_bool(), Some(true));
+        let receipts = mounts
+            .iter()
+            .find(|v| v["name"].as_str() == Some("archive-write-only-receipts"))
+            .unwrap();
+        assert_eq!(
+            receipts["mountPath"].as_str(),
+            Some("/var/lib/navigator/iceberg")
+        );
+        assert!(!receipts["readOnly"].as_bool().unwrap_or(false));
+        let volumes = pod["volumes"].as_sequence().unwrap();
+        let config = volumes
+            .iter()
+            .find(|v| v["name"].as_str() == Some("archive-write-only-config"))
+            .unwrap();
+        assert_eq!(
+            config["configMap"]["name"].as_str(),
+            Some("navigator-archive-write-only-config")
+        );
+        let receipts = volumes
+            .iter()
+            .find(|v| v["name"].as_str() == Some("archive-write-only-receipts"))
+            .unwrap();
+        assert_eq!(
+            receipts["persistentVolumeClaim"]["claimName"].as_str(),
+            Some("navigator-archive-write-only")
+        );
+        assert!(receipts.get("emptyDir").is_none());
+        assert!(receipts.get("hostPath").is_none());
+        assert!(!renders_cronjob(&manifests, "archives-trigger"));
+        use serde::Deserialize as _;
+        assert!(
+            !serde_yaml::Deserializer::from_str(&manifests).any(|doc| {
+                let doc = serde_yaml::Value::deserialize(doc).unwrap();
+                doc["kind"].as_str() == Some("PersistentVolumeClaim")
+                    && doc["metadata"]["name"].as_str() == Some("navigator-archive-write-only")
+            }),
+            "ship never provisions or replaces receipt storage"
+        );
+    }
+
+    #[test]
+    fn write_only_archive_path_cannot_arrive_through_the_environment_secret() {
+        let mut deployment = ordered_deployment();
+        deployment
+            .encrypted_keys
+            .insert(write_only_archives::ENV.into());
+        let error = require_dbos_schedule_prerequisites(&deployment)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("deployment coordinates"));
+    }
+
+    #[test]
+    fn write_only_archive_source_secret_conflicts_refuse_before_rollout_but_default_is_unchanged() {
+        let mut deployment = ordered_deployment();
+        deployment
+            .encrypted_keys
+            .insert("NAVIGATOR_ARCHIVE_SOURCE".into());
+        require_dbos_schedule_prerequisites(&deployment).unwrap();
+        deployment.coordinates.insert(
+            write_only_archives::ENV.into(),
+            write_only_archives::PATH.into(),
+        );
+        let error = require_dbos_schedule_prerequisites(&deployment)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("NAVIGATOR_ARCHIVE_SOURCE"));
+        assert!(error.contains("environment Secret"));
+        deployment.encrypted_keys.remove("NAVIGATOR_ARCHIVE_SOURCE");
+        require_dbos_schedule_prerequisites(&deployment).unwrap();
+        deployment
+            .coordinates
+            .insert("NAVIGATOR_ARCHIVE_SOURCE".into(), "postgres".into());
+        require_dbos_schedule_prerequisites(&deployment).unwrap();
+        deployment
+            .coordinates
+            .insert("NAVIGATOR_ARCHIVE_SOURCE".into(), "all".into());
+        assert!(require_dbos_schedule_prerequisites(&deployment).is_err());
+    }
+
+    #[test]
+    fn ordinary_archives_keep_the_bucket_while_explicit_write_only_needs_no_legacy_coordinate() {
+        let ordinary = rendered_manifests(env_getter(FULL_ENV));
+        assert!(!ordinary.contains("archive-write-only"));
+        let missing_bucket =
+            resolve_substitutions_for_deployment("synthetic-deployment", "26.9.16", |key| {
+                if key == "NAVIGATOR_ARCHIVES_BUCKET" {
+                    None
+                } else {
+                    env_getter(FULL_ENV)(key)
+                }
+            });
+        assert!(missing_bucket.is_err());
+        for (path, source) in [
+            ("/host/private/config.json", "postgres"),
+            ("", "postgres"),
+            (write_only_archives::PATH, "all"),
+        ] {
+            let result =
+                resolve_substitutions_for_deployment("synthetic-deployment", "26.9.16", |key| {
+                    match key {
+                        write_only_archives::ENV => Some(path.into()),
+                        "NAVIGATOR_ARCHIVE_SOURCE" => Some(source.into()),
+                        _ => env_getter(FULL_ENV)(key),
+                    }
+                });
+            assert!(result.is_err());
+        }
+    }
+
     #[test]
     fn archives_moves_to_web_with_its_login_and_coverage_manifest() {
         let switched = |key: &str| match key {

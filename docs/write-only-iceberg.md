@@ -51,6 +51,30 @@ Set `NAVIGATOR_ARCHIVE_WRITE_ONLY_CONFIG` to the operator-managed file path for 
 schedule. `NAVIGATOR_ARCHIVE_SOURCE` must be absent or `postgres`. Without this explicit configuration, the existing
 archive mode and its guards remain in effect. Workflow input binds the configuration digest before uploading.
 
+### Project the configuration for a shipped deployment
+
+For a normal `hudson ops ship` deployment, set `NAVIGATOR_ARCHIVE_WRITE_ONLY_CONFIG` in the deployment's `config.toml`
+to `/etc/navigator/archive-write-only/config.json`. The path is a container path, not the operator's filesystem. The
+native Archives owner uses the PostgreSQL source; backend-selection flags are not required. The environment Secret
+must not carry this setting. If `NAVIGATOR_ARCHIVE_SOURCE` is configured for this mode, it also belongs in the
+reviewed coordinates, not the environment Secret; its only accepted value is `postgres`.
+
+Provision the immutable `navigator-archive-write-only-config` ConfigMap in that deployment's namespace with the
+operator-generated JSON under `config.json`. It contains no credentials. Set its `local_root` to
+`/var/lib/navigator/iceberg`. Separately provision the bound `navigator-archive-write-only` filesystem claim with
+`ReadWriteMany`; every web replica and replacement needs the same sealed generations and receipts at the same path.
+Prepare the directory for the image's UID65532 with private permissions and verify its actual filesystem durability.
+Keep the underlying volume's reclaim policy and snapshots consistent with retention; ship does not create, format,
+chown, delete or replace either input. It checks the configuration and claim before rollout and mounts configuration
+read-only. An absent setting preserves the existing archive mode.
+
+The runtime's ADC principal still needs an independently reviewed create-only binding on each offsite destination. No
+verifier credentials or read/list/delete/overwrite grants are added by the mount. Validate effective inherited IAM,
+source-reader roles and identity fingerprints, locked destination retention, local capacity, pod replacement and exact
+receipt replay before enabling the schedule. A successful render is not upload, offsite verification or restore proof.
+The ordinary paired lane keeps its bucket requirement. Explicit write-only configuration does not require or inject
+`NAVIGATOR_ARCHIVES_BUCKET`; it retains the existing source-reader and coverage prerequisites.
+
 Each destination receives its own immutable attempt prefix and complete destination-specific Iceberg URI closure. The
 final inventory is written last. An upload acknowledgement proves transport acknowledgement, not verification. Lost
 acknowledgements remain unconfirmed. A repeated used attempt never probes remote existence with writer credentials. To
