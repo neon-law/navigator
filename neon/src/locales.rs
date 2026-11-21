@@ -10,11 +10,11 @@
 
 use views::brand::BrandKey;
 use views::locales::{
-    interpolate, BandCopy, CardCopy, CopyRun, HeroCtaCopy, HeroLine, HomeCopy, LitigationCopy,
+    BandCopy, CardCopy, CopyRun, HeroCtaCopy, HeroLine, HomeCopy, LitigationCopy,
     MarketingPageCopy, PackageInstallCopy, PageSkin, Paragraph, PracticeLinkCopy, PracticeMark,
     PricingCardCopy, ProjectNetworkNodeCopy, ProvenanceLedgerRowCopy, ProvenanceMark,
     ProvenancePillarCopy, ProvenanceSectionCopy, ProvenanceStepCopy, ServiceSectionCopy, StepCopy,
-    SummonsCopy, TransactionalCopy, VirtueCopy,
+    SummonsCopy, TransactionalCopy, VirtueCopy, interpolate,
 };
 use webapp::components::DayRateBadge;
 use webapp::lead_capture::LeadCaptureCopy;
@@ -504,14 +504,18 @@ fn card(copy: CardCopy) -> Card {
     }
 }
 
+fn marketing_image(image: views::locales::StepImageCopy) -> webapp::marketing_page::StepImage {
+    webapp::marketing_page::StepImage {
+        src: views::assets::asset_url(&image.asset_key),
+        alt: image.alt,
+    }
+}
+
 fn step(copy: StepCopy) -> Step {
     Step {
         title: copy.title,
         body: paragraphs_to_marketing(copy.body),
-        image: copy.image.map(|image| webapp::marketing_page::StepImage {
-            src: views::assets::asset_url(&image.asset_key),
-            alt: image.alt,
-        }),
+        image: copy.image.map(marketing_image),
     }
 }
 
@@ -669,15 +673,9 @@ fn services_band(copy: BandCopy, catalog: &views::locales::services::ServicesCat
 
 fn band(copy: BandCopy, catalog: Option<&views::locales::services::ServicesCatalog>) -> Band {
     match copy {
-        BandCopy::Photos { items } => Band::Photos(
-            items
-                .into_iter()
-                .map(|image| webapp::marketing_page::StepImage {
-                    src: views::assets::asset_url(&image.asset_key),
-                    alt: image.alt,
-                })
-                .collect(),
-        ),
+        BandCopy::Photos { items } => {
+            Band::Photos(items.into_iter().map(marketing_image).collect())
+        }
         copy @ BandCopy::Enrollment { .. } => enrollment_band(copy),
         BandCopy::Statement {
             heading,
@@ -1961,14 +1959,17 @@ mod tests {
         assert_eq!(company["membership_prefix"].as_str(), Some("From"));
         assert_eq!(company["membership_price"].as_str(), Some("$50"));
         assert_eq!(company["membership_unit"].as_str(), Some("/ day"));
-        assert!(!company["membership_body"]
-            .as_str()
-            .unwrap()
-            .contains("$50/day"));
-        assert!(company["membership_body"]
-            .as_str()
-            .unwrap()
-            .contains("Additional flat fees may apply and are quoted in the engagement letter."));
+        assert!(
+            !company["membership_body"]
+                .as_str()
+                .unwrap()
+                .contains("$50/day")
+        );
+        assert!(
+            company["membership_body"].as_str().unwrap().contains(
+                "Additional flat fees may apply and are quoted in the engagement letter."
+            )
+        );
         assert!(
             company["express_price"].is_null(),
             "expedited reviews are retired"
@@ -1979,10 +1980,12 @@ mod tests {
             company["drafting_packages"].as_sequence().map(Vec::len),
             Some(1)
         );
-        assert!(company["retainer_note"]
-            .as_str()
-            .unwrap()
-            .contains("$10,000"));
+        assert!(
+            company["retainer_note"]
+                .as_str()
+                .unwrap()
+                .contains("$10,000")
+        );
     }
 
     #[test]
@@ -1990,8 +1993,11 @@ mod tests {
         let copy: serde_yaml::Value = serde_yaml::from_str(NEON_FRACTIONAL_GC_YAML).unwrap();
         let body = copy["fee_body"].as_str().unwrap();
         assert!(body.contains("starts at $50/day"));
-        assert!(body
-            .contains("Additional flat fees may apply and are quoted in the engagement letter."));
+        assert!(
+            body.contains(
+                "Additional flat fees may apply and are quoted in the engagement letter."
+            )
+        );
         assert!(body.contains("$10,000 minimum retainer"));
         assert!(body.contains("Notations begin at $100"));
     }
@@ -2169,9 +2175,11 @@ mod tests {
     #[test]
     fn home_catalog_names_the_mounted_brand() {
         let content = home(&views::brand::DEFAULT_BRANDING);
-        assert!(content
-            .head_title
-            .contains(views::brand::FIRM_BRAND.site_name));
+        assert!(
+            content
+                .head_title
+                .contains(views::brand::FIRM_BRAND.site_name)
+        );
         assert_eq!(content.contact_href, views::brand::consultation_url());
         assert_eq!(content.heading, "Keep building.");
         assert!(content.company.is_some());
@@ -2290,15 +2298,17 @@ mod tests {
 
         assert_eq!(content.contact_label, "Call for a free consultation");
         assert_eq!(content.contact_href, "tel:+15108002090");
-        assert!(content
-            .service
-            .as_ref()
-            .expect("Misericordia renders its service copy")
-            .body
-            .iter()
-            .flatten()
-            .any(|run| run.text == "+1 510 800 2090"
-                && run.href.as_deref() == Some("tel:+15108002090")));
+        assert!(
+            content
+                .service
+                .as_ref()
+                .expect("Misericordia renders its service copy")
+                .body
+                .iter()
+                .flatten()
+                .any(|run| run.text == "+1 510 800 2090"
+                    && run.href.as_deref() == Some("tel:+15108002090"))
+        );
     }
 
     /// The firm's own site markets to businesses alone, never individuals.
@@ -2441,14 +2451,16 @@ mod tests {
         );
         assert!(copy.incident_options[0].contains("Car accident"));
         assert!(copy.incident_options[1].contains("Medical"));
-        assert!(copy
-            .discovery_cards
-            .iter()
-            .any(|card| card[0].contains("VEHICLE COLLISIONS")));
-        assert!(copy
-            .discovery_cards
-            .iter()
-            .any(|card| card[0].contains("DATA THEFT")));
+        assert!(
+            copy.discovery_cards
+                .iter()
+                .any(|card| card[0].contains("VEHICLE COLLISIONS"))
+        );
+        assert!(
+            copy.discovery_cards
+                .iter()
+                .any(|card| card[0].contains("DATA THEFT"))
+        );
     }
 
     /// Every word one of these pages renders, flattened, so a claim placed in
@@ -2529,12 +2541,16 @@ mod tests {
         let estate = content.estate.expect("estate offer");
         assert_eq!(estate.price, "From $1,111");
         assert!(estate.fee_note.starts_with("Fees depend on the scope"));
-        assert!(estate
-            .plan_description
-            .starts_with("For a basic estate plan"));
-        assert!(estate
-            .fee_note
-            .contains("trust administration, and later updates require a separate quote"));
+        assert!(
+            estate
+                .plan_description
+                .starts_with("For a basic estate plan")
+        );
+        assert!(
+            estate
+                .fee_note
+                .contains("trust administration, and later updates require a separate quote")
+        );
         assert_eq!(content.heading, "Your life is part of a larger story.");
     }
 
@@ -2564,10 +2580,12 @@ mod tests {
             "no household surcharge is advertised: {}",
             privacy.household_note
         );
-        assert!(privacy
-            .benefits
-            .iter()
-            .any(|item| item[1].contains("Choose whether to opt in")));
+        assert!(
+            privacy
+                .benefits
+                .iter()
+                .any(|item| item[1].contains("Choose whether to opt in"))
+        );
         assert!(content.practices.is_empty());
         assert!(content.service.is_none());
         let text = serde_yaml::to_string(&privacy).expect("privacy copy serializes");
