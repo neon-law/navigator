@@ -2420,7 +2420,6 @@ mod tests {
         }
     }
 
-
     /// LAW-329: a notation is filled from the Firm's office in its
     /// jurisdiction; a jurisdiction with no office falls back to the one
     /// default office, flagged so the fallback is never silent.

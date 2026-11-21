@@ -3401,7 +3401,13 @@ mod tests {
         assert!(text.contains("daybridge divorce law"), "{text}");
         assert!(text.contains("$200 if you agree"), "{text}");
         assert!(text.contains("$500 if you do not"), "{text}");
-        for stale_fee in ["$333", "mutual split", "$500 setup", "$10 a day", "$5,000 per day"] {
+        for stale_fee in [
+            "$333",
+            "mutual split",
+            "$500 setup",
+            "$10 a day",
+            "$5,000 per day",
+        ] {
             assert!(!text.contains(stale_fee), "{text}");
         }
         assert!(!text.contains("we guarantee"), "{text}");
@@ -3425,7 +3431,11 @@ mod tests {
         assert!(d.contested_body.contains("$1,000 retainer"), "{d:?}");
         assert!(d.costs_body.contains("court"), "{d:?}");
         assert!(!d.signup_label.is_empty() && !d.signin_label.is_empty());
-        assert!(home.heading.starts_with("Divorce sucks"), "{}", home.heading);
+        assert!(
+            home.heading.starts_with("Divorce sucks"),
+            "{}",
+            home.heading
+        );
         let text = format!("{} {} {}", home.lead, d.story_body, d.joint_body).to_lowercase();
         assert!(text.contains("court sets its own schedule"), "{text}");
         for promise in ["we guarantee", "guaranteed", "fast divorce"] {
