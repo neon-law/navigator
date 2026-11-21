@@ -76,21 +76,17 @@ async fn daybridge_home_is_plain_spoken_and_features_both_prices() {
         assert_own_brand_head(&html, host);
         for expected in [
             "Daybridge Divorce Law",
-            "Divorce sucks. We make it fair and keep it moving.",
             "Prefer to write first?",
             r#"href="https://calendar.notion.so/meet/nick-shook/or15n4yy7""#,
             r#"href="tel:+15108002090""#,
             r#"href="/auth/signup?return_to=/app/projects""#,
             r#"href="/auth/login?return_to=/app/projects""#,
             "Book Consultation",
-            "$200",
             "$500",
-            "flat fee, plus $50 per motion",
-            "$1,000 retainer",
-            "The court charges its own filing fees",
-            "The court sets its own schedule",
+            "$5,000",
+            "flat fee for up to two years, then $5 a day while we represent you",
+            "discovery expenses, including expert fees",
             "/public/brand/daybridge/crossing.svg",
-            "informed written consent",
             "/public/brand/daybridge/logo.svg",
             "/public/css/daybridge.css",
             "Attorney advertisement",
@@ -101,6 +97,11 @@ async fn daybridge_home_is_plain_spoken_and_features_both_prices() {
         assert!(
             html.contains(r#"href="https://www.vestaestateplanning.com""#),
             "{host} must link Vesta for the estate-plan review"
+        );
+        let header = html.split("</header>").next().expect("site header");
+        assert!(
+            header.contains(r#"href="/testimonials""#),
+            "{host}: {header}"
         );
         let footer = html.split("<footer").nth(1).expect("shared footer");
         assert!(footer.contains("www.guiebshook.com"), "{host}: {footer}");
@@ -130,7 +131,7 @@ async fn daybridge_services_explain_scope_timing_and_costs() {
             "Joint representation starts with clarity",
             "separate counsel",
             "Two plain prices",
-            "$200 if you agree. $500 if you do not.",
+            "$500 if you agree. $5,000 for up to two years if you do not.",
             "not a particular result",
         ] {
             assert!(html.contains(expected), "{host} missing {expected:?}");
@@ -175,7 +176,7 @@ async fn daybridge_llms_txt_indexes_its_own_pages() {
             "{host} llms.txt must name Daybridge as its own site: {body}"
         );
         assert!(
-            body.contains("$200 if you agree"),
+            body.contains("$500 if you agree"),
             "{host} llms.txt summary must state the prices: {body}"
         );
         assert!(

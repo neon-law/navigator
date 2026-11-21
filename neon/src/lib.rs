@@ -432,9 +432,8 @@ fn indexed_pages(mark: &str) -> Vec<portal::LlmsTxtLink> {
         indexed_page(
             "Divorce",
             "/divorce",
-            "Neon's gateway page naming Daybridge Divorce Law as the destination for couples \
-             $200 if you agree, \
-             $500 if you do not, plus court fees and $50 per motion. Joint \
+            "Neon's gateway page naming Daybridge Divorce Law as the destination. \
+             $500 if you agree. $5,000 for up to two years if you do not. After two years, continued representation costs $5 a day. Court fees and discovery expenses, including expert fees, are separate. You can accept these prices within 90 days of your consultation. Joint \
              representation is subject to applicable rules, conflict review, and \
              informed written consent. No result or timeline is promised.",
         ),

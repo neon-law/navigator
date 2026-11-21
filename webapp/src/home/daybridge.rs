@@ -19,15 +19,7 @@ pub struct DaybridgeContent {
     pub contested_price: String,
     pub contested_unit: String,
     pub contested_body: String,
-    pub costs_heading: String,
-    pub costs_body: String,
-    pub story_heading: String,
-    pub story_body: String,
-    pub joint_heading: String,
-    pub joint_body: String,
     pub testimonials_heading: String,
-    pub account_heading: String,
-    pub account_body: String,
     pub signup_label: String,
     pub signin_label: String,
     pub closing_heading: String,
@@ -97,25 +89,10 @@ pub(super) fn DaybridgeHome(
                     p { "{daybridge.contested_body}" }
                 }
             }
-            section { class: "daybridge-story",
-                h2 { "{daybridge.costs_heading}" }
-                p { "{daybridge.costs_body}" }
-                h2 { "{daybridge.story_heading}" }
-                p { "{daybridge.story_body}" }
-                h2 { "{daybridge.joint_heading}" }
-                p { "{daybridge.joint_body}" }
-            }
             TestimonialSection {
                 heading: daybridge.testimonials_heading.clone(),
                 lead: String::new(),
                 cards: testimonials,
-            }
-            section { class: "daybridge-account", "aria-labelledby": "daybridge-account-title",
-                h2 { id: "daybridge-account-title", "{daybridge.account_heading}" }
-                p { "{daybridge.account_body}" }
-                a { class: "nav-btn nav-btn--primary daybridge-cta", href: SIGNUP_HREF,
-                    "{daybridge.signup_label}"
-                }
             }
             SiblingPractices { cards: daybridge.sibling_practices.clone() }
             section { class: "daybridge-closing", "aria-labelledby": "daybridge-closing-title",
@@ -159,7 +136,6 @@ mod tests {
                         agreed_price: "$5,000".into(),
                         agreed_unit: " one-time fee".into(),
                         contested_price: "$9,000".into(),
-                        costs_heading: "A shared path forward".into(),
                         signup_label: "Create your account".into(),
                         sibling_practices: vec![SiblingPractice {
                             heading: "After the divorce is final".into(),
@@ -183,7 +159,6 @@ mod tests {
             "{html}"
         );
         assert!(!html.contains("<ol") && !html.contains("<li"), "{html}");
-        assert!(html.contains("A shared path forward"), "{html}");
         assert!(
             html.contains("/public/brand/daybridge/crossing.svg"),
             "{html}"

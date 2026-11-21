@@ -596,6 +596,23 @@ mod tests {
         assert!(html.contains(CONTACT_US), "{html}");
     }
 
+    #[tokio::test]
+    async fn sign_in_loads_the_home_brands_stylesheet() {
+        use views::brand::{scope, BrandKey, DEFAULT_BRANDING};
+
+        for key in BrandKey::LIVE {
+            let branding = key.resolve_branding(&DEFAULT_BRANDING);
+            scope(branding, async {
+                let html = login("/app", "csrf", &[], true, None, None).0;
+                let tokens = crate::brand_style::brand_tokens_href(key.as_str());
+                let head = html.split("</head>").next().unwrap();
+                assert!(head.contains(&format!("href=\"{tokens}\"")), "{key:?}");
+                assert!(html.contains(branding.firm.logo_href), "{key:?}");
+            })
+            .await;
+        }
+    }
+
     /// The ordinary chooser is unchanged by the portal framing: no portal
     /// copy, no Contact us door.
     #[test]
