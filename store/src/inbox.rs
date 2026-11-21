@@ -6682,14 +6682,11 @@ mod tests {
         .await
         .unwrap();
 
-        // The accept door reserves the member intro before sending. A
-        // redelivered webhook or a retried door runs the reserve again —
-        // the reservation must hold so the send fires at most once.
-        let reserved = reserve_acknowledgment(&db, &ingested, "Welcome to the matter.")
+        let reserved = reserve_acknowledgment(&db, &ingested, "We received your message.")
             .await
             .unwrap();
         assert!(reserved.is_some(), "the first reserve wins the send");
-        let replayed = reserve_acknowledgment(&db, &ingested, "Welcome to the matter.")
+        let replayed = reserve_acknowledgment(&db, &ingested, "We received your message.")
             .await
             .unwrap();
         assert!(

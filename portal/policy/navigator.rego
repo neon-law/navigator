@@ -306,6 +306,25 @@ route_allow if {
     input.session.role in {"owner", "admin", "lawyer", "clerk"}
 }
 
+# Plan intake has no Project participation until a lawyer takes the referral.
+# The queue and write doors check the acting lawyer against the Brand's Firm.
+route_allow if {
+    input.path[0] == "app"
+    input.path[1] == "plan-intake"
+    count(input.path) == 2
+    input.method == "GET"
+    is_lawyer(input.session)
+}
+
+route_allow if {
+    input.path[0] == "app"
+    input.path[1] == "plan-intake"
+    count(input.path) == 4
+    input.path[3] in {"resolve-member", "accept", "decline"}
+    input.method == "POST"
+    is_lawyer(input.session)
+}
+
 route_allow if {
     input.path[0] == "app"
     input.path[1] == "projects"

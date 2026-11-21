@@ -141,11 +141,8 @@ async fn landing_time(
 }
 
 /// Stage a parsed notice for attorney review, anchored to the ingested
-/// message. The firm is resolved exactly as ingest resolved it; without
-/// PostgreSQL the plan and fee quote stay unresolved for the attorney to
-/// price on the review screen. A staging failure never fails the intake —
-/// the raw mail is already durable and triage still holds the message — so
-/// the outcome is logged and returned as `None`.
+/// message. The firm is resolved exactly as ingest resolved it. If staging
+/// fails, the archived mail and triage entry remain available for review.
 pub(crate) async fn stage_for_review(
     db: &store::surreal::SurrealDb,
     email: &InboundEmail,

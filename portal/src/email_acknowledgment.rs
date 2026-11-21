@@ -69,9 +69,7 @@ fn receipt_allowed(email: &InboundEmail) -> bool {
 
 /// Save support intake before acknowledging it, including the summary lane.
 /// Reservation is at most once: uncertain sends remain visible in the inbox.
-/// Plan-provider mail never takes the generic receipt: the member intro the
-/// attorney's acceptance sends reserves that same per-inbound slot, and a
-/// generic receipt here would take it first.
+/// Plan-provider mail follows the lawyer's review path, without an automatic receipt.
 pub(crate) async fn receive(
     db: &store::surreal::SurrealDb,
     storage: &std::sync::Arc<dyn cloud::StorageService>,
@@ -89,7 +87,7 @@ pub(crate) async fn receive(
             tracing::info!(
                 message_id = %inbound.message_id,
                 staged = staged.is_some(),
-                outcome = ?outcome,
+                parsed = matches!(outcome, crate::plan_assignment_lane::LaneOutcome::Parsed { .. }),
                 "plan-assignment lane recorded the intake"
             );
             true
@@ -231,8 +229,6 @@ mod tests {
         email.text = store::plan_assignment::fixtures::arag_case_request_text();
         email.message_id = Some("<plan-notice-1@notice.arag.com>".into());
         receive(&db, &storage, &service, &email).await.unwrap();
-        // No generic receipt: the member intro the acceptance sends reserves
-        // this message's acknowledgment slot.
         assert!(service.captured().is_empty());
         // A redelivery stages the same record once, not twice.
         receive(&db, &storage, &service, &email).await.unwrap();

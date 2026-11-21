@@ -1731,6 +1731,10 @@ mod tests {
             ),
             ("20261121100000_create_billing_annotation.sql", include_str!("../postgres/migrations/20261121100000_create_billing_annotation.sql")),
             (
+                "20261121210300_preserve_plan_intake_case_number.sql",
+                include_str!("../postgres/migrations/20261121210300_preserve_plan_intake_case_number.sql"),
+            ),
+            (
                 "20261121220000_admit_government_official_reference.sql",
                 include_str!(
                     "../postgres/migrations/20261121220000_admit_government_official_reference.sql"

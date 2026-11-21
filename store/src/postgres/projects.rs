@@ -395,6 +395,7 @@ pub(crate) async fn delete_on(pg: &PostgresDb, id: Uuid) -> Result<bool, Project
 
 /// A matter being opened: the Project row and who is accountable for it.
 pub(crate) struct OpenMatter<'a> {
+    pub id: Option<Uuid>,
     pub project: &'a NewProject,
     pub closed_at: Option<&'a str>,
     pub lawyer: Uuid,
@@ -424,7 +425,7 @@ pub(crate) async fn open_on(
         "INSERT INTO project (id,code,name,status,brand,entity_id,firm_id,jurisdiction_id,description,closed_at) \
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *",
     )
-    .bind(Uuid::new_v4())
+    .bind(open.id.unwrap_or_else(Uuid::new_v4))
     .bind(&input.code)
     .bind(&input.name)
     .bind(&input.status)

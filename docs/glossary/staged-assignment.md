@@ -1,21 +1,19 @@
 ---
 title: "Staged Assignment"
 description: >-
-  One parsed plan-assignment notice held for attorney review: the member anchor, conflict result, plan columns, and fee
-  quote, with no matter behind it.
+  One parsed Legal Plan notice held for lawyer review, with the referral identifiers and any resolved member and fees.
 ---
 
-A **Staged Assignment** is one parsed [plan-assignment](plan-intake.md) notice held for attorney review. The row carries
-the parsed fields as the review screen shows them: the [member](person.md) anchor (a Client Person and their Human
-[entity](entity.md), found-or-created from the notice's contact), the [conflict check](conflict-check-graph.md) result
-attached before any matter write, the plan columns the matter will open with (`plan_member_id`, the notice's verbatim
-`plan_number` — the future [Plan Case Number](legal-plan.md) on the project, [matter type](plan-matter-type.md), state),
-and the fee quote resolved from the firm's [Plan Fee Schedule](plan-fee-schedule.md) — or the reason it could not
-resolve. Staging is idempotent per inbound message: the same notice re-lands on the same row. The row is decided exactly
-once — accepted (which opens the matter) or declined with a reason — and never anchors a matter by itself.
+A **Staged Assignment** holds a parsed [Legal Plan](legal-plan.md) notice for [Plan Intake](plan-intake.md). The review
+shows the provider's [Plan Case Number](plan-case-number.md), member ID, and any certificate number separately. It shows
+the requested work as the provider describes it, and any suggested [Plan Matter Type](plan-matter-type.md) and fee
+quote. The lawyer can verify the Plan Case Number against the original notice when the staged row has none.
+
+The row links a Client [Person](person.md) and Human [Entity](entity.md) when the member's email is known or the lawyer
+confirms it. It carries the [conflict check](conflict-check-graph.md) result for the lawyer's review before any Project
+opens. Staging the same inbound Message returns the same review row. Taking the referral opens a [Pitch](pitch.md) and
+records the decision. Declining records a reason on the row.
 
 - Vocabulary: [`store::plan_intake`](../../store/src/plan_intake.rs)
 
-The record lives in PostgreSQL whenever it is configured, with SurrealDB as the fallback.
-
-The table is `plan_intake`.
+PostgreSQL holds the queue in `plan_intake`.

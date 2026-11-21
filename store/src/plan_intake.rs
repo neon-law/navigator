@@ -1,31 +1,10 @@
-//! The prepare-and-confirm plan intake: a parsed plan assignment is
-//! staged for a person to confirm, and a matter exists only on the
-//! attorney's attested acceptance.
+//! Stage provider notices for the owning Firm. A lawyer confirms the
+//! member, reviews conflicts, and takes the referral with an attestation.
+//! Taking opens a Pitch, links the Legal Plan and referral identifiers,
+//! and records internal SLA Deadlines. Correspondence is a separate action.
 //!
-//! Staging ([`stage`]) is the automated half, run from the portal's
-//! plan-assignment lane the moment a notice parses. It anchors the member
-//! (a `Role::Client` person and a fresh `Human` entity, the same shape the
-//! self-serve retainer walk creates), resolves the firm's matching
-//! [`crate::legal_plans::LegalPlan`] and its fee quote, runs
-//! [`crate::conflicts::check_new_matter`] pre-write, and records a
-//! [`StagedAssignment`]. It never opens a matter — no code path in this
-//! module opens one, and the record's status refuses acceptance that did
-//! not come through [`accept`] with the attorney's own attestation, which
-//! [`crate::projects::open_matter`] enforces again at the open.
-//!
-//! Acceptance ([`accept`]) is the person's half, driven by the review
-//! screen's confirm door: open the matter (attestation forwarded from the
-//! click, never defaulted), fill the project's plan columns with the
-//! assignment's date as `plan_assigned_on`, create the plan's SLA
-//! deadlines from the email-landing time, and mark the record accepted.
-//! The member intro and plan reply are the portal's sends; both key off
-//! the staged record so a replay cannot double-send.
-//!
-//! The staging row is born in PostgreSQL: whenever `NAVIGATOR_POSTGRES_HOST`
-//! is set ([`PostgresDb::configured`]) the `plan_intake` table there is its
-//! system of record, and without a PostgreSQL host the same calls use the
-//! SurrealDB table. It has no write mirror; rows SurrealDB still holds reach
-//! PostgreSQL through the Mirror Backfill's born-in-PostgreSQL arm.
+//! PostgreSQL holds the queue. The Source projection supports reads
+//! and copying for historical rows without assuming a certificate is a case number.
 
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 use surrealdb::types::{RecordId, SurrealValue};
@@ -53,12 +32,9 @@ const SELECT: &str = "id, firm_id, conversation_id, source_message_id, provider,
 pub struct StagedAssignment {
     pub id: Uuid,
     pub firm_id: Uuid,
-    /// The assignment email's conversation — where the member intro thread
-    /// and the reserved outbound live.
+    /// The Inbox Conversation containing the original notice.
     pub conversation_id: Uuid,
-    /// The ingested inbound Message the notice produced. Staging is
-    /// idempotent on this id, and the member intro's reserve-then-send
-    /// anchor reconstructs from it.
+    /// The inbound Message anchoring idempotent staging.
     pub source_message_id: Uuid,
     /// The provider spelling from [`crate::plan_assignment::PlanProvider::as_str`].
     pub provider: String,
@@ -73,13 +49,15 @@ pub struct StagedAssignment {
     pub member_entity_id: Option<Uuid>,
     /// The notice's member number — the project's `plan_member_id`.
     pub plan_member_id: Option<String>,
-    /// The notice's plan/certificate number, verbatim — becomes the
-    /// project's `plan_case_number` at acceptance. The notice names no
-    /// benefit code, so `benefit_code` stages empty.
+    /// The plan's coverage or certificate number, when the notice prints one.
     pub plan_number: Option<String>,
+    /// The provider's referral identifier. Older staged rows need verification.
+    pub plan_case_number: Option<String>,
+    /// The plan's description of the requested work, verbatim.
+    pub notice_matter_type: Option<String>,
     /// A benefit code the plan's assignment named, when it ever does.
     pub benefit_code: Option<String>,
-    /// The classified matter type, as [`PlanMatterType::as_str`] spells it.
+    /// The classified Plan Matter Type, or an empty string for an unclassified notice.
     pub plan_matter_type: String,
     /// The lowercased state word from the notice when it survives
     /// [`crate::legal_plans::valid_state_code`].
@@ -88,8 +66,7 @@ pub struct StagedAssignment {
     /// not when a person reads the notice.
     pub assigned_at: DateTime<Utc>,
     /// The firm's matching plan, resolved from PostgreSQL at staging.
-    /// `None` when no plan matches (or PostgreSQL is not configured); the
-    /// review screen asks the attorney to pick one before acceptance.
+    /// The review checks live Firm configuration before taking the assignment.
     pub legal_plan_id: Option<Uuid>,
     pub legal_plan_name: Option<String>,
     /// Whether the plan's acceptance is confirmed on the provider's portal
@@ -117,9 +94,18 @@ pub struct StagedAssignment {
     pub project_id: Option<Uuid>,
     pub accepted_by: Option<Uuid>,
     pub decided_at: Option<DateTime<Utc>>,
+    take_started_at: Option<DateTime<Utc>>,
     pub decline_reason: Option<String>,
     pub inserted_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+impl StagedAssignment {
+    /// The predetermined Project ID when a take is in progress.
+    #[must_use]
+    pub fn pending_project_id(&self) -> Option<Uuid> {
+        self.take_started_at.map(|_| self.id)
+    }
 }
 
 /// Closed status set stored on `plan_intake.status`.
@@ -174,15 +160,12 @@ pub struct AcceptInput {
     pub code: String,
     /// The matter's display name; the screen prefills [`default_matter_name`].
     pub name: Option<String>,
-    /// The plan to work under — the firm's own plan, verified here.
-    pub legal_plan_id: Uuid,
+    /// The case number the lawyer confirmed against an older notice.
+    pub plan_case_number: Option<String>,
     /// The matter type to work the matter as, correctable on the screen.
     pub plan_matter_type: String,
     /// The jurisdiction to price and work the matter under, correctable.
     pub plan_state: Option<String>,
-    /// The firm's client-facing intake questions, carried in the member
-    /// intro ([`member_intro_body`]).
-    pub questions: Vec<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -201,10 +184,20 @@ pub enum PlanIntakeError {
     NotFound,
     #[error("the assignment is no longer staged")]
     NotStaged,
-    #[error("the notice has no member contact email, so no member person anchors the matter")]
+    #[error("Confirm the member and review the conflict result before taking this assignment.")]
     MissingMemberAnchor,
-    #[error("plan does not belong to the firm, or does not exist")]
+    #[error("The provider must match exactly one Legal Plan configured for this Firm.")]
     PlanNotFound,
+    #[error("Confirm the provider's case number from the original notice.")]
+    MissingCaseNumber,
+    #[error("A Project is already linked to this provider case, or it is being opened from another notice.")]
+    DuplicateCase,
+    #[error("Enter the member's name and verified email address.")]
+    InvalidMember,
+    #[error("That email does not identify the named client. Confirm the member's own email.")]
+    ConflictingMember,
+    #[error(transparent)]
+    Firm(#[from] crate::firms::FirmError),
     #[error("matter_type must be one of the plan vocabulary's words")]
     InvalidMatterType,
     #[error("state must be a lowercase jurisdiction code the fee schedule holds")]
@@ -283,6 +276,8 @@ impl StagedRow {
             plan_member_id: self.plan_member_id,
             benefit_code: self.benefit_code,
             plan_number: self.plan_number,
+            plan_case_number: None,
+            notice_matter_type: None,
             plan_matter_type: self.plan_matter_type,
             plan_state: self.plan_state,
             assigned_at: self.assigned_at.into(),
@@ -313,6 +308,7 @@ impl StagedRow {
             project_id: self.project_id.as_ref().and_then(record_uuid),
             accepted_by: self.accepted_by.as_ref().and_then(record_uuid),
             decided_at: self.decided_at.map(Into::into),
+            take_started_at: None,
             decline_reason: self.decline_reason,
             inserted_at: self.inserted_at.into(),
             updated_at: self.updated_at.into(),
@@ -324,16 +320,45 @@ impl StagedRow {
 /// The review screen shows the classification beside the notice's own
 /// words so the attorney can correct it before acceptance.
 #[must_use]
-pub fn matter_type_from_notice(text: &str) -> PlanMatterType {
-    let lowered = text.to_lowercase();
-    if lowered.contains("divorce") {
-        PlanMatterType::UncontestedDivorce
-    } else if lowered.contains("letter") {
-        PlanMatterType::Letter
-    } else if lowered.contains("appearance") || lowered.contains("hearing") {
-        PlanMatterType::CourtAppearance
+pub fn matter_type_from_notice(text: &str) -> Option<PlanMatterType> {
+    let lowered = text.to_ascii_lowercase();
+    let words: Vec<_> = lowered
+        .split(|c: char| !c.is_ascii_alphabetic())
+        .filter(|word| !word.is_empty())
+        .collect();
+    if words.contains(&"divorce") {
+        return (words
+            .windows(2)
+            .any(|pair| pair == ["uncontested", "divorce"])
+            && !words
+                .iter()
+                .any(|word| matches!(*word, "contested" | "custody")))
+        .then_some(PlanMatterType::UncontestedDivorce);
+    }
+    if words
+        .iter()
+        .any(|word| matches!(*word, "contested" | "custody" | "probate"))
+    {
+        return None;
+    }
+    if words == ["letter"]
+        || words
+            .windows(2)
+            .any(|pair| matches!(pair, ["demand" | "draft", "letter"]))
+    {
+        Some(PlanMatterType::Letter)
+    } else if words
+        .windows(2)
+        .any(|pair| matches!(pair, ["court", "appearance" | "hearing"]))
+    {
+        Some(PlanMatterType::CourtAppearance)
+    } else if words
+        .windows(2)
+        .any(|pair| matches!(pair, ["document" | "contract" | "agreement", "review"]))
+    {
+        Some(PlanMatterType::DocumentReview)
     } else {
-        PlanMatterType::DocumentReview
+        None
     }
 }
 
@@ -348,19 +373,15 @@ pub fn matter_label(matter_type: PlanMatterType) -> &'static str {
     }
 }
 
-/// The firm's plan that matches a parsed provider, by name — a firm's
-/// ARAG row is theirs to name, so the match is a lowercase containment,
-/// not an equality. `provider` is [`crate::plan_assignment::PlanProvider::as_str`].
+/// The owning Firm's unique plan matching the provider's name.
 #[must_use]
 pub fn plan_for_provider<'a>(plans: &'a [LegalPlan], provider: &str) -> Option<&'a LegalPlan> {
-    plans.iter().find(|plan| {
-        let name = plan.name.to_lowercase();
-        match provider {
-            "arag" => name.contains("arag"),
-            "legal_shield" => name.contains("legalshield") || name.contains("legal shield"),
-            _ => false,
-        }
-    })
+    let mut matches = plans.iter().filter(|plan| {
+        crate::plan_assignment::provider_for_plan_name(&plan.name)
+            .is_some_and(|matched| matched.as_str() == provider)
+    });
+    let first = matches.next()?;
+    matches.next().is_none().then_some(first)
 }
 
 /// The acceptance deadline's due instant: the plan's acceptance SLA
@@ -378,23 +399,25 @@ pub fn turnaround_due(accepted_at: DateTime<Utc>, turnaround_sla_days: i32) -> D
     accepted_at + Duration::days(i64::from(turnaround_sla_days))
 }
 
-/// The matter-code prefill for a staged assignment: the plan member id
-/// lowercased and reduced to the code vocabulary's letters, digits, and
-/// hyphens, under a `plan-` prefix. The attorney owns the final code; a
-/// collision with an open matter is refused, never silently resolved.
+/// Suggest a code from the member's surname, requested work, and state.
 #[must_use]
-pub fn suggest_code(plan_member_id: &str) -> String {
-    let reduced: String = plan_member_id
-        .trim()
-        .to_lowercase()
+pub fn suggest_code(member: &str, request: Option<&str>, state: Option<&str>) -> String {
+    let Some(surname) = member.split_whitespace().next_back() else {
+        return String::new();
+    };
+    [Some(surname), request.or(Some("plan")), state]
+        .into_iter()
+        .flatten()
+        .flat_map(|part| part.split(|c: char| !c.is_ascii_alphanumeric()))
+        .filter(|word| !word.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect::<Vec<_>>()
+        .join("-")
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect();
-    let mut code = format!("plan-{reduced}");
-    while code.ends_with('-') {
-        code.pop();
-    }
-    code
+        .take(crate::projects::PROJECT_CODE_MAX_LEN)
+        .collect::<String>()
+        .trim_end_matches('-')
+        .to_owned()
 }
 
 /// The matter-name prefill for a staged assignment.
@@ -402,61 +425,15 @@ pub fn suggest_code(plan_member_id: &str) -> String {
 pub fn default_matter_name(
     plan_name: &str,
     member_name: &str,
-    matter_type: PlanMatterType,
+    matter_type: Option<PlanMatterType>,
 ) -> String {
-    format!(
-        "{plan_name} plan matter — {} ({})",
-        member_name,
-        matter_label(matter_type)
-    )
-}
-
-/// The member's intro message: what the firm sends the member on
-/// acceptance. The SMS-consent question is always asked — consent is
-/// never assumed from the plan having a phone number on file. The
-/// firm's client-facing questions ride along when the firm has any;
-/// otherwise the intro promises the questionnaire separately rather than
-/// inventing one.
-#[must_use]
-pub fn member_intro_body(
-    member_name: &str,
-    firm_name: &str,
-    matter_label: &str,
-    questions: &[String],
-) -> String {
-    let mut body = format!(
-        "Hello {member_name},\n\n\
-         Your legal plan assigned your {matter_label} matter to {firm_name}, and we have \
-         accepted it. An attorney will reach out to schedule your consultation.\n\n"
-    );
-    if questions.is_empty() {
-        body.push_str(
-            "We will send a short intake questionnaire for your matter — no need to \
-             prepare anything before then.\n\n",
-        );
-    } else {
-        body.push_str("To get started, a few questions you can answer in a reply:\n\n");
-        for question in questions {
-            body.push_str("- ");
-            body.push_str(question);
-            body.push('\n');
-        }
-        body.push('\n');
+    let name = format!("{plan_name} plan matter — {member_name}");
+    match matter_type {
+        Some(kind) => format!("{name} ({})", matter_label(kind)),
+        None => name,
     }
-    body.push_str(
-        "One question we have to ask: may we text you at the number your plan has \
-         on file about scheduling? Replying YES or NO is entirely optional, and we \
-         will not text without your answer.\n\n",
-    );
-    body.push_str("— ");
-    body.push_str(firm_name);
-    body.push('\n');
-    body
 }
 
-/// Everything staging binds from the firm's reference data: the member
-/// anchor, the firm's plan for the provider with its fee quote, and the
-/// pre-write conflict report. None of it writes to a matter.
 struct StagingContext {
     member_person_id: Option<Uuid>,
     member_entity_id: Option<Uuid>,
@@ -473,7 +450,7 @@ async fn staging_context(
     surreal: &SurrealDb,
     pg: Option<&PostgresDb>,
     input: &StageInput,
-    matter_type: PlanMatterType,
+    matter_type: Option<PlanMatterType>,
 ) -> Result<StagingContext, PlanIntakeError> {
     let assignment = &input.assignment;
     let member = anchor_member(surreal, assignment).await?;
@@ -532,23 +509,50 @@ async fn anchor_member(
     let Some(member_name) = &assignment.member_name else {
         return Ok(None);
     };
-    let person = match crate::persons::find_by_email_ci(surreal, email).await? {
+    let person = member_person(surreal, member_name, email).await?;
+    if !same_member_name(&person.name, member_name) {
+        return Ok(None);
+    }
+    let entity = create_human_entity(surreal, member_name).await?;
+    Ok(Some((person.id, entity)))
+}
+
+async fn member_person(
+    surreal: &SurrealDb,
+    name: &str,
+    email: &str,
+) -> Result<crate::persons::Person, PlanIntakeError> {
+    let email = email.trim().to_ascii_lowercase();
+    let Some((local, domain)) = email.split_once('@') else {
+        return Err(PlanIntakeError::InvalidMember);
+    };
+    if name.trim().is_empty()
+        || local.is_empty()
+        || domain.is_empty()
+        || domain.contains('@')
+        || email.chars().any(char::is_whitespace)
+        || crate::plan_assignment::provider_for_sender(&email).is_some()
+    {
+        return Err(PlanIntakeError::InvalidMember);
+    }
+    let person = match crate::persons::find_by_any_email(surreal, &email).await? {
         Some(person) => person,
         None => {
-            crate::persons::create(
+            crate::persons::find_or_create(
                 surreal,
-                &crate::persons::NewPerson {
-                    name: member_name.clone(),
-                    email: email.clone(),
-                    role: crate::persons::Role::Client,
-                    ..crate::persons::NewPerson::default()
-                },
+                &crate::persons::NewPerson::with_role(
+                    name.trim(),
+                    email,
+                    crate::persons::Role::Client,
+                ),
             )
             .await?
         }
     };
-    let entity = create_human_entity(surreal, member_name).await?;
-    Ok(Some((person.id, entity)))
+    if person.role != crate::persons::Role::Client {
+        return Err(PlanIntakeError::ConflictingMember);
+    }
+    Ok(person)
 }
 
 /// The pre-write conflict report for the member anchor. Unanchored notices
@@ -625,12 +629,11 @@ pub async fn stage(
         member_person_id: context.member_person_id,
         member_entity_id: context.member_entity_id,
         plan_member_id: assignment.member_number.clone(),
-        // The notice names no benefit code, so `benefit_code` stages
-        // empty; the verbatim plan/certificate number is the project's
-        // future `plan_case_number`.
         benefit_code: None,
         plan_number: assignment.plan_number.clone(),
-        plan_matter_type: matter_type.as_str().to_string(),
+        plan_case_number: Some(assignment.case_number.clone()),
+        notice_matter_type: assignment.matter_type.clone(),
+        plan_matter_type: matter_type.map_or("", PlanMatterType::as_str).to_string(),
         plan_state: sanitized_state(assignment.state.as_deref()),
         assigned_at: input.landing_at,
         legal_plan_id: context.legal_plan_id,
@@ -648,6 +651,7 @@ pub async fn stage(
         project_id: None,
         accepted_by: None,
         decided_at: None,
+        take_started_at: None,
         decline_reason: None,
         inserted_at: now,
         updated_at: now,
@@ -751,22 +755,125 @@ pub struct Accepted {
     pub project_id: Uuid,
 }
 
-async fn staged_for_acceptance(
+/// The Firm whose intake queue a lawyer may review on the current Brand.
+///
+/// # Errors
+///
+/// Returns an error when the actor is outside the Brand's Firm or a lookup fails.
+pub async fn review_firm(
     surreal: &SurrealDb,
-    staged_id: Uuid,
-) -> Result<StagedAssignment, PlanIntakeError> {
-    let staged = find_by_id(surreal, staged_id)
+    actor_id: Uuid,
+    brand: &str,
+) -> Result<Uuid, PlanIntakeError> {
+    use crate::firms::FirmMembership;
+    use crate::persons::Role;
+
+    let person = crate::persons::find_by_id(surreal, actor_id)
         .await?
         .ok_or(PlanIntakeError::NotFound)?;
-    if staged.status != Status::Staged.as_str() {
-        return Err(PlanIntakeError::NotStaged);
+    let firm = crate::firms::firm_id_for_brand_key(surreal, brand)
+        .await?
+        .ok_or(PlanIntakeError::NotFound)?;
+    if person.role == Role::Owner {
+        return Ok(firm);
     }
-    Ok(staged)
+    if person.role.is_lawyer_tier()
+        && crate::firms::membership_for_person(surreal, actor_id, firm)
+            .await?
+            .is_some_and(|role| {
+                matches!(
+                    role.membership,
+                    FirmMembership::Admin | FirmMembership::Lawyer
+                )
+            })
+    {
+        return Ok(firm);
+    }
+    Err(PlanIntakeError::NotFound)
 }
 
-fn validated_matter_type(input: &AcceptInput) -> Result<PlanMatterType, PlanIntakeError> {
-    let matter_type = PlanMatterType::parse(&input.plan_matter_type)
-        .map_err(|_| PlanIntakeError::InvalidMatterType)?;
+async fn scoped_assignment(
+    surreal: &SurrealDb,
+    staged_id: Uuid,
+    actor_id: Uuid,
+    brand: &str,
+) -> Result<StagedAssignment, PlanIntakeError> {
+    let firm = review_firm(surreal, actor_id, brand).await?;
+    find_by_id(surreal, staged_id)
+        .await?
+        .filter(|row| row.firm_id == firm)
+        .ok_or(PlanIntakeError::NotFound)
+}
+
+/// Confirm the member's email before asking the lawyer to attest to the
+/// conflict result. An identified member stays fixed on that staged notice.
+///
+/// # Errors
+///
+/// Returns an error when the row is outside the Firm, already decided, or
+/// the verified email cannot identify the named client.
+pub async fn resolve_member(
+    surreal: &SurrealDb,
+    pg: &PostgresDb,
+    staged_id: Uuid,
+    actor_id: Uuid,
+    brand: &str,
+    name: Option<&str>,
+    email: &str,
+) -> Result<(), PlanIntakeError> {
+    let _lock = postgres::lock(pg, &format!("plan-intake/{staged_id}")).await?;
+    let mut row = scoped_assignment(surreal, staged_id, actor_id, brand).await?;
+    if row.status != Status::Staged.as_str() || row.take_started_at.is_some() {
+        return Err(PlanIntakeError::NotStaged);
+    }
+    if row.member_person_id.is_some() && row.member_entity_id.is_some() {
+        return if row
+            .member_email
+            .as_deref()
+            .is_some_and(|confirmed| confirmed.eq_ignore_ascii_case(email.trim()))
+        {
+            Ok(())
+        } else {
+            Err(PlanIntakeError::ConflictingMember)
+        };
+    }
+    let name = row
+        .member_name
+        .as_deref()
+        .or(name)
+        .ok_or(PlanIntakeError::InvalidMember)?;
+    let person = member_person(surreal, name, email).await?;
+    if !same_member_name(&person.name, name) {
+        return Err(PlanIntakeError::ConflictingMember);
+    }
+    let entity_id = create_human_entity(surreal, name).await?;
+    let (summary, blocking, checked) =
+        conflict_report(surreal, Some((person.id, entity_id))).await?;
+    row.member_name = Some(name.to_owned());
+    row.member_email = Some(email.trim().to_ascii_lowercase());
+    row.member_person_id = Some(person.id);
+    row.member_entity_id = Some(entity_id);
+    row.conflict_summary = summary;
+    row.conflict_blocking = blocking;
+    row.conflict_checked = checked;
+    postgres::save_member(pg, &row).await
+}
+
+fn same_member_name(left: &str, right: &str) -> bool {
+    left.split_whitespace()
+        .map(str::to_lowercase)
+        .eq(right.split_whitespace().map(str::to_lowercase))
+}
+
+fn validated_matter_type(input: &AcceptInput) -> Result<Option<PlanMatterType>, PlanIntakeError> {
+    let matter_type = if input.plan_matter_type.is_empty() {
+        None
+    } else {
+        Some(
+            PlanMatterType::parse(&input.plan_matter_type)
+                .map_err(|_| PlanIntakeError::InvalidMatterType)?,
+        )
+    };
     if let Some(state) = &input.plan_state {
         if !crate::legal_plans::valid_state_code(state) {
             return Err(PlanIntakeError::InvalidState);
@@ -775,18 +882,41 @@ fn validated_matter_type(input: &AcceptInput) -> Result<PlanMatterType, PlanInta
     Ok(matter_type)
 }
 
-/// The matter name, description, and the open itself. Retry-safe: a
-/// previous accept that opened the matter and died before marking the
-/// record resumes onto the same project by its chosen code instead of
-/// colliding.
+fn confirmed_case<'a>(
+    row: &'a StagedAssignment,
+    input: &'a AcceptInput,
+) -> Result<&'a str, PlanIntakeError> {
+    if let Some(number) = row.plan_case_number.as_deref() {
+        return Ok(number);
+    }
+    input
+        .plan_case_number
+        .as_deref()
+        .map(str::trim)
+        .filter(|number| number.bytes().any(|byte| byte.is_ascii_digit()))
+        .filter(|number| {
+            !row.plan_member_id
+                .as_deref()
+                .is_some_and(|member| member.eq_ignore_ascii_case(number))
+        })
+        .filter(|number| {
+            row.provider == "legal_shield"
+                || !row
+                    .plan_number
+                    .as_deref()
+                    .is_some_and(|certificate| certificate.eq_ignore_ascii_case(number))
+        })
+        .ok_or(PlanIntakeError::MissingCaseNumber)
+}
+
 async fn open_on_acceptance(
     surreal: &SurrealDb,
     staged: &StagedAssignment,
-    plan: &crate::legal_plans::LegalPlan,
+    plan: &LegalPlan,
     person_id: Uuid,
     entity_id: Uuid,
     input: &AcceptInput,
-    matter_type: PlanMatterType,
+    matter_type: Option<PlanMatterType>,
 ) -> Result<crate::projects::Project, PlanIntakeError> {
     let name = input.name.clone().unwrap_or_else(|| {
         default_matter_name(
@@ -795,37 +925,24 @@ async fn open_on_acceptance(
             matter_type,
         )
     });
-    let description = format!(
-        "Accepted from a {} assignment notice for member {} ({}).",
-        staged.provider,
-        staged.plan_member_id.as_deref().unwrap_or("unknown"),
-        staged.member_name.as_deref().unwrap_or("the member")
-    );
-    let existing = crate::projects::find_by_code(surreal, &input.code).await?;
-    let project = match existing {
-        Some(project) if project.firm_id == Some(staged.firm_id) => project,
-        Some(_) => return Err(PlanIntakeError::PlanNotFound),
-        None => {
-            crate::projects::open_matter(
-                surreal,
-                &crate::projects::OpenMatterCommand {
-                    firm_id: Some(staged.firm_id),
-                    name,
-                    code: input.code.clone(),
-                    client_id: person_id,
-                    entity_id,
-                    jurisdiction_id: None,
-                    description: Some(description),
-                    brand: input.brand.clone(),
-                    attestation: input.attestation,
-                    acting_person_id: input.acting_person_id,
-                    closed_at: None,
-                },
-            )
-            .await?
-        }
-    };
-    Ok(project)
+    Ok(crate::projects::open_matter_for_intake(
+        surreal,
+        &crate::projects::OpenMatterCommand {
+            firm_id: Some(staged.firm_id),
+            name,
+            code: input.code.clone(),
+            client_id: person_id,
+            entity_id,
+            jurisdiction_id: None,
+            description: None,
+            brand: input.brand.clone(),
+            attestation: input.attestation,
+            acting_person_id: input.acting_person_id,
+            closed_at: None,
+        },
+        staged.id,
+    )
+    .await?)
 }
 
 /// Mark the record accepted with the plan columns as filed and return the
@@ -846,7 +963,7 @@ async fn mark_accepted(
         accepted.project_id = Some(project_id);
         accepted.accepted_by = Some(input.acting_person_id);
         accepted.decided_at = Some(accepted_at);
-        accepted.plan_matter_type = matter_type.as_str().to_string();
+        accepted.plan_matter_type = matter_type.map_or("", PlanMatterType::as_str).to_string();
         accepted.plan_state.clone_from(&input.plan_state);
         accepted.legal_plan_id = Some(plan.id);
         accepted.legal_plan_name = Some(plan.name.clone());
@@ -865,7 +982,8 @@ async fn mark_accepted(
         .query(format!(
             "UPDATE $id SET status = 'accepted', project_id = $project_id, \
              accepted_by = $accepted_by, decided_at = $decided_at, \
-             plan_matter_type = $plan_matter_type, plan_state = $plan_state, \
+             plan_matter_type = $plan_matter_type, \
+             plan_state = $plan_state, \
              legal_plan_id = $legal_plan_id, legal_plan_name = $legal_plan_name, \
              plan_portal_only = $plan_portal_only, fee_covered_benefit = $fee_covered_benefit, \
              fee_plan_fee_cents = $fee_plan_fee_cents, \
@@ -877,7 +995,10 @@ async fn mark_accepted(
         .bind(("project_id", record_id("project", project_id)))
         .bind(("accepted_by", record_id("person", input.acting_person_id)))
         .bind(("decided_at", surrealdb::types::Datetime::from(accepted_at)))
-        .bind(("plan_matter_type", matter_type.as_str()))
+        .bind((
+            "plan_matter_type",
+            matter_type.map_or("", PlanMatterType::as_str),
+        ))
         .bind(("plan_state", input.plan_state.clone()))
         .bind(("legal_plan_id", Some(plan.id.to_string())))
         .bind(("legal_plan_name", Some(plan.name.clone())))
@@ -919,53 +1040,108 @@ async fn mark_accepted(
 /// [`crate::projects::open_matter`] refuses to open without it, so no
 /// path through this function opens a matter without the attorney's click.
 ///
-/// The member intro and the plan's reply are the portal's sends, keyed
-/// off the accepted record; this function never sends mail.
+/// A retry of the same staged notice returns the existing accepted Project.
 ///
 /// # Errors
 ///
-/// [`PlanIntakeError::NotStaged`] when the record was already accepted or
-/// declined; [`PlanIntakeError::MissingMemberAnchor`] when no member
-/// person anchors the matter; [`PlanIntakeError::Open`] when the open
-/// refused (missing attestation, blocking conflicts, a chosen code's
-/// collision, a non-lawyer attester); [`PlanIntakeError::PlanNotFound`]
-/// when the plan is not the firm's own.
+/// Returns an error for an inaccessible or declined notice, an unresolved
+/// member or Legal Plan, or a Project open that fails its checks.
+#[expect(
+    clippy::too_many_lines,
+    reason = "the ordered take steps share one reservation and its retry boundary"
+)]
 pub async fn accept(
     surreal: &SurrealDb,
     pg: &PostgresDb,
     staged_id: Uuid,
     input: &AcceptInput,
 ) -> Result<Accepted, PlanIntakeError> {
-    let staged = staged_for_acceptance(surreal, staged_id).await?;
+    if !input.attestation {
+        return Err(crate::projects::OpenMatterError::AttestationRequired.into());
+    }
+    let mut lock = postgres::lock(pg, &format!("plan-intake/{staged_id}")).await?;
+    let mut staged =
+        scoped_assignment(surreal, staged_id, input.acting_person_id, &input.brand).await?;
+    if staged.status == Status::Accepted.as_str() {
+        if staged.accepted_by != Some(input.acting_person_id) {
+            return Err(PlanIntakeError::NotFound);
+        }
+        let project_id = staged
+            .project_id
+            .ok_or(PlanIntakeError::WriteReturnedNothing)?;
+        return Ok(Accepted { staged, project_id });
+    }
+    if staged.status != Status::Staged.as_str() {
+        return Err(PlanIntakeError::NotStaged);
+    }
     let person_id = staged
         .member_person_id
         .ok_or(PlanIntakeError::MissingMemberAnchor)?;
     let entity_id = staged
         .member_entity_id
         .ok_or(PlanIntakeError::MissingMemberAnchor)?;
+    if !staged.conflict_checked {
+        return Err(PlanIntakeError::MissingMemberAnchor);
+    }
+    if staged.conflict_blocking {
+        return Err(
+            crate::projects::OpenMatterError::BlockingConflict(staged.conflict_summary).into(),
+        );
+    }
     let matter_type = validated_matter_type(input)?;
+    let case_number = confirmed_case(&staged, input)?.to_owned();
+    if !crate::projects::valid_plan_case_number(&case_number) {
+        return Err(PlanIntakeError::MissingCaseNumber);
+    }
+    let plans = crate::legal_plans::list(pg, staged.firm_id).await?;
+    let plan = plan_for_provider(&plans, &staged.provider).ok_or(PlanIntakeError::PlanNotFound)?;
+    let accepted_at = staged.take_started_at.unwrap_or_else(Utc::now);
+    postgres::lock_in(
+        &mut lock,
+        &format!(
+            "plan-case/{}/{}/{}",
+            staged.firm_id,
+            staged.provider,
+            case_number.to_ascii_lowercase()
+        ),
+    )
+    .await?;
+    let code = crate::projects::normalize_code(&input.code).ok_or(
+        crate::projects::OpenMatterError::Invalid("Project code is required."),
+    )?;
+    if let Some(existing) = crate::projects::find_by_code(surreal, &code).await? {
+        if existing.id != staged.id {
+            return Err(crate::projects::OpenMatterError::CodeConflict.into());
+        }
+    }
+    postgres::reserve_case(pg, &staged, plan.id, &case_number, accepted_at).await?;
+    staged.plan_case_number = Some(case_number.clone());
+    staged.plan_portal_only = plan.portal.is_some();
 
-    // One clock reading for the whole acceptance: the accepted-on date,
-    // the record's decided_at, and the turnaround SLA all derive from the
-    // same instant, so they can never disagree by a capture gap.
-    let accepted_at = Utc::now();
-
-    // The plan is the firm's own — the lookup is firm-scoped, so another
-    // firm's plan id refuses here.
-    let plan = crate::legal_plans::find(pg, staged.firm_id, input.legal_plan_id)
-        .await?
-        .ok_or(PlanIntakeError::PlanNotFound)?;
-
-    let project = open_on_acceptance(
+    let project = match open_on_acceptance(
         surreal,
         &staged,
-        &plan,
+        plan,
         person_id,
         entity_id,
         input,
         matter_type,
     )
-    .await?;
+    .await
+    {
+        Ok(project) => project,
+        Err(error) => {
+            // A successful open may be followed by an attestation write
+            // failure. Keep that Project's reservation for the next retry.
+            if crate::projects::find_by_id(surreal, staged.id)
+                .await?
+                .is_none()
+            {
+                postgres::release_case(pg, staged.id).await?;
+            }
+            return Err(error);
+        }
+    };
     crate::projects::set_plan_columns(
         surreal,
         pg,
@@ -973,9 +1149,9 @@ pub async fn accept(
         &crate::projects::PlanColumns {
             legal_plan_id: Some(plan.id),
             plan_member_id: staged.plan_member_id.clone(),
-            plan_case_number: staged.plan_number.clone(),
+            plan_case_number: Some(case_number),
             benefit_code: staged.benefit_code.clone(),
-            plan_matter_type: Some(input.plan_matter_type.clone()),
+            plan_matter_type: matter_type.map(|kind| kind.as_str().to_owned()),
             plan_state: input.plan_state.clone(),
             // The assignment date is the email-landing date, not the
             // acceptance date — the plan's clock started at landing.
@@ -991,7 +1167,7 @@ pub async fn accept(
     .await?;
 
     // The quote as accepted, from the corrected matter type and state.
-    let fee = if let Some(state) = &input.plan_state {
+    let fee = if let (Some(matter_type), Some(state)) = (matter_type, &input.plan_state) {
         crate::legal_plans::resolve_fee(
             pg,
             staged.firm_id,
@@ -1000,7 +1176,7 @@ pub async fn accept(
             state,
             staged
                 .fee_effective_on
-                .unwrap_or_else(|| Utc::now().date_naive()),
+                .unwrap_or_else(|| staged.assigned_at.date_naive()),
         )
         .await?
     } else {
@@ -1012,18 +1188,45 @@ pub async fn accept(
         surreal,
         project.id,
         &staged,
-        &plan,
-        &input.code,
+        plan,
+        &project.code,
         accepted_at,
     )
     .await?;
 
-    let staged =
-        mark_accepted(surreal, &staged, project.id, input, &plan, fee, accepted_at).await?;
+    let staged = mark_accepted(surreal, &staged, project.id, input, plan, fee, accepted_at).await?;
     Ok(Accepted {
         staged,
         project_id: project.id,
     })
+}
+
+/// Record the lawyer's decision within the same scope and lock as taking it.
+///
+/// # Errors
+///
+/// Returns an error when the row is outside the Firm, a Project has opened,
+/// the assignment was already decided, or a lookup or write fails.
+pub async fn decline_from_review(
+    surreal: &SurrealDb,
+    pg: &PostgresDb,
+    staged_id: Uuid,
+    actor_id: Uuid,
+    brand: &str,
+    reason: &str,
+) -> Result<StagedAssignment, PlanIntakeError> {
+    let _lock = postgres::lock(pg, &format!("plan-intake/{staged_id}")).await?;
+    let row = scoped_assignment(surreal, staged_id, actor_id, brand).await?;
+    if crate::projects::find_by_id(surreal, row.id)
+        .await?
+        .is_some()
+    {
+        return Err(PlanIntakeError::NotStaged);
+    }
+    if row.take_started_at.is_some() {
+        postgres::release_case(pg, staged_id).await?;
+    }
+    decline(surreal, staged_id, reason).await
 }
 
 /// Decline a staged assignment without opening a matter. The record and
@@ -1033,7 +1236,7 @@ pub async fn accept(
 /// # Errors
 ///
 /// [`PlanIntakeError::NotStaged`] when the record was already decided.
-pub async fn decline(
+pub(crate) async fn decline(
     surreal: &SurrealDb,
     staged_id: Uuid,
     reason: &str,
@@ -1041,7 +1244,7 @@ pub async fn decline(
     let staged = find_by_id(surreal, staged_id)
         .await?
         .ok_or(PlanIntakeError::NotFound)?;
-    if staged.status != Status::Staged.as_str() {
+    if staged.status != Status::Staged.as_str() || staged.take_started_at.is_some() {
         return Err(PlanIntakeError::NotStaged);
     }
     let now = Utc::now();
@@ -1193,7 +1396,7 @@ async fn resolve_plan_and_fee(
     pg: Option<&PostgresDb>,
     firm_id: Uuid,
     provider: &str,
-    matter_type: PlanMatterType,
+    matter_type: Option<PlanMatterType>,
     state: Option<&str>,
     on: NaiveDate,
 ) -> Result<(Option<Uuid>, Option<String>, bool, Option<ResolvedFee>), PlanIntakeError> {
@@ -1204,8 +1407,11 @@ async fn resolve_plan_and_fee(
     let Some(plan) = plan_for_provider(&plans, provider) else {
         return Ok((None, None, false, None));
     };
-    let fee = match state.filter(|state| crate::legal_plans::valid_state_code(state)) {
-        Some(state) => {
+    let fee = match (
+        matter_type,
+        state.filter(|state| crate::legal_plans::valid_state_code(state)),
+    ) {
+        (Some(matter_type), Some(state)) => {
             crate::legal_plans::resolve_fee(pg, firm_id, plan.id, matter_type, state, on)
                 .await?
                 .map(|fee| {
@@ -1218,7 +1424,7 @@ async fn resolve_plan_and_fee(
                     )
                 })
         }
-        None => None,
+        _ => None,
     };
     Ok((
         Some(plan.id),
@@ -1253,9 +1459,8 @@ async fn create_plan_deadlines(
             project_id,
             title: Some("Plan acceptance window".to_string()),
             description: Some(format!(
-                "{} expects this assignment accepted within {} hours of the notice \
-                 landing. The clock starts at the landing time, not the acceptance.",
-                plan.name, plan.acceptance_sla_hours
+                "Review this assignment within {} hours of the notice landing for {}.",
+                plan.acceptance_sla_hours, plan.name
             )),
             due_at: acceptance_due.to_rfc3339(),
             authority_kind: "internal".to_string(),
@@ -1335,8 +1540,8 @@ async fn create_plan_deadlines(
 mod tests {
     use super::{
         accept, acceptance_due, decline, find_by_id, list_by_firm, matter_type_from_notice,
-        member_intro_body, plan_for_provider, stage, suggest_code, turnaround_due, AcceptInput,
-        PlanIntakeError, StageInput, Status,
+        plan_for_provider, stage, suggest_code, turnaround_due, AcceptInput, PlanIntakeError,
+        StageInput, Status,
     };
     use crate::legal_plans::{LegalPlan, NewLegalPlan, NewPlanFeeSchedule, PlanMatterType};
     use crate::plan_assignment::{fixtures, parse, Assignment, PlanProvider};
@@ -1360,7 +1565,7 @@ mod tests {
                 member_name: Some("Dana Example".to_string()),
                 member_number: Some("AR-004512".to_string()),
                 plan_number: Some("PLAN-778812".to_string()),
-                matter_type: Some("Will Preparation".to_string()),
+                matter_type: Some("Document Review".to_string()),
                 effective_date: None,
                 contact_email: Some("dana@example.com".to_string()),
                 state: Some("nv".to_string()),
@@ -1489,42 +1694,46 @@ mod tests {
         Some(pg)
     }
 
-    fn accept_input(plan_id: Uuid, attorney_id: Uuid, attestation: bool) -> AcceptInput {
+    fn accept_input(_plan_id: Uuid, attorney_id: Uuid, attestation: bool) -> AcceptInput {
         AcceptInput {
             attestation,
             acting_person_id: attorney_id,
             brand: "neon".to_string(),
             code: "plan-ar-004512".to_string(),
             name: None,
-            legal_plan_id: plan_id,
+            plan_case_number: Some("4900000-001".to_owned()),
             plan_matter_type: "document_review".to_string(),
             plan_state: Some("nv".to_string()),
-            questions: vec!["What is the best number to reach you on?".to_string()],
         }
     }
 
     #[test]
-    fn a_notice_classifies_into_the_closed_plan_vocabulary() {
-        assert_eq!(
-            matter_type_from_notice("Uncontested Divorce intake"),
-            PlanMatterType::UncontestedDivorce
-        );
-        assert_eq!(
-            matter_type_from_notice("Demand Letter review"),
-            PlanMatterType::Letter
-        );
-        assert_eq!(
-            matter_type_from_notice("Court appearance coverage"),
-            PlanMatterType::CourtAppearance
-        );
-        assert_eq!(
-            matter_type_from_notice("Estate Planning - Will Preparation"),
-            PlanMatterType::DocumentReview
-        );
-        assert_eq!(
-            matter_type_from_notice("Consumer Contract Review"),
-            PlanMatterType::DocumentReview
-        );
+    fn classification_only_suggests_a_supported_type_with_explicit_evidence() {
+        for notice in [
+            "Divorce",
+            "Contested Divorce/Separation/Annulment - with custody",
+            "Probate",
+            "Custody hearing",
+            "Probate court appearance",
+            "Estate Planning - Will Preparation",
+            "",
+        ] {
+            assert_eq!(
+                matter_type_from_notice(notice).map(PlanMatterType::as_str),
+                None
+            );
+        }
+        for (notice, expected) in [
+            ("Uncontested Divorce intake", "uncontested_divorce"),
+            ("Demand Letter review", "letter"),
+            ("Court appearance coverage", "court_appearance"),
+            ("Consumer Contract Review", "document_review"),
+        ] {
+            assert_eq!(
+                matter_type_from_notice(notice).map(PlanMatterType::as_str),
+                Some(expected)
+            );
+        }
     }
 
     #[test]
@@ -1578,29 +1787,13 @@ mod tests {
     }
 
     #[test]
-    fn the_code_suggestion_reduces_the_member_number_to_the_code_vocabulary() {
-        assert_eq!(suggest_code("AR-004512"), "plan-ar-004512");
-        assert_eq!(suggest_code("ls/902/441 "), "plan-ls-902-441");
-        assert_eq!(suggest_code("weird!!"), "plan-weird");
-    }
-
-    #[test]
-    fn the_member_intro_always_asks_about_sms_and_carries_the_firms_questions() {
-        let intro = member_intro_body(
-            "Dana Example",
-            "Guieb & Shook",
-            "uncontested divorce",
-            &["What county will you file in?".to_string()],
+    fn the_code_suggestion_uses_the_surname_requested_work_and_state() {
+        assert_eq!(
+            suggest_code("Dana Example", Some("Lease / Agreement"), Some("NV")),
+            "example-lease-agreement-nv"
         );
-        assert!(intro.contains("Hello Dana Example,"));
-        assert!(intro.contains("uncontested divorce"));
-        assert!(intro.contains("What county will you file in?"));
-        assert!(intro.contains("may we text you"));
-        // No questions means the questionnaire is promised separately, not
-        // invented.
-        let bare = member_intro_body("Dana Example", "Guieb & Shook", "letter", &[]);
-        assert!(bare.contains("intake questionnaire"));
-        assert!(!bare.contains('-'));
+        assert_eq!(suggest_code("Dana Sample", None, None), "sample-plan");
+        assert_eq!(suggest_code("", None, None), "");
     }
 
     #[tokio::test]
@@ -1753,7 +1946,7 @@ mod tests {
             &crate::persons::NewPerson::with_role(
                 "Pisces Attorney",
                 "plan-intake-attorney@example.com",
-                crate::persons::Role::Lawyer,
+                crate::persons::Role::Owner,
             ),
         )
         .await
@@ -1819,7 +2012,7 @@ mod tests {
             &crate::persons::NewPerson::with_role(
                 "Pisces Attorney",
                 "plan-intake-attorney@example.com",
-                crate::persons::Role::Lawyer,
+                crate::persons::Role::Owner,
             ),
         )
         .await
@@ -1857,7 +2050,7 @@ mod tests {
         assert_eq!(project.plan_matter_type.as_deref(), Some("document_review"));
         assert_eq!(project.plan_state.as_deref(), Some("nv"));
         assert_eq!(project.plan_member_id.as_deref(), Some("AR-004512"));
-        assert_eq!(project.plan_case_number.as_deref(), Some("PLAN-778812"));
+        assert_eq!(project.plan_case_number.as_deref(), Some("4900000-001"));
         assert_eq!(
             project.plan_assigned_on.as_deref(),
             Some(landing.date_naive().to_string().as_str())
@@ -1937,7 +2130,7 @@ mod tests {
             &crate::persons::NewPerson::with_role(
                 "Pisces Attorney",
                 "plan-intake-attorney@example.com",
-                crate::persons::Role::Lawyer,
+                crate::persons::Role::Owner,
             ),
         )
         .await
@@ -1988,7 +2181,7 @@ mod tests {
             &crate::persons::NewPerson::with_role(
                 "Pisces Attorney",
                 "plan-intake-attorney@example.com",
-                crate::persons::Role::Lawyer,
+                crate::persons::Role::Owner,
             ),
         )
         .await

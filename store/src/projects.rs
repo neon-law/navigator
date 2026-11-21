@@ -3064,7 +3064,7 @@ fn valid_plan_date(text: &str) -> bool {
 
 /// A Plan Case Number as the plan prints it (`4963680-001`, `412590`): one
 /// token, so an inbox rule can match it as a whole word in a subject line.
-fn valid_plan_case_number(text: &str) -> bool {
+pub(crate) fn valid_plan_case_number(text: &str) -> bool {
     (1..=64).contains(&text.chars().count()) && text.chars().all(|c| c.is_ascii_graphic())
 }
 
@@ -4398,6 +4398,28 @@ pub async fn open_matter(
     surreal: &SurrealDb,
     input: &OpenMatterCommand,
 ) -> Result<Project, OpenMatterError> {
+    open_matter_with_id(surreal, input, None).await
+}
+
+/// Resume only the Project ID allocated to this staged notice. The caller
+/// serializes decisions on the notice before using this entry point.
+pub(crate) async fn open_matter_for_intake(
+    surreal: &SurrealDb,
+    input: &OpenMatterCommand,
+    intake_id: Uuid,
+) -> Result<Project, OpenMatterError> {
+    open_matter_with_id(surreal, input, Some(intake_id)).await
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "one open applies the same validation and conflict attestation to a new Project or an intake retry"
+)]
+async fn open_matter_with_id(
+    surreal: &SurrealDb,
+    input: &OpenMatterCommand,
+    intake_id: Option<Uuid>,
+) -> Result<Project, OpenMatterError> {
     // The attorney's attestation gates every open, checked first: no amount of
     // valid form data opens a Project the attorney hasn't attested to.
     if !input.attestation {
@@ -4440,6 +4462,49 @@ pub async fn open_matter(
     if conflict.has_blocking() {
         return Err(OpenMatterError::BlockingConflict(conflict.summary_lines()));
     }
+    if let Some(id) = intake_id {
+        if let Some(project) = find_by_id(surreal, id)
+            .await
+            .map_err(|error| OpenMatterError::Db(error.to_string()))?
+        {
+            if project.code != code
+                || project.firm_id != Some(firm_id)
+                || project.brand != input.brand
+                || project.entity_id != input.entity_id
+            {
+                return Err(OpenMatterError::CodeConflict);
+            }
+            let roles = participations_for_project(surreal, id)
+                .await
+                .map_err(|error| OpenMatterError::Db(error.to_string()))?;
+            if !roles
+                .iter()
+                .any(|role| role.is_lawyer_dri && role.person_id == input.acting_person_id)
+                || !roles
+                    .iter()
+                    .any(|role| role.is_client_dri && role.person_id == input.client_id)
+            {
+                return Err(OpenMatterError::CodeConflict);
+            }
+            let logs = crate::relationship_logs::for_project(surreal, id)
+                .await
+                .map_err(OpenMatterError::Attestation)?;
+            if !logs.iter().any(|log| {
+                log.action == "conflict_attestation"
+                    && log.actor_person_id == Some(input.acting_person_id)
+            }) {
+                record_open_attestation(
+                    surreal,
+                    id,
+                    input.acting_person_id,
+                    conflict.is_clear(),
+                    &conflict.summary_lines(),
+                )
+                .await?;
+            }
+            return Ok(project);
+        }
+    }
     let (status, closed_at) = initial_status_and_closed_at(input.closed_at)?;
 
     let project = NewProject {
@@ -4453,6 +4518,7 @@ pub async fn open_matter(
         description: crate::people_commands::none_if_blank(input.description.as_deref()),
     };
     let open = crate::postgres::projects::OpenMatter {
+        id: intake_id,
         project: &project,
         closed_at: closed_at.as_deref(),
         lawyer: input.acting_person_id,
@@ -4488,7 +4554,7 @@ async fn open_matter_in_surreal(
     surreal: &SurrealDb,
     open: &crate::postgres::projects::OpenMatter<'_>,
 ) -> Result<Project, OpenMatterError> {
-    let project_id = Uuid::now_v7();
+    let project_id = open.id.unwrap_or_else(Uuid::now_v7);
     let now = chrono::Utc::now().to_rfc3339();
     let jurisdiction_id = jurisdiction_record(open.project.jurisdiction_id);
     let mut response = writing_project(|| {
