@@ -172,7 +172,8 @@ substitute browser or native-app automation for a server that is available.
 * **Gmail** — review received mail and draft outgoing mail. Before an authorized archive, review the exact thread,
   file it or save a source-linked review in the approved matter record, and verify the save. If filing is blocked, leave
   the thread in the inbox.
-* **Google Calendar** — meetings and deadlines.
+* **Google Calendar** — at session start, follow `.agents/skills/calendar-conflict-check/SKILL.md` to verify access.
+  Check the proposed window before naming or accepting a time.
 * **Google Drive** — meeting notes, transcripts, and large document intake.
 * **Slack** — private channel for updates.
 * **Linear** — CLI feedback, named by mechanism and never by matter. Remove personal and matter identifiers before
