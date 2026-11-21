@@ -195,12 +195,9 @@ env:
   DEPLOY_EXPECTED_REPOSITORY: ${{ vars.DEPLOY_EXPECTED_REPOSITORY }}
 
 concurrency:
-  # Releases share one serialized lane so two merges to `main` — or a merge and a
-  # `kind-ci/**` branch iteration — never race each other. This matters more than
-  # it did while a person pushed the tag: EVERY merge starts a run now, so two
-  # merges landing close together would otherwise overlap, and the second one's
-  # release decision would read a tag list the first one is still writing to.
-  group: ${{ github.event_name == 'schedule' && 'deploy-nightly-kind' || 'deploy-release' }}
+  # Main releases stay serialized while their tag decisions and publication run.
+  # Nonpublishing kind-ci branches skip tag lookup and use a separate lane per ref.
+  group: ${{ startsWith(github.ref_name, 'kind-ci/') && format('deploy-kind-ci-{0}', github.ref) || github.event_name == 'schedule' && 'deploy-nightly-kind' || 'deploy-release' }}
   cancel-in-progress: false
 
 jobs:
