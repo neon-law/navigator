@@ -5,6 +5,8 @@ description: Check Calendar access at Project session start and verify availabil
 
 # Check calendar access
 
+Follow **Find the term first** in `AGENTS.md` for the Project Calendar and Attorney Calendar definitions.
+
 At session start, read the Project code and host from `navigator.yaml`. Use `navigator site whoami --host <host>` to
 identify the signed-in user. Choose a short upcoming window and run both read-only probes:
 
