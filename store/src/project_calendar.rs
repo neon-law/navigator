@@ -392,7 +392,7 @@ async fn current_roster(
                 } else {
                     has_lawyer_dri |= row.is_lawyer_dri;
                 }
-                if matches!(person.role, Role::Clerk | Role::Admin) {
+                if receives_event_invitation(person.role) {
                     guests.insert(person.id.simple().to_string(), address.clone());
                 }
                 desired.insert(person.id, address);
@@ -411,6 +411,10 @@ async fn current_roster(
     }
 
     Ok((desired, guests, report))
+}
+
+fn receives_event_invitation(role: Role) -> bool {
+    matches!(role, Role::Clerk | Role::Lawyer | Role::Admin)
 }
 
 fn delivery_gap(
@@ -566,6 +570,15 @@ mod tests {
         )
         .await
         .expect("open")
+    }
+
+    #[test]
+    fn assigned_lawyers_join_event_guests_without_inviting_clients_or_owners() {
+        assert!(super::receives_event_invitation(Role::Lawyer));
+        assert!(super::receives_event_invitation(Role::Clerk));
+        assert!(super::receives_event_invitation(Role::Admin));
+        assert!(!super::receives_event_invitation(Role::Client));
+        assert!(!super::receives_event_invitation(Role::Owner));
     }
 
     #[test]
