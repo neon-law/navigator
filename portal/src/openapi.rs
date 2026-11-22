@@ -1354,8 +1354,8 @@ fn canonical_document(base: &str) -> Value {
                   "name": { "type": "string" },
                   "contact": { "type": ["string", "null"] },
                   "portal": { "type": ["string", "null"] },
-                  "acceptance_sla_hours": { "type": "integer" },
-                  "turnaround_sla_days": { "type": "integer" },
+                  "acceptance_sla_hours": { "type": ["integer", "null"] },
+                  "turnaround_sla_days": { "type": ["integer", "null"] },
                   "reporting_requirements": { "type": ["string", "null"] },
                   "inserted_at": { "type": "string", "format": "date-time" }
                 } } }
@@ -1369,12 +1369,12 @@ fn canonical_document(base: &str) -> Value {
             "description": "Adds one plan to the Firm's vocabulary. A name is unique per Firm. Authorization: the `manage_legal_plans` capability — Owner, or an Admin of the Firm; otherwise 404.",
             "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
             "requestBody": { "required": true, "content": { "application/json": {
-              "schema": { "type": "object", "required": ["name", "acceptance_sla_hours", "turnaround_sla_days"], "properties": {
+              "schema": { "type": "object", "required": ["name"], "properties": {
                 "name": { "type": "string" },
                 "contact": { "type": "string" },
                 "portal": { "type": "string", "description": "Where the Firm logs in to accept cases and file claims." },
-                "acceptance_sla_hours": { "type": "integer", "minimum": 1 },
-                "turnaround_sla_days": { "type": "integer", "minimum": 1 },
+                "acceptance_sla_hours": { "type": ["integer", "null"], "minimum": 1 },
+                "turnaround_sla_days": { "type": ["integer", "null"], "minimum": 1 },
                 "reporting_requirements": { "type": "string" }
               } }
             } } },
@@ -1385,8 +1385,8 @@ fn canonical_document(base: &str) -> Value {
                   "name": { "type": "string" },
                   "contact": { "type": ["string", "null"] },
                   "portal": { "type": ["string", "null"] },
-                  "acceptance_sla_hours": { "type": "integer" },
-                  "turnaround_sla_days": { "type": "integer" },
+                  "acceptance_sla_hours": { "type": ["integer", "null"] },
+                  "turnaround_sla_days": { "type": ["integer", "null"] },
                   "reporting_requirements": { "type": ["string", "null"] },
                   "inserted_at": { "type": "string", "format": "date-time" }
                 } } } } },
@@ -1475,8 +1475,8 @@ fn canonical_document(base: &str) -> Value {
                   "name": { "type": "string" },
                   "contact": { "type": ["string", "null"] },
                   "portal": { "type": ["string", "null"] },
-                  "acceptance_sla_hours": { "type": "integer" },
-                  "turnaround_sla_days": { "type": "integer" },
+                  "acceptance_sla_hours": { "type": ["integer", "null"] },
+                  "turnaround_sla_days": { "type": ["integer", "null"] },
                   "reporting_requirements": { "type": ["string", "null"] },
                   "inserted_at": { "type": "string", "format": "date-time" }
                 } }, { "type": "null" }] },
@@ -1534,8 +1534,8 @@ fn canonical_document(base: &str) -> Value {
                   "name": { "type": "string" },
                   "contact": { "type": ["string", "null"] },
                   "portal": { "type": ["string", "null"] },
-                  "acceptance_sla_hours": { "type": "integer" },
-                  "turnaround_sla_days": { "type": "integer" },
+                  "acceptance_sla_hours": { "type": ["integer", "null"] },
+                  "turnaround_sla_days": { "type": ["integer", "null"] },
                   "reporting_requirements": { "type": ["string", "null"] },
                   "inserted_at": { "type": "string", "format": "date-time" }
                 } }, { "type": "null" }] },

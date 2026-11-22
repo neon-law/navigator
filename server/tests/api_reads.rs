@@ -463,8 +463,8 @@ async fn seed_confirmed_plan_project(fx: &Fixture, project: &store::projects::Pr
             name: "Example Plan".into(),
             contact: None,
             portal: None,
-            acceptance_sla_hours: 24,
-            turnaround_sla_days: 7,
+            acceptance_sla_hours: Some(24),
+            turnaround_sla_days: Some(7),
             reporting_requirements: None,
         },
     )

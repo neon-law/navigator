@@ -16,7 +16,7 @@
 //! Money follows the [`crate::finance_aggregate`] rule: integer cents, a
 //! group total sums the per-matter rounded pieces rather than re-splitting
 //! raw totals. The needs-you rule is a pure helper,
-//! [`business_days_between`], so the two-business-day threshold is unit-tested
+//! [`next_business_day`], so the one-business-day threshold is unit-tested
 //! without a database; weekends count off, and no court-holiday calendar is
 //! applied — `store::courts` carries a court registry, not a holiday calendar.
 //!
@@ -330,30 +330,39 @@ async fn append_statutory(
     Ok(())
 }
 
+/// The same UTC time on the next Monday through Friday.
+pub fn next_business_day(at: DateTime<Utc>) -> DateTime<Utc> {
+    let days = match at.weekday() {
+        chrono::Weekday::Fri => 3,
+        chrono::Weekday::Sat => 2,
+        _ => 1,
+    };
+    at + chrono::Duration::days(days)
+}
+
 /// One conversation the Firm owes a reply on: an inbound message with no later
-/// outbound on the same conversation, older than two business days. The
+/// outbound on the same conversation, awaiting a reply for one business day. The
 /// subject and counterparty name are the conversation's, not the message
 /// body — the alert names the thread, never quotes it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NeedsYouItem {
-    pub project_id: Uuid,
+    pub project_id: Option<Uuid>,
     pub conversation_id: Uuid,
     pub external_name: Option<String>,
     pub subject: Option<String>,
-    /// The newest unanswered inbound's occurred_at.
-    pub last_inbound: DateTime<Utc>,
+    /// The inbound that started the current response window.
+    #[serde(alias = "last_inbound")]
+    pub first_unanswered: DateTime<Utc>,
 }
 
-/// Needs-you across the Firm's project-attributed conversations: inbound with
-/// no later outbound, older than two business days ([`business_days_between`],
+/// Needs-you across the Firm's conversations: inbound with
+/// no later outbound, awaiting a reply for one business day ([`next_business_day`],
 /// weekends off — no holiday calendar is applied). Read from the inbox
 /// mirror's PostgreSQL lane, the same lane
 /// [`crate::postgres::inbox::unread_count_for_project_on`] counts; a
 /// deployment whose conversations were never mirrored answers nothing rather
 /// than reading the write authority through a second, firm-unfiltered query.
-/// The last-inbound/last-outbound aggregation picks each side's maximum by
-/// text comparison, which the mirror's uniform RFC 3339 UTC rendering makes
-/// exact; the picked values are parsed, not trusted.
+/// The first inbound since the last reply starts the clock.
 ///
 /// # Errors
 ///
@@ -366,11 +375,12 @@ pub async fn needs_you(
 ) -> Result<Vec<NeedsYouItem>, FirmDigestError> {
     let rows = sqlx::query(
         "SELECT c.id AS conversation_id, c.project_id, c.subject, c.external_name, \
-         MAX(m.occurred_at) FILTER (WHERE m.direction = 'inbound') AS last_inbound, \
-         MAX(m.occurred_at) FILTER (WHERE m.direction = 'outbound') AS last_outbound \
+         MIN(m.occurred_at::timestamptz) AS first_unanswered \
          FROM inbox_conversation c \
-         JOIN message m ON m.conversation_id = c.id AND m.purpose = 'matter' \
-         WHERE c.firm_id = $1 AND c.project_id IS NOT NULL \
+         JOIN message m ON m.conversation_id = c.id AND m.purpose = 'matter' AND m.direction = 'inbound' \
+         WHERE c.firm_id = $1 AND NOT EXISTS ( \
+             SELECT 1 FROM message reply WHERE reply.conversation_id = c.id AND reply.purpose = 'matter' \
+             AND reply.direction = 'outbound' AND reply.occurred_at::timestamptz >= m.occurred_at::timestamptz) \
          GROUP BY c.id, c.project_id, c.subject, c.external_name \
          ORDER BY c.id",
     )
@@ -379,19 +389,8 @@ pub async fn needs_you(
     .await?
     .iter()
     .map(|row| -> Result<Option<NeedsYouItem>, FirmDigestError> {
-        let Some(inbound) = row.try_get::<Option<String>, _>("last_inbound")? else {
-            return Ok(None);
-        };
-        let last_inbound =
-            parse_instant(&inbound).ok_or(FirmDigestError::Invalid("message.occurred_at"))?;
-        if let Some(outbound) = row.try_get::<Option<String>, _>("last_outbound")? {
-            let last_outbound =
-                parse_instant(&outbound).ok_or(FirmDigestError::Invalid("message.occurred_at"))?;
-            if last_outbound >= last_inbound {
-                return Ok(None);
-            }
-        }
-        if business_days_between(last_inbound.date_naive(), now.date_naive()) <= 2 {
+        let first: DateTime<Utc> = row.try_get("first_unanswered")?;
+        if now < next_business_day(first) {
             return Ok(None);
         }
         Ok(Some(NeedsYouItem {
@@ -399,7 +398,7 @@ pub async fn needs_you(
             conversation_id: row.try_get("conversation_id")?,
             external_name: row.try_get("external_name")?,
             subject: row.try_get("subject")?,
-            last_inbound,
+            first_unanswered: first,
         }))
     })
     .collect::<Result<Vec<_>, FirmDigestError>>()?
@@ -975,8 +974,9 @@ mod database {
         )
         .await;
         let stale = conversation(&world.pg, world.firm_id, matter_id, "stale thread").await;
-        // Wednesday of last week — three business days before Monday.
-        message(&world.pg, stale, "inbound", "2026-11-04T12:00:00Z").await;
+        // Friday is due at the same time Monday. A follow-up does not reset that clock.
+        message(&world.pg, stale, "inbound", "2026-11-06T12:00:00Z").await;
+        message(&world.pg, stale, "inbound", "2026-11-09T11:00:00Z").await;
         let fresh = conversation(&world.pg, world.firm_id, matter_id, "fresh thread").await;
         message(&world.pg, fresh, "inbound", "2026-11-09T08:00:00Z").await;
         let answered = conversation(&world.pg, world.firm_id, matter_id, "answered thread").await;

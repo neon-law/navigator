@@ -73,7 +73,7 @@ pub struct AcceptanceSlaMiss {
     pub project_id: Uuid,
     pub code: String,
     pub plan_name: String,
-    pub acceptance_sla_hours: i32,
+    pub acceptance_sla_hours: Option<i32>,
     pub elapsed_hours: i64,
     pub assigned_on: NaiveDate,
     pub accepted_on: NaiveDate,
@@ -299,7 +299,7 @@ pub async fn acceptance_sla_misses(
          WHERE p.firm_id = $1 AND lp.firm_id = $1 \
            AND p.plan_assigned_on IS NOT NULL AND p.plan_accepted_on IS NOT NULL \
            AND p.plan_accepted_on BETWEEN $2 AND $3 \
-           AND (p.plan_accepted_on - p.plan_assigned_on) * 24 > lp.acceptance_sla_hours \
+           AND (p.plan_accepted_on - p.plan_assigned_on) * 24 > COALESCE(lp.acceptance_sla_hours, 24 * CASE EXTRACT(ISODOW FROM p.plan_assigned_on) WHEN 5 THEN 3 WHEN 6 THEN 2 ELSE 1 END) \
          ORDER BY p.plan_accepted_on, p.id",
     )
     .bind(firm_id)
@@ -917,8 +917,8 @@ mod database {
                 name: name.to_owned(),
                 contact: None,
                 portal: None,
-                acceptance_sla_hours,
-                turnaround_sla_days,
+                acceptance_sla_hours: Some(acceptance_sla_hours),
+                turnaround_sla_days: Some(turnaround_sla_days),
                 reporting_requirements: None,
             },
         )
@@ -1254,7 +1254,7 @@ mod database {
         assert_eq!(acceptance.len(), 1, "same-day acceptance never misses");
         assert_eq!(acceptance[0].project_id, late);
         assert_eq!(acceptance[0].elapsed_hours, 48);
-        assert_eq!(acceptance[0].acceptance_sla_hours, 24);
+        assert_eq!(acceptance[0].acceptance_sla_hours, Some(24));
 
         let turnaround = turnaround_sla_misses(&pg, a.firm_id, day(11, 1), day(11, 30))
             .await

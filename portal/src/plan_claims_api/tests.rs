@@ -107,7 +107,7 @@ async fn a_closed_project_reconciles_claims_through_the_authenticated_routes() {
         }).await.unwrap();
         let plan = legal_plans::create(&pg, firm, &NewLegalPlan {
             name: "ARAG Group Legal".into(), contact: None, portal: None,
-            acceptance_sla_hours: 24, turnaround_sla_days: 30, reporting_requirements: None,
+            acceptance_sla_hours: Some(24), turnaround_sla_days: Some(30), reporting_requirements: None,
         }).await.unwrap();
         let project = projects::create(&db, &NewProject {
             code: "synthetic-closed-claim".into(), name: "Synthetic closed claim".into(),

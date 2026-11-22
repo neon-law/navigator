@@ -138,8 +138,8 @@ async fn seed_review(
             name: "LegalEASE".into(),
             contact: None,
             portal: None,
-            acceptance_sla_hours: 24,
-            turnaround_sla_days: 14,
+            acceptance_sla_hours: Some(24),
+            turnaround_sla_days: Some(14),
             reporting_requirements: None,
         },
     )

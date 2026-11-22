@@ -41,12 +41,12 @@ pub enum LegalPlansCmd {
         /// The plan's provider-support contact: email, phone, hours.
         #[arg(long)]
         contact: Option<String>,
-        /// Hours the Firm has to answer a case request.
+        /// Optional carrier response window in elapsed hours. Defaults to one business day.
         #[arg(long)]
-        acceptance_sla_hours: i32,
-        /// Days the Firm has to finish an accepted matter.
+        acceptance_sla_hours: Option<i32>,
+        /// Optional carrier completion term in days. Omit for an open-ended matter.
         #[arg(long)]
-        turnaround_sla_days: i32,
+        turnaround_sla_days: Option<i32>,
         /// What the plan asks the Firm to report, and how often.
         #[arg(long)]
         reporting_requirements: Option<String>,
@@ -620,8 +620,8 @@ mod tests {
                 name: "Sample Panel Plan".into(),
                 portal: Some("https://plan.example.com/account".into()),
                 contact: None,
-                acceptance_sla_hours: 24,
-                turnaround_sla_days: 30,
+                acceptance_sla_hours: Some(24),
+                turnaround_sla_days: Some(30),
                 reporting_requirements: None,
             },
         )
