@@ -508,11 +508,11 @@
 {"file":"deploy/src/devx/forgejo/runner.rs","line":556,"function":"execute","operation":"create","sql_operations":[],"tables":[],"transaction":false}
 {"file":"deploy/src/devx/forgejo/runner.rs","line":568,"function":"execute","operation":"create","sql_operations":[],"tables":[],"transaction":false}
 {"file":"deploy/src/devx/forgejo/runner.rs","line":635,"function":"run","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
-{"file":"deploy/src/devx/forgejo/smoke.rs","line":1645,"function":"grant_smoke_runtime","operation":"query_scalar","sql_operations":["SELECT"],"tables":[],"transaction":false}
-{"file":"deploy/src/devx/forgejo/smoke.rs","line":1655,"function":"grant_smoke_runtime","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
-{"file":"deploy/src/devx/forgejo/smoke.rs","line":1655,"function":"grant_smoke_runtime","operation":"raw_sql","sql_operations":[],"tables":[],"transaction":false}
-{"file":"deploy/src/devx/forgejo/smoke.rs","line":1657,"function":"grant_smoke_runtime","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
-{"file":"deploy/src/devx/forgejo/smoke.rs","line":1657,"function":"grant_smoke_runtime","operation":"raw_sql","sql_operations":["SELECT","INSERT","UPDATE","DELETE"],"tables":[],"transaction":true}
+{"file":"deploy/src/devx/forgejo/smoke.rs","line":1589,"function":"grant_smoke_runtime","operation":"query_scalar","sql_operations":["SELECT"],"tables":[],"transaction":false}
+{"file":"deploy/src/devx/forgejo/smoke.rs","line":1599,"function":"grant_smoke_runtime","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
+{"file":"deploy/src/devx/forgejo/smoke.rs","line":1599,"function":"grant_smoke_runtime","operation":"raw_sql","sql_operations":[],"tables":[],"transaction":false}
+{"file":"deploy/src/devx/forgejo/smoke.rs","line":1601,"function":"grant_smoke_runtime","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
+{"file":"deploy/src/devx/forgejo/smoke.rs","line":1601,"function":"grant_smoke_runtime","operation":"raw_sql","sql_operations":["SELECT","INSERT","UPDATE","DELETE"],"tables":[],"transaction":true}
 {"file":"deploy/src/devx/forgejo/smoke_postgres_tests.rs","line":10,"function":"native_forgejo_fixture_derives_real_owned_repository_and_routes_spawned_reads","operation":"query_scalar","sql_operations":["SELECT"],"tables":["brand","entity","entity_type","firm","jurisdiction","person","person_firm_role","project"],"transaction":false}
 {"file":"deploy/src/devx/forgejo/smoke_postgres_tests.rs","line":28,"function":"receiver_refuses_an_unprepared_database_without_installing_schema_or_receipts","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
 {"file":"deploy/src/devx/forgejo/smoke_postgres_tests.rs","line":28,"function":"receiver_refuses_an_unprepared_database_without_installing_schema_or_receipts","operation":"query","sql_operations":["CREATE"],"tables":[],"transaction":false}

@@ -61,6 +61,7 @@ binary(/^(mail_signatures|project_drive_folder_id|project_repository_url|project
 | (binary(=store) & test(/^postgres::inbox_tests::(fi_history_is_native_idempotent_metadata_and_cannot_queue_or_dispatch|raced_fi_native_id_payloads_cannot_split_across_channels_or_replace_the_winner|identical_fi_replays_preserve_reviewed_history_and_new_events_reopen_it|fi_import_lock_prevents_assignment_until_destination_verification_finishes|fi_project_destination_is_reserved_before_any_history_commit|native_call_and_fi_triage_preserve_roles_billing_and_attribution)$/))
 | (binary(=store) & test(/^postgres::native_origin::tests::/) & not test(=postgres::native_origin::tests::invalid_tier_and_nil_operation_fail_before_connecting))
 | (binary(=hudson) & test(=postgres_backfill::tests::native_target_refuses_dry_run_and_family_before_source_configuration_or_capture_files))
+| (binary(=hudson) & test(/^devx::forgejo::smoke::postgres_tests::/))
 | (binary(=workflows_service) & test(=host::host_mode_tests::verified_object_activation_removes_only_the_two_legacy_sdk_http_services))
 | (binary(=workflows_service) & test(/^host::local_providers::tests::(detached_native_handlers_use_captured_effects_and_the_owned_postgres_store|injected_store_refuses_damaged_history_and_closed_pool_without_fallback|native_billing_digest_without_exports_registers_without_provider_effects)$/))
 | (binary(=workflows) & test(=dbos_engine::dri_digest::tests::native_source_keeps_all_projects_and_both_dri_sides))
