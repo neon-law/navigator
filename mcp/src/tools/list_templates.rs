@@ -49,6 +49,14 @@ pub fn descriptor() -> Value {
     })
 }
 
+#[derive(serde::Serialize)]
+struct CatalogEntry {
+    #[serde(flatten)]
+    template: store::seed::PublicTemplate,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    intake_url: Option<String>,
+}
+
 pub fn call(arguments: &Value) -> Result<Value, ToolError> {
     let arguments: Arguments = serde_json::from_value(arguments.clone())
         .map_err(|error| ToolError::InvalidArguments(error.to_string()))?;
@@ -59,13 +67,6 @@ pub fn call(arguments: &Value) -> Result<Value, ToolError> {
         }));
     }
 
-    #[derive(serde::Serialize)]
-    struct CatalogEntry {
-        #[serde(flatten)]
-        template: store::seed::PublicTemplate,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        intake_url: Option<String>,
-    }
     let host = std::env::var("NAVIGATOR_PUBLIC_HOST").ok();
     let site = views::brand::BrandKey::Neon.public_home_href_for(host.as_deref());
     let templates: Vec<_> = store::seed::public_seeded_templates()

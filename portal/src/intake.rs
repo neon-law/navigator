@@ -491,11 +491,12 @@ pub(crate) async fn resolve_intake_state(
 
     // Completed client intake is the completion landing, not an editable form.
     if is_past_intake(&notation.state) {
-        return Ok(webapp::client_intake::IntakeState::Complete {
-            project_code: project.code,
+        return Ok(completed_intake(
+            personal,
+            project.code,
             flow_label,
-            total: total_of(&step),
-        });
+            total_of(&step),
+        ));
     }
 
     Ok(match step {
@@ -557,15 +558,27 @@ pub(crate) async fn resolve_intake_state(
                 },
             ))
         }
-        ClientIntakeStep::Complete { .. } if personal => {
-            webapp::client_intake::IntakeState::SelfServeComplete
+        ClientIntakeStep::Complete { total } => {
+            completed_intake(personal, project.code, flow_label, total)
         }
-        ClientIntakeStep::Complete { total } => webapp::client_intake::IntakeState::Complete {
-            project_code: project.code,
+    })
+}
+
+fn completed_intake(
+    personal: bool,
+    project_code: String,
+    flow_label: String,
+    total: usize,
+) -> webapp::client_intake::IntakeState {
+    if personal {
+        webapp::client_intake::IntakeState::SelfServeComplete
+    } else {
+        webapp::client_intake::IntakeState::Complete {
+            project_code,
             flow_label,
             total,
-        },
-    })
+        }
+    }
 }
 
 /// `POST /app/projects/{project_code}/intake/{notation_id}` — save one

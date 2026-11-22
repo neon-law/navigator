@@ -1970,21 +1970,7 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap();
-            let project = store::projects::find_by_id(&db, notation.project_id).await.unwrap().unwrap();
-            for (code, exempt) in [("navigator",true),("navigatorbusiness",true),("my-navigator",false)] {
-                let comparison = store::projects::create(&db, &store::projects::NewProject {
-                    code: code.into(), name: "Example business".into(), entity_id: project.entity_id,
-                    firm_id: project.firm_id, brand: "neon".into(), ..Default::default()
-                }).await.unwrap();
-                let result = workflows::enforce_engagement_first(&db, comparison.id, store::personal_projects::FORMATION).await;
-                if exempt { result.unwrap(); } else { assert!(matches!(result, Err(workflows::notation_session::NotationSessionError::EngagementMustBeFirst {..}))); }
-            }
-            let roles = store::projects::participations_for_project(&db, notation.project_id)
-                .await
-                .unwrap();
-            assert_eq!(roles.len(), 1);
-            assert!(roles[0].is_client_dri && !roles[0].is_lawyer_dri);
-            assert_eq!(roles[0].person_id, owner.id);
+            check_founder_and_onboarding(&db, notation.project_id, owner.id).await;
             let answer = |question, value| {
                 workflows::notation_session::record_client_answer_with_reference(
                     &db,
@@ -2022,35 +2008,99 @@ mod tests {
                 location(&start(None).await),
                 "/notations/nevada-llc-formation/start"
             );
-            assert!(store::personal_projects::formations(&pg, other.id, "neon")
-                .await
-                .unwrap()
-                .is_empty());
-            assert!(
-                store::personal_projects::formations(&pg, owner.id, "daybridge")
-                    .await
-                    .unwrap()
-                    .is_empty()
-            );
-            let move_draft = |person| store::personal_projects::separate_formation(&pg, person, "neon", id);
-            assert!(move_draft(other.id).await.unwrap().is_none());
-            let moved = move_draft(owner.id).await.unwrap().unwrap();
-            assert_eq!(move_draft(owner.id).await.unwrap(), Some(moved.clone()));
-            let rows = store::personal_projects::formations(&pg, owner.id, "neon").await.unwrap();
-            assert_eq!(rows.len(), 2);
-            assert_eq!(rows[1].intake_path(), moved);
-            assert_eq!(rows[1].label, "First Example LLC");
-            assert_eq!(rows[0].intake_path(), second);
-            let bookmark = |person| store::personal_projects::moved_intake(notation.project_id, id, person, "neon");
-            assert_eq!(bookmark(owner.id).await.unwrap(), Some(moved));
-            assert!(bookmark(other.id).await.unwrap().is_none());
-            assert_eq!(
-                store::personal_projects::owner_access(notation.project_id, other.id, "neon")
-                    .await
-                    .unwrap(),
-                Some(false)
-            );
+            check_isolation_and_move(&pg, owner.id, other.id, notation.project_id, id, &second)
+                .await;
         })
         .await;
+    }
+    async fn check_founder_and_onboarding(
+        db: &store::surreal::SurrealDb,
+        project_id: Uuid,
+        owner: Uuid,
+    ) {
+        let project = store::projects::find_by_id(db, project_id)
+            .await
+            .unwrap()
+            .unwrap();
+        for (code, exempt) in [
+            ("navigator", true),
+            ("navigatorbusiness", true),
+            ("my-navigator", false),
+        ] {
+            let comparison = store::projects::create(
+                db,
+                &store::projects::NewProject {
+                    code: code.into(),
+                    name: "Example business".into(),
+                    entity_id: project.entity_id,
+                    firm_id: project.firm_id,
+                    brand: "neon".into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+            let result = workflows::enforce_engagement_first(
+                db,
+                comparison.id,
+                store::personal_projects::FORMATION,
+            )
+            .await;
+            if exempt {
+                result.unwrap();
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(
+                        workflows::notation_session::NotationSessionError::EngagementMustBeFirst { .. }
+                    )
+                ));
+            }
+        }
+        let roles = store::projects::participations_for_project(db, project_id)
+            .await
+            .unwrap();
+        assert_eq!(roles.len(), 1);
+        assert!(roles[0].is_client_dri && !roles[0].is_lawyer_dri);
+        assert_eq!(roles[0].person_id, owner);
+    }
+
+    async fn check_isolation_and_move(
+        pg: &store::postgres::PostgresDb,
+        owner: Uuid,
+        other: Uuid,
+        source: Uuid,
+        id: Uuid,
+        second: &str,
+    ) {
+        assert!(store::personal_projects::formations(pg, other, "neon")
+            .await
+            .unwrap()
+            .is_empty());
+        assert!(store::personal_projects::formations(pg, owner, "daybridge")
+            .await
+            .unwrap()
+            .is_empty());
+        let move_draft =
+            |person| store::personal_projects::separate_formation(pg, person, "neon", id);
+        assert!(move_draft(other).await.unwrap().is_none());
+        let moved = move_draft(owner).await.unwrap().unwrap();
+        assert_eq!(move_draft(owner).await.unwrap(), Some(moved.clone()));
+        let rows = store::personal_projects::formations(pg, owner, "neon")
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[1].intake_path(), moved);
+        assert_eq!(rows[1].label, "First Example LLC");
+        assert_eq!(rows[0].intake_path(), second);
+        let bookmark = |person| store::personal_projects::moved_intake(source, id, person, "neon");
+        assert_eq!(bookmark(owner).await.unwrap(), Some(moved));
+        assert!(bookmark(other).await.unwrap().is_none());
+        assert_eq!(
+            store::personal_projects::owner_access(source, other, "neon")
+                .await
+                .unwrap(),
+            Some(false)
+        );
     }
 }

@@ -154,25 +154,24 @@ pub async fn start_formation(
          WHERE p.code=$1 AND p.brand=$2 AND p.firm_id=$3 AND p.self_serve AND p.status='open'
            AND p.client_dri_person_id=$4 AND r.person_id=$4 AND r.participation='client' AND r.is_client_dri FOR SHARE OF p,r",
     ).bind(&code).bind(brand).bind(firm).bind(owner).fetch_optional(&mut *tx).await?;
-    let project = match project {
-        Some(project) => project,
-        None => {
-            crate::durable_object_handover::hold_creation_epoch(&mut tx).await?;
-            let entity: Uuid = sqlx::query_scalar(
+    let project = if let Some(existing) = project {
+        existing
+    } else {
+        crate::durable_object_handover::hold_creation_epoch(&mut tx).await?;
+        let entity: Uuid = sqlx::query_scalar(
                 "INSERT INTO entity (name,entity_type_id,jurisdiction_id)
                  SELECT $1,t.id,j.id FROM entity_type t,jurisdiction j WHERE t.name='Human' AND j.name='United States' RETURNING id",
             ).bind(owner_name).fetch_one(&mut *tx).await?;
-            create_owned(
-                &mut tx,
-                &code,
-                "My Navigator Project",
-                owner,
-                entity,
-                firm,
-                brand,
-            )
-            .await?
-        }
+        create_owned(
+            &mut tx,
+            &code,
+            "My Navigator Project",
+            owner,
+            entity,
+            firm,
+            brand,
+        )
+        .await?
     };
     let new =
         NewNotation::new(template, owner, project, "BEGIN").with_questionnaire_snapshot(snapshot);

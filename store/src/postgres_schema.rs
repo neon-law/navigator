@@ -1745,6 +1745,7 @@ mod tests {
             ("20261122021314_converge_native_person_merge.sql", include_str!("../postgres/migrations/20261122021314_converge_native_person_merge.sql")),
             ("20261122140000_firm_namespace_move.sql", include_str!("../postgres/migrations/20261122140000_firm_namespace_move.sql")),
             ("20261122150000_optional_plan_terms.sql", include_str!("../postgres/migrations/20261122150000_optional_plan_terms.sql")),
+            ("20261122180000_personal_project.sql", include_str!("../postgres/migrations/20261122180000_personal_project.sql")),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());
