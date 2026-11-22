@@ -61,6 +61,27 @@ hudson ops archives capture --config archive-config.json \
   --reuse-local capture-report.json --out retry-report.json
 ```
 
+## Deploy with DBOS Archives
+
+Select DBOS Archives in the deployment's private `config.toml` and name the mounted configuration:
+
+```toml
+NAVIGATOR_DBOS_ENABLED = "true"
+NAVIGATOR_DBOS_ARCHIVES_ENABLED = "true"
+NAVIGATOR_ARCHIVE_WRITE_ONLY_CONFIG = "/var/lib/navigator/iceberg/config/archive-config.json"
+```
+
+Provision `navigator-archive-write-only` as a ConfigMap with the non-secret `archive-config.json` key. Generate that
+configuration with `--local-root /var/lib/navigator/iceberg/data`. Provision a Bound `navigator-archive-iceberg` PVC
+with `ReadWriteMany` access and storage writable by group 65532. Replicas and rolling updates must share the sealed
+generations and receipts. Size and retain the filesystem through the environment's storage policy; the renderer does not
+create, resize, or delete this claim. `ops ship` checks the configuration, persistent path and claim before apply.
+
+The renderer mounts the configuration read-only and the persistent claim at the configured local root. It removes the
+Restate Archives trigger when DBOS Archives is selected. It does not provision destination buckets, grant IAM, or
+validate effective cloud permissions. Independently provision the writer's ADC and separate verifier identity under the
+create-only contract above before enabling the schedule. Keep verifier credentials out of `web`.
+
 ## Verify with a separate identity
 
 The verifier uses a separately provisioned read/control-plane ADC identity. Do not put its credentials in the writer
