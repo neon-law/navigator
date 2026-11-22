@@ -97,6 +97,23 @@ pub fn run_e2e(cfg: &KindConfig) -> Result<()> {
     require_tools(&["kubectl", "curl"])?;
     use_kind_context(cfg)?;
 
+    let root = super::orchestrate::workspace_root().ok();
+    let native_requested = std::env::var("NAVIGATOR_KIND_DEPS_OVERLAY").as_deref()
+        == Ok(super::native_profile::OVERLAY);
+    if native_smoke_selected(root.as_deref(), cfg, native_requested)? {
+        let root = root
+            .as_deref()
+            .context("native smoke workspace is missing")?;
+        // This verifies the exact ready native resource; it never provisions,
+        // grants roles, creates history, or falls back to the legacy tier.
+        super::orchestrate::verified_native_database(root, cfg)?;
+        wait_for_clamd_ping(cfg.clamav_port)?;
+        check_health_at(&format!("localhost:{}", cfg.web_port))?;
+        check_seed()?;
+        eprintln!("=== native checks passed ===");
+        return Ok(());
+    }
+
     eprintln!("=== waiting for navigator-web rollout ===");
     wait_rollout("deployment", "navigator-web", cfg)?;
 
@@ -105,8 +122,8 @@ pub fn run_e2e(cfg: &KindConfig) -> Result<()> {
         eprintln!("    waiting for {kind}/{name} rollout");
         wait_rollout(kind, name, cfg)?;
     }
-    // The deploy workflow applies the overlay directly rather than running
-    // `dev up`, so no host-side ClamAV forward exists there. Starting one is
+    // Direct callers of the compatibility overlay do not run `dev up`, so
+    // they have no host-side ClamAV forward. Starting one is
     // harmless when a local `dev up` already owns the port: kubectl exits on
     // the bind conflict and the existing forward satisfies the probe.
     let _clamav_forward = start_port_forward(cfg, "service/clamav", cfg.clamav_port, CLAMAV_PORT)?;
@@ -122,6 +139,34 @@ pub fn run_e2e(cfg: &KindConfig) -> Result<()> {
 
     eprintln!("=== all checks passed ===");
     Ok(())
+}
+
+fn native_smoke_selected(
+    root: Option<&std::path::Path>,
+    cfg: &KindConfig,
+    native_requested: bool,
+) -> Result<bool> {
+    let Some(root) = root else {
+        anyhow::ensure!(
+            !native_requested,
+            "native smoke requires its owned workspace"
+        );
+        return Ok(false);
+    };
+    if !super::native_profile::selected(root, cfg)? {
+        anyhow::ensure!(
+            !native_requested,
+            "native smoke requires its creation intent"
+        );
+        return Ok(false);
+    }
+    let intent = super::native_profile::Intent::read(root)?
+        .context("native smoke requires its owned creation intent")?;
+    anyhow::ensure!(
+        intent.was_ready(),
+        "native tier initialization is incomplete"
+    );
+    Ok(true)
 }
 
 /// A `kubectl port-forward` that lives exactly as long as the check that
@@ -291,6 +336,10 @@ fn restate_ready_target() -> (&'static str, &'static str, &'static str) {
 /// failure says *what* the ingress returned, not just "not 200".
 fn check_health() -> Result<()> {
     let host = std::env::var("INGRESS_HOST").unwrap_or_else(|_| "localhost:8080".to_string());
+    check_health_at(&host)
+}
+
+fn check_health_at(host: &str) -> Result<()> {
     let url = format!("http://{host}/app/health");
     let deadline = Instant::now() + Duration::from_mins(1);
     let mut attempt = 0;
@@ -362,6 +411,24 @@ fn witnessed(rows: usize) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_smoke_refuses_partial_or_foreign_intent_instead_of_waiting_on_legacy() {
+        let root = tempfile::tempdir().unwrap();
+        let cfg = KindConfig::from_env();
+        assert!(!native_smoke_selected(None, &cfg, false).unwrap());
+        assert!(native_smoke_selected(None, &cfg, true).is_err());
+        assert!(!native_smoke_selected(Some(root.path()), &cfg, false).unwrap());
+        assert!(native_smoke_selected(Some(root.path()), &cfg, true).is_err());
+        super::super::native_profile::Intent::prepare(root.path(), &cfg).unwrap();
+        assert!(
+            native_smoke_selected(Some(root.path()), &cfg, false).is_err(),
+            "an interrupted native creation is not compatibility authority"
+        );
+        let mut foreign = cfg;
+        foreign.cluster = "foreign-smoke-tier".into();
+        assert!(native_smoke_selected(Some(root.path()), &foreign, true).is_err());
+    }
 
     #[test]
     fn dependent_rollouts_match_kind_resources() {

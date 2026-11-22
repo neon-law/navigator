@@ -29,7 +29,8 @@ either value.
 
 ## Where DBOS state lives
 
-- **Database:** the same `navigator-postgres` server and `navigator` database as application tables.
+- **Database:** the configured application database on `navigator-postgres`. Fresh native tiers use the database
+  recorded in their creation intent; their DBOS connection targets that same database.
 - **Schema:** `dbos`. The SDK creates and migrates its own tables there on launch (`Config.migrate`).
 - **Login:** `navigator_dbos`, owning only the `dbos` schema. It has no rights on `public`. Application logins have no
   rights on `dbos`. It also holds `CREATE` on the database: the SDK runs `CREATE SCHEMA IF NOT EXISTS dbos` on every
@@ -513,3 +514,12 @@ retained state and outcomes. Preserve the original idempotency and effect identi
 item's disposition. Ambiguous provider effects require reconciliation rather than a fresh submission. Complete [durable
 object handover](durable-object-handover.md) for Notation and Project Slack, then verify native routing and recovery.
 Selected flags and local captures do not establish that these operational gates have passed.
+
+## Native deployment browser gate
+
+The deployment integration job provisions a native KIND tier through `hudson quickstart`, with the complete native
+selector profile. It verifies native admission and persisted DBOS checkpoint replay across host/image restart. The host
+drains before the exact built application image starts as its nonroot user. All three hydrated browser suites run
+against that image, including authenticated repository Draft provenance and restart checks. Independent practice
+previews use owned PostgreSQL fixtures. These checks do not select a production deployment's engine or dispose of
+retained workflow state; compatibility suites remain explicit.

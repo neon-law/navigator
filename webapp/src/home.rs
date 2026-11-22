@@ -323,6 +323,11 @@ pub struct HomePageView {
 /// Resolve the chrome and the static home content.
 #[server]
 pub async fn home_page_view() -> Result<HomePageView, ServerFnError> {
+    crate::server_store::with_request_store(Box::pin(home_page_data())).await
+}
+
+#[cfg(feature = "server")]
+async fn home_page_data() -> Result<HomePageView, ServerFnError> {
     let injected =
         crate::public_chrome::copy_from_request_or_context(consume_context::<InjectedHome>).await;
     let surreal = consume_context::<store::surreal::SurrealDb>();

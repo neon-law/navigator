@@ -53,6 +53,38 @@ mod inbox_triage;
 #[path = "common/private_chart.rs"]
 mod private_chart;
 
+/// Record response status and structural failure markers, never input values or raw HTML.
+async fn failure_page_context(c: &Client) -> String {
+    let result = c.execute(
+        r#"const navigation = performance.getEntriesByType('navigation').at(-1);
+        const body = document.body;
+        const text = body?.textContent ?? '';
+        const knownErrors = ['client email must contain an @', 'choose an onboarding template',
+          'this brand is not worn by a firm', 'that onboarding template was not found',
+          "We're unable to start this intake online. Please contact our office to proceed."];
+        return {
+          path: location.pathname,
+          navigation_status: navigation?.responseStatus ?? null,
+          error_query_present: new URLSearchParams(location.search).has('error'),
+          logout_links: document.querySelectorAll("a[href^='/auth/logout']").length,
+          lenses: Array.from(document.querySelectorAll('[data-lens]')).map(e => e.dataset.lens)
+            .filter(v => ['client', 'lawyer', 'clerk'].includes(v)),
+          workbench_failed: text.includes('Failed to load the workbench.'),
+          internal_response: text.trim() === 'internal',
+          forbidden_response: text.trim().toLowerCase() === 'forbidden',
+          known_start_refusals: knownErrors.filter(error => text.includes(error)),
+          start_form: !!document.querySelector('form.admin-form'),
+          csrf_field: !!document.querySelector('input[name="csrf"],input[name="_csrf"],input[name="csrf_token"]'),
+          body_tags: Array.from(body?.children ?? []).slice(0, 12).map(e => e.tagName)
+        };"#,
+        vec![],
+    ).await;
+    match result {
+        Ok(value) => value.to_string(),
+        Err(_) => "failure page context unavailable".into(),
+    }
+}
+
 /// Browser fixtures require activated PostgreSQL history before creating any records.
 async fn postgres_browser_store() -> anyhow::Result<store::surreal::SurrealDb> {
     store::postgres::PostgresDb::application()
@@ -168,17 +200,23 @@ async fn enrollment_intake_preserves_answers_and_reviews_before_sign_in() {
     let Some(c) = new_client_or_skip().await else {
         return;
     };
-    let preview;
-    let origin = match env::var(SAME_DAY_LEGAL_BASE_URL_ENV) {
-        Ok(url) if !url.trim().is_empty() => url,
+    match env::var(SAME_DAY_LEGAL_BASE_URL_ENV) {
+        Ok(origin) if !origin.trim().is_empty() => exercise_enrollment_intake(c, origin).await,
         _ => {
-            preview = practice_preview::PracticePreview::for_brands(&[
-                views::brand::BrandKey::SameDayLegal,
-            ])
+            practice_preview::PracticePreview::run_for_brands(
+                &[views::brand::BrandKey::SameDayLegal],
+                move |preview| {
+                    Box::pin(async move {
+                        exercise_enrollment_intake(c, preview.sites[0].1.clone()).await;
+                    })
+                },
+            )
             .await;
-            preview.sites[0].1.clone()
         }
-    };
+    }
+}
+
+async fn exercise_enrollment_intake(c: Client, origin: String) {
     c.goto(&format!("{origin}/"))
         .await
         .expect("Same Day Legal home");
@@ -445,70 +483,73 @@ async fn prepared_practice_brands_have_responsive_pages_and_a_working_mobile_men
     let Some(c) = new_client_or_skip().await else {
         return;
     };
-    let preview = practice_preview::PracticePreview::start().await;
-    let capture_dir = std::path::Path::new("/tmp/navigator-screenshots");
-    std::fs::create_dir_all(capture_dir).expect("capture directory");
-    for (key, origin) in &preview.sites {
-        for (width, height) in [(320, 700), (390, 844), (1280, 900)] {
-            if width == 320 && *key != views::brand::BrandKey::Vesta {
-                continue;
-            }
-            set_practice_viewport(&c, width, height).await;
-            let paths = std::iter::once("/")
-                .chain(std::iter::once("/services"))
-                .chain(key.explainer_pages().iter().map(|(path, _)| *path));
-            for path in paths {
-                c.goto(&format!("{origin}{path}"))
-                    .await
-                    .expect("practice page");
-                let mark = key
-                    .resolve_branding(&views::brand::DEFAULT_BRANDING)
-                    .firm
-                    .site_name;
-                wait_for_text(&c, mark, Duration::from_secs(10)).await;
-                let widths = c.execute("return [document.documentElement.scrollWidth, document.documentElement.clientWidth];", vec![])
-                    .await.expect("page widths");
-                let widths = widths.as_array().expect("width pair");
-                assert!(
-                    widths[1].as_u64().expect("viewport width") <= u64::from(width),
-                    "requested viewport applied"
-                );
-                assert!(
-                    widths[0].as_u64() <= widths[1].as_u64(),
-                    "{key:?} {path} overflows at {width}px"
-                );
-                if *key == views::brand::BrandKey::Vesta && path == "/" {
-                    assert_vesta_layout(&c, width, capture_dir).await;
+    practice_preview::PracticePreview::run(|preview| {
+        Box::pin(async move {
+            let capture_dir = std::path::Path::new("/tmp/navigator-screenshots");
+            std::fs::create_dir_all(capture_dir).expect("capture directory");
+            for (key, origin) in &preview.sites {
+                for (width, height) in [(320, 700), (390, 844), (1280, 900)] {
+                    if width == 320 && *key != views::brand::BrandKey::Vesta {
+                        continue;
+                    }
+                    set_practice_viewport(&c, width, height).await;
+                    let paths = std::iter::once("/")
+                        .chain(std::iter::once("/services"))
+                        .chain(key.explainer_pages().iter().map(|(path, _)| *path));
+                    for path in paths {
+                        c.goto(&format!("{origin}{path}"))
+                            .await
+                            .expect("practice page");
+                        let mark = key
+                            .resolve_branding(&views::brand::DEFAULT_BRANDING)
+                            .firm
+                            .site_name;
+                        wait_for_text(&c, mark, Duration::from_secs(10)).await;
+                        let widths = c.execute("return [document.documentElement.scrollWidth, document.documentElement.clientWidth];", vec![])
+                            .await.expect("page widths");
+                        let widths = widths.as_array().expect("width pair");
+                        assert!(
+                            widths[1].as_u64().expect("viewport width") <= u64::from(width),
+                            "requested viewport applied"
+                        );
+                        assert!(
+                            widths[0].as_u64() <= widths[1].as_u64(),
+                            "{key:?} {path} overflows at {width}px"
+                        );
+                        if *key == views::brand::BrandKey::Vesta && path == "/" {
+                            assert_vesta_layout(&c, width, capture_dir).await;
+                        }
+                        if width == 390 && path == "/" && *key != views::brand::BrandKey::Vesta {
+                            std::fs::write(
+                                capture_dir.join(format!("{}-mobile-home.png", key.as_str())),
+                                c.screenshot().await.expect("home capture"),
+                            )
+                            .expect("save home capture");
+                            c.find(Locator::Css(".site-header__burger"))
+                                .await
+                                .expect("mobile menu")
+                                .click()
+                                .await
+                                .expect("open menu");
+                            let contact = c
+                                .find(Locator::Css(
+                                    ".site-header__links a[href^='https://calendar.notion.so/']",
+                                ))
+                                .await
+                                .expect("calendar contact link");
+                            assert!(contact.is_displayed().await.expect("contact visibility"));
+                            std::fs::write(
+                                capture_dir.join(format!("{}-mobile-menu.png", key.as_str())),
+                                c.screenshot().await.expect("menu capture"),
+                            )
+                            .expect("save menu capture");
+                        }
+                    }
                 }
-                if width == 390 && path == "/" && *key != views::brand::BrandKey::Vesta {
-                    std::fs::write(
-                        capture_dir.join(format!("{}-mobile-home.png", key.as_str())),
-                        c.screenshot().await.expect("home capture"),
-                    )
-                    .expect("save home capture");
-                    c.find(Locator::Css(".site-header__burger"))
-                        .await
-                        .expect("mobile menu")
-                        .click()
-                        .await
-                        .expect("open menu");
-                    let contact = c
-                        .find(Locator::Css(
-                            ".site-header__links a[href^='https://calendar.notion.so/']",
-                        ))
-                        .await
-                        .expect("calendar contact link");
-                    assert!(contact.is_displayed().await.expect("contact visibility"));
-                    std::fs::write(
-                        capture_dir.join(format!("{}-mobile-menu.png", key.as_str())),
-                        c.screenshot().await.expect("menu capture"),
-                    )
-                    .expect("save menu capture");
-                }
             }
-        }
-    }
-    c.close().await.expect("close browser");
+            c.close().await.expect("close browser");
+        })
+    }).await;
 }
 
 async fn assert_vesta_layout(c: &Client, width: u32, capture_dir: &std::path::Path) {
@@ -1352,7 +1393,9 @@ async fn lawyer_walks_the_full_retainer_questionnaire_end_to_end() {
         }
         assert!(
             started.elapsed() <= Duration::from_secs(10),
-            "never landed on /app/lawyer/notations/:id/step; last URL was {url}",
+            "never landed on /app/lawyer/notations/:id/step; last path {}; {}",
+            url.path(),
+            failure_page_context(&c).await,
         );
         tokio::time::sleep(Duration::from_millis(200)).await;
     };
@@ -1540,13 +1583,23 @@ async fn lawyer_walks_the_full_retainer_questionnaire_end_to_end() {
     // Submitting the approve form fires `approved`; the worker renders +
     // persists the PDF on entering `generate_pdf__*` and the page offers
     // the deliberate send action.
-    c.execute(
-        "document.querySelector('form[action$=\"/approve-send\"]').submit(); return true;",
-        vec![],
-    )
+    c.find(Locator::Css(
+        "form[action$=\"/approve-send\"] button[type=submit]",
+    ))
+    .await
+    .unwrap()
+    .click()
     .await
     .unwrap();
-    wait_for_text(&c, "Send for signature", Duration::from_secs(20)).await;
+    // DBOS acceptance can redirect before rendering finishes. The review page
+    // asks for refresh; observe that same page without resubmitting approval.
+    wait_for_text_reloading(
+        &c,
+        &format!("{}/app/lawyer/notations/{notation_id}/review", base_url()),
+        "Send for signature",
+        Duration::from_secs(20),
+    )
+    .await;
 
     // --- Attorney sends: the binding envelope goes out -------
     c.execute(
@@ -2225,7 +2278,9 @@ async fn lawyer_walks_the_whole_questionnaire_with_the_keyboard_alone() {
         }
         assert!(
             started.elapsed() <= Duration::from_secs(10),
-            "never landed on the first question; last URL was {url}",
+            "never landed on the first question; last path {}; {}",
+            url.path(),
+            failure_page_context(&c).await,
         );
         tokio::time::sleep(Duration::from_millis(200)).await;
     };
@@ -2950,7 +3005,8 @@ async fn lawyer_user_can_hit_every_admin_route() {
             .unwrap();
         assert!(
             !nav_links.is_empty(),
-            "expected the signed-in nav on {route}; got no /auth/logout links — was access denied?",
+            "expected the signed-in nav on {route}; no /auth/logout links; {}",
+            failure_page_context(&c).await,
         );
         assert!(
             c.find_all(Locator::Css(".error-page"))
@@ -3377,7 +3433,12 @@ async fn capture_inbox_frames(
 }
 
 async fn activate_inbox_link(c: &Client, selector: &str) {
-    c.find(Locator::Css(selector)).await.unwrap();
+    let link = c.find(Locator::Css(selector)).await;
+    assert!(
+        link.is_ok(),
+        "Inbox link {selector} is missing; {}",
+        failure_page_context(c).await
+    );
     // The local macOS driver can drop native input. Activate the actual anchor
     // through its DOM click, as the questionnaire harness does for submission.
     c.execute(
@@ -6182,11 +6243,16 @@ async fn sample_matter_pages_follow_client_brand_and_lawyer_participation() {
                 );
                 continue;
             }
-            c.wait()
+            let rendered = c
+                .wait()
                 .at_most(Duration::from_secs(10))
                 .for_element(Locator::Css(&format!("[data-lens='{lens}']")))
-                .await
-                .unwrap_or_else(|_| panic!("/app/projects/{code}/{slug} renders the {lens} lens"));
+                .await;
+            assert!(
+                rendered.is_ok(),
+                "/app/projects/{code}/{slug} renders the {lens} lens; {}",
+                failure_page_context(&c).await
+            );
             let boundary = c
                 .find_all(Locator::Css("[data-section='boundary_note']"))
                 .await
@@ -6288,7 +6354,9 @@ async fn lawyer_walks_the_basic_will_through_the_matter_workflow() {
         }
         assert!(
             started.elapsed() <= Duration::from_secs(10),
-            "never landed on /app/lawyer/notations/:id/step; last URL was {url}",
+            "never landed on /app/lawyer/notations/:id/step; last path {}; {}",
+            url.path(),
+            failure_page_context(&c).await,
         );
         tokio::time::sleep(Duration::from_millis(200)).await;
     };
@@ -6498,4 +6566,114 @@ mod login_form_tests {
             ])
         );
     }
+}
+
+#[path = "common/git_draft.rs"]
+mod git_draft;
+
+/// A populated Git Draft opens through the real Lawyer API with immutable source provenance.
+#[tokio::test]
+async fn repository_draft_inventory_and_open_pin_the_image_git_commit_and_body() {
+    let Some(browser) = new_client_or_skip().await else {
+        return;
+    };
+    let db = postgres_browser_store().await.unwrap();
+    let firm = store::firms::firm_id_for_brand_key(&db, "neon")
+        .await
+        .unwrap()
+        .expect("seeded browser Firm");
+    let lawyer = store::persons::find_by_email_ci(&db, "lawyer@neonlaw.com")
+        .await
+        .unwrap()
+        .expect("seeded Rauthy Lawyer");
+    let project = seed_browser_project_on_firm(&db, Some(firm), "Synthetic Git Draft").await;
+    store::projects::add_participation(&db, project.id, lawyer.id, "lawyer")
+        .await
+        .unwrap();
+    let unrelated = seed_browser_project_on_firm(&db, Some(firm), "Synthetic Private Draft").await;
+    let draft_code = format!("synthetic_git_{}", Uuid::now_v7().simple());
+    assert!(
+        store::templates::resolve(&db, Some(project.id), &draft_code)
+            .await
+            .unwrap()
+            .is_none(),
+        "the Draft cannot fall back to the catalog"
+    );
+    let inventory = format!("/app/api/projects/{}/notation-inventory", project.id);
+    let create = format!("/app/api/projects/{}/notations", project.id);
+    let unrelated_inventory = format!("/app/api/projects/{}/notation-inventory", unrelated.id);
+    let unrelated_create = format!("/app/api/projects/{}/notations", unrelated.id);
+    let mut repository =
+        git_draft::DraftRepository::configured().expect("owned repository fixture");
+    let (first_sha, first_digest) = repository
+        .commit_template_revision(&project.code, &draft_code, "one")
+        .unwrap();
+
+    browser.goto(&base_url()).await.unwrap();
+    assert_eq!(git_draft::request(&browser, &inventory, None).await.0, 401);
+    login_as_lawyer(&browser).await;
+    let csrf = git_draft::csrf(&browser).await;
+    let (status, rows) = git_draft::request(&browser, &inventory, None).await;
+    assert_eq!(status, 200);
+    let row = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["template_code"] == draft_code)
+        .expect("populated repository Draft is visible to its participating Lawyer");
+    assert!(row["notation_id"].is_null());
+    let payload =
+        serde_json::json!({"template_code": draft_code, "client_email": "client@neonlaw.com"});
+    git_draft::assert_access_guards(
+        &browser,
+        &unrelated_inventory,
+        &unrelated_create,
+        &create,
+        &payload,
+        &csrf,
+    )
+    .await;
+    let opened = git_draft::open_notation(&browser, &create, payload.clone(), &csrf).await;
+    let first_id = opened["notation_id"]
+        .as_str()
+        .expect("created Notation UUID");
+    let first =
+        git_draft::assert_notation_provenance(&browser, first_id, &first_sha, &first_digest).await;
+    assert_eq!(first["project_id"], project.id.to_string());
+
+    repository.restart_for_readback(&base_url()).await.unwrap();
+    repository
+        .assert_existing_revision(&project.code, &draft_code, &first_sha, &first_digest)
+        .unwrap();
+    let csrf = git_draft::csrf(&browser).await;
+    git_draft::assert_retained_import(&browser, &inventory, first_id, &first_sha, &first_digest)
+        .await;
+
+    let (second_sha, second_digest) = repository
+        .commit_template_revision(&project.code, &draft_code, "two")
+        .unwrap();
+    assert_ne!(first_sha, second_sha);
+    assert_ne!(first_digest, second_digest);
+    git_draft::assert_stale_revision_preserved(
+        &browser,
+        &inventory,
+        first_id,
+        &first_sha,
+        &first_digest,
+    )
+    .await;
+    let opened = git_draft::open_notation(&browser, &create, payload, &csrf).await;
+    let second_id = opened["notation_id"]
+        .as_str()
+        .expect("second Notation UUID");
+    assert_ne!(first_id, second_id);
+    let second =
+        git_draft::assert_notation_provenance(&browser, second_id, &second_sha, &second_digest)
+            .await;
+    assert_ne!(
+        first["template_id"], second["template_id"],
+        "changed Draft bytes create a new immutable Template version"
+    );
+    git_draft::assert_unrelated_project_has_no_notations(&db, unrelated.id).await;
+    browser.close().await.unwrap();
 }
