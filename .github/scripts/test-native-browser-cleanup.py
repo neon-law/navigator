@@ -7,7 +7,7 @@ helper=Path(sys.argv[1]).resolve()
 results=[]
 for mode in ('secondary_failure', 'completed_teardown', 'unsupported_assignment',
              'image_secondary_failure', 'unowned_image_secondary_failure',
-             'success_secondary_failure'):
+             'success_secondary_failure', 'failed_browser_teardown'):
     source=helper.read_text()
     functions=source[source.index('resources() {'):source.index('trap cleanup EXIT')]
     with tempfile.TemporaryDirectory(prefix='native-cleanup-regression-') as directory:
@@ -58,6 +58,8 @@ startup_alive
             scenario = "stop_browser() { return 73; }\n" + scenario
         if mode == 'success_secondary_failure':
             scenario = "trap cleanup EXIT\nprintf 'synthetic healthy startup\\n' > \"$private/quickstart.log\"\nexit 0\n"
+        if mode == 'failed_browser_teardown':
+            scenario = "trap cleanup EXIT\nprintf 'synthetic failed browser\\n' > \"$private/quickstart.log\"\nexit 1\n"
         script=task/'probe.sh';script.write_text('COPY_EXIT='+('73' if mode in ('secondary_failure', 'success_secondary_failure') else '0')+'\n'+prelude+functions+scenario)
         result=subprocess.run(['bash',str(script)],cwd=task,capture_output=True,timeout=10)
         public=task/'public';quick=public/'quickstart.log';cleanup=public/'cleanup.log'
@@ -65,6 +67,11 @@ startup_alive
         assert result.returncode==1,row
         if cleanup.exists() and 'Cleanup interrupted' in cleanup.read_text():
             assert re.search(r'^failure_line=[1-9][0-9]*$', cleanup.read_text(), re.MULTILINE), row
+        if mode == 'failed_browser_teardown':
+            assert not row['private_retained'], row
+            assert not (task/'.devx/env').exists(), row
+            results.append(row)
+            continue
         if mode == 'success_secondary_failure':
             assert cleanup.exists() and row['private_retained'] and not row['role_exported'], row
             text = cleanup.read_text()

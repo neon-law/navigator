@@ -59,7 +59,7 @@ drain_group() {
   wait "$leader" 2>/dev/null || true
 }
 stop_browser() {
-  if [ -z "$browser_supervisor" ]; then return; fi
+  if [ -z "$browser_supervisor" ]; then return 0; fi
   kill -TERM -- "-$browser_supervisor" 2>/dev/null || true
   if drain_group "$browser_supervisor"; then
     browser_supervisor=''
@@ -161,7 +161,7 @@ if matches:
 PY
 }
 stop_host() {
-  if [ -z "$supervisor" ]; then return; fi
+  if [ -z "$supervisor" ]; then return 0; fi
   # serve's supervisor drops kill_on_drop children on its own shutdown. Signal
   # the verified app FIRST, allowing its DBOS shutdown before stopping the group.
   current_host="$(owned_host)" || cleanup_failed=true
