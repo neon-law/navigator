@@ -65,6 +65,8 @@ binary(/^(mail_signatures|project_drive_folder_id|project_repository_url|project
 | (binary(=workflows_service) & test(/^host::local_providers::tests::(detached_native_handlers_use_captured_effects_and_the_owned_postgres_store|injected_store_refuses_damaged_history_and_closed_pool_without_fallback|native_billing_digest_without_exports_registers_without_provider_effects)$/))
 | (binary(=workflows) & test(=dbos_engine::dri_digest::tests::native_source_keeps_all_projects_and_both_dri_sides))
 | (binary(=store) & test(/^(entity_roles|relationships)::tests::/))
+| (binary(=webapp) & test(=server_store::tests::request_pool_crosses_spawn_and_damaged_history_refuses_the_callback))
+| (binary(=hudson) & test(=postgres_admission::tests::selected_application_database_must_match_the_verified_target))
 | binary(=sandbox_usage_ledger)
 | binary(=document_folder)
 | binary(=postgres_native_fixture)

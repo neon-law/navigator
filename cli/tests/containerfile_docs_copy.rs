@@ -1145,3 +1145,30 @@ fn no_crate_links_openssl_so_the_musl_images_can_build() {
          its rustls feature instead"
     );
 }
+
+/// Consume the build-only runtime proof without shipping its probe.
+#[test]
+fn the_site_image_consumes_git_runtime_proof_without_shipping_the_probe() {
+    let body = fs::read_to_string(images_dir().join("Containerfile.neon")).unwrap();
+    let (_, runtime_base) = body.split_once(" AS runtime-base\n").unwrap();
+    let (base, checks) = runtime_base
+        .split_once("FROM runtime-base AS repo-runtime-check")
+        .unwrap();
+    assert!(
+        !base.contains("repo-runtime-smoke"),
+        "the production base must not contain the probe"
+    );
+    let (check, final_stage) = checks.split_once("FROM runtime-base AS runtime").unwrap();
+    assert!(check.contains("USER nonroot:nonroot\nRUN /usr/local/bin/repo-runtime-smoke"));
+    let mutations: Vec<_> = final_stage
+        .lines()
+        .map(str::trim)
+        .filter(|line| {
+            line.starts_with("COPY ") || line.starts_with("RUN ") || line.starts_with("ENV ")
+        })
+        .collect();
+    assert_eq!(mutations, ["COPY --from=repo-runtime-check /tmp/navigator-git-runtime-proof /app/git-runtime-proof"],
+        "the final image must consume the proof without changing the tested runtime");
+    assert!(final_stage.contains("USER nonroot:nonroot"));
+    assert!(final_stage.contains("ENTRYPOINT [\"/app/neon\"]"));
+}

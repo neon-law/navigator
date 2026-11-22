@@ -784,21 +784,26 @@ async fn prepared_practice_brands_pass_axe_in_light_and_dark_schemes() {
         return;
     };
     gate.close().await.unwrap();
-    let preview = practice_preview::PracticePreview::start().await;
-    for (key, origin) in &preview.sites {
-        for scheme in ColorScheme::both() {
-            let Some(c) = session_in_scheme(scheme, origin).await else {
-                return;
-            };
-            let paths = ["/", "/services", "/contact"]
-                .into_iter()
-                .chain(key.explainer_pages().iter().map(|(path, _)| *path));
-            for path in paths {
-                assert_route_passes_axe_at(&c, origin, path, DOCUMENT_AXE_SCOPE, scheme).await;
+    practice_preview::PracticePreview::run(|preview| {
+        Box::pin(async move {
+            for (key, origin) in &preview.sites {
+                for scheme in ColorScheme::both() {
+                    let Some(c) = session_in_scheme(scheme, origin).await else {
+                        return;
+                    };
+                    let paths = ["/", "/services", "/contact"]
+                        .into_iter()
+                        .chain(key.explainer_pages().iter().map(|(path, _)| *path));
+                    for path in paths {
+                        assert_route_passes_axe_at(&c, origin, path, DOCUMENT_AXE_SCOPE, scheme)
+                            .await;
+                    }
+                    c.close().await.expect("close brand audit browser");
+                }
             }
-            c.close().await.expect("close brand audit browser");
-        }
-    }
+        })
+    })
+    .await;
 }
 
 /// The whole public surface, derived from `neon::PUBLIC_PATHS` — both faces,
@@ -939,7 +944,10 @@ async fn the_inbox_reading_pane_passes_axe_wcag_a_and_aa() {
     {
         return;
     }
-    let db = store::surreal::connect_from_env().await.unwrap();
+    store::postgres::PostgresDb::application()
+        .await
+        .expect("admitted browser PostgreSQL target");
+    let db = store::surreal::SurrealDb::uninitialized();
     let firm = store::firms::firm_id_for_brand_key(&db, "neon")
         .await
         .unwrap()

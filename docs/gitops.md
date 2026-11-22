@@ -31,8 +31,8 @@ sets `GH_HOST`, or repoints `NAVIGATOR_GITHUB_API_BASE`: `gh` and every Action d
 
 Standard GitHub-hosted runners are free for public repositories. Coordination jobs, auto-merge, CodeQL, Dependabot, the
 KIND quickstart, the content gate, the CLI release archives, and the release ships use `ubuntu-24.04`. The database-free
-CLI glossary check uses `ubuntu-24.04`. The Rust coverage suite, KIND integration, and buildx image builds retain
-Blacksmith for their disk and memory requirements. The Marketplace is available.
+CLI glossary check and native KIND integration use `ubuntu-24.04`. The Rust coverage suite and buildx image builds
+retain Blacksmith for their disk and memory requirements. The Marketplace is available.
 
 **Confirm an App id against a live check run before trusting it.** A required status check registered under the wrong id
 still *reads* as present in the API while matching an App that never posts a check, so the gate silently enforces
@@ -408,10 +408,10 @@ images.
 
 The content gate also runs on `ubuntu-24.04`: the gate compiles one debug CLI, the same build `quickstart.yml` proves on
 that runner. So do the release decision, the Linux CLI archive, the CLI container and Release publish, the daily release
-cut, and both release-deploy ships. The Rust suite, KIND integration, and every buildx image build (`build`,
-`publish-service`, `publish-triggers`) retain `blacksmith-4vcpu-ubuntu-2404`. Public GitHub Linux runners provide four
-CPUs, 16 GB RAM, and 14 GB SSD storage; private repositories get two CPUs and 8 GB RAM with the same label. Free usage
-depends on actual repository visibility. See [GitHub's runner
+cut, both release-deploy ships, and native KIND integration. The Rust suite and buildx image builds (`build`,
+`publish-service`, `publish-triggers`) retain their per-job Blacksmith runner selections. Public GitHub Linux runners
+provide four CPUs, 16 GB RAM, and 14 GB SSD storage; private repositories get two CPUs and 8 GB RAM with the same label.
+Free usage depends on actual repository visibility. See [GitHub's runner
 specifications](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
 
 The Rust workflow records a measured peak of 142 GB disk use, so CPU count alone does not make a standard runner a
