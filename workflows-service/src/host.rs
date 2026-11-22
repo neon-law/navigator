@@ -649,11 +649,8 @@ async fn run_host(
     // same decorator `web` wraps its backend in.
     let (backend, sender) = crate::email_config::select_backend(|key| std::env::var(key).ok())
         .context("build email service from env")?;
-    let email: Arc<dyn workflows::EmailService> = Arc::new(workflows::email::LoggingEmail::new(
-        backend,
-        surreal.clone(),
-        sender,
-    ));
+    let email: Arc<dyn workflows::EmailService> =
+        Arc::new(workflows::email::LoggingEmail::new(backend, sender));
     tracing::info!(
         backend = if std::env::var("NAVIGATOR_EMAIL_BACKEND").as_deref() == Ok("sendgrid") {
             "SendGrid"

@@ -372,7 +372,7 @@ pub async fn build_from_env(brand_seed: store::seed::BrandSeed) -> anyhow::Resul
         "e-signature webhook auth configured"
     );
 
-    let email = crate::email::from_env(surreal.clone()).context("loading email config")?;
+    let email = crate::email::from_env().context("loading email config")?;
     tracing::info!("email backend configured");
     let clamd_addr = std::env::var("NAVIGATOR_CLAMD_ADDR")
         .ok()
@@ -1555,8 +1555,7 @@ async fn ceo_digest_context(
             pg,
         )),
         Arc::new(prose),
-        crate::email::from_lookup(lookup, rt.state.surreal.clone())
-            .context("configure the CEO digest email backend")?,
+        crate::email::from_lookup(lookup).context("configure the CEO digest email backend")?,
         simulated,
         lookup,
     )

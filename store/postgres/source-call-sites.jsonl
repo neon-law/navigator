@@ -808,7 +808,7 @@
 {"file":"portal/src/a2a.rs","line":1119,"function":"resume_after_confirmation","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/a2a.rs","line":1290,"function":"resume_after_confirmation","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/a2a.rs","line":1575,"function":"resolve_person_refs","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"portal/src/a2a.rs","line":1982,"function":"post_rpc_as","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"portal/src/a2a.rs","line":1981,"function":"post_rpc_as","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/admin.rs","line":221,"function":"routes","operation":"delete","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/admin.rs","line":236,"function":"routes","operation":"delete","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/admin.rs","line":245,"function":"routes","operation":"delete","sql_operations":[],"tables":[],"transaction":false}
@@ -7146,8 +7146,8 @@
 {"file":"store/src/seed.rs","line":4528,"function":"waiting_for_a_stranded_seed_claim_fails_without_replacing_its_owner","operation":"bind","sql_operations":[],"tables":["entity"],"transaction":false}
 {"file":"store/src/seed.rs","line":4528,"function":"waiting_for_a_stranded_seed_claim_fails_without_replacing_its_owner","operation":"query","sql_operations":["CREATE"],"tables":[],"transaction":false}
 {"file":"store/src/seed.rs","line":7632,"function":"seeds_attorney_credentials_with_correct_numbers","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"store/src/sent_emails/native_tests.rs","line":57,"function":"project","operation":"query_scalar","sql_operations":["SELECT"],"tables":["notation"],"transaction":false}
-{"file":"store/src/sent_emails/native_tests.rs","line":332,"function":"native_person_links_survive_and_project_scope_excludes_other_people_and_firm_mail","operation":"query_scalar","sql_operations":["SELECT"],"tables":["notation"],"transaction":false}
+{"file":"store/src/sent_emails/native_tests.rs","line":53,"function":"project","operation":"query_scalar","sql_operations":["SELECT"],"tables":["notation"],"transaction":false}
+{"file":"store/src/sent_emails/native_tests.rs","line":317,"function":"native_person_links_survive_and_project_scope_excludes_other_people_and_firm_mail","operation":"query_scalar","sql_operations":["SELECT"],"tables":["notation"],"transaction":false}
 {"file":"store/src/sent_emails/postgres.rs","line":59,"function":"record","operation":"query","sql_operations":["SELECT","INSERT"],"tables":["sent_email"],"transaction":false}
 {"file":"store/src/sent_emails/postgres.rs","line":96,"function":"page","operation":"begin","sql_operations":[],"tables":[],"transaction":true}
 {"file":"store/src/sent_emails/postgres.rs","line":97,"function":"page","operation":"execute","sql_operations":[],"tables":[],"transaction":false}

@@ -53,7 +53,6 @@ mod tests {
         let surreal = mem_surreal().await;
         let mailer: Arc<dyn EmailService> = Arc::new(LoggingEmail::new(
             Arc::new(CapturingEmail::new()),
-            surreal.clone(),
             "support@example.com",
         ));
 
@@ -75,7 +74,7 @@ mod tests {
         .await
         .unwrap();
 
-        let rows = store::sent_emails::all(&surreal).await.unwrap();
+        let rows = store::sent_emails::all().await.unwrap();
         assert_eq!(rows.len(), 2, "each door must journal exactly one row");
         for recipient in ["api@example.com", "agent@example.com"] {
             let row = rows
