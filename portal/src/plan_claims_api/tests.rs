@@ -136,12 +136,18 @@ async fn a_closed_project_reconciles_claims_through_the_authenticated_routes() {
 
         let app = crate::router(app_state(db).await);
         let route = format!("/app/api/projects/{}/legal-plan-claims", project.id);
+        let project_billing = format!("/app/api/projects/{}/billing", project.id);
         let collections = format!("/app/api/firms/{firm}/legal-plan-collections");
         let foreign_collections = format!("/app/api/firms/{foreign}/legal-plan-collections");
         let totals_route = format!("{collections}?totals_only=true");
         let read = async |uri: &str, person, role| request(&app, "GET", uri, person, role, None).await;
         assert_eq!(read(&route, admin, Role::Admin).await.0, StatusCode::NOT_FOUND);
         assert_eq!(read(&route, outsider, Role::Admin).await.0, StatusCode::NOT_FOUND);
+        assert_eq!(read(&project_billing, outsider, Role::Admin).await.0, StatusCode::NOT_FOUND);
+        let (status, personal) = read("/app/api/billing", lawyer, Role::Lawyer).await;
+        assert_eq!(status, StatusCode::OK, "{personal}");
+        assert_eq!(personal["my_time"][0]["id"], json!(entry_id));
+        assert!(personal.get("project_time").is_none());
         assert_eq!(read(&foreign_collections, lawyer, Role::Lawyer).await.0, StatusCode::NOT_FOUND);
         assert_eq!(read(&totals_route, lawyer, Role::Lawyer).await.0, StatusCode::NOT_FOUND);
         let (code, report) = read(&collections, lawyer, Role::Lawyer).await;
@@ -221,5 +227,14 @@ async fn a_closed_project_reconciles_claims_through_the_authenticated_routes() {
         let (status, history) = read(&route, lawyer, Role::Lawyer).await;
         assert_eq!(status, StatusCode::OK, "{history}");
         assert_eq!(history.as_array().unwrap().len(), 2);
+        let (status, billing) = read(&project_billing, lawyer, Role::Lawyer).await;
+        assert_eq!(status, StatusCode::OK, "{billing}");
+        assert_eq!(billing["project_time"][0]["timekeeper"], json!(lawyer));
+        let measured = billing["needs_my_action"].as_array().unwrap().iter()
+            .chain(billing["other_claims"].as_array().unwrap())
+            .find(|item| item["id"] == json!(claim_id)).unwrap();
+        assert_eq!(measured["projected_fee_cents"], 10_000);
+        assert_eq!(measured["approved_outstanding_cents"], 4_000);
+        assert_eq!(measured["net_cash_received_cents"], 5_000);
     }).await;
 }

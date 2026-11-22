@@ -16,7 +16,7 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::{
-    projects::{manifest, surfaces},
+    projects::{project_target, surfaces},
     remote,
 };
 
@@ -192,19 +192,15 @@ async fn firm_command(base: &str, token: &str, firm: &str, action: LegalPlansCmd
 
 /// The Project's API route, from `--project` or this checkout's
 /// `navigator.yaml`.
-async fn project_route(
+pub(crate) async fn project_route(
     host: Option<&str>,
     project: Option<&str>,
 ) -> Result<(String, String, Uuid)> {
-    let local = manifest::read(Path::new("."));
-    let project = project
-        .or_else(|| local.as_ref().and_then(|m| m.project.as_deref()))
-        .ok_or_else(|| anyhow!("pass --project or run from a Project checkout"))?;
-    let host = host.or_else(|| local.as_ref().and_then(|m| m.host.as_deref()));
-    let (base, token) = remote::resolve(host)?;
-    let id = match Uuid::parse_str(project) {
+    let (host, project) = project_target(host, project)?;
+    let (base, token) = remote::resolve(host.as_deref())?;
+    let id = match Uuid::parse_str(&project) {
         Ok(id) => id,
-        Err(_) => surfaces::resolve_project_id(&base, &token, project).await?,
+        Err(_) => surfaces::resolve_project_id(&base, &token, &project).await?,
     };
     Ok((format!("{base}/app/api/projects/{id}"), token, id))
 }
@@ -251,7 +247,7 @@ pub async fn set(host: Option<&str>, project: Option<&str>, fields: &PlanFields)
 
 #[derive(Subcommand)]
 pub enum ClaimCmd {
-    /// List the Project's claims and their evidence history.
+    /// Read the Project's claim status.
     Status,
     /// Record completed work and its verified fee terms, if available.
     Work(ClaimWork),
@@ -265,6 +261,7 @@ pub enum ClaimCmd {
     /// Prepare covered work for the lawyer's manual filing.
     Prepare(ExistingClaim),
     /// Confirm an already-filed claim.
+    #[command(visible_alias = "file")]
     Submit(ClaimSubmission),
     /// Confirm a corrected filing for the same claim.
     Correct(ClaimSubmission),
@@ -279,6 +276,7 @@ pub enum ClaimCmd {
         reference: String,
     },
     /// Confirm an actual payment; a claim can have several remittance lines.
+    #[command(visible_alias = "record-payment")]
     Pay(ClaimAmountEvidence),
     /// Confirm a refund or payment reversal.
     Reverse(ClaimAmountEvidence),
@@ -497,14 +495,14 @@ pub async fn claim(host: Option<&str>, project: Option<&str>, action: ClaimCmd) 
     finish("project legal-plan claim", result)
 }
 
-async fn claim_command(
+pub(crate) async fn claim_command(
     project_route: &str,
     token: &str,
     project: Uuid,
     action: ClaimCmd,
 ) -> Result<Value> {
     let route = format!("{project_route}/legal-plan-claims");
-    let client = reqwest::Client::new();
+    let client = remote::authenticated_client_builder(project_route)?.build()?;
     match action.into_body(project)? {
         None => call(client.get(route).bearer_auth(token), "claim status").await,
         Some(body) => {

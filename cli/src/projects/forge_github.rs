@@ -552,6 +552,24 @@ impl Forge for GitHubForge {
         })
     }
 
+    async fn find_merged_review(&self, branch: &str, sha: &str) -> Result<Option<ReviewRef>> {
+        let Some(number) = self.merged_review_for_head(branch, sha).await? else {
+            return Ok(None);
+        };
+        let pull: Pull = self
+            .get_json(&self.repo_path(&format!("pulls/{number}")))
+            .await?;
+        anyhow::ensure!(
+            pull.merged && pull.base.git_ref == "main" && pull.head.sha == sha,
+            "the merged review no longer matches the selected change"
+        );
+        Ok(Some(ReviewRef {
+            number,
+            head_sha: pull.head.sha,
+            url: pull.html_url,
+        }))
+    }
+
     async fn arm_merge(&self, review: &ReviewRef) -> Result<ArmOutcome> {
         let pull_path = self.repo_path(&format!("pulls/{}", review.number));
         let pull: Pull = self.get_json(&pull_path).await?;
@@ -640,6 +658,10 @@ impl Forge for GitHubForge {
         let pull: Pull = self
             .get_json(&self.repo_path(&format!("pulls/{}", review.number)))
             .await?;
+        anyhow::ensure!(
+            pull.head.sha == review.head_sha,
+            "review head changed while waiting for merge"
+        );
         if pull.merged {
             Ok(pull.merge_commit_sha.filter(|sha| !sha.is_empty()))
         } else {
@@ -734,13 +756,21 @@ mod tests {
             ])))
             .mount(&server)
             .await;
+        Mock::given(method("GET"))
+            .and(path("/repos/acme/nav/pulls/4"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(pull_body(4, "current", "clean", true)),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
         let github = GitHubForge::new(&server.uri(), "acme", "nav", "test").unwrap();
         assert_eq!(
             github
-                .merged_review_for_head("push/change", "current")
+                .find_merged_review("push/change", "current")
                 .await
                 .unwrap(),
-            Some(4)
+            Some(review(4, "current"))
         );
         assert_eq!(
             github

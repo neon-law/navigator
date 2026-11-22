@@ -6,6 +6,7 @@
 //! one type. The `navigator` CLI uses these models without linking database clients or
 //! workflow runtimes; its local document renderer links Typst separately.
 
+pub mod billing_report;
 pub mod cases;
 pub mod correspondence;
 pub mod document_pointers;

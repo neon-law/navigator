@@ -1,30 +1,14 @@
 ---
 name: push-to-navigator
-description: >-
-  Land a Project repository change and follow the exact merge commit's deployment run to a verdict. Use for "push to the
-  navigator" or when a change must be verified through the live gate.
+description: Land a Project repository change and follow the deployment of the exact merge commit to a verdict.
 ---
 
 # Push to Navigator
 
-## Find the term first
+Follow [push-changes](../push-changes/SKILL.md) from the Project checkout. Run `navigator jj push` and report the review
+URL, merge commit, and deployment result. The Project's origin selects GitHub or Forgejo. For a Forgejo checkout, the
+trusted host supplies `NAVIGATOR_FORGEJO_ROOT_URL` and `FORGEJO_TOKEN`.
 
-Before naming a table, field, state, or UI concept, follow the **Find the term first** section in `AGENTS.md`.
-
-## Deliver
-
-Review the requested diff and run `navigator project gate` before delivery. Keep document bytes, private notes,
-credentials, and client data out of Git. Use [pull-changes](../pull-changes/SKILL.md) to update the topic branch.
-
-Run `navigator project repository push --title '<commit subject>' --branch '<topic branch>'` from the Project root. The
-verb stages the checkout's changes, signs the commit, opens a ready review request, follows the required check and
-merge, and watches the exact merge commit's deployment run. Reuse the branch after a recoverable stall.
-
-The origin selects the forge. For Forgejo, configure `NAVIGATOR_FORGEJO_ROOT_URL` and `FORGEJO_TOKEN` on the trusted
-host; the token stays outside Project workflows. Forgejo's API acknowledges scheduling; only observing the actual merge
-proves completion. The generated Forgejo workflow gates pull requests only, and seed writes through Forgejo CI are
-unavailable. Report its missing post-merge run as unverified; keep source handover pending.
-
-Read the report's review URL, merge commit, deployment URL, conclusion, and job results. A failed or missing deployment
-is unresolved work even after merge. The deployment run proves application; a `publish` no-op does not. Report any
-unverified stage explicitly. Do not change source authority or remove the other forge as part of this verb.
+A successful check on a review head proves that revision passed CI. Confirm the separate post-merge deployment run on
+the exact merge commit. Inspect its jobs before reporting what reached the portal. A publish job that skipped its work
+provides no evidence of a client-visible change.

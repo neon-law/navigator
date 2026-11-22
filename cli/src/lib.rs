@@ -9,6 +9,7 @@
 pub mod answers_file;
 pub mod atomic_directory;
 pub mod authorities;
+pub mod billing;
 pub mod closing_trailer;
 pub mod commands;
 pub mod credentials;

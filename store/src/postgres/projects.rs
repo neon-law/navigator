@@ -382,6 +382,30 @@ pub(crate) async fn update_on(
         .transpose()
 }
 
+/// Add a Legal Plan link while the Project still has the expected owner and no plan.
+pub(crate) async fn link_legal_plan_on(
+    pg: &PostgresDb,
+    id: Uuid,
+    firm: Uuid,
+    brand: &str,
+    plan: Uuid,
+) -> Result<Option<Project>, ProjectError> {
+    sqlx::query(
+        "UPDATE project SET legal_plan_id=$4, updated_at=clock_timestamp() \
+         WHERE id=$1 AND firm_id=$2 AND brand=$3 AND legal_plan_id IS NULL RETURNING *",
+    )
+    .bind(id)
+    .bind(firm)
+    .bind(brand)
+    .bind(plan)
+    .fetch_optional(pg.pool())
+    .await
+    .map_err(write_error)?
+    .as_ref()
+    .map(row)
+    .transpose()
+}
+
 /// Delete one Project with no participation left on it. `false` when no
 /// Project has that id; a row still referenced elsewhere is a database error.
 pub(crate) async fn delete_on(pg: &PostgresDb, id: Uuid) -> Result<bool, ProjectError> {

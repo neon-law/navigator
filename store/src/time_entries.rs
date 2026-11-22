@@ -568,6 +568,29 @@ pub async fn list_for_project(
     .collect()
 }
 
+pub(crate) async fn for_billing(
+    connection: &mut sqlx::PgConnection,
+    project_id: Uuid,
+    attorney_id: Option<Uuid>,
+    on: NaiveDate,
+) -> Result<Vec<TimeEntry>, TimeEntryError> {
+    sqlx::query(
+        "SELECT id,project_id,attorney_id,performed_on,minutes,description,billable,\
+         rate_cents_per_hour,source,billing_status,xero_invoice_id,written_off_reason,stage,\
+         inserted_at,updated_at FROM time_entry
+         WHERE project_id=$1 AND ($2::uuid IS NULL OR attorney_id=$2)
+         AND performed_on<=$3 ORDER BY performed_on DESC,id",
+    )
+    .bind(project_id)
+    .bind(attorney_id)
+    .bind(on)
+    .fetch_all(connection)
+    .await?
+    .iter()
+    .map(from_row)
+    .collect()
+}
+
 /// Reclassify one entry's stage (ENG-1269). The stage must come from the
 /// matter Firm's own Case Stage vocabulary — checked here for a typed
 /// denial, and again by the database trigger for any writer that skips this

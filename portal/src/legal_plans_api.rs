@@ -36,13 +36,15 @@ pub(super) async fn authorize(
 /// with `503 legal_plans_unavailable` rather than answering from anywhere
 /// else.
 pub(super) async fn plan_store() -> Result<store::postgres::PostgresDb, Response> {
-    store::postgres::PostgresDb::from_env().await.map_err(|_| {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({ "error": "legal_plans_unavailable" })),
-        )
-            .into_response()
-    })
+    store::postgres::PostgresDb::application()
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({ "error": "legal_plans_unavailable" })),
+            )
+                .into_response()
+        })
 }
 
 fn plan_error(error: &LegalPlanError) -> Response {
@@ -189,6 +191,76 @@ pub(super) struct ProjectPlanPatch {
     plan_closed_on: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub(super) enum ProjectPlanUpdate {
+    Manifest(ManifestPlanUpdate),
+    Fields(ProjectPlanPatch),
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ManifestPlanUpdate {
+    manifest_legal_plan: ManifestPlan,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ManifestPlan {
+    name: String,
+    firm_id: Uuid,
+    brand: String,
+    #[serde(default)]
+    dry_run: bool,
+}
+
+async fn apply_manifest_plan(
+    state: &ApiState,
+    session: &crate::SessionData,
+    project: &Project,
+    firm: Uuid,
+    request: ManifestPlan,
+) -> Result<Response, ApiError> {
+    if session.scope.is_some()
+        || firm != request.firm_id
+        || project.brand != request.brand
+        || !store::projects::can_access_as_lawyer_in_surreal(
+            &state.surreal,
+            session.person_id,
+            session.role,
+            project.id,
+        )
+        .await
+        .map_err(|error| ApiError::Db(error.to_string()))?
+    {
+        return Err(ApiError::NotFound);
+    }
+    let pg = match plan_store().await {
+        Ok(pg) => pg,
+        Err(unavailable) => return Ok(unavailable),
+    };
+    let plan = match legal_plans::find_by_name(&pg, firm, &request.name).await {
+        Ok(Some(plan)) => plan,
+        Ok(None) => {
+            return Err(ApiError::Project(ProjectCommandError::Invalid(
+                "legal_plan does not name one of the Firm's legal plans",
+            )));
+        }
+        Err(error) => return Ok(plan_error(&error)),
+    };
+    store::projects::link_manifest_legal_plan(
+        &state.surreal,
+        project,
+        firm,
+        &request.brand,
+        plan.id,
+        request.dry_run,
+    )
+    .await?
+    .ok_or(ApiError::NotFound)?;
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
 /// Overlay one supplied value: absent keeps, empty clears, anything else
 /// is trimmed and set.
 fn overlay(current: &mut Option<String>, supplied: Option<String>) {
@@ -206,9 +278,22 @@ pub(super) async fn set_project(
     State(state): State<ApiState>,
     LawyerSession(session): LawyerSession,
     Path(project_id): Path<Uuid>,
-    Json(patch): Json<ProjectPlanPatch>,
+    Json(update): Json<ProjectPlanUpdate>,
 ) -> Result<Response, ApiError> {
     let (project, firm) = firm_project(&state, &session, project_id).await?;
+    let patch = match update {
+        ProjectPlanUpdate::Manifest(update) => {
+            return apply_manifest_plan(
+                &state,
+                &session,
+                &project,
+                firm,
+                update.manifest_legal_plan,
+            )
+            .await;
+        }
+        ProjectPlanUpdate::Fields(patch) => patch,
+    };
     let pg = match plan_store().await {
         Ok(pg) => pg,
         Err(unavailable) => return Ok(unavailable),
