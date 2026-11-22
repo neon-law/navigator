@@ -66,6 +66,9 @@ pub(crate) mod notations;
 /// PostgreSQL Project participation ledger, preparatory to application authority.
 pub mod participation;
 
+#[cfg(test)]
+mod project_reference_tests;
+
 pub(crate) mod firm_secrets;
 pub(crate) mod leads;
 pub(crate) mod project_deadlines;

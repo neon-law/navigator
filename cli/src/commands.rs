@@ -2432,8 +2432,8 @@ pub enum ReferenceCmd {
     /// Reference a party, through the `project_reference` seed model.
     Add {
         /// Why the Project names them: `counterparty_officer`,
-        /// `registered_agent`, `signatory`, `adverse_party`, or
-        /// `counterparty_entity`.
+        /// `registered_agent`, `signatory`, `adverse_party`,
+        /// `counterparty_entity`, or `government_official`.
         #[arg(long)]
         reason: String,
         #[command(flatten)]

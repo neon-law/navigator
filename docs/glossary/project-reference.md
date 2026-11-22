@@ -4,10 +4,10 @@ description: "A Project Reference names a Person or Entity a Project verified wi
 ---
 
 A [Project](project.md) naming a [Person](person.md) or an [Entity](entity.md) it has verified — a counterparty's
-officer, its registered agent, the signatory on the instrument, the adverse party, or the counterparty organization
-itself — with **no standing on the matter attached**. PostgreSQL's `project_reference` row links the Project to a typed
-Person or Entity and records a `reason` (`counterparty_officer`, `registered_agent`, `signatory`, `adverse_party`, or
-`counterparty_entity`).
+officer, its registered agent, the signatory on the instrument, the adverse party, the counterparty organization itself,
+or someone who works at a government office — with **no standing on the matter attached**. PostgreSQL's
+`project_reference` row links the Project to a typed Person or Entity and records a `reason` (`counterparty_officer`,
+`registered_agent`, `signatory`, `adverse_party`, `counterparty_entity`, or `government_official`).
 
 A reference is deliberately not a [Person–Project Role](personproject-role.md). Every [participation](participation.md)
 value grants a lens on the matter, and a counterparty must never have one; yet the [Conflict-Check
@@ -35,6 +35,8 @@ Each `reason` maps to the [Relationship Edge Kind](relationship-edge-kind.md) th
   `adverse_to`. The reason is a placeholder until that kind is recorded.
 - `registered_agent` → [`agent_of`](agent-of-edge.md), from the agent to the Entity it serves.
 - `signatory` → [`agent_of`](agent-of-edge.md), from the signatory to the party it signs for.
+- `government_official` names a Person who works at a government office, such as an auditor or inspector. It records
+  the reference alone.
 
 Only `adverse_party` writes its edge today, through `navigator project adverse add`; the other reasons record the
 reference alone.

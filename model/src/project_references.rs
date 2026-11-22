@@ -1,11 +1,12 @@
 /// Every reason the schema admits, in the schema's order. The `ASSERT` on
 /// `project_reference.reason` is the engine's copy of this list.
-pub const REASONS: [&str; 5] = [
+pub const REASONS: [&str; 6] = [
     REASON_COUNTERPARTY_OFFICER,
     REASON_REGISTERED_AGENT,
     REASON_SIGNATORY,
     REASON_ADVERSE_PARTY,
     REASON_COUNTERPARTY_ENTITY,
+    REASON_GOVERNMENT_OFFICIAL,
 ];
 
 /// Whether `reason` is one the schema admits.
@@ -28,3 +29,6 @@ pub const REASON_ADVERSE_PARTY: &str = "adverse_party";
 
 /// Reason: the counterparty organization itself.
 pub const REASON_COUNTERPARTY_ENTITY: &str = "counterparty_entity";
+
+/// Reason: a person who works at a government office.
+pub const REASON_GOVERNMENT_OFFICIAL: &str = "government_official";
