@@ -7,18 +7,19 @@ helper=Path(sys.argv[1]).resolve()
 results=[]
 for mode in ('secondary_failure', 'completed_teardown', 'unsupported_assignment',
              'image_secondary_failure', 'unowned_image_secondary_failure',
-             'success_secondary_failure', 'failed_browser_teardown'):
+             'success_secondary_failure', 'failed_browser_teardown', 'early_startup_failure'):
     source=helper.read_text()
     functions=source[source.index('resources() {'):source.index('trap cleanup EXIT')]
     with tempfile.TemporaryDirectory(prefix='native-cleanup-regression-') as directory:
         task=Path(directory);(task/'.devx').mkdir();(task/'private').mkdir();(task/'public').mkdir()
         # Leading whitespace is valid shell assignment syntax, not permission to skip a secret.
         (task/'.devx/env').write_text("  NAVIGATOR_SYNTHETIC_TOKEN='synthetic-secret-value'\n")
+        (task/'.devx/kubeconfig').write_text('synthetic owned kubeconfig\n')
         if mode == 'unsupported_assignment':
             (task/'.devx/env').write_text("  export NAVIGATOR_SYNTHETIC_TOKEN = 'synthetic-secret-value'\n")
         hudson = task/'target/debug/hudson'
         hudson.parent.mkdir(parents=True)
-        hudson.write_text('#!/bin/sh\nrm -- .devx/env\nprintf "synthetic teardown complete\\n"\n')
+        hudson.write_text('#!/bin/sh\nrm -f -- .devx/env\nprintf "synthetic teardown complete\\n"\n')
         hudson.chmod(0o700)
         (task/'.devx/port-forwards.log').write_text('synthetic forward status')
         (task/'private/role-private.log').write_text('role-private-marker\n')
@@ -58,8 +59,10 @@ startup_alive
             scenario = "stop_browser() { return 73; }\n" + scenario
         if mode == 'success_secondary_failure':
             scenario = "trap cleanup EXIT\nprintf 'synthetic healthy startup\\n' > \"$private/quickstart.log\"\nexit 0\n"
-        if mode == 'failed_browser_teardown':
+        if mode in ('failed_browser_teardown', 'early_startup_failure'):
             scenario = "trap cleanup EXIT\nprintf 'synthetic failed browser\\n' > \"$private/quickstart.log\"\nexit 1\n"
+        if mode == 'early_startup_failure':
+            (task/'.devx/env').unlink()
         script=task/'probe.sh';script.write_text('COPY_EXIT='+('73' if mode in ('secondary_failure', 'success_secondary_failure') else '0')+'\n'+prelude+functions+scenario)
         result=subprocess.run(['bash',str(script)],cwd=task,capture_output=True,timeout=10)
         public=task/'public';quick=public/'quickstart.log';cleanup=public/'cleanup.log'
@@ -67,7 +70,8 @@ startup_alive
         assert result.returncode==1,row
         if cleanup.exists() and 'Cleanup interrupted' in cleanup.read_text():
             assert re.search(r'^failure_line=[1-9][0-9]*$', cleanup.read_text(), re.MULTILINE), row
-        if mode == 'failed_browser_teardown':
+        if mode in ('failed_browser_teardown', 'early_startup_failure'):
+            assert (public/'workloads.log').exists(), 'startup failure must export owned cluster diagnostics'
             assert not row['private_retained'], row
             assert not (task/'.devx/env').exists(), row
             results.append(row)

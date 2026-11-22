@@ -296,8 +296,8 @@ cleanup() {
       docker rm "$fixture" >/dev/null || cleanup_failed=true
     fi
   fi
-  if [ -f .devx/env ]; then
-    # Cleanup needs only the owned kubeconfig, never execution of generated env.
+  if [ -s "$root/.devx/kubeconfig" ]; then
+    # Startup can fail before env is written. Inspect only this task's kubeconfig.
     export KUBECONFIG="$root/.devx/kubeconfig"
     cleanup_checkpoint collect_workloads
     kubectl -n navigator get pods,jobs,pvc -o wide > "$private/workloads.log" 2>&1 || true
