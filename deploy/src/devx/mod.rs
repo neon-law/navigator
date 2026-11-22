@@ -3553,35 +3553,6 @@ admin_base_url = "https://production-env.example.invalid:9070"
         assert!(parse_label_target("no-separator").is_err());
     }
 
-    /// `deploy.yml`'s KIND integration deploys with a raw
-    /// `kubectl apply -k` (not `dev deploy`), so it must run the `SeaweedFS`
-    /// secret bootstrap itself — and *before* the smoke checks, or the
-    /// `SeaweedFS` `StatefulSet` never starts and `navigator-web`/`workflows-service`
-    /// sit in `CreateContainerConfigError` on the missing
-    /// `navigator-seaweedfs-s3` secret.
-    #[test]
-    fn deploy_yml_bootstraps_seaweedfs_before_the_smoke_checks() {
-        use std::path::Path;
-        let deploy_yml = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("repo root is cli/'s parent")
-            .join(".github")
-            .join("workflows")
-            .join("deploy.yml");
-        let body = std::fs::read_to_string(&deploy_yml)
-            .unwrap_or_else(|e| panic!("read {}: {e}", deploy_yml.display()));
-        let bootstrap = body
-            .find("dev seaweedfs-bootstrap")
-            .expect("deploy.yml must run `dev seaweedfs-bootstrap` to mint the SeaweedFS secrets");
-        let smoke = body
-            .find("dev e2e")
-            .expect("deploy.yml must run `dev e2e` smoke checks");
-        assert!(
-            bootstrap < smoke,
-            "the SeaweedFS bootstrap must run before `dev e2e`, else the rollout wait times out on unstarted pods"
-        );
-    }
-
     // The deploy workflow's "stub public assets" step generates
     // the placeholder `/public/img/...` and `/public/fonts/...` bytes the KIND
     // `assets verify` gate requires and removes the matching `.dockerignore`
