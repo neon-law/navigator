@@ -2032,14 +2032,18 @@ mod tests {
                     .unwrap()
                     .is_empty()
             );
-            assert!(store::personal_projects::separate_formation(&pg, other.id, "neon", id).await.unwrap().is_none());
-            let moved = store::personal_projects::separate_formation(&pg, owner.id, "neon", id).await.unwrap().unwrap();
-            assert_eq!(store::personal_projects::separate_formation(&pg, owner.id, "neon", id).await.unwrap(),Some(moved.clone()));
+            let move_draft = |person| store::personal_projects::separate_formation(&pg, person, "neon", id);
+            assert!(move_draft(other.id).await.unwrap().is_none());
+            let moved = move_draft(owner.id).await.unwrap().unwrap();
+            assert_eq!(move_draft(owner.id).await.unwrap(), Some(moved.clone()));
             let rows = store::personal_projects::formations(&pg, owner.id, "neon").await.unwrap();
-            assert_eq!(rows.len(),2);
-            assert_eq!(rows[1].intake_path(),moved);
-            assert_eq!(rows[1].label,"First Example LLC");
-            assert_eq!(rows[0].intake_path(),second);
+            assert_eq!(rows.len(), 2);
+            assert_eq!(rows[1].intake_path(), moved);
+            assert_eq!(rows[1].label, "First Example LLC");
+            assert_eq!(rows[0].intake_path(), second);
+            let bookmark = |person| store::personal_projects::moved_intake(notation.project_id, id, person, "neon");
+            assert_eq!(bookmark(owner.id).await.unwrap(), Some(moved));
+            assert!(bookmark(other.id).await.unwrap().is_none());
             assert_eq!(
                 store::personal_projects::owner_access(notation.project_id, other.id, "neon")
                     .await

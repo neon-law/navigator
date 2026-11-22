@@ -510,7 +510,7 @@ async fn the_home_explains_the_mcp_setup_and_the_quickstart() {
     for expected in [
         r#"id="connect-mcp""#,
         r#"href="https://chatgpt.com/plugins""#,
-        r#"href="/start/llc-file""#,
+        r#"href="/notations/nevada-llc-formation/start""#,
         r#"href="/notations/nevada-llc-formation""#,
         r#"href="/app/projects""#,
         "https://www.neonlaw.com/app/mcp",

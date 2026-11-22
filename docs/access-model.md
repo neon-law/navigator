@@ -11,10 +11,15 @@ a session. It defaults to `true` for ordinary and historical rows. Discarding a 
 the retained client row has no remaining Project participation; it does not change the person's role, participation
 history, or conflict record.
 
-The client-initiated service start is one path where a client gains Project participation. It is safe because the
-handler accepts only the signed-in session's own Person, adds the configured lawyer DRI, and keeps the same conflict and
-lawyer-review gates as every other intake path. Compensation on a refused start removes the new Project and its notation
-without withdrawing admission from that already admitted client.
+The lawyer-led service start is one path where a client gains Project participation. The handler accepts only the
+signed-in session's own Person, adds the configured lawyer DRI, and keeps the same conflict and lawyer-review gates as
+every other intake path. Compensation on a refused start removes the new Project and its notation without withdrawing
+admission from that already admitted client.
+
+At the self-serve Nevada LLC start, the signed-in founder opens a personal Project with only their own client-side
+participation. Each formation has its own Notation. Moving one draft opens another Project with the same owner and
+Brand, and the transfer record resolves the old intake link. A Project code beginning with `navigator` exempts it from
+engagement-first onboarding. Access still requires participation.
 
 The stored columns:
 
