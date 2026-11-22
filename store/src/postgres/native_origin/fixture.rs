@@ -1,5 +1,8 @@
 //! Fresh native test resources use the same creation capability and migrator.
-use super::{create_observed, database_name, identity, NativeDatabase, TierBinding};
+use super::{
+    create_resource_on, database_name, identity, mark_created_on, CreatedDatabase, NativeDatabase,
+    TierBinding,
+};
 use crate::postgres::PostgresDb;
 use sqlx::postgres::PgConnectOptions;
 use sqlx::AssertSqlSafe;
@@ -18,50 +21,43 @@ pub(crate) async fn create(
     let name = database_name(operation)?;
     let mut acknowledged = false;
     let mut initialization_pool = None;
-    let created = create_observed(
-        admin_options,
-        operation,
-        tier.clone(),
-        || acknowledged = true,
-        |pg| initialization_pool = Some(pg.clone()),
-    )
-    .await;
-    super::creation_outcome("fixture.create.end", created.is_ok());
-    super::creation_outcome("fixture.creation.acknowledged", acknowledged);
-    let mut routed_pool = None;
-    let prepared = async {
-        let created = created?;
-        super::creation_phase("fixture.initialize.begin");
-        let native = created.initialize().await?;
-        super::creation_phase("fixture.initialize.end");
-        let expected = identity(native.postgres()).await?;
+    let prepared: anyhow::Result<NativeDatabase> = async {
+        tier.validate()?;
+        super::creation_phase("fixture.borrowed_admin.begin");
+        let created = create_resource_on(admin, &name, || acknowledged = true).await;
+        super::creation_outcome("fixture.create.end", created.is_ok());
+        super::creation_outcome("fixture.creation.acknowledged", acknowledged);
+        created?;
+        super::creation_phase("fixture.borrowed_admin.retained");
+        let expected = mark_created_on(admin, &name, operation).await?;
         super::creation_phase("fixture.data_connect.begin");
-        let pg = PostgresDb::connect(fixture_options.database(&name)).await?;
-        routed_pool = Some(pg.clone());
-        super::creation_phase("fixture.data_connect.end");
-        // A separately routed transport must reach the exact resource this
-        // capability created, not merely a database with a matching name.
-        let actual = identity(&pg).await?;
-        if actual != expected || !super::admits(&pg).await? {
-            return Err(anyhow::Error::from(super::OriginError::Identity));
-        }
-        super::creation_phase("fixture.data_identity_admission.end");
-        Ok(NativeDatabase {
+        let connected = PostgresDb::connect(fixture_options.database(&name)).await;
+        super::creation_outcome("fixture.data_connect.end", connected.is_ok());
+        let pg = connected?;
+        initialization_pool = Some(pg.clone());
+        super::creation_phase("fixture.data_identity.begin");
+        let identity = require_created_identity(&pg, &expected).await;
+        super::creation_outcome("fixture.data_identity.end", identity.is_ok());
+        identity?;
+        super::creation_phase("fixture.initialize.begin");
+        let native = CreatedDatabase {
             postgres: pg,
             operation,
             tier,
-        })
+            admin_options,
+        }
+        .initialize()
+        .await?;
+        super::creation_phase("fixture.initialize.end");
+        if !super::admits(native.postgres()).await? {
+            return Err(anyhow::Error::from(super::OriginError::Identity));
+        }
+        super::creation_phase("fixture.data_identity_admission.end");
+        Ok(native)
     }
     .await;
-    // The opaque creation resource may have failed after connecting. Its
-    // observed pool is retained solely to drain it before owned cleanup.
-    if let Some(pg) = initialization_pool {
-        super::creation_phase("fixture.initialization_pool_close.begin");
-        pg.pool().close().await;
-        super::creation_phase("fixture.initialization_pool_close.end");
-    }
     if prepared.is_err() {
-        if let Some(pg) = routed_pool {
+        if let Some(pg) = initialization_pool {
             super::creation_phase("fixture.failed_data_pool_close.begin");
             pg.pool().close().await;
             super::creation_phase("fixture.failed_data_pool_close.end");
@@ -90,10 +86,104 @@ pub(crate) async fn create(
     }
 }
 
+/// Name/OID alone can collide across clusters; the owner's fresh nonce must match too.
+async fn require_created_identity(
+    pg: &PostgresDb,
+    expected: &(String, i64, Option<String>),
+) -> Result<(), super::OriginError> {
+    if &identity(pg).await? != expected {
+        return Err(super::OriginError::Identity);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::{identity, OriginError, TierBinding};
     use crate::postgres::PostgresDb;
+
+    #[tokio::test]
+    async fn a_colliding_name_and_oid_without_the_owners_nonce_never_admits_or_changes_the_target()
+    {
+        crate::test_support::with_postgres(async {
+            let pg = PostgresDb::application().await.unwrap();
+            let before = identity(&pg).await.unwrap();
+            let origin: serde_json::Value =
+                sqlx::query_scalar("SELECT to_jsonb(o) FROM public.database_origin o")
+                    .fetch_one(pg.pool())
+                    .await
+                    .unwrap();
+            let expected = (
+                before.0.clone(),
+                before.1,
+                Some(super::super::marker(uuid::Uuid::new_v4())),
+            );
+            assert!(
+                matches!(
+                    super::require_created_identity(&pg, &expected).await,
+                    Err(OriginError::Identity)
+                ),
+                "same name/OID is not ownership of a foreign nonce"
+            );
+            assert_eq!(
+                identity(&pg).await.unwrap(),
+                before,
+                "the data target is never restamped"
+            );
+            let retained: serde_json::Value =
+                sqlx::query_scalar("SELECT to_jsonb(o) FROM public.database_origin o")
+                    .fetch_one(pg.pool())
+                    .await
+                    .unwrap();
+            assert_eq!(retained, origin);
+            super::require_created_identity(&pg, &before).await.unwrap();
+            assert!(super::super::admits(&pg).await.unwrap());
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn borrowed_single_connection_admin_stays_live_and_data_options_initialize_the_owned_fixture(
+    ) {
+        use futures::FutureExt as _;
+        crate::test_support::with_postgres(async {
+            let parent = PostgresDb::application().await.unwrap();
+            let admin_options = parent.pool().connect_options().as_ref().clone()
+                .application_name("synthetic-borrowed-fixture-admin");
+            let data_options = admin_options.clone().application_name("synthetic-borrowed-fixture-data");
+            let pool = sqlx::postgres::PgPoolOptions::new().max_connections(1)
+                .connect_with(admin_options.clone()).await.unwrap();
+            let admin = PostgresDb(pool);
+            let backend: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+                .fetch_one(admin.pool()).await.unwrap();
+            let operation = uuid::Uuid::now_v7();
+            let name = super::database_name(operation).unwrap();
+            let native = super::create(
+                &admin, admin_options, data_options, operation,
+                TierBinding { tier_id: uuid::Uuid::new_v4(), namespace_uid: uuid::Uuid::new_v4(), cluster_name: "synthetic-borrowed-fixture".into() },
+            ).await.unwrap();
+            let result = std::panic::AssertUnwindSafe(async {
+                assert!(!admin.pool().is_closed());
+                let retained: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+                    .fetch_one(admin.pool()).await.unwrap();
+                assert_eq!(retained, backend, "caller-owned administrative session remains retained");
+                let route: String = sqlx::query_scalar("SELECT current_setting('application_name')")
+                    .fetch_one(native.postgres().pool()).await.unwrap();
+                assert_eq!(route, "synthetic-borrowed-fixture-data");
+                let expected: (String, i64, Option<String>) = sqlx::query_as("SELECT datname::text,oid::bigint,shobj_description(oid,'pg_database') FROM pg_database WHERE datname=$1")
+                    .bind(&name).fetch_one(admin.pool()).await.unwrap();
+                assert_eq!(identity(native.postgres()).await.unwrap(), expected);
+                assert_eq!(expected.2, Some(super::super::marker(operation)));
+                assert!(super::super::admits(native.postgres()).await.unwrap());
+            }).catch_unwind().await;
+            native.postgres().pool().close().await;
+            sqlx::query(sqlx::AssertSqlSafe(format!("DROP DATABASE \"{name}\"")))
+                .execute(admin.pool()).await.unwrap();
+            admin.ping().await.unwrap();
+            admin.pool().close().await;
+            if let Err(panic) = result { std::panic::resume_unwind(panic); }
+        }).await;
+    }
 
     #[tokio::test]
     async fn duplicate_existing_native_fixture_never_adopts_or_drops_the_database() {

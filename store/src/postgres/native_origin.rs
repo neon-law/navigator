@@ -145,8 +145,33 @@ async fn create_observed(
         .await
         .map_err(|_| OriginError::Creation)?;
     creation_phase("create.admin_connect.end");
+    let result = create_resource_on(&admin, &name, &mut observe_created).await;
+    creation_phase("create.admin_close.begin");
+    admin.pool().close().await;
+    creation_phase("create.admin_close.end");
+    result?;
+    creation_phase("create.target_connect.begin");
+    let postgres = PostgresDb::connect(admin_options.clone().database(&name))
+        .await
+        .map_err(|_| OriginError::Creation)?;
+    observe_connection(&postgres);
+    creation_phase("create.target_connect.end");
+    mark_created_on(&postgres, &name, operation).await?;
+    Ok(CreatedDatabase {
+        postgres,
+        operation,
+        tier,
+        admin_options,
+    })
+}
+
+/// Use a retained caller-owned administrative transport without closing it.
+async fn create_resource_on(
+    admin: &PostgresDb,
+    name: &str,
+    mut observe_created: impl FnMut(),
+) -> Result<(), OriginError> {
     creation_phase("create.database.begin");
-    // Both identifiers derive solely from a validated UUID, not user SQL.
     let result = sqlx::query(AssertSqlSafe(format!(
         "CREATE DATABASE \"{name}\" TEMPLATE template0 ALLOW_CONNECTIONS false"
     )))
@@ -166,9 +191,6 @@ async fn create_observed(
         .await;
         creation_outcome("create.fence.end", fenced.is_ok());
         if fenced.is_err() {
-            creation_phase("create.admin_close.fence_failure.begin");
-            admin.pool().close().await;
-            creation_phase("create.admin_close.fence_failure.end");
             return Err(OriginError::Creation);
         }
         creation_phase("create.allow_connections.begin");
@@ -179,36 +201,35 @@ async fn create_observed(
         .await;
         creation_outcome("create.allow_connections.end", opened.is_ok());
         if opened.is_err() {
-            creation_phase("create.admin_close.open_failure.begin");
-            admin.pool().close().await;
-            creation_phase("create.admin_close.open_failure.end");
             return Err(OriginError::Creation);
         }
     }
-    creation_phase("create.admin_close.begin");
-    admin.pool().close().await;
-    creation_phase("create.admin_close.end");
     result.map_err(|_| OriginError::Creation)?;
-    creation_phase("create.target_connect.begin");
-    let postgres = PostgresDb::connect(admin_options.clone().database(&name))
-        .await
-        .map_err(|_| OriginError::Creation)?;
-    observe_connection(&postgres);
-    creation_phase("create.target_connect.end");
+    Ok(())
+}
+
+/// Stamp this acknowledged creation; routed fixtures use only their retained administrative owner.
+async fn mark_created_on(
+    admin: &PostgresDb,
+    name: &str,
+    operation: Uuid,
+) -> Result<(String, i64, Option<String>), OriginError> {
     creation_phase("create.marker.begin");
     sqlx::query(AssertSqlSafe(format!(
         "COMMENT ON DATABASE \"{name}\" IS '{}'",
         marker(operation)
     )))
-    .execute(postgres.pool())
+    .execute(admin.pool())
     .await?;
     creation_phase("create.marker.end");
-    Ok(CreatedDatabase {
-        postgres,
-        operation,
-        tier,
-        admin_options,
-    })
+    creation_phase("create.owner_identity.begin");
+    let expected: (String, i64, Option<String>) = sqlx::query_as("SELECT datname::text,oid::bigint,shobj_description(oid,'pg_database') FROM pg_catalog.pg_database WHERE datname=$1")
+        .bind(name).fetch_one(admin.pool()).await?;
+    if expected.2.as_deref() != Some(marker(operation).as_str()) {
+        return Err(OriginError::Identity);
+    }
+    creation_phase("create.owner_identity.end");
+    Ok(expected)
 }
 
 impl CreatedDatabase {
