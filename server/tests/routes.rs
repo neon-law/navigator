@@ -9523,18 +9523,31 @@ async fn lawyer_projects_list_defaults_to_pitch_and_active_and_filters_by_status
     assert!(body.contains(&open_name), "{body}");
     assert!(!body.contains("Estate of a Retired Matter"), "{body}");
     assert!(!body.contains("Wound-Down Matter"), "{body}");
-    for (status, selected) in [
-        ("open", true),
-        ("pitch", true),
-        ("active", true),
-        ("closed", false),
-    ] {
-        assert!(
-            body.contains(&format!(
-                r#"data-status="{status}" aria-current="{selected}" "#
-            )),
-            "{status} selected: {selected}: {body}"
-        );
+    {
+        let doc = Html::parse_document(&body);
+        let filter = Selector::parse("nav[aria-label='Project status'] a").unwrap();
+        let choices: Vec<_> = doc
+            .select(&filter)
+            .map(|link| {
+                (
+                    link.text().collect::<String>(),
+                    link.value().attr("aria-current"),
+                )
+            })
+            .collect();
+        for (status, selected) in [
+            ("open", "true"),
+            ("pitch", "true"),
+            ("active", "true"),
+            ("closed", "false"),
+        ] {
+            assert!(
+                choices
+                    .iter()
+                    .any(|(label, current)| label == status && *current == Some(selected)),
+                "{choices:?}"
+            );
+        }
     }
     assert!(
         body.contains(r#"href="/app/projects?status=open,pitch,active,closed"#),

@@ -2481,12 +2481,16 @@ async fn project_status_filter_fits_and_toggles_closed() {
             "Status filter overflows at {width}px"
         );
     }
-    scroll_and_js_click(&c, &format!("{filter} a[data-status=closed]")).await;
+    let closed = "//nav[@aria-label='Project status']//a[normalize-space()='closed']";
+    c.find(Locator::XPath(closed))
+        .await
+        .unwrap()
+        .click()
+        .await
+        .unwrap();
     c.wait()
         .at_most(Duration::from_secs(10))
-        .for_element(Locator::Css(&format!(
-            "{filter} a[data-status=closed].is-active"
-        )))
+        .for_element(Locator::XPath(&format!("{closed}[@aria-current='true']")))
         .await
         .unwrap();
     let url = c.current_url().await.unwrap();
