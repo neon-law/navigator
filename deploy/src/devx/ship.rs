@@ -738,8 +738,8 @@ const DBOS_SCHEDULES: [DbosSchedule; 6] = [
             "billing-digest-trigger",
             "  - cron-billing-digest-trigger.yaml\n",
         )),
-        coordinates: &["BILLING_EXPORT_TABLE", "BIGQUERY_PROJECT"],
-        secret: Some(SLACK_WEBHOOK_URL),
+        coordinates: &[],
+        secret: None,
     },
     DbosSchedule {
         env: "NAVIGATOR_DBOS_NOTATION_RESET_ENABLED",
@@ -779,12 +779,15 @@ const DBOS_SCHEDULES: [DbosSchedule; 6] = [
     },
 ];
 
-/// These schedules are registered only by the embedded workflow host. A
-/// selector alone must not retire a trigger from the separate-worker profile.
-const COHOST_CRONJOBS: [RetiredCronJob; 1] = [retired(
-    "social-publish-reconciler-trigger",
-    "  - cron-social-publish-reconciler-trigger.yaml\n",
-)];
+/// Complete native hosting retires these engine-specific jobs. Select this
+/// profile only after source recovery and durable-work disposition are accepted.
+const COHOST_CRONJOBS: [RetiredCronJob; 2] = [
+    retired(
+        "social-publish-reconciler-trigger",
+        "  - cron-social-publish-reconciler-trigger.yaml\n",
+    ),
+    retired("surreal-archive", "  - cron-surreal-archive.yaml\n"),
+];
 
 const COHOST_TRIGGERS: [(&str, &str); 2] = [
     (
@@ -913,6 +916,10 @@ where
     let dbos_on = non_empty_env(NAVIGATOR_DBOS_ENABLED, get).as_deref() == Some("true");
     let mut flags = Vec::with_capacity(DBOS_SCHEDULES.len());
     for schedule in &DBOS_SCHEDULES {
+        if store::workflow_engine::disabled_billing_flag(schedule.env) {
+            flags.push(false);
+            continue;
+        }
         let flag = match non_empty_env(schedule.env, get).as_deref() {
             None => schedule.default_on && dbos_on,
             Some("false") => false,
@@ -950,6 +957,16 @@ where
             "            - name: {}\n              value: \"{enabled}\"\n",
             schedule.env
         );
+        if store::workflow_engine::disabled_billing_flag(schedule.env) {
+            if let Some(retired) = schedule.retires {
+                substitutions.push(Substitution {
+                    token: retired.resource,
+                    env: schedule.env,
+                    value: String::new(),
+                });
+            }
+            continue;
+        }
         if !enabled {
             continue;
         }
@@ -996,6 +1013,11 @@ where
         }
     }
     if dbos_only_profile(get)? {
+        substitutions.push(Substitution {
+            token: "  - surreal-archive-monitoring.yaml\n",
+            env: store::workflow_engine::COHOST_ENV,
+            value: String::new(),
+        });
         env.push_str(&cohost_environment(deployment, get)?);
         for retired in COHOST_CRONJOBS {
             substitutions.push(Substitution {
@@ -1151,10 +1173,15 @@ fn require_dbos_schedule_prerequisites(deployment: &super::deployments::Deployme
     Ok(())
 }
 
-/// Trigger `CronJob`s no render produces any more, whose workflow now runs only
-/// on DBOS. Every roll deletes them, because `kubectl apply` never prunes a
-/// `CronJob` an earlier release created.
-const RETIRED_CRONJOBS: [&str; 1] = ["heartbeat-trigger"];
+/// Retired trigger jobs are deleted on every full roll: apply does not prune
+/// jobs, and disabled billing must not retain an automatic submitter.
+const RETIRED_CRONJOBS: [&str; 5] = [
+    "heartbeat-trigger",
+    "billing-canary-trigger",
+    "billing-digest-trigger",
+    "reconcile-trigger",
+    "sandbox-credit-reset-trigger",
+];
 
 /// Every trigger `CronJob` this roll deletes: each switched-on DBOS schedule's
 /// Restate trigger, then every [`RETIRED_CRONJOBS`] entry.
@@ -1198,6 +1225,17 @@ fn retire_dbos_hosted_cronjobs(
                 .arg("cronjob")
                 .arg(cronjob)
                 .arg("--ignore-not-found=true"),
+        )?;
+    }
+    if cfg.dbos_only {
+        exec(
+            dry_run,
+            kubectl(cfg).args([
+                "delete",
+                "rules.monitoring.googleapis.com",
+                "surreal-archive-alerts",
+                "--ignore-not-found=true",
+            ]),
         )?;
     }
     Ok(())
@@ -3641,24 +3679,7 @@ fn offline_ship_plan(
             )?;
         }
     }
-    if cfg.dbos_only {
-        for key in [
-            workflows::flags::BILLING_CANARY_SCHEDULE_ENABLED_ENV,
-            workflows::flags::RECONCILE_INVOICES_SCHEDULE_ENABLED_ENV,
-        ] {
-            let enabled = workflows::flags::schedule_enabled(key, &|name| {
-                deployment.coordinates.get(name).cloned()
-            })?;
-            operations.push(format!(
-                "{key}: automatic timer {} (manual DBOS starts remain registered)",
-                if enabled {
-                    "enabled by explicit opt-in"
-                } else {
-                    "disabled"
-                }
-            ));
-        }
-    }
+    operations.push("billing automation is disabled".to_owned());
     print_offline_ship_plan(
         lane,
         &local_validation,
@@ -8404,7 +8425,8 @@ mod tests {
                     })
                 };
                 assert!(has("ServiceAccount", WORKFLOWS_DEPLOYMENT));
-                assert!(has("CronJob", "surreal-archive"));
+                assert!(!has("CronJob", "surreal-archive"));
+                assert!(!has("Rules", "surreal-archive-alerts"));
                 let cronjobs = objects
                     .iter()
                     .filter(|object| object["kind"].as_str() == Some("CronJob"))
@@ -8414,7 +8436,6 @@ mod tests {
                     cronjobs,
                     BTreeSet::from([
                         "nightly-project-update-trigger",
-                        "surreal-archive",
                         "youtube-comments-poll-trigger"
                     ]),
                     "registered endpoints without timer loops retain their CronJobs"
@@ -8682,84 +8703,6 @@ mod tests {
     }
 
     #[test]
-    fn native_timer_loops_default_off_and_require_explicit_valid_activation() {
-        for key in [
-            workflows::flags::BILLING_CANARY_SCHEDULE_ENABLED_ENV,
-            workflows::flags::RECONCILE_INVOICES_SCHEDULE_ENABLED_ENV,
-        ] {
-            for (configured, expected) in [
-                (None, "false"),
-                (Some("false"), "false"),
-                (Some("true"), "true"),
-            ] {
-                let manifests = rendered_manifests(|name| {
-                    if name == key {
-                        configured.map(str::to_owned)
-                    } else {
-                        native_ship_env(name)
-                    }
-                });
-                let web = manifest_doc(&manifests, "Deployment", WEB_DEPLOYMENT);
-                assert_eq!(web_env_value(&web, key).as_deref(), Some(expected));
-            }
-            let error = resolve_substitutions_for_deployment("synthetic", "26.1.1", |name| {
-                if name == key {
-                    Some("invalid".into())
-                } else {
-                    native_ship_env(name)
-                }
-            })
-            .err()
-            .unwrap();
-            assert!(error.to_string().contains(key));
-        }
-    }
-
-    #[test]
-    fn mixed_hosts_keep_timer_defaults_and_honor_explicit_timer_coordinates() {
-        for key in [
-            workflows::flags::BILLING_CANARY_SCHEDULE_ENABLED_ENV,
-            workflows::flags::RECONCILE_INVOICES_SCHEDULE_ENABLED_ENV,
-        ] {
-            let get = |name: &str| {
-                if name == NAVIGATOR_DBOS_ENABLED {
-                    Some("true".into())
-                } else {
-                    env_getter(FULL_ENV)(name)
-                }
-            };
-            let defaults = rendered_manifests(get);
-            let web = manifest_doc(&defaults, "Deployment", WEB_DEPLOYMENT);
-            assert!(
-                web_env_value(&web, key).is_none(),
-                "omission preserves the runtime mixed default"
-            );
-            for value in ["true", "false"] {
-                let manifests = rendered_manifests(|name| {
-                    if name == key {
-                        Some(value.into())
-                    } else {
-                        get(name)
-                    }
-                });
-                for deployment in [WEB_DEPLOYMENT, WORKFLOWS_DEPLOYMENT] {
-                    let object = manifest_doc(&manifests, "Deployment", deployment);
-                    let containers = object["spec"]["template"]["spec"]["containers"]
-                        .as_sequence()
-                        .unwrap();
-                    let found = containers
-                        .iter()
-                        .filter_map(|container| container["env"].as_sequence())
-                        .flat_map(|env| env.iter())
-                        .find(|entry| entry["name"].as_str() == Some(key))
-                        .unwrap();
-                    assert_eq!(found["value"].as_str(), Some(value));
-                }
-            }
-        }
-    }
-
-    #[test]
     fn dbos_only_ship_targets_web_and_never_registers_or_restarts_a_retained_worker() {
         let cfg = ShipConfig::from_lookup("synthetic-deployment", native_ship_env)
             .expect("the complete native deployment needs no broker coordinate");
@@ -8922,71 +8865,43 @@ mod tests {
         // General Nag is on wherever the executor runs, so it retires too.
         assert_eq!(
             retired_cronjobs(&deployment).unwrap(),
-            ["general-nag", "archives-trigger", "heartbeat-trigger"]
+            [
+                "general-nag",
+                "archives-trigger",
+                "heartbeat-trigger",
+                "billing-canary-trigger",
+                "billing-digest-trigger",
+                "reconcile-trigger",
+                "sandbox-credit-reset-trigger"
+            ]
         );
     }
 
     #[test]
-    fn billing_digest_moves_to_web_and_retires_its_cronjob() {
-        let switched = |key: &str| match key {
-            NAVIGATOR_DBOS_ENABLED | "NAVIGATOR_DBOS_BILLING_DIGEST_ENABLED" => {
-                Some("true".to_owned())
+    fn disabled_billing_needs_no_provider_configuration_and_retires_triggers() {
+        for value in [None, Some("false"), Some("true"), Some("stale")] {
+            let lookup = |key: &str| {
+                if store::workflow_engine::disabled_billing_flag(key) {
+                    value.map(str::to_owned)
+                } else {
+                    env_getter(FULL_ENV)(key)
+                }
+            };
+            let manifests = rendered_manifests(lookup);
+            let web = manifest_doc(&manifests, "Deployment", WEB_DEPLOYMENT);
+            assert!(matches!(
+                web_env_value(&web, "NAVIGATOR_DBOS_BILLING_DIGEST_ENABLED").as_deref(),
+                None | Some("false")
+            ));
+            for cronjob in [
+                "billing-digest-trigger",
+                "billing-canary-trigger",
+                "sandbox-credit-reset-trigger",
+                "reconcile-trigger",
+            ] {
+                assert!(!renders_cronjob(&manifests, cronjob));
             }
-            "BILLING_EXPORT_TABLE" => Some("synthetic-project.billing.export".to_owned()),
-            "BIGQUERY_PROJECT" => Some("synthetic-project".to_owned()),
-            _ => env_getter(FULL_ENV)(key),
-        };
-        let manifests = rendered_manifests(switched);
-        let web = manifest_doc(&manifests, "Deployment", WEB_DEPLOYMENT);
-        assert_eq!(
-            web_env_value(&web, "NAVIGATOR_DBOS_BILLING_DIGEST_ENABLED").as_deref(),
-            Some("true")
-        );
-        assert!(!renders_cronjob(&manifests, "billing-digest-trigger"));
-
-        let mut deployment =
-            super::super::deployments::Deployment::load(&fixture_tree(), "example-deployment")
-                .expect("fixture row loads");
-        deployment
-            .coordinates
-            .insert(NAVIGATOR_DBOS_ENABLED.into(), "true".into());
-        deployment.coordinates.insert(
-            "NAVIGATOR_DBOS_BILLING_DIGEST_ENABLED".into(),
-            "true".into(),
-        );
-        deployment.encrypted_keys.remove(SLACK_WEBHOOK_URL);
-        let error = require_dbos_schedule_prerequisites(&deployment).unwrap_err();
-        assert!(error.to_string().contains(SLACK_WEBHOOK_URL), "{error}");
-
-        let missing_executor = |key: &str| match key {
-            "NAVIGATOR_DBOS_BILLING_DIGEST_ENABLED" => Some("true".to_owned()),
-            _ => env_getter(FULL_ENV)(key),
-        };
-        let error = resolve_substitutions_for_deployment(
-            "synthetic-deployment",
-            "26.9.16",
-            missing_executor,
-        )
-        .unwrap_err();
-        assert!(
-            error.to_string().contains(NAVIGATOR_DBOS_ENABLED),
-            "{error}"
-        );
-
-        let missing_export = |key: &str| match key {
-            NAVIGATOR_DBOS_ENABLED | "NAVIGATOR_DBOS_BILLING_DIGEST_ENABLED" => {
-                Some("true".to_owned())
-            }
-            "BIGQUERY_PROJECT" => Some("synthetic-project".to_owned()),
-            _ => env_getter(FULL_ENV)(key),
-        };
-        let error =
-            resolve_substitutions_for_deployment("synthetic-deployment", "26.9.16", missing_export)
-                .unwrap_err();
-        assert!(
-            error.to_string().contains("BILLING_EXPORT_TABLE"),
-            "{error}"
-        );
+        }
     }
 
     #[test]
@@ -9033,7 +8948,7 @@ mod tests {
     }
 
     #[test]
-    fn dbos_renders_digest_destinations_and_retires_nothing() {
+    fn dbos_renders_digest_destinations_and_keeps_unswitched_active_triggers() {
         let switched = |key: &str| match key {
             NAVIGATOR_DBOS_ENABLED => Some("true".to_owned()),
             "SLACK_LINEAR_BACKLOG_CHANNEL_ID" => Some("C012BACKLOG".into()),
@@ -9049,7 +8964,11 @@ mod tests {
         ] {
             assert_eq!(web_env_value(&web, name).as_deref(), Some(value), "{name}");
         }
-        for schedule in DBOS_SCHEDULES.iter().filter_map(|s| s.retires) {
+        for schedule in DBOS_SCHEDULES
+            .iter()
+            .filter(|s| !store::workflow_engine::disabled_billing_flag(s.env))
+            .filter_map(|s| s.retires)
+        {
             assert!(
                 renders_cronjob(&manifests, schedule.cronjob),
                 "{}",
@@ -9131,16 +9050,20 @@ mod tests {
         let mut deployment =
             super::super::deployments::Deployment::load(&fixture_tree(), "example-deployment")
                 .expect("fixture row loads");
-        assert_eq!(
-            retired_cronjobs(&deployment).unwrap(),
-            ["heartbeat-trigger"]
-        );
+        assert_eq!(retired_cronjobs(&deployment).unwrap(), RETIRED_CRONJOBS);
         deployment
             .coordinates
             .insert(NAVIGATOR_DBOS_ENABLED.into(), "true".into());
         assert_eq!(
             retired_cronjobs(&deployment).unwrap(),
-            ["general-nag", "heartbeat-trigger"]
+            [
+                "general-nag",
+                "heartbeat-trigger",
+                "billing-canary-trigger",
+                "billing-digest-trigger",
+                "reconcile-trigger",
+                "sandbox-credit-reset-trigger"
+            ]
         );
         deployment.encrypted_keys.remove("SLACK_BOT_TOKEN");
         let error = require_dbos_schedule_prerequisites(&deployment).unwrap_err();
@@ -9152,7 +9075,14 @@ mod tests {
         deployment.encrypted_keys.insert(SLACK_WEBHOOK_URL.into());
         assert_eq!(
             retired_cronjobs(&deployment).unwrap(),
-            ["general-nag", "billing-digest-trigger", "heartbeat-trigger"]
+            [
+                "general-nag",
+                "heartbeat-trigger",
+                "billing-canary-trigger",
+                "billing-digest-trigger",
+                "reconcile-trigger",
+                "sandbox-credit-reset-trigger"
+            ]
         );
     }
 

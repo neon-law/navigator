@@ -460,13 +460,8 @@ pub struct AppState {
     /// [`cloud::NoRuntimeKms`] is the default and refuses, matching
     /// [`Self::integration_providers`]'s unconfigured default.
     pub runtime_kms: Arc<dyn cloud::RuntimeKms>,
-    /// Pluggable billing provider. The stub is the default; the real
-    /// `XeroBillingProvider` drops in behind the same trait when the
-    /// `XERO_*` env is configured. No matter is invoiced through it —
-    /// lawyers bill matters in Xero, and the nightly `ReconcileInvoices`
-    /// workflow only folds paid-status back. The one exception is a
-    /// Client's self-serve Purchase at a published price
-    /// ([`purchases`]).
+    /// Accounting provider. Application hosting refuses provider operations for real
+    /// matters; explicitly simulated development matters use synthetic billing.
     pub billing_provider: Arc<dyn billing::BillingProvider>,
     /// Coarse path secret the e-signature provider must include in its
     /// completion-webhook URL (`/webhook/esignature/{secret}`). Same

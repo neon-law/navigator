@@ -1,25 +1,4 @@
-# `sandbox-credit-reset-trigger` — monthly trigger for the `SandboxCreditReset`
-# workflow.
-#
-# The workflow itself is hosted by the `workflows-service` worker (it binds
-# `SandboxCreditResetService` alongside `ReconcileInvoices`, `BillingCanary`,
-# and the rest — see `../workflows-service/`), so there is no separate pod.
-# This CronJob is the thin trigger: it POSTs to the Restate ingress to start
-# one invocation, then exits. Restate owns retries.
-#
-# On the first of the month the workflow grants every active Same Day Legal
-# subscriber the fresh 500-cent Legal Sandbox credit and invoices the closed
-# month's overage à la carte through the `billing` contract. The trigger keys
-# each invocation on the billing period (`YYYY-MM`), so a same-month re-fire
-# joins the existing run instead of double-granting or double-billing.
-#
-# Trigger a run by hand:
-#   kubectl create job --from=cronjob/sandbox-credit-reset-trigger sandbox-credit-reset-manual -n navigator
-#
-# Image `navigator-sandbox-credit-reset-trigger:dev` is built by
-# `navigator image-sandbox-credit-reset-trigger` from the shared
-# `images/Containerfile.trigger`
-# (--build-arg CRATE=billing-workflows --build-arg BIN=sandbox-credit-reset-trigger).
+# Retained suspended billing job; its image exits without submitting work.
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -28,6 +7,7 @@ metadata:
   labels:
     app: sandbox-credit-reset-trigger
 spec:
+  suspend: true
   # Monthly at 07:00 UTC on the 1st (23:00 PST), clear of every other cron
   # (digest 13:00 daily, archives 10:00, reconcile 11:00, canary 14:00 Sun,
   # heartbeat */6h).

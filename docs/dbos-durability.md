@@ -52,8 +52,8 @@ The rule that closes the gap:
 2. **A PostgreSQL write** stores the effect key in a unique column, in the same transaction as the write. Use
    `INSERT … ON CONFLICT (effect_key) DO NOTHING` or an upsert, then read the stored row back so a re-run returns the
    first result.
-3. **A provider call that accepts an idempotency key** receives the effect key.
-4. **A provider call without one** stays at least once. Name that in the workflow's docs, and keep the step to the
+3. **A provider call that accepts an idempotency key** receives the effect key. 4. **A provider call without one** stays
+at least once. Name that in the workflow's docs, and keep the step to the
    single call so the duplicate window is only the crash between the provider's reply and the checkpoint.
 
 `workflows-service/tests/dbos/effects.rs` proves both halves against PostgreSQL. An unkeyed effect repeats after a crash
@@ -90,11 +90,10 @@ value refuses the boot. `neon`'s `main` boots through `portal::hosting::run_with
    is loopback) and an optional `_ROOT_CERT`. It is never a connection-string secret. The release image bakes
    `NAVIGATOR_RELEASE_TAG` in. DBOS connections bound PostgreSQL lock waits to five seconds; application pools keep
    their own settings.
-2. Binds the listeners.
-3. Registers every ported workflow. Registration must finish before launch.
-4. Calls `DBOS::launch`. Launch migrates the `dbos` schema and re-enqueues workflows left pending by this version.
-5. Starts each schedule loop, then serves.
-6. On `SIGTERM` or Ctrl-C, drains every listener, cancels scheduling, calls `DBOS::shutdown`, then joins the schedule
+2. Binds the listeners. 3. Registers every ported workflow. Registration must finish before launch. 4. Calls
+`DBOS::launch`. Launch migrates the `dbos` schema and re-enqueues workflows left pending by this version. 5. Starts each
+schedule loop, then serves. 6. On `SIGTERM` or Ctrl-C, drains every listener, cancels scheduling, calls
+`DBOS::shutdown`, then joins the schedule
    tasks. Work cut off there stays pending, and the next launch of the same version recovers it.
 
 `workflows::dbos_engine::Executor` is steps 3 to 6, behind the crate's `dbos` feature. `neon/tests/dbos_host.rs` runs
@@ -104,16 +103,9 @@ A separate worker remains optional: `NAVIGATOR_WORKFLOW_ENGINE=dbos` launches th
 `workflows-service` Restate endpoint, keeping unported services, event handlers, and virtual objects reachable while
 DBOS workflows are enabled individually.
 
-`NAVIGATOR_DBOS_BILLING_CANARY_ENABLED=true` registers `BillingCanary` in either host. Automatic weekly starts are
-controlled independently by `NAVIGATOR_DBOS_BILLING_CANARY_SCHEDULE_ENABLED`; false keeps manual starts registered. It
-uses the Sunday 14:00 UTC slot as its deterministic workflow identity, so both hosts and restarted replicas join the
-same run. The Xero step resolves one fixed system contact twice; the provider's stable email find-or-create behavior
-prevents a second contact if the call repeats before its checkpoint. This adapter does not accept a DBOS Effect Key. The
-Slack operations notice is at least once: a crash after Slack accepts it and before the `email` checkpoint can post it
-again. Registration defaults off, and enabling it requires the configured Xero provider and Slack webhook. The existing
-Restate service remains available in mixed deployments. Standalone and mixed hosts retain their existing automatic start
-default when the new control is omitted. Complete native cohosting defaults the timer off even outside ship; ship also
-renders that choice explicitly, and activation requires opt-in.
+BillingCanary, BillingDigest, ReconcileInvoices, and SandboxCreditReset are disabled on both engines. Their retained
+flags cannot enable registration, timers, or manual starts. Retained trigger binaries exit without contacting a provider
+or workflow ingress. A release does not cancel or purge existing runs; operators must disposition those separately.
 
 ### One application container
 
@@ -135,16 +127,16 @@ Before selecting the combined host on a deployment, quiesce starts, account for 
 remove the separate executor, and route internal callers and readiness probes to the application's workflow listener.
 The combined process exposes no Restate compatibility endpoint. Retained Restate traffic needs the separate worker, its
 proxy, and existing routing until that traffic is reconciled. The shipped separate-worker Kubernetes topology remains
-the default.
+the default. The complete native ship profile omits and deletes the Surreal archive CronJob and its alert; accept source
+recovery and retained-work disposition before selecting that profile. Mixed deployments retain the source archive.
+PostgreSQL physical backups, WAL archives, and Iceberg exports retain their independent recovery requirements.
 
 ### Manual schedule controls
 
-The manual Archives, BillingCanary, BillingDigest, NotationReset, and ReconcileInvoices controls follow their respective
-DBOS switches. An enabled DBOS control requires the authenticated ingress; failure never falls back to Restate. Archives
-and the first three built-in schedules use `POST /internal/dbos/schedules`, with an allowlisted service and
-`manual-<UUID>` run key. A retry reuses that key and joins the existing workflow. Separate operator clicks get distinct
-keys. The executor's typed schedule handles start the same workflows as the automatic schedules; manual dispatch adds no
-second workflow implementation. ReconcileInvoices retains its identity-claim route.
+The manual Archives and NotationReset controls follow their respective DBOS switches. An enabled DBOS control requires
+the authenticated ingress; failure never falls back to Restate. They use `POST /internal/dbos/schedules`, with an
+allowlisted service and `manual-<UUID>` run key. A retry joins the same workflow. Billing controls reject starts on both
+engines without submitting a request.
 
 ### Several replicas
 
@@ -192,30 +184,12 @@ exists:
 
 Set `"false"` and ship to turn the executor off; `web` then never touches DBOS, and no heartbeat runs.
 
-### FinanceAggregate and ReconcileInvoices handoff
+### FinanceAggregate handoff
 
-The internal worker exposes authenticated, bounded DBOS start routes for `FinanceAggregate` and `ReconcileInvoices`. The
-portal's manual FinanceAggregate action keeps the lawyer's existing Project authorization check and sends the canonical
-Project id and code to the worker. Manual reconciliation and the scheduled trigger use the same namespaced
-`ReconcileInvoices:<run-key>` identity. During transition, the matching per-workflow DBOS flag selects the engine; a
-shared ingress URL alone does not switch an unported caller. When the flag is on, a missing DBOS ingress URL or
-credential fails closed instead of falling back to Restate.
-
-Before enabling FinanceAggregate ingress, apply the `dbos_workflow_request` PostgreSQL migration. It binds each global
-DBOS workflow id to one workflow name and a SHA-256 fingerprint of its typed request. Retrying the same request is safe;
-reusing its id for a different Project or parameter set returns `409 Conflict`. A workflow row that predates this claim
-table cannot be proven to have the matching input through DBOS's public API, so ingress refuses it. Before activation,
-operators must account for all existing FinanceAggregate rows and finish or otherwise explicitly reconcile pending work.
-Do not assume an older run id is safe to reuse just because its report is absent. The claim row is durable and must
-remain alongside DBOS history.
-
-`NightlyProjectUpdate` keeps its UTC-date key and starts one stable DBOS child for each `(date, Project, tag)` tuple.
-The daily 03:33 UTC trigger includes a calendar child for each open Project. It checks the Firm-owned private calendar,
-mirrors stored Deadlines, and reconciles assigned guests under one PostgreSQL lock. A calendar failure leaves the
-Project Slack notice eligible to run. The trigger binary selects this worker's authenticated handoff only when
-`NAVIGATOR_DBOS_NIGHTLY_PROJECT_UPDATE_ENABLED=true`; an unset or false flag keeps using Restate, while an invalid value
-or missing DBOS URL/token fails closed. Start and completion notices use correlation receipts so a restart after Slack
-accepts a message does not post it twice. The three Restate child services remain registered during the transition.
+The internal worker exposes an authenticated, bounded DBOS start route for `FinanceAggregate`. The Portal retains the
+lawyer's Project authorization check and sends the canonical Project identity. The configured selector chooses the
+durable engine; a selected DBOS call fails closed on missing ingress or credentials. Invoice reconciliation starts are
+disabled, including the retained identity-claim route.
 
 ## Heartbeat on DBOS
 
@@ -458,12 +432,9 @@ Lowest risk first. Each port keeps its Restate twin until a deployment switches 
 | 1 | `Heartbeat` | No database, one Slack call. Ported; its Restate service and trigger are gone. |
 | 2 | `GeneralNag` | One read and Slack posts. Ship defaults to DBOS on deployments with the web executor. |
 | 3 | `DriDigest` | Read-only digest and Slack posts; DBOS path is opt-in and Restate remains active pending cutover. |
-| 4 | `BillingCanary` | Find-or-create on a fixed key, then one notice |
-| 5 | `BillingDigest` | Cost read and one notice |
 | 6 | `NotationReset` | Daily deletes; DBOS path is opt-in and Restate remains active pending cutover. |
 | 7 | `FinanceAggregate` | Writes object storage |
 | 8 | `Archives` | Twice-daily export; runs in `web` behind its switch, and `ops ship` retires the trigger. |
-| 9 | `ReconcileInvoices` | Provider and database writes |
 | 10 | `NightlyProjectUpdate` and its three children | Parent and child workflows |
 | 11 | `ProjectPublisher` | Repository writes |
 | 12 | `InboundMessageAlert` | Event-driven; started from `web` |
@@ -478,22 +449,6 @@ each run also exports the paired PostgreSQL coverage generation to Iceberg. `ops
 login and the reviewed coverage manifest with the switch, and deletes `archives-trigger`. See [Iceberg
 archive](iceberg-archive.md#where-it-runs).
 
-`BillingDigest` runs on DBOS only when `NAVIGATOR_DBOS_BILLING_DIGEST_ENABLED=true`. Its stable workflow id is
-`BillingDigest-<UTC date>`. The scheduler starts today's run from 13:00 through 13:14 UTC; otherwise it waits until
-tomorrow. `ops ship` renders the switch and removes `billing-digest-trigger` from the exports overlay in the same
-rollout, then deletes that CronJob after applying the new release. An enabled, configured digest requires
-`SLACK_WEBHOOK_URL`. Webhook delivery has no idempotency key, so a crash after Slack accepts a message but before DBOS
-checkpoints the step can repeat the notice.
-
-## Invoice reconciliation timer activation
-
-`NAVIGATOR_DBOS_RECONCILE_INVOICES_ENABLED` selects native registration and manual ingress.
-`NAVIGATOR_DBOS_RECONCILE_INVOICES_SCHEDULE_ENABLED` separately controls its daily 11:00 UTC timer. False keeps manual
-DBOS reconciliation available. Existing standalone and mixed hosts retain their automatic-start default when the control
-is omitted. Complete native cohosting defaults off even outside ship; the native ship profile explicitly renders false
-unless deployment coordinates opt in with true. Malformed timer settings are refused before live provider construction.
-The offline ship plan reports both timer states.
-
 ## Embedded development provider captures
 
 The embedded development harness can register the same native workflows without external Slack or Xero credentials. This
@@ -502,11 +457,9 @@ simulated matters, and embedded hosting. Partial and mixed hosts retain strict p
 identity or invalid staging setting refuses captures. Explicit Slack or Xero configuration conflicts with this capture
 profile and fails startup rather than being silently replaced. Other profiles keep their strict provider constructors.
 
-GeneralNag, DriDigest, NotationReset, and Archives use the existing capturing notification transports. BillingCanary
-uses the existing billing stub and capturing email; ReconcileInvoices runs the shared reconciliation operation with that
-stub and its admitted PostgreSQL store. These captures do not send external messages or certify provider delivery.
-Registration does not activate the canary or reconciliation timers; their independent schedule controls still apply.
-Per-Firm Slack credentials, repository providers, archive storage, and other handler requirements keep their own guards.
+GeneralNag, DriDigest, NotationReset, and Archives use capturing notification transports. These captures do not send
+external messages or certify provider delivery. Billing automations remain disabled in this profile. Per-Firm Slack
+credentials, repository providers, archive storage, and other handler requirements keep their own guards.
 
 ## Cutover acceptance
 
