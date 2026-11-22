@@ -2,8 +2,8 @@
 //!
 //! Each Firm is one Forgejo organization, named by its [`Firm::slug`], and
 //! each Project it owns is one repository in that organization, named by its
-//! [`Project::code`]: `<firm-slug>/<project-code>`. Both segments are
-//! immutable, so a repository never moves when a Firm or Project is renamed.
+//! [`Project::code`]: `<firm-slug>/<project-code>`. Display-name edits keep both
+//! segments. A coordinated namespace move updates the Firm slug and repository bindings.
 //! [`repository_path`] is the one place that path is composed.
 
 use std::fmt;

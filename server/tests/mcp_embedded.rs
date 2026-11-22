@@ -18,7 +18,7 @@ async fn state_with(auth: AuthConfig) -> AppState {
                 .await
                 .unwrap(),
         ),
-        ..portal::test_support::app_state(portal::test_support::embedded_surreal().await).await
+        ..portal::test_support::app_state(store::surreal::SurrealDb::uninitialized()).await
     }
 }
 
@@ -150,76 +150,116 @@ async fn app_mcp_rejects_invalid_bearer_instead_of_falling_back_to_discovery() {
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }
 
-/// A valid bearer authenticates `/app/mcp`.
 #[tokio::test]
-async fn app_mcp_accepts_valid_bearer_token_when_auth_enforced() {
+async fn signed_session_discovers_tools_and_initializes_over_http() {
     let state = state_with(AuthConfig::new(false, Some("test-secret"))).await;
-    let claims = AuthClaims {
-        sub: "lawyer@neonlaw.com".into(),
-        exp: i64::try_from(jsonwebtoken::get_current_timestamp() + 3600).unwrap(),
-        role: store::persons::Role::Lawyer,
-    };
-    let token = encode(
-        &Header::default(),
-        &claims,
-        &EncodingKey::from_secret(b"test-secret").unwrap(),
-    )
-    .unwrap();
-
+    let mut session =
+        portal::SessionData::fresh("lawyer@example.test", store::persons::Role::Lawyer);
+    session.email = Some("lawyer@example.test".into());
+    session.source = portal::SessionSource::Cli;
+    let token = state.sessions.encode(&session);
     let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
-    let resp = app
-        .oneshot(mcp_request_at(
-            "/app/mcp",
-            &json!({
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "tools/list"
-            }),
+    let response = app
+        .clone()
+        .oneshot(mcp_request(
+            &json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
             Some(&token),
         ))
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body = body_json(resp).await;
-    let tools = body["result"]["tools"].as_array().expect("tools array");
-    let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    assert!(response
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes()
+        .is_empty());
+    let response = app
+        .oneshot(mcp_request(
+            &json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }),
+            Some(&token),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    let names: Vec<_> = body["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|t| t["name"].as_str())
+        .collect();
     assert!(names.contains(&"create_person"));
+    assert!(!names.contains(&"create_notation"));
 }
 
 #[tokio::test]
-async fn mcp_accepts_valid_bearer_token_when_auth_enforced() {
+async fn a_bearer_without_a_verified_personal_identity_cannot_call_private_tools() {
     let state = state_with(AuthConfig::new(false, Some("test-secret"))).await;
-    let claims = AuthClaims {
-        sub: "lawyer@neonlaw.com".into(),
-        exp: i64::try_from(jsonwebtoken::get_current_timestamp() + 3600).unwrap(),
-        role: store::persons::Role::Lawyer,
-    };
     let token = encode(
         &Header::default(),
-        &claims,
+        &AuthClaims {
+            sub: "opaque-subject".into(),
+            exp: i64::try_from(jsonwebtoken::get_current_timestamp() + 3600).unwrap(),
+            role: store::persons::Role::Lawyer,
+        },
         &EncodingKey::from_secret(b"test-secret").unwrap(),
     )
     .unwrap();
-
     let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
-    let resp = app
-        .oneshot(mcp_request(
-            &json!({
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "tools/list"
-            }),
-            Some(&token),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body = body_json(resp).await;
-    let tools = body["result"]["tools"].as_array().expect("tools array");
-    let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
-    assert!(names.contains(&"create_person"));
-    assert!(names.contains(&"show_person"));
-    assert!(names.contains(&"list_jurisdictions"));
+    let response = app.oneshot(mcp_request(
+        &json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": "list_projects" } }),
+        Some(&token)
+    )).await.unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// An HTTP client can supply a deployment bearer without surrendering the
+/// actor/decision record for writes. Keep argument values outside the audit log.
+#[tokio::test]
+async fn signed_http_writes_record_the_person_and_decision() {
+    use std::sync::Mutex;
+    use store::persons::{NewPerson, Role};
+    store::test_support::with_postgres(async {
+        let state = state_with(AuthConfig::new(false, Some("test-secret"))).await;
+        let app = server::neon_router(state.clone(), std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
+        let log = tempfile::NamedTempFile::new().unwrap();
+        let subscriber = tracing_subscriber::fmt().json().with_target(true)
+            .with_writer(Mutex::new(log.reopen().unwrap())).finish();
+        let _subscriber = tracing::subscriber::set_default(subscriber);
+        for (role, tool, authorized) in [
+            (Role::Lawyer, "create_person", true),
+            (Role::Client, "create_person", false),
+            (Role::Lawyer, "create_notation", false),
+        ] {
+            let email = format!("{}-{tool}@example.test", role.as_str());
+            let actor = store::persons::create(&state.surreal, &NewPerson::with_role(&email, &email, role))
+                .await.unwrap();
+            let mut session = portal::SessionData::fresh(&email, role);
+            session.email = Some(email.clone());
+            session.source = portal::SessionSource::Cli;
+            let token = state.sessions.encode(&session);
+            let response = app.clone().oneshot(mcp_request(&json!({
+                "jsonrpc":"2.0", "id":1, "method":"tools/call",
+                "params":{"name":tool,"arguments":{"name":"Sample Contact","email":"fixture-contact@example.test"}}
+            }), Some(&token))).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let result = body_json(response).await;
+            assert_eq!(result["result"]["isError"].as_bool().unwrap_or(false), !authorized, "{result}");
+            let events = std::fs::read_to_string(log.path()).unwrap();
+            let entry = events.lines().map(|line| serde_json::from_str::<Value>(line).unwrap())
+                .find(|entry| entry["target"] == "audit" && entry["fields"]["event"] == "mcp.tool.authorization"
+                    && entry["fields"]["person_id"] == actor.id.to_string()).expect("actor's write decision");
+            let fields = &entry["fields"];
+            assert_eq!(fields["authorized"], authorized);
+            assert_eq!(fields["role"], role.as_str());
+            assert_eq!(fields["skill"], tool);
+            assert_eq!(fields["confirmation_required"], tool == "create_notation");
+            assert!(!entry.to_string().contains("@example.test"));
+            assert!(!entry.to_string().contains("Sample Contact"));
+        }
+    }).await;
 }
 
 #[tokio::test]

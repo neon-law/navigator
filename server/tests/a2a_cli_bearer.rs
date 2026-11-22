@@ -1,7 +1,7 @@
 #![allow(clippy::doc_markdown)]
 //! The `navigator` CLI's own bearer must reach `/app/api/mcp/rpc`.
 //!
-//! `navigator site mcp` bridges Claude to A2A using the credential
+//! A2A clients may present the first-party credential that
 //! `site login` stores — the HMAC-signed `SessionData` blob `cli_auth`
 //! mints. Before the first-party lane existed that credential could not
 //! reach this endpoint at all: `require_auth` found no JWT to validate,

@@ -23,22 +23,6 @@ pub const WORKFLOWS: &[WorkflowSelection] = &[
         flag: "NAVIGATOR_DBOS_ARCHIVES_ENABLED",
     },
     WorkflowSelection {
-        name: "BillingCanary",
-        flag: "NAVIGATOR_DBOS_BILLING_CANARY_ENABLED",
-    },
-    WorkflowSelection {
-        name: "BillingDigest",
-        flag: "NAVIGATOR_DBOS_BILLING_DIGEST_ENABLED",
-    },
-    WorkflowSelection {
-        name: "ReconcileInvoices",
-        flag: "NAVIGATOR_DBOS_RECONCILE_INVOICES_ENABLED",
-    },
-    WorkflowSelection {
-        name: "SandboxCreditReset",
-        flag: "NAVIGATOR_DBOS_SANDBOX_CREDIT_RESET_ENABLED",
-    },
-    WorkflowSelection {
         name: "DriDigest",
         flag: "NAVIGATOR_DBOS_DRI_DIGEST_ENABLED",
     },
@@ -100,6 +84,37 @@ pub const WORKFLOWS: &[WorkflowSelection] = &[
     },
 ];
 
+/// Disabled billing automations are neither DBOS requirements nor Restate fallbacks.
+/// Their names fence stale callers while retained executions receive operator disposition.
+pub const DISABLED_BILLING: &[WorkflowSelection] = &[
+    WorkflowSelection {
+        name: "BillingCanary",
+        flag: "NAVIGATOR_DBOS_BILLING_CANARY_ENABLED",
+    },
+    WorkflowSelection {
+        name: "BillingDigest",
+        flag: "NAVIGATOR_DBOS_BILLING_DIGEST_ENABLED",
+    },
+    WorkflowSelection {
+        name: "ReconcileInvoices",
+        flag: "NAVIGATOR_DBOS_RECONCILE_INVOICES_ENABLED",
+    },
+    WorkflowSelection {
+        name: "SandboxCreditReset",
+        flag: "NAVIGATOR_DBOS_SANDBOX_CREDIT_RESET_ENABLED",
+    },
+];
+
+#[must_use]
+pub fn disabled_billing_service(service: &str) -> bool {
+    DISABLED_BILLING.iter().any(|row| row.name == service)
+}
+
+#[must_use]
+pub fn disabled_billing_flag(flag: &str) -> bool {
+    DISABLED_BILLING.iter().any(|row| row.flag == flag)
+}
+
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 #[error("{0} must select a supported workflow engine setting")]
 pub struct SelectionError(pub &'static str);
@@ -160,6 +175,21 @@ pub fn dbos_executor(get: &impl Fn(&str) -> Option<String>) -> Result<bool, Sele
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn native_deployment_does_not_require_disabled_billing() {
+        let values = native();
+        for value in [None, Some("false"), Some("true"), Some("stale")] {
+            let lookup = |key: &str| {
+                if super::disabled_billing_flag(key) {
+                    value.map(str::to_owned)
+                } else {
+                    values.get(key).cloned()
+                }
+            };
+            assert!(super::dbos_only(&lookup).unwrap());
+        }
+    }
+
     #[test]
     fn selected_executor_does_not_require_unrelated_service_switches_or_cohosting() {
         let lookup = |key: &str| match key {

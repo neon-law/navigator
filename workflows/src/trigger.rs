@@ -82,6 +82,11 @@ pub async fn start_workflow<B: Serialize + ?Sized>(
     body: &B,
     one_way: bool,
 ) -> Result<String, TriggerError> {
+    if store::workflow_engine::disabled_billing_service(service) {
+        return Err(TriggerError::Rejected {
+            status: reqwest::StatusCode::GONE,
+        });
+    }
     let suffix = if one_way { "/send" } else { "" };
     let url = format!(
         "{}/{}/{}/{}{}",
@@ -175,6 +180,11 @@ pub async fn start_dbos_schedule(
     service: &str,
     run_key: &str,
 ) -> Result<(), TriggerError> {
+    if store::workflow_engine::disabled_billing_service(service) {
+        return Err(TriggerError::Rejected {
+            status: reqwest::StatusCode::GONE,
+        });
+    }
     start_dbos_at(
         ingress,
         token,
@@ -612,6 +622,14 @@ async fn start_dbos_at<B: Serialize + ?Sized>(
     route: &str,
     body: &B,
 ) -> Result<(), TriggerError> {
+    if matches!(
+        route,
+        "/internal/dbos/reconcile-invoices" | "/internal/dbos/sandbox-credit-reset"
+    ) {
+        return Err(TriggerError::Rejected {
+            status: reqwest::StatusCode::GONE,
+        });
+    }
     if token.trim().is_empty() {
         return Err(TriggerError::Transport);
     }
@@ -753,14 +771,57 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[tokio::test]
+    async fn disabled_billing_never_contacts_either_ingress() {
+        let server = MockServer::start().await;
+        for selection in store::workflow_engine::DISABLED_BILLING {
+            let result = start_workflow(
+                &server.uri(),
+                Some("token"),
+                selection.name,
+                "slot",
+                "run",
+                &json!({}),
+                true,
+            )
+            .await;
+            assert!(matches!(
+                result,
+                Err(TriggerError::Rejected {
+                    status: reqwest::StatusCode::GONE
+                })
+            ));
+            let result =
+                super::start_dbos_schedule(&server.uri(), "token", selection.name, "slot").await;
+            assert!(matches!(
+                result,
+                Err(TriggerError::Rejected {
+                    status: reqwest::StatusCode::GONE
+                })
+            ));
+        }
+        for result in [
+            start_dbos_reconcile(&server.uri(), "token", &json!({})).await,
+            super::start_dbos_sandbox_credit_reset(&server.uri(), "token", "2026-11").await,
+        ] {
+            assert!(matches!(
+                result,
+                Err(TriggerError::Rejected {
+                    status: reqwest::StatusCode::GONE
+                })
+            ));
+        }
+        assert!(server.received_requests().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn dbos_handoff_reports_rejection_and_transport_failure() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
-            .and(path("/internal/dbos/reconcile-invoices"))
+            .and(path("/internal/dbos/finance-aggregate"))
             .respond_with(ResponseTemplate::new(401))
             .mount(&server)
             .await;
-        let rejected = start_dbos_reconcile(&server.uri(), "wrong", &json!({})).await;
+        let rejected = start_dbos_finance_aggregate(&server.uri(), "wrong", &json!({})).await;
         assert!(matches!(
             rejected,
             Err(TriggerError::Rejected { status }) if status.as_u16() == 401
@@ -798,44 +859,6 @@ mod tests {
         assert!(start_dbos_finance_aggregate(&server.uri(), "", &json!({}))
             .await
             .is_err());
-    }
-
-    #[tokio::test]
-    async fn dbos_sandbox_handoff_targets_its_own_monthly_route() {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/internal/dbos/sandbox-credit-reset"))
-            .and(header("authorization", "Bearer worker-secret"))
-            .and(body_partial_json(json!({"period": "2026-11"})))
-            .respond_with(ResponseTemplate::new(202))
-            .expect(1)
-            .mount(&server)
-            .await;
-        super::start_dbos_sandbox_credit_reset(&server.uri(), "worker-secret", "2026-11")
-            .await
-            .expect("sandbox rollover handoff");
-    }
-
-    #[tokio::test]
-    async fn dbos_reconcile_handoff_targets_the_internal_allowlisted_route() {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/internal/dbos/reconcile-invoices"))
-            .and(header("authorization", "Bearer worker-secret"))
-            .and(body_partial_json(json!({
-                "workflow_id": "ReconcileInvoices:2026-10-22"
-            })))
-            .respond_with(ResponseTemplate::new(202))
-            .expect(1)
-            .mount(&server)
-            .await;
-        start_dbos_reconcile(
-            &server.uri(),
-            "worker-secret",
-            &json!({ "workflow_id": "ReconcileInvoices:2026-10-22" }),
-        )
-        .await
-        .expect("daily reconciliation accepted");
     }
 
     #[tokio::test]
@@ -1162,7 +1185,7 @@ mod target_tests {
     use super::{dbos_owns_schedule, trigger_target, TriggerTarget, TriggerTargetError};
     use crate::dbos_engine::SettingsError;
 
-    const FLAG: &str = "NAVIGATOR_DBOS_RECONCILE_INVOICES_ENABLED";
+    const FLAG: &str = "NAVIGATOR_DBOS_FINANCE_AGGREGATE_ENABLED";
 
     fn env<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
         move |name| {

@@ -15,31 +15,37 @@ bands:
   - kind: steps
     anchor: mcp-setup
     overline: ""
-    heading: Set up the free MCP in your AI assistant
+    heading: Find a legal template in your AI assistant
+    description: Browse the public template catalog for free. You can use it without a Navigator account.
     items:
-      - title: Start with a free account
+      - title: Add Navigator to ChatGPT
         body:
-          - - text: Create your free account
-              href: /auth/signup
-            - text: " or "
-            - text: sign in
-              href: "/auth/login?return_to=/%23mcp-setup"
-            - text: ". After signup, open Free MCP setup on this page. Public templates are available before you sign in."
-      - title: Connect the tool
+          - - text: "Open "
+            - text: ChatGPT Plugins
+              href: https://chatgpt.com/plugins
+            - text: >-
+                , select +, then Add custom MCP server. Name it Navigator and describe it as a public legal template catalog.
+          - - text: >-
+                If your workspace hides this option, ask your administrator about custom plugins.
+                In another assistant that supports MCP, open its settings and add a custom server.
+      - title: Enter the connection details
         body:
-          - - text: "In your assistant’s connector settings, add a custom MCP server. Paste "
-            - text: https://neonlaw.com/app/mcp
+          - - text: "Paste this server URL: "
+            - text: https://www.neonlaw.com/app/mcp
               code: true
-            - text: " and choose Streamable HTTP if asked."
+          - - text: >-
+                Choose no authentication and, if asked, Streamable HTTP. In ChatGPT, review the connection,
+                choose Create as a plugin, and install Navigator.
           - - text: "The hosted service limits how often you can call it. Prefer to run it yourself? "
             - text: Get the open-source project
               href: https://github.com/neon-law/navigator
             - text: "."
-      - title: Find a filing template
+      - title: Try it in a new chat
         body:
-          - - text: "Try this in chat, using your own state. "
-            - text: "List Navigator’s public templates. Which ones could help me form an LLC in Nevada?"
+          - - text: "Type @ and select Navigator in ChatGPT. Then ask "
+            - text: "Which Nevada LLC templates are in the public catalog?"
               code: true
+          - - text: Look for Nevada LLC Formation in the results.
   - kind: cards
     anchor: attorney-options
     overline: ""

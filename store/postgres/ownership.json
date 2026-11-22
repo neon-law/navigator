@@ -359,6 +359,13 @@
     "scope": "platform",
     "through": "installation governance; no matter visibility grant"
   },
+  "firm_namespace_move": {
+    "migration_slice": "firm-storage",
+    "parity_scenario": "operator-only rename and same-identity resumption",
+    "scope": "firm",
+    "target_only": true,
+    "through": "firm_id with Forgejo organization and repository identity evidence"
+  },
   "glossary_term": {
     "migration_slice": "catalog-storage",
     "parity_scenario": "stable catalog lookup; unauthorized mutation refusal",

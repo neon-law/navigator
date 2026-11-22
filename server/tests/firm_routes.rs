@@ -509,7 +509,7 @@ async fn the_home_explains_the_mcp_setup_and_the_quickstart() {
     let body = body_string(anon_get(&app, "/").await).await;
     for expected in [
         r#"id="connect-mcp""#,
-        "https://neonlaw.com/app/mcp",
+        "https://www.neonlaw.com/app/mcp",
         "Navigator is open source under MIT OR Apache-2.0.",
         r#"id="video""#,
         "navigator quickstart",

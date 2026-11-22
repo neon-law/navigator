@@ -1,23 +1,4 @@
-# `billing-digest-trigger` — daily trigger for the `BillingDigest` workflow.
-#
-# The workflow itself is hosted by the `workflows-service` worker (it binds
-# `BillingDigestService` alongside `Notation`, `Archives`, `BillingCanary`, and
-# the rest — see `../workflows-service/`), so there is no separate digest pod.
-# This CronJob is the thin trigger: it POSTs to the Restate ingress to start one
-# invocation, then exits. Restate owns retries.
-#
-# `BillingDigest` emails firm ops a trailing-window GCP cost report (gross /
-# credits / net by service, free-trial credit burned to date, and the real
-# cost once the trial credit expires). With no billing export configured —
-# which is the case in KIND — the workflow is a clean no-op (it logs and sends
-# nothing), so this CronJob is harmless to apply locally.
-#
-# Trigger a run by hand:
-#   kubectl create job --from=cronjob/billing-digest-trigger billing-digest-manual -n navigator
-#
-# Image `navigator-billing-digest-trigger:dev` is built by
-# `navigator image-billing-digest-trigger` from the shared `images/Containerfile.trigger`
-# (--build-arg CRATE=billing-workflows --build-arg BIN=billing-digest-trigger).
+# Retained suspended billing job; its image exits without submitting work.
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -26,6 +7,7 @@ metadata:
   labels:
     app: billing-digest-trigger
 spec:
+  suspend: true
   # Daily at 13:00 UTC (05:00 PST / 06:00 PDT). Clears the billing export's
   # ~24h lag and avoids every other cron (archives 10:00, reconcile 11:00,
   # heartbeat */6h, canary 14:00 Sun). The trigger keys each

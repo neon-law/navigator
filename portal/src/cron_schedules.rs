@@ -197,10 +197,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn retired_manual_billing_controls_never_submit() {
+        let server = MockServer::start().await;
+        for slug in ["billing-canary", "billing-digest", "reconcile-invoices"] {
+            for dbos in [false, true] {
+                let response = run_configured_with_dbos(
+                    slug,
+                    Some(&server.uri()),
+                    Some("token"),
+                    Some(&server.uri()),
+                    Some("token"),
+                    dbos,
+                )
+                .await;
+                assert!(location(&response).contains("notice=not_queued:"));
+            }
+        }
+        assert!(server.received_requests().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn trigger_queues_the_selected_workflow_with_a_manual_key() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
-            .and(path_regex(r"^/BillingCanary/manual-[0-9a-f-]+/run/send$"))
+            .and(path_regex(r"^/Archives/manual-[0-9a-f-]+/run/send$"))
             .and(body_partial_json(serde_json::json!({})))
             .respond_with(
                 ResponseTemplate::new(200).set_body_string("{\"invocationId\":\"inv_x\"}"),
@@ -209,7 +229,7 @@ mod tests {
             .await;
         let job = MANUAL_JOBS
             .iter()
-            .find(|job| job.slug == "billing-canary")
+            .find(|job| job.slug == "archives")
             .unwrap();
         let body = trigger(
             &server.uri(),
@@ -226,7 +246,7 @@ mod tests {
     async fn every_other_manual_schedule_uses_dbos_without_a_restate_request() {
         for job in MANUAL_JOBS
             .iter()
-            .filter(|job| job.service != "ReconcileInvoices")
+            .filter(|job| !store::workflow_engine::disabled_billing_service(job.service))
         {
             let dbos = MockServer::start().await;
             let restate = MockServer::start().await;
@@ -292,83 +312,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reconcile_manual_control_uses_authenticated_dbos_and_its_namespaced_id() {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path_regex(r"^/internal/dbos/reconcile-invoices$"))
-            .and(header("authorization", "Bearer dbos-secret"))
-            .and(body_partial_json(serde_json::json!({})))
-            .respond_with(ResponseTemplate::new(202))
-            .expect(1)
-            .mount(&server)
-            .await;
-        let response = run_configured_with_dbos(
-            "reconcile-invoices",
-            Some("http://unused-restate"),
-            Some("legacy-token"),
-            Some(&server.uri()),
-            Some("dbos-secret"),
-            true,
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::SEE_OTHER);
-        assert!(location(&response).ends_with("notice=queued:reconcile-invoices"));
-    }
-
-    #[tokio::test]
-    async fn enabled_reconcile_dbos_fails_closed_without_ingress() {
-        use wiremock::{matchers::method, Mock, MockServer};
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .respond_with(ResponseTemplate::new(202))
-            .expect(0)
-            .mount(&server)
-            .await;
-        let response = run_configured_with_dbos(
-            "reconcile-invoices",
-            Some(&server.uri()),
-            Some("legacy-token"),
-            None,
-            None,
-            true,
-        )
-        .await;
-        server.verify().await;
-        assert_eq!(response.status(), StatusCode::SEE_OTHER);
-        assert!(location(&response).ends_with("notice=not_queued:reconcile-invoices"));
-    }
-
-    #[tokio::test]
-    async fn reconcile_ingress_url_alone_does_not_select_dbos() {
-        let restate = MockServer::start().await;
-        let dbos = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path_regex(r"^/ReconcileInvoices/manual-[^/]+/run/send$"))
-            .respond_with(ResponseTemplate::new(200))
-            .expect(1)
-            .mount(&restate)
-            .await;
-        Mock::given(method("POST"))
-            .respond_with(ResponseTemplate::new(202))
-            .expect(0)
-            .mount(&dbos)
-            .await;
-        let response = run_configured_with_dbos(
-            "reconcile-invoices",
-            Some(&restate.uri()),
-            None,
-            Some(&dbos.uri()),
-            Some("dbos-secret"),
-            false,
-        )
-        .await;
-        restate.verify().await;
-        dbos.verify().await;
-        assert_eq!(response.status(), StatusCode::SEE_OTHER);
-        assert!(location(&response).ends_with("notice=queued:reconcile-invoices"));
-    }
-
-    #[tokio::test]
     async fn run_covers_unknown_unavailable_accepted_and_rejected_jobs() {
         let response = run(Path("unknown".to_string())).await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
@@ -382,7 +325,7 @@ mod tests {
 
         let server = MockServer::start().await;
         Mock::given(method("POST"))
-            .and(path_regex(r"^/BillingCanary/manual-[0-9a-f-]+/run/send$"))
+            .and(path_regex(r"^/Archives/manual-[0-9a-f-]+/run/send$"))
             .and(header("authorization", "Bearer secret"))
             .respond_with(ResponseTemplate::new(200).set_body_string("accepted"))
             .expect(1)
@@ -391,11 +334,11 @@ mod tests {
         let broker =
             normalize_broker_url(Some(format!("{}/", server.uri()))).expect("non-empty broker URL");
 
-        let response = run_configured("billing-canary", Some(&broker), Some("secret")).await;
+        let response = run_configured("archives", Some(&broker), Some("secret")).await;
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
         assert_eq!(
             location(&response),
-            "/app/admin/schedules?notice=queued:billing-canary"
+            "/app/admin/schedules?notice=queued:archives"
         );
 
         let rejecting_server = MockServer::start().await;
@@ -405,11 +348,11 @@ mod tests {
             .mount(&rejecting_server)
             .await;
 
-        let response = run_configured("billing-digest", Some(&rejecting_server.uri()), None).await;
+        let response = run_configured("archives", Some(&rejecting_server.uri()), None).await;
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
         assert_eq!(
             location(&response),
-            "/app/admin/schedules?notice=not_queued:billing-digest"
+            "/app/admin/schedules?notice=not_queued:archives"
         );
 
         assert_eq!(

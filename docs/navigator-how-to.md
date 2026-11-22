@@ -6,24 +6,23 @@ Jujutsu (`jj`) manages local changes and publishes them to the Project's Git for
 ## Connect to Navigator from chat
 
 For public Template discovery, add a custom **Streamable HTTP** MCP server in your assistant and enter
-`https://neonlaw.com/app/mcp`. Ask “List Navigator’s public Templates.” The connector offers public Template metadata
-without sign-in once the deployment serves the public catalog. An HTTP 401 from an anonymous request means that
-deployment still requires credentials.
+`https://www.neonlaw.com/app/mcp`. Ask “List Navigator’s public Templates.” You can browse without signing in.
 
-For signed-in tools in local Codex, run these commands on the same computer as the desktop app.
+To register the public catalog in Codex, run:
 
 ```sh
-navigator site login --host www.neonlaw.com
-navigator site whoami --host www.neonlaw.com
-codex mcp add navigator -- hudson site mcp --host www.neonlaw.com
+codex mcp add navigator-public --url https://www.neonlaw.com/app/mcp
 ```
 
-Restart the desktop app and type `/mcp` to check the connection. The local bridge reads the saved session from
-`~/.navigator.json` on each call. Sign in again when the session expires. Keep the credential file on your computer and
-out of chat and source control. For Claude setup, see the [MCP client guide](claude-mcp-client.md).
+For signed-in tools, configure your client's secret store to send your deployment's short-lived access token as an HTTPS
+bearer credential. In Codex, supply the token through its launch environment as `NAVIGATOR_MCP_TOKEN`, then run:
 
-Try “List my Projects” after signing in. Navigator applies your account's access rules. A hosted assistant needs its own
-supported authentication flow because it cannot read the credential file on your computer.
+```sh
+codex mcp add navigator --url https://www.neonlaw.com/app/mcp --bearer-token-env-var NAVIGATOR_MCP_TOKEN
+```
+
+Start a new Codex session and ask “List my Projects.” Navigator applies your account's access rules. Refresh the
+credential when it expires. Keep tokens out of chat, command arguments, and repository files.
 
 ## Check your calendar and billing
 

@@ -845,8 +845,9 @@ dependencies.
 **This mint is not a GCP credential.** `POST /auth/ci/document-token` (and `seeds`' own `POST /auth/ci/seed-token`)
 verifies GitHub's OIDC token directly against GitHub's own issuer and returns an HMAC-signed Navigator session — a
 project-scoped API credential, nothing more. Neither job authenticates to GCP, federates an identity into one, or holds
-a GCP credential of any kind; `id-token: write` here grants only the token these two doors read. No job a Project
-repository calls reaches GCP.
+a GCP credential of any kind; `id-token: write` here grants only the token these two doors read. Use the Project's live
+Brand host for the target environment: the token audience is that host's HTTPS origin, and its Brand must match the live
+Project. No per-Brand audience setting is required.
 
 The `seeds` job retains its main-only live check. `navigator project gate` covers the offline shape of every
 `seeds/*.yaml` document on pull requests, while the live reconciliation remains outside the required `ci` dependencies

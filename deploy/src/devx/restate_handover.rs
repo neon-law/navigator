@@ -7,7 +7,7 @@ use std::process::Command;
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
-const INVOCATIONS: &str = "SELECT status, completion_result, COUNT(*) AS invocation_count FROM sys_invocation GROUP BY status, completion_result LIMIT 32";
+const INVOCATIONS: &str = "SELECT target_service_name, status, completion_result, COUNT(*) AS invocation_count FROM sys_invocation GROUP BY target_service_name, status, completion_result ORDER BY target_service_name, status, completion_result LIMIT 128";
 const STATE: &str = "SELECT COUNT(*) AS state_count FROM state";
 const JOURNALS: &str = "SELECT COUNT(*) AS journal_count FROM sys_journal";
 
@@ -34,6 +34,7 @@ enum Completion {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct InvocationGroup {
+    target_service_name: String,
     status: Status,
     completion_result: Option<Completion>,
     invocation_count: u64,
@@ -79,7 +80,7 @@ fn sum(total: &mut u64, count: u64) -> Result<()> {
 
 fn audit(mut query: impl FnMut(&str) -> Result<String>) -> Result<Audit> {
     let invocations: Vec<InvocationGroup> = parse(&query(INVOCATIONS)?)?;
-    if invocations.len() >= 32 {
+    if invocations.len() >= 128 {
         bail!("Restate aggregate may be truncated");
     }
     let mut retained_invocations = 0;
@@ -87,8 +88,15 @@ fn audit(mut query: impl FnMut(&str) -> Result<String>) -> Result<Audit> {
     let mut completed_failures = 0;
     let mut seen = std::collections::BTreeSet::new();
     for row in &invocations {
-        let identity = serde_json::to_string(&(&row.status, &row.completion_result))?;
-        if !seen.insert(identity) || row.invocation_count == 0 {
+        let identity = serde_json::to_string(&(
+            &row.target_service_name,
+            &row.status,
+            &row.completion_result,
+        ))?;
+        if row.target_service_name.trim().is_empty()
+            || !seen.insert(identity)
+            || row.invocation_count == 0
+        {
             bail!("invalid Restate aggregate row");
         }
         sum(&mut retained_invocations, row.invocation_count)?;
@@ -186,6 +194,19 @@ mod tests {
     }
 
     #[test]
+    fn separate_services_retain_their_own_obligations_with_shared_statuses() {
+        let audit = with_invocations(
+            r#"[{"target_service_name":"SyntheticAlpha","status":"paused","completion_result":null,"invocation_count":2},{"target_service_name":"SyntheticBeta","status":"paused","completion_result":null,"invocation_count":3}]"#,
+        )
+        .unwrap();
+        assert_eq!(audit.nonterminal_invocations, 5);
+        assert_eq!(audit.retained_invocations, 5);
+        assert_eq!(audit.invocations[0].target_service_name, "SyntheticAlpha");
+        assert_eq!(audit.invocations[1].target_service_name, "SyntheticBeta");
+        assert!(audit.preservation_required);
+    }
+
+    #[test]
     fn every_nonterminal_status_preserves_work() {
         for status in [
             "pending",
@@ -197,7 +218,7 @@ mod tests {
             "suspended",
         ] {
             let audit = with_invocations(&format!(
-                r#"[{{"status":"{status}","completion_result":null,"invocation_count":2}}]"#
+                r#"[{{"target_service_name":"SyntheticService","status":"{status}","completion_result":null,"invocation_count":2}}]"#
             ))
             .unwrap();
             assert_eq!(audit.nonterminal_invocations, 2);
@@ -208,7 +229,7 @@ mod tests {
     #[test]
     fn completed_failures_require_explicit_reconciliation() {
         let audit = with_invocations(
-            r#"[{"status":"completed","completion_result":"failure","invocation_count":3}]"#,
+            r#"[{"target_service_name":"SyntheticService","status":"completed","completion_result":"failure","invocation_count":3}]"#,
         )
         .unwrap();
         assert_eq!(audit.completed_failures, 3);
@@ -219,7 +240,7 @@ mod tests {
     fn completed_success_does_not_dispose_of_object_state_or_journals() {
         for (state, journal) in [(1, 0), (0, 1)] {
             let audit = inventory(
-                r#"[{"status":"completed","completion_result":"success","invocation_count":8}]"#,
+                r#"[{"target_service_name":"SyntheticService","status":"completed","completion_result":"success","invocation_count":8}]"#,
                 &format!(r#"[{{"state_count":{state}}}]"#),
                 &format!(r#"[{{"journal_count":{journal}}}]"#),
             )
@@ -232,7 +253,7 @@ mod tests {
     #[test]
     fn successful_completions_still_retain_outcomes_and_idempotency_evidence() {
         let audit = with_invocations(
-            r#"[{"status":"completed","completion_result":"success","invocation_count":8}]"#,
+            r#"[{"target_service_name":"SyntheticService","status":"completed","completion_result":"success","invocation_count":8}]"#,
         )
         .unwrap();
         assert!(audit.preservation_required);
@@ -249,14 +270,25 @@ mod tests {
     #[test]
     fn unknown_or_inconsistent_outcomes_fail_closed_without_echoing_input() {
         for input in [
-            r#"[{"status":"private-value","completion_result":null,"invocation_count":1}]"#,
-            r#"[{"status":"completed","completion_result":null,"invocation_count":1}]"#,
-            r#"[{"status":"running","completion_result":"success","invocation_count":1}]"#,
-            r#"[{"status":"completed","completion_result":"success","invocation_count":0}]"#,
-            r#"[{"status":"completed","completion_result":"success","invocation_count":1,"payload":"private-value"}]"#,
+            r#"[{"target_service_name":"SyntheticService","status":"private-value","completion_result":null,"invocation_count":1}]"#,
+            r#"[{"target_service_name":"SyntheticService","status":"completed","completion_result":null,"invocation_count":1}]"#,
+            r#"[{"target_service_name":"SyntheticService","status":"running","completion_result":"success","invocation_count":1}]"#,
+            r#"[{"target_service_name":"SyntheticService","status":"completed","completion_result":"success","invocation_count":0}]"#,
+            r#"[{"target_service_name":"SyntheticService","status":"completed","completion_result":"success","invocation_count":1,"payload":"private-value"}]"#,
         ] {
             let error = with_invocations(input).unwrap_err().to_string();
             assert!(!error.contains("private-value"));
+        }
+    }
+
+    #[test]
+    fn a_missing_or_blank_service_identity_is_refused() {
+        for input in [
+            r#"[{"status":"paused","completion_result":null,"invocation_count":1}]"#,
+            r#"[{"target_service_name":"","status":"paused","completion_result":null,"invocation_count":1}]"#,
+            r#"[{"target_service_name":"  ","status":"paused","completion_result":null,"invocation_count":1}]"#,
+        ] {
+            assert!(with_invocations(input).is_err());
         }
     }
 
@@ -271,13 +303,13 @@ mod tests {
         )
         .is_err());
         assert!(audit(|_| bail!("synthetic query failure")).is_err());
-        assert!(with_invocations(r#"[{"status":"pending","completion_result":null,"invocation_count":1},{"status":"pending","completion_result":null,"invocation_count":1}]"#).is_err());
+        assert!(with_invocations(r#"[{"target_service_name":"SyntheticService","status":"pending","completion_result":null,"invocation_count":1},{"target_service_name":"SyntheticService","status":"pending","completion_result":null,"invocation_count":1}]"#).is_err());
     }
 
     #[test]
     fn ambiguous_truncated_output_and_implicit_environments_are_refused() {
-        let row = r#"{"status":"completed","completion_result":"success","invocation_count":1}"#;
-        let input = format!("[{}]", [row; 32].join(","));
+        let row = r#"{"target_service_name":"SyntheticService","status":"completed","completion_result":"success","invocation_count":1}"#;
+        let input = format!("[{}]", [row; 128].join(","));
         assert!(with_invocations(&input)
             .unwrap_err()
             .to_string()
@@ -362,7 +394,7 @@ mod tests {
     #[test]
     fn count_overflow_fails_closed() {
         let input = format!(
-            r#"[{{"status":"running","completion_result":null,"invocation_count":{}}},{{"status":"pending","completion_result":null,"invocation_count":1}}]"#,
+            r#"[{{"target_service_name":"SyntheticService","status":"running","completion_result":null,"invocation_count":{}}},{{"target_service_name":"SyntheticService","status":"pending","completion_result":null,"invocation_count":1}}]"#,
             u64::MAX
         );
         assert!(with_invocations(&input).is_err());

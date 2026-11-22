@@ -17,9 +17,9 @@ Brands that practice wears; a [Brand Key](brand-key.md) is worn by at most one F
 letters are lowercased, and every other run of characters becomes one hyphen. The result has a Project code's shape, at
 most 40 characters, and is unique per installation. It must not be a reserved word: Forgejo's own reserved names, such
 as `admin`, `api`, and `explore`, and `navigator`. A name that derives an invalid slug, or another Firm's slug, is
-refused. Nothing appends a suffix. The slug is immutable: renaming a Firm never moves its organization. A PostgreSQL
-trigger refuses an update. Boot backfills a slug for each Firm that predates the field, and fails on an invalid or
-colliding one. `GET /app/api/firms` lists each visible Firm's slug. Navigator creates or reconciles the organization
+refused. Nothing appends a suffix. A display-name edit keeps the slug. Moving the organization requires a deployment
+operator and a recorded migration. Boot backfills a slug for each Firm that predates the field, and fails on an invalid
+or colliding one. `GET /app/api/firms` lists each visible Firm's slug. Navigator creates or reconciles the organization
 itself; see [Forgejo Organization](forgejo-organization.md).
 
 The repository `<firm-slug>/library` is the Firm's [Firm Library](firm-library.md): the Drafts and the default retainer

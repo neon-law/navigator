@@ -289,9 +289,11 @@ async fn exercise_enrollment_intake(c: Client, origin: String) {
         .await
         .expect("pre-signup opens the account eligibility form");
     c.back().await.unwrap();
-    c.find(Locator::Css("#mcp-setup a[href='/auth/signup']"))
-        .await
-        .expect("free account link");
+    c.find(Locator::Css(
+        "#mcp-setup a[href='https://chatgpt.com/plugins']",
+    ))
+    .await
+    .expect("ChatGPT plugin setup link");
     c.find(Locator::Css("#attorney-options a[href='/app#pricing']"))
         .await
         .expect("subscription pricing link")

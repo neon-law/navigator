@@ -59,7 +59,7 @@ async fn exercise(fixture: &PostgresFixture, postgres_port: &str) -> anyhow::Res
         .context("start the real combined host")?;
         let observed = async {
             wait_ready(&mut child, web_port, worker_port).await?;
-            verify_manual_canary(fixture.postgres(), worker_port, &manual_key).await?;
+            verify_native_workflows(fixture.postgres(), worker_port, &manual_key).await?;
             PostgresDb::with_test_db(fixture.postgres().clone(), verify_native(root.path())).await
         }
         .await;
@@ -225,10 +225,8 @@ fn native_startup_profile(key: &str) -> Option<String> {
     }
 }
 
-/// Real authenticated dispatch proves the cohost retained the worker's local
-/// provider context and manual registration even with its weekly timer disabled.
-/// The second boot joins these same durable checkpoints instead of sending again.
-async fn verify_manual_canary(pg: &PostgresDb, worker: u16, key: &str) -> anyhow::Result<()> {
+/// A billing request cannot execute, while Heartbeat proves durable native execution.
+async fn verify_native_workflows(pg: &PostgresDb, worker: u16, key: &str) -> anyhow::Result<()> {
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(2))
         .build()?;
@@ -239,11 +237,20 @@ async fn verify_manual_canary(pg: &PostgresDb, worker: u16, key: &str) -> anyhow
         .send()
         .await?;
     ensure!(
-        response.status() == reqwest::StatusCode::ACCEPTED,
-        "manual native BillingCanary is not registered: {}",
+        response.status() == reqwest::StatusCode::GONE,
+        "disabled billing was not rejected: {}",
         response.status()
     );
-    let id = format!("BillingCanary:{key}");
+    let billing_id = format!("BillingCanary:{key}");
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM dbos.workflow_status WHERE workflow_uuid=$1")
+            .bind(billing_id)
+            .fetch_one(pg.pool())
+            .await?;
+    ensure!(count == 0, "disabled billing created a workflow");
+    let id = workflows::dbos_engine::heartbeat::workflow_id(
+        workflows::dbos_engine::heartbeat::slot(chrono::Utc::now()),
+    );
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
     loop {
         let status: Option<String> =
@@ -256,19 +263,19 @@ async fn verify_manual_canary(pg: &PostgresDb, worker: u16, key: &str) -> anyhow
         }
         ensure!(
             status.as_deref() != Some("ERROR"),
-            "local BillingCanary failed"
+            "native Heartbeat failed"
         );
         ensure!(
             tokio::time::Instant::now() < deadline,
-            "local BillingCanary did not finish"
+            "native Heartbeat did not finish"
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     let steps: Vec<String> = sqlx::query_scalar("SELECT function_name FROM dbos.operation_outputs WHERE workflow_uuid=$1 ORDER BY function_id")
         .bind(&id).fetch_all(pg.pool()).await?;
     ensure!(
-        steps == ["xero", "email"],
-        "local canary checkpoints changed: {steps:?}"
+        steps == ["beat", "notify"],
+        "native Heartbeat checkpoints changed: {steps:?}"
     );
     let automatic: i64 = sqlx::query_scalar("SELECT count(*) FROM dbos.workflow_status WHERE name='BillingCanary' AND workflow_uuid LIKE 'BillingCanary-%'")
         .fetch_one(pg.pool()).await?;
