@@ -537,10 +537,10 @@
 {"file":"deploy/src/devx/mod.rs","line":3319,"function":"published_mixed_registration_keeps_the_retained_worker_target","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"deploy/src/devx/mod.rs","line":3322,"function":"published_mixed_registration_keeps_the_retained_worker_target","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"deploy/src/devx/mod.rs","line":3344,"function":"published_legacy_registration_still_requires_the_rows_endpoint_and_propagates_failure","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"deploy/src/devx/mod.rs","line":4953,"function":"apply_dispatch_performs_only_the_printed_plan_across_zones","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"deploy/src/devx/mod.rs","line":4972,"function":"apply_dispatch_performs_only_the_printed_plan_across_zones","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"deploy/src/devx/mod.rs","line":5015,"function":"dispatch_keeps_unchanged_records_and_refuses_conflicts","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"deploy/src/devx/mod.rs","line":5045,"function":"dispatch_keeps_unchanged_records_and_refuses_conflicts","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"deploy/src/devx/mod.rs","line":4924,"function":"apply_dispatch_performs_only_the_printed_plan_across_zones","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"deploy/src/devx/mod.rs","line":4943,"function":"apply_dispatch_performs_only_the_printed_plan_across_zones","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"deploy/src/devx/mod.rs","line":4986,"function":"dispatch_keeps_unchanged_records_and_refuses_conflicts","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"deploy/src/devx/mod.rs","line":5016,"function":"dispatch_keeps_unchanged_records_and_refuses_conflicts","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"deploy/src/devx/native/mod.rs","line":980,"function":"status_lines_report_shared_and_this_worktrees_processes","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"deploy/src/devx/native/mod.rs","line":1012,"function":"a_sweep_plan_marks_a_claim_without_a_checkout_orphaned","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"deploy/src/devx/native/mod.rs","line":1041,"function":"applying_a_sweep_with_no_orphans_keeps_every_claim_and_service","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
