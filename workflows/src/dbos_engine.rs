@@ -529,13 +529,14 @@ impl Executor {
         let ceo_digest = register_optional(&dbos, schedules.ceo_digest, ceo_digest::register)?;
         let linear_backlog =
             register_optional(&dbos, schedules.linear_backlog, linear_backlog::register)?;
-        let external_schedules = register_external(&dbos)?;
+        let starters = retainers
+            .into_iter()
+            .chain(calendar)
+            .chain(register_external(&dbos)?);
         dbos.launch().await?;
         tracing::info!(app_name = APP_NAME, "DBOS launched");
         let stop = dbos::CancellationToken::new();
         let mut loops = vec![tokio::spawn(heartbeat::schedule(beat, clock, stop.clone()))];
-        loops.extend(retainers.map(|start| start(stop.clone())));
-        loops.extend(calendar.map(|start| start(stop.clone())));
         if let Some(linear_backlog) = linear_backlog {
             loops.push(tokio::spawn(linear_backlog::schedule(
                 linear_backlog,
@@ -581,11 +582,7 @@ impl Executor {
             },
         ));
         restate_ports.spawn(&stop, &mut loops);
-        loops.extend(
-            external_schedules
-                .into_iter()
-                .map(|start| start(stop.clone())),
-        );
+        loops.extend(starters.map(|start| start(stop.clone())));
         Ok(Self {
             dbos,
             stop,

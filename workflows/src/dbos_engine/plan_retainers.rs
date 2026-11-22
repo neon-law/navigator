@@ -63,12 +63,11 @@ fn register_workflow(dbos: &DBOS, source: Arc<dyn Source>) -> dbos::Result<Workf
                     }
                 })
                 .await;
-                match outcome {
-                    Ok(outcome) => report.push((project, outcome)),
-                    Err(_) => {
-                        tracing::warn!(%project, "Legal Plan retainer requires reconciliation");
-                        failed = true;
-                    }
+                if let Ok(outcome) = outcome {
+                    report.push((project, outcome));
+                } else {
+                    tracing::warn!(%project, "Legal Plan retainer requires reconciliation");
+                    failed = true;
                 }
             }
             if failed {

@@ -87,33 +87,7 @@ pub async fn create_project_notation(
         return Err(CreateProjectNotationError::EmptyInput);
     }
 
-    // The matter must already exist — this command opens a notation *within*
-    // it, unlike the onboarding retainer walk that creates the project.
-    let project = match store::projects::find_by_id(surreal, project_id).await {
-        Ok(Some(p)) => p,
-        Ok(None) => return Err(CreateProjectNotationError::ProjectNotFound),
-        Err(e) => {
-            return Err(CreateProjectNotationError::Db(e.to_string()));
-        }
-    };
-
-    // Matter-scoped: creation is not merely lawyer-tier, it is bound to the
-    // matter. The acting lawyer must participate in this project (admin
-    // bypasses), the same rule the contract-review routes enforce. A miss maps
-    // to "not found" so neither door discloses a project outside the caller's
-    // scope.
-    let in_scope = store::access::can_see_project_as_lawyer(
-        surreal,
-        acting_person_id,
-        acting_role,
-        project_id,
-    )
-    .await
-    .unwrap_or(false);
-    if !in_scope {
-        return Err(CreateProjectNotationError::ProjectNotFound);
-    }
-
+    let project = scoped_project(surreal, acting_person_id, acting_role, project_id).await?;
     let person_id = find_or_create_client(surreal, email, project_id).await?;
 
     let database = attempts::database()
@@ -124,37 +98,20 @@ pub async fn create_project_notation(
         let lane = store::notation_machine_state::acquire_lane(&database, project_id)
             .await
             .map_err(|error| CreateProjectNotationError::Db(error.to_string()))?;
-        if let Some(template) = store::templates::resolve_exact(surreal, Some(project_id), code)
-            .await
-            .map_err(|error| CreateProjectNotationError::Db(error.to_string()))?
+        if let Some(notation_id) = existing_retainer(
+            surreal,
+            project_id,
+            code,
+            person_id,
+            checkout.as_ref(),
+            delivery,
+        )
+        .await?
         {
-            let matches_checkout = checkout.as_ref().is_none_or(|draft| {
-                let hash = store::documents::sha256_hex(draft.contents.as_bytes());
-                template.body_sha256.as_deref() == Some(hash.as_str())
-            });
-            if matches_checkout
-                && store::projects::template_opens_a_matter(template.kind.as_deref())
-            {
-                let existing = store::notations::find_by_project_template_person(
-                    surreal,
-                    project_id,
-                    template.id,
-                    person_id,
-                )
+            let next = workflows::current_step(surreal, runtime, Some(storage), notation_id)
                 .await
-                .map_err(|error| CreateProjectNotationError::Db(error.to_string()))?;
-                if let Some(row) =
-                    existing.filter(|row| row.state == "BEGIN" && row.delivery == delivery.as_str())
-                {
-                    let next = workflows::current_step(surreal, runtime, Some(storage), row.id)
-                        .await
-                        .map_err(CreateProjectNotationError::Session)?;
-                    return Ok(StartOutcome {
-                        notation_id: row.id,
-                        next,
-                    });
-                }
-            }
+                .map_err(CreateProjectNotationError::Session)?;
+            return Ok(StartOutcome { notation_id, next });
         }
         Some(lane)
     } else {
@@ -199,27 +156,91 @@ pub async fn create_project_notation(
         .map_err(CreateProjectNotationError::Session)
     }
     .await;
-    {
-        let db = &database;
-        let recorded = match &outcome {
-            Ok(opened) => {
-                attempts::link_retry(
-                    db,
-                    project_id,
-                    code,
-                    person_id,
-                    opened.notation_id,
-                    started_at,
-                )
-                .await
-            }
-            Err(_) => attempts::record_failure(db, project_id, code, person_id).await,
-        };
-        if let Err(error) = recorded {
-            tracing::error!(%project_id, %error, "could not record notation creation outcome");
+    let recorded = match &outcome {
+        Ok(opened) => {
+            attempts::link_retry(
+                &database,
+                project_id,
+                code,
+                person_id,
+                opened.notation_id,
+                started_at,
+            )
+            .await
         }
+        Err(_) => attempts::record_failure(&database, project_id, code, person_id).await,
+    };
+    if let Err(error) = recorded {
+        tracing::error!(%project_id, %error, "could not record notation creation outcome");
     }
     outcome
+}
+
+async fn scoped_project(
+    surreal: &store::surreal::SurrealDb,
+    acting_person_id: Option<Uuid>,
+    acting_role: Role,
+    project_id: Uuid,
+) -> Result<store::projects::Project, CreateProjectNotationError> {
+    // The matter must already exist — this command opens a notation *within*
+    // it, unlike the onboarding retainer walk that creates the project.
+    let project = store::projects::find_by_id(surreal, project_id)
+        .await
+        .map_err(|error| CreateProjectNotationError::Db(error.to_string()))?
+        .ok_or(CreateProjectNotationError::ProjectNotFound)?;
+
+    // Matter-scoped: creation is not merely lawyer-tier, it is bound to the
+    // matter. The acting lawyer must participate in this project (admin
+    // bypasses), the same rule the contract-review routes enforce. A miss maps
+    // to "not found" so neither door discloses a project outside the caller's
+    // scope.
+    let in_scope = store::access::can_see_project_as_lawyer(
+        surreal,
+        acting_person_id,
+        acting_role,
+        project_id,
+    )
+    .await
+    .unwrap_or(false);
+    if !in_scope {
+        return Err(CreateProjectNotationError::ProjectNotFound);
+    }
+
+    Ok(project)
+}
+
+async fn existing_retainer(
+    surreal: &store::surreal::SurrealDb,
+    project_id: Uuid,
+    code: &str,
+    person_id: Uuid,
+    checkout: Option<&workflows::CheckoutDraft>,
+    delivery: store::notations::SigningDelivery,
+) -> Result<Option<Uuid>, CreateProjectNotationError> {
+    let Some(template) = store::templates::resolve_exact(surreal, Some(project_id), code)
+        .await
+        .map_err(|error| CreateProjectNotationError::Db(error.to_string()))?
+    else {
+        return Ok(None);
+    };
+    let matches_checkout = checkout.is_none_or(|draft| {
+        let hash = store::documents::sha256_hex(draft.contents.as_bytes());
+        template.body_sha256.as_deref() == Some(hash.as_str())
+    });
+    if !matches_checkout || !store::projects::template_opens_a_matter(template.kind.as_deref()) {
+        return Ok(None);
+    }
+    let existing = store::notations::find_by_project_template_person(
+        surreal,
+        project_id,
+        template.id,
+        person_id,
+    )
+    .await
+    .map_err(|error| CreateProjectNotationError::Db(error.to_string()))?;
+    Ok(existing
+        .filter(|row| row.state == "BEGIN" && row.delivery == delivery.as_str())
+        .map(|row| row.id))
 }
 
 /// Typed failure of [`create_project_notation`]. Each door renders it its own

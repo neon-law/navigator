@@ -331,6 +331,7 @@ async fn append_statutory(
 }
 
 /// The same UTC time on the next Monday through Friday.
+#[must_use]
 pub fn next_business_day(at: DateTime<Utc>) -> DateTime<Utc> {
     let days = match at.weekday() {
         chrono::Weekday::Fri => 3,

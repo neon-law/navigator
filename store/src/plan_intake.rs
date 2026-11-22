@@ -1934,6 +1934,19 @@ mod tests {
         ));
     }
 
+    async fn plan_attorney(surreal: &crate::surreal::SurrealDb) -> crate::persons::Person {
+        crate::persons::create(
+            surreal,
+            &crate::persons::NewPerson::with_role(
+                "Pisces Attorney",
+                "plan-intake-attorney@example.com",
+                crate::persons::Role::Owner,
+            ),
+        )
+        .await
+        .expect("the attorney exists")
+    }
+
     #[tokio::test]
     async fn acceptance_refuses_to_open_without_the_attorney_attestation() {
         let Some(pg) = postgres().await else {
@@ -1950,16 +1963,7 @@ mod tests {
         let staged = stage(&surreal, Some(&pg), &input)
             .await
             .expect("staging succeeds");
-        let attorney = crate::persons::create(
-            &surreal,
-            &crate::persons::NewPerson::with_role(
-                "Pisces Attorney",
-                "plan-intake-attorney@example.com",
-                crate::persons::Role::Owner,
-            ),
-        )
-        .await
-        .expect("the attorney exists");
+        let attorney = plan_attorney(&surreal).await;
 
         // The plan and fee resolved at staging from the firm's schedule.
         assert_eq!(staged.legal_plan_id, Some(plan.id));
@@ -2016,16 +2020,7 @@ mod tests {
         let staged = stage(&surreal, Some(&pg), &arag_input(firm_id, landing))
             .await
             .expect("staging succeeds");
-        let attorney = crate::persons::create(
-            &surreal,
-            &crate::persons::NewPerson::with_role(
-                "Pisces Attorney",
-                "plan-intake-attorney@example.com",
-                crate::persons::Role::Owner,
-            ),
-        )
-        .await
-        .expect("the attorney exists");
+        let attorney = plan_attorney(&surreal).await;
 
         let accepted = accept(
             &surreal,
@@ -2137,16 +2132,7 @@ mod tests {
         let staged = stage(&surreal, Some(&pg), &arag_input(firm_id, landing))
             .await
             .expect("staging succeeds");
-        let attorney = crate::persons::create(
-            &surreal,
-            &crate::persons::NewPerson::with_role(
-                "Pisces Attorney",
-                "plan-intake-attorney@example.com",
-                crate::persons::Role::Owner,
-            ),
-        )
-        .await
-        .expect("the attorney exists");
+        let attorney = plan_attorney(&surreal).await;
 
         let accepted = accept(
             &surreal,
@@ -2204,16 +2190,7 @@ mod tests {
             staged.plan_portal_only,
             "a plan with a portal accepts on the portal"
         );
-        let attorney = crate::persons::create(
-            &surreal,
-            &crate::persons::NewPerson::with_role(
-                "Pisces Attorney",
-                "plan-intake-attorney@example.com",
-                crate::persons::Role::Owner,
-            ),
-        )
-        .await
-        .expect("the attorney exists");
+        let attorney = plan_attorney(&surreal).await;
 
         let accepted = accept(
             &surreal,

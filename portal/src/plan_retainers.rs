@@ -60,15 +60,7 @@ impl Source for PlanRetainers {
         else {
             return Ok(Outcome::NeedsClient);
         };
-        let mut existing = Vec::new();
-        for row in store::notations::list_by_project(db, id).await? {
-            let template = store::templates::find_by_id(db, row.template_id)
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("notation template unavailable"))?;
-            if store::projects::template_opens_a_matter(template.kind.as_deref()) {
-                existing.push(row);
-            }
-        }
+        let existing = engagement_notations(db, id).await?;
         let outcome = match existing.as_slice() {
             [] => {
                 let drafts = store::templates::list_for_project(db, id).await?;
@@ -134,4 +126,20 @@ impl Source for PlanRetainers {
         lane.commit().await?;
         Ok(outcome)
     }
+}
+
+async fn engagement_notations(
+    db: &store::surreal::SurrealDb,
+    id: Uuid,
+) -> anyhow::Result<Vec<store::notations::Notation>> {
+    let mut existing = Vec::new();
+    for row in store::notations::list_by_project(db, id).await? {
+        let template = store::templates::find_by_id(db, row.template_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("notation template unavailable"))?;
+        if store::projects::template_opens_a_matter(template.kind.as_deref()) {
+            existing.push(row);
+        }
+    }
+    Ok(existing)
 }
