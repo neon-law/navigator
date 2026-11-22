@@ -47,6 +47,7 @@ views.workspace = true
 dbos = ["dep:chrono-tz", "dep:dbos", "dep:tokio", "dep:url"]
 
 [dev-dependencies]
+sqlx.workspace = true
 store = { workspace = true, features = ["test-support"] }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt"] }

@@ -139,32 +139,36 @@ mod tests {
 
     #[tokio::test]
     async fn retrying_a_daily_slot_does_not_prepare_another_envelope() {
-        let Ok(url) = std::env::var("NAVIGATOR_TEST_DBOS_DATABASE_URL") else {
-            return;
-        };
-        let dbos = dbos::DBOS::new(super::super::config(&url, "retainers-test"));
-        let project = Uuid::new_v4();
-        let source = Arc::new(SyntheticSource {
-            project,
-            calls: AtomicUsize::new(0),
-        });
-        let workflow = register_workflow(&dbos, source.clone()).unwrap();
-        dbos.launch().await.unwrap();
-        let id = format!("test-retainers-{project}");
-        for _ in 0..2 {
-            let report = workflow
-                .run_with(
-                    (),
-                    dbos::RunOptions {
-                        workflow_id: Some(&id),
-                        ..Default::default()
-                    },
-                )
-                .await
-                .unwrap();
-            assert_eq!(report, [(project, Outcome::EnvelopePrepared)]);
-        }
-        dbos.shutdown().await;
-        assert_eq!(source.calls.load(Ordering::SeqCst), 1);
+        use sqlx::ConnectOptions;
+
+        store::test_support::with_postgres(async {
+            let pg = store::postgres::PostgresDb::application().await.unwrap();
+            let url = pg.pool().connect_options().to_url_lossy();
+            let dbos = dbos::DBOS::new(super::super::config(url.as_str(), "retainers-test"));
+            let project = Uuid::new_v4();
+            let source = Arc::new(SyntheticSource {
+                project,
+                calls: AtomicUsize::new(0),
+            });
+            let workflow = register_workflow(&dbos, source.clone()).unwrap();
+            dbos.launch().await.unwrap();
+            let id = format!("test-retainers-{project}");
+            for _ in 0..2 {
+                let report = workflow
+                    .run_with(
+                        (),
+                        dbos::RunOptions {
+                            workflow_id: Some(&id),
+                            ..Default::default()
+                        },
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(report, [(project, Outcome::EnvelopePrepared)]);
+            }
+            dbos.shutdown().await;
+            assert_eq!(source.calls.load(Ordering::SeqCst), 1);
+        })
+        .await;
     }
 }
