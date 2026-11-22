@@ -56,3 +56,19 @@ async fn receiver_refuses_an_unprepared_database_without_installing_schema_or_re
     })
     .await;
 }
+
+#[test]
+fn native_smoke_uses_the_configured_direct_tls_endpoint_not_an_ephemeral_forward() {
+    let mut cfg = crate::devx::tests::default_cfg();
+    cfg.postgres_port = 21555;
+    let seed = super::Seed::generate();
+    let root = tempfile::NamedTempFile::new().unwrap();
+    let options = super::smoke_postgres_options(&cfg, &seed, root.path());
+    assert_eq!(options.get_host(), "127.0.0.1");
+    assert_eq!(options.get_port(), 21555);
+    assert!(matches!(
+        options.get_ssl_mode(),
+        sqlx::postgres::PgSslMode::VerifyFull
+    ));
+    assert_eq!(options.get_database(), Some("postgres"));
+}
