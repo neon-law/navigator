@@ -3200,6 +3200,27 @@ mod terminating_guard_tests {
     }
 }
 
+/// Coordinates of the existing private native resource, verified without lifecycle mutation.
+pub(crate) struct NativeAdmissionTarget {
+    pub port: u16,
+    pub database: String,
+    pub root_cert: std::path::PathBuf,
+}
+
+pub(crate) fn verified_native_admission_target() -> Result<Option<NativeAdmissionTarget>> {
+    if std::env::var("NAVIGATOR_KIND_DEPS_OVERLAY").as_deref() != Ok(native_profile::OVERLAY) {
+        return Ok(None);
+    }
+    let root = workspace_root()?;
+    let cfg = worktree_env::postgres_fixture_config(&root, &KindConfig::from_env())?;
+    let database = orchestrate::verified_native_database(&root, &cfg)?;
+    Ok(Some(NativeAdmissionTarget {
+        port: cfg.postgres_port,
+        database,
+        root_cert: postgres_fixture::ca_path(&root),
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3530,35 +3551,6 @@ admin_base_url = "https://production-env.example.invalid:9070"
         assert!(parse_label_target("   =target").is_err());
         assert!(parse_label_target("label=   ").is_err());
         assert!(parse_label_target("no-separator").is_err());
-    }
-
-    /// `deploy.yml`'s KIND integration deploys with a raw
-    /// `kubectl apply -k` (not `dev deploy`), so it must run the `SeaweedFS`
-    /// secret bootstrap itself — and *before* the smoke checks, or the
-    /// `SeaweedFS` `StatefulSet` never starts and `navigator-web`/`workflows-service`
-    /// sit in `CreateContainerConfigError` on the missing
-    /// `navigator-seaweedfs-s3` secret.
-    #[test]
-    fn deploy_yml_bootstraps_seaweedfs_before_the_smoke_checks() {
-        use std::path::Path;
-        let deploy_yml = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("repo root is cli/'s parent")
-            .join(".github")
-            .join("workflows")
-            .join("deploy.yml");
-        let body = std::fs::read_to_string(&deploy_yml)
-            .unwrap_or_else(|e| panic!("read {}: {e}", deploy_yml.display()));
-        let bootstrap = body
-            .find("dev seaweedfs-bootstrap")
-            .expect("deploy.yml must run `dev seaweedfs-bootstrap` to mint the SeaweedFS secrets");
-        let smoke = body
-            .find("dev e2e")
-            .expect("deploy.yml must run `dev e2e` smoke checks");
-        assert!(
-            bootstrap < smoke,
-            "the SeaweedFS bootstrap must run before `dev e2e`, else the rollout wait times out on unstarted pods"
-        );
     }
 
     // The deploy workflow's "stub public assets" step generates

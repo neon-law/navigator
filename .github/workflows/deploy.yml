@@ -195,12 +195,9 @@ env:
   DEPLOY_EXPECTED_REPOSITORY: ${{ vars.DEPLOY_EXPECTED_REPOSITORY }}
 
 concurrency:
-  # Releases share one serialized lane so two merges to `main` — or a merge and a
-  # `kind-ci/**` branch iteration — never race each other. This matters more than
-  # it did while a person pushed the tag: EVERY merge starts a run now, so two
-  # merges landing close together would otherwise overlap, and the second one's
-  # release decision would read a tag list the first one is still writing to.
-  group: ${{ github.event_name == 'schedule' && 'deploy-nightly-kind' || 'deploy-release' }}
+  # Main releases stay serialized while their tag decisions and publication run.
+  # Nonpublishing kind-ci branches skip tag lookup and use a separate lane per ref.
+  group: ${{ startsWith(github.ref_name, 'kind-ci/') && format('deploy-kind-ci-{0}', github.ref) || github.event_name == 'schedule' && 'deploy-nightly-kind' || 'deploy-release' }}
   cancel-in-progress: false
 
 jobs:
@@ -454,9 +451,8 @@ jobs:
       # A `kind-ci/**` branch iteration never asks the question. It exists to
       # prove a change to THIS FILE, its branch name is not a version, and it
       # reports `publishable=false` — with the ref name standing in for a version
-      # so progress lines and job titles name something real. Nothing downstream
-      # consumes that string, because every publishing job is gated on
-      # `publishable`.
+      # so progress, job titles and ephemeral image metadata name the tested ref.
+      # Every publishing job remains gated on `publishable`.
       - name: is this commit a release?
         timeout-minutes: 90
         id: version
@@ -579,7 +575,7 @@ jobs:
     needs: release-version
     # WORK ONLY WHEN THERE IS A RELEASE TO PROVE. Every merge to `main` starts
     # this workflow, and almost none of them carry a version bump — so without
-    # this gate an ordinary merge would cold-compile four images and run the
+    # this gate an ordinary merge would build the image matrix and run the
     # whole KIND suite to publish nothing. `release-version` answers in seconds
     # and the run stops there.
     #
@@ -754,6 +750,10 @@ jobs:
           # `integration` as a workflow artifact, so it never leaves the run.
           load: true
           tags: ${{ matrix.image }}:ci-${{ github.sha }}
+          # Bind ephemeral exact-image acceptance to this same source commit.
+          build-args: |
+            ${{ matrix.image == 'neon-server' && format('RELEASE_TAG={0}', needs.release-version.outputs.tag) || '' }}
+            ${{ matrix.image == 'neon-server' && format('GIT_SHA={0}', github.sha) || '' }}
           # EXPORT ONLY WHAT `publish-service` READS BACK. `matrix.ci_cache_scope`
           # is set on exactly the legs whose scope `publish-service` lists as a
           # second `cache-from`, so this export is compiled once per release
@@ -841,9 +841,8 @@ jobs:
           tag: "${{ needs.release-version.outputs.tag }}"
           stage: "build ${{ matrix.image }}"
           step: "upload alias image artifact"
-      # A separate artifact rather than a second file in the one above, so the
-      # `ci-image-*` set `integration` downloads is exactly what it was when
-      # `navigator-web` had its own leg.
+      # Keep a separate alias artifact so integration can load both named
+      # image tags and verify that they identify the same image bytes.
       - name: upload alias image artifact
         timeout-minutes: 90
         if: matrix.alias != ''
@@ -883,7 +882,7 @@ jobs:
     needs: [build, release-version]
     # WORK ONLY WHEN THERE IS A RELEASE TO PROVE. Every merge to `main` starts
     # this workflow, and almost none of them carry a version bump — so without
-    # this gate an ordinary merge would cold-compile four images and run the
+    # this gate an ordinary merge would build the image matrix and run the
     # whole KIND suite to publish nothing. `release-version` answers in seconds
     # and the run stops there.
     #
@@ -897,659 +896,151 @@ jobs:
       || github.event_name == 'schedule'
       || startsWith(github.ref_name, 'kind-ci/')
       || (vars.DEPLOY_EXPECTED_REPOSITORY != '' && github.repository != vars.DEPLOY_EXPECTED_REPOSITORY)
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    # Fail fast instead of hanging for hours. With the image builds moved
-    # to the parallel `build` job, a healthy run here is just the KIND
-    # stand-up + e2e/browser/accessibility suite (~15 min); a wedged
-    # dependency (e.g. Restate not provisioning) used to leave the `e2e`
-    # waits and smoke checks spinning until someone cancelled it by hand —
-    # one such run burned 2h15m. Healthy runs now take ~50 min with the
-    # PostgreSQL bootstrap and the full browser suite, so 90 keeps headroom
-    # while still capping a wedge at a bounded, log-bearing failure.
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
+      EXPECTED_IMAGE_RELEASE: ${{ needs.release-version.outputs.tag }}
       CHROME_FOR_TESTING_VERSION: 150.0.7871.46
-      # KIND's default 2 MiB test stack overflows
-      # prepared_practice_brands_pass_axe_in_light_and_dark_schemes at
-      # PracticePreview::start (mem_surreal). 32 MiB holds that helper, matching
-      # the coverage lane in ci.yml.
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_BUILD_JOBS: "2"
       RUST_MIN_STACK: "33554432"
     steps:
-      # No disk sweep: `blacksmith-4vcpu-ubuntu-2404` has a single ~145 GB root
-      # disk, ample for the service images, the KIND node image, and the e2e
-      # build, and the sweep's tool-cache deletion would only need undoing.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        timeout-minutes: 90
-
+      - uses: azure/setup-kubectl@bda439f5f36b99b262ebdcd3613869bddb064c8e # v5
+        with:
+          version: v1.37.0
       - uses: ./.github/actions/slack-progress
-        timeout-minutes: 90
         with:
           webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
           tag: "${{ needs.release-version.outputs.tag }}"
           stage: "integration"
-          step: "install kind"
-      - name: install kind
-        timeout-minutes: 90
-        uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
-        with:
-          cluster_name: navigator
-          config: k8s/kind-config.yaml
-          wait: 60s
-          # Pin the kind BINARY in lockstep with the node image below. v0.32.0's
-          # `kind load` understands the containerd config v4 that the v1.36.1
-          # node writes, and it is the release that publishes this exact node
-          # digest — so binary and node land together on the latest. Bump this
-          # and node_image together.
-          version: v0.32.0
-          # Pin the node image to the exact digest we validate locally so CI
-          # can't silently drift onto a different Kubernetes/kindnet build —
-          # the classic "passes on my machine, hangs in CI" gap. This is the
-          # image the full stack (incl. Restate provisioning under enforcing
-          # kindnet v20260528) was verified Ready on; bump it deliberately,
-          # in lockstep with the local KIND node image.
-          node_image: kindest/node:v1.36.1@sha256:3489c7674813ba5d8b1a9977baea8a6e553784dab7b84759d1014dbd78f7ebd5
-      - uses: ./.github/actions/slack-progress
-        timeout-minutes: 90
-        with:
-          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          tag: "${{ needs.release-version.outputs.tag }}"
-          stage: "integration"
-          step: "download built service images"
-      # The parallel `build` job saved each image to a tarball and uploaded it
-      # as a `ci-image-*` artifact; download them, load them into the runner's
-      # docker, retag to the `:dev` names the KIND manifests reference
-      # (imagePullPolicy: IfNotPresent), and load them into the node. These
-      # per-commit images never touch a registry.
-      - name: download built service images
-        timeout-minutes: 90
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          pattern: ci-image-*
-          path: /tmp/ci-images
-          merge-multiple: true
-      - uses: ./.github/actions/slack-progress
-        timeout-minutes: 90
-        with:
-          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          tag: "${{ needs.release-version.outputs.tag }}"
-          stage: "integration"
-          step: "load service images into kind"
-      - name: load service images into kind
-        timeout-minutes: 90
+          step: "install pinned KIND"
+      - name: install pinned KIND
         run: |
-          set -euo pipefail
-          for img in navigator-web neon-server navigator-workflows-service; do
-              echo "::group::load ${img}"
-              docker load -i "/tmp/ci-images/${img}.tar"
-              docker tag "${img}:ci-${{ github.sha }}" "${img}:dev"
-              kind load docker-image "${img}:dev" --name navigator
-              echo "::endgroup::"
-          done
-      - uses: ./.github/actions/slack-progress
-        timeout-minutes: 90
-        with:
-          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          tag: "${{ needs.release-version.outputs.tag }}"
-          stage: "integration"
-          step: "install nginx-ingress"
-      # Apply the manifest VENDORED IN THIS REPO, exactly as
-      # `install_ingress` in `cli::devx::orchestrate` does — never a URL.
-      # `raw.githubusercontent.com` rate-limits by runner IP, and its 429
-      # arrives as a hard `kubectl` error four minutes into a job that has
-      # already spent an hour building four images (run 32040810491). The
-      # vendored copy is the byte-identical upstream KIND manifest for
-      # controller-v1.11.2, held to its recorded SHA-256 by
-      # `cli::devx::ingress_manifest_tests`, so this trades a third party's
-      # availability for a digest the workspace already gates.
-      - name: install nginx-ingress
-        timeout-minutes: 90
-        run: |
-          kubectl apply -f k8s/vendor/ingress-nginx-controller-v1.11.2.yaml
-          kubectl --namespace ingress-nginx wait \
-              --for=condition=ready pod \
-              --selector=app.kubernetes.io/component=controller \
-              --timeout=180s
-      - uses: ./.github/actions/slack-progress
-        timeout-minutes: 90
-        with:
-          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          tag: "${{ needs.release-version.outputs.tag }}"
-          stage: "integration"
-          step: "install Restate Operator"
-      - name: install Restate Operator
-        timeout-minutes: 90
-        # Keep this version in lockstep with `RESTATE_OPERATOR_VERSION`
-        # in `cli::devx`. The operator manages RestateCluster and
-        # RestateDeployment CRDs (see k8s/overlays/kind/).
-        #
-        # The explicit CRD apply mirrors `install_restate_operator` in
-        # `cli::devx::orchestrate`: since chart 2.8.1 the CRDs ship in a
-        # native `crds/` directory, which Helm installs but never upgrades,
-        # so the chart bump alone would leave an existing cluster's CRD
-        # schema frozen. Server-side because the chart owns these fields and
-        # `restateclusters` is ~236 KB, near the client-side annotation cap.
-        #
-        # The CRDs come from the vendored release artifacts under
-        # `k8s/vendor/restate-operator-v2.8.1/`, for the same reason the
-        # ingress manifest does: a manifest fetched at run time makes a
-        # release depend on a third party being reachable in that minute.
-        run: |
-          helm upgrade --install restate-operator \
-              oci://ghcr.io/restatedev/restate-operator-helm \
-              --version 2.8.1 \
-              --namespace restate-operator --create-namespace
-          for crd in restateclusters restatedeployments restatecloudenvironments; do
-            kubectl apply --server-side --force-conflicts -f \
-              "k8s/vendor/restate-operator-v2.8.1/${crd}.yaml"
-          done
-          kubectl --namespace restate-operator wait \
-              --for=condition=available --timeout=180s deployment --all
-      - uses: ./.github/actions/slack-progress
-        timeout-minutes: 90
-        with:
-          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          tag: "${{ needs.release-version.outputs.tag }}"
-          stage: "integration"
-          step: "install rust toolchain"
-      - name: install rust toolchain
-        timeout-minutes: 90
-        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+          curl -fsSL --retry 5 --retry-delay 10 --retry-all-errors --connect-timeout 30 https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64 -o /tmp/kind
+          echo 'aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d  /tmp/kind' | sha256sum -c -
+          chmod +x /tmp/kind
+          sudo mv /tmp/kind /usr/local/bin/kind
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: 1.98.0
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          shared-key: gate-cli
+          save-if: false
       - uses: ./.github/actions/slack-progress
-        timeout-minutes: 90
         with:
           webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
           tag: "${{ needs.release-version.outputs.tag }}"
           stage: "integration"
-          step: "cache cargo"
-      - name: cache cargo
-        timeout-minutes: 90
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-          key: ${{ runner.os }}-cargo-integration-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-integration-
-      - uses: ./.github/actions/slack-progress
-        timeout-minutes: 90
-        with:
-          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          tag: "${{ needs.release-version.outputs.tag }}"
-          stage: "integration"
-          step: "compile navigator CLI"
-      # Compile the CLI BEFORE the stack is applied. `kubectl apply` starts
-      # every Deployment's progressDeadline clock, and the very next thing
-      # the cluster needs is `dev seaweedfs-bootstrap` to mint the
-      # `navigator-seaweedfs-*` secrets. On a cold cargo cache that compile
-      # took 21 minutes (run 142058511), the deadline expired while pods
-      # sat in CreateContainerConfigError, and `dev e2e` failed on the
-      # stamped ProgressDeadlineExceeded even though the cluster was
-      # seconds from converging. Compiling here makes the bootstrap start
-      # within seconds of the apply regardless of cache warmth.
-      - name: compile navigator CLI
-        timeout-minutes: 90
-        run: cargo build -p hudson
-      - uses: ./.github/actions/slack-progress
-        timeout-minutes: 90
-        with:
-          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          tag: "${{ needs.release-version.outputs.tag }}"
-          stage: "integration"
-          step: "deploy navigator stack"
-      - name: deploy navigator stack
-        timeout-minutes: 90
-        run: kubectl apply -k k8s/overlays/kind
-      - uses: ./.github/actions/slack-progress
-        timeout-minutes: 90
-        with:
-          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          tag: "${{ needs.release-version.outputs.tag }}"
-          stage: "integration"
-          step: "bootstrap SeaweedFS object storage"
-      # The CLI generates random, bucket-scoped credentials and creates the
-      # navigator-seaweedfs-s3 Secret, including the server's s3.json config.
-      # The StatefulSet waits for that Secret, then bootstrap creates all buckets.
-      - name: bootstrap SeaweedFS object storage
-        timeout-minutes: 90
-        run: cargo run -p hudson -- dev seaweedfs-bootstrap
-      - uses: ./.github/actions/slack-progress
-        timeout-minutes: 90
-        with:
-          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          tag: "${{ needs.release-version.outputs.tag }}"
-          stage: "integration"
-          step: "bootstrap the shared synthetic PostgreSQL fixture"
-      - name: bootstrap the shared synthetic PostgreSQL fixture
-        timeout-minutes: 90
-        run: cargo run -p hudson -- dev postgres-bootstrap
-      - uses: ./.github/actions/slack-progress
-        timeout-minutes: 90
-        with:
-          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          tag: "${{ needs.release-version.outputs.tag }}"
-          stage: "integration"
-          step: "wait for rollouts, ClamAV readiness, and run attachment smoke checks"
-      - name: wait for rollouts, ClamAV readiness, and run attachment smoke checks
-        timeout-minutes: 90
-        # The seed check counts Questions, which PostgreSQL holds once it is
-        # configured, so it reads through the bootstrap's connection.
-        run: |
-          set -a
-          source .devx/postgres/env
-          set +a
-          cargo run -p hudson -- dev e2e
-
-      - uses: ./.github/actions/slack-progress
-        timeout-minutes: 90
-        with:
-          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          tag: "${{ needs.release-version.outputs.tag }}"
-          stage: "integration"
-          step: "verify content images are served by KIND web"
-      # ---------- public content images ----------
-      # `web/public/img/` is gitignored; the build stage stubbed every
-      # referenced asset into the ephemeral image before the bake, and this
-      # gate proves the local `/public` copy is actually served. Publication
-      # of the real bytes is the operator upload lane plus the live site's
-      # `/assets` proxy — see the top-of-file env comment for why no public
-      # origin is probed here.
-      - name: verify content images are served by KIND web
-        timeout-minutes: 90
-        run: cargo run -p hudson --quiet -- ops assets verify --base-url http://localhost:8080/public
-
-      - uses: ./.github/actions/slack-progress
-        timeout-minutes: 90
-        with:
-          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          tag: "${{ needs.release-version.outputs.tag }}"
-          stage: "integration"
-          step: "port-forward in-cluster SurrealDB"
-      # ---------- chromedriver-driven browser tests ----------
-      # The full browser suite (login + admin-routes + retainer-walker)
-      # plus the axe-core WCAG A/AA accessibility gate against the live
-      # KIND web server. Check all three JUnit suites and the streamed output
-      # because a test that logs a skip and returns appears as passed in JUnit.
-      # `grant-lawyer` and four fixtures in the browser suite connect to
-      # the SAME SurrealDB the in-cluster `web` reads (persons moved there
-      # with ENG-19), reached from the runner the same way the local loop
-      # reaches it: a port-forward on the local convention port 18000.
-      # Deploy run 142277536 died here with no endpoint configured.
-      # SUPERVISED, because this forward has to outlive its own step by about
-      # half an hour. `kubectl port-forward` never reconnects: when its stream
-      # to the pod breaks it prints the error and exits, and nothing notices —
-      # the port simply stops answering. Deploy run 32082116362 died exactly
-      # there. Eleven browser tests passed, then
-      # `admin_edits_matter_participation_from_the_project_workbench` got
-      # `Connection refused` on ws://127.0.0.1:18000 on all three nextest
-      # retries, sixteen minutes after this step had reported itself healthy.
-      # Re-running kubectl in a loop makes a dropped stream cost a reconnect
-      # rather than every fixture that touches the store afterwards.
-      - name: port-forward in-cluster SurrealDB
-        timeout-minutes: 90
-        run: |
-          nohup bash -c '
-              while true; do
-                  kubectl --namespace navigator port-forward \
-                      service/surreal 18000:8000
-                  echo "surreal port-forward exited ($?) — respawning"
-                  sleep 1
-              done' > /tmp/surreal-port-forward.log 2>&1 &
-          for i in 1 2 3 4 5 6 7 8 9 10; do
-              if curl -sf http://127.0.0.1:18000/health >/dev/null 2>&1; then
-                  echo "surreal port-forward up after $i attempt(s)"
-                  exit 0
-              fi
-              sleep 1
-          done
-          echo "surreal port-forward never came up" >&2
-          cat /tmp/surreal-port-forward.log
-          exit 1
-      - uses: ./.github/actions/slack-progress
-        timeout-minutes: 90
-        with:
-          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          tag: "${{ needs.release-version.outputs.tag }}"
-          stage: "integration"
-          step: "pre-grant the lawyer fixture its role"
-      - name: pre-grant the lawyer fixture its role
-        timeout-minutes: 90
-        env:
-          NAVIGATOR_SURREAL_ENDPOINT: ws://127.0.0.1:18000
-          NAVIGATOR_SURREAL_NAMESPACE: navigator
-          NAVIGATOR_SURREAL_DATABASE: navigator
-          NAVIGATOR_SURREAL_USER: root
-          NAVIGATOR_SURREAL_PASSWORD: root
-        run: |
-          set -a
-          source .devx/postgres/env
-          set +a
-          cargo run -p hudson -- dev grant-lawyer
-      - uses: ./.github/actions/slack-progress
-        timeout-minutes: 90
-        with:
-          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          tag: "${{ needs.release-version.outputs.tag }}"
-          stage: "integration"
-          step: "cache Chrome for Testing"
-      - name: cache Chrome for Testing
-        timeout-minutes: 90
-        id: chrome-for-testing-cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.tool_cache }}/chrome-for-testing/${{ env.CHROME_FOR_TESTING_VERSION }}
-          key: chrome-for-testing-linux64-${{ env.CHROME_FOR_TESTING_VERSION }}
-      - uses: ./.github/actions/slack-progress
-        timeout-minutes: 90
-        with:
-          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          tag: "${{ needs.release-version.outputs.tag }}"
-          stage: "integration"
-          step: "install Chrome for Testing + chromedriver"
-      - name: install Chrome for Testing + chromedriver
-        timeout-minutes: 90
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-              ca-certificates unzip
-          cft_root="${RUNNER_TOOL_CACHE}/chrome-for-testing/${CHROME_FOR_TESTING_VERSION}"
-          chrome_zip="/tmp/chrome-linux64-${CHROME_FOR_TESTING_VERSION}.zip"
-          chromedriver_zip="/tmp/chromedriver-linux64-${CHROME_FOR_TESTING_VERSION}.zip"
-          base_url="https://storage.googleapis.com/chrome-for-testing-public/${CHROME_FOR_TESTING_VERSION}/linux64"
-
-          if [ ! -x "${cft_root}/chrome-linux64/chrome" ] || \
-              [ ! -x "${cft_root}/chromedriver-linux64/chromedriver" ]; then
-              rm -rf "${cft_root}"
-              mkdir -p "${cft_root}"
-              curl --fail --show-error --location \
-                  --output "${chrome_zip}" \
-                  "${base_url}/chrome-linux64.zip"
-              curl --fail --show-error --location \
-                  --output "${chromedriver_zip}" \
-                  "${base_url}/chromedriver-linux64.zip"
-              unzip -q "${chrome_zip}" -d "${cft_root}"
-              unzip -q "${chromedriver_zip}" -d "${cft_root}"
-          fi
-
-          mkdir -p "${cft_root}/bin"
-          ln -sf "${cft_root}/chrome-linux64/chrome" "${cft_root}/bin/chrome"
-          ln -sf "${cft_root}/chrome-linux64/chrome" "${cft_root}/bin/google-chrome"
-          ln -sf "${cft_root}/chrome-linux64/chrome" "${cft_root}/bin/chromium-browser"
-          ln -sf "${cft_root}/chromedriver-linux64/chromedriver" "${cft_root}/bin/chromedriver"
-          echo "${cft_root}/bin" >> "${GITHUB_PATH}"
-          echo "CHROME_BINARY=${cft_root}/chrome-linux64/chrome" >> "${GITHUB_ENV}"
-          export PATH="${cft_root}/bin:${PATH}"
-          export CHROME_BINARY="${cft_root}/chrome-linux64/chrome"
-
-          echo "Chrome for Testing cache hit: ${{ steps.chrome-for-testing-cache.outputs.cache-hit }}"
-          echo "Chrome for Testing pin: ${CHROME_FOR_TESTING_VERSION}"
-          chromedriver --version
-          "${CHROME_BINARY}" --version
-      - uses: ./.github/actions/slack-progress
-        timeout-minutes: 90
-        with:
-          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          tag: "${{ needs.release-version.outputs.tag }}"
-          stage: "integration"
-          step: "start chromedriver"
-      - name: start chromedriver
-        timeout-minutes: 90
-        run: |
-          chromedriver --port=9515 --allowed-ips=127.0.0.1 \
-              --allowed-origins='*' > /tmp/chromedriver.log 2>&1 &
-          for i in 1 2 3 4 5 6 7 8 9 10; do
-              if curl -sS http://localhost:9515/status >/dev/null; then
-                  echo "chromedriver up after $i attempt(s)"
-                  exit 0
-              fi
-              sleep 1
-          done
-          echo "chromedriver never came up" >&2
-          cat /tmp/chromedriver.log
-          exit 1
-
-      - uses: ./.github/actions/slack-progress
-        timeout-minutes: 90
-        with:
-          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          tag: "${{ needs.release-version.outputs.tag }}"
-          stage: "integration"
-          step: "port-forward in-cluster SeaweedFS S3"
-      # The matter-page "download all my documents" browser test
-      # (`client_portal_nest_download_all_documents_link_returns_zip`) files
-      # its fixture documents from the host through `record_document`, which
-      # writes each blob to object storage via `cloud::from_env()`. The host
-      # lane and the in-cluster `web` must be the *same* store: `web` reads
-      # SeaweedFS, so a host write anywhere else leaves it finding the shared DB
-      # `assets` rows but 404ing every blob, returning an empty ZIP. (An
-      # unconfigured host now fails closed rather than writing to the runner's
-      # local disk — cloud/src/lib.rs — but pointing both at one store is
-      # still what makes the assertion meaningful.) Port-forward the SeaweedFS
-      # S3 API so the host writes to the same bucket `web` reads; the env on
-      # the browser step below points the host lane at it.
-      # Supervised for the same reason the SurrealDB forward above is: it has
-      # to answer for the whole browser suite, and a one-shot `kubectl
-      # port-forward` that loses its stream would leave the host lane writing
-      # nowhere — the download-all-documents fixture would hand back an empty
-      # ZIP rather than say why.
-      - name: port-forward in-cluster SeaweedFS S3
-        timeout-minutes: 90
-        run: |
-          nohup bash -c '
-              while true; do
-                  kubectl --namespace navigator port-forward \
-                      service/navigator-seaweedfs 30900:8333
-                  echo "seaweedfs S3 port-forward exited ($?) — respawning"
-                  sleep 1
-              done' > /tmp/seaweedfs-port-forward.log 2>&1 &
-          for i in 1 2 3 4 5 6 7 8 9 10; do
-              if curl -s -o /dev/null http://localhost:30900/; then
-                  echo "seaweedfs S3 port-forward up after $i attempt(s)"
-                  exit 0
-              fi
-              sleep 1
-          done
-          echo "seaweedfs S3 port-forward never came up" >&2
-          cat /tmp/seaweedfs-port-forward.log
-          exit 1
-
-      - uses: ./.github/actions/slack-progress
-        timeout-minutes: 90
-        with:
-          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          tag: "${{ needs.release-version.outputs.tag }}"
-          stage: "integration"
-          step: "install cargo-nextest"
-      - name: install cargo-nextest
-        timeout-minutes: 90
+          step: "install pinned Nextest"
+      - name: install pinned Nextest
         uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
         with:
-          # Pin the runner version: the browser gate now depends on
-          # nextest-specific retry, JUnit-path, and --no-capture behavior, so a
-          # runner bump must be a deliberate repo change, not a silent drift
-          # that alters CI results or diagnostics under us.
-          tool: nextest@0.9.140
-
+          tool: cargo-nextest@0.9.140
       - uses: ./.github/actions/slack-progress
-        timeout-minutes: 90
         with:
           webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
           tag: "${{ needs.release-version.outputs.tag }}"
           stage: "integration"
-          step: "browser + accessibility e2e (nextest, retry-classified)"
-      # NAV_REQUIRE_HARNESS=1 turns the browser tests' "harness unreachable"
-      # self-skip into a hard panic (non-zero exit) — in CI the harness is
-      # always expected up, so a skip here is a real failure, not a green
-      # pass. nextest runs the suite under the `ci` profile (.config/
-      # nextest.toml): up to two exponential-backoff retries, so an
-      # intermittent click race is classified FLAKY in junit.xml instead of
-      # reddening the deploy, while a genuine failure (all retries exhausted)
-      # still exits non-zero. `--no-fail-fast` runs every test past the first
-      # failure: this gate runs only on release commits, so one run has to
-      # report everything that broke since the last release. `--no-capture` streams each test's own stdout
-      # so the self-skip line still reaches the tee'd log for the guard below
-      # (nextest otherwise swallows a passing test's output); it also forces
-      # serial execution, preserving the single-threaded invariant these
-      # shared-fixture suites need. `set -o pipefail` makes the pipe through
-      # `tee` surface nextest's exit code rather than tee's.
-      - name: browser + accessibility e2e (nextest, retry-classified)
-        timeout-minutes: 90
-        env:
-          NAV_BASE_URL: http://localhost:8080
-          WEBDRIVER_URL: http://localhost:9515
-          SESSION_SECRET: change-me-32-bytes-of-random-data-x
-          NAV_REQUIRE_HARNESS: "1"
-          # Host-side fixtures connect to the same Surreal the in-cluster
-          # `web` reads, through the port-forward opened above grant-lawyer.
-          NAVIGATOR_SURREAL_ENDPOINT: ws://127.0.0.1:18000
-          NAVIGATOR_SURREAL_NAMESPACE: navigator
-          NAVIGATOR_SURREAL_DATABASE: navigator
-          NAVIGATOR_SURREAL_USER: root
-          NAVIGATOR_SURREAL_PASSWORD: root
-          # Point the host document-storage lane at the port-forwarded SeaweedFS
-          # so the download-all-documents fixture writes blobs the in-cluster
-          # `web` can read back — the same store, same `navigator-documents`
-          # bucket. Without these, `cloud::from_env()` defaults to the `fs`
-          # backend and the export hands back an empty ZIP (see the
-          # port-forward step above). The access/secret keys are minted per
-          # run by `seaweedfs-bootstrap`, so they are read from the secret in the
-          # run block rather than hard-coded here.
-          NAVIGATOR_STORAGE_BACKEND: s3
-          NAVIGATOR_STORAGE_ENDPOINT: http://localhost:30900
-          NAVIGATOR_STORAGE_REGION: us-east-1
-          NAVIGATOR_DOCUMENTS_BUCKET: navigator-documents
+          step: "install pinned Dioxus CLI"
+      - name: Install pinned Dioxus CLI
         run: |
-          set -euo pipefail
-          set -a
-          source .devx/postgres/env
-          set +a
-          NAVIGATOR_STORAGE_ACCESS_KEY="$(kubectl --namespace navigator get secret navigator-seaweedfs-s3 \
-              --output jsonpath='{.data.access_key}' | base64 --decode)"
-          NAVIGATOR_STORAGE_SECRET_KEY="$(kubectl --namespace navigator get secret navigator-seaweedfs-s3 \
-              --output jsonpath='{.data.secret_key}' | base64 --decode)"
-          export NAVIGATOR_STORAGE_ACCESS_KEY NAVIGATOR_STORAGE_SECRET_KEY
-          # `--no-capture` streams every test's stdout into /tmp/e2e.log, which a
-          # later step uploads as an artifact. Mask the two keys in the run log
-          # and redact them from that file, so a test that prints its
-          # environment cannot publish them. awk reads them from ENVIRON, so no
-          # value ever rides an argv.
-          for value in "${NAVIGATOR_STORAGE_ACCESS_KEY}" "${NAVIGATOR_STORAGE_SECRET_KEY}" "${NAVIGATOR_POSTGRES_PASSWORD}"; do
-            echo "::add-mask::${value}"
-          done
-          cargo nextest run -p server --profile ci --no-fail-fast \
-              --test browser_e2e --test accessibility_e2e --test notation_preview_layout \
-              --no-capture 2>&1 \
-            | awk 'BEGIN { n = split("NAVIGATOR_STORAGE_ACCESS_KEY NAVIGATOR_STORAGE_SECRET_KEY NAVIGATOR_POSTGRES_PASSWORD", names, " ") }
-                { line = $0
-                  for (i = 1; i <= n; i++) {
-                    secret = ENVIRON[names[i]]
-                    while (secret != "" && (at = index(line, secret)) > 0)
-                      line = substr(line, 1, at - 1) "[redacted]" substr(line, at + length(secret))
-                  }
-                  print line; fflush() }' \
-            | tee /tmp/e2e.log
-
+          tools="$(mktemp -d "$RUNNER_TEMP/navigator-dx-0.7.10.XXXXXX")"
+          trap 'rm -f "$tools/dx.tar.gz"' EXIT
+          curl --fail --show-error --silent --location --retry 5 --retry-delay 2 --retry-all-errors \
+            https://github.com/DioxusLabs/dioxus/releases/download/v0.7.10/dx-x86_64-unknown-linux-gnu.tar.gz \
+            --output "$tools/dx.tar.gz"
+          echo '4363e4ed2a3f1eb7f4d38d2d59aed59ce43271c44c16b425e92c89a64761fbe7'"  $tools/dx.tar.gz" | sha256sum --check --strict
+          python3 - "$tools" <<'PYTHON'
+          import pathlib, sys, tarfile
+          tools = pathlib.Path(sys.argv[1])
+          with tarfile.open(tools / 'dx.tar.gz', 'r:gz') as archive:
+              members = archive.getmembers()
+              if len(members) != 1 or members[0].name != 'dx' or not members[0].isfile():
+                  raise SystemExit('unexpected Dioxus CLI archive layout')
+              with (tools / 'dx').open('xb') as binary:
+                  binary.write(archive.extractfile(members[0]).read())
+          (tools / 'dx').chmod(0o700)
+          PYTHON
+          version="$("$tools/dx" --version)"
+          test "${version%% (*}" = 'dioxus 0.7.10'
+          "$tools/dx" build --help > "$tools/build-help.txt"
+          grep -Fq -- '--force-sequential' "$tools/build-help.txt"
+          echo "$version"
+          sha256sum "$tools/dx"
+          echo "$tools" >> "$GITHUB_PATH"
       - uses: ./.github/actions/slack-progress
-        timeout-minutes: 90
         with:
           webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
           tag: "${{ needs.release-version.outputs.tag }}"
           stage: "integration"
-          step: "assert browser/accessibility tests did not self-skip"
-      - name: assert browser/accessibility tests did not self-skip
-        timeout-minutes: 90
+          step: "build current operator"
+      - name: build current operator
         run: |
-          python3 scripts/check-browser-results.py target/nextest/ci/junit.xml /tmp/e2e.log
-
-      # Always publish the JUnit report so the FLAKY trend is visible even on
-      # a green deploy (a flake papered over by a retry still shows here); on
-      # failure the screenshots + streamed log make the next intermittent
-      # failure diagnosable. `if-no-files-found: ignore` because screenshots
-      # only exist on failure.
-      #
-      # THE PORT-FORWARD LOGS ARE THE POINT, and until run 32082116362 this
-      # list did not actually collect them: it named
-      # `/tmp/neon-browser-port-forward.log`, which no step has ever written,
-      # while the two real logs went uncollected. `if-no-files-found: ignore`
-      # meant the artifact uploaded quietly without them, so the one run that
-      # needed them had nothing to read. `cli/tests/deploy_port_forwards.rs`
-      # now fails on a collected path nothing writes.
+          df -h / /var/lib/docker
+          cargo build --locked -p hudson --bin hudson --quiet
+          df -h / /var/lib/docker
+      - uses: ./.github/actions/slack-progress
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          tag: "${{ needs.release-version.outputs.tag }}"
+          stage: "integration"
+          step: "download web alias image"
+      - name: download web alias image
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ci-image-navigator-web
+          path: /tmp/ci-images
+      - uses: ./.github/actions/slack-progress
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          tag: "${{ needs.release-version.outputs.tag }}"
+          stage: "integration"
+          step: "download exact Neon image"
+      - name: download exact Neon image
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ci-image-neon-server
+          path: /tmp/ci-images
+      - uses: ./.github/actions/slack-progress
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          tag: "${{ needs.release-version.outputs.tag }}"
+          stage: "integration"
+          step: "native KIND browser and exact image gate"
+      - name: native KIND browser and exact image gate
+        run: bash .github/scripts/native-browser-integration.sh
       - name: upload E2E JUnit + diagnostics
-        timeout-minutes: 90
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: e2e-diagnostics
           path: |
             target/nextest/ci/junit.xml
-            /tmp/e2e.log
-            /tmp/surreal-port-forward.log
-            /tmp/seaweedfs-port-forward.log
-            /tmp/chromedriver.log
+            /tmp/navigator-native-browser/quickstart.log
+            /tmp/navigator-native-browser/browser.log
+            /tmp/navigator-native-browser/native-smoke.log
+            /tmp/navigator-native-browser/image.log
+            /tmp/navigator-native-browser/image-assets.log
+            /tmp/navigator-native-browser/fixture.log
+            /tmp/navigator-native-browser/fixture-schema.log
+            /tmp/navigator-native-browser/volume-init.log
+            /tmp/navigator-native-browser/workloads.log
+            /tmp/navigator-native-browser/events.log
+            /tmp/navigator-native-browser/pods.log
+            /tmp/navigator-native-browser/forwards.log
+            /tmp/navigator-native-browser/cleanup.log
+            /tmp/navigator-native-browser/resources.log
+            /tmp/navigator-native-browser/image-id.txt
+            /tmp/navigator-native-browser/container-id.txt
+            /tmp/navigator-native-browser/repository-volume.txt
+            /tmp/navigator-native-browser/version.json
             /tmp/navigator-screenshots/
           if-no-files-found: ignore
-
-      - name: dump chromedriver log on failure
-        timeout-minutes: 90
-        if: failure()
-        run: cat /tmp/chromedriver.log || true
-      - name: dump seaweedfs port-forward log on failure
-        timeout-minutes: 90
-        if: failure()
-        run: cat /tmp/seaweedfs-port-forward.log || true
-      - name: dump surreal port-forward log on failure
-        timeout-minutes: 90
-        if: failure()
-        run: cat /tmp/surreal-port-forward.log || true
-      - name: dump diagnostics on failure
-        timeout-minutes: 90
-        if: failure()
-        run: |
-          set +e
-          # The timeout-minutes on this job makes a wedge fail (not hang till a
-          # human cancels it), so this block finally runs on the failures that
-          # matter. Cast wide: the app namespace AND the Restate namespaces,
-          # because the historical wedge was the operator failing to provision
-          # restate-0 — which lives in `restate`/`restate-operator`, never in
-          # `navigator`, so the old navigator-only dump showed nothing useful.
-          echo "##[group]nodes + disk pressure"
-          kubectl get nodes -o wide
-          kubectl describe nodes | grep -A6 -iE "Conditions:|DiskPressure|MemoryPressure|PIDPressure" || true
-          df -h / /var/lib/docker 2>/dev/null || df -h
-          echo "##[endgroup]"
-          echo "##[group]all pods, all namespaces"
-          kubectl get pods -A -o wide
-          echo "##[endgroup]"
-          echo "##[group]recent events (all namespaces, by time)"
-          kubectl get events -A --sort-by=.lastTimestamp | tail -80
-          echo "##[endgroup]"
-          # Restate CRs carry the provisioning status in their conditions —
-          # the single most useful signal when restate-0 sits at 0/1.
-          for ns in restate restate-operator navigator; do
-              echo "##[group]namespace: $ns"
-              kubectl --namespace "$ns" get all -o wide
-              kubectl --namespace "$ns" describe pods
-              echo "##[endgroup]"
-          done
-          echo "##[group]Restate CRs (provisioning status conditions)"
-          kubectl get restatecluster,restatedeployment -A -o wide
-          kubectl describe restatecluster -A
-          kubectl describe restatedeployment -A
-          echo "##[endgroup]"
-          for ns in restate restate-operator navigator; do
-              for pod in $(kubectl --namespace "$ns" get pods -o name); do
-                  echo "##[group]logs: $ns/$pod"
-                  kubectl --namespace "$ns" logs --all-containers "$pod" --tail=200
-                  echo "--- previous (if crash-looped) ---"
-                  kubectl --namespace "$ns" logs --all-containers --previous "$pod" --tail=80 2>/dev/null || true
-                  echo "##[endgroup]"
-              done
-          done
 
   # ---------- Stage 2: publish every image to Artifact Registry ----------
   # Only runs if integration is green. Publishes the service images — the

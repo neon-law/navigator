@@ -1,9 +1,8 @@
 //! Client entry point for the wasm bundle.
 //!
 //! `dx` compiles this binary to `wasm32-unknown-unknown` with the `web`
-//! feature. Interactive design, campaign, Matter, inbox, and brand move pages
-//! launch their server-rendered roots. Other routes retain [`webapp::App`]. Navigator's server is the `web`
-//! crate, not this binary — `web` links `webapp` as a library — so with no
+//! feature. Dedicated pages select their server-rendered roots by route and DOM marker;
+//! other routes retain [`webapp::App`]. The `portal` crate links `webapp` as a library, so with no
 //! platform feature selected (the workspace default) `main` is intentionally
 //! empty and `cargo build --workspace` stays green.
 
@@ -34,6 +33,13 @@ fn main() {
             });
             private_matter_page_root(&path, has_root)
         });
+        let is_intake_review = web_sys::window().is_some_and(|window| {
+            let path = window.location().pathname().unwrap_or_default();
+            let has_root = window
+                .document()
+                .is_some_and(|document| document.get_element_by_id("intake-review").is_some());
+            intake_review_root(&path, has_root)
+        });
         let inbox = web_sys::window()
             .and_then(|window| inbox_root(&window.location().pathname().unwrap_or_default()));
         // Every SSR route already supplies its head. Preserve it during
@@ -44,6 +50,8 @@ fn main() {
             webapp::home::HomePageEntry
         } else if is_firm_move {
             webapp::firm_move::MoveBrand
+        } else if is_intake_review {
+            webapp::intake_review::IntakeReview
         } else if is_matter_page {
             webapp::sections::page::MatterPage
         } else if inbox == Some(InboxRoot::Firm) {
@@ -68,6 +76,16 @@ fn main() {
             })
             .launch(root);
     }
+}
+
+/// Hydrate a notation review only where its server-rendered root is present.
+#[cfg(any(test, all(feature = "web", target_arch = "wasm32")))]
+fn intake_review_root(path: &str, has_root: bool) -> bool {
+    has_root
+        && path
+            .strip_prefix("/app/lawyer/notations/")
+            .and_then(|tail| tail.strip_suffix("/review"))
+            .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
 }
 
 /// Inbox lists and full conversations each hydrate the root rendered by SSR.
@@ -120,7 +138,7 @@ fn private_matter_page_root(path: &str, has_root: bool) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{inbox_root, private_matter_page_root, InboxRoot};
+    use super::{inbox_root, intake_review_root, private_matter_page_root, InboxRoot};
 
     #[test]
     fn inbox_lists_and_conversations_hydrate_as_their_server_roots() {
@@ -151,6 +169,24 @@ mod tests {
             "/app/team",
         ] {
             assert_eq!(inbox_root(path), None, "{path}");
+        }
+    }
+
+    #[test]
+    fn review_hydration_requires_its_private_notation_route_and_ssr_root() {
+        let notation = uuid::Uuid::from_u128(1);
+        let review = format!("/app/lawyer/notations/{notation}/review");
+        assert!(intake_review_root(&review, true));
+        assert!(!intake_review_root(&review, false));
+        for path in [
+            format!("/app/lawyer/notations/{notation}/clauses"),
+            format!("/app/lawyer/notations/{notation}/review/extra"),
+            format!("/app/projects/{notation}/review"),
+            format!("/app/notations/{notation}/review"),
+            "/app/lawyer/notations/not-a-uuid/review".to_string(),
+            "/glossary/intake-review".to_string(),
+        ] {
+            assert!(!intake_review_root(&path, true), "{path}");
         }
     }
 
