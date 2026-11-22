@@ -83,6 +83,11 @@ own persistence logic.
   the exact `navigator.yaml` host, it also reads each live revision chain and fails on missing or drifted pointers. An
   absent or expired session prints an explicit live-check skip; a rejected session or failed read is an error.
   Validation never uploads or rewrites a document.
+- **Authority filing.** `navigator site authorities create --class <class> --citation <citation> --title <title> --file
+  <path>` reads the archive locally and sends it with the stored bearer to `POST /app/api/authorities`. An Authority is
+  global reference data and takes no `--project`. Repeating a citation returns the existing Authority. `navigator site
+  authorities update` corrects one field on an Authority found by id or `--citation`. `navigator project sync` uses the
+  same create door for `documents/cases/**` and `documents/rules/**`.
 - **Brand social publication.** `hudson site blog publish <file.yaml>` sends approved source and explicit
   providers to `POST /app/api/blog` using the stored site bearer. Required `account_ids` pin each approved destination.
   The server checks Brand authority, connected accounts, and MP4 dimensions, then submits the existing durable Social

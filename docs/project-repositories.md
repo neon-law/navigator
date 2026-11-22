@@ -218,15 +218,15 @@ row and `navigator project communication list` reads it back, and `project sync`
 **`documents/cases/` and `documents/rules/` are not Project documents at all.** An HTML capture of a case or a statute
 the matter relies on is an [Authority](glossary/authority.md) — global reference data with no `project_id` — so filing
 it as an internal matter document would be the misclassification the fleet contract warns about. `project sync` routes
-every `documents/cases/**` and `documents/rules/**` capture through the same door as `hudson site authorities create`:
-it reads a sidecar (`<capture-filename>.authority.yaml`, beside the capture under `documents/`) carrying `class`,
-`citation`, `title`, and optionally `short_cite`, `publisher`, `issued_on`, `canonical_url`, and `checked_on` — the
-fields `authorities create` needs and cannot reliably scrape from arbitrary HTML `<meta>` tags — archives the bytes as
-an Authority, and writes a Pointer at the capture's slug (`blobs/cases/<capture>.yaml` or `blobs/rules/<capture>.yaml`)
-carrying the resulting `authority_id` alongside `sha256`, `canonical_url`, `checked_on`, and `created_at`. The staging
-sidecar is removed once the pointer is filed; the ignored capture remains in `documents/`. Only the pointer belongs in
-Git. A repeated exact citation with matching bytes reuses the global Authority; different bytes under that citation
-require review.
+every `documents/cases/**` and `documents/rules/**` capture through the same door as `navigator site authorities
+create`: it reads a sidecar (`<capture-filename>.authority.yaml`, beside the capture under `documents/`) carrying
+`class`, `citation`, `title`, and optionally `short_cite`, `publisher`, `issued_on`, `canonical_url`, and `checked_on` —
+the fields `authorities create` needs and cannot reliably scrape from arbitrary HTML `<meta>` tags — archives the bytes
+as an Authority, and writes a Pointer at the capture's slug (`blobs/cases/<capture>.yaml` or
+`blobs/rules/<capture>.yaml`) carrying the resulting `authority_id` alongside `sha256`, `canonical_url`, `checked_on`,
+and `created_at`. The staging sidecar is removed once the pointer is filed; the ignored capture remains in `documents/`.
+Only the pointer belongs in Git. A repeated exact citation with matching bytes reuses the global Authority; different
+bytes under that citation require review.
 
 The two folders split [`AuthorityClass`](../rules/src/citation.rs): `documents/cases/` holds `case_law` alone, and
 `documents/rules/` holds every other class — `statute`, `regulation`, `administrative`, and `secondary`. The sidecar's

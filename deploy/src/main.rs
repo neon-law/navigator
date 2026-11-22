@@ -1226,12 +1226,10 @@ enum SiteCmd {
         #[command(subcommand)]
         action: cli::matter_site::DocumentAction,
     },
-    /// File a global Authority — the citation apparatus' shared legal
-    /// reference data (#890) — with an archived artifact. Unlike `document`,
-    /// an Authority carries no `--project`.
+    /// Deprecated alias for `navigator site authorities`.
     Authorities {
         #[command(subcommand)]
-        action: AuthoritiesAction,
+        action: cli::authorities::AuthoritiesAction,
     },
     /// Publish one local public-safe asset (a brand mark, a hero image, a
     /// font file) to a deployment's public assets bucket
@@ -2966,79 +2964,6 @@ enum LspAction {
     },
 }
 
-/// `hudson site authorities create` — the citation apparatus' write path
-/// (ENG-712): file a global Authority (no `--project`; it carries no
-/// `project_id`) with its archived artifact, through
-/// `POST /app/api/authorities`.
-#[derive(Subcommand)]
-enum AuthoritiesAction {
-    /// Create (or find) the global Authority for `--citation`, archiving
-    /// `--file` as its artifact. Repeating an already-recorded citation
-    /// returns the existing Authority untouched — its original archive and
-    /// metadata are never replaced.
-    Create {
-        #[command(flatten)]
-        host: HostOpt,
-        /// One of `case_law`, `statute`, `regulation`, `administrative`, `secondary`.
-        #[arg(long)]
-        class: String,
-        /// The citation — this is the Authority's identity: a second
-        /// `create` with the same citation returns the first row.
-        #[arg(long)]
-        citation: String,
-        #[arg(long)]
-        title: String,
-        #[arg(long)]
-        short_cite: Option<String>,
-        #[arg(long)]
-        publisher: Option<String>,
-        #[arg(long)]
-        issued_on: Option<String>,
-        #[arg(long)]
-        canonical_url: Option<String>,
-        #[arg(long)]
-        checked_on: Option<String>,
-        /// Path to the artifact to archive (the full text — a PDF or slip
-        /// opinion, never committed to a Project repository).
-        #[arg(long)]
-        file: PathBuf,
-        /// MIME type. Defaults to `application/octet-stream`.
-        #[arg(long)]
-        content_type: Option<String>,
-    },
-    /// Correct a field on an existing Authority, found by `<ID>` or
-    /// `--citation`. Fields left out stay unchanged. `--citation` and
-    /// `--class` are immutable — they are the Authority's identity;
-    /// changing either means a new Authority, not an update of this one.
-    Update {
-        #[command(flatten)]
-        host: HostOpt,
-        /// The Authority's id. Give this or `--citation`, not both.
-        id: Option<uuid::Uuid>,
-        /// Look up the Authority by citation instead of id.
-        #[arg(long)]
-        citation: Option<String>,
-        #[arg(long)]
-        title: Option<String>,
-        #[arg(long)]
-        short_cite: Option<String>,
-        #[arg(long)]
-        publisher: Option<String>,
-        #[arg(long)]
-        issued_on: Option<String>,
-        #[arg(long)]
-        canonical_url: Option<String>,
-        #[arg(long)]
-        checked_on: Option<String>,
-        /// A new artifact version to archive in place of the current one.
-        #[arg(long)]
-        file: Option<PathBuf>,
-        /// MIME type of `--file`. Defaults to `application/octet-stream`.
-        #[arg(long)]
-        content_type: Option<String>,
-    },
-}
-
 /// `hudson site asset upload` — the OAuth-backed sibling of the
 /// ADC-backed `hudson ops assets upload` batch command (`ops assets`
 /// above): one asset, one or more deployments, no bucket credential.
@@ -3092,6 +3017,7 @@ const MOVED_TO_NAVIGATOR: &[&str] = &[
     "notation import",
     "notation kinds",
     "site person",
+    "site authorities",
 ];
 
 /// Point a caller of a moved verb at `navigator`, on stderr, then run it.
@@ -3377,58 +3303,10 @@ fn run() -> ExitCode {
                 moved_to_navigator("site notation");
                 runtime().block_on(cli::matter_site::run_notation(action))
             }
-            SiteCmd::Authorities { action } => match action {
-                AuthoritiesAction::Create {
-                    host,
-                    class,
-                    citation,
-                    title,
-                    short_cite,
-                    publisher,
-                    issued_on,
-                    canonical_url,
-                    checked_on,
-                    file,
-                    content_type,
-                } => runtime().block_on(authorities::create(
-                    host.host.as_deref(),
-                    &class,
-                    &citation,
-                    &title,
-                    short_cite.as_deref(),
-                    publisher.as_deref(),
-                    issued_on.as_deref(),
-                    canonical_url.as_deref(),
-                    checked_on.as_deref(),
-                    &file,
-                    content_type.as_deref(),
-                )),
-                AuthoritiesAction::Update {
-                    host,
-                    id,
-                    citation,
-                    title,
-                    short_cite,
-                    publisher,
-                    issued_on,
-                    canonical_url,
-                    checked_on,
-                    file,
-                    content_type,
-                } => runtime().block_on(authorities::update(
-                    host.host.as_deref(),
-                    id,
-                    citation.as_deref(),
-                    title.as_deref(),
-                    short_cite.as_deref(),
-                    publisher.as_deref(),
-                    issued_on.as_deref(),
-                    canonical_url.as_deref(),
-                    checked_on.as_deref(),
-                    file.as_deref(),
-                    content_type.as_deref(),
-                )),
-            },
+            SiteCmd::Authorities { action } => {
+                moved_to_navigator("site authorities");
+                authorities::run(action)
+            }
             SiteCmd::Asset { action } => match action {
                 AssetAction::PrepareVideo { input, output } => {
                     runtime().block_on(video_prepare::run_prepare(&input, &output))
@@ -3919,14 +3797,7 @@ mod command_boundary_tests {
     ];
 
     /// Hidden site spellings awaiting their application API boundary.
-    const PENDING_SITE_VERBS: &[&str] = &[
-        "asset",
-        "authorities",
-        "blog",
-        "help",
-        "seed",
-        "synthetic-portfolio",
-    ];
+    const PENDING_SITE_VERBS: &[&str] = &["asset", "blog", "help", "seed", "synthetic-portfolio"];
 
     /// Matter-work verbs that still link the store, Typst, or the web
     /// renderer, which the lean `navigator` leaves out. Each moves once it

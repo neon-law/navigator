@@ -1,25 +1,24 @@
-//! `hudson site authorities create` — file a global Authority (the citation
-//! apparatus' shared reference data, #890) with an archived artifact,
-//! through the logged-in deployment's `POST /app/api/authorities` door
+//! `navigator site authorities` — file or correct a global Authority (the
+//! citation apparatus' shared reference data) with an archived artifact,
+//! through the logged-in deployment's `/app/api/authorities` door
 //! (`portal::authorities_api`).
 //!
-//! The CLI reads no `SurrealDB` environment and writes nothing locally: the
+//! The CLI reads no database environment and writes nothing locally: the
 //! server resolves the bearer back into the caller's session, checks the
-//! lawyer tier, ingests the archive through the Asset service, and calls
-//! `model::authorities::record`. This module only forms that one
-//! authenticated HTTP request — [`crate::remote::resolve`] is the same
-//! stored-login seam every other CLI verb reaches through, reused here
-//! rather than duplicated.
+//! lawyer tier, ingests the archive through the Asset service, and records
+//! the Authority. This module only forms that authenticated HTTP request —
+//! [`crate::remote::resolve`] is the same stored-login seam every other CLI
+//! verb reaches through, reused here rather than duplicated.
 //!
-//! This is a Project repository's supported destination for an archived
-//! legal authority — see the `legal-authority` skill's note that, before
-//! this command existed, there was none.
+//! `hudson site authorities` is the compatibility spelling of the same
+//! command.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{anyhow, Context, Result};
 use base64::Engine as _;
+use clap::Subcommand;
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -27,7 +26,7 @@ use uuid::Uuid;
 /// every other failure — not reachable from this command today (it always
 /// uses the stored login, never a CI-minted token), but reused so a future
 /// caller of this function inherits that behavior for free.
-async fn run<F>(fut: F) -> ExitCode
+async fn finish<F>(fut: F) -> ExitCode
 where
     F: std::future::Future<Output = Result<()>>,
 {
@@ -140,7 +139,137 @@ pub async fn create_authority(
     serde_json::from_str(&text).context("parse authority response")
 }
 
-/// `hudson site authorities create --class … --citation … --title … --file …`
+/// `navigator site authorities create` — file a global Authority with its
+/// archived artifact. Unlike a Project document, an Authority carries no
+/// `--project`.
+#[derive(Subcommand)]
+pub enum AuthoritiesAction {
+    /// Create (or find) the global Authority for `--citation`, archiving
+    /// `--file` as its artifact. Repeating an already-recorded citation
+    /// returns the existing Authority untouched — its original archive and
+    /// metadata are never replaced.
+    Create {
+        #[command(flatten)]
+        host: crate::commands::HostOpt,
+        /// One of `case_law`, `statute`, `regulation`, `administrative`, `secondary`.
+        #[arg(long)]
+        class: String,
+        /// The citation — this is the Authority's identity: a second
+        /// `create` with the same citation returns the first row.
+        #[arg(long)]
+        citation: String,
+        #[arg(long)]
+        title: String,
+        #[arg(long)]
+        short_cite: Option<String>,
+        #[arg(long)]
+        publisher: Option<String>,
+        #[arg(long)]
+        issued_on: Option<String>,
+        #[arg(long)]
+        canonical_url: Option<String>,
+        #[arg(long)]
+        checked_on: Option<String>,
+        /// Path to the artifact to archive (the full text — a PDF or slip
+        /// opinion, never committed to a Project repository).
+        #[arg(long)]
+        file: PathBuf,
+        /// MIME type. Defaults to `application/octet-stream`.
+        #[arg(long)]
+        content_type: Option<String>,
+    },
+    /// Correct a field on an existing Authority, found by `<ID>` or
+    /// `--citation`. Fields left out stay unchanged. `--citation` and
+    /// `--class` are immutable — they are the Authority's identity;
+    /// changing either means a new Authority, not an update of this one.
+    Update {
+        #[command(flatten)]
+        host: crate::commands::HostOpt,
+        /// The Authority's id. Give this or `--citation`, not both.
+        id: Option<uuid::Uuid>,
+        /// Look up the Authority by citation instead of id.
+        #[arg(long)]
+        citation: Option<String>,
+        #[arg(long)]
+        title: Option<String>,
+        #[arg(long)]
+        short_cite: Option<String>,
+        #[arg(long)]
+        publisher: Option<String>,
+        #[arg(long)]
+        issued_on: Option<String>,
+        #[arg(long)]
+        canonical_url: Option<String>,
+        #[arg(long)]
+        checked_on: Option<String>,
+        /// A new artifact version to archive in place of the current one.
+        #[arg(long)]
+        file: Option<PathBuf>,
+        /// MIME type of `--file`. Defaults to `application/octet-stream`.
+        #[arg(long)]
+        content_type: Option<String>,
+    },
+}
+
+/// Run `navigator site authorities`.
+#[must_use]
+pub fn run(action: AuthoritiesAction) -> ExitCode {
+    let runtime = || tokio::runtime::Runtime::new().expect("tokio runtime");
+    match action {
+        AuthoritiesAction::Create {
+            host,
+            class,
+            citation,
+            title,
+            short_cite,
+            publisher,
+            issued_on,
+            canonical_url,
+            checked_on,
+            file,
+            content_type,
+        } => runtime().block_on(create(
+            host.host.as_deref(),
+            &class,
+            &citation,
+            &title,
+            short_cite.as_deref(),
+            publisher.as_deref(),
+            issued_on.as_deref(),
+            canonical_url.as_deref(),
+            checked_on.as_deref(),
+            &file,
+            content_type.as_deref(),
+        )),
+        AuthoritiesAction::Update {
+            host,
+            id,
+            citation,
+            title,
+            short_cite,
+            publisher,
+            issued_on,
+            canonical_url,
+            checked_on,
+            file,
+            content_type,
+        } => runtime().block_on(update(
+            host.host.as_deref(),
+            id,
+            citation.as_deref(),
+            title.as_deref(),
+            short_cite.as_deref(),
+            publisher.as_deref(),
+            issued_on.as_deref(),
+            canonical_url.as_deref(),
+            checked_on.as_deref(),
+            file.as_deref(),
+            content_type.as_deref(),
+        )),
+    }
+}
+
+/// `navigator site authorities create --class … --citation … --title … --file …`
 /// — file one Authority with its archived artifact through the live site's
 /// `POST /app/api/authorities` door, using the stored login credential.
 #[allow(clippy::too_many_arguments)]
@@ -157,7 +286,7 @@ pub async fn create(
     file: &Path,
     content_type: Option<&str>,
 ) -> ExitCode {
-    run(async {
+    finish(async {
         let authority = create_authority(
             host,
             &NewAuthorityArgs {
@@ -183,7 +312,7 @@ pub async fn create(
     .await
 }
 
-/// What `hudson site authorities update` needs. Exactly one of `id` or
+/// What `navigator site authorities update` needs. Exactly one of `id` or
 /// `citation` must be given to locate the existing Authority; every other
 /// field is optional and left unchanged when absent.
 #[allow(clippy::too_many_arguments)]
@@ -251,7 +380,7 @@ pub async fn update_authority(
     serde_json::from_str(&text).context("parse authority response")
 }
 
-/// `hudson site authorities update <ID> | --citation …` — correct a
+/// `navigator site authorities update <ID> | --citation …` — correct a
 /// field on an existing Authority, leaving every field left out unchanged.
 #[allow(clippy::too_many_arguments)]
 pub async fn update(
@@ -267,7 +396,7 @@ pub async fn update(
     file: Option<&Path>,
     content_type: Option<&str>,
 ) -> ExitCode {
-    run(async {
+    finish(async {
         let authority = update_authority(
             host,
             &UpdateAuthorityArgs {

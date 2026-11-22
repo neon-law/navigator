@@ -152,7 +152,7 @@ fn authority_sidecar_path(path: &Path) -> PathBuf {
 ///
 /// `documents/cases/**` and `documents/rules/**` are Authorities — global
 /// reference data with no `project_id` (see the glossary's Authority entry)
-/// — routed through `site authorities create` rather than filed as a Project
+/// — routed through `navigator site authorities create` rather than filed as a Project
 /// document. The two folders split [`rules::citation::AuthorityClass`]:
 /// `cases/` holds case law, `rules/` holds everything else (statutes,
 /// regulations, administrative proceedings, and secondary sources) —
@@ -502,9 +502,9 @@ fn commit_pointer_for_source(
 
 /// The Authority metadata a staged `documents/cases/**` or
 /// `documents/rules/**` capture must supply via its sidecar
-/// (`<capture>.authority.yaml`) — exactly the fields `site authorities
-/// create` needs and cannot reliably scrape from arbitrary HTML `<meta>`
-/// tags (settled in the issue's own triage comment).
+/// (`<capture>.authority.yaml`) — exactly the fields `navigator site
+/// authorities create` needs and cannot reliably scrape from arbitrary HTML
+/// `<meta>` tags.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoritySidecar {
@@ -551,13 +551,13 @@ fn read_authority_sidecar(path: &Path, folder: &str) -> Result<AuthoritySidecar>
 }
 
 /// Route one staged `documents/cases/**` or `documents/rules/**` capture
-/// through `site authorities create` instead of the ordinary per-Project
+/// through `navigator site authorities create` instead of the ordinary per-Project
 /// document upload — Authorities are global reference data with no
 /// `project_id` (see the glossary's Authority entry), so filing one as a
 /// Project document is the misclassification this routing exists to avoid.
 ///
 /// Reads the capture's sidecar, archives the bytes through the same
-/// authenticated door `hudson site authorities create` uses, and returns
+/// authenticated door `navigator site authorities create` uses, and returns
 /// a [`model::document_pointers::DocumentPointer`] carrying the resulting
 /// `authority_id` alongside `sha256`/`canonical_url`/`checked_on`/`created_at`
 /// — reusing the existing pointer struct rather than a parallel shape.

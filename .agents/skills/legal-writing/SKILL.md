@@ -64,7 +64,7 @@ unlikely if it is not"), never as a bare point estimate, so the reader sees whic
 Save every cited source in its original bytes, not just a link, so the supervising lawyer can verify it. A citation with
 no saved original is flagged as unverifiable and goes no further until it is saved.
 
-- **Law** (a case, statute, regulation, or rule) is saved as an Authority: `hudson site authorities create
+- **Law** (a case, statute, regulation, or rule) is saved as an Authority: `navigator site authorities create
   --class <class> --citation <citation> --title <title> --file <archived-copy>`. Set `--checked-on` to the date the
   source was opened and checked, not the drafting date. An Authority is global reference data shared by every matter
   that cites it, never a bare git-committed file.

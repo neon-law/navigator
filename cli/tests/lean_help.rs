@@ -1,7 +1,7 @@
 //! The lean `navigator` carries Projects, their Jujutsu repositories, the
 //! offline `validate` gate, notation envelope verbs, the glossary, Calendar reads,
 //! Relationship Log observations, a site session, and the `seeds/` import a Project's CI runs.
-//! Matter-work `site` verbs handle documents, mail filing, and notations. Deployment
+//! Matter-work `site` verbs handle documents, Authority filing, mail filing, and notations. Deployment
 //! and Firm configuration live in `hudson`; Ephemeris in `scorpio`.
 
 use assert_cmd::Command;
@@ -55,8 +55,18 @@ fn the_lean_navigator_names_only_its_own_verbs() {
     assert_eq!(
         command_names(&help(&["site", "--help"])),
         [
-            "brand", "document", "firm", "import", "login", "logout", "mail", "notation", "person",
-            "whoami", "help"
+            "authorities",
+            "brand",
+            "document",
+            "firm",
+            "import",
+            "login",
+            "logout",
+            "mail",
+            "notation",
+            "person",
+            "whoami",
+            "help"
         ]
         .map(String::from)
     );

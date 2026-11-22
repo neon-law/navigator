@@ -155,8 +155,8 @@ This is the default lane for any single public asset, and the one every agent sk
 batch-publishing the whole gallery, wrong for a one-off asset from a machine that has never run `gcloud auth
 application-default login`. `hudson site asset upload` is the OAuth-backed sibling: it reads no GCP environment, needs
 no bucket name, and writes nothing except through the deployment's own authenticated site API (`POST /app/api/assets`,
-`portal::assets_api`), following the same `navigator site login` seam `site document upload` and `site authorities
-create` already use (see [`command-boundary`](command-boundary.md)).
+`portal::assets_api`), following the same `navigator site login` seam `navigator site document upload` and `navigator
+site authorities create` already use (see [`command-boundary`](command-boundary.md)).
 
 Without `--key`, `ASSET_NAME` is read relative to `server/public/`, and that relative path is also the exact bucket key
 the object is stored — and served back — under. Pass `img/<slug>/<file>`, not `server/public/img/<slug>/<file>`: the

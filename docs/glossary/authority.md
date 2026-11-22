@@ -24,6 +24,10 @@ client-facing allowlist.
 A composition references an Authority by id and the server resolves it under the lens gate. Embedding citation prose
 instead is the failure mode: it drifts from the record and cannot be re-verified.
 
+File one Authority with `navigator site authorities create`. Correct a field with `navigator site authorities update`. A
+Project checkout files `documents/cases/` and `documents/rules/` captures through `navigator project sync`, which uses
+the same create door.
+
 - Vocabulary: [`rules::citation`](../../rules/src/citation.rs) · Schema:
   [`authority` in the PostgreSQL schema](../../store/postgres/schema.sql) Queries:
   [`store::authorities`](../../store/src/authorities.rs) Model: the PostgreSQL `authority` table
