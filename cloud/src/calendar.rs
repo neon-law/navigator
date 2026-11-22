@@ -1591,6 +1591,8 @@ pub enum CalendarGap {
     Share,
     /// The Workspace grant does not include the scope this read needs.
     Scope,
+    /// The provider returned incomplete or invalid availability.
+    InvalidResponse,
 }
 
 /// One busy interval on a calendar.
@@ -1852,20 +1854,16 @@ pub fn parse_free_busy(
                     }),
                 };
             }
-            let busy = entry
-                .busy
-                .iter()
-                .filter_map(|block| {
-                    Some(FreeBusyBlock {
-                        start: DateTime::parse_from_rfc3339(&block.start).ok()?,
-                        end: DateTime::parse_from_rfc3339(&block.end).ok()?,
-                    })
-                })
-                .collect();
+            let busy = entry.busy.as_ref().and_then(|blocks| {
+                blocks
+                    .iter()
+                    .map(FreeBusyInstant::interval)
+                    .collect::<Option<Vec<_>>>()
+            });
             CalendarWindow {
                 calendar_id: calendar_id.clone(),
-                busy,
-                gap: None,
+                gap: busy.is_none().then_some(CalendarGap::InvalidResponse),
+                busy: busy.unwrap_or_default(),
             }
         })
         .collect())
@@ -1879,8 +1877,7 @@ struct FreeBusyResponse {
 
 #[derive(Deserialize)]
 struct FreeBusyEntry {
-    #[serde(default)]
-    busy: Vec<FreeBusyInstant>,
+    busy: Option<Vec<FreeBusyInstant>>,
     #[serde(default)]
     errors: Vec<FreeBusyReason>,
 }
@@ -1889,6 +1886,14 @@ struct FreeBusyEntry {
 struct FreeBusyInstant {
     start: String,
     end: String,
+}
+
+impl FreeBusyInstant {
+    fn interval(&self) -> Option<FreeBusyBlock> {
+        let start = DateTime::parse_from_rfc3339(&self.start).ok()?;
+        let end = DateTime::parse_from_rfc3339(&self.end).ok()?;
+        (start < end).then_some(FreeBusyBlock { start, end })
+    }
 }
 
 #[derive(Deserialize)]
@@ -2836,6 +2841,26 @@ mod tests {
             .is_err());
         calendar.put_event(&created.id, &inserted.id, moved);
         assert_eq!(calendar.events(&created.id).len(), 1);
+    }
+
+    #[test]
+    fn freebusy_requires_a_complete_list_of_valid_intervals() {
+        let start = "2026-11-01T15:00:00Z";
+        let end = "2026-11-01T16:00:00Z";
+        for entry in [
+            serde_json::json!({}),
+            serde_json::json!({"busy": [{"start": start, "end": "invalid"}]}),
+            serde_json::json!({"busy": [{"start": end, "end": start}]}),
+            serde_json::json!({"busy": [{"start": start, "end": start}]}),
+        ] {
+            let body = serde_json::json!({"calendars": {"first": entry, "second": {"busy": []}}});
+            let windows =
+                super::parse_free_busy(&body.to_string(), &["first".into(), "second".into()])
+                    .unwrap();
+            assert!(windows[0].gap.is_some(), "{body}");
+            assert!(windows[1].gap.is_none());
+            assert!(windows[1].busy.is_empty());
+        }
     }
 
     #[test]

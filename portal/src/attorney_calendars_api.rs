@@ -144,6 +144,7 @@ fn gap_word(gap: cloud::CalendarGap) -> &'static str {
     match gap {
         cloud::CalendarGap::Share => "share",
         cloud::CalendarGap::Scope => "scope",
+        cloud::CalendarGap::InvalidResponse => "invalid_response",
     }
 }
 
