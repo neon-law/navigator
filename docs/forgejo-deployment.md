@@ -297,8 +297,8 @@ cannot reach the port-forwarded `ROOT_URL` or a seeded Navigator, and the releas
 unit test checks that the generated gate posts the required context. The smoke also does not prove a trusted PR-open
 trigger, a dedicated scheduling bot account, or branch deletion on closure without merge.
 
-Each Firm is one Forgejo organization, named by its immutable `firm.slug`, and each Project it owns is one repository
-beneath it, named by its immutable `code`: `<firm-slug>/<project-code>` (`store::firms::forgejo::repository_path`). See
+Each Firm is one Forgejo organization, named by its `firm.slug`, and each Project it owns is one repository beneath it,
+named by its immutable `code`: `<firm-slug>/<project-code>` (`store::firms::forgejo::repository_path`). See
 [Firm](glossary/firm.md) for how the slug is derived, reserved, and kept unique. Brands are storefronts, not namespaces.
 `hudson dev forgejo smoke` creates a seeded synthetic Firm's organization and Project repository and checks the API
 returns exactly that path. Concurrent creation, moves, and tenant isolation still need tests. Forgejo is one parallel
@@ -475,3 +475,21 @@ Sources:
 - [Forgejo configuration](https://forgejo.org/docs/latest/admin/config-cheat-sheet/)
 - [Database preparation](https://forgejo.org/docs/latest/admin/installation/database-preparation/)
 - [Actions deployment security](https://forgejo.org/docs/latest/admin/actions/security/)
+
+## Move a Firm organization
+
+During a maintenance window, pause provisioning, Project repository edits and pushes for the Firm. Drain its Actions
+jobs and update any deployment-specific runner filters, mirrors and trust policies that pin the owner. Keep the previous
+values in the private change record. Confirm the installation, Firm UUID, Forgejo origin and numeric organization ID.
+The command uses the installation's PostgreSQL migration role, `NAVIGATOR_FORGEJO_ROOT_URL`, and an organization owner's
+`FORGEJO_TOKEN` with organization write, user read and access to the bound repositories.
+
+```bash
+hudson ops forgejo rename-organization --firm "$firm_id" --from "$old_slug" --to "$new_slug" --organization-id "$org_id"
+```
+
+Use `--token-stdin` for a credential supplied through a pipe. Append `--apply` to record the intent and rename. If the
+connection drops, repeat the same command. It checks each repository's numeric ID at the new path before committing the
+Firm slug, recorded organization and Project URLs. An unprovisioned Firm keeps its provisioning status. Run the preview
+again to verify completion, update checkout remotes and prove a signed push and its deployment before reopening writes.
+To reverse a completed move, preview and apply a new move with the slugs reversed during a maintenance window.

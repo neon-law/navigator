@@ -2,8 +2,8 @@
 //!
 //! [`derive`] turns a Firm's name into a slug once, when the Firm is created
 //! (or, for a Firm that predates the field, when `store::schema::apply`
-//! backfills it). After that the slug never changes: renaming a Firm edits
-//! its displayed name only, so its organization never moves.
+//! backfills it). A Firm display-name edit preserves the slug. The deployment
+//! operator can migrate the namespace with its Forgejo organization.
 //!
 //! The shape is a Project code's shape ([`cloud::workspace::is_valid_slug`]),
 //! capped at [`MAX_LEN`] because that is Forgejo's limit on an organization
