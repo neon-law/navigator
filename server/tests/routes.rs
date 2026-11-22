@@ -14243,25 +14243,22 @@ async fn admin_email_log_paginates_over_fifty_rows() {
     // The email log is the one paginated listing: 50 rows per page. Seed 51 so
     // there are two pages, then assert page 1 renders its rows and a `?page=2`
     // pager anchor with "Page 1 of 2", and that `?page=2` renders as page 2 of 2.
-    let (state, surreal) = state_with_engines().await;
+    let (state, _) = state_with_engines().await;
     for i in 0..51 {
         // Zero-padded so the newest-first `sent_at` ordering is deterministic.
         let stamp = format!("2026-01-01T00:00:{i:02}Z");
-        store::sent_emails::record(
-            &surreal,
-            &store::sent_emails::NewSentEmail {
-                recipient: format!("user{i}@test.invalid"),
-                subject: format!("Message {i}"),
-                sender: "noreply@test.invalid".into(),
-                project_id: None,
-                person_id: None,
-                body: "body".into(),
-                outcome: "delivered".into(),
-                template_slug: None,
-                sg_message_id: None,
-                sent_at: stamp.parse().unwrap(),
-            },
-        )
+        store::sent_emails::record(&store::sent_emails::NewSentEmail {
+            recipient: format!("user{i}@test.invalid"),
+            subject: format!("Message {i}"),
+            sender: "noreply@test.invalid".into(),
+            project_id: None,
+            person_id: None,
+            body: "body".into(),
+            outcome: "delivered".into(),
+            template_slug: None,
+            sg_message_id: None,
+            sent_at: stamp.parse().unwrap(),
+        })
         .await
         .unwrap();
     }
@@ -14834,21 +14831,18 @@ async fn seed_matter_content(surreal: &store::surreal::SurrealDb) -> MatterConte
         (Some(hidden.id), "hidden-recipient@example.com"),
         (None, "unlinked-recipient@example.com"),
     ] {
-        store::sent_emails::record(
-            surreal,
-            &store::sent_emails::NewSentEmail {
-                recipient: recipient.into(),
-                subject: "Matter correspondence".into(),
-                sender: "support@neonlaw.com".into(),
-                project_id,
-                person_id: None,
-                template_slug: Some("welcome".into()),
-                body: "Body".into(),
-                outcome: "sent".into(),
-                sg_message_id: None,
-                sent_at: "2026-05-24T10:00:00Z".parse().unwrap(),
-            },
-        )
+        store::sent_emails::record(&store::sent_emails::NewSentEmail {
+            recipient: recipient.into(),
+            subject: "Matter correspondence".into(),
+            sender: "support@neonlaw.com".into(),
+            project_id,
+            person_id: None,
+            template_slug: Some("welcome".into()),
+            body: "Body".into(),
+            outcome: "sent".into(),
+            sg_message_id: None,
+            sent_at: "2026-05-24T10:00:00Z".parse().unwrap(),
+        })
         .await
         .unwrap();
     }
@@ -15903,7 +15897,6 @@ async fn admin_send_welcome_writes_audit_row_and_redirects() {
     let mut state = state;
     state.email = std::sync::Arc::new(portal::email::LoggingEmail::new(
         std::sync::Arc::new(portal::email::CapturingEmail::new()),
-        surreal.clone(),
         "support@neonlaw.com",
     ));
     let libra = store::persons::create(
@@ -15939,7 +15932,7 @@ async fn admin_send_welcome_writes_audit_row_and_redirects() {
         "a successful send must report itself: {body}",
     );
 
-    let rows = store::sent_emails::all(&surreal).await.unwrap();
+    let rows = store::sent_emails::all().await.unwrap();
     assert_eq!(rows.len(), 1, "expected one audit row");
     assert_eq!(rows[0].recipient, "libra@example.com");
     assert_eq!(rows[0].subject, "Welcome to Neon Law");
@@ -16120,27 +16113,24 @@ async fn admin_email_log_lists_rows_newest_first() {
     // The Admin tier reads the unscoped trail (ENG-310); scoping itself is
     // proved by the shared `matter_content_listings_*` tests, which now cover
     // this listing too. This test is about the log itself.
-    let (state, surreal) = state_with_engines().await;
+    let (state, _) = state_with_engines().await;
     for (sent_at, recipient) in [
         ("2026-05-24T10:00:00Z", "older@example.com"),
         ("2026-05-24T12:00:00Z", "middle@example.com"),
         ("2026-05-24T15:00:00Z", "newest@example.com"),
     ] {
-        store::sent_emails::record(
-            &surreal,
-            &store::sent_emails::NewSentEmail {
-                recipient: recipient.into(),
-                subject: "Welcome to Neon Law".into(),
-                body: "Welcome aboard.".into(),
-                sender: "support@neonlaw.com".into(),
-                project_id: None,
-                person_id: None,
-                template_slug: Some("welcome".into()),
-                outcome: "sent".into(),
-                sg_message_id: None,
-                sent_at: sent_at.parse().unwrap(),
-            },
-        )
+        store::sent_emails::record(&store::sent_emails::NewSentEmail {
+            recipient: recipient.into(),
+            subject: "Welcome to Neon Law".into(),
+            body: "Welcome aboard.".into(),
+            sender: "support@neonlaw.com".into(),
+            project_id: None,
+            person_id: None,
+            template_slug: Some("welcome".into()),
+            outcome: "sent".into(),
+            sg_message_id: None,
+            sent_at: sent_at.parse().unwrap(),
+        })
         .await
         .unwrap();
     }

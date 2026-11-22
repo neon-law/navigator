@@ -8,7 +8,7 @@
 //! Pagination counts and fetches rows in one read-only repeatable-read transaction.
 //! Both queries use the same Project scope and stable newest-first order.
 
-use crate::{postgres::PostgresDb, surreal::SurrealDb};
+use crate::postgres::PostgresDb;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use uuid::Uuid;
@@ -90,7 +90,7 @@ pub struct Page {
 /// # Errors
 /// PostgreSQL history or insertion is unavailable. The caller records an audit miss
 /// separately because delivery has already been attempted.
-pub async fn record(_db: &SurrealDb, new: &NewSentEmail) -> Result<SentEmail, SentEmailError> {
+pub async fn record(new: &NewSentEmail) -> Result<SentEmail, SentEmailError> {
     postgres::record(&PostgresDb::application().await?, new).await
 }
 
@@ -101,7 +101,6 @@ pub async fn record(_db: &SurrealDb, new: &NewSentEmail) -> Result<SentEmail, Se
 /// # Errors
 /// PostgreSQL application history or the scoped read is unavailable.
 pub async fn page(
-    _db: &SurrealDb,
     requested: u64,
     per_page: u64,
     project_ids: Option<&[Uuid]>,
@@ -119,7 +118,7 @@ pub async fn page(
 ///
 /// # Errors
 /// PostgreSQL application history or the read is unavailable.
-pub async fn all(_db: &SurrealDb) -> Result<Vec<SentEmail>, SentEmailError> {
+pub async fn all() -> Result<Vec<SentEmail>, SentEmailError> {
     postgres::all(&PostgresDb::application().await?).await
 }
 

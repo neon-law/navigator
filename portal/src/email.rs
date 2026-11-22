@@ -6,8 +6,7 @@
 //! [`EmailError`], [`DEFAULT_FROM_EMAIL`]) live in `workflows::email` so
 //! the `workflows-service` worker can share them without a crate cycle.
 //! This module keeps the `web`-only [`RetryingEmail`] decorator plus the
-//! env-driven factory ([`from_env`]) and re-exports the moved types
-//! so existing callsites keep compiling unchanged.
+//! env-driven factory ([`from_env`]) and re-exports the shared email types.
 
 use std::sync::Arc;
 
@@ -44,18 +43,16 @@ pub enum EmailConfigError {
 /// The crash-loud-on-missing-key behavior here is deliberately
 /// redundant with `portal::config::enforce_deployment_invariants` so that the
 /// constructor itself stays honest when called outside `main`.
-pub fn from_env(db: store::surreal::SurrealDb) -> Result<Arc<dyn EmailService>, EmailConfigError> {
-    from_lookup(|k| std::env::var(k).ok(), db)
+pub fn from_env() -> Result<Arc<dyn EmailService>, EmailConfigError> {
+    from_lookup(|k| std::env::var(k).ok())
 }
 
-/// Testable seam for [`from_env`]: any `key -> Option<value>` lookup,
-/// plus the `SurrealDB` handle for the [`LoggingEmail`] decorator.
+/// Testable seam for [`from_env`]: any `key -> Option<value>` lookup.
 pub fn from_lookup<F: Fn(&str) -> Option<String>>(
     get: F,
-    db: store::surreal::SurrealDb,
 ) -> Result<Arc<dyn EmailService>, EmailConfigError> {
     let (inner, sender) = select_backend(get)?;
-    Ok(Arc::new(LoggingEmail::new(inner, db, sender)))
+    Ok(Arc::new(LoggingEmail::new(inner, sender)))
 }
 
 /// Pure inner step of [`from_lookup`]: pick the backend (SendGrid vs

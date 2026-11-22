@@ -26,7 +26,6 @@ use super::{EmailError, EmailService, OutboundEmail, SendReceipt};
 #[derive(Clone)]
 pub struct LoggingEmail {
     inner: Arc<dyn EmailService>,
-    db: store::surreal::SurrealDb,
     /// Default `From:` address recorded on each audit row when the
     /// caller didn't supply `OutboundEmail.from`.
     sender: String,
@@ -34,14 +33,9 @@ pub struct LoggingEmail {
 
 impl LoggingEmail {
     #[must_use]
-    pub fn new(
-        inner: Arc<dyn EmailService>,
-        db: store::surreal::SurrealDb,
-        sender: impl Into<String>,
-    ) -> Self {
+    pub fn new(inner: Arc<dyn EmailService>, sender: impl Into<String>) -> Self {
         Self {
             inner,
-            db,
             sender: sender.into(),
         }
     }
@@ -71,7 +65,7 @@ impl LoggingEmail {
             sg_message_id,
             sent_at: chrono::Utc::now(),
         };
-        if let Err(e) = store::sent_emails::record(&self.db, &row).await {
+        if let Err(e) = store::sent_emails::record(&row).await {
             // The recipient address stays out of the log field — it is
             // client-identifying and telemetry leaves the firm's trust
             // boundary (`telemetry/src/lib.rs`). `person_id` is carried on the
@@ -115,61 +109,66 @@ mod tests {
     use crate::email::{CapturingEmail, EmailError, EmailService, OutboundEmail};
     use std::sync::Arc;
 
-    async fn logging() -> (LoggingEmail, store::surreal::SurrealDb) {
-        let db = store::surreal::test_support::mem().await;
+    fn logging() -> LoggingEmail {
         let inner: Arc<dyn EmailService> = Arc::new(CapturingEmail::new());
-        (
-            LoggingEmail::new(inner, db.clone(), "support@example.com"),
-            db,
-        )
+        LoggingEmail::new(inner, "support@example.com")
     }
 
     #[tokio::test]
     async fn logging_email_writes_audit_row_on_success() {
-        let (svc, db) = logging().await;
-        let person = uuid::Uuid::now_v7();
-        svc.send(
-            OutboundEmail::new("aries@example.com", "Welcome to the firm", "Body")
-                .with_template("welcome")
-                .with_person(person.to_string()),
-        )
-        .await
-        .expect("send succeeds");
-        let rows = store::sent_emails::all(&db).await.unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].recipient, "aries@example.com");
-        assert_eq!(rows[0].subject, "Welcome to the firm");
-        assert_eq!(rows[0].sender, "support@example.com");
-        assert_eq!(rows[0].template_slug.as_deref(), Some("welcome"));
-        assert_eq!(rows[0].outcome, "sent");
-        assert!(rows[0].body.contains("Body"));
+        store::test_support::with_postgres(async {
+            let svc = logging();
+            let person = uuid::Uuid::now_v7();
+            svc.send(
+                OutboundEmail::new("aries@example.com", "Welcome to the firm", "Body")
+                    .with_template("welcome")
+                    .with_person(person.to_string()),
+            )
+            .await
+            .expect("send succeeds");
+            let rows = store::sent_emails::all().await.unwrap();
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0].recipient, "aries@example.com");
+            assert_eq!(rows[0].subject, "Welcome to the firm");
+            assert_eq!(rows[0].sender, "support@example.com");
+            assert_eq!(rows[0].template_slug.as_deref(), Some("welcome"));
+            assert_eq!(rows[0].outcome, "sent");
+            assert!(rows[0].body.contains("Body"));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn logging_email_writes_failure_row_when_inner_rejects_recipient() {
-        let (svc, db) = logging().await;
-        let err = svc
-            .send(OutboundEmail::new("not-an-email", "x", "x"))
-            .await
-            .unwrap_err();
-        assert!(matches!(err, EmailError::InvalidRecipient(_)));
-        let rows = store::sent_emails::all(&db).await.unwrap();
-        assert_eq!(rows.len(), 1, "failure path must still audit");
-        assert!(
-            rows[0].outcome.starts_with("failed:"),
-            "outcome should mark failure, got {}",
-            rows[0].outcome
-        );
+        store::test_support::with_postgres(async {
+            let svc = logging();
+            let err = svc
+                .send(OutboundEmail::new("not-an-email", "x", "x"))
+                .await
+                .unwrap_err();
+            assert!(matches!(err, EmailError::InvalidRecipient(_)));
+            let rows = store::sent_emails::all().await.unwrap();
+            assert_eq!(rows.len(), 1, "failure path must still audit");
+            assert!(
+                rows[0].outcome.starts_with("failed:"),
+                "outcome should mark failure, got {}",
+                rows[0].outcome
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn logging_email_uses_per_message_from_when_provided() {
-        let (svc, db) = logging().await;
-        let mut msg = OutboundEmail::new("aries@example.com", "s", "b");
-        msg.from = Some("ops@example.com".into());
-        svc.send(msg).await.unwrap();
-        let rows = store::sent_emails::all(&db).await.unwrap();
-        assert_eq!(rows[0].sender, "ops@example.com");
+        store::test_support::with_postgres(async {
+            let svc = logging();
+            let mut msg = OutboundEmail::new("aries@example.com", "s", "b");
+            msg.from = Some("ops@example.com".into());
+            svc.send(msg).await.unwrap();
+            let rows = store::sent_emails::all().await.unwrap();
+            assert_eq!(rows[0].sender, "ops@example.com");
+        })
+        .await;
     }
 
     #[test]

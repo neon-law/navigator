@@ -630,7 +630,7 @@ pub async fn list_email_log() -> Result<AdminListingView, ServerFnError> {
         }
     };
     // The count, the clamp, and the fetch are one statement batch inside
-    // `store::sent_emails::page`, which SurrealDB runs as one transaction, so
+    // `store::sent_emails::page` uses a PostgreSQL read-only repeatable-read transaction, so
     // all three read one snapshot. Without it, a row logged between the count
     // and the fetch pushes
     // onto page 1 and shifts the rest down, stranding the oldest row on an
@@ -639,7 +639,7 @@ pub async fn list_email_log() -> Result<AdminListingView, ServerFnError> {
         rows: rows_raw,
         total_pages,
         page,
-    } = store::sent_emails::page(&db, requested_page, EMAIL_LOG_PER_PAGE, visible.as_deref())
+    } = store::sent_emails::page(requested_page, EMAIL_LOG_PER_PAGE, visible.as_deref())
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
     let rows = rows_raw

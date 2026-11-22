@@ -1909,10 +1909,9 @@ mod tests {
     /// fixture without one would exercise the refusal path instead of the
     /// send.
     fn mcp_state(surreal: store::surreal::SurrealDb) -> McpState {
-        let mut st = McpState::new(surreal.clone(), Arc::new(InMemoryRuntime::new()));
+        let mut st = McpState::new(surreal, Arc::new(InMemoryRuntime::new()));
         st.email = Some(Arc::new(crate::email::LoggingEmail::new(
             Arc::new(workflows::email::CapturingEmail::new()),
-            surreal,
             "support@example.com",
         )));
         st
