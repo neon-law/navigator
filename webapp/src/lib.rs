@@ -94,7 +94,6 @@ pub mod lawyer_dashboard;
 pub mod lawyer_project_communications;
 pub mod lawyer_project_detail;
 pub mod lawyer_project_documents;
-pub mod lawyer_project_integrations;
 pub mod lawyer_project_notations;
 pub mod lawyer_project_participation;
 pub mod lawyer_project_testimonial;

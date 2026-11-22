@@ -27,13 +27,15 @@ Each payment destination belongs to one Firm and one state. Before enabling coll
 ownership, and how the processor handles fees and chargebacks. Keep the bank verification in the private Firm record.
 Configure `NAVIGATOR_STRIPE_TRUST_ROUTES` in that deployment with a JSON array. Each entry has the Firm UUID in `firm`,
 the two-letter `state`, and the verified Stripe account ID in `account`. Account IDs must be distinct across
-destinations. A missing mapping leaves only the Xero receivable workflow available.
+destinations. Without a matching state route, Navigator prepares an unsent draft on the Firm's configured operating
+account for review. If neither destination is configured, the Xero receivable workflow remains available. A configured
+trust destination with an unavailable credential blocks the draft.
 
 Connected accounts use the Firm's platform credential (`STRIPE_OPERATING_APP_KEY`) with `STRIPE_DEFAULT` enabled. Every
-customer, draft, and invoice item request targets the selected connected account. The platform's own account cannot be
-selected. A dedicated Nevada credential uses `dedicated_nevada: true` in its route, `STRIPE_NEVADA`, and the Firm's
-`STRIPE_NEVADA_APP_KEY`. Its authenticated account ID must match the registered destination. Staging accepts sandbox
-credentials. Production accepts live credentials.
+customer, draft, and invoice item request targets the selected connected account. Trust drafts require an account
+distinct from the platform. A dedicated Nevada credential uses `dedicated_nevada: true` in its route, `STRIPE_NEVADA`,
+and the Firm's `STRIPE_NEVADA_APP_KEY`. Its authenticated account ID must match the registered destination. Staging
+accepts sandbox credentials. Production accepts live credentials.
 
 Navigator creates an unsent draft on the authenticated Stripe account and reserves the underlying work for review. The
 billing batch retains the account and invoice identity so a retry cannot silently move to a different account. A Stripe

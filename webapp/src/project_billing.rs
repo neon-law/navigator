@@ -54,22 +54,18 @@ pub struct AnnotationRow {
 }
 
 /// One of the matter's invoices, read from the local Xero mirror — the same
-/// rows the client page's client-safe `InvoiceView` renders. The Xero invoice
-/// id is deliberately not carried into the row; the status is the mirror's
-/// own word (`AUTHORISED`, `PAID`, …). The cents stand beside their rendered
-/// figures so the bar chart scales them without parsing display strings.
+/// rows the client page's client-safe `InvoiceView` renders. The reference links to the invoice on the lawyer's Billing tab. The status is the mirror's
+/// own word (`AUTHORISED`, `PAID`, …).
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct InvoiceRow {
+    #[serde(default)]
+    pub xero_invoice_id: String,
     pub reference: String,
     pub status: String,
     /// Formatted total, e.g. `$3,333.00`.
     pub amount: String,
     /// Formatted paid-to-date, e.g. `$1,000.00`.
     pub paid: String,
-    /// The invoice total, integer cents.
-    pub amount_cents: i64,
-    /// The paid-to-date figure, integer cents.
-    pub paid_cents: i64,
     /// The date Xero raised the invoice, `yyyy-mm-dd`.
     pub issued_on: String,
     /// `true` once reconcile has seen the invoice paid in full.
@@ -365,15 +361,6 @@ pub fn BillingTab(
                 p { class: "nav-form-error", role: "alert", "{error}" }
             }
 
-            section { class: "lawyer-detail__subsection",
-                h3 { "Client funds" }
-                p { "Deposit client advances for fees and costs in the reviewed trust account for this matter. Before collecting a payment, check who owns it under the agreement and governing rules." }
-                if trust.any {
-                    p { strong { "{trust.held}" } " held for this matter in the Xero mirror." }
-                } else {
-                    p { class: "nav-muted", "No trust activity appears in the matter mirror." }
-                }
-            }
             section { class: "lawyer-detail__subsection matter-billing-review",
                 h3 { "Time awaiting review" }
                 if annotations.is_empty() {
@@ -401,11 +388,7 @@ pub fn BillingTab(
             }
             section { class: "lawyer-detail__subsection matter-billing-time",
                 h3 { "Time" }
-                if timer.is_some() {
-                    p { class: "nav-muted",
-                        "A timer is running — it ticks in the header above and stops into a time entry from there."
-                    }
-                } else {
+                if timer.is_none() {
                     FormCard {
                         title: "Start the timer".to_string(),
                         action: "/app/projects/{code}/timer/start",
@@ -440,11 +423,6 @@ pub fn BillingTab(
                 if entries.is_empty() {
                     Empty {
                         title: "No time logged on this matter yet".to_string(),
-                        description: Some(
-                            "Start the timer above, or log time by hand — entries carry the rate \
-                             your fee structure resolves when they are created, and a later rate \
-                             change never reprices them.".to_string(),
-                        ),
                     }
                 } else {
                     div { class: "nav-table-wrap",
@@ -591,7 +569,18 @@ pub fn BillingTab(
                                 for row in invoices.iter() {
                                     tr {
                                         td { "{row.issued_on}" }
-                                        td { "{row.reference}" }
+                                        td {
+                                            if row.xero_invoice_id.is_empty() {
+                                                "{row.reference}"
+                                            } else {
+                                                a {
+                                                    href: "https://go.xero.com/AccountsReceivable/View.aspx?InvoiceID={row.xero_invoice_id}",
+                                                    target: "_blank", rel: "noopener noreferrer",
+                                                    title: "Open invoice in Xero",
+                                                    "{row.reference}"
+                                                }
+                                            }
+                                        }
                                         td {
                                             if row.settled {
                                                 Badge { tone: BadgeTone::Ready, "{row.status}" }
@@ -606,7 +595,6 @@ pub fn BillingTab(
                             }
                         }
                     }
-                    {invoice_bars(&invoices)}
                 }
             }
 
@@ -630,7 +618,7 @@ pub fn BillingTab(
                                     th { scope: "col", "Payee" }
                                     th { scope: "col", "Description" }
                                     th { scope: "col", "Amount" }
-                                    th { scope: "col", "Amount" }
+                                    th { scope: "col", "Amount status" }
                                     th { scope: "col", "Billing" }
                                 }
                             }
@@ -702,7 +690,7 @@ fn confirm_step(code: &str, csrf: &str, generate: &GenerateInvoiceView) -> Eleme
         p { class: "nav-muted",
             {match generate.stripe_iolta {
                 Some(true) => "This creates an unsent Stripe draft. Before sending it, verify that the payment belongs in the selected trust account. Review earned fees and reimbursement of costs the Firm already paid separately.",
-                Some(false) => "An operating-account draft requires reconciliation.",
+                Some(false) => "This creates an unsent draft in the Firm’s operating account for earned fees or reimbursable costs. Review the destination before collection.",
                 None => "This records a receivable in Xero. Confirm the proper destination before requesting payment.",
             }}
         }
@@ -745,80 +733,8 @@ fn confirm_step(code: &str, csrf: &str, generate: &GenerateInvoiceView) -> Eleme
                 if generate.stripe_iolta.is_some() { "Create Stripe draft" } else { "Raise in Xero" }
             }
         }
-        a { class: "nav-link", href: "/app/projects/{code}?tab=billing", "Not now" }
+        a { class: "nav-link", href: "/app/projects/{code}/billing", "Not now" }
     }
-}
-
-/// The matter's invoices as a small inline-SVG bar chart — one bar pair per
-/// invoice, total against paid-to-date — following the no-library, integer
-/// maths approach of `webapp::firm_invoice_graphs`. Money is never scaled by
-/// a float: widths come from integer multiplication and division.
-fn invoice_bars(invoices: &[InvoiceRow]) -> Element {
-    const BAR_MAX_WIDTH: i64 = 280;
-    const BAR_HEIGHT: i64 = 14;
-    const BAR_GAP: i64 = 6;
-    let max = invoices
-        .iter()
-        .map(|row| row.amount_cents)
-        .max()
-        .unwrap_or(0);
-    if max <= 0 {
-        return rsx! {};
-    }
-    let chart_height = i64::try_from(invoices.len()).unwrap_or(0) * (BAR_HEIGHT + BAR_GAP);
-    rsx! {
-        figure { class: "matter-billing-invoice-bars",
-            figcaption { class: "nav-muted", "Each bar is one invoice — total against paid." }
-            // Distinct fills with a legend naming them: without one, the paid
-            // bar's overlay disappears into the total bar and the chart says
-            // nothing. The fills mirror the firm invoice chart — primary for
-            // the total, the same fill at reduced opacity for paid-to-date.
-            ul { class: "nav-chart__legend",
-                li { class: "nav-chart__legend-item",
-                    span { class: "nav-chart__swatch matter-billing-swatch--invoiced", "aria-hidden": "true" }
-                    "Invoiced"
-                }
-                li { class: "nav-chart__legend-item",
-                    span { class: "nav-chart__swatch matter-billing-swatch--paid", "aria-hidden": "true" }
-                    "Paid to date"
-                }
-            }
-            svg {
-                width: "360",
-                height: "{chart_height}",
-                role: "img",
-                "aria-label": "Invoiced and paid amounts for each of this matter's invoices",
-                for (index, row) in invoices.iter().enumerate() {
-                    rect {
-                        x: "0",
-                        y: "{index as i64 * (BAR_HEIGHT + BAR_GAP)}",
-                        width: "{bar_width(row.amount_cents, max, BAR_MAX_WIDTH)}",
-                        height: "{BAR_HEIGHT}",
-                        class: "matter-billing-invoice-bar--total",
-                    }
-                    rect {
-                        x: "0",
-                        y: "{index as i64 * (BAR_HEIGHT + BAR_GAP)}",
-                        width: "{bar_width(row.paid_cents, max, BAR_MAX_WIDTH)}",
-                        height: "{BAR_HEIGHT}",
-                        class: "matter-billing-invoice-bar--paid",
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// A bar's width out of `BAR_MAX_WIDTH`, in integer maths — the same
-/// convention `firm_invoice_graphs::bar_width` uses.
-fn bar_width(cents: i64, max_cents: i64, bar_max_width: i64) -> i64 {
-    if max_cents <= 0 {
-        return 0;
-    }
-    cents
-        .saturating_mul(bar_max_width)
-        .checked_div(max_cents)
-        .unwrap_or(0)
 }
 
 /// The tab's rows, read once for the dashboard's server fn. The caller's
@@ -949,12 +865,11 @@ pub(crate) async fn mirrored_invoice_rows(
     Ok(mirror_invoices
         .iter()
         .map(|row| InvoiceRow {
+            xero_invoice_id: row.xero_invoice_id.clone(),
             reference: row.reference.clone(),
             status: row.status.clone(),
             amount: crate::portal_project_detail::format_usd(row.amount_cents),
             paid: crate::portal_project_detail::format_usd(row.amount_paid_cents),
-            amount_cents: row.amount_cents,
-            paid_cents: row.amount_paid_cents,
             issued_on: row.issued_at.format("%Y-%m-%d").to_string(),
             settled: row.amount_paid_cents >= row.amount_cents && row.amount_cents > 0,
         })
@@ -1032,37 +947,42 @@ pub(crate) async fn read_generate(
     let pending = store::billing_batches::pending_for_project(pg, project_id)
         .await
         .map_err(server_error)?;
-    let route = firm_secrets::stripe_trust_route(surreal, project)
-        .await
-        .map_err(server_error)?;
     let stripe_pending = pending.as_ref().filter(|b| b.stripe_account_id.is_some());
-    if stripe_pending.is_some_and(|batch| {
-        route
-            .as_ref()
-            .is_none_or(|route| !route.matches_batch(batch))
-    }) {
+    let use_stripe = pending.is_none() || stripe_pending.is_some();
+    let route = if use_stripe {
+        firm_secrets::stripe_trust_route(surreal, project)
+            .await
+            .map_err(server_error)?
+    } else {
+        None
+    };
+    if stripe_pending
+        .is_some_and(|batch| !firm_secrets::stripe_batch_matches_route(batch, route.as_ref()))
+    {
         return Ok(GenerateInvoiceView {
             note: Some(
-                "Review the existing draft and its trust destination before collection.".into(),
+                "Review the existing draft and its payment destination before collection.".into(),
             ),
             ..Default::default()
         });
     }
-    let route = route.filter(|_| pending.is_none() || stripe_pending.is_some());
-    let stripe_iolta = route.as_ref().map(|_| true);
-    if let Some(route) = &route {
-        let available = match project.firm_id {
-            Some(firm) => {
-                firm_secrets::stripe_credential_configured(surreal, firm, route.credential_kind())
-                    .await
-                    .map_err(server_error)?
-            }
-            None => false,
-        };
-        if !available {
-            return Ok(GenerateInvoiceView { note:Some("Configure the Firm credential for this state's trust account before creating a Stripe draft.".into()), ..Default::default()});
-        }
+    let kind = route.as_ref().map_or(
+        firm_secrets::IntegrationSecretKind::StripeOperatingAppKey,
+        firm_secrets::TrustRoute::credential_kind,
+    );
+    let available = match project.firm_id.filter(|_| use_stripe) {
+        Some(firm) => firm_secrets::stripe_credential_configured(surreal, firm, kind)
+            .await
+            .map_err(server_error)?,
+        None => false,
+    };
+    if !available && (route.is_some() || stripe_pending.is_some()) {
+        return Ok(GenerateInvoiceView {
+            note: Some("Configure the Firm credential for the selected Stripe account before creating a draft.".into()),
+            ..Default::default()
+        });
     }
+    let stripe_iolta = available.then_some(route.is_some());
     if pending
         .as_ref()
         .is_some_and(|batch| batch.stripe_invoice_id.is_some())
@@ -1264,88 +1184,6 @@ mod tests {
     }
 
     #[test]
-    fn dollar_figures_and_cents_agree_on_the_rows() {
-        let row = a_row("$1,234.56", "$25.00");
-        assert_eq!(row.amount_cents, 123_456);
-        assert_eq!(row.paid_cents, 2_500);
-    }
-
-    /// The fixture's single source of truth: the dollars a human reads, with
-    /// the cents derived — never two hand-written copies to drift.
-    fn parse_usd(display: &str) -> i64 {
-        let cleaned: String = display
-            .chars()
-            .filter(|c| c.is_ascii_digit() || *c == '.')
-            .collect();
-        let (whole, frac) = cleaned.split_once('.').unwrap_or((cleaned.as_str(), "00"));
-        format!("{whole}{frac:0<2}").parse().unwrap_or(0)
-    }
-
-    fn a_row(amount: &str, paid: &str) -> InvoiceRow {
-        InvoiceRow {
-            reference: "Matter 123".to_string(),
-            status: "AUTHORISED".to_string(),
-            amount: amount.to_string(),
-            paid: paid.to_string(),
-            amount_cents: parse_usd(amount),
-            paid_cents: parse_usd(paid),
-            issued_on: "2026-11-01".to_string(),
-            settled: false,
-        }
-    }
-
-    fn a_row_with_cents(amount_cents: i64, paid_cents: i64) -> InvoiceRow {
-        InvoiceRow {
-            amount: crate::portal_project_detail::format_usd(amount_cents),
-            paid: crate::portal_project_detail::format_usd(paid_cents),
-            amount_cents,
-            paid_cents,
-            ..a_row("$0.00", "$0.00")
-        }
-    }
-
-    #[test]
-    fn the_bar_chart_scales_each_invoice_against_the_largest_total() {
-        let rows = [
-            a_row_with_cents(10_000, 2_500),
-            a_row_with_cents(40_000, 40_000),
-        ];
-        let html = dioxus_ssr::render_element(rsx! { {invoice_bars(&rows)} });
-        // The larger invoice sets the scale: its total fills the track and
-        // the smaller one is a quarter of it.
-        assert!(html.contains("width=\"280\""), "missing [width=\"280\"]");
-        assert!(html.contains("width=\"70\""), "missing [width=\"70\"]");
-        // The paid overlay renders on the same rows.
-        assert!(
-            html.contains("matter-billing-invoice-bar--paid"),
-            "missing [matter-billing-invoice-bar--paid]"
-        );
-        // The legend names the two series — without it the paid bar's
-        // overlay reads as nothing.
-        assert!(
-            html.contains("nav-chart__legend"),
-            "missing [nav-chart__legend]"
-        );
-        assert!(html.contains("Invoiced"), "missing [Invoiced]");
-        assert!(html.contains("Paid to date"), "missing [Paid to date]");
-        assert!(
-            html.contains("matter-billing-swatch--invoiced"),
-            "missing [matter-billing-swatch--invoiced]"
-        );
-        assert!(
-            html.contains("matter-billing-swatch--paid"),
-            "missing [matter-billing-swatch--paid]"
-        );
-    }
-
-    #[test]
-    fn a_chart_of_zero_amounts_draws_nothing() {
-        let rows = [a_row_with_cents(0, 0)];
-        let html = dioxus_ssr::render_element(rsx! { {invoice_bars(&rows)} });
-        assert!(!html.contains("<svg"), "unexpectedly present: [<svg]");
-    }
-
-    #[test]
     fn the_timer_widget_ticks_from_the_epoch_attribute_with_the_label_as_fallback() {
         let timer = TimerView {
             started_at_epoch_millis: 1_730_000_000_000,
@@ -1522,15 +1360,20 @@ mod tests {
     }
 
     #[test]
-    fn the_tab_renders_mirror_invoices_and_their_bars() {
-        let invoices = vec![a_row_with_cents(40_000, 40_000)];
+    fn each_invoice_links_its_reference_to_its_xero_record() {
+        let invoices = vec![InvoiceRow {
+            reference: "INV-123".into(),
+            xero_invoice_id: "test-invoice".into(),
+            amount: "$400.00".into(),
+            status: "AUTHORISED".into(),
+            ..Default::default()
+        }];
         let html = ssr_billing(Vec::new(), invoices);
         assert!(html.contains("$400.00"), "missing [$400.00]");
         assert!(html.contains("AUTHORISED"), "missing [AUTHORISED]");
-        assert!(
-            html.contains("matter-billing-invoice-bar--total"),
-            "missing [matter-billing-invoice-bar--total]"
-        );
+        assert!(html
+            .contains("https://go.xero.com/AccountsReceivable/View.aspx?InvoiceID=test-invoice"));
+        assert_eq!(html.matches("INV-123").count(), 1);
     }
 
     #[test]
@@ -1560,8 +1403,8 @@ mod tests {
             "missing [No hourly rate is on file for you on this matter]"
         );
         assert!(
-            html.contains("No flat fee is agreed"),
-            "missing [No flat fee is agreed]"
+            html.contains("No flat fee is recorded"),
+            "missing [No flat fee is recorded]"
         );
         // A matter with no trust postings says nothing about trust.
         assert!(
@@ -1715,13 +1558,8 @@ mod tests {
             html.contains("name=\"digest\" value=\"digest-of-the-reviewed-compose\""),
             "missing [name=\"digest\" value=\"digest-of-the-reviewed-compose\"]"
         );
-        assert!(html.contains("Not now"), "missing [Not now]");
-        // The escape-free substring: dioxus-ssr escapes apostrophes in text
-        // nodes, so the assert avoids the possessive in "the Firm's ledger".
-        assert!(
-            html.contains("This is what it composes"),
-            "missing [This is what it composes]"
-        );
+        assert!(html.contains(r#"href="/app/projects/acme/billing""#));
+        assert!(html.contains("records a receivable in Xero"));
     }
 
     // ---- the server-side reads, against PostgreSQL ----

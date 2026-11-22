@@ -747,16 +747,28 @@ impl TrustRoute {
     }
 
     #[must_use]
-    pub fn matches_batch(&self, batch: &crate::billing_batches::MatterBillingBatch) -> bool {
-        // Nevada was the sole trust destination before batches recorded their state.
-        batch.stripe_iolta
-            && batch.trust_state.as_deref().unwrap_or("NV") == self.state
-            && batch.stripe_account_id.as_ref() == Some(&self.account)
-    }
-
-    #[must_use]
     pub fn bind_preview(&self, digest: &str) -> String {
         format!("{digest}/{}/{}", self.state, self.account)
+    }
+}
+
+/// An operating draft is pinned to the authenticated account by the invoice command.
+/// Trust retries also retain their reviewed state and registered account.
+#[must_use]
+pub fn stripe_batch_matches_route(
+    batch: &crate::billing_batches::MatterBillingBatch,
+    route: Option<&TrustRoute>,
+) -> bool {
+    match route {
+        // Nevada predates persisted trust states.
+        Some(route) => {
+            batch.stripe_iolta
+                && batch.trust_state.as_deref().unwrap_or("NV") == route.state
+                && batch.stripe_account_id.as_ref() == Some(&route.account)
+        }
+        None => {
+            !batch.stripe_iolta && batch.trust_state.is_none() && batch.stripe_account_id.is_some()
+        }
     }
 }
 

@@ -556,7 +556,6 @@ fn edit_body(view: &ProjectEditView) -> Element {
         document::Title { "{view.firm_name} | Lawyer | Projects | Edit project" }
         header { class: "page-header",
             h1 { "Edit project" }
-            p { a { href: "/app/projects", "← Back to projects" } }
         }
         if let Some(error) = view.error.as_ref() {
             p { class: "nav-form-error", role: "alert", "{error}" }
@@ -565,10 +564,13 @@ fn edit_body(view: &ProjectEditView) -> Element {
             title: "Edit project".to_string(),
             action,
             submit_label: "Save".to_string(),
-            heading: Heading::H2,
+            heading: Heading::Hidden,
             csrf_token: Some(view.csrf_token.clone()),
             fields,
             extra_fields: Some(rsx! {
+                if let Some(id) = &view.entity_id {
+                    a { class: "nav-link", href: "/app/admin/entities/{id}/edit", "Edit linked entity" }
+                }
                 {slack_card}
                 {notion_card}
                 {drive_card(&view.drive_folder_id)}
@@ -577,7 +579,7 @@ fn edit_body(view: &ProjectEditView) -> Element {
         }
         {brand_change_form(view)}
         p { class: "project-form-cancel",
-            a { class: "nav-btn nav-btn--secondary", href: "/app/projects", "Cancel" }
+            a { class: "nav-btn nav-btn--secondary", href: "/app/projects/{view.project_code}", "Cancel" }
         }
     }
 }

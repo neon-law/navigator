@@ -1,9 +1,6 @@
 //! The workbench's firm-internal notes and logged correspondence.
 //!
-//! The Overview tab renders the notes as a section; the Communications tab
-//! renders every logged email, text, and call. Both surfaces read one firm-visible
-//! thread (`store::communications::for_project`) split once, server-side,
-//! into view rows — no `store` type crosses to the wasm client build.
+//! The Communications tab groups notes and correspondence from the same firm-visible thread.
 
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -78,7 +75,7 @@ fn excerpt_body(body: &str) -> String {
     excerpt
 }
 
-/// The notes section on the Overview tab: the Project's firm-internal notes,
+/// The notes section on the Communications tab: the Project's firm-internal notes,
 /// oldest first. A note is a firm-internal observation — it never reaches
 /// the client view, so the empty state names the verb that writes one rather
 /// than apologising.

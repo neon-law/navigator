@@ -311,27 +311,21 @@ pub(crate) async fn generate_invoice(
         }
         return raise_batch(surreal, pg, provider, project_id, batch, actor_id).await;
     }
-    if pending.as_ref().is_some_and(|batch| !batch.stripe_iolta) {
-        return Err(InvoiceGenerationError::ReconciliationRequired);
-    }
     let route = store::firm_secrets::stripe_trust_route(surreal, &project)
         .await
         .map_err(|_| InvoiceGenerationError::StripeUnavailable)?;
-    if let Some(batch) = &pending {
-        let Some(route) = &route else {
-            return Err(InvoiceGenerationError::ReconciliationRequired);
-        };
-        if !route.matches_batch(batch) {
-            return Err(InvoiceGenerationError::ReconciliationRequired);
-        }
+    if pending.as_ref().is_some_and(|batch| {
+        !store::firm_secrets::stripe_batch_matches_route(batch, route.as_ref())
+    }) {
+        return Err(InvoiceGenerationError::ReconciliationRequired);
     }
-    let stripe_iolta = route.as_ref().map(|_| true);
-    let stripe_key = match &route {
-        Some(route) => stripe_credential(surreal, project.firm_id, route.credential_kind()).await?,
-        None => None,
-    };
-    let stripe = match (&stripe_key, &route) {
-        (Some(key), Some(route)) => {
+    let kind = route.as_ref().map_or(
+        store::firm_secrets::IntegrationSecretKind::StripeOperatingAppKey,
+        store::firm_secrets::TrustRoute::credential_kind,
+    );
+    let stripe_key = stripe_credential(surreal, project.firm_id, kind).await?;
+    let stripe = match &stripe_key {
+        Some(key) => {
             use store::config::{sample_matters, staging_from, DeploymentEnvironment};
             let mode = DeploymentEnvironment::from_env()
                 .map_err(|_| InvoiceGenerationError::StripeUnavailable)?;
@@ -342,18 +336,21 @@ pub(crate) async fn generate_invoice(
             let live = mode == DeploymentEnvironment::Production && !simulated && !staging;
             let client =
                 billing::stripe::StripeInvoiceClient::new(key.expose_for_provider_call(), live)?;
-            Some(if route.dedicated_nevada {
-                if client.account_id().await? != route.account {
-                    return Err(InvoiceGenerationError::StripeUnavailable);
+            Some(match &route {
+                Some(route) if route.dedicated_nevada => {
+                    if client.account_id().await? != route.account {
+                        return Err(InvoiceGenerationError::StripeUnavailable);
+                    }
+                    client
                 }
-                client
-            } else {
-                client.on_connected_trust(&route.account).await?
+                Some(route) => client.on_connected_trust(&route.account).await?,
+                None => client,
             })
         }
-        _ => None,
+        None => None,
     };
-    if (stripe_iolta == Some(true) || pending.is_some()) && stripe.is_none() {
+    let stripe_iolta = stripe.as_ref().map(|_| route.is_some());
+    if (route.is_some() || pending.is_some()) && stripe.is_none() {
         return Err(InvoiceGenerationError::StripeUnavailable);
     }
     if let (Some(batch), Some(stripe)) = (&pending, &stripe) {
@@ -411,7 +408,7 @@ pub(crate) async fn generate_invoice(
     // strand an already-frozen batch.
     let preview_digest = billing_batches::invoice_destination_digest(
         billing_batches::preview_digest(&entries, &unbilled_costs, flat_fee_cents),
-        stripe.as_ref().and(stripe_iolta),
+        stripe_iolta,
         project.firm_id,
     );
     let preview_digest = match &route {

@@ -81,13 +81,13 @@ impl From<store::task_handoffs::PendingHandoff> for HandoffRow {
 }
 
 #[component]
-pub fn PendingHandoffs(code: String, rows: Vec<HandoffRow>) -> Element {
+pub fn PendingHandoffs(rows: Vec<HandoffRow>) -> Element {
+    if rows.is_empty() {
+        return rsx! {};
+    }
     rsx! {
         section { class: "lawyer-detail__section", id: "pending-handoffs",
             h2 { "Pending handoffs and follow-ups" }
-            if rows.iter().all(|row| row.state == "resolved") {
-                p { class: "nav-muted", "No pending handoffs." }
-            }
             for row in rows.iter().filter(|row| row.state != "resolved") {
                 article { class: "detail-note",
                     h3 { "{row.title}" }
@@ -128,7 +128,6 @@ pub fn PendingHandoffs(code: String, rows: Vec<HandoffRow>) -> Element {
                     }
                 }
             }
-            a { href: "/app/projects/{code}/tasks#promote-handoff", "Review and save a handoff" }
         }
     }
 }
@@ -494,7 +493,7 @@ mod tests {
                 updated_at: "2026-11-17T00:00:00Z".into(),
                 sources: vec![(
                     "Deadline".into(),
-                    "/app/projects/synthetic#deadline-example".into(),
+                    "/app/projects/synthetic/deadlines#deadline-example".into(),
                 )],
                 ..Default::default()
             },
@@ -506,11 +505,11 @@ mod tests {
             },
         ];
         let html = dioxus_ssr::render_element(rsx! {
-            PendingHandoffs { code: "synthetic".to_string(), rows }
+            PendingHandoffs { rows }
         });
         assert!(html.contains("Ready to retry"));
         assert!(html.contains("Confirm the Calendar ID"));
-        assert!(html.contains("/app/projects/synthetic#deadline-example"));
+        assert!(html.contains("/app/projects/synthetic/deadlines#deadline-example"));
         let (pending, history) = html.split_once("Resolved handoffs").unwrap();
         assert!(!pending.contains("Completed synthetic review"));
         assert!(history.contains("Completed synthetic review"));

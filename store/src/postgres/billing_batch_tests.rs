@@ -116,6 +116,26 @@ fn synthetic_batch(
     }
 }
 
+#[test]
+fn stripe_retries_keep_the_reviewed_state_or_operating_destination() {
+    use crate::firm_secrets::{stripe_batch_matches_route, TrustRoute};
+    let firm = Uuid::new_v4();
+    let route: TrustRoute = serde_json::from_value(serde_json::json!({
+        "firm": firm, "state": "WA", "account": "acct_state"
+    }))
+    .unwrap();
+    let mut batch = synthetic_batch(Uuid::new_v4(), Uuid::new_v4(), chrono::Utc::now());
+    batch.stripe_account_id = Some("acct_operating".into());
+    assert!(stripe_batch_matches_route(&batch, None));
+    assert!(!stripe_batch_matches_route(&batch, Some(&route)));
+    batch.stripe_iolta = true;
+    batch.trust_state = Some("WA".into());
+    assert!(!stripe_batch_matches_route(&batch, None));
+    assert!(!stripe_batch_matches_route(&batch, Some(&route)));
+    batch.stripe_account_id = Some("acct_state".into());
+    assert!(stripe_batch_matches_route(&batch, Some(&route)));
+}
+
 async fn assert_stripe_draft_identity(pg: &super::PostgresDb, batch: MatterBillingBatch) {
     let project = batch.project_id;
     let stripe = MatterBillingBatch {

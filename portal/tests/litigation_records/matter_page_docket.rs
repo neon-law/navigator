@@ -124,7 +124,10 @@ async fn matter_page(f: &Fixture) -> String {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/app/projects/{}", f.code))
+                .uri(format!(
+                    "/app/projects/{}/deadlines?sort=date&dir=asc",
+                    f.code
+                ))
                 .header("cookie", &f.lawyer_cookie)
                 .body(Body::empty())
                 .unwrap(),
@@ -142,8 +145,10 @@ async fn matter_page(f: &Fixture) -> String {
 async fn the_timeline_lists_a_docket_row_and_a_deadline_row_in_date_order() {
     let f = fixture().await;
     let page = matter_page(&f).await;
-    // The Deadlines panel above the calendar names the deadline too; the
-    // order under test is the calendar's.
+    assert!(
+        !page.contains("data-deadline="),
+        "calendar renders each event once"
+    );
     let start = page
         .find("project-calendar")
         .unwrap_or_else(|| panic!("the calendar is on the page: {page}"));

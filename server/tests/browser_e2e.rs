@@ -1475,9 +1475,13 @@ async fn lawyer_walks_the_full_retainer_questionnaire_end_to_end() {
         .await
         .unwrap()
         .expect("retainer Project");
-    c.goto(&format!("{}/app/projects/{}", base_url(), project.code))
-        .await
-        .unwrap();
+    c.goto(&format!(
+        "{}/app/projects/{}/documents",
+        base_url(),
+        project.code
+    ))
+    .await
+    .unwrap();
     wait_for_text(&c, &notation_id.to_string(), Duration::from_secs(20)).await;
     let current = c
         .execute(

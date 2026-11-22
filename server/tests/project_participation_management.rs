@@ -1573,6 +1573,6 @@ async fn a_lawyer_on_an_unassigned_matter_names_themselves_dri() {
         &cookie,
     )
     .await;
-    assert!(body.contains("Lawyer DRI: On Matter"), "{body}");
+    assert!(body.contains("On Matter"), "{body}");
     assert!(body.contains(">Lawyer DRI<"), "{body}");
 }

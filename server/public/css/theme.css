@@ -3909,18 +3909,6 @@ a.nav-link:hover {
   padding: 0;
 }
 
-/* Overview's jump menu: one wrapping row of in-page links above the first
- * section. */
-.lawyer-detail__jump {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.25rem 1rem;
-  margin: 0 0 1rem;
-  padding-bottom: 0.75rem;
-  border-bottom: 1px solid var(--nav-color-border);
-  font-size: 0.9rem;
-}
-
 /* The summary strip's fact values — a count or a due date reads at a glance,
  * so the value carries the tile and the title stays small above it. */
 .lawyer-detail__fact-value {
@@ -3941,15 +3929,6 @@ a.lawyer-detail__fact-value:hover,
 a.lawyer-detail__fact-value:focus-visible {
   color: var(--nav-color-link-hover);
   text-decoration: underline;
-}
-
-/* The Integrations section's buttons — Slack, Xero, and one per registered
- * application — wrap onto their own line with breathing room rather than
- * running together edge to edge. */
-.lawyer-detail__integration-links {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
 }
 
 /* The matter's collaboration-resource panel — the six places work on a
@@ -4772,26 +4751,6 @@ a.lawyer-detail__fact-value:focus-visible {
   margin: 0;
 }
 
-/* Matter billing chart: the same total-against-paid convention as the firm
-   invoice chart — primary fill for the total, the same fill at reduced
-   opacity for paid-to-date, and a legend swatch per series. */
-.matter-billing-invoice-bar--total {
-  fill: var(--nav-color-primary);
-}
-
-.matter-billing-invoice-bar--paid {
-  fill-opacity: 0.55;
-}
-
-.matter-billing-swatch--invoiced {
-  background: var(--nav-color-primary);
-}
-
-.matter-billing-swatch--paid {
-  background: var(--nav-color-primary);
-  opacity: 0.55;
-}
-
 .project-kpi-empty {
   margin: 0;
 }
@@ -4813,23 +4772,39 @@ a.lawyer-detail__fact-value:focus-visible {
   font: 500 0.42em/1 var(--nav-font-mono, monospace);
 }
 
-.lawyer-detail__actions {
-  align-items: center;
+.project-toolbar {
+  flex-wrap: nowrap;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 0.25rem;
 }
 
-.lawyer-detail__resource-action {
-  width: 2.8rem;
-  height: 2.8rem;
-  min-width: 2.8rem;
-  padding: 0.65rem;
+.project-toolbar .nav-btn {
+  flex: none;
+  box-sizing: border-box;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  min-width: 2.8rem;
+  height: 2.8rem;
+  padding: 0.65rem;
+  white-space: nowrap;
 }
 
-.lawyer-detail__resource-action .project-resources__mark {
+.project-toolbar .project-resources__mark {
   width: 1.3rem;
   height: 1.3rem;
+}
+
+.nav-theme .project-toolbar a[aria-current="page"] {
+  background: var(--nav-color-primary);
+  color: var(--nav-color-on-primary);
+  border-color: var(--nav-color-primary);
+}
+
+.project-toolbar .nav-btn:is(:hover, :focus-visible) {
+  border-color: var(--nav-color-primary);
 }
 
 .lawyer-detail__resource-action-form {

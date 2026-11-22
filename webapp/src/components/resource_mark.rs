@@ -18,16 +18,7 @@
 //! unchanged for marketing: a logo still does not go on a public page to
 //! decorate it.
 //!
-//! Each mark is drawn from its owner's published geometry, in its own brand
-//! colors, so it is recognisable rather than approximated. The two multi-colour
-//! marks (Slack, Drive) carry explicit fills and read correctly on either
-//! theme; Notion's is monochrome and takes `currentColor`, so it inverts with
-//! the page instead of vanishing into a dark background.
-//!
-//! The calendar rows open on a plain calendar glyph rather than Google
-//! Calendar's logo: the label already says what the row is, and a hand-drawn
-//! copy of the logo would be the approximation this module refuses. It is
-//! monochrome for the same reason Notion's is.
+//! Slack and Notion inherit the foreground color. Drive retains its brand colors.
 
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -35,7 +26,7 @@ use serde::{Deserialize, Serialize};
 /// Which mark opens a resource row.
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default, Debug)]
 pub enum ResourceMark {
-    /// Slack's four-colour pinwheel.
+    /// Slack's monochrome pinwheel.
     #[default]
     Slack,
     /// Notion's monochrome page glyph.
@@ -59,7 +50,30 @@ macro_rules! simple_icon {
     };
 }
 
-simple_icon!(GearGlyph, "gear", "0 0 24 24", "M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Zm0-6v2m0 15v2m9.5-9.5h-2m-15 0h-2m16.22-6.72-1.42 1.42M6.7 17.3l-1.42 1.42m13.44 0-1.42-1.42M6.7 6.7 5.28 5.28");
+simple_icon!(
+    OverviewGlyph,
+    "overview",
+    "0 0 24 24",
+    "M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z"
+);
+simple_icon!(
+    OnboardingGlyph,
+    "onboarding",
+    "0 0 24 24",
+    "M14 4H5v16h14V9l-5-5z M14 4v5h5 M8 14l2 2 5-5"
+);
+simple_icon!(
+    DeadlinesGlyph,
+    "deadlines",
+    "0 0 24 24",
+    "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z M12 7v5l3 2"
+);
+simple_icon!(
+    BillingGlyph,
+    "billing",
+    "0 0 24 24",
+    "M5 3l2 1 2-1 3 1 3-1 2 1 2-1v18l-2-1-2 1-3-1-3 1-2-1-2 1z M8 8h8 M8 12h8 M8 16h4"
+);
 simple_icon!(
     PencilGlyph,
     "pencil",
@@ -90,7 +104,7 @@ pub fn GitRepositoryGlyph(#[props(default)] class: String) -> Element {
             fill: "currentColor",
             "aria-hidden": "true",
             "focusable": "false",
-            path { d: "M12 .9a11.1 11.1 0 0 0-3.51 21.63c.55.1.76-.24.76-.53v-2.06c-3.1.67-3.76-1.31-3.76-1.31-.5-1.28-1.23-1.62-1.23-1.62-1.01-.69.08-.68.08-.68 1.12.08 1.71 1.15 1.71 1.15 1 .1.76 2.02 3.4 1.42.1-.72.39-1.21.7-1.49-2.48-.28-5.09-1.24-5.09-5.52 0-1.22.44-2.22 1.15-3-.12-.28-.5-1.42.11-2.96 0 0 .94-.3 3.05 1.15a10.6 10.6 0 0 1 5.55 0c2.11-1.45 3.05-1.15 3.05-1.15.61 1.54.23 2.68.11 2.96.72.78 1.15 1.78 1.15 3 0 4.29-2.62 5.23-5.11 5.51.4.35.75 1.02.75 2.06V22c0 .29.2.63.77.52A11.1 11.1 0 0 0 12 .9Z" }
+            path { d: "M23.546 10.93 13.067.452a1.55 1.55 0 0 0-2.19 0L8.7 2.63l2.76 2.76a1.84 1.84 0 0 1 2.33 2.34l2.66 2.66a1.84 1.84 0 1 1-1.1 1.04l-2.48-2.48v6.53a1.84 1.84 0 1 1-1.51-.05V8.85a1.84 1.84 0 0 1-.99-2.42L7.65 3.7.45 10.9a1.55 1.55 0 0 0 0 2.19l10.48 10.46a1.55 1.55 0 0 0 2.19 0l10.43-10.43a1.55 1.55 0 0 0 0-2.19z" }
         }
     }
 }
@@ -144,22 +158,19 @@ pub fn ResourceMarkGlyph(mark: ResourceMark, #[props(default)] class: String) ->
                 class: "{class}",
                 "data-resource-mark": mark.name(),
                 "viewBox": "0 0 122.8 122.8",
+                fill: "currentColor",
                 "aria-hidden": "true",
                 "focusable": "false",
                 path {
-                    fill: "#E01E5A",
                     d: "M25.8 77.6c0 7.1-5.8 12.9-12.9 12.9S0 84.7 0 77.6s5.8-12.9 12.9-12.9h12.9v12.9zm6.5 0c0-7.1 5.8-12.9 12.9-12.9s12.9 5.8 12.9 12.9v32.3c0 7.1-5.8 12.9-12.9 12.9s-12.9-5.8-12.9-12.9V77.6z",
                 }
                 path {
-                    fill: "#36C5F0",
                     d: "M45.2 25.8c-7.1 0-12.9-5.8-12.9-12.9S38.1 0 45.2 0s12.9 5.8 12.9 12.9v12.9H45.2zm0 6.5c7.1 0 12.9 5.8 12.9 12.9s-5.8 12.9-12.9 12.9H12.9C5.8 58.1 0 52.3 0 45.2s5.8-12.9 12.9-12.9h32.3z",
                 }
                 path {
-                    fill: "#2EB67D",
                     d: "M97 45.2c0-7.1 5.8-12.9 12.9-12.9s12.9 5.8 12.9 12.9-5.8 12.9-12.9 12.9H97V45.2zm-6.5 0c0 7.1-5.8 12.9-12.9 12.9s-12.9-5.8-12.9-12.9V12.9C64.7 5.8 70.5 0 77.6 0s12.9 5.8 12.9 12.9v32.3z",
                 }
                 path {
-                    fill: "#ECB22E",
                     d: "M77.6 97c7.1 0 12.9 5.8 12.9 12.9s-5.8 12.9-12.9 12.9-12.9-5.8-12.9-12.9V97h12.9zm0-6.5c-7.1 0-12.9-5.8-12.9-12.9s5.8-12.9 12.9-12.9h32.3c7.1 0 12.9 5.8 12.9 12.9s-5.8 12.9-12.9 12.9H77.6z",
                 }
             }
@@ -254,14 +265,8 @@ mod tests {
         }
     }
 
-    /// The two multi-colour vendor marks carry explicit brand fills, because a
-    /// `currentColor` pinwheel would render as one flat blob.
     #[test]
-    fn the_vendor_marks_carry_their_own_colours() {
-        let slack = render(ResourceMark::Slack);
-        for brand_colour in ["#E01E5A", "#36C5F0", "#2EB67D", "#ECB22E"] {
-            assert!(slack.contains(brand_colour), "Slack missing {brand_colour}");
-        }
+    fn drive_uses_its_brand_colours() {
         let drive = render(ResourceMark::GoogleDrive);
         for brand_colour in ["#0066da", "#00ac47", "#ea4335", "#ffba00"] {
             assert!(drive.contains(brand_colour), "Drive missing {brand_colour}");
@@ -272,7 +277,11 @@ mod tests {
     /// disappears against a dark background.
     #[test]
     fn the_monochrome_marks_follow_the_text_colour() {
-        for mark in [ResourceMark::Notion, ResourceMark::Calendar] {
+        for mark in [
+            ResourceMark::Slack,
+            ResourceMark::Notion,
+            ResourceMark::Calendar,
+        ] {
             let html = render(mark);
             assert!(
                 html.contains("currentColor"),
