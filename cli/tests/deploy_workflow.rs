@@ -760,15 +760,21 @@ fn no_job_can_write_repository_contents() {
 fn browser_accessibility_uses_the_shipped_images() {
     let workflow = deploy_workflow();
 
-    for required in [
-        "          - image: neon-server\n            dockerfile: images/Containerfile.neon",
-        "for img in navigator-web neon-server navigator-workflows-service; do",
-    ] {
-        assert!(
-            workflow.contains(required),
-            "deploy.yml must keep browser accessibility proof `{required}`"
-        );
-    }
+    assert!(workflow.contains(
+        "          - image: neon-server\n            dockerfile: images/Containerfile.neon"
+    ));
+    let helper = repo_file(".github/scripts/native-browser-integration.sh");
+    assert!(helper.contains("for image in navigator-web neon-server; do"));
+    let image_boot = helper
+        .find("docker run -d --name \"$image_container\"")
+        .unwrap();
+    let browser_run = helper.find("hudson dev browser-e2e --base-url").unwrap();
+    assert!(
+        image_boot < browser_run,
+        "all browser suites must exercise the exact image"
+    );
+    assert!(helper.contains("version['commit_full'] == os.environ['GITHUB_SHA']"));
+    assert!(helper.contains("version['release'] == os.environ['EXPECTED_IMAGE_RELEASE']"));
 
     // The retired second-host apparatus must not come back: it cloned the web
     // Deployment onto port 3002 to run a second brand image, and there is no
@@ -945,30 +951,20 @@ fn no_readyz_probe_is_one_shot_curled() {
     );
 }
 
-/// NO CLUSTER MANIFEST IS FETCHED AT RUN TIME. Every `kubectl apply` in the
-/// KIND job reads a file this repository vendors.
-///
-/// `raw.githubusercontent.com` rate-limits by runner IP, and `kubectl` turns
-/// its 429 into a hard error rather than a retry: run 32040810491 lost a
-/// release four minutes into the integration job, after an hour of image
-/// builds, because the ingress manifest happened to be unreachable in that
-/// minute. Vendoring is also what makes the version pin real — a URL pinned
-/// to a tag still trusts whatever bytes that tag serves today, while
-/// `cli::devx::ingress_manifest_tests` holds the vendored copy to a recorded
-/// digest.
-///
-/// The assertion is on the shape, not on the two known URLs, because the next
-/// manifest added here would reintroduce the outage silently: the run would go
-/// green on every attempt where the third party happened to answer.
+/// Direct release and native-runner applies use vendored manifests. The CLI
+/// owns stack provisioning and checks its vendored ingress digest.
 #[test]
 fn every_kubectl_apply_reads_a_vendored_manifest() {
     let workflow = deploy_workflow();
+    let runner = include_str!("../../.github/scripts/native-browser-integration.sh");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let orchestration = std::fs::read_to_string(root.join("deploy/src/devx/mod.rs")).unwrap();
 
-    // Backslash continuations are folded first: the Restate CRD apply carries
+    // Backslash continuations are folded first: a manifest apply can carry
     // its `-f` argument on the following line, so a plain line scan sees a
     // `kubectl apply` with no URL and a URL with no `kubectl apply`, and passes
     // while the fetch is still there.
-    let folded = workflow.replace("\\\n", " ");
+    let folded = format!("{workflow}\n{runner}").replace("\\\n", " ");
     let remote: Vec<String> = folded
         .lines()
         .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
@@ -982,22 +978,17 @@ fn every_kubectl_apply_reads_a_vendored_manifest() {
          Found: {remote:#?}"
     );
 
-    // Both vendored roots must be named here, and every artifact must be
-    // present in the tree — otherwise the apply trades a 429 for a missing
-    // file and nothing is gained. The Restate CRDs are applied through a shell
-    // loop, so the directory is what appears literally.
+    // The CLI owns these paths; the native runner delegates provisioning to it.
     for named in [
         "k8s/vendor/ingress-nginx-controller-v1.11.2.yaml",
-        "k8s/vendor/restate-operator-v2.8.1/",
+        "k8s/vendor/restate-operator-v2.8.1",
     ] {
         assert!(
-            workflow.contains(named),
-            "deploy.yml must apply the vendored `{named}`, keeping the KIND job on the same \
-             manifests `dev up` applies locally"
+            orchestration.contains(named),
+            "the CLI must resolve its vendored manifest {named} locally"
         );
     }
 
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     for vendored in [
         "k8s/vendor/ingress-nginx-controller-v1.11.2.yaml",
         "k8s/vendor/restate-operator-v2.8.1/restateclusters.yaml",
@@ -1006,7 +997,7 @@ fn every_kubectl_apply_reads_a_vendored_manifest() {
     ] {
         assert!(
             root.join(vendored).exists(),
-            "`{vendored}` is named by deploy.yml but is missing from the tree"
+            "the CLI's vendored manifest `{vendored}` is missing from the tree"
         );
     }
 }
@@ -1788,20 +1779,50 @@ fn the_release_browser_gate_reports_every_failure_in_one_run() {
         serde_yaml::from_str(&deploy_workflow()).expect("deploy.yml parses as YAML");
     let run = workflow["jobs"]["integration"]["steps"]
         .as_sequence()
-        .expect("integration declares steps")
+        .unwrap()
         .iter()
-        .find(|step| {
-            step["name"].as_str() == Some("browser + accessibility e2e (nextest, retry-classified)")
-        })
-        .expect("integration runs the browser + accessibility e2e step")["run"]
-        .as_str()
-        .expect("the browser step has a run script")
-        .to_string();
-    assert!(
-        run.contains("cargo nextest run -p server --profile ci --no-fail-fast"),
-        "the browser gate runs only on release commits, so it must not stop at the first \
-         failure and hide the rest until the next release"
+        .filter_map(|step| step["run"].as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(run.contains("bash .github/scripts/native-browser-integration.sh"));
+    let helper = repo_file(".github/scripts/native-browser-integration.sh");
+    assert_eq!(
+        helper.matches("hudson dev browser-e2e --base-url").count(),
+        1
     );
+    assert!(helper.contains("skipping browser test:"));
+    let cli = repo_file("deploy/src/devx/browser_e2e.rs");
+    let runner = cli
+        .split("pub fn run_browser_e2e(")
+        .nth(1)
+        .unwrap()
+        .split("fn browser_test_command(")
+        .next()
+        .unwrap();
+    assert!(runner.contains("let mut cmd = browser_test_command();"));
+    assert_eq!(
+        runner.matches("run(&mut cmd)").count(),
+        1,
+        "one invocation owns the report and cannot stop between browser binaries"
+    );
+    let command = cli
+        .split("fn browser_test_command(")
+        .nth(1)
+        .unwrap()
+        .split("/// Resolve the web base URL")
+        .next()
+        .unwrap();
+    assert!(command.contains("\"--no-fail-fast\""));
+    for suite in [
+        "browser_e2e",
+        "accessibility_e2e",
+        "notation_preview_layout",
+    ] {
+        assert!(
+            cli.contains(&format!("\"{suite}\"")),
+            "missing browser target {suite}"
+        );
+    }
 }
 
 /// ONLY THE COMMIT THAT BUMPED THE VERSION PUBLISHES IT.
@@ -2034,4 +2055,15 @@ fn retained_operator_alias_refuses_changed_public_bytes_before_signing_them() {
         assert_eq!(signed.len(), 1);
         assert!(signed[0].starts_with("registry.example/"));
     }
+}
+
+#[test]
+fn startup_failure_exports_private_safe_logs_even_when_secondary_cleanup_fails() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let status = std::process::Command::new("python3")
+        .arg(root.join(".github/scripts/test-native-browser-cleanup.py"))
+        .arg(root.join(".github/scripts/native-browser-integration.sh"))
+        .status()
+        .expect("run the owned shell-child cleanup regression");
+    assert!(status.success());
 }

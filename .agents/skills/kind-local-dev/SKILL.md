@@ -120,10 +120,10 @@ Captured legacy bootstrap holds web and worker writers, verifies an actual stric
 required PostgreSQL scopes before seeding. Existing valid enrollment is reused; nonempty or partial history requires
 explicit recovery. It never resets retained history or replaces receipts.
 
-The existing `.github/workflows/deploy.yml` browser gate remains a compatibility lane: it installs the Restate operator
-and CRDs, invokes `postgres-bootstrap`, and forwards Source for retained fixtures. Some browser helpers still start an
-embedded engine. A fresh native local tier or the dedicated quickstart job does not establish that this deploy gate is
-engine-absent.
+The `.github/workflows/deploy.yml` browser gate provisions its native tier through the ordinary quickstart CLI, then
+requires exact-image nonroot, native admission, persisted DBOS workflow replay across host/image restart, and all three
+hydrated browser suites. Independent practice previews use owned PostgreSQL fixtures. Explicit compatibility suites
+retain their own Source/Restate fixtures; a focused local pass does not certify the full gate.
 
 ```bash
 cargo run -p hudson -- dev postgres-bootstrap --path "$PWD"

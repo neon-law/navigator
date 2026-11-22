@@ -3,11 +3,8 @@
 # The `neon-server` image: neonlaw.com, the firm's whole site (#864, #974).
 #
 # The binary is the site: no runtime flag selects the face, so an image
-# cannot be pointed at the wrong legal entity by configuration. These three
-# Containerfiles are otherwise byte-identical, which
-# `cli/tests/containerfile_docs_copy.rs` asserts by normalizing the brand
-# name away — the two near-identical host recipes that preceded them rotted
-# precisely because nothing held them together.
+# cannot be pointed at the wrong legal entity by configuration. The same
+# recipe carries its matching PostgreSQL migrator and Dioxus client assets.
 
 # ---------- Stage 1: builder ----------
 #
@@ -182,8 +179,10 @@ COPY .agents           .agents
 # compile once: a separate `-p store` build recompiled them for 17 minutes and
 # pushed the image past the build job's 90-minute cap (deploy run 44350693129).
 RUN cargo build --release --target "$(cat /tmp/rust-target)" -p neon --bin neon -p store --bin navigator-migrate \
+      -p repos --example runtime_smoke \
     && cp "target/$(cat /tmp/rust-target)/release/neon" /usr/local/bin/neon \
-    && cp "target/$(cat /tmp/rust-target)/release/navigator-migrate" /usr/local/bin/navigator-migrate
+    && cp "target/$(cat /tmp/rust-target)/release/navigator-migrate" /usr/local/bin/navigator-migrate \
+    && cp "target/$(cat /tmp/rust-target)/release/examples/runtime_smoke" /usr/local/bin/repo-runtime-smoke
 
 # Build the Dioxus wasm client bundle and stage it where the runtime image
 # serves it (`/app/public/dioxus`). The `neon` binary reads `DIOXUS_PUBLIC_PATH`,
@@ -220,12 +219,24 @@ RUN NO_DOWNLOADS=1 dx build --package webapp --platform web --release --debug-sy
 
 # ---------- Stage 2: runtime ----------
 #
-# distroless/static gives us a minimal scratch-equivalent base
-# pre-populated with ca-certificates and a non-root user. The image
-# carries only the statically linked binary plus the static asset
-# directories the server reads from disk at boot.
+# Git-backed Draft reads and governed expunge use the packaged Git executable,
+# exec-path scripts and POSIX shell utilities. Keep Debian's package dependency
+# closure intact rather than copying an ELF binary without its helpers.
+FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc AS runtime-base
 
-FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+         git=1:2.39.5-0+deb12u3 \
+         ca-certificates=20250419~deb12u2 \
+         libstdc++6=12.2.0-14+deb12u1 \
+         libgcc-s1=12.2.0-14+deb12u1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 65532 nonroot \
+    && useradd --uid 65532 --gid 65532 --no-create-home --no-log-init \
+         --home-dir /nonexistent --shell /usr/sbin/nologin nonroot \
+    && mkdir -p /usr/share/navigator \
+    && dpkg-query --show --showformat='${binary:Package}\t${Version}\n' \
+         > /usr/share/navigator/runtime-packages.txt
 
 WORKDIR /app
 
@@ -242,9 +253,8 @@ COPY --from=builder /src/templates    /app/templates
 # `--build-arg RELEASE_TAG=$YY.M.D` (the Artifact Registry tag it publishes
 # under) plus
 # `GIT_SHA`/`BUILD_TIME` for the released commit, so the running binary can
-# answer `GET /version` with the exact release + commit it was built from —
-# distroless has no shell, so a runtime endpoint is the only way to read
-# this. Baking it here ties the reported release to the image bytes: it
+# answer `GET /version` with the exact release + commit it was built from.
+# Baking it here ties the reported release to the image bytes: it
 # cannot drift from what was deployed. A local `cargo run` (no build-arg)
 # honestly reports `unknown`.
 ARG RELEASE_TAG=unknown
@@ -275,6 +285,19 @@ COPY LICENSE-MIT /app/LICENSE-MIT
 COPY LICENSE-APACHE-2 /app/LICENSE-APACHE-2
 COPY NOTICE  /app/NOTICE
 
+# ---------- Build-only runtime acceptance ----------
+# The final stage consumes this marker, so BuildKit cannot omit these checks.
+# The probe uses this exact runtime filesystem; it is never shipped.
+FROM runtime-base AS repo-runtime-check
+COPY --from=builder /usr/local/bin/repo-runtime-smoke /usr/local/bin/repo-runtime-smoke
+RUN mkdir -p /git-untrusted \
+    && git init --bare --initial-branch=main /git-untrusted/repo.git \
+    && chgrp -R 65532 /git-untrusted
 USER nonroot:nonroot
+RUN /usr/local/bin/repo-runtime-smoke /git-untrusted/repo.git
 
+# No executable, library or configuration changes follow the tested base.
+FROM runtime-base AS runtime
+COPY --from=repo-runtime-check /tmp/navigator-git-runtime-proof /app/git-runtime-proof
+USER nonroot:nonroot
 ENTRYPOINT ["/app/neon"]

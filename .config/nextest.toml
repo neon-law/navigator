@@ -68,6 +68,8 @@ binary(/^(mail_signatures|project_drive_folder_id|project_repository_url|project
 | (binary(=workflows) & test(/^email::audit::tests::logging_email_/))
 | (binary(=store) & test(/^sent_emails::native_tests::/))
 | (binary(=workflows_service) & test(/^project_slack::tests::/))
+| (binary(=webapp) & test(=server_store::tests::request_pool_crosses_spawn_and_damaged_history_refuses_the_callback))
+| (binary(=hudson) & test(=postgres_admission::tests::selected_application_database_must_match_the_verified_target))
 | binary(=sandbox_usage_ledger)
 | binary(=document_folder)
 | binary(=postgres_native_fixture)
