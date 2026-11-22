@@ -720,7 +720,6 @@ mod control_contract {
         ("person_show.rs", 2),
         ("playbooks.rs", 3),
         ("project_document_detail.rs", 1),
-        ("project_edit.rs", 1),
         ("project_new.rs", 1),
         ("project_participation.rs", 1),
         ("retainer_start.rs", 2),
