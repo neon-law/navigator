@@ -152,23 +152,60 @@ pub(super) fn host_ingress(
     let networks = container["NetworkSettings"]["Networks"]
         .as_object()
         .context("fixture Docker node omitted its networks")?;
-    ensure!(
-        networks.values().any(|network| network["IPAddress"]
-            .as_str()
-            .and_then(|value| value.parse::<std::net::Ipv4Addr>().ok())
-            == Some(ip)),
-        "fixture node address does not match its owned Docker target"
-    );
+    let gateway = owning_network_gateway(networks, ip)?;
     Ok(serde_json::json!({
         "apiVersion":"networking.k8s.io/v1", "kind":"NetworkPolicy",
         "metadata":{"name":"navigator-postgres-fixture-host","namespace":cfg.namespace},
         "spec":{
             "podSelector":{"matchLabels":{"app":"navigator-postgres"}},
             "policyTypes":["Ingress"],
-            "ingress":[{"from":[{"ipBlock":{"cidr":format!("{ip}/32")}}],
+            "ingress":[{"from":[{"ipBlock":{"cidr":format!("{ip}/32")}},
+                {"ipBlock":{"cidr":format!("{gateway}/32")}}],
                 "ports":[{"protocol":"TCP","port":5432}]}]
         }
     }))
+}
+
+// Docker's host proxy can enter through the owning bridge gateway. Admit only
+// that exact private IPv4 endpoint, never the subnet or another attached network.
+fn owning_network_gateway(
+    networks: &serde_json::Map<String, serde_json::Value>,
+    node: std::net::Ipv4Addr,
+) -> Result<std::net::Ipv4Addr> {
+    let mut matching = networks.values().filter(|network| {
+        network["IPAddress"]
+            .as_str()
+            .and_then(|value| value.parse::<std::net::Ipv4Addr>().ok())
+            == Some(node)
+    });
+    let network = matching
+        .next()
+        .context("fixture node address does not match its owned Docker target")?;
+    ensure!(
+        matching.next().is_none(),
+        "fixture node network is ambiguous"
+    );
+    let gateway: std::net::Ipv4Addr = network["Gateway"]
+        .as_str()
+        .context("fixture owning network omitted its gateway")?
+        .parse()
+        .context("fixture owning network gateway is invalid")?;
+    let prefix = network["IPPrefixLen"]
+        .as_u64()
+        .filter(|prefix| (1..=30).contains(prefix))
+        .context("fixture owning network prefix is invalid")?;
+    let mask = u32::MAX << (32 - prefix);
+    let subnet = u32::from(node) & mask;
+    let broadcast = subnet | !mask;
+    ensure!(
+        gateway.is_private()
+            && gateway != node
+            && u32::from(gateway) & mask == subnet
+            && u32::from(gateway) != subnet
+            && u32::from(gateway) != broadcast,
+        "fixture gateway is not a distinct private host on the owning network"
+    );
+    Ok(gateway)
 }
 
 pub(super) fn ca_path(root: &Path) -> PathBuf {
@@ -439,7 +476,7 @@ mod tests {
             "Config":{"Labels":{"io.x-k8s.kind.cluster":"fixture-owner","io.x-k8s.kind.role":"control-plane"}},
             "NetworkSettings":{
                 "Ports":{"31532/tcp":[{"HostIp":"127.0.0.1","HostPort":"21503"}]},
-                "Networks":{"kind":{"IPAddress":"192.168.49.2"}}
+                "Networks":{"kind":{"IPAddress":"192.168.49.2","Gateway":"192.168.49.1","IPPrefixLen":24}}
             }
         });
         let policy = host_ingress(&cfg, &node, &container).unwrap();
@@ -451,10 +488,36 @@ mod tests {
         assert_eq!(
             policy["spec"]["ingress"],
             serde_json::json!([{
-                "from":[{"ipBlock":{"cidr":"192.168.49.2/32"}}],
+                "from":[{"ipBlock":{"cidr":"192.168.49.2/32"}},
+                    {"ipBlock":{"cidr":"192.168.49.1/32"}}],
                 "ports":[{"protocol":"TCP","port":5432}]
             }])
         );
+        let valid = container.clone();
+        for gateway in [
+            "",
+            "not-an-ip",
+            "127.0.0.1",
+            "192.168.50.1",
+            "192.168.49.2",
+            "192.168.49.0",
+            "192.168.49.255",
+        ] {
+            container["NetworkSettings"]["Networks"]["kind"]["Gateway"] = gateway.into();
+            assert!(host_ingress(&cfg, &node, &container).is_err());
+        }
+        container = valid.clone();
+        // An unrelated attached network cannot supply the missing owning gateway.
+        container["NetworkSettings"]["Networks"]["kind"]["Gateway"] = serde_json::Value::Null;
+        container["NetworkSettings"]["Networks"]["other"] = serde_json::json!({
+            "IPAddress":"192.168.50.2", "Gateway":"192.168.50.1", "IPPrefixLen":24
+        });
+        assert!(host_ingress(&cfg, &node, &container).is_err());
+        container = valid.clone();
+        container["NetworkSettings"]["Networks"]["duplicate"] =
+            container["NetworkSettings"]["Networks"]["kind"].clone();
+        assert!(host_ingress(&cfg, &node, &container).is_err());
+        container = valid;
         for invalid in [
             "not-an-ip",
             "192.168.49.3",
