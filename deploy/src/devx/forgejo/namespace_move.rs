@@ -194,7 +194,54 @@ async fn validate_database(
     Ok(())
 }
 
-async fn coordinate(pg: &PostgresDb, forge: &Forge, args: &FirmNamespaceMove) -> Result<()> {
+async fn verify_provider(
+    forge: &Forge,
+    args: &FirmNamespaceMove,
+    has_receipt: bool,
+) -> Result<bool> {
+    let target = forge.organization(&args.to).await?;
+    let at_target = target == Some(args.organization_id);
+    ensure!(
+        target.is_none() || (at_target && has_receipt),
+        "destination organization already exists"
+    );
+    if at_target {
+        forge.verify_old_path(args).await?;
+    } else {
+        ensure!(
+            forge.organization(&args.from).await? == Some(args.organization_id),
+            "source organization ID differs"
+        );
+        ensure!(
+            forge.get(&format!("users/{}", args.to)).await?.is_none(),
+            "destination account exists"
+        );
+    }
+    let actual = if at_target { &args.to } else { &args.from };
+    let user = forge
+        .get("user")
+        .await?
+        .context("operator identity unavailable")?;
+    let login = user["login"].as_str().context("operator login missing")?;
+    let permission = forge
+        .get(&format!("users/{login}/orgs/{actual}/permissions"))
+        .await?
+        .context("owner access unavailable")?;
+    ensure!(permission["is_owner"] == true, "Forgejo owner required");
+    Ok(at_target)
+}
+
+struct PendingMove {
+    id: Uuid,
+    bindings: Bindings,
+    at_target: bool,
+}
+
+async fn prepare(
+    pg: &PostgresDb,
+    forge: &Forge,
+    args: &FirmNamespaceMove,
+) -> Result<Option<PendingMove>> {
     let old = format!("{}/{}/", forge.origin, args.from);
     let new = format!("{}/{}/", forge.origin, args.to);
     let mut tx = pg.pool().begin().await?;
@@ -233,35 +280,8 @@ async fn coordinate(pg: &PostgresDb, forge: &Forge, args: &FirmNamespaceMove) ->
             .bind(args.firm).bind(args.organization_id).bind(&args.from).fetch_one(&mut *tx).await?;
         ensure!(recorded, "Firm has no binding to this Forgejo organization");
     }
-    let target = forge.organization(&args.to).await?;
-    let at_target = target == Some(args.organization_id);
-    ensure!(
-        target.is_none() || (at_target && receipt.is_some()),
-        "destination organization already exists"
-    );
-    if at_target {
-        forge.verify_old_path(args).await?;
-    } else {
-        ensure!(
-            forge.organization(&args.from).await? == Some(args.organization_id),
-            "source organization ID differs"
-        );
-        ensure!(
-            forge.get(&format!("users/{}", args.to)).await?.is_none(),
-            "destination account exists"
-        );
-    }
+    let at_target = verify_provider(forge, args, receipt.is_some()).await?;
     let actual = if at_target { &args.to } else { &args.from };
-    let user = forge
-        .get("user")
-        .await?
-        .context("operator identity unavailable")?;
-    let login = user["login"].as_str().context("operator login missing")?;
-    let permission = forge
-        .get(&format!("users/{login}/orgs/{actual}/permissions"))
-        .await?
-        .context("owner access unavailable")?;
-    ensure!(permission["is_owner"] == true, "Forgejo owner required");
     if complete {
         ensure!(
             at_target && old_paths.is_empty(),
@@ -298,9 +318,25 @@ async fn coordinate(pg: &PostgresDb, forge: &Forge, args: &FirmNamespaceMove) ->
     );
     tx.commit().await?;
     if complete || !args.apply {
-        return Ok(());
+        return Ok(None);
     }
 
+    Ok(Some(PendingMove {
+        id,
+        bindings,
+        at_target,
+    }))
+}
+
+async fn coordinate(pg: &PostgresDb, forge: &Forge, args: &FirmNamespaceMove) -> Result<()> {
+    let Some(PendingMove {
+        id,
+        at_target,
+        bindings,
+    }) = prepare(pg, forge, args).await?
+    else {
+        return Ok(());
+    };
     let mut tx = pg.pool().begin().await?;
     sqlx::query("SET LOCAL lock_timeout='5s'")
         .execute(&mut *tx)
@@ -342,35 +378,50 @@ async fn coordinate(pg: &PostgresDb, forge: &Forge, args: &FirmNamespaceMove) ->
         "repository identity changed after rename"
     );
 
+    finish(&mut tx, forge, args, id, &bindings).await?;
+    tx.commit().await?;
+    println!("Committed namespace move {id}");
+    Ok(())
+}
+
+async fn finish(
+    db: &mut PgConnection,
+    forge: &Forge,
+    args: &FirmNamespaceMove,
+    id: Uuid,
+    bindings: &Bindings,
+) -> Result<()> {
+    let old = format!("{}/{}/", forge.origin, args.from);
+    let new = format!("{}/{}/", forge.origin, args.to);
     sqlx::query("LOCK TABLE firm, firm_forgejo_organization, project IN SHARE ROW EXCLUSIVE MODE")
-        .execute(&mut *tx)
+        .execute(&mut *db)
         .await?;
     let source_current: bool =
         sqlx::query_scalar("SELECT EXISTS(SELECT FROM firm WHERE id=$1 AND slug=$2)")
             .bind(args.firm)
             .bind(&args.from)
-            .fetch_one(&mut *tx)
+            .fetch_one(&mut *db)
             .await?;
     ensure!(source_current, "Firm changed before commit");
-    validate_database(&mut tx, args, &args.from).await?;
-    let original = paths(&mut tx, args.firm, &old).await?;
+    validate_database(db, args, &args.from).await?;
+    let original = paths(db, args.firm, &old).await?;
     ensure!(
         original.len() == bindings.len()
             && original
                 .iter()
                 .all(|(k, v)| bindings.get(k).is_some_and(|b| &b.suffix == v))
-            && paths(&mut tx, args.firm, &new).await?.is_empty(),
+            && paths(db, args.firm, &new).await?.is_empty(),
         "Project bindings changed after preflight"
     );
     sqlx::query("SELECT set_config('navigator.firm_namespace_move',$1,true)")
         .bind(id.to_string())
-        .execute(&mut *tx)
+        .execute(&mut *db)
         .await?;
     let firm = sqlx::query("UPDATE firm SET slug=$1,updated_at=now() WHERE id=$2 AND slug=$3")
         .bind(&args.to)
         .bind(args.firm)
         .bind(&args.from)
-        .execute(&mut *tx)
+        .execute(&mut *db)
         .await?;
     ensure!(firm.rows_affected() == 1, "Firm changed before commit");
     sqlx::query(
@@ -381,20 +432,18 @@ async fn coordinate(pg: &PostgresDb, forge: &Forge, args: &FirmNamespaceMove) ->
     .bind(args.firm)
     .bind(&args.from)
     .bind(args.organization_id)
-    .execute(&mut *tx)
+    .execute(&mut *db)
     .await?;
     let changed = sqlx::query("UPDATE project SET repository_url=$1 || substr(repository_url,length($2)+1),updated_at=now() WHERE firm_id=$3 AND starts_with(repository_url,$2)")
-        .bind(&new).bind(&old).bind(args.firm).execute(&mut *tx).await?;
+        .bind(&new).bind(&old).bind(args.firm).execute(&mut *db).await?;
     ensure!(
         changed.rows_affected() == bindings.len() as u64,
         "updated binding count differs"
     );
     sqlx::query("UPDATE firm_namespace_move SET completed_at=now() WHERE id=$1")
         .bind(id)
-        .execute(&mut *tx)
+        .execute(&mut *db)
         .await?;
-    tx.commit().await?;
-    println!("Committed namespace move {id}");
     Ok(())
 }
 

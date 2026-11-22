@@ -2312,7 +2312,7 @@ struct FirmNamespaceMove {
     /// Independently confirmed numeric Forgejo organization ID.
     #[arg(long)]
     organization_id: i64,
-    /// Read the Forgejo token from a pipe instead of FORGEJO_TOKEN.
+    /// Read the Forgejo token from a pipe instead of `FORGEJO_TOKEN`.
     #[arg(long)]
     token_stdin: bool,
     /// Execute or resume the move during the operator's maintenance window.

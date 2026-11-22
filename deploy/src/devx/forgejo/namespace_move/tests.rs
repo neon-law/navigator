@@ -107,29 +107,7 @@ async fn rehearse() {
             .await
             .is_err()
     );
-    let mut unprivileged = pg.pool().begin().await.unwrap();
-    sqlx::query(
-        "SELECT set_config('navigator.firm_namespace_move',id::text,true) FROM firm_namespace_move",
-    )
-    .execute(&mut *unprivileged)
-    .await
-    .unwrap();
-    sqlx::query("SET LOCAL ROLE pg_write_all_data")
-        .execute(&mut *unprivileged)
-        .await
-        .unwrap();
-    let refused = sqlx::query("UPDATE firm SET slug='new-firm'")
-        .execute(&mut *unprivileged)
-        .await
-        .unwrap_err();
-    assert_eq!(
-        refused
-            .as_database_error()
-            .and_then(|e| e.code())
-            .as_deref(),
-        Some("23514")
-    );
-    unprivileged.rollback().await.unwrap();
+    assert_runtime_cannot_complete(&pg).await;
     coordinate(&pg, &forge, &args).await.unwrap();
     coordinate(&pg, &forge, &args).await.unwrap();
     let (url,other,count):(String,String,i64)=sqlx::query_as("SELECT repository_url, (SELECT repository_url FROM project WHERE code='other'), (SELECT count(*) FROM firm_namespace_move WHERE completed_at IS NOT NULL) FROM project WHERE id=$1").bind(project).fetch_one(pg.pool()).await.unwrap();
@@ -149,6 +127,37 @@ async fn rehearse() {
             .await
             .is_err()
     );
+    assert_removable_after_completion(&pg, firm).await;
+    server.abort();
+}
+
+async fn assert_runtime_cannot_complete(pg: &PostgresDb) {
+    let mut unprivileged = pg.pool().begin().await.unwrap();
+    sqlx::query(
+        "SELECT set_config('navigator.firm_namespace_move',id::text,true) FROM firm_namespace_move",
+    )
+    .execute(&mut *unprivileged)
+    .await
+    .unwrap();
+    sqlx::query("SET LOCAL ROLE pg_write_all_data")
+        .execute(&mut *unprivileged)
+        .await
+        .unwrap();
+    let refused = sqlx::query("UPDATE firm SET slug='new-firm'")
+        .execute(&mut *unprivileged)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refused
+            .as_database_error()
+            .and_then(sqlx::error::DatabaseError::code)
+            .as_deref(),
+        Some("23514")
+    );
+    unprivileged.rollback().await.unwrap();
+}
+
+async fn assert_removable_after_completion(pg: &PostgresDb, firm: Uuid) {
     sqlx::query("DELETE FROM project WHERE firm_id=$1")
         .bind(firm)
         .execute(pg.pool())
@@ -167,5 +176,4 @@ async fn rehearse() {
             .unwrap(),
         0
     );
-    server.abort();
 }
