@@ -6,17 +6,9 @@ description: >-
 ---
 
 The daily routine cleanup of every [Project](project.md) in a [Deployment Environment](deployment-environment.md).
-Kubernetes owns the clock. [Restate](restate.md) owns the journal. One parent [Workflow](workflow.md) fans out to a
-closed set of **tagged child DAGs**. Each tag is itself a DAG — a Nightly Project Update is a DAG of DAGs, not a single
-membership pass with extra steps bolted on.
-
-The parent, `NightlyProjectUpdate`, is a Restate workflow keyed on the UTC date, so a second fire on the same day
-attaches to the first. It journals the clock and the Project roster, then runs one child workflow per (Project, tag),
-keyed `{date}:{project id}`. The `membership`, `slack`, and `repository` children are implemented as
-`NightlyProjectUpdateMembership`, `NightlyProjectUpdateSlack`, and `NightlyProjectUpdateRepository`. The `calendar`
-child is not yet implemented. The CronJob `nightly-project-update-trigger` runs at **11:33 UTC daily** (03:33 fixed
-PST), using `timeZone: Etc/UTC`; it does not follow Pacific daylight saving time. Parent and children:
-[`nightly_project_update.rs`](../../workflows-service/src/nightly_project_update.rs).
+Kubernetes starts `NightlyProjectUpdate` at **03:33 UTC daily**. Its UTC date key deduplicates repeat submissions. The
+DBOS parent journals the roster and runs a child for each applicable Project and tag. The compatibility worker runs the
+membership, Slack, and repository children.
 
 After journaling the roster, both the Restate parent and its opt-in DBOS twin reconcile the folder tree and separate
 [Client Submissions](client-submissions.md) root for every open Project, before Slack configuration admission or
@@ -28,7 +20,7 @@ The diagrams show the full composition. Each open Project gets its own set of ch
 
 ```mermaid
 flowchart TB
-  Clock["Kubernetes CronJob<br/>33 11 * * * UTC"]
+  Clock["Kubernetes CronJob<br/>33 3 * * * UTC"]
   Parent["Nightly Project Update<br/>parent DAG · key = UTC date"]
   Clock --> Parent
   Parent --> Folders["Converge folder trees<br/>every open Project"]
@@ -91,9 +83,10 @@ auto-merge waiting for the gate. A re-run reuses the open pull request, and a cl
 pushed to `main`. The report counts update pull requests opened, awaiting merge, and declined, and the repositories
 whose governance was repaired. Participation is never copied onto the forge.
 
-`calendar` — read stored [Deadlines](deadline.md), keep Project-set `internal` dates, source the applicable court rules
-(private Notion page, then approved research MCPs), and write cited Deadline rows. The summary quotes stored `due_on`
-and citations. Dates are never invented at read time.
+`calendar` — create or adopt the owning Firm's private Project Calendar and mirror its stored [Deadlines](deadline.md).
+Reconcile calendar access and event guests against current Firm-side assignments. Each DBOS child uses the same Project
+write lock as the on-demand mirror and the five-minute membership job. A failed child is counted and the Project's Slack
+notice can still run.
 
 ```mermaid
 flowchart LR
@@ -113,9 +106,8 @@ flowchart LR
   end
   subgraph calendar ["tag: calendar"]
     direction TB
-    C1[Read stored Deadlines] --> C2[Source court rules]
-    C2 --> C3[Write cited Deadline rows]
-    C3 --> C4[Deterministic summary]
+    C1[Verify private Project Calendar] --> C2[Mirror stored Deadlines]
+    C2 --> C3[Reconcile access and event guests]
   end
 ```
 

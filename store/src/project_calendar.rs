@@ -581,6 +581,114 @@ mod tests {
         assert!(!super::receives_event_invitation(Role::Owner));
     }
 
+    #[tokio::test]
+    async fn postgres_assignments_add_and_remove_each_eligible_event_guest() {
+        use crate::firms::{self, FirmMembership, NewPersonFirmRole};
+        use crate::participation::{
+            add_participant, remove_participant, AddParticipantCommand, DriActor, DriRequest,
+        };
+
+        crate::test_support::with_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            let pg = crate::postgres::PostgresDb::configured().await.unwrap().unwrap();
+            let (project_id, firm_id) = sqlx::query_as::<_, (uuid::Uuid, uuid::Uuid)>(
+                "WITH j AS (INSERT INTO jurisdiction (name) VALUES ('Calendar jurisdiction') RETURNING id),
+                      t AS (INSERT INTO entity_type (name) VALUES ('Calendar entity type') RETURNING id),
+                      e AS (INSERT INTO entity (name, entity_type_id, jurisdiction_id)
+                            SELECT 'Calendar entity', t.id, j.id FROM t,j RETURNING id),
+                      f AS (INSERT INTO firm (name, slug, status, entity_id)
+                            SELECT 'Calendar Firm', 'calendar-firm', 'active', id FROM e RETURNING id)
+                 INSERT INTO project (code, name, status, brand, entity_id, firm_id)
+                 SELECT 'calendar-test', 'Calendar test', 'open', 'neon', e.id, f.id FROM e,f RETURNING id, firm_id"
+            ).fetch_one(pg.pool()).await.unwrap();
+            firms::set_calendar_owner(&db, Role::Owner, None, firm_id, FAKE_CALENDAR_OWNER).await.unwrap();
+            let calendar = FakeCalendar::default();
+            ensure(&db, project_id, &calendar).await.unwrap();
+            let calendar_id = calendar.calendars().pop().unwrap().id;
+            for (name, role, membership, dri) in [
+                (
+                    "supervisor",
+                    Role::Lawyer,
+                    FirmMembership::Lawyer,
+                    DriRequest::Designate(projects::DriSide::Lawyer),
+                ),
+                (
+                    "clerk",
+                    Role::Clerk,
+                    FirmMembership::Clerk,
+                    DriRequest::Unchanged,
+                ),
+                (
+                    "lawyer",
+                    Role::Lawyer,
+                    FirmMembership::Lawyer,
+                    DriRequest::Unchanged,
+                ),
+                (
+                    "admin",
+                    Role::Admin,
+                    FirmMembership::Admin,
+                    DriRequest::Unchanged,
+                ),
+                (
+                    "owner",
+                    Role::Owner,
+                    FirmMembership::Admin,
+                    DriRequest::Unchanged,
+                ),
+            ] {
+                let email = format!("participant-{name}@calendar.test");
+                let person = persons::create(&db, &NewPerson::with_role(name, &email, role))
+                    .await
+                    .unwrap();
+                persons::set_email_confirmed(&db, person.id, true)
+                    .await
+                    .unwrap();
+                firms::add_membership(
+                    &db,
+                    &NewPersonFirmRole {
+                        person_id: person.id,
+                        firm_id,
+                        membership,
+                        is_dri: false,
+                    },
+                )
+                .await
+                .unwrap();
+                let row = add_participant(
+                    &db,
+                    &AddParticipantCommand {
+                        project_id,
+                        person_id: person.id,
+                        dri,
+                        actor: DriActor::System,
+                    },
+                )
+                .await
+                .unwrap();
+                super::sync_membership(&db, project_id, &calendar).await.unwrap();
+                let guests = calendar.assigned_guests(&calendar_id);
+                let key = person.id.simple().to_string();
+                if role == Role::Owner {
+                    assert!(!guests.contains_key(&key));
+                } else {
+                    assert_eq!(guests.get(&key), Some(&email));
+                }
+                if row.is_lawyer_dri {
+                    continue;
+                }
+                remove_participant(&db, project_id, row.id, DriActor::System)
+                    .await
+                    .unwrap();
+                super::sync_membership(&db, project_id, &calendar).await.unwrap();
+                let guests = calendar.assigned_guests(&calendar_id);
+                assert!(!guests.contains_key(&key));
+                assert!(guests.values().any(|email| email == "participant-supervisor@calendar.test"));
+            }
+        })
+        .await;
+    }
+
     #[test]
     fn only_confirmed_addresses_inside_the_firm_workspace_are_eligible() {
         let firm = Some("firm.test");

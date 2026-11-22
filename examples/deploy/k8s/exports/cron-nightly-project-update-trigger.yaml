@@ -1,10 +1,6 @@
-# Daily trigger for the `NightlyProjectUpdate` parent DAG, hosted by workflows-service.
-# The parent walks every Project and runs the tagged child DAGs (membership, repository): it syncs authorized
-# participants and recorded internal Lawyer and Clerk identities into each configured internal Project channel
-# (and removes anyone no longer named),
-# creates or adopts each open Project's repository, then posts aggregate counts to #messages or
-# #staging-messages according to the deployment's simulated-matters setting.
-# Schedule is 11:33 UTC daily (03:33 fixed PST, UTC-8); the UTC date is the idempotency key.
+# Daily trigger for NightlyProjectUpdate. DBOS reconciles open Project calendars, guests, channels, and repositories.
+# Each open Project receives its daily notice in its internal Slack channel.
+# Schedule is 03:33 UTC daily; the UTC date is the idempotency key.
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -13,7 +9,7 @@ metadata:
   labels:
     app: nightly-project-update-trigger
 spec:
-  schedule: "33 11 * * *"
+  schedule: "33 3 * * *"
   timeZone: Etc/UTC
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 7

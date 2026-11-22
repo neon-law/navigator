@@ -140,6 +140,9 @@ With calendar membership sync enabled, assigning a Clerk, Lawyer, or Admin to th
 organized by its calendar. Ending the assignment removes the event invitations Navigator added. Calendar reader access
 and event invitations are separate. Check the guest list on the event to see who was invited.
 
+At 03:33 UTC each day, the DBOS Nightly Project Update syncs open Projects’ shared calendars and posts the daily update
+in each Project’s internal Slack channel.
+
 ---
 
 On a synthetic Project with a connected Google Workspace, open a test event organized by the Project Calendar. Assign a

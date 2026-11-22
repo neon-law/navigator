@@ -209,8 +209,9 @@ Do not assume an older run id is safe to reuse just because its report is absent
 remain alongside DBOS history.
 
 `NightlyProjectUpdate` keeps its UTC-date key and starts one stable DBOS child for each `(date, Project, tag)` tuple.
-Membership channel resolution and invitation, Slack canvas and notice, and the parent roster/receipts use distinct
-checkpoints. The trigger binary selects this worker's authenticated handoff only when
+The daily 03:33 UTC trigger includes a calendar child for each open Project. It checks the Firm-owned private calendar,
+mirrors stored Deadlines, and reconciles assigned guests under one PostgreSQL lock. A calendar failure leaves the
+Project Slack notice eligible to run. The trigger binary selects this worker's authenticated handoff only when
 `NAVIGATOR_DBOS_NIGHTLY_PROJECT_UPDATE_ENABLED=true`; an unset or false flag keeps using Restate, while an invalid value
 or missing DBOS URL/token fails closed. Start and completion notices use correlation receipts so a restart after Slack
 accepts a message does not post it twice. The three Restate child services remain registered during the transition.

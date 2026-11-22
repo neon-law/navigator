@@ -29,6 +29,7 @@ use uuid::Uuid;
 use workflows::SlackBot;
 use workflows::SlackBotError;
 
+pub(crate) mod calendar;
 pub mod membership;
 pub mod repository;
 pub mod slack;
@@ -44,6 +45,7 @@ use crate::workflow_step_error::WorkflowStepError;
 /// pull request as its child.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Tag {
+    Calendar,
     Membership,
     Slack,
     Repository,
@@ -51,12 +53,16 @@ pub enum Tag {
 
 impl Tag {
     /// Every tag the parent runs, in the order it runs them for one Project.
-    pub const ALL: &'static [Tag] = &[Tag::Membership, Tag::Slack, Tag::Repository];
+    pub const ALL: &'static [Tag] = &[Tag::Membership, Tag::Calendar, Tag::Slack, Tag::Repository];
+
+    /// Preserve the journal sequence of the compatibility worker.
+    pub const COMPATIBILITY: &'static [Tag] = &[Tag::Membership, Tag::Slack, Tag::Repository];
 
     /// The tag as the glossary names it.
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
+            Tag::Calendar => "calendar",
             Tag::Membership => "membership",
             Tag::Slack => "slack",
             Tag::Repository => "repository",
@@ -67,6 +73,7 @@ impl Tag {
     #[must_use]
     pub const fn service(self) -> &'static str {
         match self {
+            Tag::Calendar => "NightlyProjectUpdateCalendar",
             Tag::Membership => "NightlyProjectUpdateMembership",
             Tag::Slack => "NightlyProjectUpdateSlack",
             Tag::Repository => "NightlyProjectUpdateRepository",
@@ -80,7 +87,7 @@ impl Tag {
     pub const fn applies_to(self, open: bool) -> bool {
         match self {
             Tag::Membership => true,
-            Tag::Slack | Tag::Repository => open,
+            Tag::Calendar | Tag::Slack | Tag::Repository => open,
         }
     }
 }
@@ -136,6 +143,7 @@ pub struct RosterEntry {
 /// A child's result, by tag.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub enum TagOutcome {
+    Calendar { synced: bool },
     Membership(MembershipOutcome),
     Slack(SlackOutcome),
     Repository(RepositoryOutcome),
@@ -201,6 +209,10 @@ pub struct NightlyProjectUpdateReport {
     pub slack_failures: usize,
     /// Projects whose `repository` child failed this run.
     pub repository_failures: usize,
+    #[serde(default)]
+    pub calendar_failures: usize,
+    #[serde(default)]
+    pub calendars_synced: usize,
     /// Projects with at least one failed child (or canvas) this run.
     #[serde(default)]
     pub failed_projects: usize,
@@ -250,7 +262,10 @@ impl NightlyProjectUpdateReport {
     /// Child failures across every tag, canvases included.
     #[must_use]
     pub fn failures(&self) -> usize {
-        self.membership_failures + self.slack_failures + self.repository_failures
+        self.membership_failures
+            + self.slack_failures
+            + self.repository_failures
+            + self.calendar_failures
     }
 
     /// The metric shape: `(stage, error_type, count)` per cause.
@@ -287,6 +302,7 @@ impl NightlyProjectUpdateReport {
 
     fn absorb(&mut self, outcome: TagOutcome) {
         match outcome {
+            TagOutcome::Calendar { synced } => self.calendars_synced += usize::from(synced),
             TagOutcome::Membership(m) => {
                 self.channels += m.channels;
                 self.projects_without_channel += m.projects_without_channel;
@@ -337,6 +353,7 @@ impl NightlyProjectUpdateReport {
     fn fail(&mut self, tag: Tag, message: &str) {
         self.note_cause(tag, failure_reason(message), 1, message);
         match tag {
+            Tag::Calendar => self.calendar_failures += 1,
             Tag::Membership => self.membership_failures += 1,
             Tag::Slack => self.slack_failures += 1,
             Tag::Repository => self.repository_failures += 1,
@@ -346,7 +363,19 @@ impl NightlyProjectUpdateReport {
 
 /// Run every applicable tag for every Project. `call` runs one child; its
 /// failure is counted against the tag and never stops another tag or Project.
-pub async fn sweep<F, Fut>(roster: &[RosterEntry], mut call: F) -> NightlyProjectUpdateReport
+pub async fn sweep<F, Fut>(roster: &[RosterEntry], call: F) -> NightlyProjectUpdateReport
+where
+    F: FnMut(Tag, Uuid) -> Fut,
+    Fut: Future<Output = Result<TagOutcome, String>>,
+{
+    sweep_tags(roster, Tag::COMPATIBILITY, call).await
+}
+
+pub(crate) async fn sweep_tags<F, Fut>(
+    roster: &[RosterEntry],
+    tags: &[Tag],
+    mut call: F,
+) -> NightlyProjectUpdateReport
 where
     F: FnMut(Tag, Uuid) -> Fut,
     Fut: Future<Output = Result<TagOutcome, String>>,
@@ -358,7 +387,7 @@ where
     };
     for entry in roster {
         let failures_before = report.failures();
-        for tag in Tag::ALL
+        for tag in tags
             .iter()
             .copied()
             .filter(|tag| tag.applies_to(entry.open))
@@ -502,6 +531,7 @@ impl NightlyProjectUpdateService {
                 project_id,
             });
             match tag {
+                Tag::Calendar => return Err("Calendar requires DBOS".to_owned()),
                 Tag::Membership => context
                     .workflow_client::<membership::MembershipTagServiceClient>(key)
                     .run(request)
@@ -648,7 +678,7 @@ fn render_headline(report: &NightlyProjectUpdateReport) -> String {
 
 pub(crate) fn render_report(report: &NightlyProjectUpdateReport) -> String {
     format!(
-        "{}\nProjects: {} ({} open).\nChannels checked: {}; channels created: {}; channels repaired: {}; channels archived: {}; channels unarchived: {}; Projects without a channel: {}; people invited: {}; people removed: {}; already members: {}; unmatched assignments: {}.\nCanvases created: {}; canvases edited: {}; notices posted: {}.\nRepositories created or adopted: {}. Navigator pins — current: {}; stale: {}; unreadable: {}.\nUpdate pull requests — opened: {}; awaiting merge: {}; declined: {}. Governance repaired: {}.\nFailures by tag — membership: {}; slack: {}; repository: {}.",
+        "{}\nProjects: {} ({} open).\nChannels checked: {}; channels created: {}; channels repaired: {}; channels archived: {}; channels unarchived: {}; Projects without a channel: {}; people invited: {}; people removed: {}; already members: {}; unmatched assignments: {}.\nCanvases created: {}; canvases edited: {}; notices posted: {}.\nRepositories created or adopted: {}. Navigator pins — current: {}; stale: {}; unreadable: {}.\nUpdate pull requests — opened: {}; awaiting merge: {}; declined: {}. Governance repaired: {}.\nShared calendars synced: {}.\nFailures by tag — membership: {}; slack: {}; repository: {}; calendar: {}.",
         render_headline(report),
         report.projects,
         report.open_projects,
@@ -673,9 +703,11 @@ pub(crate) fn render_report(report: &NightlyProjectUpdateReport) -> String {
         report.update_prs_pending,
         report.update_prs_declined,
         report.governance_repaired,
+        report.calendars_synced,
         report.membership_failures,
         report.slack_failures,
         report.repository_failures,
+        report.calendar_failures,
     )
 }
 
@@ -722,6 +754,7 @@ pub(crate) async fn sweep_in_process(
     });
     sweep(&roster, |tag, project_id| async move {
         match tag {
+            Tag::Calendar => return Err("Calendar requires DBOS".to_owned()),
             Tag::Membership => membership::reconcile_project(surreal, slack, simulated, project_id)
                 .await
                 .map(TagOutcome::Membership),
@@ -802,6 +835,7 @@ mod tests {
             async move {
                 match tag {
                     Tag::Membership if id == failing => Err("Slack down".to_owned()),
+                    Tag::Calendar => Ok(TagOutcome::Calendar { synced: true }),
                     Tag::Membership => Ok(TagOutcome::Membership(MembershipOutcome {
                         channels: 1,
                         invited: 2,
@@ -855,6 +889,7 @@ mod tests {
         let by_project = &by_project;
         let report = sweep(&roster, |tag, id| async move {
             match tag {
+                Tag::Calendar => Ok(TagOutcome::Calendar { synced: true }),
                 Tag::Membership => Ok(TagOutcome::Membership(MembershipOutcome::default())),
                 Tag::Slack => Ok(TagOutcome::Slack(SlackOutcome::default())),
                 Tag::Repository => Ok(TagOutcome::Repository(RepositoryOutcome {
@@ -888,6 +923,7 @@ mod tests {
         let report = sweep(&roster, |tag, id| async move {
             match tag {
                 Tag::Repository if id == failing => Err("forge down".to_owned()),
+                Tag::Calendar => Ok(TagOutcome::Calendar { synced: true }),
                 Tag::Membership => Ok(TagOutcome::Membership(MembershipOutcome::default())),
                 Tag::Slack => Ok(TagOutcome::Slack(SlackOutcome::default())),
                 Tag::Repository => Ok(TagOutcome::Repository(RepositoryOutcome {
@@ -909,6 +945,7 @@ mod tests {
         let report = sweep(&roster, |tag, id| async move {
             match tag {
                 Tag::Slack if id == failing => Err("missing_scope".to_owned()),
+                Tag::Calendar => Ok(TagOutcome::Calendar { synced: true }),
                 Tag::Membership => Ok(TagOutcome::Membership(MembershipOutcome::default())),
                 Tag::Slack => Ok(TagOutcome::Slack(SlackOutcome {
                     canvases_edited: 1,
@@ -926,6 +963,42 @@ mod tests {
         assert_eq!((report.canvases_edited, report.notices_posted), (1, 1));
         assert_eq!(report.repositories_synced, 2, "repository still ran");
         assert!(render_report(&report).contains("slack: 1"));
+    }
+
+    #[tokio::test]
+    async fn calendar_failure_still_posts_the_open_project_notice() {
+        let roster = [entry(true), entry(false)];
+        let mut calls = Vec::new();
+        let report = sweep_tags(&roster, Tag::ALL, |tag, id| {
+            calls.push((id, tag));
+            std::future::ready(match tag {
+                Tag::Calendar => Err("calendar provider unavailable".into()),
+                Tag::Membership => Ok(TagOutcome::Membership(MembershipOutcome::default())),
+                Tag::Slack => Ok(TagOutcome::Slack(SlackOutcome {
+                    notices_posted: 1,
+                    ..Default::default()
+                })),
+                Tag::Repository => Ok(TagOutcome::Repository(RepositoryOutcome::default())),
+            })
+        })
+        .await;
+        assert_eq!(
+            (
+                report.calendar_failures,
+                report.failed_projects,
+                report.notices_posted
+            ),
+            (1, 1, 1)
+        );
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|(_, tag)| *tag == Tag::Calendar)
+                .count(),
+            1
+        );
+        assert!(calls.contains(&(roster[0].project_id, Tag::Calendar)));
+        assert!(render_report(&report).contains("calendar: 1"));
     }
 
     #[tokio::test]
@@ -989,6 +1062,7 @@ mod tests {
         let updates = [None, Some(UpdateProposal::Opened), None];
         let report = sweep(&roster, |tag, id| async move {
             match tag {
+                Tag::Calendar => Ok(TagOutcome::Calendar { synced: true }),
                 Tag::Membership => Ok(TagOutcome::Membership(MembershipOutcome::default())),
                 Tag::Slack => Ok(TagOutcome::Slack(SlackOutcome::default())),
                 Tag::Repository => {
@@ -1054,11 +1128,14 @@ mod tests {
 
     #[test]
     fn tag_order_preserves_the_parent_journal_sequence() {
-        assert_eq!(Tag::ALL, &[Tag::Membership, Tag::Slack, Tag::Repository]);
+        assert_eq!(
+            Tag::COMPATIBILITY,
+            &[Tag::Membership, Tag::Slack, Tag::Repository]
+        );
     }
 
     #[test]
-    fn the_daily_trigger_runs_at_0333_pst_in_every_manifest() {
+    fn the_daily_trigger_runs_at_0333_utc_in_every_manifest() {
         for source in [
             include_str!(
                 "../../examples/deploy/k8s/exports/cron-nightly-project-update-trigger.yaml"
@@ -1068,7 +1145,7 @@ mod tests {
             ),
         ] {
             let manifest: serde_yaml::Value = serde_yaml::from_str(source).unwrap();
-            assert_eq!(manifest["spec"]["schedule"].as_str(), Some("33 11 * * *"));
+            assert_eq!(manifest["spec"]["schedule"].as_str(), Some("33 3 * * *"));
             assert_eq!(manifest["spec"]["timeZone"].as_str(), Some("Etc/UTC"));
             assert_eq!(
                 manifest["metadata"]["name"].as_str(),
@@ -1209,6 +1286,7 @@ mod tests {
                 Tag::Membership if id != healthy => Err(
                     "Slack channel name is taken by a channel this bot cannot see; invite the bot to that private channel or archive it".to_owned(),
                 ),
+                Tag::Calendar => Ok(TagOutcome::Calendar { synced: true }),
                 Tag::Membership => Ok(TagOutcome::Membership(MembershipOutcome::default())),
                 Tag::Slack if id == healthy => Ok(TagOutcome::Slack(SlackOutcome {
                     canvas_failures: 1,
