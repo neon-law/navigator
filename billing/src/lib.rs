@@ -7,16 +7,9 @@
 //! it records every call to an internal Mutex so tests can assert the
 //! step fired with the right invoice.
 //!
-//! Production plugs in [`XeroBillingProvider`] behind the same trait — it
-//! POSTs an `ACCREC` invoice to the Xero Accounting API and returns the
-//! `InvoiceID` as the [`InvoiceId`]. Auth is the client-credentials grant
-//! ([`xero_auth::XeroClientCredentials`]); tokens are minted and cached
-//! with a refresh-before-expiry path, mirroring the `DocuSign` signature
-//! provider in `web`.
-//!
-//! Unconfigured → the stub, so a fork boots and self-tests without a Xero
-//! account (the third-party "one vendor account per environment"
-//! convention — `docs/third-party-integrations.md`).
+//! Application hosting uses [`DisabledBillingProvider`] for real matters and
+//! synthetic billing for development fixtures. The explicit [`XeroBillingProvider`]
+//! adapter remains available for retained billing recovery and reconciliation.
 //!
 //! Lives in its own crate (not `web`) so the worker-side billing
 //! workflows in `billing-workflows` can reach the same provider seam —
@@ -312,6 +305,49 @@ pub trait BillingProvider: Send + Sync {
     /// it, and the pooled withdrawal that settles invoices. Read-only: the
     /// firm posts these in Xero and Navigator mirrors what it finds.
     async fn list_trust_transactions(&self) -> Result<Vec<TrustBankTransaction>, BillingError>;
+}
+
+/// Unavailable accounting provider. It neither contacts Xero nor fabricates invoices.
+#[derive(Default)]
+pub struct DisabledBillingProvider;
+
+fn billing_disabled() -> BillingError {
+    BillingError::Provider("billing automation is disabled".into())
+}
+
+#[async_trait]
+impl BillingProvider for DisabledBillingProvider {
+    async fn ensure_contact(&self, _: &ContactRequest) -> Result<ContactId, BillingError> {
+        Err(billing_disabled())
+    }
+    async fn create_invoice(&self, _: Uuid, _: &InvoiceRequest) -> Result<InvoiceId, BillingError> {
+        Err(billing_disabled())
+    }
+    async fn get_invoice(&self, _: &str) -> Result<InvoiceStatus, BillingError> {
+        Err(billing_disabled())
+    }
+    async fn online_invoice_url(&self, _: &str) -> Result<Option<String>, BillingError> {
+        Err(billing_disabled())
+    }
+    async fn create_repeating_invoice(
+        &self,
+        _: Uuid,
+        _: &RepeatingInvoiceRequest,
+    ) -> Result<String, BillingError> {
+        Err(billing_disabled())
+    }
+    async fn cancel_repeating_invoice(&self, _: &str) -> Result<DateTime<Utc>, BillingError> {
+        Err(billing_disabled())
+    }
+    async fn list_receivable_invoices(&self) -> Result<Vec<ReceivableInvoice>, BillingError> {
+        Err(billing_disabled())
+    }
+    async fn list_bank_accounts(&self) -> Result<Vec<TrustBankAccount>, BillingError> {
+        Err(billing_disabled())
+    }
+    async fn list_trust_transactions(&self) -> Result<Vec<TrustBankTransaction>, BillingError> {
+        Err(billing_disabled())
+    }
 }
 
 /// In-process stub. Records every call and hands back synthetic
@@ -1461,8 +1497,9 @@ fn parse_xero_datetime(raw: &str) -> Option<DateTime<Utc>> {
 mod tests {
     use super::{
         dollars_to_cents, format_cents, parse_xero_datetime, BillingProvider, CachedToken,
-        ContactId, ContactRequest, InvoiceId, InvoiceLine, InvoiceRequest, InvoiceStatus,
-        ReceivableInvoice, StubBillingProvider, XeroBillingProvider,
+        ContactId, ContactRequest, DisabledBillingProvider, InvoiceId, InvoiceLine, InvoiceRequest,
+        InvoiceStatus, ReceivableInvoice, RepeatEvery, RepeatingInvoiceRequest,
+        StubBillingProvider, XeroBillingProvider,
     };
     use crate::xero_auth::XeroClientCredentials;
     use chrono::{NaiveDate, TimeZone, Utc};
@@ -1590,6 +1627,41 @@ mod tests {
         assert_eq!(format_cents(7), "0.07");
         assert_eq!(format_cents(0), "0.00");
         assert_eq!(format_cents(-250), "-2.50");
+    }
+
+    #[tokio::test]
+    async fn disabled_provider_refuses_invoices_and_provider_effects() {
+        let provider = DisabledBillingProvider;
+        assert!(!provider.invoices_available());
+        assert!(provider
+            .ensure_contact(&ContactRequest {
+                name: "Sample payer".into(),
+                email: "payer@example.com".into()
+            })
+            .await
+            .is_err());
+        assert!(provider
+            .create_invoice(ID42, &estate_invoice())
+            .await
+            .is_err());
+        assert!(provider.get_invoice("sample").await.is_err());
+        assert!(provider.online_invoice_url("sample").await.is_err());
+        let repeating = RepeatingInvoiceRequest {
+            contact_id: "sample".into(),
+            reference: "sample".into(),
+            line_items: vec![],
+            every: RepeatEvery::Month,
+            start_date: chrono::NaiveDate::from_ymd_opt(2026, 11, 22).unwrap(),
+            due_days: 0,
+        };
+        assert!(provider
+            .create_repeating_invoice(ID42, &repeating)
+            .await
+            .is_err());
+        assert!(provider.cancel_repeating_invoice("sample").await.is_err());
+        assert!(provider.list_receivable_invoices().await.is_err());
+        assert!(provider.list_bank_accounts().await.is_err());
+        assert!(provider.list_trust_transactions().await.is_err());
     }
 
     #[tokio::test]

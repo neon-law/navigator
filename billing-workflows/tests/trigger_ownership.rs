@@ -1,38 +1,36 @@
-//! A DBOS-owned schedule never needs or contacts the Restate ingress.
+//! Retained billing trigger names cannot submit to either engine.
 
-fn trigger(flag: &str) -> std::process::Output {
-    let directory =
-        std::env::temp_dir().join(format!("navigator-canary-trigger-{}", uuid::Uuid::new_v4()));
+#[test]
+fn billing_triggers_are_inert_even_with_stale_engine_settings() {
+    let directory = std::env::temp_dir().join(format!(
+        "navigator-disabled-billing-{}",
+        uuid::Uuid::new_v4()
+    ));
     std::fs::create_dir(&directory).unwrap();
-    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_billing-canary-trigger"));
-    command
-        .current_dir(&directory)
-        .env_clear()
-        .env("NAVIGATOR_DBOS_BILLING_CANARY_ENABLED", flag);
-    // Keep instrumentation receipts while excluding application credentials.
-    if let Some(profile) = std::env::var_os("LLVM_PROFILE_FILE") {
-        command.env("LLVM_PROFILE_FILE", profile);
+    for binary in [
+        env!("CARGO_BIN_EXE_billing-canary-trigger"),
+        env!("CARGO_BIN_EXE_billing-digest-trigger"),
+        env!("CARGO_BIN_EXE_reconcile-trigger"),
+        env!("CARGO_BIN_EXE_sandbox-credit-reset-trigger"),
+    ] {
+        for flag in ["false", "true", "typo"] {
+            let mut command = std::process::Command::new(binary);
+            command
+                .current_dir(&directory)
+                .env_clear()
+                .env("NAVIGATOR_DBOS_BILLING_CANARY_ENABLED", flag)
+                .env("RESTATE_INGRESS_URL", "http://127.0.0.1:1")
+                .env("NAVIGATOR_DBOS_INGRESS_URL", "http://127.0.0.1:1");
+            if let Some(profile) = std::env::var_os("LLVM_PROFILE_FILE") {
+                command.env("LLVM_PROFILE_FILE", profile);
+            }
+            let output = command.output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
     }
-    let result = command.output();
-    std::fs::remove_dir_all(&directory).unwrap();
-    result.unwrap()
-}
-
-#[test]
-fn dbos_owned_canary_trigger_exits_without_a_restate_configuration() {
-    let output = trigger("true");
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-#[test]
-fn invalid_ownership_refuses_to_start_in_either_engine() {
-    let output = trigger("typo");
-    assert!(!output.status.success());
-    let error = String::from_utf8_lossy(&output.stderr);
-    assert!(error.contains("NAVIGATOR_DBOS_BILLING_CANARY_ENABLED"));
-    assert!(!error.contains("RESTATE_INGRESS_URL must be set"));
+    std::fs::remove_dir_all(directory).unwrap();
 }

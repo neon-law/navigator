@@ -12,8 +12,8 @@ gate below passes. Source and integration-test coverage do not establish which e
 
 The complete worker registry can also run inside the application process with `NAVIGATOR_WORKFLOWS_IN_WEB=true`; see
 [one application container](dbos-durability.md#one-application-container). Cohosting preserves each workflow's switch
-and the handover gate. The manual Archives, BillingCanary, BillingDigest, and NotationReset controls select the same
-engine as their schedule; an enabled DBOS control never uses Restate as a fallback.
+and the handover gate. The manual Archives and NotationReset controls select the same engine as their schedule; an
+enabled DBOS control never uses Restate as a fallback.
 
 ## Durable workflows
 
@@ -21,11 +21,7 @@ engine as their schedule; an enabled DBOS control never uses Restate as a fallba
   receipt path, provider recovery, enablement and retained runs.
 - **Archives** — DBOS UTC-slot workflow and worker schedule. Remaining: Complete export/parity, deployed schedule
   selection and retained runs.
-- **BillingCanary** — DBOS workflow and opt-in schedule. Remaining: Provider-effect recovery, deployed selection and
-  retained runs.
-- **BillingDigest** — DBOS workflow and opt-in schedule. Remaining: Deployed selection and retained runs.
-- **ReconcileInvoices** — DBOS adapter, identity-claim ingress and caller selection. Remaining: PostgreSQL source
-  parity, deployed selection and retained runs.
+
 - **DriDigest** — DBOS schedule and trigger selection. Remaining: PostgreSQL/runtime parity, deployed selection and
   retained runs.
 - **FinanceAggregate** — DBOS adapter, identity-claim ingress and Portal caller selection. Remaining: PostgreSQL
@@ -48,9 +44,7 @@ engine as their schedule; an enabled DBOS control never uses Restate as a fallba
   KMS/provider receipts, cancellation, deployed selection and retained runs.
 - **SocialPublishReconciler** — DBOS schedule, authenticated ingress and trigger selection. Remaining: Provider
   receipt recovery, deployed selection and retained runs.
-- **SandboxCreditReset** — DBOS month-keyed adapter and authenticated trigger selection. Each overage has a separate
-  attempt anchor and invoice receipt checkpoint. Automatic retry stops before Xero's request-key window expires.
-  Remaining: PostgreSQL ledger parity, expired-attempt reconciliation, deployed selection and retained runs.
+
 - **InboundTriage** — DBOS adapter and authenticated Message-keyed ingress shared by the Portal and YouTube poller.
   Remaining: PostgreSQL triage storage authority, deployed selection and retained runs.
 - **YoutubeCommentsPoller** — DBOS adapter with one checkpoint per video and one run per 15-minute UTC slot.
@@ -65,9 +59,12 @@ poller, set `NAVIGATOR_DBOS_YOUTUBE_COMMENTS_POLLER_ENABLED=true` on the worker 
 worker's ingress token and give both callers the matching token and ingress URL. The poller submits triage through the
 same selector as the Portal, so its worker also needs the ingress URL when triage uses DBOS.
 
-For SandboxCreditReset, enable `NAVIGATOR_DBOS_SANDBOX_CREDIT_RESET_ENABLED=true` on the worker and monthly trigger
-before a new, unprocessed billing month. Reconcile any Restate attempt before transferring ownership of a month. An
-expired DBOS attempt without a receipt requires operator reconciliation with Xero before an invoice can be retried.
+BillingCanary, BillingDigest, ReconcileInvoices, and SandboxCreditReset are disabled on both engines. Retained trigger
+images are inert, automatic schedules and manual starts cannot submit, and their switches are not native deployment
+requirements. The application uses an unavailable accounting provider, even when Xero credentials are present; only
+explicitly simulated matters use synthetic billing. Retained executions require operator cancellation and effect
+reconciliation; deployment does not cancel or purge them. FinanceAggregate reporting and financial records remain
+available.
 
 ## Virtual objects
 

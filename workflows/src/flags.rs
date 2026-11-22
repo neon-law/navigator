@@ -29,9 +29,12 @@ pub enum SettingsError {
 ///
 /// # Errors
 ///
-/// Refuses any value other than `true` or `false`, so a typo cannot silently
-/// leave the switch off.
+/// Active switches refuse any value other than `true` or `false`. Disabled billing
+/// selectors always resolve to false, including stale deployment values.
 pub fn flag_enabled(name: &'static str, value: Option<&str>) -> Result<bool, SettingsError> {
+    if store::workflow_engine::disabled_billing_flag(name) {
+        return Ok(false);
+    }
     match value.map(str::trim) {
         None | Some("" | "false") => Ok(false),
         Some("true") => Ok(true),
@@ -49,6 +52,12 @@ pub fn schedule_enabled(
     name: &'static str,
     get: &impl Fn(&str) -> Option<String>,
 ) -> Result<bool, SettingsError> {
+    if matches!(
+        name,
+        BILLING_CANARY_SCHEDULE_ENABLED_ENV | RECONCILE_INVOICES_SCHEDULE_ENABLED_ENV
+    ) {
+        return Ok(false);
+    }
     let native =
         store::workflow_engine::dbos_only(get).map_err(|error| SettingsError::Invalid(error.0))?;
     store::workflow_engine::missing_dbos_flags(get)
@@ -63,75 +72,17 @@ mod tests {
     use super::{flag_enabled, SettingsError};
 
     #[test]
-    fn automatic_timers_default_off_only_for_complete_native_ownership() {
-        use store::workflow_engine as engine;
-        let native = |key: &str| match key {
-            engine::COHOST_ENV | engine::DBOS_ENABLED_ENV => Some("true".into()),
-            engine::ENGINE_ENV => Some("dbos".into()),
-            _ if engine::WORKFLOWS
-                .iter()
-                .any(|selection| selection.flag == key) =>
-            {
-                Some("true".into())
+    fn billing_timers_and_selectors_cannot_be_reenabled() {
+        for value in [None, Some("true"), Some("false"), Some("invalid")] {
+            for selection in store::workflow_engine::DISABLED_BILLING {
+                assert!(!flag_enabled(selection.flag, value).unwrap());
             }
-            _ => None,
-        };
-        for key in [
-            super::BILLING_CANARY_SCHEDULE_ENABLED_ENV,
-            super::RECONCILE_INVOICES_SCHEDULE_ENABLED_ENV,
-        ] {
-            assert!(!super::schedule_enabled(key, &native).unwrap());
-            assert!(super::schedule_enabled(key, &|_| None).unwrap());
-            assert!(
-                super::schedule_enabled(key, &|name| if name == engine::COHOST_ENV {
-                    None
-                } else {
-                    native(name)
-                })
-                .unwrap()
-            );
-            for selection in engine::WORKFLOWS {
-                let partial = |name: &str| {
-                    if name == selection.flag {
-                        Some("false".into())
-                    } else {
-                        native(name)
-                    }
-                };
-                assert!(
-                    super::schedule_enabled(key, &partial).unwrap(),
-                    "{} keeps the mixed default",
-                    selection.name
-                );
+            for key in [
+                super::BILLING_CANARY_SCHEDULE_ENABLED_ENV,
+                super::RECONCILE_INVOICES_SCHEDULE_ENABLED_ENV,
+            ] {
+                assert!(!super::schedule_enabled(key, &|_| value.map(str::to_owned)).unwrap());
             }
-            for (value, expected) in [("true", true), ("false", false)] {
-                assert_eq!(
-                    super::schedule_enabled(key, &|name| if name == key {
-                        Some(value.into())
-                    } else {
-                        native(name)
-                    })
-                    .unwrap(),
-                    expected
-                );
-            }
-            assert_eq!(
-                super::schedule_enabled(key, &|name| if name == key {
-                    Some("invalid".into())
-                } else {
-                    native(name)
-                }),
-                Err(SettingsError::Invalid(key))
-            );
-            let selection = engine::WORKFLOWS[0].flag;
-            assert_eq!(
-                super::schedule_enabled(key, &|name| if name == selection {
-                    Some("invalid".into())
-                } else {
-                    None
-                }),
-                Err(SettingsError::Invalid(selection))
-            );
         }
     }
 

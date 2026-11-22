@@ -795,15 +795,33 @@ async fn fresh_origin_and_object_epoch_commit_atomically_and_boot_requires_every
         .await
         .unwrap();
     assert!(!selection.legacy_objects());
-    let mut mixed = values.clone();
-    mixed.insert("NAVIGATOR_DBOS_BILLING_CANARY_ENABLED", "false".into());
-    assert!(
-        crate::durable_object_handover::require_runtime_selection(native.postgres(), |key| mixed
-            .get(key)
-            .cloned())
-        .await
-        .is_err()
-    );
+    for workflow in crate::workflow_engine::WORKFLOWS {
+        let mut mixed = values.clone();
+        mixed.insert(workflow.flag, "false".into());
+        assert!(
+            crate::durable_object_handover::require_runtime_selection(native.postgres(), |key| {
+                mixed.get(key).cloned()
+            })
+            .await
+            .is_err(),
+            "{} must select native execution",
+            workflow.name
+        );
+    }
+    for workflow in crate::workflow_engine::DISABLED_BILLING {
+        let mut disabled = values.clone();
+        disabled.insert(workflow.flag, "false".into());
+        assert!(
+            !crate::durable_object_handover::require_runtime_selection(native.postgres(), |key| {
+                disabled.get(key).cloned()
+            })
+            .await
+            .unwrap()
+            .legacy_objects(),
+            "{} must not require a billing executor",
+            workflow.name
+        );
+    }
     let counts:(i64,i64)=sqlx::query_as("SELECT (SELECT count(*) FROM database_origin),(SELECT count(*) FROM durable_object_ownership)").fetch_one(native.postgres().pool()).await.unwrap();
     assert_eq!(counts, (1, 1));
     sqlx::query("UPDATE durable_object_handover SET origin='captured_source',source_environment='synthetic-foreign',capture_sha256=repeat('a',64) WHERE capture_id=(SELECT capture_id FROM durable_object_ownership)")
