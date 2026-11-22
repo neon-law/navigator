@@ -99,6 +99,9 @@ pub struct ProjectHandles {
     /// older-server reason.
     #[serde(default)]
     pub drive_folder_id: Option<String>,
+    /// The Firm Legal Plan name used by the Project manifest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legal_plan: Option<String>,
     /// Person ids named by a DRI participation row (`is_lawyer_dri` or
     /// `is_client_dri`) that no longer resolve to a Person — the row survived
     /// a Person delete that should have cleared it (see

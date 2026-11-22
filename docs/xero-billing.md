@@ -233,9 +233,11 @@ Update the template
 Billing-Time: 0.2 2026-11-20 00000000-0000-4000-8000-000000000001
 ```
 
-Run `navigator project jj stage-time` while that change is current, or select it with `--revision`. The signed-in
-timekeeper attests to their own time. The command reads the Project and host from `navigator.yaml`. A rebase keeps the
-original entry. Reusing its UUID with changed hours, date, timekeeper, or change identity requires review.
+`navigator jj push` reads the outgoing Jujutsu changes and stages the signed-in author's annotated time for review. To
+stage your time before pushing, run `navigator jj stage-time`, optionally with `--revision`. Your Jujutsu author email
+must match your Navigator sign-in email. The checkout's `navigator.yaml` identifies the Project and site. Each work
+block retains its original change ID and UUID through a rebase. A retry with changed hours, date, timekeeper, or change
+identity requires review.
 
 On the Project's Billing tab, review the time against the engagement and check for overlap with manual or timer entries.
 Enter the client-facing description and approve the time, record it at no charge, or deny it with an internal reason. An

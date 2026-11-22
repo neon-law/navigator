@@ -1,4 +1,4 @@
-//! `navigator project jj log` — the lawyer-facing view of a checkout's
+//! `navigator jj log` — the lawyer-facing view of a checkout's
 //! Jujutsu history.
 //!
 //! The colocated store tracks every edit, but `jj log` itself speaks in
@@ -37,12 +37,11 @@ pub struct ChangeEntry {
 
 /// Print the checkout's history in lawyer terms.
 ///
-/// The checkout must already be tracked by jj (`navigator project
-/// repository jj`); this command installs nothing and runs on any host.
+/// The checkout must already be tracked by jj (`navigator jj setup`); this command installs nothing and runs on any host.
 pub fn run(dir: &Path) -> Result<()> {
     if !dir.join(".jj").is_dir() {
         anyhow::bail!(
-            "{} is not tracked by Jujutsu yet; run `navigator project repository jj` first",
+            "{} is not tracked by Jujutsu yet; run `navigator jj setup` first",
             dir.display()
         );
     }

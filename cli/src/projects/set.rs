@@ -56,6 +56,7 @@ pub struct SetRequest<'a> {
     pub host_override: Option<&'a str>,
     pub project_override: Option<&'a str>,
     pub from_live: bool,
+    pub apply_legal_plan: bool,
     pub supplied: [Option<&'a str>; 4],
     pub live_fields: LiveFields<'a>,
     pub firm: Option<&'a str>,
@@ -93,6 +94,7 @@ pub(super) async fn set_at(dir: &Path, request: SetRequest<'_>) -> Result<Vec<St
         host_override,
         project_override,
         from_live,
+        apply_legal_plan,
         supplied,
         live_fields,
         firm,
@@ -109,14 +111,17 @@ pub(super) async fn set_at(dir: &Path, request: SetRequest<'_>) -> Result<Vec<St
     let path = dir.join(manifest::FILE);
     let contents = std::fs::read_to_string(&path).context("read navigator.yaml")?;
     let parsed = manifest::parse(&contents).map_err(|error| anyhow!(error))?;
-    let host = host_override
-        .or(parsed.host.as_deref())
-        .ok_or_else(|| anyhow!("navigator.yaml must declare project.host or pass --host"))?;
-    let project = project_override
-        .or(parsed.project.as_deref())
-        .ok_or_else(|| {
-            anyhow!("navigator.yaml must declare project.name or pass a Project code")
-        })?;
+    let (host, project) = manifest_target(&parsed, host_override, project_override)?;
+    if apply_legal_plan {
+        anyhow::ensure!(
+            !from_live
+                && firm.is_none()
+                && supplied.iter().all(Option::is_none)
+                && live_patch.is_empty(),
+            "--apply-legal-plan cannot be combined with coordinate changes"
+        );
+        return apply_manifest_plan(host, project, &parsed, dry_run).await;
+    }
     let ownership = manifest_ownership(host, project, &parsed, firm.zip(brand), from_live).await?;
     let mut values: [Option<String>; 6] = [
         lawyer_dri,
@@ -132,9 +137,11 @@ pub(super) async fn set_at(dir: &Path, request: SetRequest<'_>) -> Result<Vec<St
     // key, since `Y016` refuses an empty value.
     let clear_calendar = values[4].as_deref() == Some("");
     let clear_drive_folder = values[5].as_deref() == Some("");
-    if from_live {
-        fill_from_live(host, project, &mut values).await?;
-    }
+    let live_plan = if from_live {
+        fill_from_live(host, project, &mut values).await?
+    } else {
+        None
+    };
     if clear_calendar {
         values[4] = None;
     }
@@ -161,15 +168,11 @@ pub(super) async fn set_at(dir: &Path, request: SetRequest<'_>) -> Result<Vec<St
             changed.push("manifest Firm and brand".into());
         }
     }
-    let findings = manifest::lint_contents(&path, &updated);
-    if let Some(finding) = findings.into_iter().find(|finding| !finding.warning) {
-        return Err(anyhow!(
-            "{} ({}): {}",
-            finding.code,
-            finding.line,
-            finding.message
-        ));
+    if let (None, Some(name)) = (&parsed.legal_plan, live_plan) {
+        updated = replace_project_key(&updated, "legal_plan", &name)?;
+        changed.push("legal_plan".into());
     }
+    validate_manifest_update(&path, &updated)?;
     if dry_run {
         // Everything past this point is a write: the manifest file, the live
         // row patch, the Firm reassignment. The plan names all of them and
@@ -191,6 +194,83 @@ pub(super) async fn set_at(dir: &Path, request: SetRequest<'_>) -> Result<Vec<St
         changed.push("coordinates already current".to_string());
     }
     Ok(changed)
+}
+
+fn manifest_target<'a>(
+    manifest: &'a manifest::Manifest,
+    host_override: Option<&'a str>,
+    project_override: Option<&'a str>,
+) -> Result<(&'a str, &'a str)> {
+    let host = host_override
+        .or(manifest.host.as_deref())
+        .ok_or_else(|| anyhow!("navigator.yaml must declare project.host or pass --host"))?;
+    let project = project_override
+        .or(manifest.project.as_deref())
+        .ok_or_else(|| {
+            anyhow!("navigator.yaml must declare project.name or pass a Project code")
+        })?;
+    Ok((host, project))
+}
+
+fn validate_manifest_update(path: &Path, contents: &str) -> Result<()> {
+    let findings = manifest::lint_contents(path, contents);
+    if let Some(finding) = findings.into_iter().find(|finding| !finding.warning) {
+        return Err(anyhow!(
+            "{} ({}): {}",
+            finding.code,
+            finding.line,
+            finding.message
+        ));
+    }
+    Ok(())
+}
+
+async fn apply_manifest_plan(
+    host: &str,
+    code: &str,
+    declared: &manifest::Manifest,
+    dry_run: bool,
+) -> Result<Vec<String>> {
+    let local_host = declared
+        .host
+        .as_deref()
+        .context("navigator.yaml has no project.host")?;
+    anyhow::ensure!(
+        crate::credentials::base_url(host) == crate::credentials::base_url(local_host)
+            && declared.project.as_deref() == Some(code),
+        "--apply-legal-plan must target the Project named in navigator.yaml"
+    );
+    let Some(name) = declared.legal_plan.as_deref() else {
+        return Ok(vec!["no Legal Plan declared".into()]);
+    };
+    let (base, token) = remote::resolve(Some(host))?;
+    let project = surfaces::resolve_visible_project(&base, &token, code).await?;
+    declared
+        .check_live_ownership(project.firm_id, project.brand.as_deref())
+        .map_err(anyhow::Error::msg)?;
+    let firm = project.firm_id.context("live Project has no Firm")?;
+    let brand = project.brand.context("live Project has no brand")?;
+    let route = format!("{base}/app/api/projects/{}/legal-plan", project.id);
+    let response = remote::authenticated_client_builder(&base)?
+        .timeout(std::time::Duration::from_secs(30))
+        .build()?
+        .patch(route)
+        .bearer_auth(token)
+        .json(&serde_json::json!({
+            "manifest_legal_plan": { "name": name, "firm_id": firm, "brand": brand, "dry_run": dry_run }
+        }))
+        .send()
+        .await?;
+    let status = response.status();
+    if status != reqwest::StatusCode::NO_CONTENT {
+        let detail = response
+            .json::<serde_json::Value>()
+            .await
+            .unwrap_or_default();
+        let message = detail["message"].as_str().unwrap_or("request refused");
+        anyhow::bail!("apply the manifest Legal Plan: {status} {message}");
+    }
+    Ok(vec!["live Project Legal Plan".into()])
 }
 
 async fn manifest_ownership(
@@ -267,7 +347,11 @@ fn apply_manifest_values(
 }
 
 /// Fill each coordinate not supplied by a flag from the live Project row.
-async fn fill_from_live(host: &str, project: &str, values: &mut [Option<String>; 6]) -> Result<()> {
+async fn fill_from_live(
+    host: &str,
+    project: &str,
+    values: &mut [Option<String>; 6],
+) -> Result<Option<String>> {
     let (base, token) = remote::resolve(Some(host))?;
     let project_id = surfaces::resolve_project_id(&base, &token, project).await?;
     let live = surfaces::get_handles(&base, &token, project_id).await?;
@@ -291,7 +375,7 @@ async fn fill_from_live(host: &str, project: &str, values: &mut [Option<String>;
             *target = live_value;
         }
     }
-    Ok(())
+    Ok(live.legal_plan)
 }
 
 /// The plan a `--dry-run` run reports: every field the run would have
@@ -405,7 +489,11 @@ fn live_patch(
 /// Replace or add a scalar in the nested `project:` map while retaining all
 /// unrelated YAML text and comments.
 pub fn replace_project_key(contents: &str, key: &str, value: &str) -> Result<String> {
-    let serialized = serde_yaml::to_string(value)?.trim().to_string();
+    let serialized = if value.contains(['\r', '\n']) {
+        serde_json::to_string(value)?
+    } else {
+        serde_yaml::to_string(value)?.trim().to_string()
+    };
     let mut lines: Vec<String> = contents.lines().map(str::to_string).collect();
     let project_line = lines
         .iter()

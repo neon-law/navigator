@@ -394,22 +394,95 @@ pub async fn list(pg: &PostgresDb, project: Uuid, firm: Uuid) -> Result<Vec<Clai
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
         .execute(&mut *tx)
         .await?;
-    let rows: Vec<ClaimRow> = sqlx::query_as(
-        "SELECT c.id, c.project_id, c.legal_plan_id, c.plan_case_number, c.state
-         FROM legal_plan_claim c JOIN legal_plan l ON l.id = c.legal_plan_id
-         JOIN project p ON p.id = c.project_id
-         WHERE c.project_id = $1 AND l.firm_id = $2 AND p.firm_id = $2 ORDER BY c.id",
-    )
-    .bind(project)
-    .bind(firm)
-    .fetch_all(&mut *tx)
-    .await?;
+    let rows = claim_rows(&mut tx, project, firm).await?;
     let mut claims = rows.into_iter().map(Claim::from).collect::<Vec<_>>();
     for claim in &mut claims {
         read_evidence(&mut tx, claim).await?;
     }
     tx.commit().await?;
     Ok(claims)
+}
+
+async fn claim_rows(
+    connection: &mut sqlx::PgConnection,
+    project: Uuid,
+    firm: Uuid,
+) -> Result<Vec<ClaimRow>, ClaimError> {
+    Ok(sqlx::query_as(
+        "SELECT c.id, c.project_id, c.legal_plan_id, c.plan_case_number, c.state
+         FROM legal_plan_claim c JOIN legal_plan l ON l.id = c.legal_plan_id
+         JOIN project p ON p.id = c.project_id
+         WHERE c.project_id = $1 AND l.firm_id = $2 AND p.firm_id = $2
+         ORDER BY c.id",
+    )
+    .bind(project)
+    .bind(firm)
+    .fetch_all(connection)
+    .await?)
+}
+
+pub(crate) async fn billing_rows(
+    connection: &mut sqlx::PgConnection,
+    project: &crate::projects::Project,
+    firm: Uuid,
+) -> Result<Vec<(model::billing_report::ClaimBilling, Vec<Uuid>)>, ClaimError> {
+    claim_rows(connection, project.id, firm)
+        .await?
+        .into_iter()
+        .map(|(id, _, _, _, state)| {
+            let billing = state.billing(id, &project.code)?;
+            Ok((billing, state.0.work.time_entry_ids))
+        })
+        .collect()
+}
+
+impl ClaimState {
+    fn billing(
+        &self,
+        id: Uuid,
+        project: &str,
+    ) -> Result<model::billing_report::ClaimBilling, ClaimError> {
+        let estimate = self.work.estimate()?;
+        let expected = self
+            .approved_cents
+            .or(self.claimed_cents)
+            .map(i64::from)
+            .or(estimate);
+        let follow_up = if self.stage == Stage::Denied {
+            Some("Review denial")
+        } else if expected.is_some_and(|cents| self.net_cents >= cents) {
+            None
+        } else if estimate.is_none() && !matches!(self.stage, Stage::Approved) {
+            Some("Verify fee terms and completed work")
+        } else {
+            Some(match self.stage {
+                Stage::Completed => "Prepare claim",
+                Stage::Prepared => "File claim and record submission",
+                Stage::Submitted => "Check provider decision or payment",
+                Stage::Approved => "Check payment",
+                Stage::Denied => "Review denial",
+            })
+        };
+        let status = match self.stage {
+            Stage::Completed => "completed",
+            Stage::Prepared => "prepared",
+            Stage::Submitted => "submitted",
+            Stage::Approved => "approved",
+            Stage::Denied => "denied",
+        };
+        Ok(model::billing_report::ClaimBilling {
+            project: project.to_owned(),
+            id,
+            benefit: self.work.benefit.clone(),
+            performed_on: self.work.performed_on,
+            status: status.to_owned(),
+            next_action: follow_up.map(str::to_owned),
+            projected_fee_cents: estimate,
+            filed_cents: self.claimed_cents,
+            approved_outstanding_cents: self.outstanding(),
+            net_cash_received_cents: self.net_cents,
+        })
+    }
 }
 
 #[allow(clippy::too_many_lines)] // Transaction keeps claim snapshot, evidence, and retry checks together.

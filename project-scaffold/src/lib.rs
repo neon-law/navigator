@@ -190,6 +190,8 @@ pub struct ScaffoldSource<'a> {
     pub lawyer_dri: &'a str,
     /// The client DRI (email).
     pub client_dri: &'a str,
+    /// The linked Firm Legal Plan, when the opening Project has one.
+    pub legal_plan: Option<&'a str>,
     /// The release version pinned in the manifest, which the Forgejo gate
     /// reads to install the matching release.
     pub version: &'a str,
@@ -222,10 +224,15 @@ pub fn canonical_files(source: &ScaffoldSource) -> Vec<(String, String)> {
 /// the Project coordinates provisioning recorded.
 #[must_use]
 pub fn navigator_manifest(source: &ScaffoldSource) -> String {
-    format!(
+    let mut manifest = format!(
         "version: {}\nproject:\n  host: {}\n  name: {}\n  lawyer_dri: {}\n  client_dri: {}\n  private_slack_channel: not provisioned\n  private_notion_page: not provisioned\n",
         source.version, source.host, source.code, source.lawyer_dri, source.client_dri
-    )
+    );
+    if let Some(name) = source.legal_plan {
+        use std::fmt::Write as _;
+        let _ = writeln!(manifest, "  legal_plan: {}", serde_json::Value::from(name));
+    }
+    manifest
 }
 
 /// The synced Agent Skills: `.agents/skills/<name>/SKILL.md` paired with the
@@ -542,6 +549,7 @@ mod tests {
             host: "staging.neonlaw.com",
             lawyer_dri: "lawyer@example.com",
             client_dri: "client@example.com",
+            legal_plan: None,
             version: "26.10.29",
         }
     }
@@ -579,6 +587,20 @@ mod tests {
         assert_eq!(
             read("drafts/onboarding__letter.md"),
             template_stub(ONBOARDING)
+        );
+    }
+
+    #[test]
+    fn a_linked_legal_plan_is_quoted_in_the_manifest() {
+        let source = ScaffoldSource {
+            legal_plan: Some("Example #1: Consult"),
+            ..source()
+        };
+        let manifest = navigator_manifest(&source);
+        let parsed: serde_yaml::Value = serde_yaml::from_str(&manifest).unwrap();
+        assert_eq!(
+            parsed["project"]["legal_plan"].as_str(),
+            Some("Example #1: Consult"),
         );
     }
 

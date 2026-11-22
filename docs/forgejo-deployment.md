@@ -117,6 +117,8 @@ and `sync-skills` restores them. A push to `main` runs three jobs:
    channel. It runs after the first two, reports their combined outcome, and never fails the run: `continue-on-error`
    sits on its step, because Forgejo reports a job marked `continue-on-error` as failed all the same.
 
+`navigator jj push` follows the `cd.yml` push run and its jobs for the exact merge commit.
+
 A pull request's `gate.yml` also dry-runs `seeds/`. Forgejo ignores `.github/workflows/`, so a checkout that carries
 `.forgejo/` no longer needs `ci.yml`, `cd.yml` or `automerge.yml`. The gate still checks any of them it finds.
 

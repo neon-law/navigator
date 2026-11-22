@@ -273,6 +273,7 @@ pub async fn read_handles(
     lawyer_dri.dedup();
     client_dri.sort_unstable();
     client_dri.dedup();
+    let legal_plan = manifest_legal_plan(&project).await?;
     Ok(ProjectHandles {
         code: project.code,
         repository_url: project.repository_url,
@@ -282,6 +283,7 @@ pub async fn read_handles(
         private_notion_page: project.private_notion_page_url,
         calendar_id: project.calendar_id,
         drive_folder_id: project.drive_folder_id,
+        legal_plan,
         dangling_dri_person_ids,
     })
 }
@@ -539,6 +541,7 @@ struct ScaffoldInputs {
     version: String,
     lawyer_dri: String,
     client_dri: String,
+    legal_plan: Option<String>,
 }
 
 impl ScaffoldInputs {
@@ -550,6 +553,7 @@ impl ScaffoldInputs {
             version: env!("CARGO_PKG_VERSION").to_string(),
             lawyer_dri: String::new(),
             client_dri: String::new(),
+            legal_plan: None,
         }
     }
 }
@@ -561,6 +565,11 @@ async fn scaffold_inputs(
     project_id: Uuid,
 ) -> Result<ScaffoldInputs, SurfaceError> {
     let (lawyer_dri, client_dri) = dri_emails(surreal, project_id).await?;
+    let project = crate::projects::find_by_id(surreal, project_id)
+        .await
+        .map_err(|error| SurfaceError::Db(error.to_string()))?
+        .ok_or(SurfaceError::NotFound)?;
+    let legal_plan = manifest_legal_plan(&project).await?;
     Ok(ScaffoldInputs {
         host: std::env::var(NAVIGATOR_PUBLIC_HOST_ENV)
             .ok()
@@ -571,7 +580,26 @@ async fn scaffold_inputs(
             .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string()),
         lawyer_dri,
         client_dri,
+        legal_plan,
     })
+}
+
+/// Resolve the manifest's plan name without copying claim or member information.
+async fn manifest_legal_plan(project: &projects::Project) -> Result<Option<String>, SurfaceError> {
+    let Some(plan) = project.legal_plan_id else {
+        return Ok(None);
+    };
+    let firm = project
+        .firm_id
+        .ok_or_else(|| SurfaceError::Db("a Project with a Legal Plan needs a Firm".into()))?;
+    let pg = crate::postgres::PostgresDb::application()
+        .await
+        .map_err(|error| SurfaceError::Db(error.to_string()))?;
+    let plan = crate::legal_plans::find(&pg, firm, plan)
+        .await
+        .map_err(|error| SurfaceError::Db(error.to_string()))?
+        .ok_or_else(|| SurfaceError::Db("the linked Legal Plan is unavailable".into()))?;
+    Ok(Some(plan.name))
 }
 
 /// The first designated lawyer and client DRI emails for a Project — the
@@ -641,6 +669,7 @@ where
         host,
         lawyer_dri: &inputs.lawyer_dri,
         client_dri: &inputs.client_dri,
+        legal_plan: inputs.legal_plan.as_deref(),
         version: &inputs.version,
     });
     let tree_digest = project_scaffold::source_tree_digest(&files);
@@ -1483,6 +1512,7 @@ mod tests {
             version: env!("CARGO_PKG_VERSION").to_string(),
             lawyer_dri: String::new(),
             client_dri: String::new(),
+            legal_plan: None,
         }
     }
 
@@ -1529,6 +1559,7 @@ mod tests {
             host: "staging.neonlaw.com",
             lawyer_dri: "",
             client_dri: "",
+            legal_plan: None,
             version: env!("CARGO_PKG_VERSION"),
         };
         let mut expected: Vec<String> = project_scaffold::forgejo_seed_files(&source)

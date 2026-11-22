@@ -66,6 +66,7 @@ enum Command {
         action: crate::downloads::DownloadsCmd,
     },
     /// Manage the Firm's Legal Plans through the site API.
+    #[command(hide = true)]
     LegalPlans {
         #[arg(long)]
         firm: String,
@@ -75,6 +76,7 @@ enum Command {
         action: crate::legal_plans::LegalPlansCmd,
     },
     /// Manage the Firm's operating assumptions through the site API.
+    #[command(hide = true)]
     Assumptions {
         #[arg(long)]
         firm: uuid::Uuid,
@@ -153,6 +155,7 @@ enum Command {
         action: ReleaseCmd,
     },
     /// Reconcile GitHub repository workflows and policy.
+    #[command(hide = true)]
     Github {
         #[command(subcommand)]
         action: GithubCmd,
@@ -162,10 +165,20 @@ enum Command {
         #[command(subcommand)]
         action: ForgejoCmd,
     },
-    /// Read a Project Calendar, attorney free/busy, or the signed-in attorney's events.
-    Calendar {
+    /// Show your agenda and check your availability.
+    Calendar(projects::calendar::PersonalCalendarArgs),
+    /// Show billing actions, your time and projected fees.
+    Billing {
+        #[command(flatten)]
+        host: HostOpt,
+        /// Print structured billing data.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Work with this Jujutsu checkout on either forge.
+    Jj {
         #[command(subcommand)]
-        action: CalendarCmd,
+        action: projects::jj_commands::JjCommand,
     },
     /// Prepare or send a Notation's rendered document envelope on the
     /// deployment. The Project — host and code — comes from the
@@ -324,83 +337,6 @@ pub enum NotationCmd {
     Envelope {
         #[command(subcommand)]
         action: EnvelopeCmd,
-    },
-}
-
-#[derive(Subcommand)]
-enum CalendarCmd {
-    /// List events as JSON. With `--project`, the synthetic Project Calendar on
-    /// staging. Without it, the signed-in attorney's primary calendar.
-    Events {
-        /// Synthetic Project code. Omit to read the signed-in attorney's events.
-        #[arg(long)]
-        project: Option<String>,
-        /// Start of the window in RFC 3339 format.
-        #[arg(long)]
-        start: chrono::DateTime<chrono::FixedOffset>,
-        /// End of the window in RFC 3339 format.
-        #[arg(long)]
-        end: chrono::DateTime<chrono::FixedOffset>,
-        /// Navigator host.
-        #[arg(long)]
-        host: String,
-    },
-    /// Busy blocks for firm attorneys, the Project Calendar, and Deadlines.
-    Freebusy {
-        /// Project code. Omit for every attorney on the caller's Firms.
-        #[arg(long)]
-        project: Option<String>,
-        /// Start of the window in RFC 3339 format.
-        #[arg(long)]
-        start: chrono::DateTime<chrono::FixedOffset>,
-        /// End of the window in RFC 3339 format.
-        #[arg(long)]
-        end: chrono::DateTime<chrono::FixedOffset>,
-        /// Navigator host.
-        #[arg(long)]
-        host: String,
-        /// Limit the read to these attorney addresses. Repeat the flag to name more than one.
-        #[arg(long = "attorney")]
-        attorneys: Vec<String>,
-    },
-    /// Exit non-zero when the window overlaps busy time or a required calendar is unreadable.
-    Check {
-        /// Project code. Omit to check the caller's Firms.
-        #[arg(long)]
-        project: Option<String>,
-        /// Start of the window in RFC 3339 format.
-        #[arg(long)]
-        start: chrono::DateTime<chrono::FixedOffset>,
-        /// End of the window in RFC 3339 format.
-        #[arg(long)]
-        end: chrono::DateTime<chrono::FixedOffset>,
-        /// Navigator host.
-        #[arg(long)]
-        host: String,
-        /// Limit the check to these attorney addresses.
-        #[arg(long = "attorney")]
-        attorneys: Vec<String>,
-    },
-    /// Report whether each attorney calendar can be read.
-    Access {
-        /// Project code. Omit for every attorney on the caller's Firms.
-        #[arg(long)]
-        project: Option<String>,
-        /// Navigator host.
-        #[arg(long)]
-        host: String,
-    },
-    /// Record the signed-in attorney's primary calendar, or an extra free/busy calendar.
-    Register {
-        /// Navigator host.
-        #[arg(long)]
-        host: String,
-        /// Calendar id. Omit to record the signed-in address as the primary calendar.
-        #[arg(long)]
-        calendar: Option<String>,
-        /// Record an extra free/busy calendar instead of the primary calendar.
-        #[arg(long)]
-        freebusy: bool,
     },
 }
 
@@ -644,61 +580,11 @@ fn run() -> ExitCode {
         Command::Release { action } => run_release(action),
         Command::Github { action } => run_github(action),
         Command::Forgejo { action } => run_forgejo(action),
-        Command::Calendar { action } => run_calendar(action, &runtime()),
-    }
-}
-
-fn run_calendar(action: CalendarCmd, runtime: &tokio::runtime::Runtime) -> ExitCode {
-    match action {
-        CalendarCmd::Events {
-            project,
-            start,
-            end,
-            host,
-        } => runtime.block_on(crate::projects::calendar::events(
-            &host,
-            project.as_deref(),
-            start,
-            end,
-        )),
-        CalendarCmd::Freebusy {
-            project,
-            start,
-            end,
-            host,
-            attorneys,
-        } => runtime.block_on(crate::projects::calendar::freebusy(
-            &host,
-            project.as_deref(),
-            start,
-            end,
-            &attorneys,
-        )),
-        CalendarCmd::Check {
-            project,
-            start,
-            end,
-            host,
-            attorneys,
-        } => runtime.block_on(crate::projects::calendar::check(
-            &host,
-            project.as_deref(),
-            start,
-            end,
-            &attorneys,
-        )),
-        CalendarCmd::Access { project, host } => {
-            runtime.block_on(crate::projects::calendar::access(&host, project.as_deref()))
+        Command::Calendar(args) => runtime().block_on(args.run()),
+        Command::Billing { host, json } => {
+            runtime().block_on(crate::billing::personal(host.host.as_deref(), json))
         }
-        CalendarCmd::Register {
-            host,
-            calendar,
-            freebusy,
-        } => runtime.block_on(crate::projects::calendar::register(
-            &host,
-            calendar.as_deref(),
-            freebusy,
-        )),
+        Command::Jj { action } => runtime().block_on(projects::jj_commands::run(action)),
     }
 }
 
@@ -1026,7 +912,24 @@ pub enum ProjectsCmd {
         #[command(subcommand)]
         action: CommunicationCmd,
     },
+    /// Read the shared calendar for one Project.
+    Calendar(projects::calendar::ProjectCalendarArgs),
+    /// Review matter billing and record claim activity.
+    Billing {
+        /// Project code or UUID. Defaults to the checkout.
+        #[arg(long, global = true)]
+        project: Option<String>,
+        /// Navigator site. Defaults to the active session or checkout.
+        #[arg(long, global = true)]
+        host: Option<String>,
+        /// Print structured billing data.
+        #[arg(long)]
+        json: bool,
+        #[command(subcommand)]
+        action: Option<crate::billing::ProjectBillingCmd>,
+    },
     /// Read or set the Legal Plan this Project is paid through.
+    #[command(hide = true)]
     LegalPlan {
         #[command(subcommand)]
         action: LegalPlanCmd,
@@ -1092,6 +995,9 @@ pub enum ProjectsCmd {
         /// Fill coordinates from the authorized live Project row.
         #[arg(long)]
         from_live: bool,
+        /// Apply the manifest's Legal Plan to this Project.
+        #[arg(long, conflicts_with_all = ["from_live", "firm"])]
+        apply_legal_plan: bool,
         /// Lawyer-side DRI email.
         #[arg(long)]
         lawyer_dri: Option<String>,
@@ -1516,11 +1422,11 @@ pub enum ProjectsCmd {
         #[command(subcommand)]
         action: ProjectRepositoryCmd,
     },
-    /// The lawyer's view of a checkout tracked by Jujutsu (`jj`): history,
-    /// and one day conflicts and change details, in plain terms.
+    /// Work with the Project's Jujutsu checkout.
+    #[command(hide = true)]
     Jj {
         #[command(subcommand)]
-        action: ProjectJjCmd,
+        action: projects::jj_commands::JjCommand,
     },
     /// Search extracted text in this Project's documents and notes.
     Search {
@@ -1593,25 +1499,6 @@ pub enum ProjectEnvelopeCmd {
         project_code: String,
         #[command(flatten)]
         host: HostOpt,
-    },
-}
-
-#[derive(Subcommand)]
-pub enum ProjectJjCmd {
-    /// Stage your annotated work for lawyer review on the Project's Billing tab.
-    StageTime {
-        /// One Jujutsu revision containing a Billing-Time trailer.
-        #[arg(long, default_value = "@")]
-        revision: String,
-    },
-    /// Show the checkout's history in lawyer terms: each change's
-    /// description, author, and time, with an explicit warning on a
-    /// conflicted change. Requires `navigator project repository jj` on the
-    /// checkout first.
-    Log {
-        /// Project repository root. Defaults to the current directory.
-        #[arg(long, default_value = ".")]
-        dir: PathBuf,
     },
 }
 
@@ -3032,6 +2919,13 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
                 .await
             }
         },
+        ProjectsCmd::Calendar(args) => args.run().await,
+        ProjectsCmd::Billing {
+            host,
+            project,
+            json,
+            action,
+        } => crate::billing::project(host.as_deref(), project.as_deref(), json, action).await,
         ProjectsCmd::LegalPlan { action } => match action {
             LegalPlanCmd::Claim {
                 project,
@@ -3132,6 +3026,7 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
         ProjectsCmd::Set {
             project_code,
             from_live,
+            apply_legal_plan,
             lawyer_dri,
             client_dri,
             private_slack_channel,
@@ -3149,6 +3044,7 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
                 host_override: host.host.as_deref(),
                 project_override: project_code.as_deref(),
                 from_live,
+                apply_legal_plan,
                 supplied: [
                     lawyer_dri.as_deref(),
                     client_dri.as_deref(),
@@ -3346,27 +3242,7 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
             host,
         } => projects::invite::run(host.host.as_deref(), &project_code, draft_id).await,
         ProjectsCmd::Skill { action } => run_project_skill(action).await,
-        ProjectsCmd::Jj { action } => match action {
-            ProjectJjCmd::StageTime { revision } => {
-                match projects::jj_billing::stage(&revision).await {
-                    Ok(()) => {
-                        println!("Time staged for review in Project Billing.");
-                        ExitCode::SUCCESS
-                    }
-                    Err(error) => {
-                        eprintln!("navigator: {error:#}");
-                        ExitCode::FAILURE
-                    }
-                }
-            }
-            ProjectJjCmd::Log { dir } => match projects::jj_log::run(&dir) {
-                Ok(()) => ExitCode::SUCCESS,
-                Err(error) => {
-                    eprintln!("navigator: {error:#}");
-                    ExitCode::from(2)
-                }
-            },
-        },
+        ProjectsCmd::Jj { action } => projects::jj_commands::run(action).await,
         ProjectsCmd::Repository { action } => match action {
             ProjectRepositoryCmd::RepairMirror { dir, host } => {
                 projects::mirror_repair::run(&dir, host.host.as_deref()).await

@@ -43,11 +43,20 @@ fn first_line(body: &str) -> &str {
 /// takes an id, not a code, because a Project code is not guaranteed unique
 /// across the id space at the route layer the way it is at the store layer.
 pub async fn list_visible_projects(base: &str, token: &str) -> Result<Vec<VisibleProject>> {
-    let body = crate::remote::fetch_project_list(&reqwest::Client::new(), base, token).await?;
+    let client = crate::remote::authenticated_client_builder(base)?.build()?;
+    let body = crate::remote::fetch_project_list(&client, base, token).await?;
     serde_json::from_str(&body).context("parse GET /app/api/projects")
 }
 
 pub async fn resolve_project_id(base: &str, token: &str, project_code: &str) -> Result<Uuid> {
+    Ok(resolve_visible_project(base, token, project_code).await?.id)
+}
+
+pub(super) async fn resolve_visible_project(
+    base: &str,
+    token: &str,
+    project_code: &str,
+) -> Result<VisibleProject> {
     let projects = list_visible_projects(base, token).await?;
     // Never interpolate the CLI's own project-code argument into a message:
     // it is read out of the same clap `Commands` enum a `Secrets` variant
@@ -63,7 +72,7 @@ pub async fn resolve_project_id(base: &str, token: &str, project_code: &str) -> 
         matching.next().is_none(),
         "more than one visible matter has that code"
     );
-    Ok(project.id)
+    Ok(project)
 }
 
 /// Create or adopt the Project's three handles through the admin-tier

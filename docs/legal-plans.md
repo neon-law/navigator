@@ -60,22 +60,40 @@ directory. A Firm member without directory access can run `list` with the UUID.
    notice. Confirm the type of work or leave it unclassified when the notice does not establish a supported type. Taking
    the referral sends no correspondence. The lawyer handles provider confirmation and member contact separately.
 
-   To link a plan to an existing Project, use:
+   For an existing Project, add the Firm's plan name under `project` in its private `navigator.yaml`.
 
-   ```bash
-   navigator project legal-plan set --plan ARAG --case-number <plan case number> \
-     --state wa --assigned-on 2026-11-02 --accepted-on 2026-11-04
-   navigator project legal-plan show
+   ```yaml
+   project:
+     legal_plan: ARAG
    ```
 
-   Only the flags given change, and an empty value (`--closed-on ""`) clears one. The plan name ignores case. A name the
-   Firm has no row for is refused, and so is a plan of another Firm.
+   Run `navigator project set --apply-legal-plan --dry-run` to verify the link, then run `navigator project set
+   --apply-legal-plan` to apply it. The plan name resolves within the Project's Firm, and an existing link to a
+   different plan requires review. A new scaffold copies the plan name from Navigator when the Project already has a
+   link. `navigator project set --from-live` fills a missing name on an existing checkout.
+
+   Record the Plan Case Number, member ID, and intake dates in Navigator. These details stay out of the manifest.
+
 4. **Engagement letter.** The fee section says the plan pays, names the Plan Case Number, and states what the plan does
    not cover. The Firm tells the client in writing before doing uncovered work.
 5. **Claim.** When the matter completes, or a plan's early-claim rule allows, file the claim the plan's way (see the
    table). Then record `--closed-on`.
 
 ## Claims and collections
+
+Start with `navigator billing`. **Needs my action** lists your staged Jujutsu time awaiting review and claims on matters
+where you are the responsible lawyer. Review staged time on the Project's Billing tab. **My time** shows your time
+across matters. Run `navigator project billing` from the checkout for the matter view, or pass `--project
+<code-or-uuid>`. The matter view shows the team's time and keeps review actions for staged time specific to the
+signed-in timekeeper. Add `--json` for structured output.
+
+Projected fees use completed work and verified terms. For a plan claim, read the projected fee, amount filed, approved
+outstanding balance, and net cash received as stages of the same claim. A payment reduces the outstanding balance. A
+confirmed reversal reduces net cash. Work missing a verified fee stays visible for follow-up.
+
+The contingency section shows the signed agreement's stage percentages and whether costs come out before or after the
+fee. A lawyer's recovery estimate describes possible outcomes. Confirmed fees and recovered costs come from the recorded
+matter outcome. A hybrid agreement may also authorize an hourly fee.
 
 Record covered work as a [Legal Plan Claim](glossary/legal-plan-claim.md) on the Project, including after closure. Match
 confirmation against the Firm, plan, Plan Case Number, and claim reference. If the reference or case is ambiguous, check
@@ -98,15 +116,15 @@ Run these commands from the Project checkout or pass `--project <code-or-uuid>` 
 before the action if needed. The amounts in this example are synthetic.
 
 ```bash
-navigator project legal-plan claim work --service arag-advice-only --benefit SAMPLE-CONSULT \
+navigator project billing work --service arag-advice-only --benefit SAMPLE-CONSULT \
   --performed-on 2026-11-01 --attorney-minutes 30 \
   --authorization-reference sample-benefit --fixed-cents 8000
-navigator project legal-plan claim prepare --claim <claim-uuid> --on 2026-11-01
-navigator project legal-plan claim submit --claim <claim-uuid> --on 2026-11-02 \
+navigator project billing prepare --claim <claim-uuid> --on 2026-11-01
+navigator project billing submit --claim <claim-uuid> --on 2026-11-02 \
   --provider-reference sample-claim --claimed-cents 8000
-navigator project legal-plan claim pay --claim <claim-uuid> --on 2026-11-10 \
+navigator project billing pay --claim <claim-uuid> --on 2026-11-10 \
   --reference sample-remittance --cents 8000
-navigator project legal-plan claim status
+navigator project billing
 ```
 
 Use the claim UUID printed by `work` for later actions. If two claims share the same benefit, service type, and
@@ -114,9 +132,9 @@ completion date, give them distinct, stable `--work-key` labels. Retry an action
 date. Use `--time-entry <uuid>` in place of `--attorney-minutes` to reuse recorded time. Use `--rate-cents-per-hour`,
 `--covered-minutes`, and `--pending-minutes` for a capped authorization.
 
-For structured imports, `navigator project legal-plan claim record --input -` reads one JSON event from stdin. Use the
-same claim UUID for every event on that claim and a new event UUID for each new action. A retry uses the original event
-UUID with its original payload.
+For structured imports, `navigator project billing record --input -` reads one JSON event from stdin. Use the same claim
+UUID for every event on that claim and a new event UUID for each new action. A retry uses the original event UUID with
+its original payload.
 
 This synthetic ARAG consultation example supplies an explicitly verified fixed benefit. Amounts are integer cents. Use
 existing `time_entry_ids` from the Project or enter actual `attorney_minutes`. For a capped authorization, use
@@ -154,15 +172,9 @@ Reuse the outer fields with a fresh event UUID and the date of each action.
 | `payment` | `reference`, `cents` | Confirm one payment per remittance line. |
 | `reversal` | `reference`, `cents` | A refund or reversal is confirmed. Use its own evidence reference. |
 
-Run `navigator legal-plans --firm <firm> collections` during the weekly billing review. The worklist groups the caller’s
-participating Projects by plan. Review eligible completed work awaiting filing, missing terms, submission age,
-outstanding approvals, denials, and closed plan Projects that still need reconciliation. Closing a Project does not
-establish eligibility. `collections --totals-only` gives a Firm plan-metrics operator the aggregate across the Firm
-without Project details.
-
-Net cash is confirmed collections less confirmed reversals. The worklist shows net cash for the last seven days and to
-date. The to-date cents-per-attorney-hour rate includes known minutes on unpaid work. Cash without known attorney time
-is reported separately from the rate, and pending additional minutes cannot increase the authorized estimate.
+Use the personal worklist to review eligible completed work awaiting filing, missing terms, outstanding approvals, and
+denials. Closed matters can still need a claim or payment reconciliation. Firm-wide totals remain available to operators
+with the plan-metrics capability through the Firm collections report.
 
 ## Correspondence
 

@@ -6,78 +6,13 @@ use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
 use axum::Router;
 use serde_json::{json, Value};
-use sqlx::{
-    postgres::{PgConnectOptions, PgSslMode},
-    PgPool,
-};
 use store::persons::{NewPerson, Role};
 use tower::ServiceExt;
 use uuid::Uuid;
 
-const CHILD: &str = "NAV_LEGAL_PLANS_API_CHILD";
-
-fn admin_options(port: &str, database: &str) -> PgConnectOptions {
-    PgConnectOptions::new()
-        .host("127.0.0.1")
-        .port(port.parse().unwrap())
-        .username("postgres")
-        .password("synthetic")
-        .database(database)
-        .ssl_mode(PgSslMode::Disable)
-}
-
 #[tokio::test]
 async fn plans_are_firm_data_and_a_matter_links_to_its_own_firms_plan() {
-    if std::env::var(CHILD).as_deref() == Ok("1") {
-        run().await;
-        return;
-    }
-    let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {
-        assert_ne!(
-            std::env::var("NAV_REQUIRE_POSTGRES").as_deref(),
-            Ok("1"),
-            "PostgreSQL fixture required"
-        );
-        return;
-    };
-    let smoke =
-        std::env::var("NAVIGATOR_TEST_POSTGRES_DATABASE").unwrap_or_else(|_| "smoke".into());
-    let database = format!("legal_plans_api_{}", Uuid::new_v4().simple());
-    let admin = PgPool::connect_with(admin_options(&port, &smoke))
-        .await
-        .unwrap();
-    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {database}")))
-        .execute(&admin)
-        .await
-        .unwrap();
-    // The PostgreSQL store is read from the environment, so the scenario runs
-    // in a child process that owns it rather than racing other tests' env.
-    let status = std::process::Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            "plans_are_firm_data_and_a_matter_links_to_its_own_firms_plan",
-            "--nocapture",
-        ])
-        .env(CHILD, "1")
-        .env("NAVIGATOR_POSTGRES_HOST", "127.0.0.1")
-        .env("NAVIGATOR_POSTGRES_PORT", &port)
-        .env("NAVIGATOR_POSTGRES_USER", "postgres")
-        .env("NAVIGATOR_POSTGRES_PASSWORD", "synthetic")
-        .env("NAVIGATOR_POSTGRES_DATABASE", &database)
-        .env("NAVIGATOR_POSTGRES_SSLMODE", "disable")
-        .status()
-        .unwrap();
-    sqlx::query("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1")
-        .bind(&database)
-        .execute(&admin)
-        .await
-        .unwrap();
-    sqlx::query(sqlx::AssertSqlSafe(format!("DROP DATABASE {database}")))
-        .execute(&admin)
-        .await
-        .unwrap();
-    admin.close().await;
-    assert!(status.success());
+    store::test_support::with_postgres(run()).await;
 }
 
 async fn send(
@@ -134,67 +69,6 @@ async fn api(surreal: store::surreal::SurrealDb) -> Router {
     })
 }
 
-/// A deployment whose `web` has no PostgreSQL connection still reads a
-/// matter no plan referred, and names the missing plan store instead of
-/// answering `500 internal` where it needs one.
-#[tokio::test]
-async fn without_postgresql_an_unlinked_matter_reads_and_a_write_names_the_store() {
-    if std::env::var("NAVIGATOR_POSTGRES_HOST").is_ok() {
-        return;
-    }
-    let surreal = store::test_support::mem_surreal().await;
-    let owner = store::persons::create(
-        &surreal,
-        &NewPerson::with_role("Synthetic Owner", "unlinked-owner@example.com", Role::Owner),
-    )
-    .await
-    .unwrap();
-    let entity_id = store::test_support::seed_entity(&surreal).await;
-    let firm = store::firms::create(
-        &surreal,
-        &store::firms::NewFirm {
-            name: format!("Synthetic Unlinked Firm {}", Uuid::now_v7()),
-            status: "active".into(),
-            entity_id,
-            admin_dri_person_id: owner.id,
-        },
-    )
-    .await
-    .unwrap();
-    let project = store::projects::create(
-        &surreal,
-        &store::projects::NewProject {
-            code: store::projects::code_from_name("Synthetic Unlinked Matter", Uuid::new_v4()),
-            name: "Synthetic Unlinked Matter".into(),
-            status: "open".into(),
-            entity_id,
-            firm_id: Some(firm.id),
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
-    let app = api(surreal).await;
-    let owner = session(&owner, Role::Owner);
-    let link = format!("/app/api/projects/{}/legal-plan", project.id);
-
-    let (status, unlinked) = send(&app, &owner, "GET", &link, None).await;
-    assert_eq!(status, StatusCode::OK, "{unlinked}");
-    assert_eq!(unlinked["legal_plan"], Value::Null);
-    assert_eq!(unlinked["code"], project.code);
-
-    let (status, refused) = send(
-        &app,
-        &owner,
-        "PATCH",
-        &link,
-        Some(json!({"plan_case_number": "4900000-001"})),
-    )
-    .await;
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(refused["error"], "legal_plans_unavailable");
-}
-
 fn session(person: &store::persons::Person, role: Role) -> portal::SessionData {
     portal::SessionData {
         person_id: Some(person.id),
@@ -207,9 +81,21 @@ fn session(person: &store::persons::Person, role: Role) -> portal::SessionData {
     reason = "one scenario walks every door of the plan vocabulary and the matter link"
 )]
 async fn run() {
-    let pg = store::postgres::PostgresDb::from_env().await.unwrap();
-    pg.migrate_embedded(None).await.unwrap();
-    let surreal = store::test_support::mem_surreal().await;
+    let pg = store::postgres::PostgresDb::application().await.unwrap();
+    let surreal = store::surreal::SurrealDb::uninitialized();
+    sqlx::query("INSERT INTO brand(name, brand_key) VALUES ('Synthetic Brand', 'neon')")
+        .execute(pg.pool())
+        .await
+        .unwrap();
+    let entity_id: Uuid = sqlx::query_scalar(
+        "WITH kind AS (INSERT INTO entity_type(name) VALUES ('Plan Entity Type') RETURNING id),
+          place AS (INSERT INTO jurisdiction(name) VALUES ('Plan Jurisdiction') RETURNING id)
+          INSERT INTO entity(name,entity_type_id,jurisdiction_id)
+          SELECT 'Synthetic Plan Entity',kind.id,place.id FROM kind, place RETURNING id",
+    )
+    .fetch_one(pg.pool())
+    .await
+    .unwrap();
     let owner = store::persons::create(
         &surreal,
         &NewPerson::with_role("Synthetic Owner", "plans-owner@example.com", Role::Owner),
@@ -226,7 +112,6 @@ async fn run() {
     )
     .await
     .unwrap();
-    let entity_id = store::test_support::seed_entity(&surreal).await;
     let firm = store::firms::create(
         &surreal,
         &store::firms::NewFirm {
@@ -238,15 +123,6 @@ async fn run() {
     )
     .await
     .unwrap();
-    // The plan rows key the PostgreSQL firm row; the Firm is SurrealDB-authored
-    // and mirrored there in production.
-    sqlx::query("INSERT INTO firm (id,name,slug,status) VALUES ($1,$2,$3,'active')")
-        .bind(firm.id)
-        .bind(&firm.name)
-        .bind(format!("plans-{}", Uuid::new_v4().simple()))
-        .execute(pg.pool())
-        .await
-        .unwrap();
     let project = store::projects::create(
         &surreal,
         &store::projects::NewProject {
@@ -332,6 +208,70 @@ async fn run() {
     let (status, unlinked) = send(&app, &owner, "GET", &link, None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(unlinked["legal_plan"], Value::Null);
+    let (status, case_recorded) = send(
+        &app,
+        &owner,
+        "PATCH",
+        &link,
+        Some(json!({"plan_case_number": "4900000-001"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{case_recorded}");
+    assert_eq!(case_recorded["legal_plan"], Value::Null);
+    let manifest_request = |name, dry_run| {
+        json!({
+            "manifest_legal_plan": {
+                "name": name,
+                "firm_id": firm.id,
+                "brand": project.brand,
+                "dry_run": dry_run,
+            }
+        })
+    };
+    assert_eq!(
+        send(
+            &app,
+            &outsider,
+            "PATCH",
+            &link,
+            Some(manifest_request("arag", false))
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        send(
+            &app,
+            &owner,
+            "PATCH",
+            &link,
+            Some(manifest_request("arag", true))
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        send(&app, &owner, "GET", &link, None).await.1["legal_plan"],
+        Value::Null
+    );
+    assert_eq!(
+        send(
+            &app,
+            &owner,
+            "PATCH",
+            &link,
+            Some(manifest_request("arag", false))
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+    let (status, linked_from_manifest) = send(&app, &owner, "GET", &link, None).await;
+    assert_eq!(status, StatusCode::OK, "{linked_from_manifest}");
+    assert_eq!(linked_from_manifest["legal_plan"]["name"], "ARAG");
+    assert_eq!(linked_from_manifest["plan_case_number"], "4900000-001");
     let (status, linked) = send(
         &app,
         &owner,
@@ -362,6 +302,45 @@ async fn run() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(read, accepted);
 
+    assert_eq!(
+        send(
+            &app,
+            &owner,
+            "POST",
+            &plans,
+            Some(json!({
+                "name": "Other Panel", "acceptance_sla_hours": 24, "turnaround_sla_days": 90
+            }))
+        )
+        .await
+        .0,
+        StatusCode::CREATED
+    );
+    assert_eq!(
+        send(
+            &app,
+            &owner,
+            "PATCH",
+            &link,
+            Some(manifest_request("Other Panel", false))
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        send(
+            &app,
+            &owner,
+            "PATCH",
+            &link,
+            Some(manifest_request("arag", false))
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(send(&app, &owner, "GET", &link, None).await.1, accepted);
     // A plan the Firm does not hold, and a malformed number, are refused.
     assert_eq!(
         send(

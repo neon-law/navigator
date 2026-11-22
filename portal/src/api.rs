@@ -1,5 +1,7 @@
 //! JSON API commands and reads over the canonical store.
 
+#[path = "billing_report_api.rs"]
+mod billing_report_api;
 #[path = "firm_assumptions_api.rs"]
 mod firm_assumptions_api;
 #[path = "firm_journal_api.rs"]
@@ -312,6 +314,12 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             "PATCH",
             "/app/api/projects/{id}/legal-plan",
             patch(legal_plans_api::set_project),
+        ),
+        ("GET", "/app/api/billing", get(billing_report_api::personal)),
+        (
+            "GET",
+            "/app/api/projects/{id}/billing",
+            get(billing_report_api::project),
         ),
         (
             "GET",

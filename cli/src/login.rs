@@ -23,9 +23,9 @@ use crate::palette;
 
 /// Identity echoed by `GET /auth/cli/whoami`.
 #[derive(Debug, serde::Deserialize)]
-struct WhoAmI {
+pub(crate) struct WhoAmI {
     #[serde(default)]
-    email: Option<String>,
+    pub(crate) email: Option<String>,
     role: String,
     exp: i64,
 }
@@ -198,8 +198,10 @@ pub fn resolve_base(host: Option<&str>, creds: &credentials::Credentials) -> Res
     }
 }
 
-async fn fetch_whoami(base: &str, token: &str) -> Result<WhoAmI> {
-    let resp = reqwest::Client::new()
+pub(crate) async fn fetch_whoami(base: &str, token: &str) -> Result<WhoAmI> {
+    let resp = crate::remote::authenticated_client_builder(base)?
+        .timeout(Duration::from_secs(30))
+        .build()?
         .get(format!("{base}/auth/cli/whoami"))
         .bearer_auth(token)
         .send()

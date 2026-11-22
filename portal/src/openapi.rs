@@ -1397,6 +1397,30 @@ fn canonical_document(base: &str) -> Value {
             }
           }
         },
+        "/app/api/billing": {
+          "get": {
+            "summary": "Read the signed-in lawyer's billing worklist",
+            "responses": {
+              "200": { "description": "The caller's claim actions, time, fee projections and recorded payment figures" },
+              "401": { "description": "No authenticated session" },
+              "403": { "description": "The session lacks lawyer-tier access or a Person" },
+              "503": { "description": "Billing storage is unavailable" }
+            }
+          }
+        },
+        "/app/api/projects/{id}/billing": {
+          "get": {
+            "summary": "Read a participating lawyer's billing view of one Project",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "responses": {
+              "200": { "description": "Claim actions, time across Project timekeepers, fee projections and recorded payments" },
+              "401": { "description": "No authenticated session" },
+              "403": { "description": "The session lacks lawyer-tier access" },
+              "404": { "description": "Project outside the caller's firm-side participation" },
+              "503": { "description": "Billing storage is unavailable" }
+            }
+          }
+        },
         "/app/api/projects/{id}/legal-plan-claims": {
           "get": {
             "summary": "Read a private Project's claims and evidence",
@@ -1476,6 +1500,18 @@ fn canonical_document(base: &str) -> Value {
             "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
             "requestBody": { "required": true, "content": { "application/json": {
               "schema": { "type": "object", "additionalProperties": false, "properties": {
+                "manifest_legal_plan": {
+                  "type": "object",
+                  "description": "Apply the plan declared by the Project manifest. Supply this alone. Requires interactive firm-side Project access. A different existing plan blocks the update.",
+                  "additionalProperties": false,
+                  "required": ["name", "firm_id", "brand"],
+                  "properties": {
+                    "name": { "type": "string" },
+                    "firm_id": { "type": "string", "format": "uuid" },
+                    "brand": { "type": "string" },
+                    "dry_run": { "type": "boolean", "default": false }
+                  }
+                },
                 "legal_plan": { "type": "string", "description": "One of the Firm's plan names; empty clears the link." },
                 "plan_case_number": { "type": "string", "description": "The plan's own number for this referral (ARAG CaseAssist, LegalEASE member case), verbatim." },
                 "plan_member_id": { "type": "string" },
@@ -1488,6 +1524,7 @@ fn canonical_document(base: &str) -> Value {
               } }
             } } },
             "responses": {
+              "204": { "description": "Manifest plan verified or applied" },
               "200": { "description": "The matter's plan link after the change", "content": { "application/json": { "schema": { "type": "object", "properties": {
                 "project_id": { "type": "string", "format": "uuid" },
                 "code": { "type": "string" },
@@ -1985,28 +2022,28 @@ fn canonical_document(base: &str) -> Value {
         "/app/api/calendars/freebusy": {
             "post": {
                 "summary": "Read merged attorney free/busy",
-                "description": "Busy blocks for every lawyer-tier firm-side participant on the Project, or for the caller's Firms when project_code is omitted. An unreadable calendar is reported and is never an empty busy list. Event details are not included. Authorization: lawyer tier, plus read_attorney_calendars on the owning Firm.",
+                "description": "Set personal=true for the signed-in attorney's busy blocks. Set project_code for the Project and its participating attorneys. Without either, the report covers the caller's Firms. An unreadable calendar is reported and is never an empty busy list. Event details are not included. Authorization: lawyer tier, plus read_attorney_calendars on the owning Firm.",
                 "responses": { "200": { "description": "Busy blocks and any unreadable calendars" }, "401": { "description": "No authenticated session" }, "403": { "description": "Lawyer tier required" }, "404": { "description": "The Project or Firm is outside the caller's scope" } }
             }
         },
         "/app/api/calendars/events": {
             "post": {
-                "summary": "Read the signed-in attorney's events",
-                "description": "Event details for the signed-in Person's primary Attorney Calendar only. Authorization: lawyer tier, plus read_attorney_calendars on a Firm the caller belongs to.",
+                "summary": "Read personal or Project Calendar events",
+                "description": "Without project_code, event details come from the signed-in attorney's primary calendar. With project_code, the caller must have firm-side access to the Project and read_attorney_calendars on its Firm.",
                 "responses": { "200": { "description": "Events, or an unreadable calendar" }, "401": { "description": "No authenticated session" }, "403": { "description": "Lawyer tier required" }, "404": { "description": "The caller is outside the Firm" } }
             }
         },
         "/app/api/calendars/check": {
             "post": {
                 "summary": "Check a window for conflicts and duplicate titles",
-                "description": "clear is false when a required calendar is unreadable, when busy time or a Deadline overlaps the window, or when the signed-in attorney's events repeat a title.",
+                "description": "Set personal=true for the signed-in attorney's calendars, or project_code for a Project. clear is false when a required calendar is unreadable, busy time or a Deadline overlaps the window, or the signed-in attorney's events repeat a title.",
                 "responses": { "200": { "description": "The check result" }, "401": { "description": "No authenticated session" }, "403": { "description": "Lawyer tier required" }, "404": { "description": "The Project or Firm is outside the caller's scope" } }
             }
         },
         "/app/api/calendars/access": {
             "post": {
                 "summary": "Report whether each attorney calendar can be read",
-                "description": "Names each attorney and whether free/busy can be read. A missing share or scope is not reported as readable.",
+                "description": "Names each attorney in scope and reports whether free/busy can be read. Set personal=true to restrict the report to the signed-in attorney, or project_code for a Project.",
                 "responses": { "200": { "description": "Per-attorney calendar access" }, "401": { "description": "No authenticated session" }, "403": { "description": "Lawyer tier required" }, "404": { "description": "The Project or Firm is outside the caller's scope" } }
             }
         },

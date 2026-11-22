@@ -9189,6 +9189,7 @@ name = "project-scaffold"
 version = "26.11.22"
 dependencies = [
  "rules",
+ "serde_json",
  "serde_yaml",
  "sha2 0.11.1",
 ]

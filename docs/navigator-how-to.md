@@ -25,6 +25,13 @@ out of chat and source control. For Claude setup, see the [MCP client guide](cla
 Try “List my Projects” after signing in. Navigator applies your account's access rules. A hosted assistant needs its own
 supported authentication flow because it cannot read the credential file on your computer.
 
+## Check your calendar and billing
+
+Run `navigator calendar` for your agenda and `navigator billing` for the claims that need your attention, followed by
+your time. Both use your signed-in account, including inside a Project checkout. Run `navigator project calendar` for
+the matter's shared calendar or `navigator project billing` for its timekeepers, fees and claims. Outside the checkout,
+use `--project <code>` on either Project command.
+
 ## Set up a Project checkout with Jujutsu
 
 On macOS, get the repository URL from the Project’s Navigator page. Replace the example URL and code in these commands
@@ -33,17 +40,17 @@ with the Project’s values.
 ```sh
 git clone https://forge.example/firm/sample-project sample-project
 cd sample-project
-navigator project repository jj
+navigator jj setup
 jj status
 ```
 
 The setup command installs Jujutsu through Homebrew if needed and colocates it with Git. It copies the checkout's Git
-identity and signing settings.
+identity and signing settings. To inspect the remote repository's review policy, run `navigator jj policy --dry-run`.
 
 [Jujutsu Git compatibility guide](https://docs.jj-vcs.dev/latest/git-compatibility/)
 
-Start a change from the refreshed `main@origin` in a clean checkout. If the Project uses a different Git remote name,
-substitute it in the commands.
+Start a change from the refreshed `main@origin` in a clean checkout. The delivery command uses the Project's `origin`
+remote.
 
 ```sh
 jj git fetch --remote origin
@@ -70,11 +77,12 @@ Before publishing, refresh the base and rebase the single change if `main` advan
 and verify the final change carries the required signature. Then publish only the reviewed change.
 
 ```sh
-jj git push --remote origin --change @
+navigator jj push
 ```
 
-Open a pull request from the printed bookmark to `main` on the Project's forge. Follow the required `ci` check and merge
-policy. Review client-facing Matter Page lenses and document Pointer visibility before merge.
+The command opens or resumes a pull request to `main` on the configured forge, follows the required check and merge, and
+reports the deployment run for the exact merge commit. Re-run with the same revision to resume after an interruption.
+Review client-facing Matter Page lenses and document Pointer visibility before pushing.
 
 ## Give agents the Project rules
 
