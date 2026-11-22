@@ -62,7 +62,7 @@ async fn object_fixture(
 }
 
 #[tokio::test]
-async fn verified_object_activation_removes_only_the_two_legacy_sdk_http_services() {
+async fn verified_object_activation_removes_only_compatibility_object_services() {
     let Some(options) = object_fixture_options() else {
         return;
     };
@@ -98,7 +98,11 @@ async fn verified_object_activation_removes_only_the_two_legacy_sdk_http_service
             )
         });
         let endpoint = bind_legacy_objects(
-            Endpoint::builder().bind(SandboxCreditResetService::new(source)),
+            Endpoint::builder().bind(DriDigestService::new(
+                source,
+                Arc::new(workflows::CapturingNotifier::new()),
+                false,
+            )),
             objects,
         )
         .build();
@@ -121,7 +125,7 @@ async fn verified_object_activation_removes_only_the_two_legacy_sdk_http_service
             .map(|service| service["name"].as_str().unwrap())
             .collect::<std::collections::BTreeSet<_>>();
         assert!(
-            services.contains("SandboxCreditReset"),
+            services.contains("DriDigest"),
             "unrelated service remains bound"
         );
         assert_eq!(services.contains("notation"), !active);
@@ -150,7 +154,7 @@ async fn verified_object_activation_removes_only_the_two_legacy_sdk_http_service
         let unrelated = endpoint.handle(
             axum::http::Request::builder()
                 .method("POST")
-                .uri("/invoke/SandboxCreditReset/run")
+                .uri("/invoke/DriDigest/run")
                 .header("content-type", "application/vnd.restate.invocation.v5")
                 .body(axum::body::Body::empty())
                 .unwrap(),
