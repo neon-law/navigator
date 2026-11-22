@@ -69,6 +69,7 @@ pub const INTERNAL_DBOS_OPERATIONS: &[(&str, &str)] = &[
 #[cfg(test)]
 mod tests {
     use super::{VIRTUAL_OBJECTS, WORKFLOW_SERVICES};
+    use crate::nightly_project_update::Tag;
 
     #[test]
     fn deployment_admission_covers_actual_worker_bindings_and_caller_selectors() {
@@ -166,10 +167,7 @@ mod tests {
                 crate::dbos_email_summary::recovery::WORKFLOW,
                 "EmailSummary",
             ),
-            (
-                crate::nightly_project_update::Tag::Calendar.service(),
-                "NightlyProjectUpdate",
-            ),
+            (Tag::Calendar.service(), "NightlyProjectUpdate"),
         ] {
             assert!(!WORKFLOW_SERVICES.contains(&child));
             let selection = store::workflow_engine::WORKFLOWS
@@ -232,7 +230,6 @@ mod tests {
     #[test]
     fn the_nightly_project_update_and_its_tagged_children_are_registered() {
         assert!(WORKFLOW_SERVICES.contains(&"NightlyProjectUpdate"));
-        use crate::nightly_project_update::Tag;
         for tag in Tag::ALL {
             let registered = if Tag::COMPATIBILITY.contains(tag) {
                 WORKFLOW_SERVICES.contains(&tag.service())
