@@ -339,26 +339,14 @@ pub async fn build_from_env(brand_seed: store::seed::BrandSeed) -> anyhow::Resul
     // is the honest answer rather than a provider that pretends.
     let integration_providers = crate::integrations::from_env().await;
 
-    // Real Xero provider when configured. Without credentials, invoice
-    // generation refuses unless the deployment declares simulated matters;
-    // a fork can still boot without fabricating invoices for real work.
     let simulated_billing =
         store::sample_matters(cfg.environment).context("resolve simulated billing environment")?;
-    let billing_provider: std::sync::Arc<dyn crate::billing::BillingProvider> =
-        crate::billing::XeroBillingProvider::from_env().map_or_else(
-            || {
-                tracing::info!("billing provider: StubBillingProvider (XERO_* unset)");
-                std::sync::Arc::new(if simulated_billing {
-                    crate::billing::StubBillingProvider::for_simulated_matters()
-                } else {
-                    crate::billing::StubBillingProvider::new()
-                }) as std::sync::Arc<dyn crate::billing::BillingProvider>
-            },
-            |xero| {
-                tracing::info!("billing provider: XeroBillingProvider");
-                std::sync::Arc::new(xero)
-            },
-        );
+    let billing_provider: std::sync::Arc<dyn crate::billing::BillingProvider> = if simulated_billing
+    {
+        std::sync::Arc::new(crate::billing::StubBillingProvider::for_simulated_matters())
+    } else {
+        std::sync::Arc::new(crate::billing::DisabledBillingProvider)
+    };
 
     let esignature_webhook_secret = std::env::var("DOCUSIGN_WEBHOOK_SECRET")
         .ok()
@@ -1717,12 +1705,8 @@ mod tests {
     type Gate = fn(bool, &dyn Fn(&str) -> Option<String>) -> anyhow::Result<bool>;
 
     /// The schedules gated only by DBOS and their own flag.
-    fn recovery_gates() -> [(Gate, &'static str); 7] {
+    fn recovery_gates() -> [(Gate, &'static str); 6] {
         [
-            (
-                |host, lookup| should_host_billing_digest(host, lookup),
-                workflows::dbos_engine::billing_digest::ENABLED_ENV,
-            ),
             (
                 |host, lookup| should_host_purchase_activation(host, lookup),
                 workflows::dbos_engine::purchase_activation::ENABLED_ENV,
@@ -1845,7 +1829,7 @@ mod tests {
             _ => None,
         };
         assert!(!should_host_billing_canary(false, both_enabled).unwrap());
-        assert!(should_host_billing_canary(true, both_enabled).unwrap());
+        assert!(!should_host_billing_canary(true, both_enabled).unwrap());
         assert!(!should_host_billing_canary(true, |_| None).unwrap());
     }
 
@@ -1882,7 +1866,7 @@ mod tests {
             workflows::dbos_engine::billing_canary::ENABLED_ENV => Some("typo".into()),
             _ => None,
         };
-        assert!(should_host_billing_canary(true, invalid_billing_canary).is_err());
+        assert!(!should_host_billing_canary(true, invalid_billing_canary).unwrap());
     }
 }
 

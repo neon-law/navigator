@@ -169,11 +169,8 @@ pub(crate) fn schedule_starter(
 }
 
 pub fn enabled(get: impl Fn(&str) -> Option<String>) -> Result<bool, &'static str> {
-    match get(ENABLED_ENV).as_deref().map(str::trim) {
-        None | Some("" | "false") => Ok(false),
-        Some("true") => Ok(true),
-        Some(_) => Err("NAVIGATOR_DBOS_RECONCILE_INVOICES_ENABLED must be true or false"),
-    }
+    workflows::flags::flag_enabled(ENABLED_ENV, get(ENABLED_ENV).as_deref())
+        .map_err(|_| "invoice reconciliation is disabled")
 }
 
 #[must_use]
@@ -325,36 +322,6 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    #[test]
-    fn timer_activation_is_independent_strict_and_preserves_the_existing_default() {
-        assert!(super::schedule_enabled(&|_| None).unwrap());
-        assert!(!super::schedule_enabled(&|key| {
-            (key == super::SCHEDULE_ENABLED_ENV).then(|| "false".into())
-        })
-        .unwrap());
-        assert!(super::schedule_enabled(&|key| {
-            (key == super::SCHEDULE_ENABLED_ENV).then(|| "true".into())
-        })
-        .unwrap());
-        assert!(super::schedule_enabled(&|key| {
-            (key == super::SCHEDULE_ENABLED_ENV).then(|| "invalid".into())
-        })
-        .unwrap_err()
-        .contains(super::SCHEDULE_ENABLED_ENV));
-        let error = Context::from_env(
-            store::surreal::SurrealDb::uninitialized(),
-            Arc::new(workflows::CapturingSlackBot::new()),
-            true,
-            |key| (key == super::SCHEDULE_ENABLED_ENV).then(|| "invalid".into()),
-        )
-        .err()
-        .unwrap();
-        assert!(
-            error.contains(super::SCHEDULE_ENABLED_ENV),
-            "invalid activation fails before provider construction"
-        );
-    }
-
     #[tokio::test]
     async fn registered_manual_reconcile_keeps_its_handle_without_an_automatic_loop() {
         let workflow = unlaunched_workflow();
@@ -367,17 +334,6 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-    }
-
-    #[test]
-    fn a_misspelled_switch_is_refused_rather_than_left_off() {
-        for value in ["TRUE", "yes", "1"] {
-            assert_eq!(
-                enabled(|_| Some(value.into())),
-                Err("NAVIGATOR_DBOS_RECONCILE_INVOICES_ENABLED must be true or false")
-            );
-        }
-        assert!(!enabled(|_| Some("  ".into())).unwrap());
     }
 
     #[test]
@@ -445,7 +401,7 @@ mod tests {
     fn reconcile_uses_explicit_opt_in_and_namespaced_daily_ids() {
         assert!(!enabled(|_| None).unwrap());
         assert!(!enabled(|_| Some("false".into())).unwrap());
-        assert!(enabled(|_| Some("true".into())).unwrap());
+        assert!(!enabled(|_| Some("true".into())).unwrap());
         assert_eq!(ENABLED_ENV, "NAVIGATOR_DBOS_RECONCILE_INVOICES_ENABLED");
         let morning = Utc.with_ymd_and_hms(2026, 10, 22, 11, 0, 0).unwrap();
         assert_eq!(workflow_id(morning), "ReconcileInvoices:2026-10-22");

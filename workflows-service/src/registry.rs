@@ -28,10 +28,6 @@
 pub const WORKFLOW_SERVICES: &[&str] = &[
     "EmailSummary",
     "Archives",
-    "BillingCanary",
-    "BillingDigest",
-    "ReconcileInvoices",
-    "SandboxCreditReset",
     "DriDigest",
     "FinanceAggregate",
     "GeneralNag",
@@ -76,19 +72,6 @@ mod tests {
         let mut runtime = vec![
             ("EmailSummary", crate::dbos_email_summary::ENABLED_ENV),
             ("Archives", archives::workflow::DBOS_ENABLED_ENV),
-            (
-                "BillingCanary",
-                workflows::dbos_engine::billing_canary::ENABLED_ENV,
-            ),
-            (
-                "BillingDigest",
-                workflows::dbos_engine::billing_digest::ENABLED_ENV,
-            ),
-            ("ReconcileInvoices", crate::dbos_reconcile::ENABLED_ENV),
-            (
-                "SandboxCreditReset",
-                workflows::trigger::SANDBOX_CREDIT_RESET_DBOS_ENABLED_ENV,
-            ),
             ("DriDigest", workflows::dbos_engine::dri_digest::ENABLED_ENV),
             (
                 "FinanceAggregate",

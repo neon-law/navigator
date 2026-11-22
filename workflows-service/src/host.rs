@@ -47,22 +47,12 @@ use anyhow::Context;
 #[cfg(feature = "restate-compatibility")]
 use archives::workflow::ArchivesService;
 #[cfg(feature = "restate-compatibility")]
-use billing_workflows::canary::BillingCanaryService;
-#[cfg(feature = "restate-compatibility")]
-use billing_workflows::digest::BillingDigestService;
-#[cfg(feature = "restate-compatibility")]
-use billing_workflows::reconcile::ReconcileInvoicesService;
-#[cfg(feature = "restate-compatibility")]
-use billing_workflows::sandbox_reset::SandboxCreditResetService;
-#[cfg(feature = "restate-compatibility")]
 use restate_sdk::prelude::*;
 use workflows::dbos_engine;
-#[cfg(feature = "restate-compatibility")]
-use workflows::{EmailService, SlackOpsDelivery};
 
 #[cfg(feature = "restate-compatibility")]
 macro_rules! bind_common_services {
-    ($endpoint:expr, $surreal:expr, $storage:expr, $assets_storage:expr, $kms:expr, $email_summary:expr, $inbound_triage:expr, $notifier:expr, $ops_delivery:expr, $slack_bot:expr, $project_slack_bots:expr, $general_channel:expr, $finance_channel:expr, $messages_channel:expr, $staging_messages_channel:expr, $slack_bot_enabled:expr, $simulated_matters:expr, $repository_forge:expr, $portal_origin:expr, $environment_label:expr) => {
+    ($endpoint:expr, $surreal:expr, $storage:expr, $assets_storage:expr, $kms:expr, $email_summary:expr, $inbound_triage:expr, $notifier:expr, $slack_bot:expr, $project_slack_bots:expr, $general_channel:expr, $messages_channel:expr, $staging_messages_channel:expr, $slack_bot_enabled:expr, $simulated_matters:expr, $repository_forge:expr, $portal_origin:expr, $environment_label:expr) => {
         $endpoint
             .bind(SocialPublisherService::new(
                 $surreal.clone(),
@@ -131,15 +121,6 @@ macro_rules! bind_common_services {
                 $repository_forge,
                 crate::nightly_project_update::repository::RUNTIME_VERSION,
             ))
-            .bind(BillingCanaryService::new($ops_delivery.clone()))
-            .bind(BillingDigestService::new($ops_delivery))
-            .bind(ReconcileInvoicesService::new(
-                $surreal.clone(),
-                $slack_bot.clone(),
-                $finance_channel,
-                $simulated_matters,
-            ))
-            .bind(SandboxCreditResetService::new($surreal.clone()))
             .bind(DriDigestService::new(
                 $surreal.clone(),
                 $notifier,
@@ -660,12 +641,8 @@ async fn run_host(
         "workflows-service email backend"
     );
 
-    // Internal ops notifications deliver to the engineering channel through a
-    // Slack incoming webhook. `BillingCanary` and `BillingDigest` route plain
-    // text through `SlackOpsDelivery`, which fences the message in a code block. `Archives` posts mrkdwn directly to the
-    // notifier so links and compact status formatting render correctly.
-    // The client-facing Notation service uses the email backend, keeping
-    // client content inside the client delivery channel.
+    // Operations notifications use the Slack notifier; client mail uses the
+    // separately configured email backend.
     #[cfg(feature = "restate-compatibility")]
     let notifier = notifier_from_env();
     let slack_bot = slack_bot_from_env()
@@ -692,8 +669,6 @@ async fn run_host(
     // The `#finance` destination for the nightly Xero and IOLTA report. It
     // uses the same configured Slack App as `#general`; the empty-value rule
     // is the same too, so a run with nowhere to report is a terminal error.
-    #[cfg(feature = "restate-compatibility")]
-    let finance_channel = std::env::var("SLACK_FINANCE_CHANNEL_ID").unwrap_or_default();
     let messages_channel = std::env::var("SLACK_MESSAGES_CHANNEL_ID").unwrap_or_default();
     let staging_messages_channel =
         std::env::var("SLACK_STAGING_MESSAGES_CHANNEL_ID").unwrap_or_default();
@@ -716,8 +691,6 @@ async fn run_host(
         },
         "workflows-service ops-notification backend"
     );
-    #[cfg(feature = "restate-compatibility")]
-    let ops_delivery: Arc<dyn EmailService> = Arc::new(SlackOpsDelivery::new(notifier.clone()));
 
     // Object storage for `generate_pdf__*` step dispatch (the worker
     // renders the PDF and persists it here). Same `cloud::from_env`
@@ -851,11 +824,9 @@ async fn run_host(
                     email_summary,
                     inbound_triage,
                     notifier,
-                    ops_delivery,
                     slack_bot,
                     project_slack_bots,
                     general_channel,
-                    finance_channel,
                     messages_channel,
                     staging_messages_channel,
                     slack_bot_enabled,

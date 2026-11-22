@@ -181,24 +181,6 @@ fn explicit_delivery_configuration_is_never_silently_replaced() {
     assert!(notation_reset::Context::from_lookup(source, "Development", true, |_| None).is_err());
 }
 
-#[test]
-fn local_canary_keeps_manual_registration_and_strict_timer_configuration() {
-    let providers = local();
-    assert_eq!(
-        providers.canary(&native).unwrap().recipient,
-        "billing-canary@example.test"
-    );
-    assert!(providers
-        .canary(
-            &|key| if key == workflows::flags::BILLING_CANARY_SCHEDULE_ENABLED_ENV {
-                Some("sometimes".into())
-            } else {
-                native(key)
-            }
-        )
-        .is_err());
-}
-
 async fn seed_invoice(source: &SurrealDb, providers: &LocalProviders) -> String {
     let (matter, admin) = native_project::matter(source).await;
     let firm = matter

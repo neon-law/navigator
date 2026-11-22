@@ -1,23 +1,4 @@
-# billing-digest daily trigger — starts one `BillingDigest` Restate workflow
-# invocation per day. The workflow itself is hosted by the `workflows-service`
-# worker (../gke/workflows-service/) — all workflows live there, so there is no
-# separate digest worker. This CronJob is a thin trigger that POSTs to the
-# Restate Cloud ingress and exits in seconds. Restate owns the retry schedule.
-#
-# `BillingDigest` posts firm ops a trailing-window GCP cost report covering every
-# configured billing account and every project on each — a cross-account
-# roll-up, then per account a table by project and one by service, each against
-# the prior window. The BigQuery billing export is written per billing account,
-# so BILLING_EXPORT_TABLE is a comma-separated list with one table per account;
-# the message names every account it read. The worker needs BILLING_EXPORT_TABLE
-# + BIGQUERY_PROJECT set (env on the workflows-service Deployment), and
-# roles/bigquery.dataViewer on *each* account's billing dataset; unset → the
-# workflow is a clean no-op.
-#
-# Schedule `0 13 * * *` UTC = 05:00 PST (06:00 PDT). 13:00 clears the billing
-# export's ~24h lag and avoids every other cron (archives 10:00, reconcile
-# 11:00, canary 14:00 Sun). The trigger
-# keys each invocation on the UTC date, so a same-day double-fire is a no-op.
+# Retained suspended billing job; its image exits without submitting work.
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -26,6 +7,7 @@ metadata:
   labels:
     app: billing-digest-trigger
 spec:
+  suspend: true
   schedule: "0 13 * * *"
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 7
