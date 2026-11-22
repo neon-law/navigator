@@ -168,6 +168,8 @@ jobs:
           cargo test -p store --lib journal_startup_migration::
           cargo test -p store \
             --test firm_journal --test postgres_tooling --test brand_move_mirror
+      - name: Runtime role-proof cleanup refuses changed ownership or mounts
+        run: python3 images/postgres/tests/test-runtime-graph-cleanup.py
       - name: Runtime graph writers use genuine native admission and restricted App roles
         env:
           NAV_REQUIRE_POSTGRES: '1'

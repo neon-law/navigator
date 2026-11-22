@@ -27,11 +27,18 @@ cleanup() {
         task=$(docker inspect --format '{{index .Config.Labels "codex.task"}}' "$container" 2>/dev/null || true)
         actual_image=$(docker inspect --format '{{.Image}}' "$container" 2>/dev/null || true)
         mounts=$(docker inspect --format '{{json .Mounts}}' "$container" 2>/dev/null || true)
-        if [[ "$id" == "$container" && "$owner" == "$nonce" && "$task" == runtime-graph-roles && "$actual_image" == "$image_id" && "$mounts" == "$owned_mounts" ]]; then
+        id_matches=false; operation_matches=false; task_matches=false; image_matches=false; mounts_match=false
+        if [[ "$container" =~ ^[a-f0-9]{64}$ && "$id" == "$container" ]]; then id_matches=true; fi
+        if [[ "$owner" == "$nonce" ]]; then operation_matches=true; fi
+        if [[ "$task" == runtime-graph-roles ]]; then task_matches=true; fi
+        if [[ "$actual_image" == "$image_id" ]]; then image_matches=true; fi
+        if python3 "$root/images/postgres/tests/runtime-graph-mounts.py" "$owned_mounts" "$mounts"; then mounts_match=true; fi
+        if $id_matches && $operation_matches && $task_matches && $image_matches && $mounts_match; then
             docker logs --tail 150 "$container" > "$work/postgres.log" 2>&1 || true
             docker rm -f -v "$container" > "$work/cleanup.log" 2>&1 || result=1
         else
-            printf 'Ownership/volume uncertainty: retaining captured ID; no cleanup.\n' >&2
+            printf 'Ownership/volume uncertainty: id=%s operation=%s task=%s image=%s mounts=%s; retaining captured ID; no cleanup.\n' \
+                "$id_matches" "$operation_matches" "$task_matches" "$image_matches" "$mounts_match" >&2
             result=1
         fi
     fi
