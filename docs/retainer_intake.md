@@ -124,14 +124,16 @@ prior answer when the user navigates back so re-display is read-only.
 
 ## Durable execution
 
-Restate is the production target. The [`workflows-service`](../workflows-service/) crate registers a `Notation` virtual
-object with the broker; each `questionnaire_signal` and `workflow_signal` handler reads the spec yaml + current state
-from Restate's keyed state, computes the next state, persists it back, and appends one row to `notation_events` inside
-`ctx.run("append-event", …)` so a replay reuses the cached row id instead of double-writing.
+Native Notation execution uses the PostgreSQL-backed DBOS worker in
+[`workflows-service/src/dbos_notation.rs`](../workflows-service/src/dbos_notation.rs). It serializes each Notation's
+transitions and persists state and Notation Events through the existing transactional store seams. The application uses
+[`DbosNotationRuntime`](../workflows/src/runtime_dbos.rs) with its explicit ingress and bearer token.
 
-The application-side adapter ([`workflows::runtime_restate::RestateRuntime`](../workflows/src/runtime_restate.rs)) posts
-to the broker's ingress port. When `RESTATE_BROKER_URL` is unset, `web` falls back to the in-process
-[`InMemoryRuntime`](../workflows/src/runtime.rs) used in tests and local dev.
+The native and retained broker adapters use the same internal [Notation HTTP
+transport](../workflows/src/notation_http.rs) for start, signal, actor attribution, trace propagation, and bodyless
+state/event reads. Native revision-bound approvals have dedicated handlers. Explicit compatibility selection retains
+[`RestateRuntime`](../workflows/src/runtime_restate.rs), its broker environment, and journaled worker handlers. Boot
+selection and ownership admission determine which adapter is allowed.
 
 ## The signature seam
 
@@ -180,8 +182,9 @@ infrastructure rather than a future swap-in.
   [`webapp/src/walker_step.rs`](../webapp/src/walker_step.rs) the per-answer-type step (text / country / people-list
   branches, prior-answer pre-fill), [`webapp/src/intake_review.rs`](../webapp/src/intake_review.rs) the review phases
   and the CSRF token on every write, and [`webapp/src/reask.rs`](../webapp/src/reask.rs) the flagged re-ask.
-- **Restate adapter**: [`workflows/src/runtime_restate.rs`](../workflows/src/runtime_restate.rs) uses `wiremock` to pin
-  the broker wire shape per `MachineKind`.
+- **Notation HTTP transport**: [`workflows/src/notation_http.rs`](../workflows/src/notation_http.rs) uses `wiremock`
+  to pin wire shape, authentication, trace propagation and failures per `MachineKind`. Adapter tests retain legacy
+  service selection and native revision-bound approval checks.
 - **Worker handlers**: `workflows-service/src/notation_service.rs` pins `next_state` against the questionnaire spec; the
   journal helpers live next door in `workflows-service/src/journal.rs`.
 - **HTTP + browser**: `server/tests/browser_e2e.rs` drives the full retainer walk end-to-end via fantoccini +
