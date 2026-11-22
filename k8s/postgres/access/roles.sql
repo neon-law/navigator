@@ -218,7 +218,7 @@ ALTER DEFAULT PRIVILEGES FOR ROLE navigator_owner IN SCHEMA public
 SELECT format('REVOKE ALL ON TABLE %I FROM navigator_app', relname)
 FROM pg_class
 WHERE relnamespace = 'public'::regnamespace
-  AND relname IN ('_sqlx_migrations', 'schema_migrations')
+  AND relname IN ('_sqlx_migrations', 'schema_migrations', 'firm_namespace_move')
 \gexec
 
 -- Initial authority is metadata, not runtime-writable application data. This

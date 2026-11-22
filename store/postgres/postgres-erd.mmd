@@ -790,6 +790,17 @@ erDiagram
         int version
         string wrapped_dek
     }
+    firm_namespace_move {
+        datetime completed_at
+        uuid firm_id
+        string forge_origin
+        int forgejo_id
+        uuid id
+        datetime inserted_at
+        string new_slug
+        string old_slug
+        json repositories
+    }
     forgejo_push_webhook_journal {
         string author
         string change_id
@@ -2307,6 +2318,7 @@ erDiagram
     firm }o--|| firm_forgejo_organization : references
     firm }o--|| firm_integration_secret : references
     person }o--|| firm_integration_secret : references
+    firm }o--|| firm_namespace_move : references
     person }o--|| git_access_token : references
     project }o--|| git_access_token : references
     firm }o--|| inbox_assignment : references

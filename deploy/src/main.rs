@@ -2298,8 +2298,32 @@ enum EmailSummaryCmd {
     },
 }
 
+#[derive(clap::Args)]
+struct FirmNamespaceMove {
+    /// Firm UUID from the deployment's Project directory.
+    #[arg(long)]
+    firm: uuid::Uuid,
+    /// Canonical current Forgejo organization and Firm slug.
+    #[arg(long)]
+    from: String,
+    /// Requested organization name.
+    #[arg(long)]
+    to: String,
+    /// Independently confirmed numeric Forgejo organization ID.
+    #[arg(long)]
+    organization_id: i64,
+    /// Read the Forgejo token from a pipe instead of `FORGEJO_TOKEN`.
+    #[arg(long)]
+    token_stdin: bool,
+    /// Execute or resume the move during the operator's maintenance window.
+    #[arg(long)]
+    apply: bool,
+}
+
 #[derive(Subcommand)]
 enum ForgejoPolicyCmd {
+    /// Move one existing Firm organization and its bound Project URLs on this installation.
+    RenameOrganization(FirmNamespaceMove),
     /// Reconcile Firm users' SSH public keys onto their Forgejo accounts.
     SshKeys {
         #[command(subcommand)]

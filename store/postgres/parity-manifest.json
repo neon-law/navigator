@@ -401,6 +401,13 @@
     },
     {
       "extra_column": null,
+      "extra_table": "firm_namespace_move",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
       "extra_table": "forgejo_push_webhook_journal",
       "missing_column": null,
       "missing_table": null,
@@ -2228,7 +2235,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 188,
+    "table_count": 189,
     "tables": {
       "address": {
         "columns": {
@@ -3723,6 +3730,29 @@
         "references": [
           "firm",
           "person"
+        ]
+      },
+      "firm_namespace_move": {
+        "columns": {
+          "completed_at": "TIMESTAMPTZ",
+          "firm_id": "UUID",
+          "forge_origin": "TEXT",
+          "forgejo_id": "BIGINT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "new_slug": "TEXT",
+          "old_slug": "TEXT",
+          "repositories": "JSONB"
+        },
+        "foreign_keys": [
+          [
+            "firm_id",
+            "firm"
+          ]
+        ],
+        "name": "firm_namespace_move",
+        "references": [
+          "firm"
         ]
       },
       "forgejo_push_webhook_journal": {

@@ -948,6 +948,7 @@ fn forgejo_policy_help_requires_explicit_targets_and_names_the_guarded_actions()
             "bundle",
             "logs",
             "release",
+            "rename-organization",
             "restore",
             "runner-controller",
             "runner-once",

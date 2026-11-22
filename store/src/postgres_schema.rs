@@ -1743,6 +1743,7 @@ mod tests {
                 include_str!("../postgres/migrations/20261122000400_preserve_plan_intake_case_number.sql"),
             ),
             ("20261122021314_converge_native_person_merge.sql", include_str!("../postgres/migrations/20261122021314_converge_native_person_merge.sql")),
+            ("20261122140000_firm_namespace_move.sql", include_str!("../postgres/migrations/20261122140000_firm_namespace_move.sql")),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());
