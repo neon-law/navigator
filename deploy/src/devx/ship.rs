@@ -2173,10 +2173,11 @@ const ORDERED_SERVICE_OBJECTS: &[(&str, &str)] = &[
 fn ensure_ordered_service_objects(
     cfg: &ShipConfig,
     dry_run: bool,
-    dbos: bool,
-    archives: bool,
-    write_only: bool,
+    deployment: &super::deployments::Deployment,
 ) -> Result<()> {
+    let dbos = dbos_enabled(deployment);
+    let archives = archives_enabled(deployment);
+    let write_only = write_only_archives(&|key: &str| deployment.coordinates.get(key).cloned())?;
     let required = ORDERED_SERVICE_OBJECTS
         .iter()
         .copied()
@@ -4421,13 +4422,7 @@ fn roll(
     //     keeps the rendered catalog from drifting from what `ops secrets
     //     apply` can write.
     ensure_projected_objects_resolve(&manifests)?;
-    ensure_ordered_service_objects(
-        cfg,
-        dry_run,
-        dbos_enabled(deployment),
-        archives_enabled(deployment),
-        write_only_archives(&|key: &str| deployment.coordinates.get(key).cloned())?,
-    )?;
+    ensure_ordered_service_objects(cfg, dry_run, deployment)?;
     // 4c. Request the shared Firm certificate for this build's brand hosts
     //     now, so Google issues it while the release rolls, and keep the one
     //     serving today attached until it does; see `firm_certificate_roll`.
@@ -14157,7 +14152,16 @@ spec:
         wait_statefulset(&cfg, true, "navigator-postgres", ROLLOUT_TIMEOUT).unwrap();
         wait_job(&cfg, true, "navigator-migrate", "15m").unwrap();
         retire_automatic_mirror_recovery(&cfg, true).unwrap();
-        ensure_ordered_service_objects(&cfg, true, true, true, true).unwrap();
+        let mut deployment = ordered_deployment();
+        deployment.coordinates.extend(
+            [
+                (NAVIGATOR_DBOS_ENABLED, "true"),
+                (ARCHIVES_SCHEDULE_ENV, "true"),
+                (ARCHIVE_WRITE_ONLY_CONFIG, ARCHIVE_WRITE_ONLY_CONFIG_PATH),
+            ]
+            .map(|(key, value)| (key.into(), value.into())),
+        );
+        ensure_ordered_service_objects(&cfg, true, &deployment).unwrap();
         retire_dbos_hosted_cronjobs(&cfg, true, &ordered_deployment()).unwrap();
         retire_firm_only_brand_certificates(&cfg, true).unwrap();
         ensure_manifest_images_published(
