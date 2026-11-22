@@ -108,10 +108,11 @@ async fn rpc_handler(
 ) -> impl IntoResponse {
     let principal = principal.map(|Extension(p)| p);
     let response = match parse_request(&body) {
+        Ok(request) if request.id.is_none() => return StatusCode::ACCEPTED.into_response(),
         Ok(request) => dispatch(&state, principal.as_ref(), &request).await,
         Err(response) => *response,
     };
-    (StatusCode::OK, Json(serialize(response)))
+    (StatusCode::OK, Json(serialize(response))).into_response()
 }
 
 /// Handle anonymous discovery on the shared MCP endpoint.
@@ -223,9 +224,6 @@ async fn dispatch(state: &McpState, principal: Option<&Principal>, req: &Request
         "tools/list" => Response::ok(id, json!({ "tools": tools::advertised_catalog() })),
         "tools/call" => handle_tools_call(state, principal, id, &req.params).await,
         "ping" => Response::ok(id, json!({})),
-        // MCP notifications expect no reply, but HTTP needs a body —
-        // we return an empty success so the client gets a clean 200.
-        m if m.starts_with("notifications/") => Response::ok(id, json!({})),
         other => Response::err(
             id,
             codes::METHOD_NOT_FOUND,
@@ -248,36 +246,26 @@ async fn handle_tools_call(
         .cloned()
         .unwrap_or_else(|| json!({}));
 
-    // A gated tool is absent from `tools/list`, but a client holding a stale
-    // catalog — or one naming a tool it never listed — can still ask for it.
-    // Refuse before dispatch, so the supervised act does not run, and say
-    // where to perform it instead. An *unknown* name falls through to
-    // `call_tool`, which answers it as `Unknown` rather than as a refusal.
-    if tools::is_known_tool(name) && !tools::is_advertised(name) {
-        telemetry::record_mcp_tool_called(name, telemetry::mcp_outcome::ERROR);
-        return Response::ok(
-            id,
-            json!({
-                "isError": true,
-                "content": [{ "type": "text", "text": tools::withheld_message(name) }]
-            }),
-        );
-    }
-
+    // An unknown name is client input. Only catalog identifiers belong in telemetry.
+    let tool_label = if tools::is_known_tool(name) {
+        name
+    } else {
+        "unknown"
+    };
     // The one instrumented chokepoint for every `/mcp` tool call — the direct
     // counterpart to the A2A audit span, so the shared tool catalog is observable
     // on both protocol surfaces. Identifiers and counts only: the span and the
     // metric carry the tool NAME and the OUTCOME enum, never `arguments` (which
     // can hold a client name, email, or answer body) and never the result body.
-    let result = tools::call_tool(state, principal, name, &arguments)
-        .instrument(tracing::info_span!("mcp.tool.call", tool = name))
+    let result = tools::call_http_tool(state, principal, name, &arguments)
+        .instrument(tracing::info_span!("mcp.tool.call", tool = tool_label))
         .await;
-    telemetry::record_mcp_tool_called(name, tool_call_outcome(&result));
+    telemetry::record_mcp_tool_called(tool_label, tool_call_outcome(&result));
 
     match result {
         Ok(value) => Response::ok(id, value),
         Err(e) => {
-            tracing::warn!(tool = name, "mcp tool call failed");
+            tracing::warn!(tool = tool_label, "mcp tool call failed");
             Response::ok(id, tool_error_payload(&e))
         }
     }

@@ -212,5 +212,5 @@ Each behavior described above is grounded by a test or a BDD feature, so the doc
   README](../server/content/workshops/navigator/README.md), grounded by its
   [feature](../features/tests/features/workshop_navigator_walkthrough.feature).
 - **Agent-card shape and its OAuth security schemes** — grounded by the card tests in `portal/src/a2a.rs`.
-- **`/app/mcp` is Bearer-only** — it carries no session cookie, so `/app` being private-by-default does not change how
-  this path authenticates. See [`access-model.md`](access-model.md).
+- **HTTP MCP** offers public Template discovery. Signed-in clients supply a bearer credential. See the
+  [access model](access-model.md) for authorization and Project scope.

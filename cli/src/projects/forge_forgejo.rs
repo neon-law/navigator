@@ -71,6 +71,24 @@ impl ForgejoForge {
         )
     }
 
+    pub(super) async fn reconcile_policy(&self, dry_run: bool) -> Result<()> {
+        let drift = self
+            .governance
+            .reconcile(&self.repository, REQUIRED_CHECK_CONTEXT, dry_run)
+            .await?;
+        if drift.is_empty() {
+            println!("Repository review settings match.");
+        } else {
+            let action = if dry_run {
+                "Would reconcile"
+            } else {
+                "Reconciled"
+            };
+            println!("{action} {}", drift.join(", "));
+        }
+        Ok(())
+    }
+
     /// Read the bound primary's review controls and Actions setting.
     pub(super) async fn verify_workspace(&self) -> Result<()> {
         let repository: serde_json::Value = self
@@ -128,7 +146,12 @@ impl ForgejoForge {
         );
         Ok(pull)
     }
-    async fn workflow_run(&self, merge_commit: &str, event: &str) -> Result<Option<DeploymentRun>> {
+    async fn workflow_run(
+        &self,
+        merge_commit: &str,
+        event: &str,
+        workflow: &str,
+    ) -> Result<Option<DeploymentRun>> {
         #[derive(Deserialize)]
         struct Runs {
             workflow_runs: Vec<Run>,
@@ -155,19 +178,16 @@ impl ForgejoForge {
             workflow_id: String,
             run_number: u64,
         }
-        // Forgejo's one gate workflow runs on both PRs and pushes to main.
         let runs: Runs = self
             .get(&format!(
-                "actions/runs?head_sha={merge_commit}&event={event}&workflow_id=gate.yml&limit=50"
+                "actions/runs?head_sha={merge_commit}&event={event}&workflow_id={workflow}&limit=50"
             ))
             .await?;
         let Some(run) = runs
             .workflow_runs
             .into_iter()
             .filter(|run| {
-                run.commit_sha == merge_commit
-                    && run.event == event
-                    && run.workflow_id == "gate.yml"
+                run.commit_sha == merge_commit && run.event == event && run.workflow_id == workflow
             })
             .max_by_key(|run| run.id)
         else {
@@ -305,6 +325,34 @@ impl Forge for ForgejoForge {
         pull.review()
     }
 
+    async fn find_merged_review(&self, branch: &str, sha: &str) -> Result<Option<ReviewRef>> {
+        let mut page = 1;
+        loop {
+            let pulls: Vec<Pull> = self
+                .get(&format!("pulls?state=closed&page={page}&limit=50"))
+                .await?;
+            let count = pulls.len();
+            for pull in pulls {
+                if pull.merged
+                    && pull.base.name == "main"
+                    && pull.head.name == branch
+                    && pull.head.sha == sha
+                    && pull
+                        .head
+                        .repo
+                        .as_ref()
+                        .is_some_and(|repo| repo.full_name == self.repository)
+                {
+                    return pull.review().map(Some);
+                }
+            }
+            if count < 50 {
+                return Ok(None);
+            }
+            page += 1;
+        }
+    }
+
     async fn arm_merge(&self, review: &ReviewRef) -> Result<ArmOutcome> {
         if let Some(merge_commit) = self.merge_commit(review).await? {
             return Ok(ArmOutcome::MergedNow { merge_commit });
@@ -373,11 +421,12 @@ impl Forge for ForgejoForge {
     }
 
     async fn deployment(&self, merge_commit: &str) -> Result<Option<DeploymentRun>> {
-        self.workflow_run(merge_commit, "push").await
+        self.workflow_run(merge_commit, "push", "cd.yml").await
     }
 
     async fn verification(&self, review: &ReviewRef) -> Result<Option<DeploymentRun>> {
-        self.workflow_run(&review.head_sha, "pull_request").await
+        self.workflow_run(&review.head_sha, "pull_request", "gate.yml")
+            .await
     }
 }
 
@@ -401,17 +450,20 @@ mod tests {
             .and(path("/api/v1/repos/example/sample-litigation/actions/runs"))
             .and(query_param("head_sha", "merged"))
             .and(query_param("event", "push"))
+            .and(query_param("workflow_id", "cd.yml"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({"workflow_runs": [
-                {"id": 4, "index_in_repo": 3, "commit_sha": "merged", "workflow_id": "gate.yml",
+                {"id": 4, "index_in_repo": 3, "commit_sha": "merged", "workflow_id": "cd.yml",
                  "event": "push", "html_url": "https://forge.example/actions/runs/3", "status": "failure"},
-                {"id": 5, "index_in_repo": 4, "commit_sha": "different", "workflow_id": "gate.yml",
-                 "event": "push", "html_url": "wrong", "status": "success"}
+                {"id": 5, "index_in_repo": 4, "commit_sha": "different", "workflow_id": "cd.yml",
+                 "event": "push", "html_url": "wrong", "status": "success"},
+                {"id": 6, "index_in_repo": 5, "commit_sha": "merged", "workflow_id": "gate.yml",
+                 "event": "push", "html_url": "wrong workflow", "status": "success"}
             ]}))).expect(1).mount(&server).await;
         Mock::given(method("GET"))
             .and(path("/api/v1/repos/example/sample-litigation/actions/tasks"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({"workflow_runs": [
-                {"name": "seeds", "status": "failure", "head_sha": "merged", "workflow_id": "gate.yml", "run_number": 3},
-                {"name": "gate", "status": "success", "head_sha": "merged", "workflow_id": "gate.yml", "run_number": 2}
+                {"name": "seeds", "status": "failure", "head_sha": "merged", "workflow_id": "cd.yml", "run_number": 3},
+                {"name": "gate", "status": "success", "head_sha": "merged", "workflow_id": "cd.yml", "run_number": 2}
             ]}))).expect(1).mount(&server).await;
         let forge =
             ForgejoForge::new(&server.uri(), "example/sample-litigation", "t".into()).unwrap();
@@ -460,6 +512,39 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(review.number, 8);
+    }
+
+    #[tokio::test]
+    async fn merged_review_resumption_matches_the_exact_topic_and_head() {
+        let server = MockServer::start().await;
+        let pull = |number, repository, head| {
+            json!({
+                "number": number,
+                "head": {"sha": head, "ref": "push/change", "repo": {"full_name": repository}},
+                "base": {"sha": "base", "ref": "main"},
+                "html_url": format!("https://forge.example/pulls/{number}"),
+                "draft": false, "merged": true, "merge_commit_sha": "merged", "mergeable": false
+            })
+        };
+        Mock::given(method("GET"))
+            .and(path("/api/v1/repos/example/sample-litigation/pulls"))
+            .and(query_param("state", "closed"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                pull(7, "another/sample-litigation", "head"),
+                pull(8, "example/sample-litigation", "older-head"),
+                pull(9, "example/sample-litigation", "head"),
+            ])))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let forge =
+            ForgejoForge::new(&server.uri(), "example/sample-litigation", "t".into()).unwrap();
+        let review = forge
+            .find_merged_review("push/change", "head")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(review.number, 9);
     }
 
     #[tokio::test]

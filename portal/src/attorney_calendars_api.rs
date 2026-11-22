@@ -6,8 +6,8 @@
 //!
 //! `ReadAttorneyCalendars` is the Firm boundary: a caller with no membership
 //! on the Firm that owns the Workspace cannot spend its delegation. Free/busy
-//! for other participants returns no event details. Event details are the
-//! signed-in Person's primary calendar only.
+//! for other participants returns busy windows. Event details come from the
+//! signed-in Person's primary calendar or the authorized Project Calendar.
 
 use std::collections::BTreeMap;
 
@@ -35,6 +35,8 @@ pub(crate) struct WindowRequest {
     end: DateTime<FixedOffset>,
     #[serde(default)]
     attorneys: Vec<String>,
+    #[serde(default)]
+    personal: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -42,6 +44,8 @@ pub(crate) struct WindowRequest {
 pub(crate) struct AccessRequest {
     #[serde(default)]
     project_code: Option<String>,
+    #[serde(default)]
+    personal: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -206,7 +210,7 @@ pub(crate) async fn check_door(
     .into_response())
 }
 
-/// `POST /app/api/calendars/events` — the signed-in attorney's primary calendar.
+/// `POST /app/api/calendars/events` — the signed-in attorney's primary calendar or a Project Calendar.
 pub(crate) async fn events_door(
     State(state): State<ApiState>,
     LawyerSession(session): LawyerSession,
@@ -214,6 +218,20 @@ pub(crate) async fn events_door(
 ) -> Result<Response, ApiError> {
     window(request.start, request.end)?;
     ensure_caller(&session).await;
+    if let Some(code) = request.project_code.as_deref() {
+        let project = authorized_project(&state, &session, code).await?;
+        let body = match project_events(&state, &project, request.start, request.end).await? {
+            Ok(events) => serde_json::json!(events),
+            Err(missing) => serde_json::json!({
+                "unreadable": [{"role": "project", "missing": missing}]
+            }),
+        };
+        return Ok((
+            [(axum::http::header::CACHE_CONTROL, "no-store")],
+            Json(body),
+        )
+            .into_response());
+    }
     let person_id = session.person_id.ok_or(ApiError::Forbidden)?;
     if !firm_member(&state, &session).await? {
         return Err(ApiError::NotFound);
@@ -271,8 +289,14 @@ pub(crate) async fn access_door(
     Json(request): Json<AccessRequest>,
 ) -> Result<Response, ApiError> {
     ensure_caller(&session).await;
-    let (project, attorneys) =
-        audience(&state, &session, request.project_code.as_deref(), &[]).await?;
+    let (project, attorneys) = audience(
+        &state,
+        &session,
+        request.project_code.as_deref(),
+        &[],
+        request.personal,
+    )
+    .await?;
     let pg = store::attorney_calendars::postgres()
         .await
         .map_err(calendar_store)?;
@@ -409,6 +433,7 @@ async fn read_report(
         session,
         request.project_code.as_deref(),
         &request.attorneys,
+        request.personal,
     )
     .await?;
     let pg = store::attorney_calendars::postgres()
@@ -631,9 +656,12 @@ async fn project_events(
         }
         Err(error) => return Err(provider_status(error)),
     };
-    match calendar.events_in_window(calendar_id, start, end).await {
-        Ok(events) => Ok(Ok(events)),
-        Err(_) => Ok(Err("scope")),
+    match calendar
+        .project_events(&project.code, calendar_id, start, end)
+        .await
+    {
+        Ok(Some(events)) => Ok(Ok(events)),
+        Ok(None) | Err(_) => Ok(Err("scope")),
     }
 }
 
@@ -688,18 +716,19 @@ async fn google_firms(
         .map_err(|error| ApiError::Db(error.to_string()))
 }
 
-async fn project_attorneys(
+async fn authorized_project(
     state: &ApiState,
     session: &crate::session::SessionData,
     code: &str,
-) -> Result<(store::projects::Project, Vec<Attorney>), ApiError> {
+) -> Result<store::projects::Project, ApiError> {
     let visible = store::access::visible_projects(&state.surreal, session.person_id, session.role)
         .await
         .map_err(ApiError::Db)?;
-    let project = visible
-        .into_iter()
-        .find(|project| project.code == code)
-        .ok_or(ApiError::NotFound)?;
+    let mut matching = visible.into_iter().filter(|project| project.code == code);
+    let project = matching.next().ok_or(ApiError::NotFound)?;
+    if matching.next().is_some() {
+        return Err(ApiError::NotFound);
+    }
     let Some(firm_id) = project.firm_id else {
         return Err(ApiError::NotFound);
     };
@@ -731,6 +760,15 @@ async fn project_attorneys(
     if !participates {
         return Err(ApiError::NotFound);
     }
+    Ok(project)
+}
+
+async fn project_attorneys(
+    state: &ApiState,
+    session: &crate::session::SessionData,
+    code: &str,
+) -> Result<(store::projects::Project, Vec<Attorney>), ApiError> {
+    let project = authorized_project(state, session, code).await?;
     let rows = store::projects::participations_for_project(&state.surreal, project.id)
         .await
         .map_err(|error| ApiError::Db(error.to_string()))?;
@@ -801,7 +839,25 @@ async fn audience(
     session: &crate::session::SessionData,
     project_code: Option<&str>,
     filter: &[String],
+    personal: bool,
 ) -> Result<(Option<store::projects::Project>, Vec<Attorney>), ApiError> {
+    if personal {
+        if project_code.is_some() || !filter.is_empty() {
+            return Err(ApiError::MalformedBody(
+                "a personal calendar request cannot select a Project or other attorneys".into(),
+            ));
+        }
+        let person_id = session.person_id.ok_or(ApiError::Forbidden)?;
+        if !firm_member(state, session).await? {
+            return Err(ApiError::NotFound);
+        }
+        let person = store::persons::find_by_id(&state.surreal, person_id)
+            .await
+            .map_err(ApiError::Person)?
+            .ok_or(ApiError::NotFound)?;
+        let role = person.role.as_str().to_string();
+        return Ok((None, vec![Attorney { person, role }]));
+    }
     let (project, mut attorneys) = match project_code {
         Some(code) => {
             let (project, attorneys) = project_attorneys(state, session, code).await?;

@@ -253,9 +253,11 @@ async fn run_inner(
         plan.code
     };
     let mut repository_url = None;
+    let mut legal_plan = None;
     if resume.is_some() {
         let handles = live_handles(host, &code).await?;
         repository_url = handles.repository_url.filter(|url| !url.is_empty());
+        legal_plan = handles.legal_plan;
         let supplied = options.client_email.as_deref();
         if !empty && supplied.is_some() {
             client_dri_for_resume(&handles.client_dri, supplied)?;
@@ -273,7 +275,7 @@ async fn run_inner(
             }
         }
     }
-    write_ownership(host, directory, &code).await?;
+    write_live_identity(host, directory, &code, legal_plan.as_deref()).await?;
     println!(
         "Generated the canonical Project repository at {}",
         directory.display()
@@ -299,14 +301,15 @@ async fn run_inner(
     Ok(ExitCode::SUCCESS)
 }
 
-/// Record the opened row's actual ownership, including a resumed scaffold.
-async fn write_ownership(host: Option<&str>, directory: &Path, code: &str) -> Result<()> {
+/// Record the opened row's ownership and fill a missing Legal Plan on a resumed scaffold.
+async fn write_live_identity(
+    host: Option<&str>,
+    directory: &Path,
+    code: &str,
+    legal_plan: Option<&str>,
+) -> Result<()> {
     let (base, token) = crate::remote::resolve(host)?;
-    let project = super::surfaces::list_visible_projects(&base, &token)
-        .await?
-        .into_iter()
-        .find(|project| project.code == code)
-        .context("opened Project is missing from the visible directory")?;
+    let project = super::surfaces::resolve_visible_project(&base, &token, code).await?;
     let firm = project
         .firm_id
         .context("opened Project has no owning Firm")?;
@@ -314,7 +317,11 @@ async fn write_ownership(host: Option<&str>, directory: &Path, code: &str) -> Re
     let path = directory.join(super::manifest::FILE);
     let contents = std::fs::read_to_string(&path)?;
     let contents = super::set::replace_project_key(&contents, "firm", &firm.to_string())?;
-    let contents = super::set::replace_project_key(&contents, "brand", &brand)?;
+    let mut contents = super::set::replace_project_key(&contents, "brand", &brand)?;
+    let current = super::manifest::parse(&contents).map_err(anyhow::Error::msg)?;
+    if let (None, Some(name)) = (current.legal_plan, legal_plan) {
+        contents = super::set::replace_project_key(&contents, "legal_plan", name)?;
+    }
     std::fs::write(&path, contents)?;
     Ok(())
 }

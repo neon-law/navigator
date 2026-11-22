@@ -486,13 +486,32 @@ pub async fn for_project(
         let financials = crate::matter_financials::for_project(surreal, pg, project_id).await?;
         return Ok(MatterProjection::Certain((&financials).into()));
     };
+    let (projection, _) = for_contingency_term(pg, &term).await?;
+    Ok(MatterProjection::Contingent(projection))
+}
+
+pub(crate) async fn for_contingency_term(
+    pg: &PostgresDb,
+    term: &crate::contingency_terms::ContingencyTerm,
+) -> Result<
+    (
+        ContingentProjection,
+        Vec<model::billing_report::ContingencyTier>,
+    ),
+    MatterProjectionError,
+> {
+    let project_id = term.project_id;
     let current_stage = crate::case_stages::current_stage(pg, project_id).await?;
     let mut tiers = Vec::with_capacity(term.tiers.len());
+    let mut fee_tiers = Vec::with_capacity(term.tiers.len());
     for tier in &term.tiers {
+        let stage = crate::case_stages::definition(pg, tier.stage_definition_id).await?;
         tiers.push(PositionedTier {
-            stage_position: crate::case_stages::definition(pg, tier.stage_definition_id)
-                .await?
-                .position,
+            stage_position: stage.position,
+            fee_bps: tier.fee_bps,
+        });
+        fee_tiers.push(model::billing_report::ContingencyTier {
+            stage: stage.label,
             fee_bps: tier.fee_bps,
         });
     }
@@ -535,7 +554,7 @@ pub async fn for_project(
             .map(|event| event.occurred_at);
         projection.stale = last_move.is_some_and(|moved| moved > estimate.recorded_at);
     }
-    Ok(MatterProjection::Contingent(projection))
+    Ok((projection, fee_tiers))
 }
 
 #[cfg(test)]

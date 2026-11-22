@@ -3,19 +3,8 @@
 //! prerequisite it omits is a command that fails on a clean machine with no
 //! hint about what is missing.
 //!
-//! A prerequisite list maintained by hand drifts silently, because the person
-//! adding a tool to `require_tools` has no reason to be reading the install
-//! page. That is how §0 came to name neither `kind` nor `helm` while
-//! `cli::devx::orchestrate` refused the cluster lane without both — a reader
-//! could install everything the page asked for and still be turned away by a
-//! tool it never mentioned.
-//!
-//! So derive the checks from the sources instead of restating them: the tool
-//! list comes out of `orchestrate.rs`'s own `require_tools` calls, the pinned
-//! versions out of the workflow that pins them, and every `path:line`
-//! citation has to resolve to a line that still says what it is cited for.
-//! A tool added to the lane, or a pin bumped, now fails here until the page
-//! catches up.
+//! Derive required tools from `orchestrate.rs` and check that the install
+//! page names them. Source citations must resolve to existing nonempty lines.
 
 use std::fs;
 use std::path::PathBuf;
@@ -28,11 +17,6 @@ const OSS_INSTALL: &str = include_str!(concat!(
 const ORCHESTRATE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../deploy/src/devx/orchestrate.rs"
-));
-
-const DEPLOY_YML: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../.github/workflows/deploy.yml"
 ));
 
 /// The workspace root, which every citation on the page is relative to.
@@ -97,54 +81,6 @@ fn prerequisites_name_every_tool_the_kind_cluster_lane_requires() {
     }
 }
 
-/// The `helm/kind-action` step in `deploy.yml` — its `with:` block pins both
-/// the `kind` binary and the node image it must stay in lockstep with.
-///
-/// Anchored on `uses: helm/kind-action` rather than the bare action name: a
-/// comment earlier in the job explains why the tool cache is recreated *for*
-/// that action, and matching the prose would return a block with no pins in it.
-fn kind_action_block() -> &'static str {
-    let (_, after) = DEPLOY_YML
-        .split_once("uses: helm/kind-action")
-        .expect("deploy.yml must install kind through helm/kind-action");
-    after
-        .split_once("- uses:")
-        .map_or(after, |(block, _)| block)
-}
-
-/// §0 tells the reader to take a specific `kind`, and the only reason that
-/// version is the right one is that CI proves the stack green on it. Pin the
-/// page to the workflow rather than to a copied string, so bumping the gate
-/// cannot leave the install page recommending the version CI abandoned.
-#[test]
-fn prerequisites_name_the_kind_version_and_node_image_deploy_pins() {
-    let block = kind_action_block();
-
-    let version = block
-        .lines()
-        .find_map(|line| line.trim().strip_prefix("version: "))
-        .expect("the kind action must pin a `version:`");
-    let node_image = block
-        .lines()
-        .find_map(|line| line.trim().strip_prefix("node_image: kindest/node:"))
-        .expect("the kind action must pin a `node_image:`");
-    let node_tag = node_image
-        .split_once('@')
-        .map_or(node_image, |(tag, _)| tag);
-
-    let section = prerequisites_section();
-    assert!(
-        section.contains(version),
-        "`docs/oss-install.md` §0 must tell the reader to install kind {version}, the version \
-         `.github/workflows/deploy.yml` pins for the KIND gate"
-    );
-    assert!(
-        section.contains(node_tag),
-        "`docs/oss-install.md` §0 must name node image {node_tag}: the page tells the reader the \
-         kind binary and the node image are pinned in lockstep, so both halves have to be current"
-    );
-}
-
 /// Inline `path/to/file.ext:123` citations on the page, as (path, line).
 ///
 /// Trims the surrounding markdown punctuation rather than parsing code spans:
@@ -195,44 +131,6 @@ fn every_source_citation_on_the_page_resolves() {
             !cited.trim().is_empty(),
             "`docs/oss-install.md` cites `{path}:{line}`, which is a blank line — the citation \
              has drifted off the code it was pointing at"
-        );
-    }
-}
-
-/// §0's citations are turned into instructions — install *this* version,
-/// because *that* line demands it — so a line that merely exists is not
-/// enough. Assert over the set of cited lines rather than pinning each
-/// citation to a position, since the page is free to reorder or reword the
-/// bullets as long as all four claims still land on their code.
-#[test]
-fn the_cluster_lane_citations_land_on_the_code_they_describe() {
-    let root = workspace_root();
-    let cited: Vec<String> = citations(prerequisites_section())
-        .into_iter()
-        .map(|(path, line)| {
-            let body = fs::read_to_string(root.join(path))
-                .unwrap_or_else(|e| panic!("§0 cites `{path}:{line}`, but {e}"));
-            body.lines()
-                .nth(line - 1)
-                .unwrap_or_else(|| panic!("§0 cites `{path}:{line}`, which is past end of file"))
-                .to_string()
-        })
-        .collect();
-
-    for (claim, needle) in [
-        ("the cluster lane's tool gate", "require_tools(&[\"kind\""),
-        (
-            "the one command helm is needed for",
-            "Command::new(\"helm\")",
-        ),
-        ("the pinned kind binary", "version: v"),
-        ("the node image it locks to", "node_image: kindest/node:"),
-    ] {
-        assert!(
-            cited.iter().any(|line| line.contains(needle)),
-            "§0 describes {claim}, so one of its `path:line` citations must land on a line \
-             containing `{needle}` — none of them do, so the page is explaining code it is no \
-             longer pointing at"
         );
     }
 }

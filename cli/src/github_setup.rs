@@ -439,6 +439,28 @@ impl RepositoryTarget {
         )
     }
 
+    pub(crate) fn from_origin(remote: &str) -> Result<Option<Self>> {
+        let Some((host, _)) = split_remote(remote) else {
+            return Ok(None);
+        };
+        if env::var("NAVIGATOR_FORGEJO_ROOT_URL")
+            .ok()
+            .and_then(|root| url::Url::parse(&root).ok())
+            .is_some_and(|root| {
+                root.host_str()
+                    .is_some_and(|configured| host.eq_ignore_ascii_case(configured))
+            })
+        {
+            return Ok(None);
+        }
+        let forge = GovernedForge::from_lookup(|key| env::var(key).ok())?;
+        if !host_matches_governed(host, &forge.host) {
+            return Ok(None);
+        }
+        let slug = slug_from_remote(remote, &forge.host)?;
+        Self::resolve_within(Some(slug), &forge, optional_env(API_BASE_ENV)).map(Some)
+    }
+
     /// The resolution itself, with every environment read already done.
     ///
     /// Split out so the tests can drive the whole path — including the shape a
@@ -1831,16 +1853,29 @@ pub fn run(
     action_version: &str,
     workflow_home: &str,
 ) -> Result<()> {
-    tracing_subscriber::fmt::try_init().ok();
-    let client = GitHubClient::from_env(target)?;
-    let policy = target.policy();
-    let runtime = tokio::runtime::Builder::new_current_thread()
+    tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .context("build tokio runtime")?;
-    runtime.block_on(async move {
-        reconcile(policy, &client, dry_run, action_version, workflow_home).await
-    })
+        .context("build tokio runtime")?
+        .block_on(run_async(target, dry_run, action_version, workflow_home))
+}
+
+pub(crate) async fn run_async(
+    target: &RepositoryTarget,
+    dry_run: bool,
+    action_version: &str,
+    workflow_home: &str,
+) -> Result<()> {
+    tracing_subscriber::fmt::try_init().ok();
+    let client = GitHubClient::from_env(target)?;
+    reconcile(
+        target.policy(),
+        &client,
+        dry_run,
+        action_version,
+        workflow_home,
+    )
+    .await
 }
 
 /// Confirm privacy before bootstrapping the Project's signed initial source.

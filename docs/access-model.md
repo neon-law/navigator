@@ -225,10 +225,9 @@ The anonymous allowlist is explicit, small, and pinned by `portal/tests/router_c
   the ontology of software anyone can clone, so a login door in front of it guarded nothing. The retired `/docs`,
   `/docs/{slug}`, `/app/docs`, and `/app/docs/{slug}` paths are anonymous permanent redirects to it.
 
-`/app/mcp` is **not** on this allowlist — a caller still needs a credential — but it is not behind the session-cookie
-boundary either. It mounts a Bearer-only stack (`require_auth`, `require_policy`, and in production
-`require_google_oauth`), carries no CSRF layer, and never accepts the browser session cookie: JSON-RPC clients send
-`Authorization: Bearer`, not a cookie.
+The public `POST /app/mcp` connection offers Template discovery. A request with an Authorization header enters the
+bearer-only policy stack. A first-party session or a verified Google access token supplies the caller identity. Private
+tool calls use the caller’s role and Project scope.
 
 The A2A agent card is *not* on that list. The whole API surface, its documentation, and the card itself live under the
 private `/app/api` prefix and require a session, so A2A discovery is not self-service: a client cannot read the card to

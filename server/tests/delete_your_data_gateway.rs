@@ -132,6 +132,10 @@ async fn the_gateway_is_404_on_every_non_neon_brand_host() {
 
 #[tokio::test]
 async fn same_day_legal_home_leads_to_signup_and_separate_attorney_options() {
+    store::test_support::with_postgres(check_same_day_home()).await;
+}
+
+async fn check_same_day_home() {
     let mut state =
         portal::test_support::app_state(store::surreal::SurrealDb::uninitialized()).await;
     state.oauth = Some(portal::OAuthConfig::new(
@@ -141,7 +145,16 @@ async fn same_day_legal_home_leads_to_signup_and_separate_attorney_options() {
         "https://idp.example/authorize",
         "https://idp.example/token",
     ));
-    let app = app(state);
+    store::seed::seed_canonical(&state.surreal, &state.assets_storage)
+        .await
+        .expect("seed the public brands");
+    let pg = store::postgres::PostgresDb::application().await.unwrap();
+    let app = app(state).layer(axum::middleware::from_fn(
+        move |mut request: axum::extract::Request, next: axum::middleware::Next| {
+            request.extensions_mut().insert(pg.clone());
+            next.run(request)
+        },
+    ));
     let app_path = views::brand::SAME_DAY_LEGAL_APP_PATH;
     for host in ["sameday.neonlaw.com", "staging-sameday.neonlaw.com"] {
         let (status, home) = get_on_host(&app, "/", Some(host)).await;
@@ -151,13 +164,16 @@ async fn same_day_legal_home_leads_to_signup_and_separate_attorney_options() {
             "fm-page--same-day-legal",
             r#"id="mcp-setup""#,
             r#"href="/auth/signup""#,
-            "https://neonlaw.com/app/mcp",
+            "https://www.neonlaw.com/app/mcp",
             r#"href="https://github.com/neon-law/navigator""#,
             r#"href="/app#pricing""#,
             "From $50",
             r#"href="mailto:"#,
         ] {
-            assert!(home.contains(expected), "{host} is missing {expected:?}");
+            assert!(
+                home.contains(expected),
+                "{host} is missing {expected:?}: {home}"
+            );
         }
         let html = scraper::Html::parse_document(&home);
         let hero_links = scraper::Selector::parse(".fm-hero a").unwrap();

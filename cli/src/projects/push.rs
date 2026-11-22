@@ -51,15 +51,7 @@ pub async fn dispatch(
     dry_run: bool,
 ) -> Result<()> {
     run_document_preflight(dir).await?;
-    let remote = git_text(dir, &["remote", "get-url", "origin"])?;
-    let github = super::lifecycle::github_origin(dir, &remote)
-        .await
-        .is_some();
-    let forge: Box<dyn Forge> = if github {
-        Box::new(GitHubForge::from_checkout(dir).await?)
-    } else {
-        Box::new(ForgejoForge::from_checkout(dir)?)
-    };
+    let (github, forge) = checkout_forge(dir).await?;
     run(
         dir,
         base,
@@ -73,6 +65,121 @@ pub async fn dispatch(
     )
     .await?;
     Ok(())
+}
+
+async fn checkout_forge(dir: &Path) -> Result<(bool, Box<dyn Forge>)> {
+    let remote = git_text(dir, &["remote", "get-url", "origin"])?;
+    let github = super::lifecycle::github_origin(dir, &remote)
+        .await
+        .is_some();
+    let forge: Box<dyn Forge> = if github {
+        Box::new(GitHubForge::from_checkout(dir).await?)
+    } else {
+        Box::new(ForgejoForge::from_checkout(dir)?)
+    };
+    Ok((github, forge))
+}
+
+/// Deliver exactly one selected Jujutsu head and the changes it introduces.
+/// Pin the commit before reading its trailers and use the full change ID
+/// for the topic so a rewrite keeps the same review branch.
+pub async fn dispatch_jj(dir: &Path, revision: &str) -> Result<()> {
+    let selected = super::jj_billing::change(dir, revision)?;
+    let (github, forge) = checkout_forge(dir).await?;
+    run_jj(dir, selected, github, forge.as_ref()).await?;
+    Ok(())
+}
+
+async fn run_jj(
+    dir: &Path,
+    selected: super::jj_billing::JujutsuChange,
+    github: bool,
+    forge: &dyn Forge,
+) -> Result<LaneReport> {
+    anyhow::ensure!(
+        !selected.conflict && !selected.divergent,
+        "resolve the selected change before pushing"
+    );
+    let target = format!("push/{}", selected.change_id);
+    let head = selected.commit_id;
+    run_forge_preflight(forge).await?;
+    let mirror = github && has_forgejo_remote(dir)?;
+    let review = if let Some(review) = forge.find_merged_review(&target, &head).await? {
+        review
+    } else {
+        // The document gate reads the checkout, so it must see the same
+        // content as the selected revision.
+        anyhow::ensure!(
+            super::jj::output(dir, &["diff", "--from", &head, "--to", "@", "--summary"])?
+                .trim()
+                .is_empty(),
+            "the selected change differs from the checkout; select or open its checkout before delivery"
+        );
+        let manifest =
+            manifest::read(dir).context("a Project navigator.yaml is required to push")?;
+        let pin = check_version_pin(manifest.version.as_deref(), env!("CARGO_PKG_VERSION"))?;
+        println!("  {pin}");
+        check_signing(dir)?;
+        if mirror {
+            configured_mirror_url(dir)?;
+        }
+        run_document_preflight(dir).await?;
+
+        super::jj::output(dir, &["git", "fetch", "--remote", "origin"])?;
+        let outgoing = super::jj_billing::changes(
+            dir,
+            &format!("ancestors({head}) ~ ancestors(main@origin)"),
+        )?;
+        anyhow::ensure!(
+            !outgoing.is_empty(),
+            "the selected change is already on main"
+        );
+        for change in &outgoing {
+            anyhow::ensure!(
+                change.signed && !change.conflict && !change.divergent,
+                "sign and resolve outgoing change {} before pushing",
+                change.change_id
+            );
+        }
+
+        super::jj::push_revision(dir, &head, true)?;
+        super::jj_billing::stage_outgoing(dir, outgoing).await?;
+        super::jj::push_revision(dir, &head, false)?;
+        if let Some(review) = forge.find_merged_review(&target, &head).await? {
+            review
+        } else {
+            let reference = format!("refs/heads/{target}");
+            let advertised = git_text(dir, &["ls-remote", "--refs", "origin", &reference])
+                .context("verify the pushed review branch on origin")?;
+            anyhow::ensure!(
+                advertised == format!("{head}\t{reference}"),
+                "origin does not advertise the selected commit on the review branch"
+            );
+            if mirror {
+                verify_jj_mirror_head(dir, &target, &head)?;
+            }
+            let title = selected
+                .description
+                .lines()
+                .next()
+                .map(str::trim)
+                .filter(|line| !line.is_empty() && !line.starts_with("Billing-Time:"))
+                .unwrap_or("Update repository");
+            forge
+                .open_review(ReviewRequest {
+                    head_branch: target.clone(),
+                    base_branch: "main".to_string(),
+                    title: title.to_string(),
+                    body: String::new(),
+                })
+                .await?
+        }
+    };
+    anyhow::ensure!(
+        review.head_sha == head,
+        "the review head differs from the selected Jujutsu commit; retry after inspecting the branch"
+    );
+    land_review(dir, mirror, target, forge, review, tokio::time::sleep).await
 }
 
 /// Check the live document ledger before the push lane can create a branch,
@@ -214,17 +321,7 @@ where
     S: Fn(Duration) -> Fut,
     Fut: Future<Output = ()>,
 {
-    println!("preflight:");
-    let identity = forge
-        .identity()
-        .await
-        .context("forge authentication is missing; authenticate and re-run")?;
-    println!("  authenticated as {identity}");
-    forge
-        .remote_reachable()
-        .await
-        .context("the push remote did not answer")?;
-    println!("  the push remote answers");
+    run_forge_preflight(forge).await?;
     check_signing(dir)?;
     println!("  commit signing is on");
     let pin = check_version_pin(require_manifest(dir).as_deref(), env!("CARGO_PKG_VERSION"))?;
@@ -284,6 +381,37 @@ where
             body: body.unwrap_or_default().to_string(),
         })
         .await?;
+    let sync_mirror = github && base == "main" && target != base;
+    land_review(dir, sync_mirror, target, forge, review, sleep).await
+}
+
+async fn run_forge_preflight(forge: &dyn Forge) -> Result<()> {
+    println!("preflight:");
+    let identity = forge
+        .identity()
+        .await
+        .context("forge authentication is missing; authenticate and re-run")?;
+    println!("  authenticated as {identity}");
+    forge
+        .remote_reachable()
+        .await
+        .context("the push remote did not answer")?;
+    println!("  the push remote answers");
+    Ok(())
+}
+
+async fn land_review<S, Fut>(
+    dir: &Path,
+    sync_mirror: bool,
+    target: String,
+    forge: &dyn Forge,
+    review: ReviewRef,
+    sleep: S,
+) -> Result<LaneReport>
+where
+    S: Fn(Duration) -> Fut,
+    Fut: Future<Output = ()>,
+{
     println!("review request: {} ({})", review.url, review.head_sha);
 
     // Merge-when-green, armed and read back (LAW-220 step 3), then the
@@ -291,7 +419,7 @@ where
     let outcome = forge.arm_merge(&review).await?;
     let merge_commit = match outcome {
         ArmOutcome::MergedNow { merge_commit } => {
-            println!("merge: landed now, pinned to the checked commit");
+            println!("merge: verified for the reviewed head");
             merge_commit
         }
         ArmOutcome::Armed | ArmOutcome::AlreadyArmed | ArmOutcome::Scheduled => {
@@ -299,7 +427,6 @@ where
         }
     };
 
-    let sync_mirror = github && base == "main" && target != base;
     let mirror = sync_secondary_remote(dir, sync_mirror, target, &review, &merge_commit);
     let delivery = finish_delivery(
         forge,
@@ -324,15 +451,43 @@ fn push_topic(dir: &Path, target: &str, github: bool) -> Result<()> {
     println!("push: the push branch is on origin");
     if github && has_forgejo_remote(dir)? {
         let head = git_text(dir, &["rev-parse", "HEAD"])?;
-        let reference = format!("refs/heads/{target}");
-        let advertised = git_text(dir, &["ls-remote", "--refs", "forgejo", &reference])
-            .map_err(|_| anyhow::anyhow!("could not verify the pushed branch on Forgejo"))?;
-        anyhow::ensure!(
-            advertised == format!("{head}\t{reference}"),
-            "Forgejo did not receive the pushed branch at the local commit. Check the origin push URLs and retry"
-        );
+        let advertised = mirror_topic(dir, target)?;
+        ensure_mirror_head(&advertised, target, &head)?;
     }
     Ok(())
+}
+
+fn mirror_topic(dir: &Path, branch: &str) -> Result<String> {
+    let reference = format!("refs/heads/{branch}");
+    git_text(dir, &["ls-remote", "--refs", "forgejo", &reference])
+        .map_err(|_| anyhow::anyhow!("could not verify the pushed branch on Forgejo"))
+}
+
+fn ensure_mirror_head(advertised: &str, branch: &str, head: &str) -> Result<()> {
+    anyhow::ensure!(
+        advertised == format!("{head}\trefs/heads/{branch}"),
+        "Forgejo did not receive the pushed branch at the selected commit. Check the origin push URLs and retry"
+    );
+    Ok(())
+}
+
+fn verify_jj_mirror_head(dir: &Path, branch: &str, head: &str) -> Result<()> {
+    let mut advertised = mirror_topic(dir, branch)?;
+    if advertised.is_empty() {
+        // Jujutsu skips an already up-to-date origin bookmark. Repair a
+        // missing mirror ref after a partial push with a create-only lease.
+        let mirror = configured_mirror_url(dir)?;
+        let reference = format!("refs/heads/{branch}");
+        let lease = format!("--force-with-lease={reference}:");
+        let refspec = format!("{head}:{reference}");
+        git_text(
+            dir,
+            &["push", "--no-follow-tags", &lease, "--", &mirror, &refspec],
+        )
+        .context("publish the missing Forgejo topic")?;
+        advertised = mirror_topic(dir, branch)?;
+    }
+    ensure_mirror_head(&advertised, branch, head)
 }
 
 async fn sync_secondary_remote(
@@ -411,15 +566,7 @@ fn sync_mirror_refs(
             .all(|sha| sha.len() == 40 && sha.bytes().all(|byte| byte.is_ascii_hexdigit())),
         "the review did not return full GitHub commit IDs"
     );
-    let mirror = git_text(dir, &["remote", "get-url", "forgejo"])?;
-    let destinations = git_text(dir, &["remote", "get-url", "--push", "--all", "origin"])?;
-    anyhow::ensure!(
-        mirror != git_text(dir, &["remote", "get-url", "origin"])?
-            && destinations
-                .lines()
-                .any(|destination| destination == mirror),
-        "the Forgejo fetch URL must match an explicit secondary push destination"
-    );
+    let mirror = configured_mirror_url(dir)?;
 
     git_text(
         dir,
@@ -457,6 +604,19 @@ fn sync_mirror_refs(
         println!("mirror: preserved the topic branch because it differs from the reviewed head");
     }
     Ok(())
+}
+
+fn configured_mirror_url(dir: &Path) -> Result<String> {
+    let mirror = git_text(dir, &["remote", "get-url", "forgejo"])?;
+    let destinations = git_text(dir, &["remote", "get-url", "--push", "--all", "origin"])?;
+    anyhow::ensure!(
+        mirror != git_text(dir, &["remote", "get-url", "origin"])?
+            && destinations
+                .lines()
+                .any(|destination| destination == mirror),
+        "the Forgejo fetch URL must match an explicit secondary push destination"
+    );
+    Ok(mirror)
 }
 
 async fn finish_delivery<S, Fut>(
@@ -860,6 +1020,15 @@ mod tests {
             Ok(self.review.clone())
         }
 
+        async fn find_merged_review(&self, branch: &str, sha: &str) -> Result<Option<ReviewRef>> {
+            if matches!(self.arm, ArmOutcome::MergedNow { .. }) {
+                assert_eq!(branch, "push/stable-change");
+                assert_eq!(sha, self.review.head_sha);
+                return Ok(Some(self.review.clone()));
+            }
+            Ok(None)
+        }
+
         async fn arm_merge(&self, _review: &ReviewRef) -> Result<ArmOutcome> {
             Ok(self.arm.clone())
         }
@@ -909,6 +1078,36 @@ mod tests {
     }
 
     async fn instant_sleep(_: std::time::Duration) {}
+
+    #[tokio::test]
+    async fn jj_retry_after_merge_tracks_the_merge_deployment_without_opening_a_review() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut forge = MockForge::green_after(1);
+        forge.arm = ArmOutcome::MergedNow {
+            merge_commit: forge.merge_sha.clone(),
+        };
+        let selected = serde_json::from_value(serde_json::json!({
+            "commit_id": forge.review.head_sha,
+            "change_id": "stable-change",
+            "description": "Signed change",
+            "author": "lawyer@example.com",
+            "signed": true,
+            "conflict": false,
+            "divergent": false,
+        }))
+        .unwrap();
+
+        // No Git checkout, site session, or manifest is needed to resume a
+        // verified merger. The review identifies the work that already landed.
+        let report = super::run_jj(dir.path(), selected, false, &forge)
+            .await
+            .unwrap();
+
+        assert!(forge.opened.lock().unwrap().is_empty());
+        assert_eq!(report.merge_commit, forge.merge_sha);
+        assert_eq!(report.deployment.unwrap().commit, forge.merge_sha);
+        assert_eq!(report.ci.unwrap().commit, forge.review.head_sha);
+    }
 
     #[tokio::test]
     async fn deployment_failure_is_reported_after_merge() {

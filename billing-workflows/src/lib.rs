@@ -1,8 +1,8 @@
-//! Shared billing workflow cores and opt-in Restate replay adapters.
+//! Shared billing cores and explicit recovery adapters.
 //!
-//! Native DBOS callers use the provider-agnostic billing functions. The
-//! `restate-compatibility` feature exposes the worker adapters for retained runs.
-//! Provider and store effects remain in the shared billing functions.
+//! Application hosts disable billing automation on both engines. Retained trigger
+//! entrypoints are inert. The opt-in adapters preserve recovery access while
+//! operators disposition retained executions and provider effects.
 
 pub mod canary;
 pub mod digest;

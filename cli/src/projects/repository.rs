@@ -3134,6 +3134,7 @@ pub fn emit_scaffold_for(
         host,
         lawyer_dri,
         client_dri,
+        legal_plan: None,
         version: crate::cli_version(),
     };
     let files = [
@@ -4641,36 +4642,20 @@ jobs:
         }
     }
     #[test]
-    fn push_changes_is_synced_and_finishes_only_after_merge() {
-        let (_, skill) = SYNCED_SKILLS
-            .iter()
-            .find(|(name, _)| *name == "push-changes")
-            .expect("push-changes must ship to every Project repository");
-        for required in [
-            "git rebase -S origin/main",
-            "navigator project gate",
-            "git commit -S",
-            "git push --force-with-lease -u origin",
-            "MERGED",
-            "App-owned",
-            // LAW-144: the App arms ~10–15s after open; read back only after
-            // its `automerge` run finishes, or a pending arm reads as `null`.
-            "gh run watch",
-            "another forge",
-            "git switch main",
-        ] {
-            assert!(
-                skill.contains(required),
-                "missing push contract: {required}"
-            );
+    fn synced_push_skills_use_the_same_project_delivery_command() {
+        for name in ["push-changes", "push-to-navigator"] {
+            let (_, skill) = SYNCED_SKILLS
+                .iter()
+                .find(|(key, _)| *key == name)
+                .expect("Project checkout includes the delivery skill");
+            assert!(skill.contains("navigator jj push"));
+            assert!(crate::projects::cli_docs::unresolved_invocations(
+                skill,
+                &crate::navigator_command()
+            )
+            .is_empty());
         }
-        assert!(!skill.contains("gh pr merge"));
         assert!(AGENT_CONTRACT_BASE.contains(".agents/skills/push-changes/SKILL.md"));
-        let contract = AGENT_CONTRACT_BASE
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ");
-        assert!(contract.contains("The job ends when the pull request is merged"));
     }
 
     #[test]
@@ -6967,6 +6952,7 @@ mod forgejo_gate_tests {
             host: "staging.neonlaw.com",
             lawyer_dri: "lawyer@example.com",
             client_dri: "client@example.com",
+            legal_plan: None,
             version: crate::cli_version(),
         };
         let seeded = project_scaffold::forgejo_seed_files(&source);

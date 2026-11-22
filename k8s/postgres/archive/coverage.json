@@ -765,6 +765,13 @@
         "accessible": true
       },
       {
+        "action": "export",
+        "schema": "public",
+        "name": "firm_namespace_move",
+        "kind": "table",
+        "accessible": true
+      },
+      {
         "action": "derived",
         "relation": {
           "schema": "public",

@@ -33,14 +33,13 @@ fn the_lean_navigator_names_only_its_own_verbs() {
     assert_eq!(
         command_names(&help(&["--help"])),
         [
-            "assumptions",
+            "billing",
             "calendar",
             "downloads",
             "forgejo",
-            "github",
             "glossary",
             "inbox",
-            "legal-plans",
+            "jj",
             "mail",
             "notation",
             "project",

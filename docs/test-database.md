@@ -17,7 +17,7 @@ Start the fixture locally the way CI does (the `start PostgreSQL for covered jou
 ```bash
 docker run -d --name test-postgres --shm-size=256m -p 127.0.0.1:25432:5432 \
   -e POSTGRES_PASSWORD=synthetic -e POSTGRES_DB=smoke \
-  ghcr.io/neon-law/navigator/postgres@sha256:a64805a84a2a7f77c87b6915c2394ca63860d63915554c9504f4df9ea4e408ef
+  ghcr.io/neon-law/navigator/postgres@sha256:c461784792a21b6d9a47081d063652c7008a53dcb15d755d759c911186e85f42
 docker exec -i test-postgres psql -U postgres -d smoke -v ON_ERROR_STOP=1 < store/postgres/schema.sql
 ```
 
@@ -48,17 +48,22 @@ The full native development harness uses existing capturing providers only under
 simulated-matter configuration. Those captures neither send external effects nor certify live-provider behavior. A
 successful fixture or local startup is not retained-work handover or recovery acceptance.
 
-## Captured compatibility and the deploy browser gate
+## Captured compatibility
 
 Existing legacy KIND descriptors retain captured-source enrollment. Explicit `--runtime native` selects the separate
 host-process compatibility topology, not fresh PostgreSQL authority. Compatibility bootstrap holds web and worker
 writers, captures the actual Source export, and enrolls required scopes before sample seeding. Valid enrollment is
 reused; unactivated nonempty or partial history requires explicit recovery rather than invented receipts.
 
-The existing `.github/workflows/deploy.yml` browser job remains a legacy compatibility gate. It installs the Restate
-operator and CRDs, invokes `hudson dev postgres-bootstrap`, and forwards the in-cluster Source service. Its
-PracticePreview helper also retains an embedded-engine fixture. This gate is separate from fresh local provisioning and
-the dedicated quickstart job; neither establishes that all CI runs without legacy engines.
+## Native deploy browser gate
+
+The `.github/workflows/deploy.yml` integration job provisions its native tier through the ordinary quickstart CLI, then
+verifies the exact built application image as nonroot. It requires native admission, persisted DBOS workflow replay
+across host/image restart, and all three hydrated browser suites. Its independent practice previews use owned PostgreSQL
+fixtures. It does not provision Source, a Restate broker, or a separate workflow worker.
+
+The explicit compatibility suites retain their own fixtures. Passing a focused native test does not establish that the
+full image, browser, recovery, or cold-runner resource gates passed.
 
 ## The embedded SurrealDB harness (deprecated)
 
@@ -104,7 +109,9 @@ not an opt-out. The primary coverage lane selects tests without Source using the
 - **Focused native tests:** disposable PostgreSQL fixtures and existing provider seams; no application sidecars are
   needed merely to test a store accessor.
 - **Fresh KIND and quickstart:** the real PostgreSQL/DBOS application topology with Rauthy, storage, and owned services.
-- **Compatibility suites and deploy browser gate:** retained Source/Restate fixtures remain explicit. Full-workspace
+- **Native deploy browser gate:** exact application image, native admission, workflow checkpoint replay, and hydrated
+  browser checks.
+- **Compatibility suites:** retained Source/Restate fixtures remain explicit. Full-workspace
   commands can include them; do not confuse them with the Source-free coverage selection.
 
 Do not add application sidecars to focused native tests; use their existing provider seams.

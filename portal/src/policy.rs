@@ -162,8 +162,9 @@ pub async fn require_policy(
         .extensions()
         .get::<crate::session::SessionData>()
         .cloned();
-    // Browser SSO sets the same session shape in a cookie.
-    if session.is_none() {
+    // HTTP MCP already established the bearer identity. Evaluate that identity's
+    // claims even if a client also supplied a browser cookie.
+    if session.is_none() && req.extensions().get::<mcp::Principal>().is_none() {
         session = cookies
             .get(crate::session::SESSION_COOKIE_NAME)
             .and_then(|c| sessions.decode(c.value()));

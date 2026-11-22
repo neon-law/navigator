@@ -1,11 +1,4 @@
-# Worker-side billing workflows, hosted by the `workflows-service` Restate
-# worker. Today: the `BillingCanary` health check that proves the Xero
-# integration is live end-to-end (find-or-create a stable canary contact,
-# assert idempotency), the `BillingDigest` GCP cost notice, and the nightly
-# `ReconcileInvoices` fold of Xero paid-status onto the local mirror. None of
-# them raises money. Ships the `billing-canary-trigger` binary — the CronJob entrypoint that
-# POSTs one invocation to the Restate ingress and exits (mirrors
-# `archives`'s split of long-running worker vs. thin trigger).
+# Shared billing cores and explicit recovery adapters. Retained trigger names are inert.
 [package]
 name = "billing-workflows"
 version.workspace = true
@@ -44,15 +37,12 @@ anyhow.workspace = true
 thiserror.workspace = true
 billing.workspace = true
 chrono.workspace = true
-dotenvy.workspace = true
 restate-sdk = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 store.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "net"] }
-telemetry.workspace = true
 tracing.workspace = true
-tracing-subscriber.workspace = true
 uuid = { workspace = true, features = ["v4", "v5", "v7", "serde"] }
 workflows = { workspace = true, features = ["dbos"] }
 

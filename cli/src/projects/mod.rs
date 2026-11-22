@@ -33,6 +33,7 @@ pub mod ics;
 pub mod invite;
 pub mod jj;
 pub mod jj_billing;
+pub mod jj_commands;
 pub mod jj_log;
 pub mod lifecycle;
 pub mod lifecycle_read;
@@ -60,3 +61,32 @@ pub mod surfaces;
 pub mod surfaces_reconcile;
 pub mod watch;
 mod workspace;
+
+/// Resolve the explicit matter scope or the enclosing Project checkout.
+pub(crate) fn project_target(
+    host: Option<&str>,
+    project: Option<&str>,
+) -> anyhow::Result<(Option<String>, String)> {
+    if let (Some(host), Some(project)) = (host, project) {
+        return Ok((Some(host.to_owned()), project.to_owned()));
+    }
+    let cwd = std::env::current_dir()?;
+    for dir in cwd.ancestors() {
+        if dir.join(manifest::FILE).is_file() {
+            let (local_project, local_host) = crate::document_sync::read_manifest(dir)?;
+            return Ok((
+                host.map(str::to_owned).or(local_host),
+                project.unwrap_or(&local_project).to_owned(),
+            ));
+        }
+        if dir.join(".git").exists() || dir.join(".jj").exists() {
+            break;
+        }
+    }
+    Ok((
+        host.map(str::to_owned),
+        project
+            .ok_or_else(|| anyhow::anyhow!("run in a Project checkout or provide --project"))?
+            .to_owned(),
+    ))
+}

@@ -26,7 +26,6 @@ use cli::lsp_download;
 mod lsp_publish;
 use cli::mail;
 mod archives_ops;
-mod mcp_bridge;
 mod notation_import;
 mod notation_kinds;
 mod notations_preview;
@@ -1299,27 +1298,6 @@ enum SiteCmd {
         #[arg(long)]
         host: Option<String>,
     },
-    /// Serve the Navigator MCP tool catalog to Claude as a local MCP server over
-    /// stdio, dispatching each call to the host's A2A endpoint with the
-    /// stored bearer token.
-    ///
-    /// Claude speaks MCP and has no A2A client; A2A is where the
-    /// lawyer-tier check and the `audit` trail live. This bridges the two
-    /// so Claude picks the tool and Navigator authorizes it.
-    ///
-    /// Only tools that run without a human approving them are offered:
-    /// every read, plus the CRM writers (person, project, participation,
-    /// bulk contact import). A tool that needs an explicit approval is
-    /// not advertised, because MCP cannot pause a call to ask a person
-    /// and a confirmation the model supplies to itself is not one.
-    ///
-    /// Speaks protocol on stdout and diagnostics on stderr. Run it from a
-    /// client's server configuration, not by hand.
-    Mcp {
-        /// Host to serve. Optional when exactly one host is stored.
-        #[arg(long)]
-        host: Option<String>,
-    },
     /// Deprecated alias for `navigator site notation`.
     Notation {
         #[command(subcommand)]
@@ -2320,8 +2298,32 @@ enum EmailSummaryCmd {
     },
 }
 
+#[derive(clap::Args)]
+struct FirmNamespaceMove {
+    /// Firm UUID from the deployment's Project directory.
+    #[arg(long)]
+    firm: uuid::Uuid,
+    /// Canonical current Forgejo organization and Firm slug.
+    #[arg(long)]
+    from: String,
+    /// Requested organization name.
+    #[arg(long)]
+    to: String,
+    /// Independently confirmed numeric Forgejo organization ID.
+    #[arg(long)]
+    organization_id: i64,
+    /// Read the Forgejo token from a pipe instead of `FORGEJO_TOKEN`.
+    #[arg(long)]
+    token_stdin: bool,
+    /// Execute or resume the move during the operator's maintenance window.
+    #[arg(long)]
+    apply: bool,
+}
+
 #[derive(Subcommand)]
 enum ForgejoPolicyCmd {
+    /// Move one existing Firm organization and its bound Project URLs on this installation.
+    RenameOrganization(FirmNamespaceMove),
     /// Reconcile Firm users' SSH public keys onto their Forgejo accounts.
     SshKeys {
         #[command(subcommand)]
@@ -3363,7 +3365,6 @@ fn run() -> ExitCode {
             }
             SiteCmd::Logout { host } => login::run_logout(host.as_deref()),
             SiteCmd::Whoami { host } => login::run_whoami(host.as_deref()),
-            SiteCmd::Mcp { host } => runtime().block_on(mcp_bridge::run(host.as_deref())),
             SiteCmd::Document { action } => {
                 moved_to_navigator("site document");
                 runtime().block_on(cli::matter_site::run_document(action))
@@ -3923,7 +3924,6 @@ mod command_boundary_tests {
         "authorities",
         "blog",
         "help",
-        "mcp",
         "seed",
         "synthetic-portfolio",
     ];

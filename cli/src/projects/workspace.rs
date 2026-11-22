@@ -44,6 +44,27 @@ async fn get(base: &str, token: &str, id: Uuid) -> Result<Project> {
         .context("parse Project repository inventory")
 }
 
+/// Check the selected checkout against the signed-in site's Project binding.
+pub(super) async fn verify_policy_target(dir: &Path, origin: &str) -> Result<()> {
+    let manifest = manifest::read(dir).context("repository policy needs a Project manifest")?;
+    let host = manifest.host.as_deref().context("manifest needs a host")?;
+    let code = manifest
+        .project
+        .as_deref()
+        .context("manifest needs a Project code")?;
+    let (base, token) = crate::remote::resolve(Some(host))?;
+    let id = surfaces::resolve_project_id(&base, &token, code).await?;
+    let project = get(&base, &token, id).await?;
+    manifest
+        .check_live_ownership(project.firm_id, Some(&project.brand))
+        .map_err(anyhow::Error::msg)?;
+    ensure!(
+        project.code == code && project.repository_remotes.origin.as_deref() == Some(origin),
+        "checkout origin must match the Project's recorded source URL to change repository policy"
+    );
+    Ok(())
+}
+
 /// A finished setup has an initialized main, the repository's normal forge
 /// policy, an exact secondary main where needed, and a usable local checkout.
 #[allow(clippy::too_many_lines)] // Verify each step before advancing the same Project.
@@ -315,6 +336,7 @@ async fn bootstrap_github(
             host_override: Some(base),
             project_override: Some(code),
             from_live: true,
+            apply_legal_plan: false,
             supplied: [None; 4],
             live_fields: set::LiveFields::default(),
             firm: None,

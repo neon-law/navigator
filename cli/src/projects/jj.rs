@@ -1,4 +1,4 @@
-//! `navigator project repository jj` — put Jujutsu (`jj`) over a Project
+//! `navigator jj setup` — put Jujutsu (`jj`) over a Project
 //! checkout without changing what the forge sees.
 //!
 //! The checkout stays a Git repository: `jj git init --colocate` adds a `.jj`
@@ -23,7 +23,7 @@ use super::lifecycle::git;
 /// The bookmark `jj git push --change` names, in the `push/` namespace the
 /// `navigator project repository push` lane already branches into, so one
 /// forge rule over `push/*` covers both.
-pub const PUSH_BOOKMARK_TEMPLATE: &str = r#""push/" ++ change_id.short()"#;
+pub const PUSH_BOOKMARK_TEMPLATE: &str = r#""push/" ++ change_id"#;
 
 /// The Git settings jj needs to mirror. Read once from the checkout.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -92,7 +92,9 @@ pub fn require_macos(os: &str) -> Result<()> {
     if os == "macos" {
         Ok(())
     } else {
-        bail!("`navigator project repository jj` installs jj through Homebrew and runs on macOS only (this host reports `{os}`)")
+        bail!(
+            "`navigator jj setup` installs jj through Homebrew and runs on macOS only (this host reports `{os}`)"
+        )
     }
 }
 
@@ -119,12 +121,21 @@ pub fn run(dir: &Path) -> Result<()> {
     if dir.join(".jj").is_dir() {
         println!("colocate: already a jj repository");
     } else {
-        jj(dir, &["git", "init", "--colocate"])?;
+        // The initial working-copy change must have the configured author too.
+        let config: Vec<_> = settings
+            .iter()
+            .map(|(key, value)| format!("{key}={}", toml_string(value)))
+            .collect();
+        let mut args = vec!["git", "init", "--colocate"];
+        for setting in &config {
+            args.extend(["--config", setting]);
+        }
+        output(dir, &args)?;
         println!("colocate: jj now tracks this Git checkout");
     }
 
     for (key, value) in &settings {
-        jj(dir, &["config", "set", "--repo", key, &toml_string(value)])?;
+        output(dir, &["config", "set", "--repo", key, &toml_string(value)])?;
     }
     println!("config: author, signing, and push bookmarks follow this checkout's Git config");
     Ok(())
@@ -136,8 +147,45 @@ fn toml_string(value: &str) -> String {
     toml::Value::String(value.to_string()).to_string()
 }
 
-fn jj(dir: &Path, args: &[&str]) -> Result<()> {
-    let output = Command::new("jj")
+/// Use the same full change ID even if the checkout config has another template.
+pub(super) fn push_revision(dir: &Path, commit: &str, dry_run: bool) -> Result<()> {
+    let setting = format!(
+        "templates.git_push_bookmark={}",
+        toml_string(PUSH_BOOKMARK_TEMPLATE)
+    );
+    let mut args = vec![
+        "--config",
+        &setting,
+        "--ignore-working-copy",
+        "git",
+        "push",
+        "--remote",
+        "origin",
+        "--change",
+        commit,
+    ];
+    if dry_run {
+        args.push("--dry-run");
+    }
+    // Git's automatic tag following can publish additional refs even for
+    // Jujutsu's explicit topic refspec. Append the same override as git -c.
+    let mut git_config = std::env::var_os("GIT_CONFIG_PARAMETERS").unwrap_or_default();
+    if !git_config.is_empty() {
+        git_config.push(" ");
+    }
+    git_config.push("'push.followTags=false'");
+    let mut command = Command::new("jj");
+    command.env("GIT_CONFIG_PARAMETERS", git_config);
+    command_output(command, dir, &args)?;
+    Ok(())
+}
+
+pub(super) fn output(dir: &Path, args: &[&str]) -> Result<String> {
+    command_output(Command::new("jj"), dir, args)
+}
+
+fn command_output(mut command: Command, dir: &Path, args: &[&str]) -> Result<String> {
+    let output = command
         .current_dir(dir)
         .args(args)
         .output()
@@ -149,7 +197,7 @@ fn jj(dir: &Path, args: &[&str]) -> Result<()> {
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
-    Ok(())
+    String::from_utf8(output.stdout).context("decode Jujutsu output")
 }
 
 #[cfg(test)]

@@ -92,11 +92,7 @@ fn schedule_enabled(get: &impl Fn(&str) -> Option<String>) -> Result<bool, Setti
 }
 
 pub fn enabled(lookup: impl Fn(&str) -> Option<String>) -> Result<bool, SettingsError> {
-    match lookup(ENABLED_ENV).as_deref().map(str::trim) {
-        None | Some("" | "false") => Ok(false),
-        Some("true") => Ok(true),
-        Some(_) => Err(SettingsError::Invalid(ENABLED_ENV)),
-    }
+    crate::flags::flag_enabled(ENABLED_ENV, lookup(ENABLED_ENV).as_deref())
 }
 
 pub fn system_clock() -> Clock {
@@ -197,36 +193,8 @@ pub async fn schedule(workflow: BillingCanaryWorkflow, clock: Clock, stop: Cance
 
 #[cfg(test)]
 mod tests {
-    use super::{enabled, slot, workflow_id, ENABLED_ENV};
+    use super::{enabled, slot, workflow_id};
     use chrono::{TimeZone, Utc};
-    #[test]
-    fn schedule_activation_is_separate_strict_and_preserves_the_standalone_default() {
-        assert!(super::schedule_enabled(&|_| None).unwrap());
-        assert!(!super::schedule_enabled(&|key| {
-            (key == super::SCHEDULE_ENABLED_ENV).then(|| "false".into())
-        })
-        .unwrap());
-        assert!(super::schedule_enabled(&|key| {
-            (key == super::SCHEDULE_ENABLED_ENV).then(|| "true".into())
-        })
-        .unwrap());
-        assert_eq!(
-            super::schedule_enabled(&|key| {
-                (key == super::SCHEDULE_ENABLED_ENV).then(|| "invalid".into())
-            }),
-            Err(super::SettingsError::Invalid(super::SCHEDULE_ENABLED_ENV))
-        );
-        let error = super::Context::from_lookup(|key| {
-            (key == super::SCHEDULE_ENABLED_ENV).then(|| "invalid".into())
-        })
-        .err()
-        .unwrap();
-        assert_eq!(
-            error,
-            super::SettingsError::Invalid(super::SCHEDULE_ENABLED_ENV),
-            "invalid activation fails before live provider construction"
-        );
-    }
 
     #[test]
     fn weekly_slot_is_sunday_at_fourteen_utc_and_stable() {
@@ -238,13 +206,10 @@ mod tests {
         assert_eq!(slot(before), expected);
     }
     #[test]
-    fn switch_defaults_off_and_rejects_invalid_values() {
+    fn billing_switch_cannot_enable_retired_automation() {
         assert!(!enabled(|_| None).unwrap());
         assert!(!enabled(|_| Some("false".into())).unwrap());
-        assert!(enabled(|_| Some("true".into())).unwrap());
-        assert_eq!(
-            enabled(|_| Some("yes".into())).unwrap_err(),
-            super::SettingsError::Invalid(ENABLED_ENV)
-        );
+        assert!(!enabled(|_| Some("true".into())).unwrap());
+        assert!(!enabled(|_| Some("yes".into())).unwrap());
     }
 }

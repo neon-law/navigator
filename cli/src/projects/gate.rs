@@ -349,11 +349,7 @@ async fn check_live_handles(dir: &Path, base: &str, token: &str) -> Result<()> {
         .project
         .as_deref()
         .ok_or_else(|| anyhow!("navigator.yaml has no project.name"))?;
-    let projects = super::surfaces::list_visible_projects(base, token).await?;
-    let project = projects
-        .into_iter()
-        .find(|project| project.code == project_code)
-        .ok_or_else(|| anyhow!("no live row for the declared Project"))?;
+    let project = super::surfaces::resolve_visible_project(base, token, project_code).await?;
     let project_id = project.id;
     manifest
         .check_live_ownership(project.firm_id, project.brand.as_deref())
@@ -429,6 +425,15 @@ pub(super) fn check_manifest_handles(
         .is_some_and(|value| Some(value) != live.calendar_id.as_deref())
     {
         differing.push("calendar_id");
+    }
+
+    if manifest.legal_plan.as_deref().is_some_and(|name| {
+        !live
+            .legal_plan
+            .as_deref()
+            .is_some_and(|live_name| live_name.eq_ignore_ascii_case(name))
+    }) {
+        differing.push("legal_plan");
     }
 
     if differing.is_empty() {

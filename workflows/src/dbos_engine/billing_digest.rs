@@ -108,11 +108,7 @@ impl Context {
 }
 
 pub fn enabled(lookup: impl Fn(&str) -> Option<String>) -> Result<bool, SettingsError> {
-    match lookup(ENABLED_ENV).as_deref().map(str::trim) {
-        None | Some("" | "false") => Ok(false),
-        Some("true") => Ok(true),
-        Some(_) => Err(SettingsError::Invalid(ENABLED_ENV)),
-    }
+    crate::flags::flag_enabled(ENABLED_ENV, lookup(ENABLED_ENV).as_deref())
 }
 
 pub fn system_clock() -> Clock {
@@ -238,7 +234,7 @@ pub async fn schedule(workflow: BillingDigestWorkflow, clock: Clock, stop: Cance
 
 #[cfg(test)]
 mod tests {
-    use super::{enabled, slot, workflow_id, Context, SettingsError, ENABLED_ENV};
+    use super::{enabled, slot, workflow_id, Context, SettingsError};
     use chrono::{TimeZone, Utc};
 
     #[test]
@@ -257,11 +253,8 @@ mod tests {
             expected + chrono::Duration::days(1)
         );
         assert!(!enabled(|_| None).unwrap());
-        assert!(enabled(|_| Some("true".into())).unwrap());
-        assert_eq!(
-            enabled(|_| Some("yes".into())).unwrap_err(),
-            SettingsError::Invalid(ENABLED_ENV)
-        );
+        assert!(!enabled(|_| Some("true".into())).unwrap());
+        assert!(!enabled(|_| Some("yes".into())).unwrap());
         assert!(Context::from_lookup(|_| None).is_ok());
         let configured = |key: &str| match key {
             "BILLING_EXPORT_TABLE" => Some("project.dataset.export".to_owned()),

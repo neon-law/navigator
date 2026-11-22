@@ -65,6 +65,14 @@ struct ManualStart {
     run_key: String,
 }
 
+fn require_active_service(service: &str) -> Result<(), StatusCode> {
+    if store::workflow_engine::disabled_billing_service(service) {
+        Err(StatusCode::GONE)
+    } else {
+        Ok(())
+    }
+}
+
 async fn start_manual_schedule(
     State(ingress): State<ManualIngress>,
     headers: HeaderMap,
@@ -91,6 +99,7 @@ async fn start_manual_schedule(
     {
         return Err(StatusCode::BAD_REQUEST);
     }
+    require_active_service(&request.service)?;
     let workflow_id = format!("{}:{}", request.service, request.run_key);
     if request.service == "Archives" {
         let workflow = ingress
@@ -169,6 +178,7 @@ async fn start_sandbox_credit_reset(
     if !authorized(&headers, &ingress.token) {
         return Err(StatusCode::UNAUTHORIZED);
     }
+    require_active_service("SandboxCreditReset")?;
     if body.len() > MAX_BODY_BYTES {
         return Err(StatusCode::PAYLOAD_TOO_LARGE);
     }
@@ -827,6 +837,7 @@ async fn start_reconcile(
     if !authorized(&headers, &ingress.token) {
         return Err(StatusCode::UNAUTHORIZED);
     }
+    require_active_service("ReconcileInvoices")?;
     if body.len() > MAX_BODY_BYTES {
         return Err(StatusCode::PAYLOAD_TOO_LARGE);
     }
@@ -2249,6 +2260,15 @@ mod tests {
                 post(&router, uri, Some("wrong-secret"), valid).await,
                 StatusCode::UNAUTHORIZED
             );
+            if uri == "/internal/dbos/reconcile-invoices" {
+                for body in ["{not json", foreign, valid] {
+                    assert_eq!(
+                        post(&router, uri, Some("worker-secret"), body).await,
+                        StatusCode::GONE
+                    );
+                }
+                continue;
+            }
             assert_eq!(
                 post(&router, uri, Some("worker-secret"), "{not json").await,
                 StatusCode::BAD_REQUEST
@@ -2613,7 +2633,7 @@ mod manual_schedule_tests {
             (Some("synthetic-manual-token"), "not-json".to_owned(), StatusCode::BAD_REQUEST),
             (Some("synthetic-manual-token"), serde_json::json!({"service":"Unknown", "run_key":format!("manual-{}", uuid::Uuid::new_v4())}).to_string(), StatusCode::BAD_REQUEST),
             (Some("synthetic-manual-token"), serde_json::json!({"service":"BillingCanary", "run_key":"daily"}).to_string(), StatusCode::BAD_REQUEST),
-            (Some("synthetic-manual-token"), serde_json::json!({"service":"BillingCanary", "run_key":format!("manual-{}", uuid::Uuid::new_v4())}).to_string(), StatusCode::SERVICE_UNAVAILABLE),
+            (Some("synthetic-manual-token"), serde_json::json!({"service":"BillingCanary", "run_key":format!("manual-{}", uuid::Uuid::new_v4())}).to_string(), StatusCode::GONE),
             (Some("synthetic-manual-token"), serde_json::json!({"service":"Archives", "run_key":format!("manual-{}", uuid::Uuid::new_v4())}).to_string(), StatusCode::SERVICE_UNAVAILABLE),
             (Some("synthetic-manual-token"), "x".repeat(MAX_BODY_BYTES + 1), StatusCode::PAYLOAD_TOO_LARGE),
         ] {

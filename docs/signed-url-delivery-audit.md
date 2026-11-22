@@ -403,7 +403,8 @@ project gate --check --ci`. The `document-verify` action ([`action.yml`](../.git
 runs that same command. The host is the one `navigator.yaml` declares. The command exchanges the runner's GitHub OIDC
 token at `POST /auth/ci/document-token` ([`portal/src/ci_auth.rs`](../portal/src/ci_auth.rs)). `--ci` writes nothing.
 
-The mint checks the deployment's canonical host as audience, accepts a `push` or `workflow_dispatch` on
+The mint checks the receiving host's HTTPS origin as audience. A live Brand host must belong to this deployment's
+environment and match the repository-bound Project's Brand. The mint accepts a `push` or `workflow_dispatch` on
 `refs/heads/main` and a `pull_request` merge ref, spends the token's `jti` once, and binds the repository to exactly one
 live Project whose `repository_url` names it. When no Project's `repository_url` names the GitHub repository, a run
 whose owner is the deployment's `NAVIGATOR_GITHUB_ORG` binds instead to the one live Project whose code is the

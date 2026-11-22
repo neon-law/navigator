@@ -460,13 +460,8 @@ pub struct AppState {
     /// [`cloud::NoRuntimeKms`] is the default and refuses, matching
     /// [`Self::integration_providers`]'s unconfigured default.
     pub runtime_kms: Arc<dyn cloud::RuntimeKms>,
-    /// Pluggable billing provider. The stub is the default; the real
-    /// `XeroBillingProvider` drops in behind the same trait when the
-    /// `XERO_*` env is configured. No matter is invoiced through it —
-    /// lawyers bill matters in Xero, and the nightly `ReconcileInvoices`
-    /// workflow only folds paid-status back. The one exception is a
-    /// Client's self-serve Purchase at a published price
-    /// ([`purchases`]).
+    /// Accounting provider. Application hosting refuses provider operations for real
+    /// matters; explicitly simulated development matters use synthetic billing.
     pub billing_provider: Arc<dyn billing::BillingProvider>,
     /// Coarse path secret the e-signature provider must include in its
     /// completion-webhook URL (`/webhook/esignature/{secret}`). Same
@@ -1374,12 +1369,26 @@ pub fn bootstrap_with_forgejo_oidc(
     let mcp_layered = |mcp_state: mcp::McpState| {
         mcp::build_router(mcp_state)
             .route_layer(axum::middleware::from_fn_with_state(
-                state.google_oauth.clone(),
-                crate::mcp_principal::inject_principal,
-            ))
-            .route_layer(axum::middleware::from_fn_with_state(
                 (state.sessions.clone(), state.policy.clone()),
                 crate::policy::require_policy,
+            ))
+            // Resolve identity before policy builds its role-only session from JWT claims.
+            .route_layer(axum::middleware::from_fn(
+                |req: axum::extract::Request, next: Next| async move {
+                    if req
+                        .extensions()
+                        .get::<mcp::Principal>()
+                        .is_some_and(|p| !p.email.trim().is_empty())
+                    {
+                        next.run(req).await
+                    } else {
+                        StatusCode::UNAUTHORIZED.into_response()
+                    }
+                },
+            ))
+            .route_layer(axum::middleware::from_fn_with_state(
+                state.google_oauth.clone(),
+                crate::mcp_principal::inject_principal,
             ))
             .route_layer(axum::middleware::from_fn_with_state(
                 state.auth.clone(),

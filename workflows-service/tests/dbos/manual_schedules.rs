@@ -1,6 +1,6 @@
-//! Manual controls join the same typed DBOS workflow on a repeated request.
+//! Retired billing controls cannot execute even with a retained native handle.
 
-use crate::support::{database, DEADLINE};
+use crate::support::database;
 use axum::{
     body::Body,
     http::{Request, StatusCode},
@@ -62,7 +62,7 @@ async fn post(router: Router, key: &str) -> StatusCode {
 }
 
 #[tokio::test]
-async fn manual_schedule_retries_join_and_distinct_clicks_run_separately() {
+async fn retired_manual_billing_cannot_execute_a_retained_native_handle() {
     let Some(database) = database().await else {
         return;
     };
@@ -96,43 +96,21 @@ async fn manual_schedule_retries_join_and_distinct_clicks_run_separately() {
         let key = format!("manual-{}", uuid::Uuid::new_v4());
         let id = format!("BillingCanary:{key}");
         let (first, retry) = tokio::join!(post(router.clone(), &key), post(router.clone(), &key));
-        assert_eq!(first, StatusCode::ACCEPTED);
-        assert_eq!(retry, StatusCode::ACCEPTED);
-        tokio::time::timeout(DEADLINE, async {
-            loop {
-                let status: Option<String> = sqlx::query_scalar(
-                    "SELECT status FROM dbos.workflow_status WHERE workflow_uuid=$1",
-                )
+        assert_eq!(first, StatusCode::GONE);
+        assert_eq!(retry, StatusCode::GONE);
+        let retained: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM dbos.workflow_status WHERE workflow_uuid=$1")
                 .bind(&id)
-                .fetch_optional(database.store().pool())
+                .fetch_one(database.store().pool())
                 .await
                 .unwrap();
-                if status.as_deref() == Some("SUCCESS") {
-                    break;
-                }
-                assert_ne!(status.as_deref(), Some("ERROR"));
-                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-            }
-        })
-        .await
-        .unwrap();
-        assert_eq!(
-            contacts.count(&id),
-            2,
-            "stable contact is resolved twice in one canary step"
-        );
-        assert_eq!(
-            notices.count(&id),
-            1,
-            "a repeated start joins the first notification"
-        );
+        assert_eq!(retained, 0);
+        assert_eq!(contacts.count(&id), 0);
+        assert_eq!(notices.count(&id), 0);
     }
     let automatic: i64 = sqlx::query_scalar("SELECT count(*) FROM dbos.workflow_status WHERE name='BillingCanary' AND workflow_uuid LIKE 'BillingCanary-%'")
         .fetch_one(database.store().pool()).await.unwrap();
-    assert_eq!(
-        automatic, 0,
-        "manual DBOS starts remain usable without an automatic weekly run"
-    );
+    assert_eq!(automatic, 0, "retired billing starts no automatic workflow");
     executor.shutdown().await;
     database.store().pool().close().await;
 }

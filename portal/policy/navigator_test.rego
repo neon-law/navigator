@@ -3584,3 +3584,13 @@ test_plan_intake_refuses_non_lawyers if {
 		not authz.allow with input as {"path": ["app", "plan-intake", "notice", "accept"], "method": "POST", "session": session}
 	}
 }
+
+test_billing_report_stays_with_signed_in_lawyers if {
+    every path in [["app", "api", "billing"], ["app", "api", "projects", "sample", "billing"]] {
+        authz.allow with input as {"path": path, "method": "GET", "session": lawyer_session}
+        not authz.allow with input as {"path": path, "method": "GET", "session": client_session}
+        not authz.allow with input as {"path": path, "method": "GET", "session": clerk_session}
+        not authz.allow with input as {"path": path, "method": "GET", "session": {"role": "owner", "source": "ci"}}
+        not authz.allow with input as {"path": path, "method": "POST", "session": lawyer_session}
+    }
+}

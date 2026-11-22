@@ -3185,6 +3185,66 @@ pub async fn set_plan_columns(
     Ok(mirrored(surreal, updated.and_then(ProjectRow::into_project)).await?)
 }
 
+/// Link a manifest's Firm-owned Legal Plan, leaving existing plan details intact.
+pub async fn link_manifest_legal_plan(
+    surreal: &SurrealDb,
+    project: &Project,
+    firm: Uuid,
+    brand: &str,
+    plan: Uuid,
+    dry_run: bool,
+) -> Result<Option<Project>, ProjectCommandError> {
+    const CONFLICT: &str = "the Project already links a different Legal Plan";
+    if project.firm_id != Some(firm) || project.brand != brand {
+        return Err(ProjectCommandError::NotFound);
+    }
+    match project.legal_plan_id {
+        Some(id) if id == plan => return Ok(Some(project.clone())),
+        Some(_) => return Err(ProjectCommandError::Invalid(CONFLICT)),
+        None if dry_run => return Ok(Some(project.clone())),
+        None => {}
+    }
+    let updated = if let Some(pg) = authority().await? {
+        crate::postgres::projects::link_legal_plan_on(&pg, project.id, firm, brand, plan)
+            .await
+            .map_err(ProjectStoreError::from)?
+    } else {
+        let mut response = surreal
+            .query(format!(
+                "UPDATE $id SET legal_plan_id = $plan, updated_at = $updated_at \
+                 WHERE firm_id = $firm AND brand = $brand AND legal_plan_id = NONE RETURN {PROJECT_SELECT}"
+            ))
+            .bind(("id", record_id(PROJECT_TABLE, project.id)))
+            .bind(("firm", record_id(crate::firms::TABLE, firm)))
+            .bind(("brand", brand.to_string()))
+            .bind(("plan", plan))
+            .bind(("updated_at", chrono::Utc::now().to_rfc3339()))
+            .await
+            .and_then(surrealdb::IndexedResults::check)
+            .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
+        let row: Option<ProjectRow> = response
+            .take(0)
+            .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
+        mirrored(surreal, row.and_then(ProjectRow::into_project)).await?
+    };
+    if updated.is_some() {
+        return Ok(updated);
+    }
+    let current = find_by_id(surreal, project.id)
+        .await
+        .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
+    match current {
+        Some(row) if row.firm_id == Some(firm) && row.brand == brand => {
+            if row.legal_plan_id == Some(plan) {
+                Ok(Some(row))
+            } else {
+                Err(ProjectCommandError::Invalid(CONFLICT))
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
 /// Record the firm-private Notion page provisioned for a Project. This is a
 /// system-managed coordinate; client-facing project payloads must redact it.
 pub async fn set_private_notion_page_url(

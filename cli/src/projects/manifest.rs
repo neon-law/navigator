@@ -77,6 +77,7 @@ const PROJECT_KEYS: &[&str] = &[
     "jurisdiction",
     "host",
     "lawyer_dri",
+    "legal_plan",
     "name",
     "private_notion_page",
     "private_slack_channel",
@@ -87,6 +88,7 @@ const PROJECT_KEYS: &[&str] = &[
 
 const HANDLE_KEYS: &[&str] = &[
     "lawyer_dri",
+    "legal_plan",
     "client_dri",
     "private_slack_channel",
     "private_notion_page",
@@ -164,6 +166,8 @@ pub struct Manifest {
     /// setup` creates the calendar and `navigator project set --calendar`
     /// records it here.
     pub calendar_id: Option<String>,
+    /// The Firm-owned Legal Plan name. Plan case and member data stay in Navigator.
+    pub legal_plan: Option<String>,
     /// The Project's Drive ingest folder id. Optional: `navigator project
     /// setup` creates or adopts the folder and `navigator project set
     /// --drive-folder` records it here.
@@ -1011,8 +1015,20 @@ fn lint_nested_project(path: &Path, project: &serde_yaml::Mapping) -> Vec<Manife
     findings
 }
 
+fn legal_plan_name(value: &serde_yaml::Value) -> Option<&str> {
+    value
+        .as_str()
+        .filter(|name| !name.trim().is_empty() && name.len() <= 200)
+        .map(str::trim)
+}
+
 fn lint_handle(path: &Path, key: &str, value: &serde_yaml::Value) -> Vec<ManifestFinding> {
-    let Some(value) = scalar_string(value) else {
+    let text = if key == "legal_plan" {
+        legal_plan_name(value).map(str::to_string)
+    } else {
+        scalar_string(value)
+    };
+    let Some(value) = text else {
         return vec![ManifestFinding::at(
             path,
             1,
@@ -1020,7 +1036,7 @@ fn lint_handle(path: &Path, key: &str, value: &serde_yaml::Value) -> Vec<Manifes
             format!("`project.{key}` must be non-empty text"),
         )];
     };
-    if is_placeholder(&value) {
+    if key != "legal_plan" && is_placeholder(&value) {
         return vec![ManifestFinding::at(
             path,
             1,
@@ -1041,7 +1057,7 @@ fn lint_handle(path: &Path, key: &str, value: &serde_yaml::Value) -> Vec<Manifes
         | "private_notion_page"
         | "shared_slack_channel"
         | "shared_notion_page" => is_https_url(&value),
-        "xero_customer" => true,
+        "xero_customer" | "legal_plan" => true,
         "jurisdiction" => value.len() == 2 && value.bytes().all(|byte| byte.is_ascii_uppercase()),
         "calendar_id" => model::projects::is_valid_calendar_id(&value),
         "drive_folder_id" => model::projects::is_valid_drive_folder_id(&value),
@@ -1163,6 +1179,15 @@ pub fn parse(contents: &str) -> Result<Manifest, String> {
         private_slack_channel: values("private_slack_channel")?,
         private_notion_page: values("private_notion_page")?,
         calendar_id: values("calendar_id")?,
+        legal_plan: project_map
+            .and_then(|project| project.get("legal_plan"))
+            .map(|value| {
+                legal_plan_name(value).map(str::to_string).ok_or_else(|| {
+                    "navigator.yaml project.legal_plan must be a non-empty Legal Plan name"
+                        .to_string()
+                })
+            })
+            .transpose()?,
         drive_folder_id: values("drive_folder_id")?,
         jurisdiction: values("jurisdiction")?,
         no_live_row: mapping.get("no_live_row").cloned(),
@@ -1718,12 +1743,14 @@ mod tests {
             "  private_slack_channel: https://slack.example.com/private\n",
             "  private_notion_page: https://notion.example.com/private\n",
             "  calendar_id: c_0123@group.calendar.example.com\n",
+            "  legal_plan: Sample Panel\n",
         );
         let parsed = parse(yaml).expect("nested manifest deserializes");
         assert_eq!(
             parsed.calendar_id.as_deref(),
             Some("c_0123@group.calendar.example.com")
         );
+        assert_eq!(parsed.legal_plan.as_deref(), Some("Sample Panel"));
         assert_eq!(parsed.version.as_deref(), Some("26.9.14"));
         assert_eq!(parsed.host.as_deref(), Some("staging.neonlaw.com"));
         assert_eq!(parsed.project.as_deref(), Some("acme"));

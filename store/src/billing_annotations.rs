@@ -84,6 +84,21 @@ pub async fn pending(pg: &PostgresDb, project: Uuid) -> Result<Vec<Pending>, sql
         .collect())
 }
 
+pub(crate) async fn pending_for_billing(
+    connection: &mut sqlx::PgConnection,
+    project_id: Uuid,
+    attorney_id: Option<Uuid>,
+) -> Result<Vec<(Uuid, Uuid, String, i32, NaiveDate)>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT id,attorney_id,change_id,tenths,performed_on FROM billing_annotation
+         WHERE project_id=$1 AND ($2::uuid IS NULL OR attorney_id=$2) AND reviewed_at IS NULL",
+    )
+    .bind(project_id)
+    .bind(attorney_id)
+    .fetch_all(connection)
+    .await
+}
+
 #[derive(Clone, Copy, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Decision {

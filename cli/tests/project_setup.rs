@@ -499,6 +499,7 @@ async fn project_set_from_live_uses_the_stored_bearer_and_fills_required_coordin
         .and(header("authorization", "Bearer test-token"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "code": "acme",
+            "legal_plan": "Sample Panel",
             "repository_url": "https://github.com/org/acme",
             "lawyer_dri": ["lawyer@example.com"],
             "client_dri": ["client@example.com"],
@@ -523,6 +524,7 @@ async fn project_set_from_live_uses_the_stored_bearer_and_fills_required_coordin
     for value in [
         "firm: 00000000-0000-0000-0000-000000000001",
         "brand: sample",
+        "legal_plan: Sample Panel",
         "lawyer@example.com",
         "client@example.com",
         "https://slack.com/archives/private",

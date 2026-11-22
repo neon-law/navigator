@@ -1,103 +1,14 @@
-# Claude as a Navigator MCP client
+# Connect Claude to Navigator
 
-How to point **Claude** — Claude Code or Claude Desktop — at a running Neon Law Navigator deployment, so an attorney can
-open a matter with its entities and people by asking for it in plain English.
+Add a remote MCP server in a client that supports Streamable HTTP. For Claude Code, run:
 
-This is the **setup and capability** story. The runtime interaction model — where Navigator MCP pauses, how a failure's
-reason reaches the user — is [`mcp-a2a-interaction.md`](mcp-a2a-interaction.md). The Gemini Enterprise equivalent, which
-dials `/app/mcp` over HTTPS directly.
-
-## What runs where
-
-Claude speaks MCP: local stdio servers and remote HTTP connectors. It has no A2A client. So `hudson site mcp` is the
-adapter — MCP on stdio facing Claude, A2A facing the deployment:
-
-```text
-Claude Code / Claude Desktop
-   │   MCP JSON-RPC 2.0, newline-delimited, over stdio
-   ▼
-hudson site mcp            ← runs on the attorney's laptop
-   │   POST /app/api/mcp/rpc
-   │   metadata.skill = the tool Claude chose
-   │   Authorization: Bearer <the 1h token `site login` stored>
-   ▼
-web  →  portal::a2a::dispatch_single  →  mcp::tools::call_tool
-        lawyer-tier check + target: "audit" events
+```sh
+claude mcp add --transport http navigator https://www.neonlaw.com/app/mcp
 ```
 
-The credential is a first-party one. `inject_bearer_session` resolves the signed `SessionData` blob on this route,
-`require_google_oauth` lets an already-resolved first-party session past its tokeninfo check rather than rejecting it
-for not being a Google token, and `inject_principal` reads the principal off the session's `email`. All three are
-needed: without them the CLI's credential reaches the endpoint and is redirected to a login page a JSON-RPC client
-cannot follow. None of it widens who may call — the same Rego lawyer-gate still decides, from the role on that session.
-
-Two more decisions are worth stating, because both are load-bearing.
-
-**It dials A2A, not `/app/mcp`, even though it speaks MCP to Claude.** A2A is where the supervision lives: the
-lawyer-tier check, and the `target: "audit"` record of every decision. Sending to `/app/mcp` would be one fewer hop and
-would skip all of it.
-
-**Claude picks the tool, not Gemini.** A2A's free-form path runs its own agentic loop with Vertex AI choosing the tools.
-Bridging that would put two models in series and let the weaker one decide the actions. The bridge sends
-`metadata.skill` instead, so the tool and its arguments are Claude's decision and the deployment's job is to authorize
-and execute.
-
-## Setup
-
-### 1. Log in to the deployment
-
-```bash
-navigator site login --host www.neonlaw.com
-```
-
-Browser-loopback flow; the token lands at `~/.navigator.json`, mode `0600`, and lasts one hour. The account must resolve
-to a `persons` row carrying the `lawyer` or `admin` role — the tools that write refuse anything less. Check it with
-`navigator site whoami`.
-
-### 2. Register the server
-
-Claude Code:
-
-```bash
-claude mcp add navigator -- hudson site mcp --host www.neonlaw.com
-```
-
-Claude Desktop, in `claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "navigator": {
-      "command": "navigator",
-      "args": ["site", "mcp", "--host", "www.neonlaw.com"]
-    }
-  }
-}
-```
-
-`--host` is optional when one host is logged in. For a local cluster pass an absolute URL — the port is in that
-worktree's `.devx/env`:
-
-```bash
-hudson site mcp --host http://localhost:3001
-```
-
-The server speaks protocol on stdout and diagnostics on stderr, because the client parses every stdout line. Run it from
-a client configuration, not by hand: started in a terminal it waits on stdin and looks hung.
-
-## Public remote connector
-
-Use `https://neonlaw.com/app/mcp` as the Streamable HTTP URL. Calls without credentials can use `list_templates`. Calls
-with a bearer token go through the existing authentication and authorization checks.
-
-## Sign in for account-scoped tools
-
-Run `navigator site login --host www.neonlaw.com` and configure your local agent to run the signed-in stdio bridge
-above. The bridge reads the credential from `~/.navigator.json` on each call, so signing in again refreshes the
-credential without restarting the agent. Keep the file local and let the bridge send the bearer token over HTTPS.
-
-A remote client that securely stores custom headers can send `Authorization: Bearer <token>` to `/app/mcp`. Hosted
-connectors cannot read a file on your computer. Browser-based account linking requires a separate OAuth flow.
+The deployment answers `tools/list` with the tools available for this connection. Anonymous connections offer
+`list_templates`. For signed-in access, use a client that can securely send the deployment's bearer credential in the
+HTTPS Authorization header. Refresh it when it expires. Use the public catalog for hosted ChatGPT.
 
 ## Find a Template in chat
 
@@ -109,35 +20,11 @@ When the request is “create a work in progress,” pass the wording as `intent
 whether the user wants a Work In Progress summary for a matter or wants to record time or a cost. Ask the question
 before suggesting a Template or taking action.
 
-## What Claude can and cannot do
+## Signed-in tools
 
-The catalog Claude sees offers reads and writes that touch only the firm's own records.
-
-| Offered | Why |
-| --- | --- |
-| Read-only tools | lookups answer through the caller's own lens |
-| `create_person` | a contact row, visible and correctable in `/app/admin` |
-| `create_project` | opens a Project on the attorney's two-limb conflict attestation |
-| `close_project` | moves a matter to `closed`, on the closing attorney's own attestation |
-| `link_person_project` | participation on a matter |
-| `bulk_import` | a whole contacts document — organizations, people, and the links |
-
-| Withheld | Why |
-| --- | --- |
-| `send_welcome_email` | it emails a client |
-| `create_notation` | a Notation is a binding legal artifact |
-| `answer_notation` | it answers one |
-
-The withheld three need a lawyer's explicit approval, which is an `input-required` pause on the A2A side. **MCP has no
-way to pause a call and ask a person.** A two-call handshake would not fix that: if Claude makes both calls, the model
-is approving its own action, which is not supervision. So rather than simulate a gate this transport cannot carry, those
-tools are absent from `tools/list` — Claude cannot see them, so it never proposes an act that could not be supervised.
-Naming one anyway is refused by the bridge without any dispatch, with a result saying to do it in the app instead.
-
-Do those three in `/app`, where a human approves in a UI and the approval is recorded against the matter.
-
-Confirmation is the only reason anything is withheld. `list_projects` is offered because the read answers through the
-caller's own lens, so there is nothing left to withhold.
+Ask for your Projects, deadlines, or other tools available to your account. The server verifies the caller and applies
+the tool's role and Project rules. A write requires a lawyer-tier Person. Navigator records the actor's ID, role, tool,
+and tier decision. Actions that require explicit lawyer approval take place in Navigator.
 
 Which lens depends on the tier, and the two answer different questions, so they return different shapes. The `lens`
 field on the response says which one came back.
@@ -184,19 +71,3 @@ operator reconciles later:
 ```bash
 navigator project setup <code>
 ```
-
-## Limits, stated rather than discovered
-
-- **stdio is per-laptop.** This serves Claude Code and Claude Desktop. It does not serve claude.ai on the web or mobile,
-  which would need OAuth protected-resource metadata and dynamic client registration.
-- **The token lasts eight hours** (`CLI_SESSION_TTL_SECS`). When it ages out, calls come back as a tool error. Run
-  `navigator site login` again; the credential is read from disk per call, so re-login lands without restarting the
-  server or the client.
-- **Registering before logging in is fine.** The server starts, lists its tools, and explains the missing login on the
-  first call. It does not refuse to start: a stdio server that exits has no way to tell the client why, so the client
-  would show a dead entry and no reason.
-- **The advertised catalog is compiled into the CLI.** A `navigator` older than the deployment advertises the catalog it
-  shipped with. Both directions fail gracefully: a tool the deployment has but the binary does not is simply
-  unavailable, and one the binary offers that the deployment has dropped returns an unknown-tool error naming it.
-- **Every call is audited.** A write dispatched this way emits the same `a2a.direct_skill.side_effect` event, with the
-  authenticated email, that any other A2A client's would.

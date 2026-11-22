@@ -1309,6 +1309,7 @@ route_allow if {
     input.method == "GET"
     count(input.path) <= 5
     not project_claims_path
+    not billing_report_path
     is_authenticated(input.session)
 }
 
@@ -2303,5 +2304,26 @@ ci_matter_content_denied if {
 
 ci_matter_content_denied if {
     project_claims_path
+    input.session.source == "ci"
+}
+
+billing_report_path if {
+    input.path == ["app", "api", "billing"]
+}
+
+billing_report_path if {
+    count(input.path) == 5
+    array.slice(input.path, 0, 3) == ["app", "api", "projects"]
+    input.path[4] == "billing"
+}
+
+route_allow if {
+    billing_report_path
+    input.method == "GET"
+    is_lawyer(input.session)
+}
+
+ci_matter_content_denied if {
+    billing_report_path
     input.session.source == "ci"
 }

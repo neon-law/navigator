@@ -116,3 +116,149 @@ async fn check_exits_zero_only_when_the_window_is_clear() {
         .success();
     server.verify().await;
 }
+
+#[tokio::test]
+async fn personal_calendar_keeps_its_scope_inside_a_project_checkout() {
+    let server = MockServer::start().await;
+    let root = TempDir::new().unwrap();
+    let host = server.uri();
+    let credentials = credentials(root.path(), &host);
+    std::fs::write(
+        root.path().join("navigator.yaml"),
+        "version: 26.11.21\nproject:\n  name: sample-matter\n  host: other.example.com\n",
+    )
+    .unwrap();
+    Mock::given(method("POST"))
+        .and(path("/app/api/calendars/events"))
+        .and(body_json(json!({
+            "start": "2026-11-01T15:00:00Z",
+            "end": "2026-11-02T15:00:00Z"
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/app/api/calendars/check"))
+        .and(body_json(json!({
+            "project_code": null,
+            "personal": true,
+            "start": "2026-11-01T15:00:00Z",
+            "end": "2026-11-01T16:00:00Z",
+            "attorneys": []
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"clear": true})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/app/api/calendars/access"))
+        .and(header("authorization", "Bearer test-token"))
+        .and(body_json(json!({ "personal": true })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "attorneys": [{"email": "ada@example.com", "calendars": []}]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    for args in [
+        vec!["calendar", "--start", "2026-11-01T15:00:00Z"],
+        vec![
+            "calendar",
+            "check",
+            "--start",
+            "2026-11-01T15:00:00Z",
+            "--end",
+            "2026-11-01T16:00:00Z",
+        ],
+        vec!["calendar", "access"],
+    ] {
+        Command::cargo_bin("navigator")
+            .unwrap()
+            .current_dir(root.path())
+            .env("NAVIGATOR_CREDENTIALS_FILE", &credentials)
+            .args(args)
+            .assert()
+            .success();
+    }
+    std::fs::write(
+        &credentials,
+        json!({"hosts": {host: {
+            "token": "second-token",
+            "person_email": "grace@example.com",
+            "role": "lawyer",
+            "expires_at": i64::MAX
+        }}})
+        .to_string(),
+    )
+    .unwrap();
+    let second_report = json!({
+        "attorneys": [{"email": "grace@example.com", "calendars": []}]
+    });
+    Mock::given(method("POST"))
+        .and(path("/app/api/calendars/access"))
+        .and(header("authorization", "Bearer second-token"))
+        .and(body_json(json!({ "personal": true })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&second_report))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let output = Command::cargo_bin("navigator")
+        .unwrap()
+        .current_dir(root.path())
+        .env("NAVIGATOR_CREDENTIALS_FILE", &credentials)
+        .args(["calendar", "access"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        serde_json::from_slice::<Value>(&output.stdout).unwrap(),
+        second_report
+    );
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn project_calendar_events_resolve_the_checkout_and_explicit_project() {
+    let server = MockServer::start().await;
+    let root = TempDir::new().unwrap();
+    let host = server.uri();
+    let credentials = credentials(root.path(), &host);
+    std::fs::write(
+        root.path().join("navigator.yaml"),
+        format!("version: 26.11.21\nproject:\n  name: sample-matter\n  host: {host}\n"),
+    )
+    .unwrap();
+    for project in ["sample-matter", "explicit-matter"] {
+        Mock::given(method("POST"))
+            .and(path("/app/api/calendars/events"))
+            .and(body_json(json!({
+                "project_code": project,
+                "start": "2026-11-01T15:00:00Z",
+                "end": "2026-11-02T15:00:00Z"
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+    let child = root.path().join("documents");
+    std::fs::create_dir(&child).unwrap();
+    for extra in [vec![], vec!["--project", "explicit-matter"]] {
+        Command::cargo_bin("navigator")
+            .unwrap()
+            .current_dir(&child)
+            .env("NAVIGATOR_CREDENTIALS_FILE", &credentials)
+            .args([
+                "project",
+                "calendar",
+                "events",
+                "--start",
+                "2026-11-01T15:00:00Z",
+            ])
+            .args(extra)
+            .assert()
+            .success();
+    }
+    server.verify().await;
+}

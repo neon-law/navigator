@@ -1,90 +1,228 @@
-//! Read a synthetic Project Calendar through the Navigator site API.
+//! Read personal and Project Calendars through the Navigator site API.
 
 use std::process::ExitCode;
 use std::time::Duration;
 
 use anyhow::{ensure, Context, Result};
-use chrono::{DateTime, FixedOffset};
+use chrono::{DateTime, FixedOffset, TimeDelta, Utc};
+use clap::{Args, Subcommand};
 use serde_json::{json, Value};
 
 use crate::remote;
 
-pub(crate) async fn events(
-    host: &str,
-    project_code: Option<&str>,
-    start: DateTime<FixedOffset>,
-    end: DateTime<FixedOffset>,
+type Instant = DateTime<FixedOffset>;
+
+#[derive(Args)]
+pub struct PersonalCalendarArgs {
+    /// Navigator host.
+    #[arg(long, global = true)]
+    host: Option<String>,
+    #[command(flatten)]
+    agenda: Agenda,
+    #[command(subcommand)]
+    action: Option<PersonalAction>,
+}
+
+#[derive(Args)]
+pub struct ProjectCalendarArgs {
+    /// Navigator host (defaults to the checkout's host).
+    #[arg(long, global = true)]
+    host: Option<String>,
+    /// Project code (defaults to the current checkout).
+    #[arg(long, global = true)]
+    project: Option<String>,
+    #[command(flatten)]
+    agenda: Agenda,
+    #[command(subcommand)]
+    action: Option<ProjectAction>,
+}
+
+#[derive(Args)]
+struct Agenda {
+    /// Agenda start in RFC 3339 (defaults to now).
+    #[arg(long)]
+    start: Option<Instant>,
+    /// Agenda end in RFC 3339 (defaults to 24 hours after start).
+    #[arg(long)]
+    end: Option<Instant>,
+}
+
+impl Agenda {
+    fn window(self) -> Result<(Instant, Instant)> {
+        let start = self.start.unwrap_or_else(|| Utc::now().fixed_offset());
+        let end = match self.end {
+            Some(end) => end,
+            None => start
+                .checked_add_signed(TimeDelta::days(1))
+                .context("agenda start is too late to default the end")?,
+        };
+        Ok((start, end))
+    }
+}
+
+#[derive(Args)]
+struct Availability {
+    /// Start of the window in RFC 3339 format.
+    #[arg(long)]
+    start: Instant,
+    /// End of the window in RFC 3339 format.
+    #[arg(long)]
+    end: Instant,
+    /// Limit the read to these attorney addresses.
+    #[arg(long = "attorney")]
+    attorneys: Vec<String>,
+}
+
+#[derive(Subcommand)]
+enum PersonalAction {
+    /// List events on the signed-in attorney's primary calendar.
+    Events {
+        #[command(flatten)]
+        agenda: Agenda,
+        #[arg(long, hide = true)]
+        project: Option<String>,
+    },
+    /// List the signed-in attorney's busy blocks.
+    Freebusy {
+        #[command(flatten)]
+        window: Availability,
+        #[arg(long, hide = true)]
+        project: Option<String>,
+    },
+    /// Check whether the signed-in attorney is available.
+    Check {
+        #[command(flatten)]
+        window: Availability,
+        #[arg(long, hide = true)]
+        project: Option<String>,
+    },
+    /// Report whether the signed-in attorney's calendars can be read.
+    Access {
+        #[arg(long, hide = true)]
+        project: Option<String>,
+    },
+    /// Record one of your calendars.
+    Register {
+        /// Calendar ID. Defaults to the signed-in address.
+        #[arg(long)]
+        calendar: Option<String>,
+        /// Record an extra free/busy calendar.
+        #[arg(long)]
+        freebusy: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum ProjectAction {
+    /// List events on the Project Calendar.
+    Events(Agenda),
+    /// List busy blocks for the Project and its attorneys.
+    Freebusy(Availability),
+    /// Check availability for the Project and its attorneys.
+    Check(Availability),
+    /// Check access to the Project and its attorney calendars.
+    Access,
+}
+
+impl PersonalCalendarArgs {
+    pub async fn run(self) -> ExitCode {
+        let host = self.host.as_deref();
+        match self.action {
+            None => events(host, None, self.agenda, false).await,
+            Some(PersonalAction::Events { agenda, project }) => {
+                events(host, project.as_deref(), agenda, true).await
+            }
+            Some(PersonalAction::Freebusy { window, project }) => {
+                availability(host, project.as_deref(), window, false).await
+            }
+            Some(PersonalAction::Check { window, project }) => {
+                availability(host, project.as_deref(), window, true).await
+            }
+            Some(PersonalAction::Access { project }) => access(host, project.as_deref()).await,
+            Some(PersonalAction::Register { calendar, freebusy }) => {
+                register(host, calendar.as_deref(), freebusy).await
+            }
+        }
+    }
+}
+
+impl ProjectCalendarArgs {
+    pub async fn run(self) -> ExitCode {
+        let target = super::project_target(self.host.as_deref(), self.project.as_deref());
+        let (host, project) = match target {
+            Ok(target) => target,
+            Err(error) => return finish("navigator project calendar", Err(error), false),
+        };
+        let host = host.as_deref();
+        let project = Some(project.as_str());
+        match self.action {
+            None => events(host, project, self.agenda, false).await,
+            Some(ProjectAction::Events(agenda)) => events(host, project, agenda, false).await,
+            Some(ProjectAction::Freebusy(window)) => {
+                availability(host, project, window, false).await
+            }
+            Some(ProjectAction::Check(window)) => availability(host, project, window, true).await,
+            Some(ProjectAction::Access) => access(host, project).await,
+        }
+    }
+}
+
+async fn events(
+    host: Option<&str>,
+    project: Option<&str>,
+    agenda: Agenda,
+    compatibility: bool,
 ) -> ExitCode {
     let result: Result<Value> = async {
-        let (base, token) = remote::resolve(Some(host))?;
-        let (path, body) = match project_code {
-            Some(project_code) => (
-                "/app/api/integrations/calendar/events",
-                json!({"project_code": project_code, "start": start, "end": end}),
-            ),
-            None => (
-                "/app/api/calendars/events",
-                json!({"start": start, "end": end}),
-            ),
+        let (start, end) = agenda.window()?;
+        let (base, token) = remote::resolve(host)?;
+        let path = if compatibility && project.is_some() {
+            "/app/api/integrations/calendar/events"
+        } else {
+            "/app/api/calendars/events"
         };
-        let value = post(&base, &token, path, body).await?;
-        if value.get("unreadable").is_some() {
-            anyhow::bail!("{value}");
+        let mut body = json!({"start": start, "end": end});
+        if let Some(project) = project {
+            body["project_code"] = json!(project);
         }
-        Ok(value)
+        post(&base, &token, path, body).await
     }
     .await;
-    finish("navigator calendar events", result, false)
+    finish("navigator calendar events", result, true)
 }
 
-pub(crate) async fn freebusy(
-    host: &str,
-    project_code: Option<&str>,
-    start: DateTime<FixedOffset>,
-    end: DateTime<FixedOffset>,
-    attorneys: &[String],
+async fn availability(
+    host: Option<&str>,
+    project: Option<&str>,
+    window: Availability,
+    check: bool,
 ) -> ExitCode {
-    let result = post_window(
-        host,
-        "/app/api/calendars/freebusy",
-        project_code,
-        start,
-        end,
-        attorneys,
-    )
-    .await;
-    finish("navigator calendar freebusy", result, true)
-}
-
-pub(crate) async fn check(
-    host: &str,
-    project_code: Option<&str>,
-    start: DateTime<FixedOffset>,
-    end: DateTime<FixedOffset>,
-    attorneys: &[String],
-) -> ExitCode {
-    let result = post_window(
-        host,
-        "/app/api/calendars/check",
-        project_code,
-        start,
-        end,
-        attorneys,
-    )
-    .await;
-    finish("navigator calendar check", result, true)
-}
-
-pub(crate) async fn access(host: &str, project_code: Option<&str>) -> ExitCode {
+    let verb = if check { "check" } else { "freebusy" };
     let result: Result<Value> = async {
-        let (base, token) = remote::resolve(Some(host))?;
-        post(
-            &base,
-            &token,
-            "/app/api/calendars/access",
-            json!({ "project_code": project_code }),
-        )
-        .await
+        let (base, token) = remote::resolve(host)?;
+        let mut body = json!({
+            "project_code": project,
+            "start": window.start,
+            "end": window.end,
+            "attorneys": window.attorneys,
+        });
+        if project.is_none() && window.attorneys.is_empty() {
+            body["personal"] = json!(true);
+        }
+        post(&base, &token, &format!("/app/api/calendars/{verb}"), body).await
+    }
+    .await;
+    finish(&format!("navigator calendar {verb}"), result, true)
+}
+
+async fn access(host: Option<&str>, project_code: Option<&str>) -> ExitCode {
+    let result: Result<Value> = async {
+        let (base, token) = remote::resolve(host)?;
+        let body = match project_code {
+            Some(code) => json!({ "project_code": code }),
+            None => json!({ "personal": true }),
+        };
+        post(&base, &token, "/app/api/calendars/access", body).await
     }
     .await;
     match result {
@@ -127,9 +265,9 @@ fn access_blocked(value: &Value) -> bool {
     attorneys || project
 }
 
-pub(crate) async fn register(host: &str, calendar_id: Option<&str>, freebusy: bool) -> ExitCode {
+async fn register(host: Option<&str>, calendar_id: Option<&str>, freebusy: bool) -> ExitCode {
     let result: Result<Value> = async {
-        let (base, token) = remote::resolve(Some(host))?;
+        let (base, token) = remote::resolve(host)?;
         post(
             &base,
             &token,
@@ -145,31 +283,9 @@ pub(crate) async fn register(host: &str, calendar_id: Option<&str>, freebusy: bo
     finish("navigator calendar register", result, false)
 }
 
-async fn post_window(
-    host: &str,
-    path: &str,
-    project_code: Option<&str>,
-    start: DateTime<FixedOffset>,
-    end: DateTime<FixedOffset>,
-    attorneys: &[String],
-) -> Result<Value> {
-    let (base, token) = remote::resolve(Some(host))?;
-    post(
-        &base,
-        &token,
-        path,
-        json!({
-            "project_code": project_code,
-            "start": start,
-            "end": end,
-            "attorneys": attorneys,
-        }),
-    )
-    .await
-}
-
 async fn post(base: &str, token: &str, path: &str, body: Value) -> Result<Value> {
-    let response = reqwest::Client::new()
+    let response = remote::authenticated_client_builder(base)?
+        .build()?
         .post(format!("{base}{path}"))
         .timeout(Duration::from_secs(30))
         .bearer_auth(token)

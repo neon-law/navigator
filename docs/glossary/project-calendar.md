@@ -28,15 +28,13 @@ events are kept as part of the matter's record. The matter page links the calend
 Create, update, complete, and cancel [Deadlines](deadline.md) in Navigator. The mirror reads its own calendar events to
 reconcile changes and preserves unrelated events.
 
-On staging, an authorized Firm administrator can inspect a synthetic Project Calendar. Attorney free/busy and the
-signed-in attorney's own events are an [Attorney Calendar](attorney-calendar.md).
+Run `navigator project calendar` in the Project checkout or give it `--project <code>`. It lists event IDs, summaries,
+and times for the next 24 hours by default. Use `--start` and `--end` for an RFC 3339 window of up to 31 days. The
+recorded Calendar ID must match the calendar the deployment owns for the Project.
 
-```bash
-navigator calendar events --project <code> --start <RFC3339> --end <RFC3339> --host <staging-host>
-```
-
-The command returns event IDs, summaries, and start and end times as JSON for a window of up to 31 days. The stored
-Calendar ID must match the single calendar the deployment owns with the staging-prefixed Project code as its name.
+`navigator project calendar check --start <RFC3339> --end <RFC3339>` checks the Project Calendar, its open
+[Deadlines](deadline.md), and the [Attorney Calendars](attorney-calendar.md) of its firm-side participants. The caller
+needs firm-side Project access and the Firm's calendar capability.
 
 - Provider: [`cloud::calendar`](../../cloud/src/calendar.rs) · setup and close:
   [`store::project_calendar`](../../store/src/project_calendar.rs)
