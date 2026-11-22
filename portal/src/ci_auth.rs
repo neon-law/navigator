@@ -675,7 +675,7 @@ mod tests {
         code: &str,
         brand: &str,
     ) -> store::projects::Project {
-        let entity_id = store::test_support::seed_entity(surreal).await;
+        let entity_id = store::test_support::seed_entity_with_parents(surreal).await;
         let project = store::projects::create(
             surreal,
             &store::projects::NewProject {
@@ -879,10 +879,15 @@ mod tests {
 
     #[tokio::test]
     async fn github_mint_binds_the_signed_audience_and_project_brand_to_the_host() {
+        store::test_support::with_postgres(check_github_mint_brand()).await;
+    }
+
+    async fn check_github_mint_brand() {
         use crate::test_support::{sign_rs256_claims, test_oidc_jwks_rsa, TEST_OIDC_KID};
         use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
 
-        let db = store::test_support::mem_surreal().await;
+        let db = store::surreal::SurrealDb::uninitialized();
+        store::test_support::seed_firm_with_new_brand(&db, "iep-defenders").await;
         project_at(&db, "https://github.com/example/acme", "iep-defenders").await;
         let mut state = ci_state(db, "example/acme", "unused");
         let keys = MockServer::start().await;
