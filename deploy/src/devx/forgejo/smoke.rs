@@ -1537,6 +1537,73 @@ fn smoke_postgres_options(cfg: &KindConfig, seed: &Seed, root_cert: &Path) -> Pg
         .options([("session_preload_libraries", "age")])
 }
 
+// Experiment-only, fixed-label diagnostics. Never print an error or connect options.
+async fn diagnose_native_transport(options: &PgConnectOptions) {
+    use sqlx::Connection;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let tcp = match tokio::time::timeout_at(
+        deadline,
+        tokio::net::TcpStream::connect((options.get_host(), options.get_port())),
+    )
+    .await
+    {
+        Ok(Ok(stream)) => {
+            drop(stream);
+            "connected"
+        }
+        Ok(Err(error)) => transport_io_category(error.kind()),
+        Err(_) => "deadline",
+    };
+    eprintln!("native_transport_diagnostic tcp={tcp}");
+    // One startup attempt, even if TCP failed, within the SAME ten-second budget.
+    let startup = match tokio::time::timeout_at(
+        deadline,
+        sqlx::PgConnection::connect_with(options),
+    )
+    .await
+    {
+        Ok(Ok(connection)) => {
+            let closed = tokio::time::timeout_at(deadline, connection.close()).await;
+            if matches!(closed, Ok(Ok(()))) {
+                "connected_closed"
+            } else {
+                "connected_close_unconfirmed"
+            }
+        }
+        Ok(Err(error)) => transport_sqlx_category(&error),
+        Err(_) => "deadline",
+    };
+    eprintln!("native_transport_diagnostic startup={startup}");
+}
+
+fn transport_io_category(kind: std::io::ErrorKind) -> &'static str {
+    match kind {
+        std::io::ErrorKind::ConnectionRefused => "refused",
+        std::io::ErrorKind::ConnectionReset => "reset",
+        std::io::ErrorKind::TimedOut => "timeout",
+        std::io::ErrorKind::UnexpectedEof => "eof",
+        _ => "io_other",
+    }
+}
+
+fn transport_sqlx_category(error: &sqlx::Error) -> &'static str {
+    match error {
+        sqlx::Error::Io(error) => transport_io_category(error.kind()),
+        sqlx::Error::Tls(_) => "tls",
+        sqlx::Error::Protocol(_) => "protocol",
+        sqlx::Error::Database(error) => match error.code().as_deref() {
+            Some("28P01" | "28000") => "database_authentication",
+            Some("42501") => "database_privilege",
+            Some("3D000") => "database_missing",
+            Some("53300") => "database_capacity",
+            _ => "database_other",
+        },
+        sqlx::Error::PoolTimedOut => "pool_timeout",
+        _ => "sqlx_other",
+    }
+}
+
 impl SmokePostgres {
     async fn create(cfg: &KindConfig, kube: &Kube, seed: &Seed) -> Result<Self> {
         // Read-only verification of the same task-owned mapping installed by forgejo up.
@@ -1552,6 +1619,7 @@ impl SmokePostgres {
             .write_all(ca.as_bytes())
             .context("write smoke PostgreSQL trust anchor")?;
         let options = smoke_postgres_options(cfg, seed, root_cert.path());
+        diagnose_native_transport(&options).await;
         let fixture =
             store::test_support::PostgresFixture::create_with_connections(options.clone(), options)
                 .await
@@ -2647,3 +2715,26 @@ exit 23
 #[cfg(test)]
 #[path = "smoke_postgres_tests.rs"]
 mod postgres_tests;
+
+#[cfg(test)]
+mod native_transport_diagnostic_tests {
+    #[test]
+    fn diagnostic_categories_never_echo_private_error_content() {
+        let marker = "synthetic-private-diagnostic-marker";
+        assert_eq!(
+            super::transport_sqlx_category(&sqlx::Error::Protocol(marker.into())),
+            "protocol"
+        );
+        assert_eq!(
+            super::transport_sqlx_category(&sqlx::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::ConnectionReset,
+                marker,
+            ))),
+            "reset"
+        );
+        assert_eq!(
+            super::transport_sqlx_category(&sqlx::Error::PoolTimedOut),
+            "pool_timeout"
+        );
+    }
+}
