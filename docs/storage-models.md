@@ -38,11 +38,11 @@ Activated PostgreSQL rows cannot be overwritten or deleted by replaying an older
 ownership, and a merge moves PostgreSQL references transactionally. Cap Table Holding and Fiduciary Role writes lock
 their typed Person or Entity in the same transaction as their row write. Person merges retarget financial Person links
 before deleting the duplicate; a unique collision refuses the transaction, and same-UUID Entity links remain distinct. A
-Person named as an immutable Billing Annotation author or reviewer cannot be merged away. The merge returns a specific
-refusal and retains both identities, participation, and billing evidence; it does not rewrite historic review
-attribution or remove the annotation. Other eligible application Person merges remain PostgreSQL-only. Identity detail uses
-`store::postgres::identity`: addresses, credentials, email tokens, entities, delegates, external identities, and phones.
-The people directory reads the `person_directory` and `firm_visible_person` views.
+Person named as an immutable Billing Annotation author or reviewer, or as a Legal Plan Claim event actor, cannot be
+merged away. The merge returns a specific refusal and retains both identities, participation, and evidence; it preserves
+billing attribution and claim collection history. Other eligible application Person merges remain PostgreSQL-only.
+Identity detail uses `store::postgres::identity`: addresses, credentials, email tokens, entities, delegates, external
+identities, and phones. The people directory reads the `person_directory` and `firm_visible_person` views.
 
 ## Tenancy
 

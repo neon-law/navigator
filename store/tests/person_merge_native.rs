@@ -2,6 +2,8 @@
 use store::postgres::PostgresDb;
 use store::surreal::SurrealDb;
 
+#[path = "support/merge_claim_refusal.rs"]
+mod merge_claim_refusal;
 #[path = "support/person_merge_graph.rs"]
 mod merge_fixture;
 #[path = "support/merge_governance_race.rs"]

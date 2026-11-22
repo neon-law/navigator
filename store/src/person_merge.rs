@@ -35,6 +35,9 @@ pub enum PersonMergeError {
     /// Immutable billing author or reviewer evidence retains the dropped identity.
     #[error("immutable billing history prevents merging this Person")]
     RetainedBillingHistory,
+    /// Immutable Legal Plan Claim evidence retains the dropped actor identity.
+    #[error("immutable Legal Plan Claim history prevents merging this Person")]
+    RetainedClaimHistory,
     /// A Person read or write failed.
     #[error(transparent)]
     Person(#[from] PersonError),
@@ -239,14 +242,13 @@ async fn merge_by_email_with_actor(
     merge_with_actor(db, keep.id, dropped.id, actor).await
 }
 
-/// Fold `drop_id` into `keep_id`: every relationship the dropped Person held
-/// moves to the kept Person, the kept Person answers to both addresses, and
-/// the duplicate row is deleted last.
+/// Fold `drop_id` into `keep_id`: relationships and mailbox claims move to
+/// the kept Person. Application merges delete the duplicate relational row
+/// and converge the AGE graph in the same PostgreSQL transaction.
 ///
 /// Only a client Person can be dropped, matching
-/// [`crate::people_commands::delete_person`]. Nothing is deleted until the
-/// relationships have moved, so a failure leaves both Persons in place and
-/// the merge can be run again.
+/// [`crate::people_commands::delete_person`]. An application refusal or failure
+/// rolls back the transaction, leaving both Persons and their evidence in place.
 ///
 /// # Errors
 ///

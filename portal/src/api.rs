@@ -1640,6 +1640,9 @@ async fn merge_people(
                 PersonMergeError::RetainedBillingHistory => {
                     (StatusCode::CONFLICT, "retained_billing_history")
                 }
+                PersonMergeError::RetainedClaimHistory => {
+                    (StatusCode::CONFLICT, "retained_claim_history")
+                }
                 PersonMergeError::Person(_)
                 | PersonMergeError::Db(_)
                 | PersonMergeError::Project(_) => {

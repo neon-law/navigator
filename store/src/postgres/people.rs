@@ -585,11 +585,7 @@ const MERGE_UNIQUE_LINKS: &[(&str, &[&str])] = &[
     ("person_calendar", &["calendar_id"]),
 ];
 
-/// Fold `drop_id` into `keep_id` in one transaction: every PostgreSQL row
-/// that links the dropped Person moves to the kept Person, the kept Person
-/// takes each provider subject it lacks and every mailbox claim, and the
-/// dropped row is deleted last. Links come from catalog foreign keys and the
-/// canonical import metadata for authoritative tables that accept historical orphans.
+/// Keep the retained Person's primary calendar when moving a duplicate's calendars.
 async fn demote_merged_calendar_primary(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     keep_id: Uuid,
@@ -607,7 +603,7 @@ async fn demote_merged_calendar_primary(
     Ok(())
 }
 
-async fn ensure_no_retained_billing(
+async fn ensure_no_retained_identity_evidence(
     connection: &mut sqlx::PgConnection,
     dropped: Uuid,
 ) -> Result<(), crate::person_merge::PersonMergeError> {
@@ -615,16 +611,25 @@ async fn ensure_no_retained_billing(
         "SELECT EXISTS(SELECT 1 FROM billing_annotation WHERE attorney_id=$1 OR reviewed_by=$1)",
     )
     .bind(dropped)
-    .fetch_one(connection)
+    .fetch_one(&mut *connection)
     .await
     .map_err(database)?;
     if retained {
         return Err(crate::person_merge::PersonMergeError::RetainedBillingHistory);
     }
+    let retained_claim: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM legal_plan_claim_event WHERE actor_id=$1)")
+            .bind(dropped)
+            .fetch_one(connection)
+            .await
+            .map_err(database)?;
+    if retained_claim {
+        return Err(crate::person_merge::PersonMergeError::RetainedClaimHistory);
+    }
     Ok(())
 }
 
-/// Commit the identity and reference merge under the same Person writer locks.
+/// Lock both Persons and validate merge eligibility for the caller-owned transaction.
 async fn lock_merge_people(
     tx: &mut Transaction<'_, Postgres>,
     keep_id: Uuid,
@@ -709,7 +714,7 @@ async fn merge_rows_with_actor(
 ) -> Result<(), crate::person_merge::PersonMergeError> {
     let mut tx = pg.0.begin().await.map_err(database)?;
     let kept_role = lock_merge_people(&mut tx, keep_id, drop_id, actor).await?;
-    ensure_no_retained_billing(&mut tx, drop_id).await?;
+    ensure_no_retained_identity_evidence(&mut tx, drop_id).await?;
     for flag in ["is_lawyer_dri", "is_client_dri"] {
         sqlx::query(AssertSqlSafe(format!(
             "UPDATE person_project_role SET {flag} = true WHERE person_id = $1 AND project_id IN \
