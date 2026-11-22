@@ -1267,6 +1267,7 @@ struct FakeCalendarState {
 #[derive(Debug)]
 struct FakeCalendarEntry {
     summary: String,
+    assigned_guests: BTreeMap<String, String>,
     members: BTreeMap<String, CalendarRole>,
 }
 
@@ -1305,6 +1306,18 @@ impl FakeCalendar {
             .calendars
             .get(calendar_id)
             .map(|entry| entry.members.clone())
+            .unwrap_or_default()
+    }
+
+    /// The most recent event guest assignments submitted to this calendar.
+    #[must_use]
+    pub fn assigned_guests(&self, calendar_id: &str) -> BTreeMap<String, String> {
+        self.state
+            .lock()
+            .expect("fake calendar mutex poisoned")
+            .calendars
+            .get(calendar_id)
+            .map(|entry| entry.assigned_guests.clone())
             .unwrap_or_default()
     }
 
@@ -1416,6 +1429,7 @@ impl CalendarService for FakeCalendar {
             id.clone(),
             FakeCalendarEntry {
                 summary: summary.to_string(),
+                assigned_guests: BTreeMap::new(),
                 members: BTreeMap::from([(FAKE_CALENDAR_OWNER.to_string(), CalendarRole::Owner)]),
             },
         );
@@ -1481,9 +1495,20 @@ impl CalendarService for FakeCalendar {
 
     async fn sync_event_guests(
         &self,
-        _calendar_id: &str,
-        _desired: &BTreeMap<String, String>,
+        calendar_id: &str,
+        desired: &BTreeMap<String, String>,
     ) -> Result<BTreeMap<String, BTreeMap<String, usize>>, CalendarError> {
+        self.state
+            .lock()
+            .expect("fake calendar mutex poisoned")
+            .calendars
+            .get_mut(calendar_id)
+            .ok_or(CalendarError::Api {
+                action: "syncing event guests",
+                status: 404,
+            })?
+            .assigned_guests
+            .clone_from(desired);
         Ok(BTreeMap::new())
     }
 

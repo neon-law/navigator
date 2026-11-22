@@ -7,8 +7,8 @@ metadata:
   labels:
     app: nightly-project-update-trigger
 spec:
-  schedule: "33 11 * * *"
-  timeZone: Etc/UTC # 11:33 UTC (03:33 PST) daily; the UTC date is the idempotency key.
+  schedule: "33 3 * * *"
+  timeZone: Etc/UTC # 03:33 UTC daily; the UTC date is the idempotency key.
   suspend: true # KIND captures Slack calls, so exercise this trigger manually.
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 7

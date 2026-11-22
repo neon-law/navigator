@@ -8570,7 +8570,7 @@ mod tests {
             );
             for ((cronjob, flag), cadence) in COHOST_TRIGGERS
                 .into_iter()
-                .zip(["33 11 * * *", "*/15 * * * *"])
+                .zip(["33 3 * * *", "*/15 * * * *"])
             {
                 let original = manifest_doc(&mixed, "CronJob", cronjob);
                 let native = manifest_doc(&manifests, "CronJob", cronjob);

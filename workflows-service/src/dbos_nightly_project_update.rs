@@ -37,6 +37,8 @@ pub enum NightlyError {
     Roster,
     #[error("nightly Project update notice could not be delivered")]
     Notice,
+    #[error("Project Calendar reconciliation failed while {0}")]
+    Calendar(String),
     #[error("nightly Project workflow step failed")]
     Step,
 }
@@ -102,18 +104,21 @@ pub fn child_workflow_id(tag: Tag, ran_on: &str, project_id: Uuid) -> String {
 #[derive(Clone)]
 struct ParentContext {
     context: Context,
+    calendar: TagWorkflow,
     membership: TagWorkflow,
     slack: TagWorkflow,
     repository: TagWorkflow,
 }
 
-#[allow(clippy::too_many_lines)] // One factory keeps all four workflow registrations coherent.
+#[allow(clippy::too_many_lines)] // One factory keeps parent and child workflow registrations coherent.
 pub fn register(dbos: &DBOS, context: Context) -> dbos::Result<NightlyWorkflow> {
+    let calendar = register_tag(dbos, context.clone(), Tag::Calendar)?;
     let membership = register_tag(dbos, context.clone(), Tag::Membership)?;
     let slack = register_tag(dbos, context.clone(), Tag::Slack)?;
     let repository = register_tag(dbos, context.clone(), Tag::Repository)?;
     let parent = ParentContext {
         context,
+        calendar,
         membership,
         slack,
         repository,
@@ -164,7 +169,7 @@ pub fn register(dbos: &DBOS, context: Context) -> dbos::Result<NightlyWorkflow> 
             let slack = Arc::clone(&parent.context.slack);
             let channel = parent.context.outcome_channel.clone();
             let correlation = format!("nightly-project-update-{ran_on}-start");
-            dbos::step_with(
+            let start_notice = dbos::step_with(
                 "post-start",
                 StepOptions {
                     max_attempts: MESSAGE_ATTEMPTS,
@@ -186,13 +191,19 @@ pub fn register(dbos: &DBOS, context: Context) -> dbos::Result<NightlyWorkflow> 
                     }
                 },
             )
-            .await?;
+            .await;
 
-            let report = nightly::sweep(&roster, |tag, project_id| {
+            let tags = if dbos::patch::<NightlyError>("nightly-project-calendar").await? {
+                Tag::ALL
+            } else {
+                Tag::COMPATIBILITY
+            };
+            let report = nightly::sweep_tags(&roster, tags, |tag, project_id| {
                 let parent = parent.clone();
                 let ran_on = ran_on.to_owned();
                 async move {
                     let child = match tag {
+                        Tag::Calendar => &parent.calendar,
                         Tag::Membership => &parent.membership,
                         Tag::Slack => &parent.slack,
                         Tag::Repository => &parent.repository,
@@ -211,7 +222,10 @@ pub fn register(dbos: &DBOS, context: Context) -> dbos::Result<NightlyWorkflow> 
                             },
                         )
                         .await
-                        .map_err(|_| "DBOS tag child failed".to_owned())
+                        .map_err(|error| match error {
+                            dbos::Error::Application(NightlyError::Calendar(phase)) => format!("Calendar failed while {phase}"),
+                            _ => "DBOS tag child failed".to_owned(),
+                        })
                 }
             })
             .await;
@@ -239,12 +253,13 @@ pub fn register(dbos: &DBOS, context: Context) -> dbos::Result<NightlyWorkflow> 
                 },
             )
             .await?;
+            start_notice?;
             dbos::Result::<_, NightlyError>::Ok(report)
         }
     })
 }
 
-#[allow(clippy::too_many_lines)] // The three fixed tag definitions share one typed registration path.
+#[allow(clippy::too_many_lines)] // The tag definitions share one typed registration path.
 fn register_tag(dbos: &DBOS, context: Context, tag: Tag) -> dbos::Result<TagWorkflow> {
     dbos.register_workflow(
         tag.service(),
@@ -256,6 +271,28 @@ fn register_tag(dbos: &DBOS, context: Context, tag: Tag) -> dbos::Result<TagWork
                 let project_id = request.project_id;
                 let ran_on = request.ran_on;
                 match tag {
+                    Tag::Calendar => {
+                        dbos::step_with(
+                            "reconcile-project-calendar",
+                            StepOptions {
+                                max_attempts: 3,
+                                ..StepOptions::default()
+                            },
+                            move || {
+                                let context = context.clone();
+                                async move {
+                                    nightly::calendar::reconcile(
+                                        &context.surreal,
+                                        project_id,
+                                        context.portal_origin.as_deref(),
+                                    )
+                                    .await
+                                    .map_err(dbos::Error::Application)
+                                }
+                            },
+                        )
+                        .await
+                    }
                     Tag::Membership => {
                         let resolution_context = context.clone();
                         let resolution = dbos::step("resolve-membership-channel", move || {
@@ -470,15 +507,15 @@ mod tests {
             open,
         });
         let mut calls = Vec::new();
-        let report = crate::nightly_project_update::sweep(&roster, |tag, id| {
+        let report = crate::nightly_project_update::sweep_tags(&roster, Tag::ALL, |tag, id| {
             calls.push((id, tag));
             async { Err("DBOS tag child failed".to_owned()) }
         })
         .await;
 
-        assert_eq!(calls.len(), 4, "closed Projects still run membership only");
+        assert_eq!(calls.len(), 5, "closed Projects still run membership only");
         assert_eq!(report.failed_projects, 2);
-        assert_eq!(report.failures(), 4);
+        assert_eq!(report.failures(), 5);
         assert!(report
             .failure_causes
             .iter()

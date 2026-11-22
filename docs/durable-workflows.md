@@ -58,10 +58,9 @@ optional bearer. The shared helper is `workflows::start_workflow`.
 
 The [Nightly Project Update](glossary/nightly-project-update.md) is the parent DAG for the nightly Project walk.
 `NightlyProjectUpdate` is a workflow keyed on the **UTC date**, so a second fire on the same day attaches to the first
-and does nothing new. A Kubernetes CronJob, `nightly-project-update-trigger`, starts it at **05:55 UTC**. Its tags are
-`membership`, `slack`, `repository`, and `calendar`; the `membership`, `slack`, and `repository` children are
-implemented as the workflows `NightlyProjectUpdateMembership`, `NightlyProjectUpdateSlack`, and
-`NightlyProjectUpdateRepository`.
+and does nothing new. The Kubernetes CronJob `nightly-project-update-trigger` starts it at **03:33 UTC**. DBOS runs
+`NightlyProjectUpdateCalendar` for each open Project. Both engines run `NightlyProjectUpdateMembership`,
+`NightlyProjectUpdateSlack`, and `NightlyProjectUpdateRepository`.
 
 The parent journals the clock (`read-clock`), the start notice (`post-start`), the Project roster (`discover-projects`:
 Project ids and an open flag only), and the outcome notice (`post-outcome`). It then calls one child per (Project, tag),
