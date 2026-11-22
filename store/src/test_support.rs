@@ -245,6 +245,81 @@ pub async fn seed_entity(surreal: &crate::surreal::SurrealDb) -> Uuid {
     .id
 }
 
+/// Create a synthetic Entity and its lookup parents through the active accessors.
+pub async fn seed_entity_with_parents(db: &crate::surreal::SurrealDb) -> Uuid {
+    let id = Uuid::new_v4();
+    let jurisdiction = crate::jurisdictions::create(
+        db,
+        &crate::jurisdictions::NewJurisdiction::new(
+            format!("Synthetic jurisdiction {id}"),
+            id.to_string(),
+            "state",
+        ),
+    )
+    .await
+    .unwrap();
+    let kind = crate::entity_types::create(db, &format!("Synthetic kind {id}"))
+        .await
+        .unwrap();
+    crate::entities::create(
+        db,
+        &crate::entities::NewEntity {
+            name: format!("Synthetic entity {id}"),
+            entity_type_id: kind.id,
+            jurisdiction_id: jurisdiction.id,
+            phone: None,
+            url: None,
+            xero_id: None,
+            firm_anchor_key: None,
+        },
+    )
+    .await
+    .unwrap()
+    .id
+}
+
+/// Create a synthetic Firm, administrator, and owned Brand through canonical accessors.
+pub async fn seed_firm_with_new_brand(db: &crate::surreal::SurrealDb, brand: &str) -> (Uuid, Uuid) {
+    let admin = crate::persons::create(
+        db,
+        &crate::persons::NewPerson::with_role(
+            "Synthetic administrator",
+            format!("synthetic-{}@example.com", Uuid::new_v4()),
+            crate::persons::Role::Admin,
+        ),
+    )
+    .await
+    .unwrap();
+    let firm = crate::firms::create(
+        db,
+        &crate::firms::NewFirm {
+            name: format!("Synthetic firm {}", Uuid::new_v4()),
+            status: "active".to_owned(),
+            entity_id: seed_entity_with_parents(db).await,
+            admin_dri_person_id: admin.id,
+        },
+    )
+    .await
+    .unwrap();
+    crate::brands::create(
+        db,
+        crate::persons::Role::Admin,
+        Some(admin.id),
+        &crate::brands::NewBrand {
+            name: brand.to_string(),
+            key: brand.to_string(),
+            firm_id: Some(firm.id),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    crate::firms::attach_brand(db, crate::persons::Role::Owner, None, firm.id, brand)
+        .await
+        .unwrap();
+    (firm.id, admin.id)
+}
+
 /// Seed a synthetic Firm that wears the named brand so matter-open fixtures
 /// exercise the same Firm/brand ownership invariant as production.
 pub async fn seed_firm_with_brand(surreal: &crate::surreal::SurrealDb, brand: &str) -> Uuid {
