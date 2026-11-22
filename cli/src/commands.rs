@@ -397,6 +397,12 @@ pub enum SiteCmd {
         #[command(subcommand)]
         action: crate::person::PersonCmd,
     },
+    /// File or correct a global Authority and its archived artifact. An
+    /// Authority carries no Project.
+    Authorities {
+        #[command(subcommand)]
+        action: crate::authorities::AuthoritiesAction,
+    },
     /// File, read, and verify a Project's documents — every document is
     /// scoped to one Project, and every Project to one brand deployment
     /// (`--host`, defaulting to the sole stored login).
@@ -595,6 +601,7 @@ fn run_site(action: SiteCmd) -> ExitCode {
         SiteCmd::Firm { action } => runtime().block_on(crate::firm_admin::run_firm(action)),
         SiteCmd::Brand { action } => runtime().block_on(crate::firm_admin::run_brand(action)),
         SiteCmd::Person { action } => runtime().block_on(crate::person::run(action)),
+        SiteCmd::Authorities { action } => crate::authorities::run(action),
         SiteCmd::Document { action } => {
             runtime().block_on(crate::matter_site::run_document(action))
         }
@@ -5105,7 +5112,7 @@ pub const DOCUMENT_UPLOAD_KIND_HELP: &str = "Accepted --kind values: letter, fil
 
 pub const DOCUMENT_TRANSCRIBE_HELP: &str = "Each page is rendered locally, orientation-corrected, deskewed, and OCR'd before the transcript is uploaded as a `transcript` revision linked to the exact source asset id, version, and SHA-256. OCR requires local Poppler (`pdftoppm`) and Tesseract with the `eng` and `osd` language data. Use --text-file to file a reviewed UTF-8 transcript against the same source revision without running OCR. Source pages and transcript text are sent to no OCR provider and are never written into Git.";
 
-pub const DOCUMENT_SYNC_HELP: &str = "Defaults: staged pointers are internal-visible and preserve that visibility when they already exist. Kind inference maps pleadings to filing, exhibits to exhibit, agreements to agreement, invoices to invoice, memos to memo, transcripts to transcript, and everything else to unclassified — except documents/cases/** and documents/rules/**, which are not Project documents at all: each is routed through `site authorities create` (a sidecar carrying citation/class/title/canonical_url/checked_on is required beside each capture) and its committed pointer carries an authority_id rather than a plain kind inference. documents/cases/** is case_law only; documents/rules/** is every other Authority class (statute, regulation, administrative, secondary) — a sidecar whose class disagrees with its folder is refused. A documents/invoices/** filename must match `INV-<digits>.<ext>`. Storage remains content-addressed under the existing Project documents keys; sync does not rename or migrate those keys. A folder outside those categories is therefore intentionally unclassified, not an error.";
+pub const DOCUMENT_SYNC_HELP: &str = "Defaults: staged pointers are internal-visible and preserve that visibility when they already exist. Kind inference maps pleadings to filing, exhibits to exhibit, agreements to agreement, invoices to invoice, memos to memo, transcripts to transcript, and everything else to unclassified — except documents/cases/** and documents/rules/**, which are not Project documents at all: each is routed through `navigator site authorities create` (a sidecar carrying citation/class/title/canonical_url/checked_on is required beside each capture) and its committed pointer carries an authority_id rather than a plain kind inference. documents/cases/** is case_law only; documents/rules/** is every other Authority class (statute, regulation, administrative, secondary) — a sidecar whose class disagrees with its folder is refused. A documents/invoices/** filename must match `INV-<digits>.<ext>`. Storage remains content-addressed under the existing Project documents keys; sync does not rename or migrate those keys. A folder outside those categories is therefore intentionally unclassified, not an error.";
 
 /// Return the body of a notation file — everything after the leading
 /// YAML frontmatter block. When there is no recognized frontmatter, the

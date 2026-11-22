@@ -23,6 +23,115 @@ fn application_commands_are_in_navigator_without_operator_access() {
 }
 
 #[test]
+fn site_help_discovers_authority_filing() {
+    let command = cli::navigator_command();
+    let site = command
+        .clone()
+        .try_get_matches_from(["navigator", "site", "--help"])
+        .unwrap_err();
+    assert_eq!(site.kind(), ErrorKind::DisplayHelp);
+    assert!(
+        site.to_string().contains("authorities"),
+        "site help must list authorities: {site}"
+    );
+    let create = command
+        .try_get_matches_from(["navigator", "site", "authorities", "create", "--help"])
+        .unwrap_err();
+    assert_eq!(create.kind(), ErrorKind::DisplayHelp, "{create}");
+    let help = create.to_string();
+    for flag in ["--class", "--citation", "--title", "--file", "--checked-on"] {
+        assert!(
+            help.contains(flag),
+            "authority create help must name {flag}: {help}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn site_authorities_create_files_a_synthetic_authority() {
+    use wiremock::{
+        matchers::{body_partial_json, header, method, path},
+        Mock, MockServer, ResponseTemplate,
+    };
+    let server = MockServer::start().await;
+    let authority = uuid::Uuid::now_v7();
+    Mock::given(method("POST"))
+        .and(path("/app/api/authorities"))
+        .and(header("authorization", "Bearer navigator-session"))
+        .and(body_partial_json(serde_json::json!({
+            "class": "statute",
+            "citation": "Synth. Stat. § 1",
+            "title": "Synthetic Statute",
+            "checked_on": "2099-01-02",
+            "archive_base64": "c3ludGhldGljIHN0YXR1dGUgdGV4dA==",
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": authority,
+            "class": "statute",
+            "citation": "Synth. Stat. § 1",
+            "short_cite": null,
+            "title": "Synthetic Statute",
+            "publisher": null,
+            "issued_on": null,
+            "canonical_url": null,
+            "checked_on": "2099-01-02",
+            "archived_asset_id": null,
+            "inserted_at": "2099-01-02T00:00:00Z",
+            "updated_at": "2099-01-02T00:00:00Z",
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let dir = tempfile::tempdir().unwrap();
+    let credentials = dir.path().join("credentials.json");
+    let archive = dir.path().join("statute.txt");
+    std::fs::write(&archive, "synthetic statute text").unwrap();
+    std::fs::write(
+        &credentials,
+        serde_json::to_vec(&serde_json::json!({
+            "hosts": { server.uri(): {"token":"navigator-session", "role":"lawyer", "expires_at":4_102_444_800_i64} }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let mut command = std::process::Command::new(assert_cmd::cargo::cargo_bin!("navigator"));
+    command
+        .current_dir(dir.path())
+        .args([
+            "site",
+            "authorities",
+            "create",
+            "--host",
+            &server.uri(),
+            "--class",
+            "statute",
+            "--citation",
+            "Synth. Stat. § 1",
+            "--title",
+            "Synthetic Statute",
+            "--checked-on",
+            "2099-01-02",
+            "--file",
+        ])
+        .arg(&archive)
+        .env("NAVIGATOR_CREDENTIALS_FILE", &credentials);
+    let output = tokio::task::spawn_blocking(move || command.output().unwrap())
+        .await
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains(&authority.to_string()),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+}
+
+#[test]
 fn person_creation_accepts_contacts_without_project_scope() {
     let command = cli::navigator_command();
     let base = [

@@ -4401,6 +4401,8 @@ jobs:
             .expect("case-downloader is a synced skill");
         for expected in [
             "navigator project sync",
+            "navigator site authorities create",
+            "navigator site authorities update",
             ".authority.yaml",
             "documents/cases/",
             "documents/rules/",
@@ -4410,7 +4412,11 @@ jobs:
         ] {
             assert!(canonical.contains(expected), "skill must name `{expected}`");
         }
-        for retired in ["hudson site sync", "hudson site pull"] {
+        for retired in [
+            "hudson site sync",
+            "hudson site pull",
+            "hudson site authorities",
+        ] {
             assert!(
                 !canonical.contains(retired),
                 "skill still names `{retired}`"
