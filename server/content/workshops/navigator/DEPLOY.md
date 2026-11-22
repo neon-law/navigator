@@ -58,7 +58,7 @@ you own outright.
 
 ### Agenda
 
-Six steps, each tagged with its Bloom verb. You are the admin operator; the `navigator` CLI is the instrument:
+Six steps, each tagged with its Bloom verb. You are the admin operator; the `hudson` CLI is the instrument:
 
 - **Create** — stand up a billed project and authenticate.
 - **Predict** — run `--dry-run` and read every API call before sending one.
@@ -71,8 +71,8 @@ Six steps, each tagged with its Bloom verb. You are the admin operator; the `nav
 ---
 
 Each step is tagged with the Bloom verb it exercises (the [Anderson & Krathwohl 2001
-revision](https://en.wikipedia.org/wiki/Bloom%27s_taxonomy)). You are the admin operator; the `navigator` CLI is the
-instrument. **Create** — stand up a billed Google Cloud project and authenticate so `navigator` can act on your behalf.
+revision](https://en.wikipedia.org/wiki/Bloom%27s_taxonomy)). You are the admin operator; the `hudson` CLI is the
+instrument. **Create** — stand up a billed Google Cloud project and authenticate so `hudson` can act on your behalf.
 **Predict** — run `hudson ops gcp setup --dry-run` and read every API call the provisioner _would_ make before sending
 one. **Identify** — name the twenty-four Google Cloud APIs the provisioner enables, and why each is needed. **Explain**
 — describe the VPC, the six core storage buckets and optional archive/telemetry lanes, the private image registry, the
