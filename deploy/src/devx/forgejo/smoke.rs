@@ -33,7 +33,7 @@
 //! and talks HTTP to a port-forward, so it is excluded from the coverage gate.
 
 use std::collections::VecDeque;
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -276,7 +276,7 @@ pub(in crate::devx) fn smoke(
     runtime.block_on(squash_merge_proofs(&kube, &http, &forward.origin, &token))?;
 
     step("repository path: a seeded Firm's organization holds its Project's repository");
-    let path = runtime.block_on(seeded_repository_path(&kube, &seed))?;
+    let path = runtime.block_on(seeded_repository_path(cfg, &kube, &seed))?;
     ensure!(
         path.to_string() == format!("example-law-pc/{SMOKE_PROJECT}"),
         "the seeded Firm and Project map to {path}"
@@ -285,6 +285,7 @@ pub(in crate::devx) fn smoke(
 
     step("push webhook: a real push lands as a journaled, analyzed receipt");
     runtime.block_on(push_webhook_proof(
+        cfg,
         &kube,
         &http,
         &forward.origin,
@@ -1538,21 +1539,18 @@ async fn seed_firm_project(surreal: &store::surreal::SurrealDb) -> Result<Seeded
 }
 
 async fn seeded_repository_path(
+    cfg: &KindConfig,
     kube: &Kube,
     seed: &Seed,
 ) -> Result<store::firms::forgejo::RepositoryPath> {
-    let mut fixture = SmokePostgres::create(kube, seed).await?;
+    let fixture = SmokePostgres::create(cfg, kube, seed).await?;
     let source = store::surreal::SurrealDb::uninitialized();
     let seeded = store::postgres::PostgresDb::with_test_db(
         fixture.fixture.postgres().clone(),
         seed_firm_project(&source),
     )
     .await
-    .with_context(|| {
-        fixture
-            .forward
-            .failure_context("seed the native smoke Firm, Brand, and Project")
-    });
+    .context("seed the native smoke Firm, Brand, and Project through verified loopback TLS");
     let closed = fixture.close().await;
     let seeded = seeded.map_err(|error| match &closed {
         Ok(()) => error,
@@ -1565,75 +1563,66 @@ async fn seeded_repository_path(
     Ok(path)
 }
 
-/// The smoke owns this new database and independent administrative/data forwards.
-/// A data connection's close must not interrupt DROP through a shared forwarding session.
+/// Native migrations deliberately close dedicated connections to release advisory locks.
+/// Use the tier's verified direct transport, not kubectl's shared forwarding stream.
 struct SmokePostgres {
     fixture: store::test_support::PostgresFixture,
-    forward: Forward,
-    admin_forward: Forward,
+    root_cert: tempfile::NamedTempFile,
 }
 
-fn smoke_postgres_options(forward: &Forward, seed: &Seed) -> Result<PgConnectOptions> {
-    let port = reqwest::Url::parse(&forward.origin)?
-        .port()
-        .context("PostgreSQL forward port")?;
-    Ok(PgConnectOptions::new()
+fn smoke_postgres_options(cfg: &KindConfig, seed: &Seed, root_cert: &Path) -> PgConnectOptions {
+    PgConnectOptions::new()
         .host("127.0.0.1")
-        .port(port)
+        .port(cfg.postgres_port)
         .username("postgres")
         .password(&seed.postgres_password)
         .database("postgres")
-        .ssl_mode(PgSslMode::Require)
-        .options([("session_preload_libraries", "age")]))
+        .ssl_mode(PgSslMode::VerifyFull)
+        .ssl_root_cert(root_cert)
+        .options([("session_preload_libraries", "age")])
 }
 
 impl SmokePostgres {
-    async fn create(kube: &Kube, seed: &Seed) -> Result<Self> {
-        let mut admin_forward = Forward::open_target(kube, POSTGRES_POD, 5432)?;
-        let mut forward = Forward::open_target(kube, POSTGRES_POD, 5432)?;
-        let fixture = store::test_support::PostgresFixture::create_with_connections(
-            smoke_postgres_options(&admin_forward, seed)?,
-            smoke_postgres_options(&forward, seed)?,
-        )
-        .await
-        .with_context(|| {
-            admin_forward.failure_context("initialize smoke PostgreSQL administration")
-        })
-        .with_context(|| forward.failure_context("initialize smoke PostgreSQL data"))?;
+    async fn create(cfg: &KindConfig, kube: &Kube, seed: &Seed) -> Result<Self> {
+        // Read-only verification of the same task-owned mapping installed by forgejo up.
+        // Never provision a replacement transport or fall back to another endpoint.
+        super::super::orchestrate::verify_fixture_port(cfg)?;
+        let tls = kube
+            .secret("navigator-postgres-tls")?
+            .context("smoke PostgreSQL TLS Secret is missing")?;
+        let ca = super::super::postgres_fixture::trust_anchor(&tls)?;
+        let mut root_cert =
+            tempfile::NamedTempFile::new().context("create owned smoke PostgreSQL trust anchor")?;
+        root_cert
+            .write_all(ca.as_bytes())
+            .context("write smoke PostgreSQL trust anchor")?;
+        let options = smoke_postgres_options(cfg, seed, root_cert.path());
+        let fixture =
+            store::test_support::PostgresFixture::create_with_connections(options.clone(), options)
+                .await
+                .context("initialize owned native smoke fixture through verified loopback TLS")?;
         let grants = grant_smoke_runtime(&fixture)
             .await
             .context("grant fresh smoke PostgreSQL runtime access");
         if let Err(error) = grants {
             let cleanup = fixture.close().await;
-            let original = match cleanup {
+            return Err(match cleanup {
                 Ok(()) => error,
                 Err(cleanup) => error.context(format!(
                     "owned smoke fixture cleanup also failed: {cleanup:#}"
                 )),
-            };
-            return Err(original
-                .context(admin_forward.failure_context("configure smoke PostgreSQL administration"))
-                .context(forward.failure_context("configure smoke PostgreSQL data")));
+            });
         }
-        Ok(Self {
-            fixture,
-            forward,
-            admin_forward,
-        })
+        Ok(Self { fixture, root_cert })
     }
 
-    async fn close(mut self) -> Result<()> {
+    async fn close(self) -> Result<()> {
         let closed = self
             .fixture
             .close()
             .await
-            .with_context(|| {
-                self.admin_forward
-                    .failure_context("close smoke PostgreSQL administration")
-            })
-            .with_context(|| self.forward.failure_context("close smoke PostgreSQL data"));
-        drop(self.forward);
-        drop(self.admin_forward);
+            .context("close owned native smoke fixture through verified loopback TLS");
+        drop(self.root_cert);
         closed
     }
 }
@@ -1938,6 +1927,7 @@ async fn wait_for_push_receipt(
 /// because CI runners blackhole pod-to-host traffic across the Docker
 /// bridge gateway. The journal row is the evidence.
 async fn push_webhook_proof(
+    cfg: &KindConfig,
     kube: &Kube,
     http: &reqwest::Client,
     forge: &str,
@@ -1945,7 +1935,7 @@ async fn push_webhook_proof(
     path: &store::firms::forgejo::RepositoryPath,
     seed: &Seed,
 ) -> Result<()> {
-    let fixture = SmokePostgres::create(kube, seed).await?;
+    let fixture = SmokePostgres::create(cfg, kube, seed).await?;
     let proof = push_webhook_proof_on(kube, http, forge, token, path, seed, &fixture).await;
     let stopped = stop_receiver(kube);
     let closed = fixture.close().await;
