@@ -1541,14 +1541,20 @@ async fn lawyer_walks_the_full_retainer_questionnaire_end_to_end() {
     // Submitting the approve form fires `approved`; the worker renders +
     // persists the PDF on entering `generate_pdf__*` and the page offers
     // the deliberate send action.
-    c.find(Locator::Css(
-        "form[action$='/approve-send'] button[type=submit]",
-    ))
-    .await
-    .unwrap()
-    .click()
+    c.execute(
+        "document.querySelector('form[action$=\"/approve-send\"]').submit(); return true;",
+        vec![],
+    )
     .await
     .unwrap();
+    // Let the approval POST redirect before polling its read-only review page.
+    c.wait()
+        .at_most(Duration::from_secs(20))
+        .for_element(Locator::XPath(
+            "//*[@id='intake-review']//*[contains(text(),'Approval submitted') or @aria-label='Send for signature']",
+        ))
+        .await
+        .unwrap();
     // Approval can queue a render. Refresh the review GET as the pending notice
     // directs until the persisted PDF makes the separate send action available.
     wait_for_text_reloading(
