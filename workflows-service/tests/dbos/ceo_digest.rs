@@ -96,11 +96,11 @@ impl DigestSource for TwoFirmSource {
         let fixture = self.fixture(firm_id);
         Ok((0..fixture.needs_you)
             .map(|n| NeedsYouItem {
-                project_id: Uuid::new_v4(),
+                project_id: Some(Uuid::new_v4()),
                 conversation_id: Uuid::new_v4(),
                 external_name: None,
                 subject: Some(format!("question {n}")),
-                last_inbound: Utc::now(),
+                first_unanswered: Utc::now(),
             })
             .collect())
     }

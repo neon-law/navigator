@@ -378,7 +378,7 @@ pub trait DigestSource: Send + Sync {
     /// [`DigestError::Source`] on a database failure.
     async fn firm_brief(&self, firm_id: Uuid) -> Result<DigestBrief, DigestError>;
 
-    /// One Firm's unanswered threads older than two business days.
+    /// One Firm's unanswered threads awaiting a reply for one business day.
     ///
     /// # Errors
     ///
@@ -811,12 +811,11 @@ pub fn render_version_line(brief: &DigestBrief) -> String {
 pub fn render_alert(firm_name: &str, items: &[NeedsYouItem]) -> String {
     let oldest = items
         .iter()
-        .map(|item| item.last_inbound)
+        .map(|item| item.first_unanswered)
         .min()
         .unwrap_or_else(Utc::now);
     let mut out = format!(
-        "{firm_name}: {} conversation(s) have awaited a reply for more than two business \
-days (oldest since {}).",
+        "{firm_name}: {} conversation(s) have awaited a reply for at least one business day (oldest since {}).",
         items.len(),
         oldest.format("%Y-%m-%d")
     );
@@ -1518,11 +1517,11 @@ mod tests {
 
     fn needs_you_item(subject: &str) -> NeedsYouItem {
         NeedsYouItem {
-            project_id: Uuid::new_v4(),
+            project_id: Some(Uuid::new_v4()),
             conversation_id: Uuid::new_v4(),
             external_name: Some("Alex Member".to_string()),
             subject: Some(subject.to_string()),
-            last_inbound: Utc.with_ymd_and_hms(2026, 11, 4, 15, 0, 0).unwrap(),
+            first_unanswered: Utc.with_ymd_and_hms(2026, 11, 4, 15, 0, 0).unwrap(),
         }
     }
 

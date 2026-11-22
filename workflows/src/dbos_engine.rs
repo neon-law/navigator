@@ -33,6 +33,7 @@ pub mod general_nag;
 pub mod heartbeat;
 pub mod linear_backlog;
 pub mod notation_reset;
+pub mod plan_retainers;
 pub mod profit_digest;
 pub mod project_calendar;
 pub mod project_recovery;
@@ -211,6 +212,7 @@ pub struct Schedules {
     pub source_imports: Option<source_imports::Context>,
     pub retention_purge: Option<retention_purge::Context>,
     pub deadline_mirror: Option<deadline_mirror::Context>,
+    pub plan_retainers: Option<Arc<dyn plan_retainers::Source>>,
     pub project_calendar: Option<Arc<dyn project_calendar::Source>>,
     pub purchase_activation: Option<purchase_activation::Context>,
     pub billing_canary: Option<billing_canary::Context>,
@@ -237,6 +239,7 @@ impl Schedules {
             source_imports: application.source_imports,
             retention_purge: application.retention_purge,
             deadline_mirror: application.deadline_mirror,
+            plan_retainers: application.plan_retainers,
             project_calendar: application.project_calendar,
             purchase_activation: application.purchase_activation,
             ceo_digest: application.ceo_digest,
@@ -504,6 +507,8 @@ impl Executor {
         let purge = register_optional(&dbos, schedules.retention_purge, retention_purge::register)?;
         let mirror =
             register_optional(&dbos, schedules.deadline_mirror, deadline_mirror::register)?;
+        let retainers =
+            register_optional(&dbos, schedules.plan_retainers, plan_retainers::register)?;
         let calendar = register_optional(
             &dbos,
             schedules.project_calendar,
@@ -524,12 +529,14 @@ impl Executor {
         let ceo_digest = register_optional(&dbos, schedules.ceo_digest, ceo_digest::register)?;
         let linear_backlog =
             register_optional(&dbos, schedules.linear_backlog, linear_backlog::register)?;
-        let external_schedules = register_external(&dbos)?;
+        let starters = retainers
+            .into_iter()
+            .chain(calendar)
+            .chain(register_external(&dbos)?);
         dbos.launch().await?;
         tracing::info!(app_name = APP_NAME, "DBOS launched");
         let stop = dbos::CancellationToken::new();
         let mut loops = vec![tokio::spawn(heartbeat::schedule(beat, clock, stop.clone()))];
-        loops.extend(calendar.map(|start| start(stop.clone())));
         if let Some(linear_backlog) = linear_backlog {
             loops.push(tokio::spawn(linear_backlog::schedule(
                 linear_backlog,
@@ -575,11 +582,7 @@ impl Executor {
             },
         ));
         restate_ports.spawn(&stop, &mut loops);
-        loops.extend(
-            external_schedules
-                .into_iter()
-                .map(|start| start(stop.clone())),
-        );
+        loops.extend(starters.map(|start| start(stop.clone())));
         Ok(Self {
             dbos,
             stop,

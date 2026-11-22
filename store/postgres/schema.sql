@@ -5708,3 +5708,7 @@ END;
 $$;
 CREATE TRIGGER project_namespace_current BEFORE INSERT OR UPDATE OF repository_url, firm_id ON project
     FOR EACH ROW WHEN (NEW.repository_url IS NOT NULL) EXECUTE FUNCTION project_namespace_current();
+
+-- Migration: 20261122150000_optional_plan_terms.sql
+ALTER TABLE legal_plan ALTER COLUMN acceptance_sla_hours DROP NOT NULL;
+ALTER TABLE legal_plan ALTER COLUMN turnaround_sla_days DROP NOT NULL;

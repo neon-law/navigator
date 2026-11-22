@@ -126,16 +126,10 @@ async fn seed_legal_plans(
         let Some(name) = text(&row, "name").map(str::to_owned) else {
             continue;
         };
-        let Some(acceptance_sla_hours) =
-            integer(&row, "acceptance_sla_hours").and_then(|v| i32::try_from(v).ok())
-        else {
-            continue;
-        };
-        let Some(turnaround_sla_days) =
-            integer(&row, "turnaround_sla_days").and_then(|v| i32::try_from(v).ok())
-        else {
-            continue;
-        };
+        let acceptance_sla_hours =
+            integer(&row, "acceptance_sla_hours").and_then(|v| i32::try_from(v).ok());
+        let turnaround_sla_days =
+            integer(&row, "turnaround_sla_days").and_then(|v| i32::try_from(v).ok());
         let reporting_requirements = text(&row, "reporting_requirements");
         let id: Uuid = sqlx::query_scalar(
             "INSERT INTO legal_plan \

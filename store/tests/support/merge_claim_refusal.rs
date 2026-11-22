@@ -22,8 +22,8 @@ async fn history(pg: &PostgresDb, db: &SurrealDb, project: &store::projects::Pro
             name: "ARAG".into(),
             contact: None,
             portal: None,
-            acceptance_sla_hours: 24,
-            turnaround_sla_days: 3,
+            acceptance_sla_hours: Some(24),
+            turnaround_sla_days: Some(3),
             reporting_requirements: None,
         },
     )

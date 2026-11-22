@@ -351,13 +351,7 @@ pub async fn start_notation_pinned(
     storage: Option<&Arc<dyn StorageService>>,
     request: StartPinnedNotation<'_>,
 ) -> Result<StartOutcome, NotationSessionError> {
-    if request.template.project_id != Some(request.project_id) || request.template.firm_id.is_some()
-    {
-        return Err(NotationSessionError::TemplateNotFound(
-            request.template.code.clone(),
-        ));
-    }
-    start_resolved_notation(
+    start_notation_pinned_with_delivery(
         surreal,
         runtime,
         storage,
@@ -365,6 +359,23 @@ pub async fn start_notation_pinned(
         store::notations::SigningDelivery::default(),
     )
     .await
+}
+
+/// Start the selected Project version with the specified signing delivery.
+pub async fn start_notation_pinned_with_delivery(
+    surreal: &store::surreal::SurrealDb,
+    runtime: &dyn StateMachineRuntime,
+    storage: Option<&Arc<dyn StorageService>>,
+    request: StartPinnedNotation<'_>,
+    delivery: store::notations::SigningDelivery,
+) -> Result<StartOutcome, NotationSessionError> {
+    if request.template.project_id != Some(request.project_id) || request.template.firm_id.is_some()
+    {
+        return Err(NotationSessionError::TemplateNotFound(
+            request.template.code.clone(),
+        ));
+    }
+    start_resolved_notation(surreal, runtime, storage, request, delivery).await
 }
 
 async fn start_resolved_notation(

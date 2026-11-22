@@ -1205,6 +1205,10 @@ async fn dbos_schedules(
         source_imports,
         retention_purge,
         deadline_mirror,
+        plan_retainers: (host_dbos && dbos_engine::enabled(lookup)?).then(|| {
+            Arc::new(crate::plan_retainers::PlanRetainers(rt.state.clone()))
+                as Arc<dyn dbos_engine::plan_retainers::Source>
+        }),
         project_calendar,
         purchase_activation,
         billing_canary,

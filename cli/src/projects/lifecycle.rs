@@ -358,14 +358,7 @@ fn write_template_stub(path: &Path, kind: &str) -> Result<()> {
 
 /// Whether `contents` is a lifecycle letter stub nobody has drafted yet.
 /// Such a file is a placeholder, never an attorney's edit.
-#[must_use]
-pub fn is_unedited_stub(contents: &str) -> bool {
-    let body = rules::frontmatter::split(contents).map(|(_, body)| body.trim());
-    [ONBOARDING, OFFBOARDING].iter().any(|kind| {
-        contents == template_stub(kind)
-            || body.is_some_and(|body| body == template_placeholder(kind))
-    })
-}
+pub use project_scaffold::is_unedited_stub;
 /// The `kind:` value a legacy engagement letter declares: a Project-local
 /// agreement draft, not a shared-template kind. A letter is *legacy* when it
 /// declares this kind together with a [`LINEAGE_FIELD`] naming the shared

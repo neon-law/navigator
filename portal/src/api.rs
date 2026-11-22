@@ -2510,7 +2510,7 @@ async fn project_status_door(
     .into_response())
 }
 
-fn invitation_client(
+pub(crate) fn project_client_dri(
     pinned: Option<Uuid>,
     participants: &[store::projects::PersonProjectRole],
 ) -> Option<Uuid> {
@@ -2551,7 +2551,7 @@ async fn project_portal_invitation_door(
     let participants = store::projects::participations_for_project(&state.surreal, id)
         .await
         .map_err(|error| ApiError::Db(error.to_string()))?;
-    let Some(client_id) = invitation_client(project.client_dri_person_id, &participants) else {
+    let Some(client_id) = project_client_dri(project.client_dri_person_id, &participants) else {
         return conflict("Designate the member as the Project's client DRI first.");
     };
     if !store::access::can_see_project_as_client(&state.surreal, Some(client_id), id)
@@ -5124,11 +5124,14 @@ async fn adopt_envelope(
         .await
         .map_err(internal)?
         .ok_or(ApiError::NotFound)?;
-    let client = project
-        .client_dri_person_id
-        .ok_or(ApiError::EnvelopeAdoption(
+    let participants = store::projects::participations_for_project(db, id)
+        .await
+        .map_err(internal)?;
+    let client = project_client_dri(project.client_dri_person_id, &participants).ok_or(
+        ApiError::EnvelopeAdoption(
             "Assign a client DRI to the Project before adopting an envelope",
-        ))?;
+        ),
+    )?;
     let lane = lock().await?;
     let scoped = state
         .signature_provider

@@ -538,6 +538,16 @@ pub fn template_placeholder(kind: &str) -> String {
     format!("Draft this letter before running `navigator project {command}` again.")
 }
 
+/// Whether this letter still contains the scaffold instructions.
+#[must_use]
+pub fn is_unedited_stub(contents: &str) -> bool {
+    let body = rules::frontmatter::split(contents).map(|(_, body)| body.trim());
+    [ONBOARDING, OFFBOARDING].iter().any(|kind| {
+        contents == template_stub(kind)
+            || body.is_some_and(|body| body == template_placeholder(kind))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

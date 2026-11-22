@@ -101,9 +101,9 @@ pub use message_alert::{
 pub use notation_session::{
     answer_step, answer_step_with_reference, choice_label, create_notation_from_checkout,
     create_notation_from_repo, current_step, enforce_engagement_first,
-    enforce_engagement_first_pinned, start_notation, start_notation_pinned, AnswerAuthor,
-    CheckoutDraft, NextStep, NotationSessionError, QuestionChoice, QuestionDescriptor,
-    StartOutcome, StartPinnedNotation,
+    enforce_engagement_first_pinned, start_notation, start_notation_pinned,
+    start_notation_pinned_with_delivery, AnswerAuthor, CheckoutDraft, NextStep,
+    NotationSessionError, QuestionChoice, QuestionDescriptor, StartOutcome, StartPinnedNotation,
 };
 pub use notify::{
     ops_slack_messages, project_channel_name, upsert_channel_canvas, CanvasWrite,

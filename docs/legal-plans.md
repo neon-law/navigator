@@ -7,11 +7,21 @@ the Firm for covered work. A plan is metadata the Firm holds about one payor, an
 Both halves live in the deployment's database, never in this repository:
 
 - **The Firm's plan row** (`legal_plan`) records where the Firm logs in, who answers provider questions, and the
-  acceptance and turnaround service levels. What the plan pays per benefit is its [Plan Fee
+  response window and any agreed completion term. What the plan pays per benefit is its [Plan Fee
   Schedule](glossary/plan-fee-schedule.md).
 - **The Project's plan columns** name that row and carry the plan's own identifiers for the matter. The most important
   is the [Plan Case Number](glossary/plan-case-number.md), which every plan email and claim cites. A Project with these
   columns unset is a matter no plan referred.
+
+The default response is due at the same UTC time on the next weekday. Record a carrier-specific response window only
+when one applies. Leave the completion term empty unless the Firm has agreed to one.
+
+The application DBOS host runs `LegalPlanRetainers` daily at 00:00 UTC and catches up after a restart. It checks the
+installation Firm’s open Projects with a Legal Plan or Plan Case Number against verified execution and existing
+signature requests. For a matter with one published Project engagement template and an identified client, it opens the
+questionnaire. Once the reviewed PDF is ready, it prepares the envelope for the lawyer. The daily result identifies
+matters needing a client, a draft, or review. The lawyer reviews the document, recipients and signing fields before
+sending through Navigator.
 
 ## The provider portals
 
@@ -36,8 +46,7 @@ Record a plan once per Firm, with the portal and contact the Firm actually uses:
 
 ```bash
 navigator legal-plans --firm <firm-id> --host <host> create --name ARAG \
-  --portal https://www.araglegal.com/account --contact "866-272-4529" \
-  --acceptance-sla-hours 24 --turnaround-sla-days 90
+  --portal https://www.araglegal.com/account
 navigator legal-plans --firm "Example Practice PC" --host <host> list
 ```
 

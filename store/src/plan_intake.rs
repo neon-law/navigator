@@ -388,8 +388,11 @@ pub fn plan_for_provider<'a>(plans: &'a [LegalPlan], provider: &str) -> Option<&
 /// measured from the moment the assignment email landed — never from
 /// when a person happened to read or accept it.
 #[must_use]
-pub fn acceptance_due(landing: DateTime<Utc>, acceptance_sla_hours: i32) -> DateTime<Utc> {
-    landing + Duration::hours(i64::from(acceptance_sla_hours))
+pub fn acceptance_due(landing: DateTime<Utc>, acceptance_sla_hours: Option<i32>) -> DateTime<Utc> {
+    acceptance_sla_hours.map_or_else(
+        || crate::firm_digest::next_business_day(landing),
+        |hours| landing + Duration::hours(i64::from(hours)),
+    )
 }
 
 /// The turnaround deadline's due instant: the plan's turnaround SLA
@@ -1456,8 +1459,8 @@ async fn create_plan_deadlines(
             project_id,
             title: Some("Plan acceptance window".to_string()),
             description: Some(format!(
-                "Review this assignment within {} hours of the notice landing for {}.",
-                plan.acceptance_sla_hours, plan.name
+                "Review this assignment by {} for {}.",
+                acceptance_due, plan.name
             )),
             due_at: acceptance_due.to_rfc3339(),
             authority_kind: "internal".to_string(),
@@ -1479,29 +1482,31 @@ async fn create_plan_deadlines(
         crate::project_deadlines::complete(surreal, project_id, acceptance_deadline.id).await?;
     }
 
-    crate::project_deadlines::create(
-        surreal,
-        &crate::project_deadlines::NewDeadline {
-            project_id,
-            title: Some("Plan turnaround deadline".to_string()),
-            description: Some(format!(
-                "{} expects the matter finished within {} days of acceptance.",
-                plan.name, plan.turnaround_sla_days
-            )),
-            due_at: turnaround_due(accepted_at, plan.turnaround_sla_days).to_rfc3339(),
-            authority_kind: "internal".to_string(),
-            authority: format!("{} turnaround SLA", plan.name),
-            source: "plan_intake".to_string(),
-            source_document_id: None,
-            owner_person_id: None,
-            calendar_role: "firm".to_string(),
-            category: Some("internal".to_string()),
-            internal_lead_days: None,
-            client_lead_days: None,
-            replay_key: Some(format!("plan-intake/turnaround/{code}")),
-        },
-    )
-    .await?;
+    if let Some(days) = plan.turnaround_sla_days {
+        crate::project_deadlines::create(
+            surreal,
+            &crate::project_deadlines::NewDeadline {
+                project_id,
+                title: Some("Plan turnaround deadline".to_string()),
+                description: Some(format!(
+                    "{} expects the matter finished within {} days of acceptance.",
+                    plan.name, days
+                )),
+                due_at: turnaround_due(accepted_at, days).to_rfc3339(),
+                authority_kind: "internal".to_string(),
+                authority: format!("{} turnaround SLA", plan.name),
+                source: "plan_intake".to_string(),
+                source_document_id: None,
+                owner_person_id: None,
+                calendar_role: "firm".to_string(),
+                category: Some("internal".to_string()),
+                internal_lead_days: None,
+                client_lead_days: None,
+                replay_key: Some(format!("plan-intake/turnaround/{code}")),
+            },
+        )
+        .await?;
+    }
 
     if staged.plan_portal_only {
         crate::project_deadlines::create(
@@ -1598,8 +1603,8 @@ mod tests {
             name: "ARAG".into(),
             contact: None,
             portal: None,
-            acceptance_sla_hours: 24,
-            turnaround_sla_days: 10,
+            acceptance_sla_hours: Some(24),
+            turnaround_sla_days: Some(10),
             reporting_requirements: None,
         }
     }
@@ -1742,8 +1747,8 @@ mod tests {
                 name: "ARAG group legal".into(),
                 contact: None,
                 portal: None,
-                acceptance_sla_hours: 24,
-                turnaround_sla_days: 10,
+                acceptance_sla_hours: Some(24),
+                turnaround_sla_days: Some(10),
                 reporting_requirements: None,
                 inserted_at: Utc::now(),
             },
@@ -1753,8 +1758,8 @@ mod tests {
                 name: "LegalShield family plan".into(),
                 contact: None,
                 portal: None,
-                acceptance_sla_hours: 24,
-                turnaround_sla_days: 10,
+                acceptance_sla_hours: Some(24),
+                turnaround_sla_days: Some(10),
                 reporting_requirements: None,
                 inserted_at: Utc::now(),
             },
@@ -1771,14 +1776,24 @@ mod tests {
     }
 
     #[test]
+    fn the_default_response_is_due_on_the_next_weekday() {
+        let monday = Utc.with_ymd_and_hms(2026, 11, 9, 15, 30, 0).unwrap();
+        for day in [6, 7, 8] {
+            let arrival = Utc.with_ymd_and_hms(2026, 11, day, 15, 30, 0).unwrap();
+            assert_eq!(acceptance_due(arrival, None), monday);
+        }
+        assert_eq!(acceptance_due(monday, None), monday + Duration::days(1));
+    }
+
+    #[test]
     fn the_acceptance_clock_starts_at_landing_and_the_turnaround_at_acceptance() {
         let landing = Utc.with_ymd_and_hms(2026, 11, 9, 14, 0, 0).unwrap();
         assert_eq!(
-            acceptance_due(landing, 24),
+            acceptance_due(landing, Some(24)),
             Utc.with_ymd_and_hms(2026, 11, 10, 14, 0, 0).unwrap()
         );
         assert_eq!(
-            turnaround_due(acceptance_due(landing, 24), 10),
+            turnaround_due(acceptance_due(landing, Some(24)), 10),
             Utc.with_ymd_and_hms(2026, 11, 20, 14, 0, 0).unwrap()
         );
     }
@@ -1919,6 +1934,19 @@ mod tests {
         ));
     }
 
+    async fn plan_attorney(surreal: &crate::surreal::SurrealDb) -> crate::persons::Person {
+        crate::persons::create(
+            surreal,
+            &crate::persons::NewPerson::with_role(
+                "Pisces Attorney",
+                "plan-intake-attorney@example.com",
+                crate::persons::Role::Owner,
+            ),
+        )
+        .await
+        .expect("the attorney exists")
+    }
+
     #[tokio::test]
     async fn acceptance_refuses_to_open_without_the_attorney_attestation() {
         let Some(pg) = postgres().await else {
@@ -1935,16 +1963,7 @@ mod tests {
         let staged = stage(&surreal, Some(&pg), &input)
             .await
             .expect("staging succeeds");
-        let attorney = crate::persons::create(
-            &surreal,
-            &crate::persons::NewPerson::with_role(
-                "Pisces Attorney",
-                "plan-intake-attorney@example.com",
-                crate::persons::Role::Owner,
-            ),
-        )
-        .await
-        .expect("the attorney exists");
+        let attorney = plan_attorney(&surreal).await;
 
         // The plan and fee resolved at staging from the firm's schedule.
         assert_eq!(staged.legal_plan_id, Some(plan.id));
@@ -2001,16 +2020,7 @@ mod tests {
         let staged = stage(&surreal, Some(&pg), &arag_input(firm_id, landing))
             .await
             .expect("staging succeeds");
-        let attorney = crate::persons::create(
-            &surreal,
-            &crate::persons::NewPerson::with_role(
-                "Pisces Attorney",
-                "plan-intake-attorney@example.com",
-                crate::persons::Role::Owner,
-            ),
-        )
-        .await
-        .expect("the attorney exists");
+        let attorney = plan_attorney(&surreal).await;
 
         let accepted = accept(
             &surreal,
@@ -2072,7 +2082,10 @@ mod tests {
             .iter()
             .find(|deadline| deadline.title.as_deref() == Some("Plan acceptance window"))
             .expect("the acceptance deadline exists");
-        assert_eq!(acceptance.due_at, acceptance_due(landing, 24).to_rfc3339());
+        assert_eq!(
+            acceptance.due_at,
+            acceptance_due(landing, Some(24)).to_rfc3339()
+        );
         assert_eq!(
             acceptance.status,
             crate::project_deadlines::STATUS_COMPLETE,
@@ -2119,16 +2132,7 @@ mod tests {
         let staged = stage(&surreal, Some(&pg), &arag_input(firm_id, landing))
             .await
             .expect("staging succeeds");
-        let attorney = crate::persons::create(
-            &surreal,
-            &crate::persons::NewPerson::with_role(
-                "Pisces Attorney",
-                "plan-intake-attorney@example.com",
-                crate::persons::Role::Owner,
-            ),
-        )
-        .await
-        .expect("the attorney exists");
+        let attorney = plan_attorney(&surreal).await;
 
         let accepted = accept(
             &surreal,
@@ -2148,7 +2152,10 @@ mod tests {
             .expect("the acceptance deadline exists");
         // The clock is due from the landing, and a late acceptance leaves
         // it open and overdue — exactly what the daily alert should show.
-        assert_eq!(acceptance.due_at, acceptance_due(landing, 24).to_rfc3339());
+        assert_eq!(
+            acceptance.due_at,
+            acceptance_due(landing, Some(24)).to_rfc3339()
+        );
         assert_eq!(acceptance.status, "open");
     }
 
@@ -2161,7 +2168,20 @@ mod tests {
         let surreal = mem_surreal().await;
         let firm_id = seed_firm_with_brand(&surreal, "neon").await;
         plan_firm(&pg, firm_id).await;
-        let plan = arag_plan_on(&pg, firm_id, "ARAG Portal", Some("portal.arag.example")).await;
+        let plan = crate::legal_plans::create(
+            &pg,
+            firm_id,
+            &NewLegalPlan {
+                name: "ARAG Portal".into(),
+                portal: Some("portal.arag.example".into()),
+                contact: None,
+                acceptance_sla_hours: None,
+                turnaround_sla_days: None,
+                reporting_requirements: None,
+            },
+        )
+        .await
+        .expect("an open-ended plan");
         let input = arag_input(firm_id, Utc::now());
         let staged = stage(&surreal, Some(&pg), &input)
             .await
@@ -2170,16 +2190,7 @@ mod tests {
             staged.plan_portal_only,
             "a plan with a portal accepts on the portal"
         );
-        let attorney = crate::persons::create(
-            &surreal,
-            &crate::persons::NewPerson::with_role(
-                "Pisces Attorney",
-                "plan-intake-attorney@example.com",
-                crate::persons::Role::Owner,
-            ),
-        )
-        .await
-        .expect("the attorney exists");
+        let attorney = plan_attorney(&surreal).await;
 
         let accepted = accept(
             &surreal,
@@ -2194,6 +2205,9 @@ mod tests {
             .await
             .expect("deadline list");
         assert_eq!(deadlines.len(), 3);
+        assert!(deadlines
+            .iter()
+            .all(|d| d.title.as_deref() != Some("Plan turnaround deadline")));
         assert!(deadlines.iter().any(|deadline| deadline
             .title
             .as_deref()

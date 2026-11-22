@@ -89,11 +89,10 @@ pub struct LegalPlan {
     pub name: String,
     pub contact: Option<String>,
     pub portal: Option<String>,
-    /// How long the Firm has to accept an assignment, in hours, from the
-    /// moment the assignment email lands.
-    pub acceptance_sla_hours: i32,
-    /// How long the Firm has to finish the matter, in days, from acceptance.
-    pub turnaround_sla_days: i32,
+    /// Carrier-specific elapsed hours from receipt. The default is one business day.
+    pub acceptance_sla_hours: Option<i32>,
+    /// Optional agreed completion term in days from acceptance.
+    pub turnaround_sla_days: Option<i32>,
     /// What the plan asks the Firm to report and how often.
     pub reporting_requirements: Option<String>,
     pub inserted_at: DateTime<Utc>,
@@ -108,8 +107,8 @@ pub struct NewLegalPlan {
     pub contact: Option<String>,
     #[serde(default)]
     pub portal: Option<String>,
-    pub acceptance_sla_hours: i32,
-    pub turnaround_sla_days: i32,
+    pub acceptance_sla_hours: Option<i32>,
+    pub turnaround_sla_days: Option<i32>,
     #[serde(default)]
     pub reporting_requirements: Option<String>,
 }
@@ -119,10 +118,10 @@ impl NewLegalPlan {
         if self.name.trim().is_empty() || self.name.len() > 200 {
             return Err(LegalPlanError::Invalid("name"));
         }
-        if self.acceptance_sla_hours <= 0 {
+        if self.acceptance_sla_hours.is_some_and(|value| value <= 0) {
             return Err(LegalPlanError::Invalid("acceptance_sla_hours"));
         }
-        if self.turnaround_sla_days <= 0 {
+        if self.turnaround_sla_days.is_some_and(|value| value <= 0) {
             return Err(LegalPlanError::Invalid("turnaround_sla_days"));
         }
         Ok(())
@@ -491,8 +490,8 @@ mod tests {
             name: "ARAG".into(),
             contact: Some("group@example.com".into()),
             portal: None,
-            acceptance_sla_hours: 24,
-            turnaround_sla_days: 10,
+            acceptance_sla_hours: Some(24),
+            turnaround_sla_days: Some(10),
             reporting_requirements: None,
         }
     }
@@ -514,6 +513,12 @@ mod tests {
     #[test]
     fn a_plan_needs_positive_service_levels_and_a_name() {
         assert!(plan().validate().is_ok());
+        let mut open_ended = plan();
+        open_ended.acceptance_sla_hours = None;
+        open_ended.turnaround_sla_days = None;
+        open_ended
+            .validate()
+            .expect("firm response policy and no completion term");
         let mut no_name = plan();
         no_name.name = "   ".into();
         assert!(matches!(
@@ -523,9 +528,9 @@ mod tests {
         for field in ["acceptance_sla_hours", "turnaround_sla_days"] {
             let mut bad = plan();
             if field == "acceptance_sla_hours" {
-                bad.acceptance_sla_hours = 0;
+                bad.acceptance_sla_hours = Some(0);
             } else {
-                bad.turnaround_sla_days = -1;
+                bad.turnaround_sla_days = Some(-1);
             }
             let error = bad.validate().unwrap_err();
             match error {
@@ -648,7 +653,7 @@ mod tests {
             let second = firm(&pg).await;
             let created = create(&pg, first, &plan()).await.unwrap();
             assert_eq!(created.firm_id, first);
-            assert_eq!(created.acceptance_sla_hours, 24);
+            assert_eq!(created.acceptance_sla_hours, Some(24));
 
             // Another Firm holds no copy and cannot read the row by id.
             assert!(list(&pg, second).await.unwrap().is_empty());

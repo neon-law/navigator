@@ -1100,8 +1100,8 @@ async fn accepted_plan_notices_open_one_pitch_per_provider_case() {
             let assignment = parse(provider, subject, &notice).unwrap();
             assert!(assignment.contact_email.is_none());
             let plan = legal_plans::create(&pg, firm, &legal_plans::NewLegalPlan {
-                name: plan_name.into(), contact: None, portal: None, acceptance_sla_hours: 24,
-                turnaround_sla_days: 7, reporting_requirements: None,
+                name: plan_name.into(), contact: None, portal: None, acceptance_sla_hours: Some(24),
+                turnaround_sla_days: Some(7), reporting_requirements: None,
             }).await.unwrap();
             let stage_input = StageInput {
                 firm_id: firm, conversation_id: Uuid::now_v7(), source_message_id: Uuid::now_v7(),
