@@ -85,6 +85,65 @@ async fn failure_page_context(c: &Client) -> String {
     }
 }
 
+/// Require the actual form to carry the session token without printing it.
+async fn assert_form_csrf(c: &Client, selector: &str) {
+    let token = c
+        .find(Locator::Css(&format!("{selector} input[name='_csrf']")))
+        .await
+        .unwrap()
+        .attr("value")
+        .await
+        .unwrap();
+    assert!(
+        token.is_some_and(|value| !value.is_empty()),
+        "the submitted form requires its session CSRF token"
+    );
+}
+
+/// Observe a native POST/redirect before a polling GET can replace its navigation.
+async fn wait_for_form_navigation(
+    c: &Client,
+    previous_document: &serde_json::Value,
+    expected_path: &str,
+    started: std::time::Instant,
+    budget: Duration,
+) -> Duration {
+    loop {
+        if c.execute("return performance.timeOrigin;", vec![])
+            .await
+            .is_ok_and(|document| &document != previous_document)
+        {
+            break;
+        }
+        assert!(
+            started.elapsed() <= budget,
+            "the submitted form did not complete a document navigation; {}",
+            failure_page_context(c).await
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    assert_eq!(
+        c.current_url().await.unwrap().path(),
+        expected_path,
+        "the submitted form returned on an unexpected path; {}",
+        failure_page_context(c).await
+    );
+    let status = c
+        .execute(
+            "return performance.getEntriesByType('navigation').at(-1)?.responseStatus ?? null;",
+            vec![],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        status.as_u64(),
+        Some(200),
+        "the submitted form must reach its successful GET; {}",
+        failure_page_context(c).await
+    );
+    budget.saturating_sub(started.elapsed())
+}
+
 /// Browser fixtures require activated PostgreSQL history before creating any records.
 async fn postgres_browser_store() -> anyhow::Result<store::surreal::SurrealDb> {
     store::postgres::PostgresDb::application()
@@ -1552,23 +1611,45 @@ async fn lawyer_walks_the_full_retainer_questionnaire_end_to_end() {
     ))
     .await
     .unwrap();
+    let clause_path = format!("/app/lawyer/notations/{notation_id}/clauses");
+    let clause_form = format!("form[action='{clause_path}']");
     c.wait()
         .at_most(Duration::from_secs(10))
-        .for_element(Locator::Css("textarea[name='body']"))
+        .for_element(Locator::Css(&format!(
+            "{clause_form} textarea[name='body']"
+        )))
         .await
         .unwrap();
+    assert_form_csrf(&c, &clause_form).await;
+    let fee_terms =
+        "The Firm's fee for this engagement is a flat fee stated to the Client in writing.";
+    let clause_document = c
+        .execute("return performance.timeOrigin;", vec![])
+        .await
+        .unwrap();
+    let clause_started = std::time::Instant::now();
+    let phase_budget = Duration::from_secs(20);
     c.execute(
-        "const t = document.querySelector('textarea[name=\"body\"]'); \
-         t.value = arguments[0]; \
+        "const form = document.querySelector(arguments[0]); \
+         const t = form.querySelector('textarea[name=\"body\"]'); \
+         t.value = arguments[1]; \
          t.dispatchEvent(new Event('input', {bubbles: true})); \
-         document.querySelector('form.admin-form').submit(); return true;",
-        vec![serde_json::Value::String(
-            "The Firm's fee for this engagement is a flat fee stated to the Client in writing."
-                .into(),
-        )],
+         form.submit(); return true;",
+        vec![
+            serde_json::Value::String(clause_form),
+            serde_json::Value::String(fee_terms.into()),
+        ],
     )
     .await
     .unwrap();
+    let clause_remaining = wait_for_form_navigation(
+        &c,
+        &clause_document,
+        &clause_path,
+        clause_started,
+        phase_budget,
+    )
+    .await;
     // The clause POST redirects to the clauses list; return to the review
     // screen, which now offers approve with a non-empty fee clause.
     let review_url = format!("{}/app/lawyer/notations/{notation_id}/review", base_url());
@@ -1576,29 +1657,52 @@ async fn lawyer_walks_the_full_retainer_questionnaire_end_to_end() {
         &c,
         &review_url,
         "Awaiting attorney review",
-        Duration::from_secs(20),
+        clause_remaining,
     )
     .await;
+    assert!(
+        store::notation_clauses::for_notation(&surreal, notation_id)
+            .await
+            .unwrap()
+            .iter()
+            .any(|clause| clause.body_markdown == fee_terms),
+        "the submitted fee clause must be persisted before approval"
+    );
 
     // --- Attorney approves: renders + parks the PDF ----------
     // Submitting the approve form fires `approved`; the worker renders +
     // persists the PDF on entering `generate_pdf__*` and the page offers
     // the deliberate send action.
-    c.find(Locator::Css(
-        "form[action$=\"/approve-send\"] button[type=submit]",
-    ))
+    let approval_form = format!("form[action='/app/lawyer/notations/{notation_id}/approve-send']");
+    assert_form_csrf(&c, &approval_form).await;
+    let approval_document = c
+        .execute("return performance.timeOrigin;", vec![])
+        .await
+        .unwrap();
+    let approval_started = std::time::Instant::now();
+    c.find(Locator::Css(&format!(
+        "{approval_form} button[type=submit]"
+    )))
     .await
     .unwrap()
     .click()
     .await
     .unwrap();
-    // DBOS acceptance can redirect before rendering finishes. The review page
-    // asks for refresh; observe that same page without resubmitting approval.
+    let review_path = format!("/app/lawyer/notations/{notation_id}/review");
+    let approval_remaining = wait_for_form_navigation(
+        &c,
+        &approval_document,
+        &review_path,
+        approval_started,
+        phase_budget,
+    )
+    .await;
+    // Rendering may continue after acceptance. Use only the original phase's remainder.
     wait_for_text_reloading(
         &c,
-        &format!("{}/app/lawyer/notations/{notation_id}/review", base_url()),
+        &format!("{}{review_path}", base_url()),
         "Send for signature",
-        Duration::from_secs(20),
+        approval_remaining,
     )
     .await;
 
