@@ -232,6 +232,8 @@ fn projects_help_lists_the_project_workspace_verbs() {
         command_names(&help(&["project", "--help"])),
         vec![
             "adverse",
+            "billing",
+            "calendar",
             "close",
             "communication",
             "create",
@@ -248,8 +250,6 @@ fn projects_help_lists_the_project_workspace_verbs() {
             "gate",
             "import-source",
             "invite",
-            "jj",
-            "legal-plan",
             "lifecycle",
             "migrate-letter",
             "notations",

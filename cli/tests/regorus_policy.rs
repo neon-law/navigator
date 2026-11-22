@@ -528,9 +528,10 @@ fn regorus_matches_every_checked_in_policy_decision() {
     // The Forgejo mirror repair route admits Admin and denies Lawyer and Client: 701 + 3 = 704.
     // Claims and collections add two lawyer-tier authorization checks.
     // Plan intake adds lawyer-tier authorization checks for review and decisions.
+    // Personal and Project billing reports admit interactive lawyers for reads.
     assert_eq!(
         test_names.len(),
-        709,
+        710,
         "the policy decision inventory changed; review every new or removed rule"
     );
 

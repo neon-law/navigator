@@ -5,6 +5,8 @@ description: Land a Project repository change and follow the deployment of the e
 
 # Push to Navigator
 
+Follow the **Find the term first** guidance in `AGENTS.md` when naming Project concepts.
+
 Follow [push-changes](../push-changes/SKILL.md) from the Project checkout. Run `navigator jj push` and report the review
 URL, merge commit, and deployment result. The Project's origin selects GitHub or Forgejo. For a Forgejo checkout, the
 trusted host supplies `NAVIGATOR_FORGEJO_ROOT_URL` and `FORGEJO_TOKEN`.

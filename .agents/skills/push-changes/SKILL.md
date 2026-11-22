@@ -6,6 +6,8 @@ description: >-
 
 # Push changes
 
+Follow the **Find the term first** guidance in `AGENTS.md` when naming Project concepts.
+
 Review `jj status`, `jj log`, and `jj diff` in the Project checkout. Initialize an existing Git checkout with `navigator
 jj setup` when needed. Fetch current main and rebase the intended change if main advanced. Resolve conflicts, check the
 final signature, and run `navigator project gate`. Review every client-visible Matter Page and document Pointer before
