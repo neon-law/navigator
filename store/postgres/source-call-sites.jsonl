@@ -1542,8 +1542,8 @@
 {"file":"store/src/billing_report_tests.rs","line":105,"function":"check_plan_claim","operation":"query_scalar","sql_operations":["INSERT"],"tables":[],"transaction":false}
 {"file":"store/src/billing_report_tests.rs","line":113,"function":"check_plan_claim","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
 {"file":"store/src/billing_report_tests.rs","line":113,"function":"check_plan_claim","operation":"query","sql_operations":["UPDATE"],"tables":["project"],"transaction":false}
-{"file":"store/src/billing_report_tests.rs","line":385,"function":"pending_annotations_are_actions_for_their_timekeeper_in_both_billing_views","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
-{"file":"store/src/billing_report_tests.rs","line":385,"function":"pending_annotations_are_actions_for_their_timekeeper_in_both_billing_views","operation":"query","sql_operations":["INSERT"],"tables":["person_project_role"],"transaction":false}
+{"file":"store/src/billing_report_tests.rs","line":398,"function":"pending_annotations_are_actions_for_their_timekeeper_in_both_billing_views","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
+{"file":"store/src/billing_report_tests.rs","line":398,"function":"pending_annotations_are_actions_for_their_timekeeper_in_both_billing_views","operation":"query","sql_operations":["INSERT"],"tables":["person_project_role"],"transaction":false}
 {"file":"store/src/brand_domains.rs","line":67,"function":"canonical_website_url","operation":"query","sql_operations":[],"tables":[],"transaction":false}
 {"file":"store/src/brand_domains.rs","line":162,"function":"version","operation":"update","sql_operations":[],"tables":[],"transaction":false}
 {"file":"store/src/brand_domains.rs","line":163,"function":"version","operation":"update","sql_operations":[],"tables":[],"transaction":false}

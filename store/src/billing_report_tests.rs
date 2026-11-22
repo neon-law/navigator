@@ -177,6 +177,19 @@ async fn check_plan_claim(
     );
 
     work.time_entry_ids = entries.iter().map(|entry| entry.id).collect();
+    check_reconciled_claim(pg, &project, fixture, claim_id, work).await;
+}
+
+async fn check_reconciled_claim(
+    pg: &PostgresDb,
+    project: &Project,
+    fixture: &crate::firm_side::tests::Matter,
+    claim_id: Uuid,
+    work: plan_claims::Work,
+) {
+    use plan_claims::{Change, Event};
+    let firm = project.firm_id.unwrap();
+    let on = work.performed_on;
     let events = [
         Event::WorkRecorded { work },
         Event::Prepared,
@@ -218,7 +231,7 @@ async fn check_plan_claim(
         add_project(
             &mut report,
             pg,
-            &project,
+            project,
             attorney,
             on,
             ProjectScope {
