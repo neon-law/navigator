@@ -100,11 +100,12 @@ references, and test restart/replay against PostgreSQL. This document authorizes
 ## Read-only preservation audit
 
 Run `hudson ops restate handover-audit --environment <configured-name>` against an explicitly selected Restate CLI
-environment. The command reads aggregate invocation statuses, completed failure counts, state-entry counts, and journal-
-entry counts across that environment. It never reads object keys, journal bodies, results, or payloads. Unknown
-statuses, malformed counts, missing responses, and query failures stop the audit. Retained invocations, including
-successful completions and their idempotency evidence, object state, or journals produce a nonzero exit and require
-preservation and reconciliation.
+environment. The command groups invocation counts by service, status, and completion outcome, and reads state-entry and
+journal-entry counts across that environment. Service groups identify which retained bindings need reconciliation;
+multiple services with the same status contribute independently to the totals. It never reads object keys, journal
+bodies, results, or payloads. Unknown statuses, malformed counts, missing responses, and query failures stop the audit.
+Retained invocations, including successful completions and their idempotency evidence, object state, or journals produce
+a nonzero exit and require preservation and reconciliation.
 
 These sequential, point-in-time counts are not a consistent recovery archive or permission to stop Restate. Preserve
 queues, timers, promises, locks, invocation relationships, retained outcomes, and external-effect receipts separately. A

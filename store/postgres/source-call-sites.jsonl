@@ -596,11 +596,11 @@
 {"file":"deploy/src/devx/postgres_fixture.rs","line":704,"function":"first_enrollment_refuses_existing_or_invalid_source_history","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"deploy/src/devx/postgres_fixture.rs","line":774,"function":"existing_tls_keeps_its_root_or_legacy_leaf_without_rotation","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"deploy/src/devx/postgres_fixture.rs","line":776,"function":"existing_tls_keeps_its_root_or_legacy_leaf_without_rotation","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"deploy/src/devx/restate_handover.rs","line":81,"function":"audit","operation":"query","sql_operations":["SELECT"],"tables":[],"transaction":false}
-{"file":"deploy/src/devx/restate_handover.rs","line":91,"function":"audit","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"deploy/src/devx/restate_handover.rs","line":105,"function":"audit","operation":"query","sql_operations":["SELECT"],"tables":[],"transaction":false}
-{"file":"deploy/src/devx/restate_handover.rs","line":106,"function":"audit","operation":"query","sql_operations":["SELECT"],"tables":[],"transaction":false}
-{"file":"deploy/src/devx/restate_handover.rs","line":156,"function":"run","operation":"query","sql_operations":[],"tables":[],"transaction":false}
+{"file":"deploy/src/devx/restate_handover.rs","line":82,"function":"audit","operation":"query","sql_operations":["SELECT"],"tables":[],"transaction":false}
+{"file":"deploy/src/devx/restate_handover.rs","line":97,"function":"audit","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"deploy/src/devx/restate_handover.rs","line":113,"function":"audit","operation":"query","sql_operations":["SELECT"],"tables":[],"transaction":false}
+{"file":"deploy/src/devx/restate_handover.rs","line":114,"function":"audit","operation":"query","sql_operations":["SELECT"],"tables":[],"transaction":false}
+{"file":"deploy/src/devx/restate_handover.rs","line":164,"function":"run","operation":"query","sql_operations":[],"tables":[],"transaction":false}
 {"file":"deploy/src/devx/restate_object_handover.rs","line":217,"function":"inventory","operation":"query_scalar","sql_operations":["SELECT"],"tables":["project"],"transaction":false}
 {"file":"deploy/src/devx/seaweedfs.rs","line":96,"function":"prepare","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"deploy/src/devx/seaweedfs.rs","line":97,"function":"prepare","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
