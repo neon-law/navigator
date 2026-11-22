@@ -187,6 +187,7 @@ pub mod participation;
 pub mod people_commands;
 pub mod person_merge;
 pub mod person_phones;
+pub mod personal_projects;
 pub mod persons;
 pub mod plan_assignment;
 pub mod plan_claims;

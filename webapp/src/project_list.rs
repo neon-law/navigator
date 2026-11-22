@@ -265,8 +265,12 @@ fn project_row(
     };
     let (missing_onboarding, missing_offboarding_letter) =
         store::projects::matter_flags(has_engagement, status, has_closing);
-    let lifecycle =
-        store::projects::matter_lifecycle(status, missing_onboarding, missing_offboarding_letter);
+    let lifecycle = store::projects::project_lifecycle(
+        &m.code,
+        status,
+        missing_onboarding,
+        missing_offboarding_letter,
+    );
     ProjectRow {
         brand_name,
         code: m.code,

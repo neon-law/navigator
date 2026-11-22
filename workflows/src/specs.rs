@@ -81,10 +81,6 @@ pub const BUNDLED_SPEC_YAML: &[(&str, &str)] = &[
     ("mutual_nda", include_str!("../specs/mutual_nda.yaml")),
     ("one_way_nda", include_str!("../specs/one_way_nda.yaml")),
     (
-        "nevada_single_member_llc_operating_agreement",
-        include_str!("../specs/nevada_single_member_llc_operating_agreement.yaml"),
-    ),
-    (
         "advisor_agreement",
         include_str!("../specs/advisor_agreement.yaml"),
     ),

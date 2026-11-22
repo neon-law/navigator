@@ -11,7 +11,12 @@ entity is a bug.
 An open Project reads `active` only under the [Official](official.md) onboarding execution rule. Until that rule is
 satisfied, it reads [Pitch](pitch.md). The stored `status` remains the operational open/closed/archived state.
 
-Opening a Project requires an attesting attorney on the lawyer tier (`owner`, `admin`, or `lawyer`) to serve as its
+A self-serve founder can open a personal Project, identified by `navigator-<person-id>`, on Neon Law. The founder is its
+client-side participant. Each Nevada LLC has its own Notation and questionnaire answers in that Project. Starting
+another formation is an explicit choice. Moving a draft into its own self-serve Project preserves the Notation ID,
+answers, and original intake link. The owner files with Nevada and can request attorney help separately.
+
+Opening a firm matter requires an attesting attorney on the lawyer tier (`owner`, `admin`, or `lawyer`) to serve as its
 lawyer DRI. The shared opening command checks that tier before it writes the Project or its participation rows. Any such
 attorney may be the lawyer DRI on any [Firm](firm.md) or [Brand](brand.md) in the deployment.
 
@@ -44,10 +49,10 @@ for an asynchronous provisioning path nothing in this codebase writes yet.
 **Every Notation belongs to exactly one Project.** The schema enforces this with a `NOT NULL` `project_id` FK on
 `notations`. A Notation without a Project is a bug.
 
-Opening a Project never opens a Notation with it. The lawyer creates the engagement afterwards, on the Project, like any
-other Notation — through `web`, the CLI, or Navigator MCP. Every door works this way: none auto-creates a retainer
-alongside the matter, and Navigator MCP's `create_notation` names the Project it acts on rather than opening one of its
-own.
+Opening a lawyer-led Project through the matter command creates an empty matter. The lawyer creates the engagement
+afterwards, on the Project, like any other Notation — through `web`, the CLI, or Navigator MCP. Every door works this
+way: none auto-creates a retainer alongside the matter, and Navigator MCP's `create_notation` names the Project it acts
+on rather than opening one of its own.
 
 Each Project has **one** deployment-scoped source repository, named for its `code`, holding that Project's notation
 templates under `templates/`, client [Portal](portal.md) under `apps/portal/`, and source-side document pointers

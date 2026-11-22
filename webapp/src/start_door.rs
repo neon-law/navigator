@@ -10,6 +10,16 @@ use serde::{Deserialize, Serialize};
 use crate::components::PublicShell;
 use crate::public_chrome::{PublicChrome, PublicFooter, PublicHeader};
 
+/// One authorized Project that already contains this formation questionnaire.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct ExistingIntake {
+    #[serde(default)]
+    pub can_move: bool,
+    pub notation_id: String,
+    pub project_name: String,
+    pub href: String,
+}
+
 /// The service-specific decision and copy resolved by the portal route.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
 pub struct StartDoorContent {
@@ -22,6 +32,12 @@ pub struct StartDoorContent {
     pub refusal: String,
     pub start_label: String,
     pub can_start: bool,
+    #[serde(default)]
+    pub existing: Vec<ExistingIntake>,
+    #[serde(default)]
+    pub resume_label: String,
+    #[serde(default)]
+    pub separate_label: String,
 }
 
 /// The portal pre-layer's content injection.
@@ -94,11 +110,25 @@ pub fn StartDoorPage(
             article { class: "start-door",
                 h1 { "{content.service_name}" }
                 p { class: "start-door__disclosure", "{content.disclosure}" }
+                for intake in &content.existing {
+                    p {
+                        a { href: "{intake.href}", "{content.resume_label} · {intake.project_name}" }
+                    }
+                    if intake.can_move {
+                        form { method: "post", action: "{content.action}",
+                            input { r#type: "hidden", name: "_csrf", value: "{csrf_token}" }
+                            button { r#type: "submit", name: "move_formation", value: "{intake.notation_id}", "Move this formation to its own Project" }
+                        }
+                    }
+                }
                 if content.can_start {
                     form { method: "post", action: "{content.action}",
                         input { type: "hidden", name: "_csrf", value: "{csrf_token}" }
+                        if let Some(latest) = content.existing.first() {
+                            input { type: "hidden", name: "seen_notation", value: "{latest.notation_id}" }
+                        }
                         button { class: "nav-btn nav-btn--primary", r#type: "submit",
-                            "{content.start_label}"
+                            if content.existing.is_empty() { "{content.start_label}" } else { "{content.separate_label}" }
                         }
                     }
                 } else {
@@ -143,12 +173,33 @@ mod tests {
             refusal: "Refusal copy".into(),
             start_label: "Start".into(),
             can_start: true,
+            ..Default::default()
         });
         assert!(html.contains("Disclosure copy"), "{html}");
         assert!(html.contains("action=\"/start/llc-file\""), "{html}");
         assert!(html.contains("name=\"_csrf\""), "{html}");
         assert!(html.contains(">Start<"), "{html}");
         assert!(!html.contains("Refusal copy"), "{html}");
+    }
+
+    #[test]
+    fn returning_client_can_resume_or_confirm_a_separate_formation() {
+        let html = render(StartDoorContent {
+            can_start: true,
+            resume_label: "Resume".into(),
+            separate_label: "Start another LLC".into(),
+            existing: vec![ExistingIntake {
+                can_move: true,
+                notation_id: "one".into(),
+                project_name: "First LLC".into(),
+                href: "/app/projects/abc/intake/one".into(),
+            }],
+            ..Default::default()
+        });
+        assert!(html.contains("href=\"/app/projects/abc/intake/one\""));
+        assert!(html.contains("First LLC"));
+        assert!(html.contains("name=\"seen_notation\""));
+        assert!(html.contains("Start another LLC"));
     }
 
     #[test]
@@ -161,6 +212,7 @@ mod tests {
             refusal: "Refusal copy".into(),
             start_label: "Start".into(),
             can_start: false,
+            ..Default::default()
         });
         assert!(html.contains("Refusal copy"), "{html}");
         assert!(!html.contains("<form"), "{html}");

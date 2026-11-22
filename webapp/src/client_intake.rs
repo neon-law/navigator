@@ -72,6 +72,7 @@ pub struct IntakeStepData {
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub enum IntakeState {
     NeedsAnswer(Box<IntakeStepData>),
+    SelfServeComplete,
     Complete {
         project_code: String,
         flow_label: String,
@@ -188,6 +189,13 @@ pub fn ClientIntake() -> Element {
 fn intake_body(view: &ClientIntakeView) -> Element {
     match &view.state {
         IntakeState::NeedsAnswer(step) => step_body(step, view),
+        IntakeState::SelfServeComplete => rsx! {
+            main { class: "nav-theme nav-card",
+                h1 { "Your formation questionnaire is saved" }
+                p { "You can return to this business in Navigator. You file your formation paperwork with Nevada." }
+                a { href: "/notations/nevada-llc-formation/start", "My Nevada LLC formations" }
+            }
+        },
         IntakeState::Complete {
             project_code,
             flow_label,
@@ -229,9 +237,7 @@ fn step_body(step: &IntakeStepData, view: &ClientIntakeView) -> Element {
         if is_people_list {
             p { "{prompt}" }
         }
-        "Your legal team started this for you. Confirm what's here or fix "
-        "anything that's wrong, then continue — your answers save as you go, "
-        "so you can finish later if you need to."
+        "Confirm or update each answer. Your answers save as you go, so you can return later."
     };
     let footer = rsx! {
         p { a { href: "{cancel}", "Finish later" } }

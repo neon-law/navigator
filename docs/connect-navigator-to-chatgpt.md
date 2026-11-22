@@ -10,8 +10,9 @@ enter private details and start the paperwork on Neon Law’s website.
 2. Enter **Navigator** for the name and **Find public legal templates from Neon Law** for the description. Paste
    `https://www.neonlaw.com/app/mcp` as the server URL, including `www`. Choose **No authentication**. If your client
    asks for a transport, select **Streamable HTTP**.
-3. Review the connection details, select **Create as a plugin**, and install it. In a new chat, type **@** and select
-   **Navigator**. Ask “List Navigator’s public templates.” Look for **Nevada LLC Formation** in its response.
+3. Review the connection details, select **Create as a plugin**, then **Connect Navigator** and **Try in chat**. In a
+   new chat, type **@** and select **Navigator**. Ask “List Navigator’s public templates.” Look for **Nevada LLC
+   Formation** in its response.
 
 OpenAI documents the [custom MCP connection and installation
 steps](https://developers.openai.com/plugins/deploy/connect-chatgpt).
@@ -20,13 +21,15 @@ steps](https://developers.openai.com/plugins/deploy/connect-chatgpt).
 
 Ask “Help me form a Nevada LLC. Show me the formation template and where to start.” Choose **Nevada LLC Formation**
 (`nv__llc_formation`). You can [preview the template](https://www.neonlaw.com/notations/nevada-llc-formation) before you
-[start the questionnaire](https://www.neonlaw.com/start/llc-file). Use the questionnaire link here if your chat only
-lists the title.
+[start the questionnaire](https://www.neonlaw.com/notations/nevada-llc-formation/start). Sign in to Navigator and choose
+**Start**. Navigator saves each business as its own formation in your personal Project. Use the same link to resume the
+business by name or choose **Start a separate Nevada LLC**. **Move this formation to its own Project** keeps that
+draft’s answers and gives the business its own Project under the same account.
 
-Sign in on Neon Law’s website. Have your proposed company name, registered agent, management structure, managing members
-or managers, and proposed formation date ready. Enter those details in the questionnaire. A lawyer reviews the packet
-before signature. Nevada forms the LLC when the Articles of Organization filing takes effect. Check the filing
-confirmation for the effective date. [Nevada Revised Statutes, Chapter 86](https://www.leg.state.nv.us/NRS/NRS-086.html)
+The questionnaire asks about the proposed company, registered agent, management, and formation date. Your answers save
+on Navigator. You file the paperwork with the state. Nevada forms the LLC when the Articles of Organization filing takes
+effect. Check the filing confirmation for the effective date. [Nevada Revised Statutes, Chapter
+86](https://www.leg.state.nv.us/NRS/NRS-086.html)
 
 An operating agreement governs how the company runs. Ask “I’m the only owner of a member-managed Nevada LLC and own it
 personally. Is there an operating agreement I can start?” Use the matching agreement if Navigator lists it. For other

@@ -2426,7 +2426,8 @@ async fn project_status_door(
     let onboarding_status = store::projects::onboarding_status(&state.surreal, id)
         .await
         .map_err(ApiError::Db)?;
-    let lifecycle = store::projects::matter_lifecycle(
+    let lifecycle = store::projects::project_lifecycle(
+        &project.code,
         if project.status == "archived" {
             "closed"
         } else {

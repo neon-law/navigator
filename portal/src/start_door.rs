@@ -1,13 +1,8 @@
 //! The authenticated visitor's service start door.
 //!
 //! A service card names the only services `/start/{service_id}` can open, and
-//! a published notation's Workflow section names the only notations
-//! `/notations/{slug}/start` can open. Either door runs the same intake: it
-//! opens a Project under a [`store::projects::random_code`] and the Firm's
-//! intake notation. The visitor's
-//! ordinary session supplies the client Person; the boot-resolved lawyer DRI
-//! supplies the firm-side participant. The route performs the same immediate
-//! commits as the existing lawyer walk and compensates them on refusal.
+//! a published notation supplies its template. The Nevada formation notation starts in the signed-in
+//! founder's personal Project. Firm service cards use the existing lawyer intake and its disclosures.
 
 use axum::extract::{DefaultBodyLimit, Path, Request, State};
 use axum::http::StatusCode;
@@ -72,6 +67,14 @@ struct Offer {
     funnel_id: String,
 }
 
+impl Offer {
+    fn personal_formation(&self, brand: views::brand::BrandKey) -> bool {
+        brand == views::brand::BrandKey::Neon
+            && self.funnel_id == "notation:nevada-llc-formation"
+            && self.template == store::personal_projects::FORMATION
+    }
+}
+
 impl DoorState {
     fn offer(&self, id: &str) -> Option<Offer> {
         if let Some(notations) = &self.notations {
@@ -101,6 +104,10 @@ impl DoorState {
 
 #[derive(Debug, Deserialize, Default)]
 struct StartForm {
+    #[serde(default)]
+    seen_notation: Option<Uuid>,
+    #[serde(default)]
+    move_formation: Option<Uuid>,
     #[serde(default)]
     _csrf: String,
     /// Accepted but ignored. The route maps the service id to its template
@@ -195,9 +202,37 @@ async fn inject_start_content(
         return StatusCode::NOT_FOUND.into_response();
     };
     let brand = views::brand::brand_key();
-    let can_start = configured_lawyer(&state.app, brand, &service_id)
-        .await
-        .is_some()
+    let mut existing = Vec::new();
+    if offer.personal_formation(brand) {
+        if let Some(person) = req
+            .extensions()
+            .get::<SessionData>()
+            .filter(|session| session.role == store::persons::Role::Client)
+            .and_then(|session| session.person_id)
+        {
+            let Ok(db) = store::postgres::PostgresDb::application().await else {
+                return StatusCode::SERVICE_UNAVAILABLE.into_response();
+            };
+            let Ok(rows) = store::personal_projects::formations(&db, person, brand.as_str()).await
+            else {
+                return StatusCode::SERVICE_UNAVAILABLE.into_response();
+            };
+            existing = rows
+                .into_iter()
+                .map(|row| webapp::start_door::ExistingIntake {
+                    can_move: row.project_code == store::personal_projects::personal_code(person),
+                    href: row.intake_path(),
+                    notation_id: row.id.to_string(),
+                    project_name: row.label,
+                })
+                .collect();
+        }
+    }
+    let personal = offer.personal_formation(brand);
+    let can_start = (personal
+        || configured_lawyer(&state.app, brand, &service_id)
+            .await
+            .is_some())
         && store::firms::firm_id_for_brand_key(&state.app.surreal, brand.as_str())
             .await
             .ok()
@@ -209,10 +244,17 @@ async fn inject_start_content(
                 service_id,
                 service_name: offer.name,
                 action: offer.path,
-                disclosure: catalog.start.disclosure.clone(),
+                disclosure: if personal {
+                    catalog.start.formation_disclosure.clone()
+                } else {
+                    catalog.start.disclosure.clone()
+                },
                 refusal: catalog.start.refusal.clone(),
                 start_label: catalog.start.label.clone(),
                 can_start,
+                existing,
+                resume_label: catalog.start.resume_formation.clone(),
+                separate_label: catalog.start.separate_formation.clone(),
             },
         ));
     next.run(req).await
@@ -252,6 +294,7 @@ fn insert_refusal(
                 refusal,
                 start_label,
                 can_start: false,
+                ..Default::default()
             },
         ));
 }
@@ -351,13 +394,54 @@ async fn configured_lawyer(
     Some(person.id)
 }
 
+async fn start_personal_formation(
+    app: &AppState,
+    owner: Uuid,
+    brand: &str,
+    form: &StartForm,
+    path: &str,
+) -> anyhow::Result<Response> {
+    let pg = store::postgres::PostgresDb::application().await?;
+    if let Some(id) = form.move_formation {
+        return Ok(
+            match store::personal_projects::separate_formation(&pg, owner, brand, id).await? {
+                Some(url) => Redirect::to(&url).into_response(),
+                None => StatusCode::NOT_FOUND.into_response(),
+            },
+        );
+    }
+    let template =
+        store::templates::resolve(&app.surreal, None, store::personal_projects::FORMATION)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("shared formation template missing"))?;
+    let snapshot = workflows::notation_session::questionnaire_snapshot_for_template(
+        &app.surreal,
+        Some(&app.storage),
+        &template,
+    )
+    .await?;
+    let result = store::personal_projects::start_formation(
+        &pg,
+        owner,
+        brand,
+        template.id,
+        snapshot,
+        form.seen_notation,
+    )
+    .await?;
+    Ok(match result {
+        store::personal_projects::Start::Intake(url) => Redirect::to(&url).into_response(),
+        store::personal_projects::Start::Choose => Redirect::to(path).into_response(),
+    })
+}
+
 #[allow(clippy::too_many_lines)]
 async fn post_start(
     State(state): State<DoorState>,
     Extension(session): Extension<SessionData>,
     Path(path_id): Path<String>,
     headers: axum::http::HeaderMap,
-    Form(_body): Form<StartForm>,
+    Form(body): Form<StartForm>,
 ) -> Response {
     let Some(catalog) = state.catalog.as_ref() else {
         return StatusCode::NOT_FOUND.into_response();
@@ -378,6 +462,14 @@ async fn post_start(
         audit(&session, None, None, &service_id, brand, "rejected_person");
         return (StatusCode::FORBIDDEN, catalog.start.refusal.clone()).into_response();
     };
+    if offer.personal_formation(brand) {
+        return start_personal_formation(&state.app, person_id, brand.as_str(), &body, &offer.path)
+            .await
+            .unwrap_or_else(|error| {
+                tracing::error!(%error, "self-serve formation unavailable");
+                StatusCode::SERVICE_UNAVAILABLE.into_response()
+            });
+    }
     let Some(lawyer_dri_id) = configured_lawyer(&state.app, brand, &service_id).await else {
         audit(
             &session,
@@ -794,6 +886,7 @@ mod tests {
             Form(StartForm {
                 _csrf: String::new(),
                 _template: template.map(ToOwned::to_owned),
+                ..Default::default()
             }),
         )
         .await
@@ -1830,5 +1923,130 @@ mod tests {
             Some("delivered"),
             "the completion webhook was delivered and verified"
         );
+    }
+    #[tokio::test]
+    async fn personal_formations_resume_independently_without_a_lawyer() {
+        store::test_support::with_postgres(async {
+            let db = store::surreal::SurrealDb::uninitialized();
+            let app = crate::test_support::app_state(db.clone()).await;
+            store::seed::seed_canonical(&db, &app.storage)
+                .await
+                .unwrap();
+            let owner = client(&db, "Test Founder", "founder@example.com").await;
+            let other = client(&db, "Other Founder", "other-founder@example.com").await;
+            let door = DoorState {
+                app: app.clone(),
+                catalog: Some(onboarding_catalog()),
+                notations: Some(std::sync::Arc::new(vec![NotationOffer {
+                    slug: "nevada-llc-formation".into(),
+                    title: "Nevada LLC Formation".into(),
+                    template_code: store::personal_projects::FORMATION.into(),
+                }])),
+            };
+            let start = |seen| {
+                post_start(
+                    State(door.clone()),
+                    Extension(session(&owner)),
+                    Path("nevada-llc-formation".to_owned()),
+                    axum::http::HeaderMap::new(),
+                    Form(StartForm {
+                        seen_notation: seen,
+                        ..Default::default()
+                    }),
+                )
+            };
+            let (one, retry) = tokio::join!(start(None), start(None));
+            let first = location(&one);
+            assert_eq!(one.status(), StatusCode::SEE_OTHER);
+            assert_eq!(first, location(&retry));
+            let pg = store::postgres::PostgresDb::application().await.unwrap();
+            let rows = store::personal_projects::formations(&pg, owner.id, "neon")
+                .await
+                .unwrap();
+            assert_eq!(rows.len(), 1);
+            let id = rows[0].id;
+            assert_eq!(rows[0].intake_path(), first);
+            let notation = store::notations::find_by_id(&db, id)
+                .await
+                .unwrap()
+                .unwrap();
+            let project = store::projects::find_by_id(&db, notation.project_id).await.unwrap().unwrap();
+            for (code, exempt) in [("navigator",true),("navigatorbusiness",true),("my-navigator",false)] {
+                let comparison = store::projects::create(&db, &store::projects::NewProject {
+                    code: code.into(), name: "Example business".into(), entity_id: project.entity_id,
+                    firm_id: project.firm_id, brand: "neon".into(), ..Default::default()
+                }).await.unwrap();
+                let result = workflows::enforce_engagement_first(&db, comparison.id, store::personal_projects::FORMATION).await;
+                if exempt { result.unwrap(); } else { assert!(matches!(result, Err(workflows::notation_session::NotationSessionError::EngagementMustBeFirst {..}))); }
+            }
+            let roles = store::projects::participations_for_project(&db, notation.project_id)
+                .await
+                .unwrap();
+            assert_eq!(roles.len(), 1);
+            assert!(roles[0].is_client_dri && !roles[0].is_lawyer_dri);
+            assert_eq!(roles[0].person_id, owner.id);
+            let answer = |question, value| {
+                workflows::notation_session::record_client_answer_with_reference(
+                    &db,
+                    Some(&app.storage),
+                    id,
+                    question,
+                    value,
+                    None,
+                    owner.id,
+                )
+            };
+            answer("person__client", "Test Founder").await.unwrap();
+            answer("entity__company", "First Example LLC")
+                .await
+                .unwrap();
+            let reopened = location(&start(None).await);
+            assert_eq!(reopened, first);
+            let workflows::notation_session::ClientIntakeStep::NeedsAnswer { question, .. } =
+                workflows::notation_session::client_intake_step(&db, Some(&app.storage), id)
+                    .await
+                    .unwrap()
+            else {
+                panic!("saved intake has another question")
+            };
+            assert_eq!(question.code, "person__registered_agent");
+            let second = location(&start(Some(id)).await);
+            assert_ne!(second, first);
+            let both = store::personal_projects::formations(&pg, owner.id, "neon")
+                .await
+                .unwrap();
+            assert_eq!(both.len(), 2);
+            assert_eq!(both[0].project_code, both[1].project_code);
+            assert_eq!(both[1].label, "First Example LLC");
+            assert_eq!(
+                location(&start(None).await),
+                "/notations/nevada-llc-formation/start"
+            );
+            assert!(store::personal_projects::formations(&pg, other.id, "neon")
+                .await
+                .unwrap()
+                .is_empty());
+            assert!(
+                store::personal_projects::formations(&pg, owner.id, "daybridge")
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(store::personal_projects::separate_formation(&pg, other.id, "neon", id).await.unwrap().is_none());
+            let moved = store::personal_projects::separate_formation(&pg, owner.id, "neon", id).await.unwrap().unwrap();
+            assert_eq!(store::personal_projects::separate_formation(&pg, owner.id, "neon", id).await.unwrap(),Some(moved.clone()));
+            let rows = store::personal_projects::formations(&pg, owner.id, "neon").await.unwrap();
+            assert_eq!(rows.len(),2);
+            assert_eq!(rows[1].intake_path(),moved);
+            assert_eq!(rows[1].label,"First Example LLC");
+            assert_eq!(rows[0].intake_path(),second);
+            assert_eq!(
+                store::personal_projects::owner_access(notation.project_id, other.id, "neon")
+                    .await
+                    .unwrap(),
+                Some(false)
+            );
+        })
+        .await;
     }
 }

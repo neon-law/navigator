@@ -381,13 +381,26 @@ async fn visible_notation(
     session: &SessionData,
     project_id: Uuid,
     notation_id: Uuid,
-) -> Result<store::notations::Notation, Response> {
+) -> Result<(store::notations::Notation, bool), Response> {
     let notation = store::notations::find_by_id(surreal, notation_id)
         .await
         .ok()
         .flatten()
         .ok_or_else(not_found)?;
     if notation.project_id != project_id {
+        if let Some(owner) = session.person_id.filter(|id| *id == notation.person_id) {
+            if let Some(url) = store::personal_projects::moved_intake(
+                project_id,
+                notation_id,
+                owner,
+                views::brand::brand_key().as_str(),
+            )
+            .await
+            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE.into_response())?
+            {
+                return Err(Redirect::to(&url).into_response());
+            }
+        }
         return Err(not_found());
     }
     let visible = store::projects::can_access_as_client_in_surreal(
@@ -403,7 +416,23 @@ async fn visible_notation(
     if !visible {
         return Err(not_found());
     }
-    Ok(notation)
+    let Some(person) = session.person_id else {
+        return Err(not_found());
+    };
+    let personal = store::personal_projects::owner_access(
+        project_id,
+        person,
+        views::brand::brand_key().as_str(),
+    )
+    .await
+    .map_err(|error| {
+        tracing::error!(%error, "personal Project lookup failed");
+        StatusCode::SERVICE_UNAVAILABLE.into_response()
+    })?;
+    if personal == Some(false) || (personal == Some(true) && notation.person_id != person) {
+        return Err(not_found());
+    }
+    Ok((notation, personal == Some(true)))
 }
 
 /// The bound template's title, for the page chrome. Falls back to a
@@ -435,7 +464,8 @@ pub(crate) async fn resolve_intake_state(
     let Some(session) = session else {
         return Err(not_found());
     };
-    let notation = visible_notation(&state.surreal, session, project_id, notation_id).await?;
+    let (notation, personal) =
+        visible_notation(&state.surreal, session, project_id, notation_id).await?;
     let Some(project) = store::projects::find_by_id(&state.surreal, project_id)
         .await
         .map_err(|e| {
@@ -527,6 +557,9 @@ pub(crate) async fn resolve_intake_state(
                 },
             ))
         }
+        ClientIntakeStep::Complete { .. } if personal => {
+            webapp::client_intake::IntakeState::SelfServeComplete
+        }
         ClientIntakeStep::Complete { total } => webapp::client_intake::IntakeState::Complete {
             project_code: project.code,
             flow_label,
@@ -555,10 +588,11 @@ pub async fn intake_save(
     let Some(project_id) = store::projects::id_for_code(&state.surreal, &project_code).await else {
         return not_found();
     };
-    let notation = match visible_notation(&state.surreal, &session, project_id, notation_id).await {
-        Ok(n) => n,
-        Err(resp) => return resp,
-    };
+    let (notation, _) =
+        match visible_notation(&state.surreal, &session, project_id, notation_id).await {
+            Ok(n) => n,
+            Err(resp) => return resp,
+        };
     // An answer must be attributable to a person; an anonymous session
     // can't author one.
     let Some(person_id) = session.person_id else {

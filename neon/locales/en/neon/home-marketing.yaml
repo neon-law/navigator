@@ -31,7 +31,7 @@ bands:
               code: true
             - text: >-
                 . Choose no authentication and, if prompted for a transport, Streamable HTTP.
-                Review the connection, select Create as a plugin, then install Navigator.
+                Review the connection, select Create as a plugin, then select Connect Navigator and Try in chat.
       - title: Find the Nevada LLC Formation template
         body:
           - - text: "In a new chat, type @, select Navigator, and ask "
@@ -44,10 +44,10 @@ bands:
       - title: Start your LLC paperwork
         body:
           - - text: Open the Nevada LLC questionnaire
-              href: /start/llc-file
+              href: /notations/nevada-llc-formation/start
             - text: >-
                 , sign in, and enter your company name, registered agent, and management details.
-                A lawyer reviews the paperwork before signature. Formation requires a separate state filing.
+                Return to this link to resume a business or start another LLC. You file with Nevada.
           - - text: "To return to an existing matter, open "
             - text: My Projects
               href: /app/projects

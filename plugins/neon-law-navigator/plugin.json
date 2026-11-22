@@ -42,7 +42,7 @@
               "description": "Match an operating agreement",
               "prompt": "My Nevada LLC is member-managed and I am its only member. I own it personally. Help me start an operating agreement.",
               "tools_triggered": "list_templates",
-              "expected_behavior": "Find the Nevada single-member operating agreement in the public catalog and offer its signed-in intake link."
+              "expected_behavior": "Check the current catalog. If no matching operating agreement is listed, say so and offer the Neon Law contact link."
             },
             {
               "description": "Find a mutual NDA",

@@ -1402,6 +1402,14 @@ erDiagram
         uuid template_id
         datetime updated_at
     }
+    notation_project_transfer {
+        uuid destination_project_id
+        uuid id
+        datetime inserted_at
+        uuid notation_id
+        uuid person_id
+        uuid source_project_id
+    }
     notation_rate {
         boolean active
         string code
@@ -1664,6 +1672,7 @@ erDiagram
         string plan_state
         string private_notion_page_url
         string repository_url
+        boolean self_serve
         string shared_notion_page_url
         string status
         datetime updated_at
@@ -2392,6 +2401,9 @@ erDiagram
     template }o--|| notation_event : references
     notation_package }o--|| notation_package_template : references
     template }o--|| notation_package_template : references
+    notation }o--|| notation_project_transfer : references
+    person }o--|| notation_project_transfer : references
+    project }o--|| notation_project_transfer : references
     communication }o--|| notation_source : references
     notation }o--|| notation_source : references
     person }o--|| outcome_estimate : references

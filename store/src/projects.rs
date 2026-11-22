@@ -4673,6 +4673,12 @@ async fn open_matter_in_surreal(
     Ok(created)
 }
 
+/// Navigator-prefixed Project codes may start directly with a working Notation.
+#[must_use]
+pub fn requires_onboarding(code: &str) -> bool {
+    !code.starts_with("navigator")
+}
+
 /// Whether a template's declared `kind` makes its notation the engagement that
 /// opens a matter — the same classifier the engagement-first gate uses. Keyed
 /// off the declared kind, never the template `code`, so a retainer template
@@ -4707,6 +4713,8 @@ pub fn matter_flags(has_engagement: bool, status: &str, has_closing: bool) -> (b
 /// The displayed lifecycle derived from completed DocuSign onboarding evidence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MatterLifecycle {
+    /// Open Project whose code exempts it from onboarding.
+    OnboardingOptional,
     /// Open, awaiting completed DocuSign onboarding.
     NeedsOnboarding,
     /// Open, with verified DocuSign onboarding.
@@ -4721,6 +4729,7 @@ impl MatterLifecycle {
     #[must_use]
     pub fn class(self) -> &'static str {
         match self {
+            MatterLifecycle::OnboardingOptional => "matter-lifecycle",
             MatterLifecycle::NeedsOnboarding => "matter-lifecycle matter-lifecycle--yellow",
             MatterLifecycle::OnboardingOnFile => "matter-lifecycle matter-lifecycle--green",
             MatterLifecycle::Closed => "matter-lifecycle matter-lifecycle--red",
@@ -4731,6 +4740,7 @@ impl MatterLifecycle {
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
+            MatterLifecycle::OnboardingOptional => "open",
             MatterLifecycle::NeedsOnboarding => "pitch",
             MatterLifecycle::OnboardingOnFile => "active",
             MatterLifecycle::Closed => "closed",
@@ -4741,6 +4751,7 @@ impl MatterLifecycle {
     #[must_use]
     pub fn title(self) -> &'static str {
         match self {
+            MatterLifecycle::OnboardingOptional => "Onboarding is optional for this Project.",
             MatterLifecycle::NeedsOnboarding => {
                 "The onboarding DocuSign envelope UUID has not been verified as completed."
             }
@@ -4777,6 +4788,24 @@ pub fn matter_lifecycle(
         (false, true, _) => MatterLifecycle::NeedsOnboarding,
         (false, false, _) => MatterLifecycle::OnboardingOnFile,
     }
+}
+
+/// Display an exempt open Project without claiming evidence of a signed onboarding.
+#[must_use]
+pub fn project_lifecycle(
+    code: &str,
+    status: &str,
+    missing_onboarding: bool,
+    missing_closing: bool,
+) -> MatterLifecycle {
+    if !requires_onboarding(code)
+        && missing_onboarding
+        && status != "closed"
+        && status != "archived"
+    {
+        return MatterLifecycle::OnboardingOptional;
+    }
+    matter_lifecycle(status, missing_onboarding, missing_closing)
 }
 
 /// Onboarding is official when Navigator holds a completed DocuSign envelope UUID

@@ -7,7 +7,7 @@ use crate::notations::{NewNotation, Notation, NotationError};
 use crate::postgres::matter::MatterAuthorityError;
 use crate::postgres::PostgresDb;
 
-const DRAFT_FACTS_SQL: &str = "SELECT
+pub(crate) const DRAFT_FACTS_SQL: &str = "SELECT
     (EXISTS(SELECT 1 FROM notation_document WHERE notation_id=$1)
      OR EXISTS(SELECT 1 FROM asset WHERE starts_with(storage_key,$2)
                OR starts_with(secondary_storage_key,$2))),
@@ -28,6 +28,13 @@ pub(crate) async fn lock_parent(
 
 /// Copy the Template pins in the insert that opens the Notation.
 pub(crate) async fn create(pg: &PostgresDb, new: &NewNotation) -> Result<Notation, NotationError> {
+    insert(pg.pool(), new).await
+}
+
+pub(crate) async fn insert<'a>(
+    executor: impl sqlx::Executor<'a, Database = sqlx::Postgres>,
+    new: &NewNotation,
+) -> Result<Notation, NotationError> {
     let row = sqlx::query(
         "INSERT INTO notation AS n
          (id,template_id,package_id,person_id,entity_id,project_id,state,delivery,
@@ -44,7 +51,7 @@ pub(crate) async fn create(pg: &PostgresDb, new: &NewNotation) -> Result<Notatio
     .bind(&new.state)
     .bind(&new.delivery)
     .bind(new.questionnaire_snapshot.as_ref().map(sqlx::types::Json))
-    .fetch_optional(pg.pool())
+    .fetch_optional(executor)
     .await?
     .ok_or(NotationError::WriteReturnedNothing)?;
     crate::notations::postgres_notation(&row)

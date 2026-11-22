@@ -100,15 +100,6 @@ const BUSINESS_NOTATIONS: &[(&str, &str, &str, &str, &str)] = &[
         include_str!("../../templates/notations/neon_law/one_way_nda.md"),
     ),
     (
-        "nevada-single-member-llc-operating-agreement",
-        "Nevada Single-Member LLC Operating Agreement",
-        "notations/neon_law/nevada_single_member_llc_operating_agreement.md",
-        "Ownership and management for a Nevada LLC with one individual member.",
-        include_str!(
-            "../../templates/notations/neon_law/nevada_single_member_llc_operating_agreement.md"
-        ),
-    ),
-    (
         "advisor-agreement",
         "Advisor Agreement",
         "notations/neon_law/advisor_agreement.md",
@@ -2381,11 +2372,14 @@ mod notation_catalog_tests {
     fn public_template_intake_links_reach_the_matching_notation() {
         let offers = super::notation_start_offers();
         let catalog = store::seed::public_seeded_templates().expect("public template catalog");
-        let operating = catalog
+        let formation = catalog
             .iter()
-            .find(|row| row.code == "nevada_single_member_llc_operating_agreement")
-            .expect("single-member operating agreement is discoverable");
-        assert!(operating.start_path.is_some());
+            .find(|row| row.code == "nv__llc_formation")
+            .expect("formation is discoverable");
+        assert_eq!(
+            formation.start_path.as_deref(),
+            Some("/notations/nevada-llc-formation/start")
+        );
         for row in catalog {
             if let Some(path) = row.start_path {
                 assert!(

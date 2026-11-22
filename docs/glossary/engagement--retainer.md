@@ -13,13 +13,16 @@ Notation (`navigator site notation create <retainer_code> --project <code>`). Op
 with it; no door creates a retainer alongside the matter. An open Project with no Notations is a pitch and may start
 with an offboarding Notation so it can be closed without an engagement.
 
-The engagement-first rule is enforced at create time on the **self-serve doors** — `web`'s project-scoped create route
-and the CLI, which share `workflows::notation_session::create_notation_from_repo`. A first Notation must be a template
-whose declared `kind` opens a matter — see [Onboarding](../../templates/notations/neon_law/onboarding__letter.md) —
-except that an open Project with no Notations may start with an offboarding letter. That exception supplies the document
-a pitch needs before it can close. One classifier answers which kinds open matters, `rules::kind::Kind::opens_a_matter`;
-see [`docs/frontmatter`](../frontmatter.md) for the `kind` vocabulary. Later Notations — filings, letters — may be any
-kind.
+Projects whose stored code begins with `navigator` may start directly with a working Notation. The prefix exempts them
+from onboarding. Authorization and the evidence needed to mark an engagement signed still apply.
+
+For other Projects, the engagement-first rule is enforced at create time on the **self-serve doors** — `web`'s
+project-scoped create route and the CLI, which share `workflows::notation_session::create_notation_from_repo`. A first
+Notation must be a template whose declared `kind` opens a matter — see
+[Onboarding](../../templates/notations/neon_law/onboarding__letter.md) — except that an open Project with no Notations
+may start with an offboarding letter. That exception supplies the document a pitch needs before it can close. One
+classifier answers which kinds open matters, `rules::kind::Kind::opens_a_matter`; see
+[`docs/frontmatter`](../frontmatter.md) for the `kind` vocabulary. Later Notations — filings, letters — may be any kind.
 
 **[Navigator MCP](navigator-mcp.md) is not bound by that rule**, because it is lawyer-directed rather than self-serve.
 `create_notation` opens the notation through the policy-free `start_notation` primitive, so an attorney driving the

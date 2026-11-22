@@ -208,6 +208,12 @@ pub struct ServiceCopy {
 /// Copy shared by a service card's start link and the start-door flow.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct StartDoorCopy {
+    #[serde(default)]
+    pub formation_disclosure: String,
+    #[serde(default)]
+    pub resume_formation: String,
+    #[serde(default)]
+    pub separate_formation: String,
     pub confirmation: String,
     pub disclosure: String,
     pub label: String,

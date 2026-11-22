@@ -328,12 +328,6 @@ pub const SEEDED_TEMPLATES: &[SeededTemplate] = &[
         markdown: include_str!("../../templates/notations/neon_law/one_way_nda.md"),
     },
     SeededTemplate {
-        label: "notations/neon_law/nevada_single_member_llc_operating_agreement.md",
-        markdown: include_str!(
-            "../../templates/notations/neon_law/nevada_single_member_llc_operating_agreement.md"
-        ),
-    },
-    SeededTemplate {
         label: "notations/neon_law/advisor_agreement.md",
         markdown: include_str!("../../templates/notations/neon_law/advisor_agreement.md"),
     },
