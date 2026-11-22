@@ -467,7 +467,7 @@ where
     substitutions.push(web_patch_substitution(deployment, &get, &DBOS_WEB_PATCH)?);
     substitutions.extend(dbos_schedule_substitutions(deployment, &get)?);
     substitutions.push(timer_env_substitution(&get)?);
-    substitutions.extend(archives_substitutions(&get));
+    substitutions.extend(archives_substitutions(&get)?);
     substitutions.extend(replica_substitutions(deployment, &get)?);
     substitutions.push(dbos_only_patch(deployment, &get)?);
     substitutions.extend(cohost_resource_substitutions(&get)?);
@@ -865,24 +865,55 @@ where
     non_empty_env(ARCHIVES_SCHEDULE_ENV, get).as_deref() == Some("true")
 }
 
+const ARCHIVE_WRITE_ONLY_CONFIG: &str = "NAVIGATOR_ARCHIVE_WRITE_ONLY_CONFIG";
+const ARCHIVE_WRITE_ONLY_CONFIG_PATH: &str =
+    "/var/lib/navigator/iceberg/config/archive-config.json";
+const ARCHIVE_WRITE_ONLY_OBJECTS: &[(&str, &str)] = &[
+    ("configmap", "navigator-archive-write-only"),
+    ("persistentvolumeclaim", "navigator-archive-iceberg"),
+];
+
+fn write_only_archives<F>(get: &F) -> Result<bool>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let Some(path) = non_empty_env(ARCHIVE_WRITE_ONLY_CONFIG, get) else {
+        return Ok(false);
+    };
+    ensure!(
+        archives_on_dbos(get),
+        "{ARCHIVE_WRITE_ONLY_CONFIG} requires {ARCHIVES_SCHEDULE_ENV} = true"
+    );
+    ensure!(path == ARCHIVE_WRITE_ONLY_CONFIG_PATH, "{ARCHIVE_WRITE_ONLY_CONFIG} must name the persistent deployment configuration path {ARCHIVE_WRITE_ONLY_CONFIG_PATH}");
+    ensure!(
+        non_empty_env("NAVIGATOR_ARCHIVE_SOURCE", get).is_none_or(|source| source == "postgres"),
+        "write-only Archives requires a PostgreSQL source"
+    );
+    Ok(true)
+}
+
 /// Archives on DBOS exports PostgreSQL from `web`, so it needs `web`'s
 /// PostgreSQL connection beside the executor. Its patch adds the read-only
 /// archive login and the coverage manifest; off, both placeholders render
 /// empty and the tree is unchanged.
-fn archives_substitutions<F>(get: &F) -> Vec<Substitution>
+fn archives_substitutions<F>(get: &F) -> Result<Vec<Substitution>>
 where
     F: Fn(&str) -> Option<String>,
 {
     let enabled = archives_on_dbos(get);
-    vec![
+    let write_only = write_only_archives(get)?;
+    let mut patches = String::new();
+    if enabled {
+        patches.push_str("  - path: postgres/web/web-archives.yaml\n    target:\n      kind: Deployment\n      name: navigator-web\n");
+    }
+    if write_only {
+        patches.push_str("  - path: postgres/web/web-archives-write-only.yaml\n    target:\n      kind: Deployment\n      name: navigator-web\n");
+    }
+    Ok(vec![
         Substitution {
             token: ARCHIVES_WEB_PATCH_TOKEN,
             env: ARCHIVES_SCHEDULE_ENV,
-            value: if enabled {
-                "  - path: postgres/web/web-archives.yaml\n    target:\n      kind: Deployment\n      name: navigator-web\n".into()
-            } else {
-                String::new()
-            },
+            value: patches,
         },
         Substitution {
             token: ARCHIVES_COVERAGE_RESOURCE_TOKEN,
@@ -893,7 +924,7 @@ where
                 String::new()
             },
         },
-    ]
+    ])
 }
 
 /// The whole-line placeholder in `web-dbos.yaml` that becomes the schedule
@@ -2136,21 +2167,29 @@ const ORDERED_SERVICE_OBJECTS: &[(&str, &str)] = &[
     ("secret", "navigator-forgejo-oidc"),
 ];
 
-/// Read object names only: `kubectl get secret -o name` never returns Secret
-/// data. These cluster-owned inputs must exist before the first apply.
+/// Check prerequisite names without reading Secret data. Write-only Archives
+/// also validates its non-secret configuration and shared persistent claim.
+/// These cluster-owned inputs must exist before the first apply.
 fn ensure_ordered_service_objects(
     cfg: &ShipConfig,
     dry_run: bool,
     dbos: bool,
     archives: bool,
+    write_only: bool,
 ) -> Result<()> {
     let required = ORDERED_SERVICE_OBJECTS
         .iter()
         .copied()
         .chain(dbos.then_some(DBOS_SERVICE_OBJECT))
-        .chain(archives.then_some(ARCHIVES_SERVICE_OBJECT));
+        .chain(archives.then_some(ARCHIVES_SERVICE_OBJECT))
+        .chain(
+            ARCHIVE_WRITE_ONLY_OBJECTS
+                .iter()
+                .copied()
+                .filter(|_| write_only),
+        );
     if dry_run {
-        eprintln!("DRY-RUN: would verify service Secret/ConfigMap names before apply");
+        eprintln!("DRY-RUN: would verify service prerequisites and archive storage before apply");
         return Ok(());
     }
     let mut missing = Vec::new();
@@ -2171,6 +2210,48 @@ fn ensure_ordered_service_objects(
         missing.is_empty(),
         "ordered release prerequisites are missing in the target namespace: {}. Provision them through the deployment's approved secret/configuration path before retrying; no resources were applied",
         missing.join(", ")
+    );
+    if write_only {
+        let read = |kind: &str, name: &str| -> Result<serde_json::Value> {
+            let output = kubectl(cfg)
+                .args(["get", kind, name, "-o", "json"])
+                .output()?;
+            ensure!(
+                output.status.success(),
+                "cannot inspect archive {kind}/{name}"
+            );
+            Ok(serde_json::from_slice(&output.stdout)?)
+        };
+        let configuration = read("configmap", "navigator-archive-write-only")?;
+        let claim = read("persistentvolumeclaim", "navigator-archive-iceberg")?;
+        ensure_write_only_archive_mounts(&configuration, &claim)?;
+    }
+    Ok(())
+}
+
+fn ensure_write_only_archive_mounts(
+    configuration: &serde_json::Value,
+    claim: &serde_json::Value,
+) -> Result<()> {
+    let json = configuration["data"]["archive-config.json"]
+        .as_str()
+        .context("archive ConfigMap requires archive-config.json")?;
+    let config: archives::write_only::operations::Config =
+        serde_json::from_str(json).context("invalid write-only archive configuration")?;
+    config.validate()?;
+    ensure!(
+        config.local_root == Path::new("/var/lib/navigator/iceberg/data"),
+        "archive local_root must use the persistent mount /var/lib/navigator/iceberg/data"
+    );
+    ensure!(
+        claim["status"]["phase"] == "Bound",
+        "archive PVC must be Bound before release"
+    );
+    ensure!(
+        claim["spec"]["accessModes"]
+            .as_array()
+            .is_some_and(|modes| modes.iter().any(|mode| mode == "ReadWriteMany")),
+        "archive PVC requires ReadWriteMany for replicas and rolling updates"
     );
     Ok(())
 }
@@ -4345,6 +4426,7 @@ fn roll(
         dry_run,
         dbos_enabled(deployment),
         archives_enabled(deployment),
+        write_only_archives(&|key: &str| deployment.coordinates.get(key).cloned())?,
     )?;
     // 4c. Request the shared Firm certificate for this build's brand hosts
     //     now, so Google issues it while the release rolls, and keep the one
@@ -8789,6 +8871,93 @@ mod tests {
             rendered_manifests(with_schedules(Some("true"), Some("false"), Some("true")));
         assert!(renders_cronjob(&manifests, "general-nag"));
         assert!(!renders_cronjob(&manifests, "dri-digest-trigger"));
+    }
+
+    #[test]
+    fn write_only_archives_mounts_persistent_receipts_and_read_only_configuration() {
+        let selected = |key: &str| match key {
+            NAVIGATOR_DBOS_ENABLED | ARCHIVES_SCHEDULE_ENV => Some("true".to_owned()),
+            ARCHIVE_WRITE_ONLY_CONFIG => Some(ARCHIVE_WRITE_ONLY_CONFIG_PATH.to_owned()),
+            _ => native_ship_env(key),
+        };
+        let manifests = rendered_manifests(selected);
+        let web = manifest_doc(&manifests, "Deployment", WEB_DEPLOYMENT);
+        assert_eq!(
+            web_env_value(&web, ARCHIVE_WRITE_ONLY_CONFIG).as_deref(),
+            Some(ARCHIVE_WRITE_ONLY_CONFIG_PATH)
+        );
+        let pod = &web["spec"]["template"]["spec"];
+        let volumes = pod["volumes"].as_sequence().unwrap();
+        let data = volumes
+            .iter()
+            .find(|v| v["name"] == "archive-iceberg")
+            .unwrap();
+        assert_eq!(
+            data["persistentVolumeClaim"]["claimName"],
+            "navigator-archive-iceberg"
+        );
+        assert!(data.get("emptyDir").is_none());
+        let config = volumes
+            .iter()
+            .find(|v| v["name"] == "archive-write-only-config")
+            .unwrap();
+        assert_eq!(config["configMap"]["name"], "navigator-archive-write-only");
+        let mounts = pod["containers"][0]["volumeMounts"].as_sequence().unwrap();
+        let config = mounts
+            .iter()
+            .find(|v| v["name"] == "archive-write-only-config")
+            .unwrap();
+        assert_eq!(config["readOnly"], true);
+        assert!(!renders_cronjob(&manifests, "archives-trigger"));
+        assert!(!renders_cronjob(&manifests, "surreal-archive"));
+    }
+
+    #[test]
+    fn write_only_archives_requires_shared_bound_storage_at_the_configured_root() {
+        let config = |root: &str| {
+            serde_json::json!({"data": {"archive-config.json": serde_json::json!({
+            "format_version": 1,
+            "local_root": root,
+            "source_project_number": null,
+            "source_identity_sha256": "ab".repeat(32),
+            "capture": {"scope": "registered_navigator"},
+            "destinations": []
+        }).to_string()}})
+        };
+        let claim = serde_json::json!({"status": {"phase": "Bound"}, "spec": {"accessModes": ["ReadWriteMany"]}});
+        let mounted = config("/var/lib/navigator/iceberg/data");
+        ensure_write_only_archive_mounts(&mounted, &claim).unwrap();
+        assert!(ensure_write_only_archive_mounts(&config("/tmp/iceberg"), &claim).is_err());
+        for invalid in [
+            serde_json::json!({"status": {"phase": "Pending"}, "spec": {"accessModes": ["ReadWriteMany"]}}),
+            serde_json::json!({"status": {"phase": "Bound"}, "spec": {"accessModes": ["ReadWriteOnce"]}}),
+        ] {
+            assert!(ensure_write_only_archive_mounts(&mounted, &invalid).is_err());
+        }
+        assert!(ensure_write_only_archive_mounts(
+            &serde_json::json!({"data": {"archive-config.json": "invalid"}}),
+            &claim
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn write_only_archives_refuses_unmounted_paths_and_source_engines() {
+        for (enabled, path, source) in [
+            (false, ARCHIVE_WRITE_ONLY_CONFIG_PATH, "postgres"),
+            (true, "/tmp/archive-config.json", "postgres"),
+            (true, ARCHIVE_WRITE_ONLY_CONFIG_PATH, "surreal"),
+        ] {
+            let get = |key: &str| match key {
+                ARCHIVES_SCHEDULE_ENV => Some(enabled.to_string()),
+                ARCHIVE_WRITE_ONLY_CONFIG => Some(path.to_owned()),
+                "NAVIGATOR_ARCHIVE_SOURCE" => Some(source.to_owned()),
+                _ => None,
+            };
+            assert!(archives_substitutions(&get).is_err());
+        }
+        let absent = archives_substitutions(&|_| None).unwrap();
+        assert!(absent.iter().all(|sub| sub.value.is_empty()));
     }
 
     /// Archives on DBOS moves to `web` with everything its whole-database
@@ -13988,7 +14157,7 @@ spec:
         wait_statefulset(&cfg, true, "navigator-postgres", ROLLOUT_TIMEOUT).unwrap();
         wait_job(&cfg, true, "navigator-migrate", "15m").unwrap();
         retire_automatic_mirror_recovery(&cfg, true).unwrap();
-        ensure_ordered_service_objects(&cfg, true, true, true).unwrap();
+        ensure_ordered_service_objects(&cfg, true, true, true, true).unwrap();
         retire_dbos_hosted_cronjobs(&cfg, true, &ordered_deployment()).unwrap();
         retire_firm_only_brand_certificates(&cfg, true).unwrap();
         ensure_manifest_images_published(

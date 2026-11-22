@@ -1,0 +1,34 @@
+# Operator-provisioned configuration and persistent receipts for DBOS Archives.
+# The claim must support concurrent mounts during rolling updates and replicas.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: navigator-web
+  namespace: navigator
+spec:
+  template:
+    spec:
+      securityContext:
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+      containers:
+        - name: web
+          env:
+            - name: NAVIGATOR_ARCHIVE_WRITE_ONLY_CONFIG
+              value: /var/lib/navigator/iceberg/config/archive-config.json
+          volumeMounts:
+            - name: archive-write-only-config
+              mountPath: /var/lib/navigator/iceberg/config
+              readOnly: true
+            - name: archive-iceberg
+              mountPath: /var/lib/navigator/iceberg/data
+      volumes:
+        - name: archive-write-only-config
+          configMap:
+            name: navigator-archive-write-only
+            items:
+              - key: archive-config.json
+                path: archive-config.json
+        - name: archive-iceberg
+          persistentVolumeClaim:
+            claimName: navigator-archive-iceberg
