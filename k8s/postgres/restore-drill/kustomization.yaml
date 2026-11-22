@@ -15,7 +15,7 @@ configMapGenerator:
 images:
   - name: navigator/postgres
     newName: ghcr.io/neon-law/navigator/postgres
-    digest: sha256:1978da25d0d797ebdd92a6fac7085921940f0e69b7db78c0f2f2473a65ee214c
+    digest: sha256:c461784792a21b6d9a47081d063652c7008a53dcb15d755d759c911186e85f42
   - name: google-cloud-cli
     newName: gcr.io/google.com/cloudsdktool/google-cloud-cli
     digest: sha256:3c896827b5c09da0f9e4adfd0211f4493e53c622ac04bdf37fd38fbb583f5fc1
