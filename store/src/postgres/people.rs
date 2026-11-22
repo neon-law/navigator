@@ -421,7 +421,9 @@ pub(crate) async fn link_subject(
         return Err(PersonError::Postgres("unsupported provider subject".into()));
     }
     let sql = if adopt_legacy {
-        format!("UPDATE person SET {column}=$2, oidc_subject=NULL, updated_at=now() WHERE id=$1 AND oidc_subject=$2 RETURNING {COLUMNS}")
+        format!(
+            "UPDATE person SET {column}=$2, oidc_subject=NULL, updated_at=now() WHERE id=$1 AND oidc_subject=$2 RETURNING {COLUMNS}"
+        )
     } else {
         format!("UPDATE person SET {column}=$2, updated_at=now() WHERE id=$1 RETURNING {COLUMNS}")
     };
@@ -583,11 +585,7 @@ const MERGE_UNIQUE_LINKS: &[(&str, &[&str])] = &[
     ("person_calendar", &["calendar_id"]),
 ];
 
-/// Fold `drop_id` into `keep_id` in one transaction: every PostgreSQL row
-/// that links the dropped Person moves to the kept Person, the kept Person
-/// takes each provider subject it lacks and every mailbox claim, and the
-/// dropped row is deleted last. Links come from catalog foreign keys and the
-/// canonical import metadata for authoritative tables that accept historical orphans.
+/// Keep the retained Person's primary calendar when moving a duplicate's calendars.
 async fn demote_merged_calendar_primary(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     keep_id: Uuid,
@@ -605,12 +603,39 @@ async fn demote_merged_calendar_primary(
     Ok(())
 }
 
-/// Commit the identity and reference merge under the same Person writer locks.
+async fn ensure_no_retained_identity_evidence(
+    connection: &mut sqlx::PgConnection,
+    dropped: Uuid,
+) -> Result<(), crate::person_merge::PersonMergeError> {
+    let retained: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM billing_annotation WHERE attorney_id=$1 OR reviewed_by=$1)",
+    )
+    .bind(dropped)
+    .fetch_one(&mut *connection)
+    .await
+    .map_err(database)?;
+    if retained {
+        return Err(crate::person_merge::PersonMergeError::RetainedBillingHistory);
+    }
+    let retained_claim: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM legal_plan_claim_event WHERE actor_id=$1)")
+            .bind(dropped)
+            .fetch_one(connection)
+            .await
+            .map_err(database)?;
+    if retained_claim {
+        return Err(crate::person_merge::PersonMergeError::RetainedClaimHistory);
+    }
+    Ok(())
+}
+
+/// Lock both Persons and validate merge eligibility for the caller-owned transaction.
 async fn lock_merge_people(
     tx: &mut Transaction<'_, Postgres>,
     keep_id: Uuid,
     drop_id: Uuid,
-) -> Result<(), crate::person_merge::PersonMergeError> {
+    actor: Option<Role>,
+) -> Result<Role, crate::person_merge::PersonMergeError> {
     let mut locked = [keep_id, drop_id];
     locked.sort();
     for id in locked {
@@ -638,6 +663,11 @@ async fn lock_merge_people(
     if dropped.1 != Role::Client.as_str() {
         return Err(crate::person_merge::PersonMergeError::Blocked);
     }
+    let kept_role = Role::parse(&keep.1)
+        .ok_or_else(|| PersonError::Postgres("the kept Person has an invalid role".into()))?;
+    if let Some(actor) = actor {
+        crate::person_merge::require_identity_governance(actor, kept_role)?;
+    }
     // Imported rows can predate mailbox claims. Preserve both primaries as
     // claims before moving links, without taking another Person's capability.
     for (email, owner) in [(&keep.2, keep_id), (&dropped.2, drop_id)] {
@@ -650,16 +680,16 @@ async fn lock_merge_people(
             return Err(PersonError::EmailTaken.into());
         }
     }
-    Ok(())
+    Ok(kept_role)
 }
 
-/// Move financial Person links; relationship projection remains a separate merge concern.
-async fn relink_financial_person_links(
+/// Rewrite typed Person links without replacing their row or other JSON fields.
+async fn relink_tagged_people(
     transaction: &mut Transaction<'_, Postgres>,
     keep_id: Uuid,
     drop_id: Uuid,
 ) -> Result<(), PersonError> {
-    for (table, column) in crate::postgres_mirror::records::financial_tagged_person_links() {
+    for (table, column) in crate::postgres_mirror::records::authoritative_tagged_person_links() {
         sqlx::query(AssertSqlSafe(format!(
             "UPDATE \"{table}\" SET \"{column}\" = jsonb_set(\"{column}\", '{{id,Uuid}}', to_jsonb($1::text), false) WHERE \"{column}\"->>'tb'='person' AND \"{column}\"->'id'->>'Uuid'=$2::text"
         )))
@@ -673,8 +703,18 @@ pub(crate) async fn merge_rows(
     keep_id: Uuid,
     drop_id: Uuid,
 ) -> Result<(), crate::person_merge::PersonMergeError> {
+    merge_rows_with_actor(pg, keep_id, drop_id, None).await
+}
+
+async fn merge_rows_with_actor(
+    pg: &PostgresDb,
+    keep_id: Uuid,
+    drop_id: Uuid,
+    actor: Option<Role>,
+) -> Result<(), crate::person_merge::PersonMergeError> {
     let mut tx = pg.0.begin().await.map_err(database)?;
-    lock_merge_people(&mut tx, keep_id, drop_id).await?;
+    let kept_role = lock_merge_people(&mut tx, keep_id, drop_id, actor).await?;
+    ensure_no_retained_identity_evidence(&mut tx, drop_id).await?;
     for flag in ["is_lawyer_dri", "is_client_dri"] {
         sqlx::query(AssertSqlSafe(format!(
             "UPDATE person_project_role SET {flag} = true WHERE person_id = $1 AND project_id IN \
@@ -749,9 +789,21 @@ pub(crate) async fn merge_rows(
     .execute(&mut *tx)
     .await
     .map_err(database)?;
-    relink_financial_person_links(&mut tx, keep_id, drop_id).await?;
+    sqlx::query("UPDATE person_project_role SET participation=$1 WHERE person_id=$2")
+        .bind(crate::projects::participation_for_role(kept_role))
+        .bind(keep_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(database)?;
+    relink_tagged_people(&mut tx, keep_id, drop_id).await?;
     move_subjects(&mut tx, keep_id, drop_id).await?;
     sqlx::query("DELETE FROM person WHERE id = $1")
+        .bind(drop_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(database)?;
+    sqlx::query("SELECT public.graph_merge_person($1,$2)")
+        .bind(keep_id)
         .bind(drop_id)
         .execute(&mut *tx)
         .await
@@ -765,8 +817,12 @@ pub(crate) async fn merge(
     _db: &SurrealDb,
     keep_id: Uuid,
     drop_id: Uuid,
+    actor: Option<Role>,
 ) -> Result<(), crate::person_merge::PersonMergeError> {
-    merge_rows(pg, keep_id, drop_id).await?;
+    match actor {
+        Some(actor) => merge_rows_with_actor(pg, keep_id, drop_id, Some(actor)).await?,
+        None => merge_rows(pg, keep_id, drop_id).await?,
+    }
     Ok(())
 }
 

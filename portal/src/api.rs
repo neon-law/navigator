@@ -1622,13 +1622,27 @@ async fn merge_people(
         )
             .into_response();
     }
-    match store::person_merge::merge_by_email(&state.surreal, &input.keep, &input.drop).await {
+    match store::person_merge::merge_by_email_as_actor(
+        &state.surreal,
+        &input.keep,
+        &input.drop,
+        session.role,
+    )
+    .await
+    {
         Ok(report) => Json(report).into_response(),
         Err(error) => {
             let (status, code) = match &error {
+                PersonMergeError::Governance => (StatusCode::FORBIDDEN, "identity_governance"),
                 PersonMergeError::SameRecord => (StatusCode::BAD_REQUEST, "same_person"),
                 PersonMergeError::NotFound(_) => (StatusCode::NOT_FOUND, "not_found"),
                 PersonMergeError::Blocked => (StatusCode::CONFLICT, "blocked"),
+                PersonMergeError::RetainedBillingHistory => {
+                    (StatusCode::CONFLICT, "retained_billing_history")
+                }
+                PersonMergeError::RetainedClaimHistory => {
+                    (StatusCode::CONFLICT, "retained_claim_history")
+                }
                 PersonMergeError::Person(_)
                 | PersonMergeError::Db(_)
                 | PersonMergeError::Project(_) => {

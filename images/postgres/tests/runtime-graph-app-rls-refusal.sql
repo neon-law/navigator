@@ -8,4 +8,9 @@ DO $$ BEGIN
   PERFORM graph_ensure_vertices('person','{"rows":[]}');
   RAISE EXCEPTION 'owner projector bypassed RLS';
  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN
+  PERFORM graph_merge_person('a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c1'::uuid,
+                            'a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c2'::uuid);
+  RAISE EXCEPTION 'merge projector bypassed RLS';
+ EXCEPTION WHEN insufficient_privilege THEN NULL; END;
 END $$;

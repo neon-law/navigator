@@ -5,9 +5,9 @@
 //! the Conflict-Check Graph splits their relationships across both.
 //! [`merge`] folds the duplicate into the Person to keep.
 //!
-//! Under PostgreSQL People authority the SurrealDB records move first, then
-//! one PostgreSQL transaction moves every row that links the dropped Person
-//! and deletes it.
+//! PostgreSQL People authority moves relational and tagged references, derives
+//! participation from the kept Person's tier, and maintains the AGE projection
+//! in one transaction. The explicit Source compatibility path remains separate.
 
 use uuid::Uuid;
 
@@ -25,8 +25,19 @@ pub enum PersonMergeError {
     #[error("no such Person: {0}")]
     NotFound(String),
     /// The drop Person is not a client; privileged tiers are edit-only.
-    #[error("only a client Person can be merged away; Owner, admin, lawyer, and clerk people are edit-only")]
+    #[error(
+        "only a client Person can be merged away; Owner, admin, lawyer, and clerk people are edit-only"
+    )]
     Blocked,
+    /// The actor may not govern the kept identity's system tier.
+    #[error("your system role cannot govern this identity merge")]
+    Governance,
+    /// Immutable billing author or reviewer evidence retains the dropped identity.
+    #[error("immutable billing history prevents merging this Person")]
+    RetainedBillingHistory,
+    /// Immutable Legal Plan Claim evidence retains the dropped actor identity.
+    #[error("immutable Legal Plan Claim history prevents merging this Person")]
+    RetainedClaimHistory,
     /// A Person read or write failed.
     #[error(transparent)]
     Person(#[from] PersonError),
@@ -196,6 +207,28 @@ pub async fn merge_by_email(
     keep: &str,
     dropped: &str,
 ) -> Result<PersonMergeReport, PersonMergeError> {
+    merge_by_email_with_actor(db, keep, dropped, None).await
+}
+
+/// Merge through an actor-facing command using the existing identity-governance ladder.
+///
+/// # Errors
+/// Refuses an actor below the kept identity; native rechecks under the Person writer locks.
+pub async fn merge_by_email_as_actor(
+    db: &SurrealDb,
+    keep: &str,
+    dropped: &str,
+    actor: persons::Role,
+) -> Result<PersonMergeReport, PersonMergeError> {
+    merge_by_email_with_actor(db, keep, dropped, Some(actor)).await
+}
+
+async fn merge_by_email_with_actor(
+    db: &SurrealDb,
+    keep: &str,
+    dropped: &str,
+    actor: Option<persons::Role>,
+) -> Result<PersonMergeReport, PersonMergeError> {
     let find = |email: &str| {
         let email = email.to_string();
         async move {
@@ -206,17 +239,16 @@ pub async fn merge_by_email(
     };
     let keep = find(keep).await?;
     let dropped = find(dropped).await?;
-    merge(db, keep.id, dropped.id).await
+    merge_with_actor(db, keep.id, dropped.id, actor).await
 }
 
-/// Fold `drop_id` into `keep_id`: every relationship the dropped Person held
-/// moves to the kept Person, the kept Person answers to both addresses, and
-/// the duplicate row is deleted last.
+/// Fold `drop_id` into `keep_id`: relationships and mailbox claims move to
+/// the kept Person. Application merges delete the duplicate relational row
+/// and converge the AGE graph in the same PostgreSQL transaction.
 ///
 /// Only a client Person can be dropped, matching
-/// [`crate::people_commands::delete_person`]. Nothing is deleted until the
-/// relationships have moved, so a failure leaves both Persons in place and
-/// the merge can be run again.
+/// [`crate::people_commands::delete_person`]. An application refusal or failure
+/// rolls back the transaction, leaving both Persons and their evidence in place.
 ///
 /// # Errors
 ///
@@ -225,6 +257,25 @@ pub async fn merge(
     db: &SurrealDb,
     keep_id: Uuid,
     drop_id: Uuid,
+) -> Result<PersonMergeReport, PersonMergeError> {
+    merge_with_actor(db, keep_id, drop_id, None).await
+}
+
+pub(crate) fn require_identity_governance(
+    actor: persons::Role,
+    kept: persons::Role,
+) -> Result<(), PersonMergeError> {
+    if !actor.is_lawyer_tier() || kept.authority_rank() > actor.authority_rank() {
+        return Err(PersonMergeError::Governance);
+    }
+    Ok(())
+}
+
+async fn merge_with_actor(
+    db: &SurrealDb,
+    keep_id: Uuid,
+    drop_id: Uuid,
+    actor: Option<persons::Role>,
 ) -> Result<PersonMergeReport, PersonMergeError> {
     if keep_id == drop_id {
         return Err(PersonMergeError::SameRecord);
@@ -238,8 +289,14 @@ pub async fn merge(
     if dropped.role != persons::Role::Client {
         return Err(PersonMergeError::Blocked);
     }
+    if let Some(actor) = actor {
+        require_identity_governance(actor, keep.role)?;
+    }
     if let Some(pg) = persons::postgres_authority().await? {
-        Box::pin(crate::postgres::people::merge(&pg, db, keep_id, drop_id)).await?;
+        Box::pin(crate::postgres::people::merge(
+            &pg, db, keep_id, drop_id, actor,
+        ))
+        .await?;
         let mut emails = persons::aliases(db, keep_id).await?;
         emails.push(keep.email.trim().to_lowercase());
         emails.sort();
@@ -249,6 +306,11 @@ pub async fn merge(
             dropped_id: drop_id,
             emails,
         });
+    }
+
+    // Explicit Source maintenance keeps its trusted capability; actor-facing writes are native-only.
+    if actor.is_some() {
+        return Err(PersonMergeError::Governance);
     }
 
     // Participation rows the relink rewrites or deletes, so the Project
@@ -276,7 +338,10 @@ pub async fn merge(
     .await?;
     crate::projects::publish_participations(db, participations).await?;
     if let Some(pg) = persons::postgres_authority().await? {
-        Box::pin(crate::postgres::people::merge(&pg, db, keep_id, drop_id)).await?;
+        Box::pin(crate::postgres::people::merge(
+            &pg, db, keep_id, drop_id, actor,
+        ))
+        .await?;
     } else {
         crate::postgres_mirror::after_write(db, MirrorKey::PersonMailbox(keep_id)).await;
         persons::delete(db, drop_id).await?;
@@ -447,7 +512,10 @@ mod tests {
             db.query(sql)
                 .bind(("p", record_id("person", drop.id)))
                 .bind(("e", entity.clone()))
-                .await.unwrap().check().unwrap();
+                .await
+                .unwrap()
+                .check()
+                .unwrap();
         }
 
         merge(&db, keep.id, drop.id).await.unwrap();
