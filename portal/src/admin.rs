@@ -297,6 +297,10 @@ pub fn routes(
             post(crate::inbox::triage_rerun_post),
         )
         .route(
+            "/app/plan-intake/{staged_id}/resolve-member",
+            post(crate::plan_intake::plan_resolve_member_post),
+        )
+        .route(
             "/app/plan-intake/{staged_id}/accept",
             post(crate::plan_intake::plan_accept_post),
         )

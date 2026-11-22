@@ -5067,8 +5067,7 @@ pub fn triage_queue_router(
     )
 }
 
-/// `/app/plan-intake` — the plan-assignment review queue. Firm-tier only:
-/// Owner, Admin, Lawyer, and Clerk; the doors re-check the actor.
+/// `/app/plan-intake` — the Firm’s lawyer-scoped plan assignment review queue.
 pub fn plan_intake_router(
     sessions: crate::session::SessionStore,
     policy: crate::policy::PolicyClient,

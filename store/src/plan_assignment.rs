@@ -146,6 +146,8 @@ pub struct Assignment {
 pub enum PlanAssignmentError {
     #[error("the plan notice has no `{0}`")]
     Missing(&'static str),
+    #[error("the plan notice contains conflicting case numbers")]
+    ConflictingCaseNumbers,
 }
 
 /// Parse a notice from a sender already resolved to `provider`.
@@ -160,8 +162,15 @@ pub fn parse(
     text: &str,
 ) -> Result<Assignment, PlanAssignmentError> {
     let body = flatten(text);
-    let case_number = case_number(provider, subject)
-        .or_else(|| case_number(provider, &body))
+    let subject_case = case_number(provider, subject);
+    let body_case = case_number(provider, &body);
+    if let (Some(subject), Some(body)) = (&subject_case, &body_case) {
+        if !subject.eq_ignore_ascii_case(body) {
+            return Err(PlanAssignmentError::ConflictingCaseNumbers);
+        }
+    }
+    let case_number = subject_case
+        .or(body_case)
         .ok_or(PlanAssignmentError::Missing("case number"))?;
     let mut assignment = Assignment {
         provider,
@@ -180,6 +189,11 @@ pub fn parse(
             // attorney services in your area for <matter>."
             assignment.member_name = between(&body, "attorneys that ", " has requested");
             assignment.matter_type = between(&body, "in your area for ", ".");
+            assignment.member_number = token_after(&body, "member id");
+            assignment.plan_number = token_after(&body, "certificate number");
+            assignment.contact_email = field(text, "member email");
+            assignment.state =
+                field(text, "legal matter state").map(|value| value.to_ascii_lowercase());
         }
         PlanProvider::LegalEase => {
             // Subject: "… Member Case #400001: <member> - <matter>".
@@ -191,6 +205,8 @@ pub fn parse(
                 assignment.matter_type = non_empty(matter);
             }
             assignment.member_number = token_after(&body, "member id");
+            assignment.plan_number = token_after(&body, "certificate number");
+            assignment.contact_email = field(text, "member email");
             assignment.effective_date =
                 token_after(&body, "plan effective date").and_then(|value| date(&value));
             // The Personal Details table prints a "Legal Matter State" row.
@@ -432,6 +448,32 @@ mod tests {
         assert_eq!(notice.effective_date.unwrap().to_string(), "2026-11-04");
         assert_eq!(notice.contact_email.as_deref(), Some("riley@example.com"));
         assert_eq!(notice.state.as_deref(), Some("ny"));
+    }
+
+    #[test]
+    fn a_notice_with_conflicting_subject_and_body_case_numbers_needs_review() {
+        assert_eq!(
+            parse(
+                PlanProvider::LegalEase,
+                "Member Case #400001",
+                "Case ID: 400002"
+            ),
+            Err(PlanAssignmentError::ConflictingCaseNumbers),
+        );
+    }
+
+    #[test]
+    fn the_provider_case_member_and_certificate_are_separate() {
+        let notice = parse(
+            PlanProvider::Arag,
+            "CaseAssist #4900000-001",
+            "Member ID: MEMBER-2\nCertificate Number: CERT-7\nMember Email: member@example.com",
+        )
+        .unwrap();
+        assert_eq!(notice.case_number, "4900000-001");
+        assert_eq!(notice.member_number.as_deref(), Some("MEMBER-2"));
+        assert_eq!(notice.plan_number.as_deref(), Some("CERT-7"));
+        assert_eq!(notice.contact_email.as_deref(), Some("member@example.com"));
     }
 
     #[test]

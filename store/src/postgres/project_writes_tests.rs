@@ -140,6 +140,7 @@ async fn opening_a_matter_writes_the_project_and_both_dri_rows_together() {
     let lawyer = insert_person(&pg, "lawyer").await;
     let client = insert_person(&pg, "client").await;
     let open = |project| OpenMatter {
+        id: None,
         project,
         closed_at: Some("2026-11-01T00:00:00Z"),
         lawyer,

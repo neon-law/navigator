@@ -3570,3 +3570,17 @@ test_legal_plan_collections_require_lawyer_tier if {
     not authz.allow with input as {"path": path, "method": "GET", "session": client_session}
     not authz.allow with input as {"path": path, "method": "GET", "session": clerk_session}
 }
+
+test_plan_intake_admits_lawyers_to_review_and_decide if {
+	authz.allow with input as {"path": ["app", "plan-intake"], "method": "GET", "session": lawyer_session}
+	every action in ["resolve-member", "accept", "decline"] {
+		authz.allow with input as {"path": ["app", "plan-intake", "notice", action], "method": "POST", "session": lawyer_session}
+	}
+}
+
+test_plan_intake_refuses_non_lawyers if {
+	every session in [client_session, clerk_session, null] {
+		not authz.allow with input as {"path": ["app", "plan-intake"], "method": "GET", "session": session}
+		not authz.allow with input as {"path": ["app", "plan-intake", "notice", "accept"], "method": "POST", "session": session}
+	}
+}

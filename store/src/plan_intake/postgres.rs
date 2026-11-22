@@ -3,13 +3,23 @@
 //! unique `source_message_id`; a decision applies only to a row still
 //! `staged`, so two racing decisions cannot both land.
 
-use sqlx::{postgres::PgRow, Row};
+use sqlx::{postgres::PgRow, Connection, PgConnection, Row};
 use uuid::Uuid;
 
-use super::{PlanIntakeError, StagedAssignment, StagedRow, Status, SELECT, TABLE};
+use super::{PlanIntakeError, StagedAssignment, StagedRow, Status, TABLE};
 use crate::postgres::PostgresDb;
 use crate::postgres_backfill::Copied;
 use crate::surreal::SurrealDb;
+
+const SELECT: &str = concat!(
+    "plan_case_number, notice_matter_type, take_started_at, ",
+    "id, firm_id, conversation_id, source_message_id, provider, member_name, ",
+    "member_email, member_person_id, member_entity_id, plan_member_id, benefit_code, plan_number, ",
+    "plan_matter_type, plan_state, assigned_at, legal_plan_id, legal_plan_name, plan_portal_only, ",
+    "fee_covered_benefit, fee_plan_fee_cents, fee_supplemental_flat_cents, ",
+    "fee_supplemental_hourly_cents, fee_effective_on, conflict_summary, conflict_blocking, ",
+    "conflict_checked, status, project_id, accepted_by, decided_at, decline_reason, inserted_at, updated_at"
+);
 
 fn staged(row: &PgRow) -> Result<StagedAssignment, sqlx::Error> {
     let summary: String = row.try_get("conflict_summary")?;
@@ -26,6 +36,8 @@ fn staged(row: &PgRow) -> Result<StagedAssignment, sqlx::Error> {
         plan_member_id: row.try_get("plan_member_id")?,
         benefit_code: row.try_get("benefit_code")?,
         plan_number: row.try_get("plan_number")?,
+        plan_case_number: row.try_get("plan_case_number")?,
+        notice_matter_type: row.try_get("notice_matter_type")?,
         plan_matter_type: row.try_get("plan_matter_type")?,
         plan_state: row.try_get("plan_state")?,
         assigned_at: row.try_get("assigned_at")?,
@@ -48,6 +60,7 @@ fn staged(row: &PgRow) -> Result<StagedAssignment, sqlx::Error> {
         project_id: row.try_get("project_id")?,
         accepted_by: row.try_get("accepted_by")?,
         decided_at: row.try_get("decided_at")?,
+        take_started_at: row.try_get("take_started_at")?,
         decline_reason: row.try_get("decline_reason")?,
         inserted_at: row.try_get("inserted_at")?,
         updated_at: row.try_get("updated_at")?,
@@ -67,9 +80,10 @@ async fn insert(
          legal_plan_name, plan_portal_only, fee_covered_benefit, fee_plan_fee_cents, \
          fee_supplemental_flat_cents, fee_supplemental_hourly_cents, fee_effective_on, \
          conflict_summary, conflict_blocking, conflict_checked, status, project_id, \
-         accepted_by, decided_at, decline_reason, inserted_at, updated_at) \
+         accepted_by, decided_at, decline_reason, inserted_at, updated_at, \
+         plan_case_number, notice_matter_type) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, \
-         $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33) \
+         $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35) \
          ON CONFLICT DO NOTHING RETURNING {SELECT}"
     )))
     .bind(row.id)
@@ -105,6 +119,8 @@ async fn insert(
     .bind(&row.decline_reason)
     .bind(row.inserted_at)
     .bind(row.updated_at)
+    .bind(&row.plan_case_number)
+    .bind(&row.notice_matter_type)
     .fetch_optional(&pg.0)
     .await?
     .as_ref()
@@ -126,6 +142,91 @@ pub(crate) async fn stage(
         .ok_or(PlanIntakeError::WriteReturnedNothing)
 }
 
+// Keep locks on a dedicated connection so waiting decisions cannot exhaust
+// the pool the domain writes use. Disconnect releases the locks, even on error.
+pub(super) async fn lock(pg: &PostgresDb, key: &str) -> Result<PgConnection, PlanIntakeError> {
+    let mut connection = PgConnection::connect_with(&pg.pool().connect_options()).await?;
+    lock_in(&mut connection, key).await?;
+    Ok(connection)
+}
+
+pub(super) async fn lock_in(
+    connection: &mut PgConnection,
+    key: &str,
+) -> Result<(), PlanIntakeError> {
+    sqlx::query("SELECT pg_advisory_lock(hashtextextended($1, 0))")
+        .bind(key)
+        .execute(connection)
+        .await?;
+    Ok(())
+}
+
+pub(super) async fn save_member(
+    pg: &PostgresDb,
+    row: &StagedAssignment,
+) -> Result<(), PlanIntakeError> {
+    sqlx::query(
+        "UPDATE plan_intake SET member_name=$2, member_email=$3, member_person_id=$4,
+         member_entity_id=$5, conflict_summary=$6, conflict_blocking=$7, conflict_checked=$8,
+         updated_at=now() WHERE id=$1 AND status='staged'",
+    )
+    .bind(row.id)
+    .bind(&row.member_name)
+    .bind(&row.member_email)
+    .bind(row.member_person_id)
+    .bind(row.member_entity_id)
+    .bind(row.conflict_summary.join("\n"))
+    .bind(row.conflict_blocking)
+    .bind(row.conflict_checked)
+    .execute(pg.pool())
+    .await?;
+    Ok(())
+}
+
+pub(super) async fn reserve_case(
+    pg: &PostgresDb,
+    row: &StagedAssignment,
+    plan: Uuid,
+    case_number: &str,
+    started_at: chrono::DateTime<chrono::Utc>,
+) -> Result<(), PlanIntakeError> {
+    let duplicate: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM plan_intake WHERE firm_id=$1 AND provider=$2
+             AND lower(plan_case_number)=lower($3) AND id<>$4
+             AND (status='accepted' OR (status='staged' AND take_started_at IS NOT NULL))
+         UNION ALL SELECT 1 FROM project WHERE firm_id=$1 AND legal_plan_id=$5
+             AND lower(plan_case_number)=lower($3) AND id<>$4)",
+    )
+    .bind(row.firm_id)
+    .bind(&row.provider)
+    .bind(case_number)
+    .bind(row.id)
+    .bind(plan)
+    .fetch_one(pg.pool())
+    .await?;
+    if duplicate {
+        return Err(PlanIntakeError::DuplicateCase);
+    }
+    sqlx::query(
+        "UPDATE plan_intake SET plan_case_number=$2, take_started_at=$3
+         WHERE id=$1 AND status='staged'",
+    )
+    .bind(row.id)
+    .bind(case_number)
+    .bind(started_at)
+    .execute(pg.pool())
+    .await?;
+    Ok(())
+}
+
+pub(super) async fn release_case(pg: &PostgresDb, id: Uuid) -> Result<(), PlanIntakeError> {
+    sqlx::query("UPDATE plan_intake SET take_started_at=NULL WHERE id=$1 AND status='staged'")
+        .bind(id)
+        .execute(pg.pool())
+        .await?;
+    Ok(())
+}
+
 /// Record a decision: every column [`super::accept`] or [`super::decline`]
 /// sets, applied only while the row is still staged.
 pub(super) async fn decide(
@@ -137,8 +238,9 @@ pub(super) async fn decide(
          decline_reason = $6, plan_matter_type = $7, plan_state = $8, legal_plan_id = $9, \
          legal_plan_name = $10, plan_portal_only = $11, fee_covered_benefit = $12, \
          fee_plan_fee_cents = $13, fee_supplemental_flat_cents = $14, \
-         fee_supplemental_hourly_cents = $15, fee_effective_on = $16, updated_at = $17 \
-         WHERE id = $1 AND status = $18 RETURNING {SELECT}"
+         fee_supplemental_hourly_cents = $15, fee_effective_on = $16, updated_at = $17, \
+         take_started_at = NULL \
+         WHERE id = $1 AND status = $18 AND ($2 <> 'declined' OR take_started_at IS NULL) RETURNING {SELECT}"
     )))
     .bind(row.id)
     .bind(&row.status)
@@ -223,7 +325,10 @@ pub(crate) async fn copy_from_surreal(
     pg: &PostgresDb,
 ) -> Result<Copied, surrealdb::Error> {
     let rows: Vec<StagedRow> = surreal
-        .query(format!("SELECT {SELECT} FROM {TABLE}"))
+        .query(format!(
+            "SELECT {select} FROM {TABLE}",
+            select = super::SELECT
+        ))
         .await
         .and_then(surrealdb::IndexedResults::check)?
         .take(0)?;

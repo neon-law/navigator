@@ -487,6 +487,9 @@ pub fn triage_queue_body(page: &TriageQueuePage) -> Element {
         }
         main { id: "triage", class: "nav-theme",
             h1 { "{page.title}" }
+            if page.role.is_lawyer_tier() {
+                a { href: crate::plan_intake::PLAN_INTAKE_PATH, "Plan intake" }
+            }
             if page.filing_queued {
                 p { role: "status", "Filing queued." }
             }

@@ -53,7 +53,14 @@ directory. A Firm member without directory access can run `list` with the UUID.
    Unanswered requests expire.
 2. **Selection.** The member chooses the Firm, and the plan confirms it. ARAG sends a CaseAssist confirmation, and
    LegalEASE sends an acceptance notice with the benefit code and claim steps.
-3. **Open the Project and link it.** Run this once the matter is opened:
+3. **Open the Pitch.** In the serving Brand's portal, open **Plan intake** from **Triage review**. Confirm the
+   member's name and verified email if the notice lacks an identified Person. Review conflicts, confirm the Project
+   code, and take the referral after the Firm decides to accept it. The Pitch records the Firm's Legal Plan, the
+   provider's case number, and any member ID. If a staged row lacks a case number, verify it against the original
+   notice. Confirm the type of work or leave it unclassified when the notice does not establish a supported type. Taking
+   the referral sends no correspondence. The lawyer handles provider confirmation and member contact separately.
+
+   To link a plan to an existing Project, use:
 
    ```bash
    navigator project legal-plan set --plan ARAG --case-number <plan case number> \

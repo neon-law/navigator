@@ -8,7 +8,7 @@ use std::sync::OnceLock;
 use super::{embedded_migrator, PostgresDb};
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgConnectOptions;
-use sqlx::{AssertSqlSafe, Row};
+use sqlx::{AssertSqlSafe, PgConnection, Row};
 use uuid::Uuid;
 
 #[cfg(any(test, feature = "test-support"))]
@@ -118,69 +118,77 @@ pub async fn create(
     operation: Uuid,
     tier: TierBinding,
 ) -> Result<CreatedDatabase, OriginError> {
-    create_observed(admin_options, operation, tier, || {}, |_| {}).await
-}
-
-/// Observe acknowledged creation and connected resources without adopting a target.
-async fn create_observed(
-    admin_options: PgConnectOptions,
-    operation: Uuid,
-    tier: TierBinding,
-    mut observe_created: impl FnMut(),
-    mut observe_connection: impl FnMut(&PostgresDb),
-) -> Result<CreatedDatabase, OriginError> {
     tier.validate()?;
     let name = database_name(operation)?;
     let admin = PostgresDb::connect(admin_options.clone())
         .await
         .map_err(|_| OriginError::Creation)?;
-    // Both identifiers derive solely from a validated UUID, not user SQL.
-    let result = sqlx::query(AssertSqlSafe(format!(
-        "CREATE DATABASE \"{name}\" TEMPLATE template0 ALLOW_CONNECTIONS false"
-    )))
-    .execute(admin.pool())
-    .await;
-    if result.is_ok() {
-        observe_created();
-        // Keep runtime roles out until the provisioner deliberately grants them
-        // access after migration and native-origin initialization.
-        let fenced = sqlx::query(AssertSqlSafe(format!(
-            "REVOKE ALL ON DATABASE \"{name}\" FROM PUBLIC"
-        )))
-        .execute(admin.pool())
-        .await;
-        if fenced.is_err() {
-            admin.pool().close().await;
-            return Err(OriginError::Creation);
-        }
-        let opened = sqlx::query(AssertSqlSafe(format!(
-            "ALTER DATABASE \"{name}\" ALLOW_CONNECTIONS true"
-        )))
-        .execute(admin.pool())
-        .await;
-        if opened.is_err() {
-            admin.pool().close().await;
-            return Err(OriginError::Creation);
-        }
+    let result = async {
+        let mut connection = admin
+            .pool()
+            .acquire()
+            .await
+            .map_err(|_| OriginError::Creation)?;
+        create_database_on(&mut connection, &name, || {}).await
     }
+    .await;
     admin.pool().close().await;
-    result.map_err(|_| OriginError::Creation)?;
+    result?;
     let postgres = PostgresDb::connect(admin_options.clone().database(&name))
         .await
         .map_err(|_| OriginError::Creation)?;
-    observe_connection(&postgres);
-    sqlx::query(AssertSqlSafe(format!(
-        "COMMENT ON DATABASE \"{name}\" IS '{}'",
-        marker(operation)
-    )))
-    .execute(postgres.pool())
-    .await?;
+    stamp_creation(postgres.pool(), &name, operation).await?;
     Ok(CreatedDatabase {
         postgres,
         operation,
         tier,
         admin_options,
     })
+}
+
+/// CREATE is exclusive. Report acknowledgement before the later fencing
+/// operations so the owning fixture can clean up only its own resource.
+async fn create_database_on(
+    admin: &mut PgConnection,
+    name: &str,
+    observe_created: impl FnOnce(),
+) -> Result<(), OriginError> {
+    // The database name derives solely from an operation UUID.
+    sqlx::query(AssertSqlSafe(format!(
+        "CREATE DATABASE \"{name}\" TEMPLATE template0 ALLOW_CONNECTIONS false"
+    )))
+    .execute(&mut *admin)
+    .await
+    .map_err(|_| OriginError::Creation)?;
+    observe_created();
+    // Keep runtime roles out until the provisioner deliberately grants them access.
+    sqlx::query(AssertSqlSafe(format!(
+        "REVOKE ALL ON DATABASE \"{name}\" FROM PUBLIC"
+    )))
+    .execute(&mut *admin)
+    .await
+    .map_err(|_| OriginError::Creation)?;
+    sqlx::query(AssertSqlSafe(format!(
+        "ALTER DATABASE \"{name}\" ALLOW_CONNECTIONS true"
+    )))
+    .execute(&mut *admin)
+    .await
+    .map_err(|_| OriginError::Creation)?;
+    Ok(())
+}
+
+async fn stamp_creation<'a>(
+    executor: impl sqlx::Executor<'a, Database = sqlx::Postgres>,
+    name: &str,
+    operation: Uuid,
+) -> Result<(), OriginError> {
+    sqlx::query(AssertSqlSafe(format!(
+        "COMMENT ON DATABASE \"{name}\" IS '{}'",
+        marker(operation)
+    )))
+    .execute(executor)
+    .await?;
+    Ok(())
 }
 
 impl CreatedDatabase {

@@ -15,3 +15,6 @@ nodes:
         hostPort: 15432
         listenAddress: "127.0.0.1"
         protocol: TCP
+  # Route PostgreSQL from the published control-plane port to a worker, as in
+  # the full worktree tier. The ingress policy admits the control-plane address.
+  - role: worker

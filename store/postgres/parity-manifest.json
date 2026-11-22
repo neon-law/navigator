@@ -141,6 +141,27 @@
       "table": "person"
     },
     {
+      "extra_column": "notice_matter_type",
+      "extra_table": null,
+      "missing_column": null,
+      "missing_table": null,
+      "table": "plan_intake"
+    },
+    {
+      "extra_column": "plan_case_number",
+      "extra_table": null,
+      "missing_column": null,
+      "missing_table": null,
+      "table": "plan_intake"
+    },
+    {
+      "extra_column": "take_started_at",
+      "extra_table": null,
+      "missing_column": null,
+      "missing_table": null,
+      "table": "plan_intake"
+    },
+    {
       "extra_column": "entity_id",
       "extra_table": null,
       "missing_column": null,
@@ -5333,6 +5354,8 @@
           "member_entity_id": "UUID",
           "member_name": "TEXT",
           "member_person_id": "UUID",
+          "notice_matter_type": "TEXT",
+          "plan_case_number": "TEXT",
           "plan_matter_type": "TEXT",
           "plan_member_id": "TEXT",
           "plan_number": "TEXT",
@@ -5342,6 +5365,7 @@
           "provider": "TEXT",
           "source_message_id": "UUID",
           "status": "TEXT",
+          "take_started_at": "TIMESTAMPTZ",
           "updated_at": "TIMESTAMPTZ"
         },
         "foreign_keys": [],

@@ -1060,3 +1060,136 @@ async fn notation_creation_history_never_skips_unconfigured_or_incomplete_applic
     .await;
     pg.pool().close().await;
 }
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the complete provider walks share a native application fixture and verify failure recovery"
+)]
+async fn accepted_plan_notices_open_one_pitch_per_provider_case() {
+    use crate::plan_assignment::{fixtures, parse, PlanProvider};
+    use crate::plan_intake::{self, AcceptInput, PlanIntakeError, StageInput};
+    use crate::{firms, legal_plans, persons, projects, relationship_logs};
+    use chrono::Utc;
+    use uuid::Uuid;
+
+    let (pg, _, _, existing_project, firm) = application_fixture().await;
+    Box::pin(PostgresDb::with_test_db(pg.clone(), async {
+        let source = crate::surreal::SurrealDb::uninitialized();
+        let (brand, occupied_code): (String, String) =
+            sqlx::query_as("SELECT brand,code FROM project WHERE id=$1")
+                .bind(existing_project).fetch_one(pg.pool()).await.unwrap();
+        firms::ensure_brand(&source, firm, &brand).await.unwrap();
+        let lawyer = persons::create(&source, &persons::NewPerson::with_role(
+            "Synthetic Intake Lawyer", "intake-lawyer@example.invalid", persons::Role::Lawyer,
+        )).await.unwrap();
+        firms::ensure_membership(&source, &firms::NewPersonFirmRole {
+            person_id: lawyer.id, firm_id: firm, membership: firms::FirmMembership::Lawyer, is_dri: false,
+        }).await.unwrap();
+        let outsider = persons::create(&source, &persons::NewPerson::with_role(
+            "Synthetic Outside Lawyer", "outside-lawyer@example.invalid", persons::Role::Lawyer,
+        )).await.unwrap();
+        assert!(plan_intake::review_firm(&source, outsider.id, &brand).await.is_err());
+
+        for (provider, plan_name, subject, notice, case_number, member_id, email, legacy) in [
+            (PlanProvider::Arag, "ARAG group legal", "CaseAssist #4900000-001",
+                fixtures::arag_case_request_text(), "4900000-001", None, "arag-member@example.invalid", false),
+            (PlanProvider::LegalEase, "Legal Ease", fixtures::LEGAL_EASE_SUBJECT,
+                fixtures::legal_ease_case_review_text(), "400001", Some("9900001"), "ease-member@example.invalid", true),
+        ] {
+            let assignment = parse(provider, subject, &notice).unwrap();
+            assert!(assignment.contact_email.is_none());
+            let plan = legal_plans::create(&pg, firm, &legal_plans::NewLegalPlan {
+                name: plan_name.into(), contact: None, portal: None, acceptance_sla_hours: 24,
+                turnaround_sla_days: 7, reporting_requirements: None,
+            }).await.unwrap();
+            let stage_input = StageInput {
+                firm_id: firm, conversation_id: Uuid::now_v7(), source_message_id: Uuid::now_v7(),
+                landing_at: Utc::now(), provider: provider.as_str().into(), assignment,
+            };
+            let staged = plan_intake::stage(&source, Some(&pg), &stage_input).await.unwrap();
+            assert_eq!(staged.plan_case_number.as_deref(), Some(case_number));
+            assert_eq!(staged.plan_member_id.as_deref(), member_id);
+            assert_eq!(staged.legal_plan_id, Some(plan.id));
+            assert!(staged.plan_matter_type.is_empty());
+            assert!(staged.fee_plan_fee_cents.is_none());
+
+            if legacy {
+                sqlx::query("UPDATE plan_intake SET plan_case_number=NULL, plan_number='CERT-OLD', plan_matter_type='document_review' WHERE id=$1")
+                    .bind(staged.id).execute(pg.pool()).await.unwrap();
+            }
+            let mut input = AcceptInput {
+                attestation: true, acting_person_id: lawyer.id, brand: brand.clone(),
+                code: format!("synthetic-{}", provider.as_str().replace('_', "-")),
+                name: None, plan_case_number: None, plan_matter_type: String::new(), plan_state: None,
+            };
+            assert!(matches!(plan_intake::accept(&source, &pg, staged.id, &input).await, Err(PlanIntakeError::MissingMemberAnchor)));
+            assert!(matches!(plan_intake::resolve_member(&source, &pg, staged.id, outsider.id, &brand, None, email).await, Err(PlanIntakeError::NotFound)));
+            plan_intake::resolve_member(&source, &pg, staged.id, lawyer.id, &brand, None, email).await.unwrap();
+            let anchored = plan_intake::find_by_id(&source, staged.id).await.unwrap().unwrap();
+            sqlx::query("UPDATE plan_intake SET conflict_checked=false WHERE id=$1")
+                .bind(staged.id).execute(pg.pool()).await.unwrap();
+            plan_intake::resolve_member(&source, &pg, staged.id, lawyer.id, &brand, None, email).await.unwrap();
+            let reviewed = plan_intake::find_by_id(&source, staged.id).await.unwrap().unwrap();
+            assert!(reviewed.conflict_checked);
+            assert_eq!(reviewed.member_entity_id, anchored.member_entity_id);
+            if legacy {
+                input.plan_case_number = Some("CERT-OLD".into());
+                assert!(matches!(plan_intake::accept(&source, &pg, staged.id, &input).await, Err(PlanIntakeError::MissingCaseNumber)));
+                input.plan_case_number = Some(case_number.into());
+            }
+            input.attestation = false;
+            assert!(matches!(plan_intake::accept(&source, &pg, staged.id, &input).await,
+                Err(PlanIntakeError::Open(projects::OpenMatterError::AttestationRequired))));
+            input.attestation = true;
+            let colliding = AcceptInput { code: occupied_code.clone(), ..input.clone() };
+            assert!(matches!(plan_intake::accept(&source, &pg, staged.id, &colliding).await,
+                Err(PlanIntakeError::Open(projects::OpenMatterError::CodeConflict))));
+            if provider == PlanProvider::Arag {
+                sqlx::query("ALTER TABLE project_deadlines ADD CONSTRAINT synthetic_turnaround_fault CHECK (title <> 'Plan turnaround deadline') NOT VALID")
+                    .execute(pg.pool()).await.unwrap();
+                let refused = plan_intake::accept(&source, &pg, staged.id, &input).await.unwrap_err();
+                assert!(matches!(
+                    refused,
+                    PlanIntakeError::Deadline(crate::project_deadlines::DeadlineError::Postgres(
+                        super::matter::MatterAuthorityError::Query(ref error)
+                    )) if error.as_database_error().and_then(sqlx::error::DatabaseError::code).as_deref() == Some("23514")
+                ), "{refused:?}");
+                let partial = projects::find_by_code(&source, &input.code).await.unwrap().unwrap();
+                assert_eq!(partial.id, staged.id);
+                assert!(matches!(plan_intake::decline_from_review(&source, &pg, staged.id, lawyer.id, &brand, "decline").await,
+                    Err(PlanIntakeError::NotStaged)));
+                assert!(matches!(plan_intake::resolve_member(&source, &pg, staged.id, lawyer.id, &brand, None, "different@example.invalid").await,
+                    Err(PlanIntakeError::NotStaged)));
+                sqlx::query("ALTER TABLE project_deadlines DROP CONSTRAINT synthetic_turnaround_fault")
+                    .execute(pg.pool()).await.unwrap();
+            }
+            let (first, retry) = tokio::join!(
+                plan_intake::accept(&source, &pg, staged.id, &input),
+                plan_intake::accept(&source, &pg, staged.id, &input)
+            );
+            let accepted = first.unwrap();
+            assert_eq!(retry.unwrap(), accepted);
+            let opened = projects::find_by_id(&source, accepted.project_id).await.unwrap().unwrap();
+            assert_eq!(opened.status, "open");
+            assert!(opened.plan_matter_type.is_none());
+            assert_eq!(opened.plan_case_number.as_deref(), Some(case_number));
+            assert_eq!(opened.plan_member_id.as_deref(), member_id);
+            assert_eq!(opened.legal_plan_id, Some(plan.id));
+            let roles = projects::participations_for_project(&source, opened.id).await.unwrap();
+            assert_eq!(roles.len(), 2);
+            assert!(roles.iter().any(|role| role.is_client_dri && Some(role.person_id) == accepted.staged.member_person_id));
+            let attestations = relationship_logs::for_project(&source, opened.id).await.unwrap();
+            assert_eq!(attestations.iter().filter(|log| log.action == "conflict_attestation" && log.actor_person_id == Some(lawyer.id)).count(), 1);
+            assert_eq!(crate::project_deadlines::list(&source, opened.id).await.unwrap().len(), 2);
+
+            let duplicate = plan_intake::stage(&source, Some(&pg), &StageInput {
+                source_message_id: Uuid::now_v7(), ..stage_input
+            }).await.unwrap();
+            plan_intake::resolve_member(&source, &pg, duplicate.id, lawyer.id, &brand, None, email).await.unwrap();
+            let duplicate_code = AcceptInput { code: format!("{}-duplicate", input.code), ..input };
+            assert!(matches!(plan_intake::accept(&source, &pg, duplicate.id, &duplicate_code).await, Err(PlanIntakeError::DuplicateCase)));
+            assert!(projects::find_by_code(&source, &duplicate_code.code).await.unwrap().is_none());
+        }
+    })).await;
+}

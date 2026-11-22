@@ -1154,6 +1154,80 @@ async fn genuine_pre_recovery_origin_upgrades_without_missing_fence_bypass() {
     }
 }
 
+#[tokio::test]
+async fn native_upgrade_preserves_a_staged_certificate_without_inventing_a_case_number() {
+    use futures::FutureExt as _;
+
+    let Some(options) = options() else { return };
+    let creation = Uuid::new_v4();
+    let binding = tier();
+    let prior_version = 20_261_122_000_300;
+    let native = create(options.clone(), creation, binding.clone())
+        .await
+        .unwrap()
+        .initialize_through(Some(prior_version), None)
+        .await
+        .unwrap();
+    let pg = native.postgres().clone();
+    let result = std::panic::AssertUnwindSafe(async {
+        let prior_schema = schema_contract();
+        let prior_schema = serde_json::Value::Array(
+            prior_schema
+                .as_array()
+                .unwrap()
+                .iter()
+                .take_while(|migration| migration[0].as_i64().unwrap() <= prior_version)
+                .cloned()
+                .collect(),
+        );
+        assert!(admits_for(&pg, &prior_schema).await.unwrap());
+        assert!(!sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT FROM information_schema.columns WHERE table_schema = 'public' \
+             AND table_name = 'plan_intake' AND column_name = 'plan_case_number')",
+        )
+        .fetch_one(pg.pool())
+        .await
+        .unwrap());
+
+        let notice = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO plan_intake (id, firm_id, conversation_id, source_message_id, provider, \
+             plan_member_id, plan_number, plan_matter_type, assigned_at, plan_portal_only, \
+             conflict_summary, conflict_blocking, conflict_checked, status) VALUES \
+             ($1, gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), 'legal_ease', \
+              'SYN-MEMBER', 'SYN-CERTIFICATE', '', now(), false, '', false, false, 'staged')",
+        )
+        .bind(notice)
+        .execute(pg.pool())
+        .await
+        .unwrap();
+
+        let upgraded = upgrade(options.clone(), creation, binding, Uuid::new_v4())
+            .await
+            .unwrap();
+        assert!(admits(upgraded.postgres()).await.unwrap());
+        let row = sqlx::query_as::<_, (String, String, String, Option<String>)>(
+            "SELECT status, plan_member_id, plan_number, plan_case_number FROM plan_intake WHERE id = $1",
+        )
+        .bind(notice)
+        .fetch_one(upgraded.postgres().pool())
+        .await
+        .unwrap();
+        assert_eq!(
+            row,
+            ("staged".into(), "SYN-MEMBER".into(), "SYN-CERTIFICATE".into(), None),
+        );
+        upgraded.postgres().pool().close().await;
+    })
+    .catch_unwind()
+    .await;
+    drop(native);
+    cleanup(options, pg, creation).await;
+    if let Err(panic) = result {
+        std::panic::resume_unwind(panic);
+    }
+}
+
 /// An acknowledged name can be reused by another acknowledged creation;
 /// the stale capability must compare its retained OID before administrative ALTER.
 #[tokio::test]
