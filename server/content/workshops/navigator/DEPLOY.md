@@ -58,7 +58,7 @@ you own outright.
 
 ### Agenda
 
-Six steps, each tagged with its Bloom verb. You are the admin operator; the `navigator` CLI is the instrument:
+Six steps, each tagged with its Bloom verb. You are the admin operator; the `hudson` CLI is the instrument:
 
 - **Create** — stand up a billed project and authenticate.
 - **Predict** — run `--dry-run` and read every API call before sending one.
@@ -71,8 +71,8 @@ Six steps, each tagged with its Bloom verb. You are the admin operator; the `nav
 ---
 
 Each step is tagged with the Bloom verb it exercises (the [Anderson & Krathwohl 2001
-revision](https://en.wikipedia.org/wiki/Bloom%27s_taxonomy)). You are the admin operator; the `navigator` CLI is the
-instrument. **Create** — stand up a billed Google Cloud project and authenticate so `navigator` can act on your behalf.
+revision](https://en.wikipedia.org/wiki/Bloom%27s_taxonomy)). You are the admin operator; the `hudson` CLI is the
+instrument. **Create** — stand up a billed Google Cloud project and authenticate so `hudson` can act on your behalf.
 **Predict** — run `hudson ops gcp setup --dry-run` and read every API call the provisioner _would_ make before sending
 one. **Identify** — name the twenty-four Google Cloud APIs the provisioner enables, and why each is needed. **Explain**
 — describe the VPC, the six core storage buckets and optional archive/telemetry lanes, the private image registry, the
@@ -858,6 +858,75 @@ Upload a verified generation to the installation's private archive store, downlo
 copy. Check its checksum, refs and default branch before marking the generation complete. Prove retention protection,
 separate archive writer and reader identities, scheduled coverage, and recovery of the full forge as separate checks.
 Only then switch the selected Project and prove gate, merge, publication and notifications with rollback available.
+
+## Iceberg archives
+
+### Configure the source and the independent destination
+
+Keep one private archive configuration per environment. Use the reviewed Navigator and Forgejo coverage inventory, a
+persistent local filesystem outside Git, and destination buckets in a different Google Cloud project from the source.
+Pass the source project number explicitly:
+
+```bash
+hudson ops archives config --local-root /var/lib/navigator/iceberg/data \
+  --source-project-number "$SOURCE_PROJECT_NUMBER" --destinations destinations.json \
+  --coverage coverage.json --out archive-config.json
+hudson ops archives provisioning-plan --config archive-config.json \
+  --writer serviceAccount:archive-writer@example.invalid \
+  --verifier serviceAccount:archive-verifier@example.invalid --out proposed-policy.json
+```
+
+The plan applies nothing. Give the writer only `roles/storage.objectCreator` on its destination. Keep the verifier's
+read/control-plane identity separate, and prove denied reads, object listing, deletion, updates and cross-environment
+writes. Review inherited IAM and the live Workload Identity mapping.
+
+---
+
+Use private operator configuration for actual project numbers, buckets, identities and receipts. A role binding alone
+does not establish effective permission. The [archive runbook](/docs/write-only-iceberg) owns destination JSON,
+source-reader requirements and the persistent GKE mount contract.
+
+### Capture locally and test the write-only copies
+
+Run capture with the writer ADC and retain the sealed generation and report on persistent storage:
+
+```bash
+GOOGLE_APPLICATION_CREDENTIALS="$WRITER_ADC" hudson ops archives capture \
+  --config archive-config.json --out capture-report.json
+hudson ops archives verify-local --config archive-config.json \
+  --receipt capture-report.json --out local-verification.json
+```
+
+Use a new private report directory for each run; outputs are not overwritten. Exercise restart and `--reuse-local` with
+the original report. Reuse must preserve the sealed generation and create fresh offsite attempt keys. Do not re-extract
+under an old receipt. Upload acknowledgements prove transport; local verification checks hashes and Iceberg scans.
+
+---
+
+Keep test buckets unlocked. The cloud verifier requires locked retention, so an unlocked destination does not pass cloud
+acceptance. Keep PostgreSQL base backups, WAL and file backups active during these tests.
+
+### Approve the lock and prove recovery
+
+After staging capture and local tests pass, review the provisioning plan and approve the exact bucket, project and
+retention duration. The current minimum is 25 years. The operator applies and reads back the policy, then performs the
+separate irreversible lock described in the [runbook](/docs/write-only-iceberg). The writer and DBOS schedule never lock
+buckets.
+
+With the separate verifier ADC, read the uploaded copy and query its Iceberg tables:
+
+```bash
+GOOGLE_APPLICATION_CREDENTIALS="$VERIFIER_ADC" hudson ops archives verify-cloud \
+  --config archive-config.json --destination 0 --report capture-report.json \
+  --out offsite-verification.json
+```
+
+---
+
+Preserve the independent verification results and rehearse an isolated restore before production acceptance. Structured
+rows do not copy Git/LFS, attachments or document bytes; retain their backups and recovery keys. A successful Iceberg
+scan alone does not prove PostgreSQL point-in-time recovery or DBOS/provider-effect replay. Complete the same acceptance
+with production's own configuration before retiring another recovery path.
 
 ## Environment Matrix
 

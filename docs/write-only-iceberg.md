@@ -105,6 +105,47 @@ writer binding requests only `roles/storage.objectCreator`; verification and cat
 always retain `writer_authorization_review_required: true` and `catalog_promoted: false`. The operator records any
 separate acceptance outside these transport reports. No boolean in configuration substitutes for that evidence.
 
+## Test, approve, then lock
+
+Use a separate private configuration and destination bucket for each environment. For a GCP source, pass its actual
+project number to `hudson ops archives config` with `--source-project-number`; each destination must belong to a
+different project. Keep project numbers, bucket names, credential configuration and receipts in the operator-managed
+store. Hudson creates report files without overwrite, so use a new private report directory for each test or attempt.
+
+During testing, keep the destination unlocked. Run `capture` with the writer's ADC, then `verify-local` against the
+sealed generation. Test restart and `--reuse-local` from the persistent archive mount. Confirm writer object creation is
+allowed and object get/list/delete/update, bucket administration and cross-environment writes are denied. Check
+inherited policies and the live workload identity mapping as well as direct bucket grants. IAM diagnostics do not prove
+that a real upload or restore succeeded.
+
+The current `verify-cloud` contract requires locked retention and fails for an unlocked test bucket. Do not label that
+state a verified offsite archive or weaken the check to make a test pass. Local verification and upload acknowledgements
+remain separate evidence. Complete independent cloud reads and recovery checks in staging before production.
+
+The provisioning plan records the intended retention period and separate writer/verifier permissions. Review it with the
+deployment operator after capture and local tests pass. The current minimum is 788940000 seconds, or 25 years. Record
+explicit approval of the bucket, owning project and duration before the separate control-plane lock operation.
+
+Use an independently authorized operator credential for the following commands. Set `ARCHIVE_BUCKET` and
+`RETENTION_PERIOD` from the approved private plan; use seconds with an `s` suffix, such as `788940000s`:
+
+```bash
+gcloud storage buckets update "gs://$ARCHIVE_BUCKET" --retention-period="$RETENTION_PERIOD"
+gcloud storage buckets describe "gs://$ARCHIVE_BUCKET" --format=json
+```
+
+Read back the project, location, public access prevention, uniform access and exact retention period. After approval,
+[lock the reviewed policy](https://docs.cloud.google.com/storage/docs/using-bucket-lock):
+
+```bash
+gcloud storage buckets update "gs://$ARCHIVE_BUCKET" --lock-retention-period
+```
+
+A locked policy cannot be removed or shortened. This control-plane action belongs to the operator, never the writer or
+DBOS schedule. Hudson's `provisioning-plan` applies nothing. Read the locked policy back, then run `verify-cloud` with
+the separate verifier ADC and the exact capture report. Preserve its object-hash and Iceberg query results, and
+independently rehearse the required restore. Repeat acceptance with production's own identities.
+
 ## Recovery scope
 
 Verification reports contain the captured source fingerprints, per-database manifest where present, actual query counts,
