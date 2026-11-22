@@ -19,23 +19,6 @@ cloud.workspace = true
 dbos = { workspace = true, optional = true }
 mail-parser.workspace = true
 pdf.workspace = true
-# We talk to the Restate broker over plain HTTP — admin API at
-# :9070 and ingress at :8080 — so reqwest is the only dependency
-# needed for the `RestateRuntime` client adapter. There is *no*
-# Restate Rust SDK in the dependency graph today.
-#
-# If/when we want to author durable services in Rust (i.e. let
-# Restate drive Rust handlers as opposed to just submitting jobs
-# to it from outside), add `restate-sdk` here. The crate is
-# maintained by Restate at <https://github.com/restatedev/sdk-rust>
-# and would slot in alongside reqwest. Pin to whatever line is
-# current at the time:
-#
-#   restate-sdk = "0.x"
-#
-# Then re-export a `restate-service` binary target from this crate
-# (or a new `workflows-services` crate) and register it against
-# `RESTATE_ADMIN_URL` at boot.
 pulldown-cmark.workspace = true
 # `create_notation_from_repo` reads a Project repo's template through the
 # shared engine (`store::template_source`), which takes a `RepoStore`.
