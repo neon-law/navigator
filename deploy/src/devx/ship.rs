@@ -572,6 +572,16 @@ where
     Ok(complete)
 }
 
+/// Reuse ship's authoritative profile decision before resolving any Restate endpoint.
+/// This does not establish that retained work has been drained or disposed of.
+pub(super) fn requires_restate_registration(
+    deployment: &super::deployments::Deployment,
+) -> Result<bool> {
+    Ok(!dbos_only_profile(&|key| {
+        deployment.coordinates.get(key).cloned()
+    })?)
+}
+
 /// Route authenticated submissions to the cohost listener, never a removed worker.
 fn cohost_ingress<F>(get: &F) -> Result<(String, String)>
 where

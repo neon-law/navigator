@@ -403,11 +403,10 @@ jobs:
           step: "health check brand-readiness: ${{ steps.brand-readiness.outcome == 'success' && 'pass' || 'fail' }}"
           tag: ${{ env.TAG }}
 
-      # `ops ship` re-registers the worker itself; this re-asserts it as a
-      # health check of its own rather than trusting `ops ship`'s exit code.
-      # It runs outside `ops ship`, so it reads the row's own worker URL from
-      # the published configuration; the brand's production default is one
-      # staging's Restate env cannot sign for, and the CLI refuses it.
+      # The CLI reuses ship's published profile: complete DBOS-only rows have no
+      # Restate target; retained compatibility rows must register their own worker.
+      # Unknown or incomplete native modes refuse before registration. This check
+      # does not certify disposition of retained work or infer it from selector flags.
       - name: "health check: Restate registration"
         id: restate-registration
         env:
@@ -638,6 +637,8 @@ jobs:
           step: "health check brand-readiness: ${{ steps.brand-readiness.outcome == 'success' && 'pass' || 'fail' }}"
           tag: ${{ env.TAG }}
 
+      # The same CLI profile decision applies to production; compatibility registration
+      # remains required, while complete DBOS-only rows need no Restate credentials.
       - name: "health check: Restate registration"
         id: restate-registration
         env:

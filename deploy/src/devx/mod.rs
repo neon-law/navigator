@@ -1324,15 +1324,9 @@ fn dispatch_with_dns_provider(
         })) => match (project_id, deployment) {
             (Some(project), Some(deployment)) => {
                 let loaded = deployment_config::load(&project, &deployment)?;
-                let url = workflows_url_coordinate(&loaded)?;
-                let target = RegisterTarget {
-                    deployment: &loaded.name,
-                    admin_url: loaded
-                        .coordinates
-                        .get(RESTATE_ADMIN_URL_KEY)
-                        .map(String::as_str),
-                };
-                restate_register(Some(&url), Some(&target))
+                register_published_deployment(&loaded, |url, target| {
+                    restate_register(Some(url), Some(target))
+                })
             }
             _ => restate_register(url.as_deref(), None),
         },
@@ -2055,6 +2049,26 @@ pub(crate) fn resolve_workflows_url(
                 .map(|d| format!("https://workflows.{d}/"))
         })
         .unwrap_or_else(|| WORKFLOWS_PUBLIC_URL.to_string())
+}
+
+/// Registration follows the same loaded deployment profile as ship, never ambient flags.
+fn register_published_deployment(
+    deployment: &deployments::Deployment,
+    register: impl FnOnce(&str, &RegisterTarget<'_>) -> Result<()>,
+) -> Result<()> {
+    if !ship::requires_restate_registration(deployment)? {
+        eprintln!("DBOS-only deployment: no Restate worker registration target");
+        return Ok(());
+    }
+    let url = workflows_url_coordinate(deployment)?;
+    let target = RegisterTarget {
+        deployment: &deployment.name,
+        admin_url: deployment
+            .coordinates
+            .get(RESTATE_ADMIN_URL_KEY)
+            .map(String::as_str),
+    };
+    register(&url, &target)
 }
 
 /// The row's own worker URL from its published configuration. Refuses rather
@@ -3207,6 +3221,130 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("refusing to register the brand default"));
+    }
+
+    fn native_registration_fixture() -> deployments::Deployment {
+        use store::workflow_engine as engine;
+
+        let root =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/deployment-tree");
+        let mut deployment = deployments::Deployment::load(&root, "example-deployment").unwrap();
+        for workflow in engine::WORKFLOWS {
+            deployment
+                .coordinates
+                .insert(workflow.flag.into(), "true".into());
+        }
+        for (key, value) in [
+            (engine::COHOST_ENV, "true"),
+            (engine::DBOS_ENABLED_ENV, "true"),
+            (engine::ENGINE_ENV, "dbos"),
+        ] {
+            deployment.coordinates.insert(key.into(), value.into());
+        }
+        deployment.coordinates.remove("NAVIGATOR_WORKFLOWS_URL");
+        deployment.coordinates.remove(RESTATE_ADMIN_URL_KEY);
+        deployment
+    }
+
+    #[test]
+    fn published_native_registration_never_resolves_or_calls_a_restate_target() {
+        let deployment = native_registration_fixture();
+        assert!(workflows_url_coordinate(&deployment).is_err());
+        register_published_deployment(&deployment, |_, _| {
+            panic!("native registration must not call Restate")
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn published_registration_refuses_incomplete_or_unknown_native_modes_before_any_call() {
+        use store::workflow_engine as engine;
+        for workflow in engine::WORKFLOWS {
+            for value in [None, Some("false"), Some("unknown")] {
+                let mut deployment = native_registration_fixture();
+                match value {
+                    Some(value) => {
+                        deployment
+                            .coordinates
+                            .insert(workflow.flag.into(), value.into());
+                    }
+                    None => {
+                        deployment.coordinates.remove(workflow.flag);
+                    }
+                }
+                assert!(register_published_deployment(&deployment, |_, _| panic!(
+                    "incomplete mode must not register"
+                ))
+                .is_err());
+            }
+        }
+        for key in [
+            engine::COHOST_ENV,
+            engine::DBOS_ENABLED_ENV,
+            engine::ENGINE_ENV,
+        ] {
+            let mut deployment = native_registration_fixture();
+            deployment.coordinates.insert(key.into(), "unknown".into());
+            assert!(register_published_deployment(&deployment, |_, _| panic!(
+                "unknown mode must not register"
+            ))
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn published_mixed_registration_keeps_the_retained_worker_target() {
+        let mut deployment = native_registration_fixture();
+        deployment
+            .coordinates
+            .insert(store::workflow_engine::COHOST_ENV.into(), "false".into());
+        deployment.coordinates.insert(
+            "NAVIGATOR_WORKFLOWS_URL".into(),
+            "https://retained-worker.example.invalid/".into(),
+        );
+        let called = std::cell::Cell::new(false);
+        register_published_deployment(&deployment, |url, _| {
+            called.set(true);
+            assert_eq!(url, "https://retained-worker.example.invalid/");
+            Ok(())
+        })
+        .unwrap();
+        assert!(
+            called.get(),
+            "native caller switches alone cannot retire the retained registration target"
+        );
+    }
+
+    #[test]
+    fn published_legacy_registration_still_requires_the_rows_endpoint_and_propagates_failure() {
+        let root =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/deployment-tree");
+        let mut deployment = deployments::Deployment::load(&root, "example-deployment").unwrap();
+        deployment.coordinates.insert(
+            RESTATE_ADMIN_URL_KEY.into(),
+            "https://restate-admin.example.invalid/".into(),
+        );
+        let called = std::cell::Cell::new(false);
+        let result = register_published_deployment(&deployment, |url, target| {
+            called.set(true);
+            assert_eq!(url, "https://workflows.example.invalid/");
+            assert_eq!(target.deployment, "example-deployment");
+            assert_eq!(
+                target.admin_url,
+                Some("https://restate-admin.example.invalid/")
+            );
+            anyhow::bail!("synthetic retained-worker registration refusal")
+        });
+        assert!(called.get());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("synthetic retained-worker registration refusal"));
+        deployment.coordinates.remove("NAVIGATOR_WORKFLOWS_URL");
+        assert!(register_published_deployment(&deployment, |_, _| panic!(
+            "missing row endpoint cannot fall back"
+        ))
+        .is_err());
     }
 
     /// An operator's `restate` CLI config with production selected as current
