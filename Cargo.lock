@@ -8944,6 +8944,7 @@ dependencies = [
  "p256 0.14.0",
  "parquet 60.1.0",
  "pdf",
+ "project-scaffold",
  "pulldown-cmark",
  "rand 0.10.4",
  "regorus",
@@ -15364,6 +15365,7 @@ dependencies = [
 name = "workflows"
 version = "26.11.23-rc.2"
 dependencies = [
+ "anyhow",
  "async-trait",
  "base64 0.23.1",
  "billing",

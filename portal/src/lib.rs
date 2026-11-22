@@ -198,6 +198,7 @@ pub mod people_commands;
 pub mod people_list_answer;
 pub(crate) mod plan_assignment_lane;
 pub mod plan_intake;
+mod plan_retainers;
 pub mod plausible;
 pub mod policy;
 pub mod portal_only;

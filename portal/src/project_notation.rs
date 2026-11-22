@@ -119,6 +119,47 @@ pub async fn create_project_notation(
     let database = attempts::database()
         .await
         .map_err(|error| CreateProjectNotationError::Db(error.to_string()))?;
+    // Serialize an interactive open with the daily Legal Plan retainer check.
+    let _retainer_lane = if crate::plan_retainers::eligible(&project) {
+        let lane = store::notation_machine_state::acquire_lane(&database, project_id)
+            .await
+            .map_err(|error| CreateProjectNotationError::Db(error.to_string()))?;
+        if let Some(template) = store::templates::resolve_exact(surreal, Some(project_id), code)
+            .await
+            .map_err(|error| CreateProjectNotationError::Db(error.to_string()))?
+        {
+            let matches_checkout = checkout.as_ref().is_none_or(|draft| {
+                let hash = store::documents::sha256_hex(draft.contents.as_bytes());
+                template.body_sha256.as_deref() == Some(hash.as_str())
+            });
+            if matches_checkout
+                && store::projects::template_opens_a_matter(template.kind.as_deref())
+            {
+                let existing = store::notations::find_by_project_template_person(
+                    surreal,
+                    project_id,
+                    template.id,
+                    person_id,
+                )
+                .await
+                .map_err(|error| CreateProjectNotationError::Db(error.to_string()))?;
+                if let Some(row) =
+                    existing.filter(|row| row.state == "BEGIN" && row.delivery == delivery.as_str())
+                {
+                    let next = workflows::current_step(surreal, runtime, Some(storage), row.id)
+                        .await
+                        .map_err(CreateProjectNotationError::Session)?;
+                    return Ok(StartOutcome {
+                        notation_id: row.id,
+                        next,
+                    });
+                }
+            }
+        }
+        Some(lane)
+    } else {
+        None
+    };
     let started_at = chrono::Utc::now();
     let outcome = async {
         if let Some(draft) = checkout {

@@ -14,6 +14,7 @@ name = "tenant"
 path = "src/bin/tenant.rs"
 
 [dependencies]
+project-scaffold.workspace = true
 ammonia.workspace = true
 anyhow.workspace = true
 # The Archives workflow and the Sent Email Export's Iceberg writer, hosted by
