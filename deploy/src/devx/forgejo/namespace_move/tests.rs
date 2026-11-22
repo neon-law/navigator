@@ -100,6 +100,13 @@ async fn rehearse() {
         .await
         .is_err());
 
+    assert!(
+        sqlx::query("DELETE FROM firm_namespace_move WHERE firm_id=$1")
+            .bind(firm)
+            .execute(pg.pool())
+            .await
+            .is_err()
+    );
     let mut unprivileged = pg.pool().begin().await.unwrap();
     sqlx::query(
         "SELECT set_config('navigator.firm_namespace_move',id::text,true) FROM firm_namespace_move",
@@ -141,6 +148,24 @@ async fn rehearse() {
             .execute(pg.pool())
             .await
             .is_err()
+    );
+    sqlx::query("DELETE FROM project WHERE firm_id=$1")
+        .bind(firm)
+        .execute(pg.pool())
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM firm WHERE id=$1")
+        .bind(firm)
+        .execute(pg.pool())
+        .await
+        .unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM firm_namespace_move WHERE firm_id=$1")
+            .bind(firm)
+            .fetch_one(pg.pool())
+            .await
+            .unwrap(),
+        0
     );
     server.abort();
 }

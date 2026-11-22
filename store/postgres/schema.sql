@@ -5640,7 +5640,7 @@ $$;
 -- repositories before calling Forgejo. The receipt survives an interrupted call.
 CREATE TABLE firm_namespace_move (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    firm_id UUID NOT NULL REFERENCES firm(id),
+    firm_id UUID NOT NULL REFERENCES firm(id) ON DELETE CASCADE,
     forge_origin TEXT NOT NULL,
     forgejo_id BIGINT NOT NULL CHECK (forgejo_id > 0),
     old_slug TEXT NOT NULL,
@@ -5651,6 +5651,17 @@ CREATE TABLE firm_namespace_move (
     CHECK (old_slug <> new_slug)
 );
 CREATE UNIQUE INDEX firm_namespace_move_pending ON firm_namespace_move (firm_id) WHERE completed_at IS NULL;
+
+-- An otherwise removable Firm may be deleted once its move is complete.
+-- While Forgejo can be ahead of PostgreSQL, the recovery receipt must survive.
+CREATE FUNCTION protect_pending_firm_namespace_move() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'Firm namespace move is pending' USING ERRCODE = 'check_violation';
+END;
+$$;
+CREATE TRIGGER protect_pending_firm_namespace_move BEFORE DELETE ON firm_namespace_move
+    FOR EACH ROW WHEN (OLD.completed_at IS NULL) EXECUTE FUNCTION protect_pending_firm_namespace_move();
 
 -- Default privileges may have granted runtime writes to newly created tables.
 DO $$
