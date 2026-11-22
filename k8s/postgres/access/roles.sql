@@ -149,6 +149,15 @@ BEGIN
 END
 $$;
 
+-- Converge the validated merge projector when roles are initialized after migrations.
+DO $$
+BEGIN
+    IF to_regprocedure('public.graph_merge_person(uuid,uuid)') IS NOT NULL THEN
+        GRANT EXECUTE ON FUNCTION public.graph_merge_person(UUID,UUID) TO navigator_app;
+    END IF;
+END;
+$$;
+
 -- A Person's email is `citext` (case-insensitive equality and uniqueness).
 -- The extension is trusted, so the migration also creates it when absent.
 CREATE EXTENSION IF NOT EXISTS citext;

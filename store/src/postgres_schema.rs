@@ -1742,6 +1742,7 @@ mod tests {
                 "20261122000400_preserve_plan_intake_case_number.sql",
                 include_str!("../postgres/migrations/20261122000400_preserve_plan_intake_case_number.sql"),
             ),
+            ("20261122021314_converge_native_person_merge.sql", include_str!("../postgres/migrations/20261122021314_converge_native_person_merge.sql")),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

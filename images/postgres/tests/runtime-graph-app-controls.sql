@@ -8,10 +8,10 @@ DO $$ BEGIN
  IF EXISTS(SELECT 1 FROM pg_namespace WHERE nspname IN ('public','navigator_graph') AND has_schema_privilege(current_user,oid,'CREATE')) THEN
   RAISE EXCEPTION 'App has schema CREATE'; END IF;
  IF (SELECT count(*) FROM pg_proc p JOIN pg_roles r ON r.oid=p.proowner
-  WHERE p.oid IN ('graph_ensure_vertices(text,text)'::regprocedure,'graph_load_edges(text,text)'::regprocedure)
+  WHERE p.oid IN ('graph_ensure_vertices(text,text)'::regprocedure,'graph_load_edges(text,text)'::regprocedure,'graph_merge_person(uuid,uuid)'::regprocedure)
   AND r.rolname='navigator_owner' AND NOT r.rolsuper AND NOT r.rolbypassrls AND p.prosecdef
   AND 'search_path=pg_catalog, public, ag_catalog, pg_temp'=ANY(p.proconfig)
-  AND 'row_security=on'=ANY(p.proconfig))<>2 THEN
+  AND 'row_security=on'=ANY(p.proconfig))<>3 THEN
   RAISE EXCEPTION 'validated wrappers have wrong owner/configuration'; END IF;
 END $$;
 INSERT INTO person(id,name,email,role) VALUES

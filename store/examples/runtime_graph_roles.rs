@@ -5,6 +5,11 @@ use std::path::PathBuf;
 use std::process::Command;
 use store::{postgres::PostgresDb, test_support::PostgresFixture};
 
+#[path = "../tests/support/person_merge_graph.rs"]
+mod merge_fixture;
+#[path = "../tests/support/native_project.rs"]
+mod native_project;
+
 fn psql(database: &str, app: bool, file: &str) -> Result<()> {
     let container = std::env::var("GRAPH_ROLE_CONTAINER")?;
     let password = if app { "app" } else { "admin" };
@@ -69,11 +74,67 @@ async fn admitted(database: &str, options: PgConnectOptions) -> Result<()> {
     Ok(())
 }
 
+async fn admitted_merge(database: &str, options: PgConnectOptions) -> Result<()> {
+    let app = PostgresDb::connect(
+        options
+            .database(database)
+            .username("navigator_app")
+            .password(&secret("app")?),
+    )
+    .await?;
+    let worker = app.clone();
+    // Catch assertion panics as JoinError so the caller still closes its owned fixture.
+    let joined = tokio::spawn(async move {
+        PostgresDb::with_application_db(worker, async {
+            let pg = PostgresDb::application().await?;
+            let current: String = sqlx::query_scalar("SELECT current_user::text")
+                .fetch_one(pg.pool())
+                .await?;
+            anyhow::ensure!(current == "navigator_app", "merge used wrong login");
+            let db = store::surreal::SurrealDb::uninitialized();
+            let parent =
+                native_project::create(&format!("synthetic-app-merge-{}", uuid::Uuid::new_v4()))
+                    .await;
+            let scenario = merge_fixture::Scenario::seed(&db, &pg, &parent).await;
+            let before = merge_fixture::snapshot(&pg).await;
+            let refused = sqlx::query("SELECT public.graph_merge_person($1,$2)")
+                .bind(scenario.kept)
+                .bind(scenario.dropped)
+                .execute(pg.pool())
+                .await
+                .expect_err("projector must refuse an incomplete relational merge");
+            anyhow::ensure!(
+                refused
+                    .as_database_error()
+                    .and_then(sqlx::error::DatabaseError::code)
+                    .as_deref()
+                    == Some("23514"),
+                "wrong incomplete-merge refusal"
+            );
+            anyhow::ensure!(
+                merge_fixture::snapshot(&pg).await == before,
+                "incomplete projection changed the 21-table sample"
+            );
+            store::person_merge::merge(&db, scenario.kept, scenario.dropped).await?;
+            scenario.assert_merged(&db, &pg).await;
+            Ok::<(), anyhow::Error>(())
+        })
+        .await
+    })
+    .await;
+    app.pool().close().await;
+    let admitted = joined.context("owned App merge assertion task failed")?;
+    admitted??;
+    println!("actual App public merge, canonical references/participation/provenance/AGE PASS");
+    Ok(())
+}
+
 // Bootstrap introspection only: this database has not run its role initializer yet.
 async fn migration_grants(fixture: &PostgresFixture) -> Result<()> {
     let public: bool = sqlx::query_scalar(
         "SELECT NOT EXISTS(SELECT FROM unnest(ARRAY[
          'public.graph_ensure_vertices(text,text)', 'public.graph_load_edges(text,text)',
+         'public.graph_merge_person(uuid,uuid)',
          'public.graph_view_seed(text)', 'public.graph_project_attach(text)',
          'public.graph_project_expand(text)', 'public.graph_lawyer_expand(text)',
          'public.graph_firm_view(text)', 'public.graph_conflict_frontier(text)',
@@ -106,6 +167,7 @@ async fn controls(fixture: &PostgresFixture, options: PgConnectOptions) -> Resul
     let database = fixture.database();
     psql(database, false, "/probe/k8s/postgres/access/roles.sql")?;
     admitted(database, options.clone()).await?;
+    admitted_merge(database, options.clone()).await?;
     psql(
         database,
         true,
@@ -125,7 +187,8 @@ async fn controls(fixture: &PostgresFixture, options: PgConnectOptions) -> Resul
     restore?;
     rls?;
     psql(database, false, "/probe/k8s/postgres/access/roles.sql")?;
-    admitted(database, options).await?;
+    admitted(database, options.clone()).await?;
+    admitted_merge(database, options).await?;
     psql(
         database,
         true,

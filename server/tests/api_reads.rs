@@ -1,6 +1,5 @@
 #![allow(clippy::doc_markdown)]
-//! Integration tests for the #866 read clusters — the matter-centric GETs the
-//! portal pages load:
+//! PostgreSQL-backed matter reads and Person merge boundaries mounted by the portal:
 //! `GET /app/api/projects`, `/app/api/projects/{id}`,
 //! `/app/api/projects/{id}/{participants,notations}`, `/app/api/notations/{id}`,
 //! `/app/api/playbooks`, `/app/api/playbooks/{id}`, `/app/api/contract-reviews/{id}`.
@@ -8,6 +7,7 @@
 //! The read functions are shared `store` reads; these tests focus on what the API
 //! adds: `visible_projects` self-scoping, the by-id 404-on-out-of-scope gate,
 //! and the tier split (matter reads are client-readable, firm tools are lawyer).
+//! Person merges retain immutable billing evidence and expose a conflict only to a lawyer.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -1378,6 +1378,60 @@ async fn contract_review_read_is_gated() {
     .await;
 }
 
+#[tokio::test]
+async fn people_merge_preserves_billing_history_and_reports_conflict_to_lawyer() {
+    store::test_support::with_postgres(async {
+        let fx = build_fixture().await;
+        let pg = PostgresDb::application().await.unwrap();
+        let dropped = store::persons::create(
+            &fx.surreal,
+            &store::persons::NewPerson::with_role(
+                "Synthetic billing author", "billing-author@example.test", Role::Lawyer,
+            ),
+        ).await.unwrap();
+        store::projects::add_participation(&fx.surreal, fx.project_id, dropped.id, "lawyer")
+            .await.unwrap();
+        let annotation = store::billing_annotations::Annotation {
+            id: Uuid::new_v4(), change_id: "k".repeat(32), commit_id: "a".repeat(40),
+            tenths: 2, performed_on: "2026-11-21".parse().unwrap(),
+        };
+        store::billing_annotations::stage(&pg, fx.project_id, dropped.id, &annotation)
+            .await.unwrap();
+        store::persons::set_role(&fx.surreal, dropped.id, Role::Client)
+            .await.unwrap().unwrap();
+        let before: serde_json::Value = sqlx::query_scalar(
+            "SELECT to_jsonb(a) FROM billing_annotation a WHERE id=$1",
+        ).bind(annotation.id).fetch_one(pg.pool()).await.unwrap();
+        for (auth, expected) in [
+            (None, StatusCode::UNAUTHORIZED),
+            (Some(fx.client.as_str()), StatusCode::FORBIDDEN),
+            (Some(fx.lawyer.as_str()), StatusCode::CONFLICT),
+        ] {
+            let mut request = Request::builder().method("POST").uri("/app/api/people/merge")
+                .header("content-type", "application/json");
+            if let Some(auth) = auth {
+                request = request.header("authorization", auth);
+            }
+            let response = fx.app.clone().oneshot(request.body(Body::from(
+                serde_json::json!({"keep":"client@example.com","drop":"billing-author@example.test"}).to_string(),
+            )).unwrap()).await.unwrap();
+            assert_eq!(response.status(), expected);
+            let bytes = response.into_body().collect().await.unwrap().to_bytes();
+            let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            if expected == StatusCode::CONFLICT {
+                assert_eq!(body["error"], "retained_billing_history");
+            }
+        }
+        let after: serde_json::Value = sqlx::query_scalar(
+            "SELECT to_jsonb(a) FROM billing_annotation a WHERE id=$1",
+        ).bind(annotation.id).fetch_one(pg.pool()).await.unwrap();
+        assert_eq!(after, before);
+        for email in ["client@example.com", "billing-author@example.test"] {
+            assert!(store::persons::find_by_email_ci(&fx.surreal, email).await.unwrap().is_some());
+        }
+    }).await;
+}
+
 async fn document_status(fx: &Fixture, code: &str, auth: Option<&str>, upload: bool) -> StatusCode {
     let suffix = if upload {
         "documents/upload"
@@ -1512,4 +1566,161 @@ async fn documents_zip_reports_project_query_failure_after_authentication() {
 #[tokio::test]
 async fn document_upload_reports_project_query_failure_after_authentication() {
     store::test_support::with_postgres(assert_document_project_query_failure(true)).await;
+}
+
+async fn merge_route(
+    fx: &Fixture,
+    keep: &str,
+    drop: &str,
+    auth: Option<&str>,
+) -> axum::response::Response {
+    let mut request = Request::builder()
+        .method("POST")
+        .uri("/app/api/people/merge")
+        .header("content-type", "application/json");
+    if let Some(auth) = auth {
+        request = request.header("authorization", auth);
+    }
+    fx.app
+        .clone()
+        .oneshot(
+            request
+                .body(Body::from(
+                    serde_json::json!({"keep":keep,"drop":drop}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+}
+
+async fn merge_identity_snapshot(pg: &PostgresDb) -> serde_json::Value {
+    sqlx::query_scalar(
+        "SELECT jsonb_build_object(
+        'people',(SELECT jsonb_agg(to_jsonb(p) ORDER BY id) FROM person p),
+        'mailboxes',(SELECT jsonb_agg(to_jsonb(m) ORDER BY id) FROM person_mailbox m),
+        'participation',(SELECT jsonb_agg(to_jsonb(p) ORDER BY id) FROM person_project_role p))",
+    )
+    .fetch_one(pg.pool())
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn lower_tiers_cannot_transfer_client_authentication_into_an_owner_but_owner_can() {
+    store::test_support::with_postgres(async {
+        let fx = build_fixture().await;
+        let pg = PostgresDb::application().await.unwrap();
+        let owner = store::persons::find_by_email_ci(&fx.surreal, "owner@example.com")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(owner.microsoft_subject.is_none());
+        let dropped = store::persons::create(
+            &fx.surreal,
+            &store::persons::NewPerson::new("Synthetic merge client", "merge-client@example.test"),
+        )
+        .await
+        .unwrap();
+        let subject = format!("synthetic-merge-provider-{}", Uuid::new_v4());
+        store::persons::link_microsoft_subject(&fx.surreal, dropped.id, &subject)
+            .await
+            .unwrap()
+            .unwrap();
+        store::projects::add_participation(&fx.surreal, fx.project_id, dropped.id, "client")
+            .await
+            .unwrap();
+        let before = merge_identity_snapshot(&pg).await;
+        for (auth, status) in [
+            (None, StatusCode::UNAUTHORIZED),
+            (Some(fx.client.as_str()), StatusCode::FORBIDDEN),
+            (Some(fx.clerk.as_str()), StatusCode::FORBIDDEN),
+            (Some(fx.lawyer.as_str()), StatusCode::FORBIDDEN),
+            (Some(fx.unassigned_admin.as_str()), StatusCode::FORBIDDEN),
+        ] {
+            let response = merge_route(&fx, &owner.email, &dropped.email, auth).await;
+            assert_eq!(response.status(), status);
+            if auth == Some(fx.lawyer.as_str()) || auth == Some(fx.unassigned_admin.as_str()) {
+                let bytes = response.into_body().collect().await.unwrap().to_bytes();
+                let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                assert_eq!(body["error"], "identity_governance");
+            }
+            assert_eq!(merge_identity_snapshot(&pg).await, before);
+            assert_eq!(
+                store::persons::find_by_microsoft_subject(&fx.surreal, &subject)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .id,
+                dropped.id
+            );
+        }
+        let accepted = merge_route(
+            &fx,
+            &owner.email,
+            &dropped.email,
+            Some(&fx.unassigned_owner),
+        )
+        .await;
+        assert_eq!(accepted.status(), StatusCode::OK);
+        assert_eq!(
+            store::persons::find_by_microsoft_subject(&fx.surreal, &subject)
+                .await
+                .unwrap()
+                .unwrap()
+                .id,
+            owner.id
+        );
+        assert_eq!(
+            store::persons::find_by_any_email(&fx.surreal, &dropped.email)
+                .await
+                .unwrap()
+                .unwrap()
+                .id,
+            owner.id
+        );
+        assert!(store::persons::find_by_id(&fx.surreal, dropped.id)
+            .await
+            .unwrap()
+            .is_none());
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn lawyer_can_merge_an_eligible_client_into_a_lawyer_identity() {
+    store::test_support::with_postgres(async {
+        let fx = build_fixture().await;
+        let lawyer = store::persons::find_by_email_ci(&fx.surreal, "lawyer@example.com")
+            .await
+            .unwrap()
+            .unwrap();
+        let dropped = store::persons::create(
+            &fx.surreal,
+            &store::persons::NewPerson::new(
+                "Synthetic eligible client",
+                "eligible-merge@example.test",
+            ),
+        )
+        .await
+        .unwrap();
+        store::projects::add_participation(&fx.surreal, fx.project_id, dropped.id, "client")
+            .await
+            .unwrap();
+        let response = merge_route(&fx, &lawyer.email, &dropped.email, Some(&fx.lawyer)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            store::persons::find_by_any_email(&fx.surreal, &dropped.email)
+                .await
+                .unwrap()
+                .unwrap()
+                .id,
+            lawyer.id
+        );
+        assert!(store::persons::find_by_id(&fx.surreal, dropped.id)
+            .await
+            .unwrap()
+            .is_none());
+    })
+    .await;
 }

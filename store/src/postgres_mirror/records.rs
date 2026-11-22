@@ -1744,15 +1744,13 @@ pub(crate) fn authoritative_person_links() -> impl Iterator<Item = (&'static str
         })
 }
 
-/// Financial tagged Person links share canonical preservation metadata with import.
-pub(crate) fn financial_tagged_person_links() -> impl Iterator<Item = (&'static str, &'static str)>
-{
+/// Tagged Person links share the canonical preservation registry with import.
+pub(crate) fn authoritative_tagged_person_links(
+) -> impl Iterator<Item = (&'static str, &'static str)> {
     TAGGED_REFERENCES
         .iter()
         .filter_map(|(table, field, parents)| {
-            (matches!(*table, "cap_table_holding" | "fiduciary_role")
-                && parents.contains(&"person"))
-            .then_some((*table, *field))
+            parents.contains(&"person").then_some((*table, *field))
         })
 }
 
