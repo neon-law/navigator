@@ -7845,7 +7845,7 @@ Apache License
    limitations under the License.
 
 ----------------------------------------------------------------------------------------
-aws-sdk-s3 1.160.0
+aws-sdk-s3 1.161.0
 
 Apache License
                            Version 2.0, January 2004
@@ -33670,7 +33670,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 spin 0.10.1
 spin 0.12.3
 spin 0.9.9
-zip 9.7.0
+zip 9.8.1
 
 The MIT License (MIT)
 
