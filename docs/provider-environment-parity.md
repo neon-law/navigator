@@ -53,8 +53,8 @@ For each row:
 2. Create a Web application browser client with only that row's callback.
 3. Store its client ID as `NAVIGATOR_OAUTH_CLIENT_ID_BROWSER` in the matching `deployments/<name>/config.toml` and its
    secret as `OAUTH_CLIENT_SECRET` in that deployment's `secrets.enc.yaml`.
-4. Ship, sign in through the browser client, and call an authenticated Navigator MCP tool through the CLI bridge. A
-   client ID appearing in the tree is not proof that either flow works.
+4. Ship, sign in through the browser client, and call an authenticated Navigator MCP tool over HTTPS. A client
+   ID appearing in the tree is not proof that either flow works.
 
 Google does not permit these general Google Sign-In/API OAuth clients to be created or modified programmatically. The
 similarly named `gcloud iam oauth-clients` surface creates Workforce Identity Federation clients and is not a

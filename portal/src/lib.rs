@@ -1374,12 +1374,26 @@ pub fn bootstrap_with_forgejo_oidc(
     let mcp_layered = |mcp_state: mcp::McpState| {
         mcp::build_router(mcp_state)
             .route_layer(axum::middleware::from_fn_with_state(
-                state.google_oauth.clone(),
-                crate::mcp_principal::inject_principal,
-            ))
-            .route_layer(axum::middleware::from_fn_with_state(
                 (state.sessions.clone(), state.policy.clone()),
                 crate::policy::require_policy,
+            ))
+            // Resolve identity before policy builds its role-only session from JWT claims.
+            .route_layer(axum::middleware::from_fn(
+                |req: axum::extract::Request, next: Next| async move {
+                    if req
+                        .extensions()
+                        .get::<mcp::Principal>()
+                        .is_some_and(|p| !p.email.trim().is_empty())
+                    {
+                        next.run(req).await
+                    } else {
+                        StatusCode::UNAUTHORIZED.into_response()
+                    }
+                },
+            ))
+            .route_layer(axum::middleware::from_fn_with_state(
+                state.google_oauth.clone(),
+                crate::mcp_principal::inject_principal,
             ))
             .route_layer(axum::middleware::from_fn_with_state(
                 state.auth.clone(),

@@ -33,14 +33,14 @@ use http_body_util::BodyExt;
 use portal::{AppState, SessionData, SessionStore};
 use serde_json::{json, Value};
 use store::persons::Role;
-use store::test_support::mem_surreal;
 use tower::ServiceExt;
 use uuid::Uuid;
 
 const KEY: &[u8] = b"mcp-read-scope-test-key-0123456789";
 
 async fn build_app() -> (axum::Router, store::surreal::SurrealDb) {
-    let surreal = mem_surreal().await;
+    let surreal = store::surreal::SurrealDb::uninitialized();
+    store::test_support::seed_firm_with_new_brand(&surreal, "neon").await;
     let state = AppState {
         sessions: SessionStore::new(KEY),
         ..portal::test_support::app_state(surreal.clone()).await
@@ -74,7 +74,7 @@ async fn cli_bearer(
 }
 
 async fn seed_matter(surreal: &store::surreal::SurrealDb, name: &str) -> Uuid {
-    let entity_id = store::test_support::seed_entity(surreal).await;
+    let entity_id = store::test_support::seed_entity_with_parents(surreal).await;
     store::projects::create(
         surreal,
         &store::projects::NewProject {
@@ -156,98 +156,110 @@ fn names(content: &Value) -> Vec<String> {
 
 #[tokio::test]
 async fn a_lawyer_lists_the_matter_they_are_on_and_not_the_one_they_are_not() {
-    let (app, surreal) = build_app().await;
-    let theirs = seed_matter(&surreal, "Matter A").await;
-    seed_matter(&surreal, "Matter B").await;
-    let (bearer, person_id) = cli_bearer(&surreal, "lawyer@neonlaw.com", Role::Lawyer).await;
-    put_on_matter(
-        &surreal,
-        person_id,
-        theirs,
-        store::participation::DriRequest::Unchanged,
-    )
-    .await;
+    store::test_support::with_postgres(async {
+        let (app, surreal) = build_app().await;
+        let theirs = seed_matter(&surreal, "Matter A").await;
+        seed_matter(&surreal, "Matter B").await;
+        let (bearer, person_id) = cli_bearer(&surreal, "lawyer@neonlaw.com", Role::Lawyer).await;
+        put_on_matter(
+            &surreal,
+            person_id,
+            theirs,
+            store::participation::DriRequest::Unchanged,
+        )
+        .await;
 
-    let content = list_projects(&app, &bearer).await;
-    assert_eq!(content["lens"], "membership");
-    assert_eq!(names(&content), vec!["Matter A"], "got: {content}");
+        let content = list_projects(&app, &bearer).await;
+        assert_eq!(content["lens"], "membership");
+        assert_eq!(names(&content), vec!["Matter A"], "got: {content}");
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn owner_and_admin_list_every_matter_through_the_directory_lens() {
     for role in [Role::Owner, Role::Admin] {
-        let (app, surreal) = build_app().await;
-        let assigned = seed_matter(&surreal, "Matter A").await;
-        seed_matter(&surreal, "Matter B").await;
-        // A lawyer accountable for one matter, so the directory has a DRI
-        // to report and an unassigned matter to report as such.
-        let (_, dri_id) = cli_bearer(&surreal, "dri@neonlaw.com", Role::Lawyer).await;
-        put_on_matter(
-            &surreal,
-            dri_id,
-            assigned,
-            store::participation::DriRequest::Designate(store::projects::DriSide::Lawyer),
-        )
+        store::test_support::with_postgres(async {
+            let (app, surreal) = build_app().await;
+            let assigned = seed_matter(&surreal, "Matter A").await;
+            seed_matter(&surreal, "Matter B").await;
+            // A lawyer accountable for one matter, so the directory has a DRI
+            // to report and an unassigned matter to report as such.
+            let (_, dri_id) = cli_bearer(&surreal, "dri@neonlaw.com", Role::Lawyer).await;
+            put_on_matter(
+                &surreal,
+                dri_id,
+                assigned,
+                store::participation::DriRequest::Designate(store::projects::DriSide::Lawyer),
+            )
+            .await;
+            // The oversight caller holds no participation row at all.
+            let (bearer, _) = cli_bearer(&surreal, "overseer@neonlaw.com", role).await;
+
+            let content = list_projects(&app, &bearer).await;
+            assert_eq!(content["lens"], "directory", "{role:?}: {content}");
+            let mut listed = names(&content);
+            listed.sort();
+            assert_eq!(listed, vec!["Matter A", "Matter B"], "{role:?}");
+
+            let rows = content["projects"].as_array().unwrap();
+            let a = rows.iter().find(|p| p["name"] == "Matter A").unwrap();
+            assert_eq!(a["lawyer_dris"][0], "dri@neonlaw.com", "{role:?}");
+            assert!(a["code"].is_string(), "{role:?}: the handle is the code");
+            // Oversight is not membership: the lens carries no handle a
+            // contents read could take.
+            assert!(a["id"].is_null(), "{role:?}: no id on the directory lens");
+            let b = rows.iter().find(|p| p["name"] == "Matter B").unwrap();
+            assert_eq!(b["lawyer_dris"].as_array().unwrap().len(), 0, "{role:?}");
+        })
         .await;
-        // The oversight caller holds no participation row at all.
-        let (bearer, _) = cli_bearer(&surreal, "overseer@neonlaw.com", role).await;
-
-        let content = list_projects(&app, &bearer).await;
-        assert_eq!(content["lens"], "directory", "{role:?}: {content}");
-        let mut listed = names(&content);
-        listed.sort();
-        assert_eq!(listed, vec!["Matter A", "Matter B"], "{role:?}");
-
-        let rows = content["projects"].as_array().unwrap();
-        let a = rows.iter().find(|p| p["name"] == "Matter A").unwrap();
-        assert_eq!(a["lawyer_dris"][0], "dri@neonlaw.com", "{role:?}");
-        assert!(a["code"].is_string(), "{role:?}: the handle is the code");
-        // Oversight is not membership: the lens carries no handle a
-        // contents read could take.
-        assert!(a["id"].is_null(), "{role:?}: no id on the directory lens");
-        let b = rows.iter().find(|p| p["name"] == "Matter B").unwrap();
-        assert_eq!(b["lawyer_dris"].as_array().unwrap().len(), 0, "{role:?}");
     }
 }
 
 #[tokio::test]
 async fn a_client_lists_only_their_own_matter() {
-    let (app, surreal) = build_app().await;
-    let theirs = seed_matter(&surreal, "Their Matter").await;
-    let other = seed_matter(&surreal, "Someone Else").await;
-    let (bearer, client_id) = cli_bearer(&surreal, "client@example.com", Role::Client).await;
-    put_on_matter(
-        &surreal,
-        client_id,
-        theirs,
-        store::participation::DriRequest::Unchanged,
-    )
-    .await;
-    let (_, lawyer_id) = cli_bearer(&surreal, "lawyer@neonlaw.com", Role::Lawyer).await;
-    put_on_matter(
-        &surreal,
-        lawyer_id,
-        other,
-        store::participation::DriRequest::Unchanged,
-    )
-    .await;
+    store::test_support::with_postgres(async {
+        let (app, surreal) = build_app().await;
+        let theirs = seed_matter(&surreal, "Their Matter").await;
+        let other = seed_matter(&surreal, "Someone Else").await;
+        let (bearer, client_id) = cli_bearer(&surreal, "client@example.com", Role::Client).await;
+        put_on_matter(
+            &surreal,
+            client_id,
+            theirs,
+            store::participation::DriRequest::Unchanged,
+        )
+        .await;
+        let (_, lawyer_id) = cli_bearer(&surreal, "lawyer@neonlaw.com", Role::Lawyer).await;
+        put_on_matter(
+            &surreal,
+            lawyer_id,
+            other,
+            store::participation::DriRequest::Unchanged,
+        )
+        .await;
 
-    let content = list_projects(&app, &bearer).await;
-    assert_eq!(names(&content), vec!["Their Matter"], "got: {content}");
+        let content = list_projects(&app, &bearer).await;
+        assert_eq!(names(&content), vec!["Their Matter"], "got: {content}");
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn an_authenticated_stranger_with_no_persons_row_lists_nothing() {
-    // Sign-in does not create a Person. A signed session whose email has
-    // no row is the caller who must reach no matter — fail-closed, with
-    // no privileged exception.
-    let (app, surreal) = build_app().await;
-    seed_matter(&surreal, "Matter A").await;
-    let mut session = SessionData::fresh("stranger@example.com", Role::Lawyer);
-    session.email = Some("stranger@example.com".to_string());
-    session.source = portal::SessionSource::Cli;
-    let bearer = format!("Bearer {}", SessionStore::new(KEY).encode(&session));
+    store::test_support::with_postgres(async {
+        // Sign-in does not create a Person. A signed session whose email has
+        // no row is the caller who must reach no matter — fail-closed, with
+        // no privileged exception.
+        let (app, surreal) = build_app().await;
+        seed_matter(&surreal, "Matter A").await;
+        let mut session = SessionData::fresh("stranger@example.com", Role::Lawyer);
+        session.email = Some("stranger@example.com".to_string());
+        session.source = portal::SessionSource::Cli;
+        let bearer = format!("Bearer {}", SessionStore::new(KEY).encode(&session));
 
-    let content = list_projects(&app, &bearer).await;
-    assert_eq!(content["count"], 0, "got: {content}");
+        let content = list_projects(&app, &bearer).await;
+        assert_eq!(content["count"], 0, "got: {content}");
+    })
+    .await;
 }

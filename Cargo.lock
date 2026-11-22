@@ -5746,7 +5746,6 @@ dependencies = [
  "k8s-openapi",
  "lopdf 0.47.0",
  "mail-parser",
- "mcp",
  "neon",
  "nix 0.32.0",
  "p256 0.14.0",
