@@ -36,6 +36,10 @@ requirement profile and the external-root preflight passes. Synthetic CI cannot 
 The application never reads this tree and never reads GitHub. It reads the projected Kubernetes Secret. This page is the
 operator boundary; the deployment map itself is [`environments.md`](environments.md).
 
+From the public checkout root, run `python3 scripts/validate-deployment-coordinates.py` with the operator's denylist
+configured. The scanner requires the whole worktree and reports only the number of matched files. Run `--self-test` to
+check the detector against a planted synthetic coordinate.
+
 ## The published record
 
 The tree is a one-time import source. A row's source of truth is its published record,
