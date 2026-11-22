@@ -31,6 +31,14 @@ def load_values(path):
 def source_files(root):
     """Yield paths in Git's local index, including staged additions and symlinks."""
     try:
+        prefix = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--show-prefix"],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+        if prefix.stdout != b"\n":
+            raise ValueError("source root must be the Git worktree root")
         result = subprocess.run(
             ["git", "-C", str(root), "ls-files", "--cached", "-z"],
             check=True,
@@ -101,6 +109,13 @@ def self_test():
         (root / "outside-link").symlink_to(os.path.relpath(outside, root))
         subprocess.run(["git", "-C", str(root), "add", "ordinary.txt", "target/planted.txt", "link-text", "outside-link"], check=True)
         assert validate(root, denylist) == 2
+        try:
+            validate(tracked_build.parent, denylist)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("a partial repository scan must be refused")
+
         (root / "binary.bin").write_bytes(b"\x00" + probe.encode("utf-8") + b"\xff")
         subprocess.run(["git", "-C", str(root), "add", "binary.bin"], check=True)
         assert validate(root, denylist) == 3
