@@ -445,7 +445,7 @@ chmod 644 "$private/ca.crt"
 image_env=()
 while read -r key; do
   case "$key" in
-    NAVIGATOR_RELEASE_TAG|NAVIGATOR_GIT_SHA|NAVIGATOR_BUILD_TIME|NAVIGATOR_PUBLIC_DIR|DIOXUS_PUBLIC_PATH|NAVIGATOR_WORKSHOPS_DIR|NAVIGATOR_POSTGRES_ROOT_CERT|NAVIGATOR_DBOS_ROOT_CERT|NAVIGATOR_SAMPLE_PROJECTS_DIR|NAVIGATOR_GIT_REPO_ROOT|CI|NAVIGATOR_FORBID_SURREAL) continue ;;
+    NAVIGATOR_RELEASE_TAG|NAVIGATOR_GIT_SHA|NAVIGATOR_BUILD_TIME|NAVIGATOR_PUBLIC_DIR|DIOXUS_PUBLIC_PATH|NAVIGATOR_WORKSHOPS_DIR|NAVIGATOR_POSTGRES_ROOT_CERT|NAVIGATOR_DBOS_ROOT_CERT|NAVIGATOR_SAMPLE_PROJECTS_DIR|NAVIGATOR_GIT_REPO_ROOT|NAVIGATOR_FAKE_SIGNATURE_DIR|CI|NAVIGATOR_FORBID_SURREAL) continue ;;
   esac
   image_env+=(--env "$key")
 done < <(sed -nE 's/^([A-Z_][A-Z0-9_]*)=.*/\1/p' .devx/env)
@@ -458,6 +458,7 @@ image_container_id="$(docker run -d --name "$image_container" --network host \
   --env NAVIGATOR_POSTGRES_ROOT_CERT=/native/ca.crt --env NAVIGATOR_DBOS_ROOT_CERT=/native/ca.crt \
   --env NAVIGATOR_SAMPLE_PROJECTS_DIR=/native/sample-projects \
   --env NAVIGATOR_GIT_REPO_ROOT=/tmp/navigator-image-repos \
+  --env NAVIGATOR_FAKE_SIGNATURE_DIR=/tmp/navigator-image-repos/.fake-signature \
   --mount "type=bind,source=$private/ca.crt,target=/native/ca.crt,readonly" \
   --mount "type=bind,source=$private/samples,target=/native/sample-projects,readonly" \
   --mount "type=volume,source=$repo_volume,target=/tmp/navigator-image-repos" \
