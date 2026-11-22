@@ -250,6 +250,31 @@ Report GCP spend from the BigQuery Cloud Billing export, not console guesses or 
 Discover the project from env and the billing table from BigQuery. Do not hard-code billing account generated table
 names into docs or code.
 
+### Daily export aggregation in production
+
+The DBOS web host runs `GcpDailyCost` at 13:00 UTC when the production deployment row supplies both settings below.
+Local, staging and simulated deployments skip registration. Set the coordinates in the private deployment row.
+
+| Setting | Value |
+| --- | --- |
+| `NAVIGATOR_GCP_COST_EXPORT_TABLE` | One fully qualified, daily-partitioned standard or detailed billing export. |
+| `NAVIGATOR_GCP_COST_READER` | The dedicated Google service account that can read that table. |
+
+For a standard export, use `<PROJECT_ID>.<DATASET>.gcp_billing_export_v1_<BILLING_ACCOUNT_ID>`. Substitute the export's
+actual project and dataset, and replace hyphens in the billing account ID with underscores. [Standard export table
+naming](https://docs.cloud.google.com/billing/docs/how-to/export-data-bigquery-tables/standard-usage)
+
+Grant the reader `bigquery.tables.get` and `bigquery.tables.getData` on the export table. Grant the production runtime
+`iam.serviceAccounts.getAccessToken` on that reader only. The job obtains a short-lived BigQuery read-only token and
+reads the previous UTC partition using paginated table-data requests. It requires no BigQuery query-job permission.
+[BigQuery table reads](https://docs.cloud.google.com/bigquery/docs/managing-table-data)
+
+DBOS stores the result under `GcpDailyCost-YYYY-MM-DD`, keyed by the export partition date. Each row groups gross cost,
+all credits and net cost by invoice month, project, service and currency. A null project covers account-level charges.
+Inspect the completed workflow output in the production DBOS system database. Empty partitions produce an empty list
+when the API returns zero rows. A failed or inaccessible partition produces a failed workflow after retries. Each export
+day can include adjustments for earlier usage. Reconcile the invoice-month totals against the closed bill.
+
 ## Observability
 
 Every service binary emits through `telemetry::init("navigator-<name>")`. With no `OTEL_EXPORTER_OTLP_ENDPOINT`, logs

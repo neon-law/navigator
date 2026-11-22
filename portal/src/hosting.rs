@@ -1198,6 +1198,11 @@ async fn dbos_schedules(
     let project_calendar = calendar_membership_schedule(rt, host_dbos, lookup)?;
 
     Ok(dbos_engine::Schedules {
+        daily_cost_export: if host_dbos && dbos_engine::enabled(lookup)? {
+            workflows::flags::daily_cost_export(lookup)?
+        } else {
+            None
+        },
         linear_backlog,
         general_nag,
         dri_digest,

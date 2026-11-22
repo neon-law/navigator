@@ -1025,6 +1025,18 @@ where
         }
     }
     if non_empty_env(NAVIGATOR_DBOS_ENABLED, get).as_deref() == Some("true") {
+        if let Some(table) = workflows::flags::daily_cost_export(get)? {
+            for (key, value) in [
+                (workflows::flags::GCP_COST_EXPORT_TABLE, table.reference()),
+                (workflows::flags::GCP_COST_READER, table.reader()),
+            ] {
+                let quoted = serde_json::to_string(value)?;
+                writeln!(
+                    env,
+                    "            - name: {key}\n              value: {quoted}"
+                )?;
+            }
+        }
         for key in [
             "SLACK_MESSAGES_CHANNEL_ID",
             "SLACK_STAGING_MESSAGES_CHANNEL_ID",
@@ -8422,6 +8434,32 @@ mod tests {
         let rendered = render_manifests_with(&subs).expect("render succeeds");
         kustomize_build(&rendered.path().join(GKE_KUSTOMIZE_SUBPATH))
             .expect("rendered GKE manifests build")
+    }
+
+    #[test]
+    fn daily_cost_coordinates_reach_only_the_production_dbos_web_host() {
+        use workflows::flags::{GCP_COST_EXPORT_TABLE, GCP_COST_READER};
+        for (profile, staging, simulated, expected) in [
+            ("production", "false", "false", true),
+            ("production", "true", "false", false),
+            ("production", "false", "true", false),
+            ("dev", "false", "false", false),
+        ] {
+            let manifests = rendered_manifests(|key| match key {
+                GCP_COST_EXPORT_TABLE => Some("x.sample.billing".into()),
+                GCP_COST_READER => Some(concat!("reader@", "x", ".iam.gserviceaccount.com").into()),
+                store::config::NAVIGATOR_ENVIRONMENT => Some(profile.into()),
+                store::config::NAVIGATOR_STAGING => Some(staging.into()),
+                NAVIGATOR_SIMULATED_MATTERS => Some(simulated.into()),
+                _ => native_ship_env(key),
+            });
+            let web = manifest_doc(&manifests, "Deployment", WEB_DEPLOYMENT);
+            assert_eq!(
+                web_env_value(&web, GCP_COST_EXPORT_TABLE).is_some(),
+                expected
+            );
+            assert_eq!(web_env_value(&web, GCP_COST_READER).is_some(), expected);
+        }
     }
 
     fn native_ship_env(key: &str) -> Option<String> {
