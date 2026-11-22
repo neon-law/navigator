@@ -442,6 +442,8 @@ for path in [root, *root.rglob('*')]:
 PY
 cp "${NAVIGATOR_POSTGRES_ROOT_CERT:?}" "$private/ca.crt"
 chmod 644 "$private/ca.crt"
+# Exercise the approved attachment journey against the image and its real scanner.
+export NAVIGATOR_DBOS_INBOX_ATTACHMENT_FILING_ENABLED=true
 image_env=()
 while read -r key; do
   case "$key" in
@@ -452,7 +454,7 @@ done < <(sed -nE 's/^([A-Z_][A-Z0-9_]*)=.*/\1/p' .devx/env)
 image_container_id="$(docker run -d --name "$image_container" --network host \
   --label com.neonlaw.navigator.browser-fixture=git-runtime \
   --label "com.neonlaw.navigator.browser-operation=$volume_operation" \
-  "${image_env[@]}" --env CI=1 --env NAVIGATOR_FORBID_SURREAL=1 \
+  "${image_env[@]}" --env NAVIGATOR_DBOS_INBOX_ATTACHMENT_FILING_ENABLED --env CI=1 --env NAVIGATOR_FORBID_SURREAL=1 \
   --env NAVIGATOR_PUBLIC_DIR=/app/public --env DIOXUS_PUBLIC_PATH=/app/public/dioxus \
   --env NAVIGATOR_WORKSHOPS_DIR=/app/content/workshops \
   --env NAVIGATOR_POSTGRES_ROOT_CERT=/native/ca.crt --env NAVIGATOR_DBOS_ROOT_CERT=/native/ca.crt \

@@ -3649,6 +3649,10 @@ async fn a_lawyer_can_approve_one_inbox_message_for_internal_filing() {
 #[tokio::test]
 async fn a_lawyer_can_approve_one_inbox_attachment_with_an_explicit_kind() {
     if !workflows::trigger::inbox_attachment_filing_enabled() {
+        assert!(
+            std::env::var_os("NAV_BROWSER_IMAGE_ID").is_none(),
+            "the release image browser gate requires Inbox attachment filing"
+        );
         return;
     }
     let Some(client) = new_client_or_skip().await else {
