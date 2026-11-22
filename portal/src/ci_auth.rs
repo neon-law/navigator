@@ -17,12 +17,13 @@
 //! Forgejo run is refused.
 
 use axum::extract::State;
-use axum::http::StatusCode;
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use store::seed::SeedModel;
+use views::brand::{admitted_brand_key, held_out_host, BrandKey};
 
 use crate::forgejo_oidc::{repository_matches_issuer, ForgejoOidc, ForgejoRun};
 use crate::github_oidc::{GitHubActionsClaims, GitHubOidc};
@@ -72,10 +73,12 @@ pub fn routes(state: CiAuthState) -> Router {
 
 async fn mint_seed_token(
     State(state): State<CiAuthState>,
+    headers: HeaderMap,
     Json(input): Json<MintRequest>,
 ) -> Response {
     match mint_inner(
         &state,
+        &headers,
         &input.token,
         "ci.seed_token.minted",
         CiSessionKind::Seed,
@@ -92,10 +95,12 @@ async fn mint_seed_token(
 /// revision metadata, and document-integrity reads.
 async fn mint_document_token(
     State(state): State<CiAuthState>,
+    headers: HeaderMap,
     Json(input): Json<MintRequest>,
 ) -> Response {
     match mint_inner(
         &state,
+        &headers,
         &input.token,
         "ci.document_token.minted",
         CiSessionKind::Document,
@@ -159,18 +164,42 @@ impl IntoResponse for MintError {
     }
 }
 
-async fn mint_inner(
-    state: &CiAuthState,
-    github_token: &str,
-    audit_event: &'static str,
-    kind: CiSessionKind,
-) -> Result<MintResponse, MintError> {
-    let Some(host) = state.canonical_host.host() else {
+fn github_mint_origin(
+    canonical: &CanonicalHost,
+    headers: &HeaderMap,
+) -> Result<(String, Option<BrandKey>), MintError> {
+    let Some(deployment) = canonical.host() else {
         return Err(MintError::Unavailable(
             "CANONICAL_HOST is required to mint CI tokens",
         ));
     };
-    let audience = format!("https://{host}");
+    let refused = || MintError::Unauthorized("CI host is not admitted by this deployment".into());
+    let host = headers
+        .get(header::HOST)
+        .and_then(|host| host.to_str().ok())
+        .ok_or_else(refused)?;
+    let brand = admitted_brand_key(host);
+    if host.eq_ignore_ascii_case(deployment) && !held_out_host(host) {
+        return Ok((format!("https://{deployment}"), brand));
+    }
+    let brand = brand
+        .filter(|_| admitted_brand_key(deployment).is_some())
+        .ok_or_else(refused)?;
+    let audience = brand.public_home_href_for(Some(&deployment.to_ascii_lowercase()));
+    if !audience.eq_ignore_ascii_case(&format!("https://{host}")) {
+        return Err(refused());
+    }
+    Ok((audience, Some(brand)))
+}
+
+async fn mint_inner(
+    state: &CiAuthState,
+    headers: &HeaderMap,
+    github_token: &str,
+    audit_event: &'static str,
+    kind: CiSessionKind,
+) -> Result<MintResponse, MintError> {
+    let (audience, brand) = github_mint_origin(&state.canonical_host, headers)?;
     let claims = state
         .github_oidc
         .verify(github_token, &audience)
@@ -182,6 +211,9 @@ async fn mint_inner(
         .spend_jti(&claims.jti, claims.exp)
         .map_err(|error| MintError::Unauthorized(error.to_string()))?;
     let project = resolve_project(state, &claims).await?;
+    if brand.is_some_and(|brand| brand.as_str() != project.brand) {
+        return Err(MintError::Forbidden(UNBOUND.into()));
+    }
     let actor = lawyer_dri_actor(&state.surreal, &project, kind).await?;
     let exp = now_unix_secs() + CI_SESSION_TTL_SECS;
     let session = SessionData {
@@ -504,6 +536,39 @@ mod tests {
     use tower::ServiceExt;
 
     #[test]
+    fn github_mint_selects_only_a_live_host_in_the_configured_deployment() {
+        use views::brand::BrandKey;
+
+        let hosts = |deployment: &str, host: &str| {
+            let canonical = CanonicalHost::new(Some(deployment.into()));
+            let mut headers = axum::http::HeaderMap::new();
+            headers.insert(axum::http::header::HOST, host.parse().unwrap());
+            super::github_mint_origin(&canonical, &headers).ok()
+        };
+        assert_eq!(
+            hosts("STAGING.neonlaw.com", "staging-iep.neonlaw.com"),
+            Some((
+                "https://staging-iep.neonlaw.com".into(),
+                Some(BrandKey::IepDefenders)
+            ))
+        );
+        assert_eq!(
+            hosts("www.neonlaw.com", "iep.neonlaw.com"),
+            Some((
+                "https://iep.neonlaw.com".into(),
+                Some(BrandKey::IepDefenders)
+            ))
+        );
+        for host in [
+            "iep.neonlaw.com",
+            "unknown.example",
+            "staging-iep.neonlaw.com:8443",
+        ] {
+            assert_eq!(hosts("staging.neonlaw.com", host), None, "{host}");
+        }
+    }
+
+    #[test]
     fn github_https_and_ssh_remotes_yield_owner_name() {
         assert_eq!(
             github_repository_from_url("https://github.com/neon-law-staging/acme.git"),
@@ -608,12 +673,14 @@ mod tests {
     async fn project_with_no_lawyer_dri(
         surreal: &store::surreal::SurrealDb,
         code: &str,
+        brand: &str,
     ) -> store::projects::Project {
         let entity_id = store::test_support::seed_entity(surreal).await;
         let project = store::projects::create(
             surreal,
             &store::projects::NewProject {
                 code: code.to_string(),
+                brand: brand.into(),
                 name: code.to_string(),
                 status: "open".to_string(),
                 entity_id,
@@ -650,8 +717,8 @@ mod tests {
     }
 
     /// A live Project `acme` with a lawyer DRI, recorded at `repository_url`.
-    async fn project_at(surreal: &store::surreal::SurrealDb, repository_url: &str) {
-        let project = project_with_no_lawyer_dri(surreal, "acme").await;
+    async fn project_at(surreal: &store::surreal::SurrealDb, repository_url: &str, brand: &str) {
+        let project = project_with_no_lawyer_dri(surreal, "acme", brand).await;
         store::projects::set_repository_url(surreal, project.id, Some(repository_url))
             .await
             .unwrap();
@@ -684,7 +751,7 @@ mod tests {
         forgejo_oidc: ForgejoOidc,
     ) -> (StatusCode, serde_json::Value) {
         let surreal = store::test_support::mem_surreal().await;
-        project_at(&surreal, repository_url).await;
+        project_at(&surreal, repository_url, "neon").await;
         let mut state = ci_state(surreal, &format!("{owner}/acme"), "fallback-jti");
         state.github_oidc = GitHubOidc::fixed(GitHubActionsClaims {
             repository: format!("{owner}/acme"),
@@ -784,13 +851,23 @@ mod tests {
     }
 
     async fn mint_request(state: CiAuthState, path: &str) -> (StatusCode, serde_json::Value) {
+        mint_at(state, path, "staging.neonlaw.com", "anything").await
+    }
+
+    async fn mint_at(
+        state: CiAuthState,
+        path: &str,
+        host: &str,
+        token: &str,
+    ) -> (StatusCode, serde_json::Value) {
         let response = routes(state)
             .oneshot(
                 Request::builder()
                     .method("POST")
                     .uri(path)
+                    .header("host", host)
                     .header("content-type", "application/json")
-                    .body(Body::from(r#"{"token":"anything"}"#))
+                    .body(Body::from(serde_json::json!({"token":token}).to_string()))
                     .unwrap(),
             )
             .await
@@ -801,9 +878,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn github_mint_binds_the_signed_audience_and_project_brand_to_the_host() {
+        use crate::test_support::{sign_rs256_claims, test_oidc_jwks_rsa, TEST_OIDC_KID};
+        use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
+
+        let db = store::test_support::mem_surreal().await;
+        project_at(&db, "https://github.com/example/acme", "iep-defenders").await;
+        let mut state = ci_state(db, "example/acme", "unused");
+        let keys = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"keys": [test_oidc_jwks_rsa()]})),
+            )
+            .mount(&keys)
+            .await;
+        let issuer = "https://token.actions.test";
+        state.github_oidc = GitHubOidc::jwks(issuer, keys.uri());
+        let iep = "staging-iep.neonlaw.com";
+        let canonical = "staging.neonlaw.com";
+        for path in ["/auth/ci/document-token", "/auth/ci/seed-token"] {
+            for (host, audience, expected) in [
+                (iep, canonical, StatusCode::UNAUTHORIZED),
+                (canonical, canonical, StatusCode::FORBIDDEN),
+                (iep, iep, StatusCode::OK),
+            ] {
+                let token = sign_rs256_claims(
+                    TEST_OIDC_KID,
+                    &serde_json::json!({
+                        "iss":issuer, "aud":format!("https://{audience}"), "sub":"repo:example/acme:ref:refs/heads/main",
+                        "repository":"example/acme", "repository_owner":"example", "ref":"refs/heads/main", "event_name":"push",
+                        "exp":now_unix_secs()+300, "jti":format!("{path}:{host}:{audience}")
+                    }),
+                );
+                let (status, body) = mint_at(state.clone(), path, host, &token).await;
+                assert_eq!(status, expected, "{body}");
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn the_seed_door_names_a_ci_seed_write_when_no_lawyer_dri_exists() {
         let surreal = store::test_support::mem_surreal().await;
-        project_with_no_lawyer_dri(&surreal, "no-dri-seed").await;
+        project_with_no_lawyer_dri(&surreal, "no-dri-seed", "neon").await;
         let state = ci_state(surreal, "neon-law-staging/no-dri-seed", "seed-door-jti");
 
         let (status, body) = mint_request(state, "/auth/ci/seed-token").await;
@@ -818,7 +935,7 @@ mod tests {
     #[tokio::test]
     async fn the_document_door_names_verification_not_a_write_when_no_lawyer_dri_exists() {
         let surreal = store::test_support::mem_surreal().await;
-        project_with_no_lawyer_dri(&surreal, "no-dri-document").await;
+        project_with_no_lawyer_dri(&surreal, "no-dri-document", "neon").await;
         let state = ci_state(
             surreal,
             "neon-law-staging/no-dri-document",
