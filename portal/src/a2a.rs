@@ -3255,7 +3255,7 @@ mod tests {
 
     #[tokio::test]
     async fn direct_skill_confirmation_completes_without_entering_the_router_loop() {
-        // The two-call handshake the stdio bridge translates. The state
+        // The named-skill approval handshake. The state
         // here carries `NullRouter`, so if the approved call fell through
         // to `drive_loop` the task would come back `failed` — a passing
         // `completed` is the proof that a named skill resumes as one

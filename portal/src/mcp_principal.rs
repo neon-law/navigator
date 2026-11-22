@@ -49,12 +49,10 @@ pub async fn inject_principal(
     // `sub` came from the session rather than from tokeninfo. Reading the
     // explicit `email` instead makes the source of the identity plain
     // rather than incidental.
-    if let Some(email) = req
-        .extensions()
-        .get::<crate::session::SessionData>()
-        .and_then(|s| s.email.clone())
-    {
-        req.extensions_mut().insert(mcp::Principal::new(email));
+    if let Some(session) = req.extensions().get::<crate::session::SessionData>() {
+        if let Some(email) = session.email.clone() {
+            req.extensions_mut().insert(mcp::Principal::new(email));
+        }
         return next.run(req).await;
     }
     if google_oauth.is_enforced() {
@@ -130,7 +128,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_first_party_session_supplies_the_principal_from_its_email_field() {
-        // The `navigator site mcp` path. Without this the CLI reaches the
+        // The first-party bearer path. Without this the CLI reaches the
         // endpoint but every side-effecting tool refuses for want of a
         // principal.
         assert_eq!(

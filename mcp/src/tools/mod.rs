@@ -89,7 +89,7 @@ pub fn list_tools() -> Vec<Value> {
 /// This is deliberately narrower than [`list_tools`], and the gap is not
 /// an accident: it is exactly [`requires_confirmation`]. A tool that
 /// emails a client, or that creates or answers a Notation, is a
-/// supervised act, and neither MCP transport can collect that approval —
+/// supervised act, and the MCP connection cannot collect that approval —
 /// the protocol has no `input-required` state to pause in. So the act is
 /// withheld rather than simulated, and it is performed in `/app`, where
 /// a human approves it and the approval is recorded against the matter.
@@ -97,17 +97,12 @@ pub fn list_tools() -> Vec<Value> {
 /// Filtering rather than only refusing at call time is the point: a tool
 /// the model cannot see is a tool it cannot decide to try, so the model
 /// is never in the position of proposing an act the transport could not
-/// supervise. Both transports still refuse a named-anyway call —
+/// supervise. HTTP also refuses a named-anyway call —
 /// [`withheld_message`] is that refusal — because a host may hold a
 /// stale catalog.
 ///
-/// Every transport that hands a catalog to a model calls this rather
-/// than [`list_tools`]: `mcp::server`'s `tools/list` for the `/mcp`
-/// endpoint, and `cli::mcp_bridge` for the stdio bridge. One predicate,
-/// two transports, so a newly-gated tool is withheld on both without a
-/// second edit. [`list_tools`] itself stays whole — it is the catalog,
-/// and `list_tools` and the A2A agent card still describe every
-/// capability the firm has.
+/// Navigator serves this catalog on authenticated HTTP connections. The A2A
+/// agent card also describes capabilities that require an approval exchange.
 #[must_use]
 pub fn advertised_catalog() -> Vec<Value> {
     list_tools()
@@ -154,10 +149,8 @@ pub fn is_advertised(tool_name: &str) -> bool {
     is_known_tool(tool_name) && !requires_confirmation(tool_name)
 }
 
-/// The refusal text for a gated tool a caller named anyway. Shared by
-/// both transports so the routing answer a model relays is the same one
-/// wherever it dialled in from: this is not "no such tool", it is "not
-/// here — do it where the approval can be recorded."
+/// The refusal text for a gated tool a caller named anyway. Used by
+/// the HTTP catalog and direct-call refusal.
 #[must_use]
 pub fn withheld_message(tool_name: &str) -> String {
     format!(
@@ -275,19 +268,65 @@ pub async fn call_tool(
     name: &str,
     arguments: &Value,
 ) -> Result<Value, ToolError> {
+    let caller = resolve_caller(&state.surreal, principal).await?;
+    caller.require_tool_authz(name)?;
+    dispatch_tool(state, principal, &caller, name, arguments).await
+}
+
+/// HTTP has no lawyer-approval exchange. Record the tier decision for each known
+/// writer before execution, including refusals and failed identity lookups.
+pub(super) async fn call_http_tool(
+    state: &McpState,
+    principal: Option<&Principal>,
+    name: &str,
+    arguments: &Value,
+) -> Result<Value, ToolError> {
+    if !is_known_tool(name) {
+        return Err(ToolError::Unknown(name.into()));
+    }
+    if !is_side_effecting(name) {
+        return call_tool(state, principal, name, arguments).await;
+    }
+    let caller = resolve_caller(&state.surreal, principal).await;
+    let actor = match &caller {
+        Ok(Caller::Authenticated { identity, .. }) => *identity,
+        _ => None,
+    };
+    let confirmation_required = requires_confirmation(name);
+    let authorized = actor.is_some_and(|i| i.role.is_lawyer_tier()) && !confirmation_required;
+    tracing::info!(
+        target: "audit",
+        event = "mcp.tool.authorization",
+        skill = name,
+        person_id = %actor.map_or_else(|| "none".to_owned(), |i| i.person_id.to_string()),
+        role = actor.map_or("none", |i| i.role.as_str()),
+        authorized,
+        confirmation_required,
+        confirmed = false,
+        audit = true,
+        "MCP write authorization",
+    );
+    if confirmation_required {
+        return Err(ToolError::Forbidden(withheld_message(name)));
+    }
+    let caller = caller?;
+    if !authorized {
+        return Err(ToolError::Forbidden(
+            "This tool requires a signed-in lawyer.".into(),
+        ));
+    }
+    dispatch_tool(state, principal, &caller, name, arguments).await
+}
+
+async fn dispatch_tool(
+    state: &McpState,
+    principal: Option<&Principal>,
+    caller: &Caller,
+    name: &str,
+    arguments: &Value,
+) -> Result<Value, ToolError> {
     let surreal = &state.surreal;
     let runtime = state.questionnaire_runtime.as_ref();
-    // Per-tool authorization, enforced for EVERY dispatch path (the MCP
-    // server, the A2A router loop, and the A2A direct-skill path). A
-    // side-effecting tool invoked by an *authenticated* non-lawyer caller
-    // is refused here, so authz never depends solely on the endpoint's
-    // embedded Rego policy gate or the LLM confirmation flow.
-    let caller = resolve_caller(surreal, principal).await?;
-    caller.require_tool_authz(name)?;
-    // A read is never refused on tier — `require_tool_authz` returns
-    // early for anything read-only, and that stays true. What changed is
-    // the answer: a read is scoped to the caller's own lens rather than
-    // taken over the whole deployment.
     let scope = caller.read_scope();
     match name {
         "create_person" => {
@@ -364,7 +403,7 @@ pub async fn call_tool(
                 ..
             } = caller
             {
-                link_person_project::require_admin_scope(surreal, identity, arguments).await?;
+                link_person_project::require_admin_scope(surreal, *identity, arguments).await?;
             }
             link_person_project::call(surreal, arguments).await
         }
