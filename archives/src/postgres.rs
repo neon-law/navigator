@@ -123,6 +123,7 @@ pub const POSTGRES_TABLES: &[&str] = &[
     "asset",
     "document_upload_session",
     "notation",
+    "notation_project_transfer",
     "notation_event",
     "notation_creation_attempt",
     "notation_machine_state",

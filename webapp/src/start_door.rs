@@ -117,7 +117,7 @@ pub fn StartDoorPage(
                     if intake.can_move {
                         form { method: "post", action: "{content.action}",
                             input { r#type: "hidden", name: "_csrf", value: "{csrf_token}" }
-                            button { r#type: "submit", name: "move_formation", value: "{intake.notation_id}", "Move this formation to its own Project" }
+                            button { class: "nav-btn", r#type: "submit", name: "move_formation", value: "{intake.notation_id}", "Move this formation to its own Project" }
                         }
                     }
                 }
