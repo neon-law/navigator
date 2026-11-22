@@ -1528,9 +1528,10 @@ async fn lawyer_walks_the_full_retainer_questionnaire_end_to_end() {
     .unwrap();
     // The clause POST redirects to the clauses list; return to the review
     // screen, which now offers approve with a non-empty fee clause.
+    let review_url = format!("{}/app/lawyer/notations/{notation_id}/review", base_url());
     wait_for_text_reloading(
         &c,
-        &format!("{}/app/lawyer/notations/{notation_id}/review", base_url()),
+        &review_url,
         "Awaiting attorney review",
         Duration::from_secs(20),
     )
@@ -1540,13 +1541,23 @@ async fn lawyer_walks_the_full_retainer_questionnaire_end_to_end() {
     // Submitting the approve form fires `approved`; the worker renders +
     // persists the PDF on entering `generate_pdf__*` and the page offers
     // the deliberate send action.
-    c.execute(
-        "document.querySelector('form[action$=\"/approve-send\"]').submit(); return true;",
-        vec![],
-    )
+    c.find(Locator::Css(
+        "form[action$='/approve-send'] button[type=submit]",
+    ))
+    .await
+    .unwrap()
+    .click()
     .await
     .unwrap();
-    wait_for_text(&c, "Send for signature", Duration::from_secs(20)).await;
+    // Approval can queue a render. Refresh the review GET as the pending notice
+    // directs until the persisted PDF makes the separate send action available.
+    wait_for_text_reloading(
+        &c,
+        &review_url,
+        "Send for signature",
+        Duration::from_secs(20),
+    )
+    .await;
 
     // --- Attorney sends: the binding envelope goes out -------
     c.execute(
