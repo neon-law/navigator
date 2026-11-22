@@ -13,6 +13,9 @@
 
 use dioxus::prelude::*;
 
+#[cfg(feature = "server")]
+mod server_store;
+
 pub mod admin_landing;
 pub mod admin_leads;
 pub mod admin_listing;

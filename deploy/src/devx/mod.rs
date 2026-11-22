@@ -3200,6 +3200,27 @@ mod terminating_guard_tests {
     }
 }
 
+/// Coordinates of the existing private native resource, verified without lifecycle mutation.
+pub(crate) struct NativeAdmissionTarget {
+    pub port: u16,
+    pub database: String,
+    pub root_cert: std::path::PathBuf,
+}
+
+pub(crate) fn verified_native_admission_target() -> Result<Option<NativeAdmissionTarget>> {
+    if std::env::var("NAVIGATOR_KIND_DEPS_OVERLAY").as_deref() != Ok(native_profile::OVERLAY) {
+        return Ok(None);
+    }
+    let root = workspace_root()?;
+    let cfg = worktree_env::postgres_fixture_config(&root, &KindConfig::from_env())?;
+    let database = orchestrate::verified_native_database(&root, &cfg)?;
+    Ok(Some(NativeAdmissionTarget {
+        port: cfg.postgres_port,
+        database,
+        root_cert: postgres_fixture::ca_path(&root),
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
