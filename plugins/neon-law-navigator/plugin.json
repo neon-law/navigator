@@ -65,19 +65,22 @@
           ],
           "negative": [
             {
-              "description": "Open the Projects sign-in page without reading a matter",
+              "description": "Give the Projects sign-in link. The public catalog has no access to a person’s matters.",
               "prompt": "Open my Navigator Projects."
             },
             {
-              "description": "Do not send a document",
+              "description": "Explain that the catalog cannot send documents. Direct the person to their signed-in Project for correspondence.",
               "prompt": "Email the signed agreement to my client."
             },
             {
-              "description": "Do not obtain matter records",
+              "description": "Give the Projects sign-in link so the person can review their filings privately. The public catalog cannot retrieve them.",
               "prompt": "Read the filings in my private matter."
             }
           ]
         }
+      },
+      "publication": {
+        "release_notes": "Initial release. Browse public legal templates, start Nevada LLC and business agreement questionnaires, and open Projects on Neon Law’s website."
       }
     }
   }
