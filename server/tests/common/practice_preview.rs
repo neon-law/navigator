@@ -22,6 +22,14 @@ impl PracticePreview {
             .expect("require PostgreSQL browser fixture history");
         let mut state =
             portal::test_support::app_state(store::surreal::SurrealDb::uninitialized()).await;
+        // The public signup form mounts with the OAuth routes. Rendering it uses no provider.
+        state.oauth = Some(portal::OAuthConfig::new(
+            "preview",
+            "synthetic",
+            "https://primary.example/auth/callback",
+            "https://idp.example/authorize",
+            "https://idp.example/token",
+        ));
         store::seed::seed_brand_blog(&state.surreal, store::seed::BrandSeed::Neon)
             .await
             .expect("seed public Brand Posts for previews");
