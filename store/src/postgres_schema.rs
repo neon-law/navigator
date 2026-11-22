@@ -1737,6 +1737,7 @@ mod tests {
                 ),
             ),
             ("20261122000200_create_legal_plan_claims.sql", include_str!("../postgres/migrations/20261122000200_create_legal_plan_claims.sql")),
+            ("20261122000300_close_native_graph_writers.sql", include_str!("../postgres/migrations/20261122000300_close_native_graph_writers.sql")),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

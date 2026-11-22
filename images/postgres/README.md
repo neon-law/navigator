@@ -32,6 +32,18 @@ GeoJSON round trips. It also checks restart persistence, a spatial database rest
 `tests/dbos` application is a standalone Cargo project outside Navigator's workspace. Pass a published
 `ghcr.io/neon-law/navigator/postgres@sha256:<digest>` to test a released image instead.
 
+## Application graph permissions
+
+The PostgreSQL compatibility gate also runs `tests/runtime-graph-roles.sh` against the current published digest. It
+creates an isolated cluster, applies genuine native migrations and the deployment role initializer, and connects as
+`navigator_app` over TCP through application admission. It exercises both migration-before-role and
+role-before-migration ordering, including initializer reapplication.
+
+Canonical wrappers derive vertices and relationship provenance from relational rows. The role proof checks new vertices
+and edges, atomic refusal of forged batches, and refusal of direct AGE writes, private loaders, catalog reads, and
+projection over row-security-enabled sources. It does not certify captured deployment upgrades, HTTP route
+authorization, or production recovery.
+
 ## Weekly publication
 
 [`postgres-image.yml`](../../.github/workflows/postgres-image.yml) publishes the image:
