@@ -116,6 +116,7 @@ cannot decay the way the old seven-line stub did.
 
 ## Navigator MCP, A2A, and MCP clients
 
+- [Use Navigator in ChatGPT](connect-navigator-to-chatgpt.md) to start or resume a Nevada LLC.
 - [`mcp-a2a-interaction.md`](mcp-a2a-interaction.md) — Navigator MCP over A2A: confirmations and errors.
 - [`navigator-how-to.md`](navigator-how-to.md) — connect over MCP and work in a Project repository with Jujutsu.
 - [`examples/jujutsu-project/AGENTS.md`](examples/jujutsu-project/AGENTS.md) — the generated Project shell's agent

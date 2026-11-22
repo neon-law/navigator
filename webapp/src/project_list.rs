@@ -13,7 +13,7 @@
 //! participation row to open the matter surface at `/app/projects/{code}`.
 //!
 //! Status is the matter-lifecycle pill (`store::projects::matter_lifecycle`):
-//! `pitch`, `active`, or `closed`, with an archived matter reading `closed`.
+//! `open`, `pitch`, `active`, or `closed`, with an archived matter reading `closed`.
 //! The `?status=` filter is a multi-select over those three, comma-separated;
 //! with no `?status=` the list shows `pitch` and `active`. The `?brand=`
 //! filter is a multi-select over the brand keys among the viewer's matters,
@@ -28,10 +28,10 @@ use crate::people::ViewerRole;
 use crate::portal_project_list::PersonId;
 
 /// Every status the filter offers, in lifecycle order.
-pub const PROJECT_STATUSES: [&str; 3] = ["pitch", "active", "closed"];
+pub const PROJECT_STATUSES: [&str; 4] = ["open", "pitch", "active", "closed"];
 
 /// The statuses selected when the request names none.
-pub const DEFAULT_PROJECT_STATUSES: [&str; 2] = ["pitch", "active"];
+pub const DEFAULT_PROJECT_STATUSES: [&str; 3] = ["open", "pitch", "active"];
 
 /// The `?status=` value that selects no status. Any value the filter does
 /// not offer selects nothing, so this one only needs to be stable.
@@ -265,8 +265,12 @@ fn project_row(
     };
     let (missing_onboarding, missing_offboarding_letter) =
         store::projects::matter_flags(has_engagement, status, has_closing);
-    let lifecycle =
-        store::projects::matter_lifecycle(status, missing_onboarding, missing_offboarding_letter);
+    let lifecycle = store::projects::project_lifecycle(
+        &m.code,
+        status,
+        missing_onboarding,
+        missing_offboarding_letter,
+    );
     ProjectRow {
         brand_name,
         code: m.code,
@@ -639,8 +643,8 @@ mod tests {
     }
 
     #[test]
-    fn no_status_query_selects_pitch_and_active() {
-        assert_eq!(selected_statuses(None), owned(&["pitch", "active"]));
+    fn no_status_query_selects_all_open_projects() {
+        assert_eq!(selected_statuses(None), owned(&["open", "pitch", "active"]));
     }
 
     #[test]
@@ -656,10 +660,10 @@ mod tests {
     fn toggling_round_trips_through_the_query() {
         let default = selected_statuses(None);
         let with_closed = toggle_status(&default, "closed");
-        assert_eq!(with_closed, owned(&["pitch", "active", "closed"]));
+        assert_eq!(with_closed, owned(&["open", "pitch", "active", "closed"]));
         assert_eq!(
             status_query(&with_closed),
-            vec![("status".to_string(), "pitch,active,closed".to_string())]
+            vec![("status".to_string(), "open,pitch,active,closed".to_string())]
         );
         assert!(status_query(&toggle_status(&with_closed, "closed")).is_empty());
         let none = toggle_status(&owned(&["active"]), "active");

@@ -1182,6 +1182,13 @@
       {
         "action": "export",
         "schema": "public",
+        "name": "notation_project_transfer",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
         "name": "notation_rate",
         "kind": "table",
         "accessible": true

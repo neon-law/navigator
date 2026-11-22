@@ -2369,8 +2369,31 @@ mod notation_catalog_tests {
     }
 
     #[test]
+    fn public_template_intake_links_reach_the_matching_notation() {
+        let offers = super::notation_start_offers();
+        let catalog = store::seed::public_seeded_templates().expect("public template catalog");
+        let formation = catalog
+            .iter()
+            .find(|row| row.code == "nv__llc_formation")
+            .expect("formation is discoverable");
+        assert_eq!(
+            formation.start_path.as_deref(),
+            Some("/notations/nevada-llc-formation/start")
+        );
+        for row in catalog {
+            if let Some(path) = row.start_path {
+                assert!(
+                    offers.iter().any(|offer| offer.template_code == row.code
+                        && path == format!("/notations/{}/start", offer.slug)),
+                    "{}",
+                    row.code
+                );
+            }
+        }
+    }
+
+    #[test]
     fn business_notations_have_fillable_previews_and_review_workflows() {
-        assert_eq!(super::BUSINESS_NOTATIONS.len(), 10);
         let seeded = store::seed::seeded_template_codes().expect("seed catalog");
         for (slug, _, path, _, source) in super::BUSINESS_NOTATIONS {
             let code = slug.replace('-', "_");

@@ -159,10 +159,7 @@ async fn debt_home_connects_panda_and_brooklyn_on_both_hosts() {
     }
 }
 
-/// Every live brand leads with its own voice line: a `tel:` link in the header
-/// and another in the home hero (the section holding the page's `<h1>`), each
-/// dialling that brand's `Branding::firm_phone`. One number per brand is what
-/// lets an inbound call pick that brand's call script.
+/// Every live brand has a header voice line. Same Day keeps its contact action in the site navigation.
 #[tokio::test]
 async fn every_brand_home_leads_with_its_own_click_to_call_number() {
     use views::brand::{BrandKey, DEFAULT_BRANDING};
@@ -187,9 +184,10 @@ async fn every_brand_home_leads_with_its_own_click_to_call_number() {
                 .find("</h1>")
                 .unwrap_or_else(|| panic!("{host} has an h1"));
         let hero_end = h1 + html[h1..].find("</section>").unwrap_or(html.len() - h1);
-        assert!(
+        assert_eq!(
             html[header_end..hero_end].contains(&dial),
-            "{host}: the hero does not dial {phone}"
+            *key != BrandKey::SameDayLegal,
+            "{host}: unexpected hero phone action"
         );
     }
 }

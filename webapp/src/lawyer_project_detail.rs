@@ -530,7 +530,7 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         .map_err(server_error)?;
     let entity_name = entity.map(|entity| entity.name);
     let (repository_url, last_committed_at) = project_source(&surreal, &project).await;
-    let onboarding_status = store::projects::onboarding_status(&surreal, id)
+    let onboarding_status = store::projects::onboarding_status(&surreal, id, &project.code)
         .await
         .map_err(server_error)?;
     let onboarding_runs = crate::sections::engagement::onboarding_runs(&surreal, id)
@@ -858,13 +858,14 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         page_tabs,
         onboarding,
         id: project.id.to_string(),
-        code: project.code,
-        name: project.name,
         status: store::projects::execution_lifecycle_label(
+            &project.code,
             &project.status,
             onboarding_status == store::projects::OnboardingStatus::Official,
         )
         .into(),
+        code: project.code,
+        name: project.name,
         brand: project.brand,
         entity_name,
         opened_at: project.inserted_at,

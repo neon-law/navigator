@@ -2448,6 +2448,7 @@ struct TemplateFrontmatter {
     title: String,
     #[serde(default)]
     description: Option<String>,
+    start_path: Option<String>,
     confidential: Option<bool>,
     respondent_type: String,
     /// forms-registry code of the government form this template fills
@@ -2475,6 +2476,8 @@ pub struct PublicTemplate {
     pub code: String,
     pub title: String,
     pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_path: Option<String>,
 }
 
 /// List bundled Templates explicitly marked public, without bodies or questionnaires.
@@ -2489,6 +2492,7 @@ pub fn public_seeded_templates() -> anyhow::Result<Vec<PublicTemplate>> {
                 code: template_code(template.label)?.to_owned(),
                 title: metadata.title,
                 description: metadata.description,
+                start_path: metadata.start_path,
             });
         }
     }

@@ -507,15 +507,17 @@ async fn enforce_engagement_first_resolved(
     // an offboarding document before it can close, so let its closing
     // letter be the first notation without weakening the engagement-
     // first rule for other kinds or Project lifecycle states.
-    let is_offboarding_pitch = if kind == Some(rules::kind::Kind::Offboarding) {
-        store::projects::find_by_id(surreal, project_id)
-            .await
-            .map_err(|error| NotationSessionError::Db(error.to_string()))?
-            .is_some_and(|project| project.status == "open")
-    } else {
-        false
-    };
-    if opens || is_offboarding_pitch {
+    if opens {
+        return Ok(());
+    }
+    if store::projects::find_by_id(surreal, project_id)
+        .await
+        .map_err(|error| NotationSessionError::Db(error.to_string()))?
+        .is_some_and(|project| {
+            !store::projects::requires_onboarding(&project.code)
+                || (kind == Some(rules::kind::Kind::Offboarding) && project.status == "open")
+        })
+    {
         return Ok(());
     }
     if store::assets::kinds_by_projects(surreal, &[project_id])

@@ -162,6 +162,13 @@
       "table": "plan_intake"
     },
     {
+      "extra_column": "self_serve",
+      "extra_table": null,
+      "missing_column": null,
+      "missing_table": null,
+      "table": "project"
+    },
+    {
       "extra_column": "entity_id",
       "extra_table": null,
       "missing_column": null,
@@ -549,6 +556,13 @@
     {
       "extra_column": null,
       "extra_table": "notation_machine_state",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "notation_project_transfer",
       "missing_column": null,
       "missing_table": null,
       "table": null
@@ -2235,7 +2249,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 189,
+    "table_count": 190,
     "tables": {
       "address": {
         "columns": {
@@ -5053,6 +5067,40 @@
           "template"
         ]
       },
+      "notation_project_transfer": {
+        "columns": {
+          "destination_project_id": "UUID",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "notation_id": "UUID",
+          "person_id": "UUID",
+          "source_project_id": "UUID"
+        },
+        "foreign_keys": [
+          [
+            "destination_project_id",
+            "project"
+          ],
+          [
+            "notation_id",
+            "notation"
+          ],
+          [
+            "person_id",
+            "person"
+          ],
+          [
+            "source_project_id",
+            "project"
+          ]
+        ],
+        "name": "notation_project_transfer",
+        "references": [
+          "notation",
+          "person",
+          "project"
+        ]
+      },
       "notation_rate": {
         "columns": {
           "active": "BOOLEAN",
@@ -5515,6 +5563,7 @@
           "plan_state": "TEXT",
           "private_notion_page_url": "TEXT",
           "repository_url": "TEXT",
+          "self_serve": "BOOLEAN",
           "shared_notion_page_url": "TEXT",
           "status": "TEXT",
           "updated_at": "TIMESTAMPTZ"

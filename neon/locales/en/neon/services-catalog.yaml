@@ -422,6 +422,11 @@ services:
       - answer
 
 start:
+  formation_disclosure: >-
+    Prepare your Nevada LLC paperwork yourself. Each business has its own saved questionnaire in your personal
+    Navigator Project. You decide when to file with Nevada. You can request attorney help separately.
+  resume_formation: Resume Nevada LLC formation
+  separate_formation: Start a separate Nevada LLC
   confirmation: >-
     Thank you. We have opened a file for you and a lawyer will review it and
     check for conflicts before any work begins. You are not a client yet, and

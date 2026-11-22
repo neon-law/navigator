@@ -216,9 +216,7 @@ pub struct ProjectDetailView {
     pub code: String,
     pub name: String,
     pub status: String,
-    /// This matter's onboarding reading, `pitch` until its onboarding
-    /// notation's envelope completes a signature loop Navigator sent, then
-    /// `official`. A wasm-safe string — the store's `OnboardingStatus` enum
+    /// The Project's onboarding status: optional, pitch, or official. A wasm-safe string — the store's `OnboardingStatus` enum
     /// does not cross to the client build; `store::projects::OnboardingStatus::
     /// label()` computes it server-side.
     #[serde(default)]
@@ -615,19 +613,20 @@ pub async fn get_project_detail() -> Result<ProjectDetailView, ServerFnError> {
         crate::sections::page::stored_page_tabs(&surreal, id, &project.code, viewer).await;
     // The matter's execution reading, from the signature records — `official`
     // only once the onboarding envelope completed a loop Navigator sent.
-    let onboarding_status = store::projects::onboarding_status(&surreal, id)
+    let onboarding_status = store::projects::onboarding_status(&surreal, id, &project.code)
         .await
         .map_err(server_error)?;
     Ok(ProjectDetailView {
         page_tabs,
         id: project.id.to_string(),
-        code: project.code,
-        name: project.name,
         status: store::projects::execution_lifecycle_label(
+            &project.code,
             &project.status,
             onboarding_status == store::projects::OnboardingStatus::Official,
         )
         .into(),
+        code: project.code,
+        name: project.name,
         onboarding_status: onboarding_status.label().to_string(),
         invoices,
         trust,
@@ -1123,10 +1122,7 @@ pub fn ClientProjectDetailPage(view: ProjectDetailView) -> Element {
             }
             p { class: "portal-detail__actions",
                 span { class: "status-chip", "{capitalized(&view.status)}" }
-                // The stored reading is `pitch` or `official`; a client reads
-                // what it means for them, in the chip itself — a tooltip
-                // never opens on a phone.
-                if !view.onboarding_status.is_empty() {
+                if matches!(view.onboarding_status.as_str(), "pitch" | "official") {
                     span { class: "status-chip",
                         if view.onboarding_status == "official" {
                             "Engagement signed"
