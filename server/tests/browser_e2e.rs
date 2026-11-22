@@ -1679,14 +1679,7 @@ async fn lawyer_walks_the_full_retainer_questionnaire_end_to_end() {
         .await
         .unwrap();
     let approval_started = std::time::Instant::now();
-    c.find(Locator::Css(&format!(
-        "{approval_form} button[type=submit]"
-    )))
-    .await
-    .unwrap()
-    .click()
-    .await
-    .unwrap();
+    scroll_and_js_click(&c, &format!("{approval_form} button[type=submit]")).await;
     let review_path = format!("/app/lawyer/notations/{notation_id}/review");
     let approval_remaining = wait_for_form_navigation(
         &c,
