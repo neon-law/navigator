@@ -252,7 +252,13 @@ pub async fn get_lawyer_dashboard() -> Result<DashboardView, ServerFnError> {
         .iter()
         .filter(|p| match status {
             "closed" => p.status == "closed",
-            "pitch" => p.status == "open" && !has_engagement.contains(&p.id),
+            "pitch" => {
+                store::projects::execution_lifecycle_label(
+                    &p.code,
+                    &p.status,
+                    has_engagement.contains(&p.id),
+                ) == "pitch"
+            }
             _ => p.status == "open" && has_engagement.contains(&p.id),
         })
         .collect();
@@ -444,7 +450,8 @@ fn pitch_row(
     pending: &std::collections::HashMap<uuid::Uuid, store::onboarding::EsignSummary>,
 ) -> ProjectLink {
     link.lifecycle =
-        store::projects::execution_lifecycle_label(&project.status, official).to_string();
+        store::projects::execution_lifecycle_label(&project.code, &project.status, official)
+            .to_string();
     if tab == "pitch" {
         if let Some(request) = pending.get(&project.id) {
             let provider = store::signatures::SignatureProvider::from_stored(&request.provider);
@@ -583,12 +590,16 @@ fn kpi_lifecycle_counts(
     let mut active = 0_u64;
     let mut closed = 0_u64;
     for project in projects {
-        match project.status.as_str() {
+        match store::projects::execution_lifecycle_label(
+            &project.code,
+            &project.status,
+            has_engagement.contains(&project.id),
+        ) {
             "closed" => closed = closed.saturating_add(1),
-            "open" if has_engagement.contains(&project.id) => {
+            "active" => {
                 active = active.saturating_add(1);
             }
-            "open" => pitch = pitch.saturating_add(1),
+            "pitch" => pitch = pitch.saturating_add(1),
             _ => {}
         }
     }

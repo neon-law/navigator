@@ -1,4 +1,4 @@
-//! Read a Project's onboarding status (`pitch` | `official`) through its
+//! Read a Project's onboarding status (`optional`, `pitch`, or `official`) through its
 //! authenticated, matter-scoped API.
 //!
 //! The status is derived server-side from completed `DocuSign` evidence. Navigator

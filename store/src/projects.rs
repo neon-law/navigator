@@ -4813,6 +4813,8 @@ pub fn project_lifecycle(
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OnboardingStatus {
+    /// The Project can proceed without a signed engagement.
+    Optional,
     /// The matter is still a pitch: no onboarding envelope UUID has verified
     /// DocuSign completion. Includes a matter whose envelope was
     /// sent and is still outstanding, and one that was declined, voided, or
@@ -4829,6 +4831,7 @@ impl OnboardingStatus {
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
+            Self::Optional => "optional",
             Self::Pitch => "pitch",
             Self::Official => "official",
         }
@@ -4839,6 +4842,7 @@ impl OnboardingStatus {
     #[must_use]
     pub fn title(self) -> &'static str {
         match self {
+            Self::Optional => MatterLifecycle::OnboardingOptional.title(),
             Self::Pitch => {
                 "This matter is still a pitch: its onboarding document has not completed a \
                  DocuSign envelope verified by Navigator."
@@ -4851,11 +4855,13 @@ impl OnboardingStatus {
 
     /// Derive the status from verified completed DocuSign evidence.
     #[must_use]
-    pub fn from_completed_envelope(completed: bool) -> Self {
+    pub fn for_project(code: &str, completed: bool) -> Self {
         if completed {
             Self::Official
-        } else {
+        } else if requires_onboarding(code) {
             Self::Pitch
+        } else {
+            Self::Optional
         }
     }
 }
@@ -4868,6 +4874,7 @@ impl OnboardingStatus {
 pub async fn onboarding_status(
     _surreal: &crate::surreal::SurrealDb,
     project_id: Uuid,
+    code: &str,
 ) -> Result<OnboardingStatus, String> {
     let pg = crate::postgres::PostgresDb::application()
         .await
@@ -4875,19 +4882,18 @@ pub async fn onboarding_status(
     let official = crate::onboarding::official_projects(&pg, &[project_id])
         .await
         .map_err(|error| error.to_string())?;
-    Ok(OnboardingStatus::from_completed_envelope(
+    Ok(OnboardingStatus::for_project(
+        code,
         official.contains(&project_id),
     ))
 }
 
 /// The displayed lifecycle keeps closed and archived states and gates active on execution.
 #[must_use]
-pub fn execution_lifecycle_label(status: &str, official: bool) -> &'static str {
+pub fn execution_lifecycle_label(code: &str, status: &str, official: bool) -> &'static str {
     match status {
         "archived" => "archived",
-        "closed" => "closed",
-        _ if official => "active",
-        _ => "pitch",
+        _ => project_lifecycle(code, status, !official, false).label(),
     }
 }
 
@@ -4994,7 +5000,7 @@ pub async fn matter_open_pitch_counts(
             (
                 project.brand.as_str(),
                 project.status.as_str(),
-                !has_engagement.contains(&project.id),
+                requires_onboarding(&project.code) && !has_engagement.contains(&project.id),
             )
         })
         .collect();
@@ -6362,11 +6368,32 @@ mod project_jurisdiction_tests {
 mod onboarding_status_tests {
     #[test]
     fn active_requires_official_execution() {
-        assert_eq!(super::execution_lifecycle_label("open", false), "pitch");
-        assert_eq!(super::execution_lifecycle_label("open", true), "active");
-        assert_eq!(super::execution_lifecycle_label("closed", false), "closed");
         assert_eq!(
-            super::execution_lifecycle_label("archived", true),
+            super::execution_lifecycle_label("navigator-acme", "open", false),
+            "open"
+        );
+        assert_eq!(
+            super::OnboardingStatus::for_project("navigator", false),
+            super::OnboardingStatus::Optional
+        );
+        assert_eq!(
+            super::OnboardingStatus::for_project("navigator", true),
+            super::OnboardingStatus::Official
+        );
+        assert_eq!(
+            super::execution_lifecycle_label("matter", "open", false),
+            "pitch"
+        );
+        assert_eq!(
+            super::execution_lifecycle_label("matter", "open", true),
+            "active"
+        );
+        assert_eq!(
+            super::execution_lifecycle_label("matter", "closed", false),
+            "closed"
+        );
+        assert_eq!(
+            super::execution_lifecycle_label("matter", "archived", true),
             "archived"
         );
     }

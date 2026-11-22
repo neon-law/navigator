@@ -8,8 +8,9 @@ Has a `status` (`open`, `closed`, `archived`) and is **always opened against an 
 organization, or a `Human` entity for a solo natural person. The `entity_id` FK is `NOT NULL`: a matter without an
 entity is a bug.
 
-An open Project reads `active` only under the [Official](official.md) onboarding execution rule. Until that rule is
-satisfied, it reads [Pitch](pitch.md). The stored `status` remains the operational open/closed/archived state.
+An open Project reads `active` only under the [Official](official.md) onboarding execution rule. Before execution, a
+Project whose code begins with `navigator` reads `open` and all other open Projects read [Pitch](pitch.md). The stored
+`status` tracks whether the Project is open, closed, or archived.
 
 A self-serve founder can open a personal Project, identified by `navigator-<person-id>`, on Neon Law. The founder is its
 client-side participant. Each Nevada LLC has its own Notation and questionnaire answers in that Project. Starting

@@ -97,7 +97,7 @@ async fn application_scope_rechecks_history_and_never_falls_back_to_another_admi
                     ));
                     let source = crate::surreal::SurrealDb::uninitialized();
                     assert!(
-                        crate::projects::onboarding_status(&source, uuid::Uuid::new_v4())
+                        crate::projects::onboarding_status(&source, uuid::Uuid::new_v4(), "navigator")
                             .await
                             .is_err()
                     );

@@ -2323,7 +2323,7 @@ fn canonical_document(base: &str) -> Value {
                 "schema": { "type": "array", "items": { "type": "object", "required": ["code", "status", "lifecycle", "brand", "firm_id", "closed_at", "closure_reason", "source_state"], "properties": {
                   "code": { "type": "string" },
                   "status": { "type": "string", "enum": ["open", "closed", "archived"] },
-                  "lifecycle": { "type": "string", "enum": ["pitch", "active", "closed", "archived"],
+                  "lifecycle": { "type": "string", "enum": ["open", "pitch", "active", "closed", "archived"],
                     "description": "Active requires verified completed DocuSign onboarding." },
                   "brand": { "type": "string", "description": "The house brand the Project belongs to." },
                   "firm_id": { "type": ["string", "null"], "format": "uuid", "description": "The owning Firm, or null when the Project has not been assigned." },

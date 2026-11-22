@@ -9523,7 +9523,12 @@ async fn lawyer_projects_list_defaults_to_pitch_and_active_and_filters_by_status
     assert!(body.contains(&open_name), "{body}");
     assert!(!body.contains("Estate of a Retired Matter"), "{body}");
     assert!(!body.contains("Wound-Down Matter"), "{body}");
-    for (status, selected) in [("pitch", true), ("active", true), ("closed", false)] {
+    for (status, selected) in [
+        ("open", true),
+        ("pitch", true),
+        ("active", true),
+        ("closed", false),
+    ] {
         assert!(
             body.contains(&format!(
                 r#"data-status="{status}" aria-current="{selected}" "#
@@ -9532,7 +9537,7 @@ async fn lawyer_projects_list_defaults_to_pitch_and_active_and_filters_by_status
         );
     }
     assert!(
-        body.contains(r#"href="/app/projects?status=pitch,active,closed"#),
+        body.contains(r#"href="/app/projects?status=open,pitch,active,closed"#),
         "the closed toggle adds closed to the selection: {body}"
     );
 

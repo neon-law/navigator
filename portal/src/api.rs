@@ -2075,6 +2075,7 @@ async fn project_lifecycle_door(
         .into_iter()
         .map(|project| ProjectLifecycleEntry {
             lifecycle: store::projects::execution_lifecycle_label(
+                &project.code,
                 &project.status,
                 official.contains(&project.id),
             )
@@ -2423,7 +2424,7 @@ async fn project_status_door(
         store::projects::matter_lifecycle_sets(&state.surreal, std::slice::from_ref(&project))
             .await
             .map_err(ApiError::Db)?;
-    let onboarding_status = store::projects::onboarding_status(&state.surreal, id)
+    let onboarding_status = store::projects::onboarding_status(&state.surreal, id, &project.code)
         .await
         .map_err(ApiError::Db)?;
     let lifecycle = store::projects::project_lifecycle(

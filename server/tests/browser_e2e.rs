@@ -2481,13 +2481,11 @@ async fn project_status_filter_fits_and_toggles_closed() {
             "Status filter overflows at {width}px"
         );
     }
-    // The chips follow `PROJECT_STATUSES` (pitch, active, closed), so the
-    // third one is the Closed status.
-    scroll_and_js_click(&c, &format!("{filter} a.nav-tab:nth-of-type(3)")).await;
+    scroll_and_js_click(&c, &format!("{filter} a[data-status=closed]")).await;
     c.wait()
         .at_most(Duration::from_secs(10))
         .for_element(Locator::Css(&format!(
-            "{filter} a.nav-tab.is-active:nth-of-type(3)"
+            "{filter} a[data-status=closed].is-active"
         )))
         .await
         .unwrap();
@@ -2495,7 +2493,7 @@ async fn project_status_filter_fits_and_toggles_closed() {
     assert_eq!(url.path(), "/app/projects");
     assert!(url
         .query_pairs()
-        .any(|(key, value)| key == "status" && value == "pitch,active,closed"));
+        .any(|(key, value)| key == "status" && value == "open,pitch,active,closed"));
     c.close().await.unwrap();
 }
 

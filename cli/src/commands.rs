@@ -951,7 +951,7 @@ pub enum ProjectsCmd {
         #[command(flatten)]
         host: HostOpt,
     },
-    /// Read the Project's onboarding status: pitch or official.
+    /// Read the Project's onboarding status: optional, pitch, or official.
     Lifecycle {
         /// Project code. Defaults to project.name in navigator.yaml.
         project_code: Option<String>,

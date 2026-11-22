@@ -1692,7 +1692,7 @@ mod tests {
         // A matter whose loop has not completed reads `pitch` — even now,
         // with the offer accepted and the notation opened.
         assert_eq!(
-            store::projects::onboarding_status(&surreal, project.id)
+            store::projects::onboarding_status(&surreal, project.id, &project.code)
                 .await
                 .expect("read onboarding status"),
             store::projects::OnboardingStatus::Pitch,
@@ -1907,7 +1907,7 @@ mod tests {
         // The fake envelope completes the signature loop and archives its documents.
         // Its synthetic provider ID cannot establish official DocuSign execution.
         assert_eq!(
-            store::projects::onboarding_status(&surreal, project.id)
+            store::projects::onboarding_status(&surreal, project.id, &project.code)
                 .await
                 .expect("read onboarding status after the loop"),
             store::projects::OnboardingStatus::Pitch,
