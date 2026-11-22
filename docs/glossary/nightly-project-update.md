@@ -7,8 +7,9 @@ description: >-
 
 The daily routine cleanup of every [Project](project.md) in a [Deployment Environment](deployment-environment.md).
 Kubernetes starts `NightlyProjectUpdate` at **03:33 UTC daily**. Its UTC date key deduplicates repeat submissions. The
-DBOS parent journals the roster and runs a child for each applicable Project and tag. The compatibility worker runs the
-membership, Slack, and repository children.
+DBOS parent journals the roster and runs a DAG of DAGs with one child per applicable Project and tag.
+`NightlyProjectUpdateCalendar` handles calendars. The compatibility worker runs the three shared children,
+`NightlyProjectUpdateMembership`, `NightlyProjectUpdateSlack`, and `NightlyProjectUpdateRepository`.
 
 After journaling the roster, both the Restate parent and its opt-in DBOS twin reconcile the folder tree and separate
 [Client Submissions](client-submissions.md) root for every open Project, before Slack configuration admission or

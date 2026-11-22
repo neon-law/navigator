@@ -69,7 +69,7 @@ impl Tag {
         }
     }
 
-    /// The Restate service that runs this tag's child DAG.
+    /// The registered workflow name for this tag's child DAG.
     #[must_use]
     pub const fn service(self) -> &'static str {
         match self {

@@ -55,10 +55,16 @@ pub const WORKFLOW_SERVICES: &[&str] = &[
 pub const VIRTUAL_OBJECTS: &[&str] = &["notation", "project-slack"];
 
 /// Internal DBOS operations have no Restate binding and share their parent caller switch.
-pub const INTERNAL_DBOS_OPERATIONS: &[(&str, &str)] = &[(
-    crate::dbos_email_summary::recovery::WORKFLOW,
-    crate::dbos_email_summary::ENABLED_ENV,
-)];
+pub const INTERNAL_DBOS_OPERATIONS: &[(&str, &str)] = &[
+    (
+        crate::dbos_email_summary::recovery::WORKFLOW,
+        crate::dbos_email_summary::ENABLED_ENV,
+    ),
+    (
+        crate::nightly_project_update::Tag::Calendar.service(),
+        crate::dbos_nightly_project_update::ENABLED_ENV,
+    ),
+];
 
 #[cfg(test)]
 mod tests {
@@ -154,12 +160,23 @@ mod tests {
     }
 
     #[test]
-    fn internal_recovery_uses_its_registered_parent_selector() {
-        for (name, flag) in super::INTERNAL_DBOS_OPERATIONS {
-            assert!(!WORKFLOW_SERVICES.contains(name));
-            assert!(store::workflow_engine::WORKFLOWS
+    fn internal_operations_use_registered_parent_selectors() {
+        for (child, parent) in [
+            (
+                crate::dbos_email_summary::recovery::WORKFLOW,
+                "EmailSummary",
+            ),
+            (
+                crate::nightly_project_update::Tag::Calendar.service(),
+                "NightlyProjectUpdate",
+            ),
+        ] {
+            assert!(!WORKFLOW_SERVICES.contains(&child));
+            let selection = store::workflow_engine::WORKFLOWS
                 .iter()
-                .any(|selection| selection.name == "EmailSummary" && selection.flag == *flag));
+                .find(|selection| selection.name == parent)
+                .expect("parent has a registered engine selector");
+            assert!(super::INTERNAL_DBOS_OPERATIONS.contains(&(child, selection.flag)));
         }
     }
 
@@ -215,9 +232,18 @@ mod tests {
     #[test]
     fn the_nightly_project_update_and_its_tagged_children_are_registered() {
         assert!(WORKFLOW_SERVICES.contains(&"NightlyProjectUpdate"));
-        for tag in crate::nightly_project_update::Tag::ALL {
+        use crate::nightly_project_update::Tag;
+        for tag in Tag::ALL {
+            let registered = if Tag::COMPATIBILITY.contains(tag) {
+                WORKFLOW_SERVICES.contains(&tag.service())
+            } else {
+                super::INTERNAL_DBOS_OPERATIONS.contains(&(
+                    tag.service(),
+                    crate::dbos_nightly_project_update::ENABLED_ENV,
+                ))
+            };
             assert!(
-                WORKFLOW_SERVICES.contains(&tag.service()),
+                registered,
                 "tag `{}` has no registered child `{}`",
                 tag.name(),
                 tag.service()
