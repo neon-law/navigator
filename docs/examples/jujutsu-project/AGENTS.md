@@ -15,7 +15,7 @@ Read `navigator.yaml` and stay in this Project checkout. Preserve the Project's 
 
 ## Navigator access
 
-Sign in with `navigator site login` to use the local MCP bridge. It reads the saved session from `~/.navigator.json`.
+Connect your MCP client to the deployment’s `/app/mcp` URL over HTTPS. Supply a bearer credential for signed-in tools.
 Keep credentials out of tool arguments, chat, and repository files.
 
 Use `navigator glossary list` and `navigator glossary show "<Term>"` for terminology.

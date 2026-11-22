@@ -201,9 +201,9 @@ The same questionnaire state machine is also driven from outside the HTML form b
 exactly one codepath.
 
 Creating or answering a Notation is a supervised act, so that walk runs over A2A, where every call pauses in
-`input-required` until a firm principal authorizes it. The `/app/mcp` endpoint and the stdio bridge withhold both tools
-and refuse one named anyway: neither can collect an approval, and simulating one is worse than declining. See
-[`docs/mcp-a2a-interaction.md`](mcp-a2a-interaction.md) for the authorization round trip.
+`input-required` until a firm principal authorizes it. The `/app/mcp` endpoint withholds both tools and directs the
+caller to the Navigator app for approval. See [`docs/mcp-a2a-interaction.md`](mcp-a2a-interaction.md) for the
+authorization round trip.
 
 `hudson notation preview` is intentionally a local reading surface: it binds only to `127.0.0.1`, always on an
 OS-assigned ephemeral port chosen at random, opens no store, and holds no session or persistent state.
