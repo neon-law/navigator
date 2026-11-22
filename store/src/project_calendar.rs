@@ -581,6 +581,23 @@ mod tests {
         assert!(!super::receives_event_invitation(Role::Owner));
     }
 
+    async fn seed_calendar_project() -> (uuid::Uuid, uuid::Uuid) {
+        let pg = crate::postgres::PostgresDb::configured()
+            .await
+            .unwrap()
+            .unwrap();
+        sqlx::query_as::<_, (uuid::Uuid, uuid::Uuid)>(
+            "WITH j AS (INSERT INTO jurisdiction (name) VALUES ('Calendar jurisdiction') RETURNING id),
+                  t AS (INSERT INTO entity_type (name) VALUES ('Calendar entity type') RETURNING id),
+                  e AS (INSERT INTO entity (name, entity_type_id, jurisdiction_id)
+                        SELECT 'Calendar entity', t.id, j.id FROM t,j RETURNING id),
+                  f AS (INSERT INTO firm (name, slug, status, entity_id)
+                        SELECT 'Calendar Firm', 'calendar-firm', 'active', id FROM e RETURNING id)
+             INSERT INTO project (code, name, status, brand, entity_id, firm_id)
+             SELECT 'calendar-test', 'Calendar test', 'open', 'neon', e.id, f.id FROM e,f RETURNING id, firm_id"
+        ).fetch_one(pg.pool()).await.unwrap()
+    }
+
     #[tokio::test]
     async fn postgres_assignments_add_and_remove_each_eligible_event_guest() {
         use crate::firms::{self, FirmMembership, NewPersonFirmRole};
@@ -590,53 +607,33 @@ mod tests {
 
         crate::test_support::with_postgres(async {
             let db = crate::surreal::SurrealDb::uninitialized();
-            let pg = crate::postgres::PostgresDb::configured().await.unwrap().unwrap();
-            let (project_id, firm_id) = sqlx::query_as::<_, (uuid::Uuid, uuid::Uuid)>(
-                "WITH j AS (INSERT INTO jurisdiction (name) VALUES ('Calendar jurisdiction') RETURNING id),
-                      t AS (INSERT INTO entity_type (name) VALUES ('Calendar entity type') RETURNING id),
-                      e AS (INSERT INTO entity (name, entity_type_id, jurisdiction_id)
-                            SELECT 'Calendar entity', t.id, j.id FROM t,j RETURNING id),
-                      f AS (INSERT INTO firm (name, slug, status, entity_id)
-                            SELECT 'Calendar Firm', 'calendar-firm', 'active', id FROM e RETURNING id)
-                 INSERT INTO project (code, name, status, brand, entity_id, firm_id)
-                 SELECT 'calendar-test', 'Calendar test', 'open', 'neon', e.id, f.id FROM e,f RETURNING id, firm_id"
-            ).fetch_one(pg.pool()).await.unwrap();
-            firms::set_calendar_owner(&db, Role::Owner, None, firm_id, FAKE_CALENDAR_OWNER).await.unwrap();
+            let (project_id, firm_id) = seed_calendar_project().await;
+            firms::set_calendar_owner(&db, Role::Owner, None, firm_id, FAKE_CALENDAR_OWNER)
+                .await
+                .unwrap();
             let calendar = FakeCalendar::default();
-            ensure(&db, project_id, &calendar).await.unwrap();
+            assert_eq!(
+                ensure(&db, project_id, &calendar).await.unwrap().outcome,
+                CalendarOutcome::Created
+            );
+            assert_eq!(
+                ensure(&db, project_id, &calendar).await.unwrap().outcome,
+                CalendarOutcome::Present
+            );
+            assert_eq!(calendar.created(), 1);
             let calendar_id = calendar.calendars().pop().unwrap().id;
-            for (name, role, membership, dri) in [
-                (
-                    "supervisor",
-                    Role::Lawyer,
-                    FirmMembership::Lawyer,
-                    DriRequest::Designate(projects::DriSide::Lawyer),
-                ),
-                (
-                    "clerk",
-                    Role::Clerk,
-                    FirmMembership::Clerk,
-                    DriRequest::Unchanged,
-                ),
-                (
-                    "lawyer",
-                    Role::Lawyer,
-                    FirmMembership::Lawyer,
-                    DriRequest::Unchanged,
-                ),
-                (
-                    "admin",
-                    Role::Admin,
-                    FirmMembership::Admin,
-                    DriRequest::Unchanged,
-                ),
-                (
-                    "owner",
-                    Role::Owner,
-                    FirmMembership::Admin,
-                    DriRequest::Unchanged,
-                ),
+            for (name, role, membership) in [
+                ("supervisor", Role::Lawyer, FirmMembership::Lawyer),
+                ("clerk", Role::Clerk, FirmMembership::Clerk),
+                ("lawyer", Role::Lawyer, FirmMembership::Lawyer),
+                ("admin", Role::Admin, FirmMembership::Admin),
+                ("owner", Role::Owner, FirmMembership::Admin),
             ] {
+                let dri = if name == "supervisor" {
+                    DriRequest::Designate(projects::DriSide::Lawyer)
+                } else {
+                    DriRequest::Unchanged
+                };
                 let email = format!("participant-{name}@calendar.test");
                 let person = persons::create(&db, &NewPerson::with_role(name, &email, role))
                     .await
@@ -666,7 +663,9 @@ mod tests {
                 )
                 .await
                 .unwrap();
-                super::sync_membership(&db, project_id, &calendar).await.unwrap();
+                super::sync_membership(&db, project_id, &calendar)
+                    .await
+                    .unwrap();
                 let guests = calendar.assigned_guests(&calendar_id);
                 let key = person.id.simple().to_string();
                 if role == Role::Owner {
@@ -680,10 +679,14 @@ mod tests {
                 remove_participant(&db, project_id, row.id, DriActor::System)
                     .await
                     .unwrap();
-                super::sync_membership(&db, project_id, &calendar).await.unwrap();
+                super::sync_membership(&db, project_id, &calendar)
+                    .await
+                    .unwrap();
                 let guests = calendar.assigned_guests(&calendar_id);
                 assert!(!guests.contains_key(&key));
-                assert!(guests.values().any(|email| email == "participant-supervisor@calendar.test"));
+                assert!(guests
+                    .values()
+                    .any(|email| email == "participant-supervisor@calendar.test"));
             }
         })
         .await;
