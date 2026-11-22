@@ -729,10 +729,7 @@ fn add_email_summary_routes(
     }
 }
 
-/// The notation virtual object's eight routes: the Restate object's seven
-/// handlers, plus a journal-backed `workflow_events` read the Restate side
-/// never served (the caller degrades its absence to an empty list — see
-/// `RestateRuntime::events`).
+/// Native Notation mutations, revision-bound approvals, and bodyless reads.
 fn add_notation_routes(router: Router, notation: &NotationIngress) -> Router {
     router
         .route(

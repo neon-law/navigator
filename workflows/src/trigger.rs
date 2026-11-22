@@ -105,9 +105,7 @@ pub async fn start_workflow<B: Serialize + ?Sized>(
         .post(&url)
         .json(body)
         .timeout(std::time::Duration::from_secs(30));
-    // Empty token is treated as absent: a mounted-but-empty secret
-    // must not produce `Authorization: Bearer ` (Restate Cloud rejects
-    // that as malformed). Mirrors `RestateRuntime::with_auth_token`.
+    // Empty tokens omit Authorization, matching the shared Notation transport.
     if let Some(token) = auth_token.filter(|t| !t.is_empty()) {
         req = req.bearer_auth(token);
     }

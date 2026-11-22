@@ -1,31 +1,15 @@
-//! DBOS-backed caller side for the `notation` state machine.
+//! DBOS Notation caller over the authenticated shared HTTP transport.
 //!
-//! The notation port (workflows-service `dbos_notation`) reproduces the
-//! Restate virtual object's wire contract verbatim — same paths, same
-//! request bodies, same bodyless reads — so the application's callers do
-//! not change shape when the engine flips. This adapter is therefore a
-//! thin named wrapper over [`crate::RestateRuntime`]: it points the same
-//! HTTP client at the worker's authenticated DBOS ingress and exists so
-//! the engine choice is a *type* at the boot site, not a URL string that
-//! happens to differ.
-//!
-//! The header on [`crate::runtime_restate`] pins the wire shape; the
-//! bodyless-read contract (`*_current_state` / `*_events` reject any body
-//! or `Content-Type`) is inherited unchanged.
-//!
-//! Boot reads the engine from [`ENABLED_ENV`] — the same strict
-//! `true`/`false` switch contract as every other `NAVIGATOR_DBOS_*` flag.
-//! With the flag on, [`DbosNotationRuntime::from_lookup`] requires the
-//! worker's DBOS ingress URL and bearer token; unlike the Restate
-//! adapter's permissive localhost default, a missing ingress fails boot —
-//! pointing notation traffic at nothing is never the safe default.
+//! Native ingress configuration is explicit and fails closed when missing.
+//! Start, signal, bodyless read and actor serialization use the neutral
+//! Notation transport; approval uses the native revision-bound handlers.
 
 use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::dbos_engine::flag_enabled;
+use crate::notation_http::{NotationHttpRuntime, NOTATION_SERVICE};
 use crate::runtime::{SignalContext, StateMachineRuntime, WorkflowEvent, WorkflowRuntimeError};
-use crate::runtime_restate::RestateRuntime;
 use crate::spec::{MachineKind, StateName, WorkflowSpec};
 use crate::trigger::{DBOS_INGRESS_TOKEN_ENV, DBOS_INGRESS_URL_ENV};
 
@@ -38,7 +22,7 @@ pub const ENABLED_ENV: &str = "NAVIGATOR_DBOS_NOTATION_ENABLED";
 /// # Errors
 ///
 /// Refuses any value other than `true` or `false`, so a typo cannot
-/// silently leave traffic on Restate.
+/// silently choose a different runtime.
 pub fn enabled(
     lookup: impl Fn(&str) -> Option<String>,
 ) -> Result<bool, crate::dbos_engine::SettingsError> {
@@ -49,9 +33,7 @@ pub fn enabled(
 /// [`StateMachineRuntime`] over the worker's DBOS ingress.
 #[derive(Clone)]
 pub struct DbosNotationRuntime {
-    /// The worker deliberately speaks the Restate wire contract, so every
-    /// method delegates to the shared HTTP client.
-    inner: RestateRuntime,
+    inner: NotationHttpRuntime,
 }
 
 impl DbosNotationRuntime {
@@ -60,10 +42,7 @@ impl DbosNotationRuntime {
     #[must_use]
     pub fn new(ingress_url: impl Into<String>, token: Option<String>) -> Self {
         Self {
-            // The service path segment stays `notation` — the wire path the
-            // port reproduces.
-            inner: RestateRuntime::new(ingress_url, crate::runtime_restate::DEFAULT_SERVICE)
-                .with_auth_token(token),
+            inner: NotationHttpRuntime::new(ingress_url, NOTATION_SERVICE).with_auth_token(token),
         }
     }
 
@@ -94,7 +73,7 @@ impl DbosNotationRuntime {
     /// The worker ingress URL this runtime posts to.
     #[must_use]
     pub fn ingress_url(&self) -> String {
-        self.inner.broker_url()
+        self.inner.ingress_url()
     }
 }
 
@@ -269,5 +248,66 @@ mod tests {
         ]))
         .expect("complete configuration");
         assert_eq!(runtime.ingress_url(), "http://worker:9083");
+    }
+    #[tokio::test]
+    async fn native_approval_uses_authenticated_revision_bound_handlers() {
+        use crate::{ApprovalProgress, SignalContext, StateMachineRuntime};
+        use wiremock::matchers::{body_partial_json, header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        let id = uuid::Uuid::from_u128(7);
+        let actor = uuid::Uuid::from_u128(99);
+        Mock::given(method("POST"))
+            .and(path(format!("/notation/{id}/workflow_approve")))
+            .and(header("authorization","Bearer native-token"))
+            .and(body_partial_json(serde_json::json!({"review_revision":3,"value":"approved","acting_person_id":actor})))
+            .respond_with(ResponseTemplate::new(200)).expect(1).mount(&server).await;
+        Mock::given(method("POST"))
+            .and(path(format!("/notation/{id}/workflow_approval_progress")))
+            .and(header("authorization", "Bearer native-token"))
+            .and(body_partial_json(serde_json::json!({"review_revision":3})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!("ready")))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let runtime = DbosNotationRuntime::new(server.uri(), Some("native-token".into()));
+        assert_eq!(
+            runtime
+                .approve(
+                    id,
+                    3,
+                    "approved",
+                    Some(SignalContext {
+                        acting_person_id: actor
+                    })
+                )
+                .await
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            runtime.approval_progress(id, 3).await.unwrap(),
+            Some(ApprovalProgress::Ready)
+        );
+    }
+
+    #[tokio::test]
+    async fn native_approval_authentication_failure_remains_a_transport_error() {
+        use crate::{StateMachineRuntime, WorkflowRuntimeError};
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        let id = uuid::Uuid::from_u128(7);
+        Mock::given(method("POST"))
+            .and(path(format!("/notation/{id}/workflow_approve")))
+            .respond_with(ResponseTemplate::new(401))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let runtime = DbosNotationRuntime::new(server.uri(), Some("rejected-token".into()));
+        assert!(matches!(
+            runtime.approve(id, 3, "approved", None).await,
+            Err(WorkflowRuntimeError::Transport(_))
+        ));
     }
 }
