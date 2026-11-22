@@ -2422,10 +2422,24 @@ where
     let (to, subject, in_reply_to, quoted) = if let Some(thread_id) = thread.as_deref() {
         let thread_data =
             read_project_thread(&gmail, thread_id, project.as_deref(), contact.as_deref()).await?;
-        let latest = thread_data
+        // The thread's newest entry can be the lawyer's own abandoned draft;
+        // quote and thread from the newest non-draft message instead.
+        let latest = match thread_data
             .messages
-            .last()
-            .ok_or_else(|| anyhow!("thread has no messages"))?;
+            .iter()
+            .rev()
+            .find(|message| !message.label_ids.iter().any(|label| label == "DRAFT"))
+        {
+            Some(message) => message,
+            // An empty thread and an all-draft thread both fail the filter;
+            // each error names its own condition.
+            None if thread_data.messages.is_empty() => {
+                return Err(anyhow!("thread has no messages"));
+            }
+            None => {
+                return Err(anyhow!("the Gmail thread has no non-draft Messages"));
+            }
+        };
         let to = if to.is_empty() {
             vec![header(latest, "Reply-To")
                 .or_else(|| header(latest, "From"))
@@ -6529,6 +6543,200 @@ Can I sign electronically?\r\n\
                 .iter()
                 .any(|request| request.method.as_str() == "POST"));
         }
+    }
+
+    /// A Gmail body travels base64url-encoded; encode fixture text the same
+    /// way the client decodes it.
+    fn encoded_body(text: &str) -> String {
+        GMAIL_BASE64URL.encode(text)
+    }
+
+    /// A thread where the newest message is the lawyer's own abandoned draft.
+    fn thread_whose_newest_message_is_a_draft() -> serde_json::Value {
+        json!({
+            "id": "thread-1",
+            "messages": [
+                {"id": "m-1", "payload": {"mimeType": "text/plain", "headers": [
+                    {"name": "From", "value": "Client <client@example.test>"},
+                    {"name": "Date", "value": "Mon, 9 Nov 2026 09:00:00 -0800"},
+                    {"name": "Subject", "value": "Retainer"},
+                    {"name": "Message-ID", "value": "<m-1@example.test>"}
+                ], "body": {"data": encoded_body("Please send the retainer agreement.")}}},
+                {"id": "m-2", "labelIds": ["DRAFT"], "payload": {"mimeType": "text/plain", "headers": [
+                    {"name": "From", "value": "Example Attorney <lawyer@example.test>"},
+                    {"name": "Subject", "value": "Re: Retainer"},
+                    {"name": "Message-ID", "value": "<m-2@example.test>"}
+                ], "body": {"data": encoded_body("Abandoned first attempt.")}}}
+            ]
+        })
+    }
+
+    #[tokio::test]
+    async fn a_reply_draft_skips_abandoned_drafts_when_picking_the_message_to_quote() {
+        let directory = tempfile::tempdir().unwrap();
+        let body = directory.path().join("body.txt");
+        std::fs::write(&body, "Synthetic reply").unwrap();
+        let server = draft_server(thread_whose_newest_message_is_a_draft()).await;
+        let saved = draft_with(&server, draft_request(body, &[], None, Some("thread-1")))
+            .await
+            .unwrap();
+        assert_eq!(saved.id, "draft-9");
+        let requests = server.received_requests().await.unwrap();
+        let draft = requests
+            .iter()
+            .find(|request| request.method.as_str() == "POST")
+            .unwrap();
+        let (_, raw) = decoded_draft(draft);
+        assert!(raw.contains("To: Client <client@example.test>"), "{raw}");
+        assert!(raw.contains("Subject: Re: Retainer"), "{raw}");
+        assert!(raw.contains("In-Reply-To: <m-1@example.test>"), "{raw}");
+        assert!(
+            raw.contains("> Please send the retainer agreement."),
+            "{raw}"
+        );
+        assert!(!raw.contains("Abandoned first attempt."), "{raw}");
+    }
+
+    #[tokio::test]
+    async fn a_reply_draft_revision_quotes_the_latest_non_draft_message() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, ResponseTemplate};
+
+        let directory = tempfile::tempdir().unwrap();
+        let body = directory.path().join("body.txt");
+        std::fs::write(&body, "Synthetic reply").unwrap();
+        let server = draft_server(thread_whose_newest_message_is_a_draft()).await;
+        Mock::given(method("PUT"))
+            .and(path("/users/me/drafts/draft-1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": "draft-1"})))
+            .mount(&server)
+            .await;
+        let mut request = draft_request(body, &[], None, Some("thread-1"));
+        request.draft_id = Some("draft-1".into());
+        let saved = draft_with(&server, request).await.unwrap();
+        assert_eq!(saved.id, "draft-1");
+        let requests = server.received_requests().await.unwrap();
+        let put = requests
+            .iter()
+            .find(|request| request.method.as_str() == "PUT")
+            .unwrap();
+        let (_, raw) = decoded_draft(put);
+        assert!(raw.contains("In-Reply-To: <m-1@example.test>"), "{raw}");
+        assert!(
+            raw.contains("> Please send the retainer agreement."),
+            "{raw}"
+        );
+        assert!(!raw.contains("Abandoned first attempt."), "{raw}");
+    }
+
+    #[tokio::test]
+    async fn an_html_reply_draft_skips_abandoned_drafts_in_both_parts() {
+        let directory = tempfile::tempdir().unwrap();
+        let body = directory.path().join("body.html");
+        std::fs::write(&body, "<p>Synthetic reply</p>").unwrap();
+        let server = draft_server(thread_whose_newest_message_is_a_draft()).await;
+        let mut request = draft_request(body, &[], None, Some("thread-1"));
+        request.html = true;
+        let saved = draft_with(&server, request).await.unwrap();
+        assert_eq!(saved.id, "draft-9");
+        let requests = server.received_requests().await.unwrap();
+        let draft = requests
+            .iter()
+            .find(|request| request.method.as_str() == "POST")
+            .unwrap();
+        let (_, raw) = decoded_draft(draft);
+        let message = parsed(&raw);
+        let text = message.body_text(0).unwrap().replace("\r\n", "\n");
+        assert!(
+            text.contains("> Please send the retainer agreement."),
+            "{text}"
+        );
+        assert!(!text.contains("Abandoned first attempt."), "{text}");
+        let html = message.body_html(0).unwrap();
+        assert!(
+            html.contains("Please send the retainer agreement."),
+            "{html}"
+        );
+        assert!(!html.contains("Abandoned first attempt."), "{html}");
+    }
+
+    #[tokio::test]
+    async fn a_thread_of_only_drafts_is_refused_without_writing_a_draft() {
+        let directory = tempfile::tempdir().unwrap();
+        let body = directory.path().join("body.txt");
+        std::fs::write(&body, "Synthetic reply").unwrap();
+        let server = draft_server(json!({
+            "id": "thread-1",
+            "messages": [
+                {"id": "m-1", "labelIds": ["DRAFT"], "payload": {"mimeType": "text/plain", "headers": [
+                    {"name": "From", "value": "Example Attorney <lawyer@example.test>"},
+                    {"name": "Subject", "value": "Re: Retainer"},
+                    {"name": "Message-ID", "value": "<m-1@example.test>"}
+                ], "body": {"data": encoded_body("Abandoned first attempt.")}}},
+                {"id": "m-2", "labelIds": ["DRAFT"], "payload": {"mimeType": "text/plain", "headers": [
+                    {"name": "From", "value": "Example Attorney <lawyer@example.test>"},
+                    {"name": "Subject", "value": "Re: Retainer"},
+                    {"name": "Message-ID", "value": "<m-2@example.test>"}
+                ], "body": {"data": encoded_body("Abandoned second attempt.")}}}
+            ]
+        }))
+        .await;
+        let error = draft_with(&server, draft_request(body, &[], None, Some("thread-1")))
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(
+            error.to_string(),
+            "the Gmail thread has no non-draft Messages"
+        );
+        assert!(!server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .any(|request| request.method.as_str() == "POST" || request.method.as_str() == "PUT"));
+    }
+
+    #[tokio::test]
+    async fn a_reply_draft_quotes_the_lawyer_s_own_sent_reply_when_it_is_latest() {
+        let directory = tempfile::tempdir().unwrap();
+        let body = directory.path().join("body.txt");
+        std::fs::write(&body, "Synthetic reply").unwrap();
+        let server = draft_server(json!({
+            "id": "thread-1",
+            "messages": [
+                {"id": "m-1", "payload": {"mimeType": "text/plain", "headers": [
+                    {"name": "From", "value": "Client <client@example.test>"},
+                    {"name": "Subject", "value": "Retainer"},
+                    {"name": "Message-ID", "value": "<m-1@example.test>"}
+                ], "body": {"data": encoded_body("Please send the retainer agreement.")}}},
+                {"id": "m-2", "labelIds": ["SENT"], "payload": {"mimeType": "text/plain", "headers": [
+                    {"name": "From", "value": "Example Attorney <lawyer@example.test>"},
+                    {"name": "Date", "value": "Tue, 10 Nov 2026 10:00:00 -0800"},
+                    {"name": "Subject", "value": "Re: Retainer"},
+                    {"name": "Message-ID", "value": "<m-2@example.test>"}
+                ], "body": {"data": encoded_body("Attached is the retainer agreement.")}}}
+            ]
+        }))
+        .await;
+        let saved = draft_with(
+            &server,
+            draft_request(body, &["client@example.test"], None, Some("thread-1")),
+        )
+        .await
+        .unwrap();
+        assert_eq!(saved.id, "draft-9");
+        let requests = server.received_requests().await.unwrap();
+        let draft = requests
+            .iter()
+            .find(|request| request.method.as_str() == "POST")
+            .unwrap();
+        let (_, raw) = decoded_draft(draft);
+        assert!(raw.contains("In-Reply-To: <m-2@example.test>"), "{raw}");
+        assert!(
+            raw.contains("> Attached is the retainer agreement."),
+            "{raw}"
+        );
     }
 
     #[tokio::test]
