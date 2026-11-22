@@ -201,11 +201,12 @@ cleanup_checkpoint() {
 
 finalize_cleanup() {
   secondary=$?
+  local failure_line="${BASH_LINENO[0]:-0}"
   trap - EXIT INT TERM ERR
   if ! $cleanup_complete; then
     cleanup_failed=true
-    printf 'Cleanup interrupted; private supports retained\nprimary_exit=%s\nsecondary_exit=%s\nlast_cleanup_phase=%s\n' \
-      "$result" "$secondary" "${cleanup_phase:-not_started}" >> "$private/cleanup.log"
+    printf 'Cleanup interrupted; private supports retained\nprimary_exit=%s\nsecondary_exit=%s\nlast_cleanup_phase=%s\nfailure_line=%s\n' \
+      "$result" "$secondary" "${cleanup_phase:-not_started}" "$failure_line" >> "$private/cleanup.log"
   fi
   logs_exported=false
   if redact; then logs_exported=true; else cleanup_failed=true; fi
