@@ -927,6 +927,7 @@
 {"file":"portal/src/brand_tokens.rs","line":105,"function":"css_response","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/canonical_host.rs","line":325,"function":"resolve_brand_and_enforce_host","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/canonical_host.rs","line":329,"function":"resolve_brand_and_enforce_host","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"portal/src/ci_auth.rs","line":545,"function":"github_mint_selects_only_a_live_host_in_the_configured_deployment","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/client_portal.rs","line":49,"function":"apply_host_mark","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/csrf.rs","line":95,"function":"require_csrf","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/deployment_keys.rs","line":18,"function":"redirect","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
