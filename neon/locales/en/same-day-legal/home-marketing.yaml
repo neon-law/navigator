@@ -7,45 +7,8 @@ tagline: Get your business filing started before the new year
 hero_lead: >-
   Create your free account now. When you’re ready, use Navigator in your AI assistant
   to find templates and prepare your own paperwork. You file it yourself and pay any government fees.
-hero_cta:
-  href: /auth/signup
-  label: Pre-sign up for free
 skin: same_day_legal
 bands:
-  - kind: steps
-    anchor: mcp-setup
-    overline: ""
-    heading: Find a legal template in your AI assistant
-    description: Browse the public template catalog for free. You can use it without a Navigator account.
-    items:
-      - title: Add Navigator to ChatGPT
-        body:
-          - - text: "Open "
-            - text: ChatGPT Plugins
-              href: https://chatgpt.com/plugins
-            - text: >-
-                , select +, then Add custom MCP server. Name it Navigator and describe it as a public legal template catalog.
-          - - text: >-
-                If your workspace hides this option, ask your administrator about custom plugins.
-                In another assistant that supports MCP, open its settings and add a custom server.
-      - title: Enter the connection details
-        body:
-          - - text: "Paste this server URL: "
-            - text: https://www.neonlaw.com/app/mcp
-              code: true
-          - - text: >-
-                Choose no authentication and, if asked, Streamable HTTP. In ChatGPT, review the connection,
-                choose Create as a plugin, and install Navigator.
-          - - text: "The hosted service limits how often you can call it. Prefer to run it yourself? "
-            - text: Get the open-source project
-              href: https://github.com/neon-law/navigator
-            - text: "."
-      - title: Try it in a new chat
-        body:
-          - - text: "Type @ and select Navigator in ChatGPT. Then ask "
-            - text: "Which Nevada LLC templates are in the public catalog?"
-              code: true
-          - - text: Look for Nevada LLC Formation in the results.
   - kind: cards
     anchor: attorney-options
     overline: ""

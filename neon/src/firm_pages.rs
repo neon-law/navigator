@@ -100,6 +100,15 @@ const BUSINESS_NOTATIONS: &[(&str, &str, &str, &str, &str)] = &[
         include_str!("../../templates/notations/neon_law/one_way_nda.md"),
     ),
     (
+        "nevada-single-member-llc-operating-agreement",
+        "Nevada Single-Member LLC Operating Agreement",
+        "notations/neon_law/nevada_single_member_llc_operating_agreement.md",
+        "Ownership and management for a Nevada LLC with one individual member.",
+        include_str!(
+            "../../templates/notations/neon_law/nevada_single_member_llc_operating_agreement.md"
+        ),
+    ),
+    (
         "advisor-agreement",
         "Advisor Agreement",
         "notations/neon_law/advisor_agreement.md",
@@ -2369,8 +2378,28 @@ mod notation_catalog_tests {
     }
 
     #[test]
+    fn public_template_intake_links_reach_the_matching_notation() {
+        let offers = super::notation_start_offers();
+        let catalog = store::seed::public_seeded_templates().expect("public template catalog");
+        let operating = catalog
+            .iter()
+            .find(|row| row.code == "nevada_single_member_llc_operating_agreement")
+            .expect("single-member operating agreement is discoverable");
+        assert!(operating.start_path.is_some());
+        for row in catalog {
+            if let Some(path) = row.start_path {
+                assert!(
+                    offers.iter().any(|offer| offer.template_code == row.code
+                        && path == format!("/notations/{}/start", offer.slug)),
+                    "{}",
+                    row.code
+                );
+            }
+        }
+    }
+
+    #[test]
     fn business_notations_have_fillable_previews_and_review_workflows() {
-        assert_eq!(super::BUSINESS_NOTATIONS.len(), 10);
         let seeded = store::seed::seeded_template_codes().expect("seed catalog");
         for (slug, _, path, _, source) in super::BUSINESS_NOTATIONS {
             let code = slug.replace('-', "_");

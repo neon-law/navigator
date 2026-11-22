@@ -8,6 +8,8 @@ Jujutsu (`jj`) manages local changes and publishes them to the Project's Git for
 For public Template discovery, add a custom **Streamable HTTP** MCP server in your assistant and enter
 `https://www.neonlaw.com/app/mcp`. Ask “List Navigator’s public Templates.” You can browse without signing in.
 
+Follow the [ChatGPT setup and Nevada LLC walkthrough](connect-navigator-to-chatgpt.md) for a first request.
+
 To register the public catalog in Codex, run:
 
 ```sh

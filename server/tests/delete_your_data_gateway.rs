@@ -131,7 +131,7 @@ async fn the_gateway_is_404_on_every_non_neon_brand_host() {
 }
 
 #[tokio::test]
-async fn same_day_legal_home_leads_to_signup_and_separate_attorney_options() {
+async fn same_day_legal_home_offers_attorney_options() {
     store::test_support::with_postgres(check_same_day_home()).await;
 }
 
@@ -162,10 +162,7 @@ async fn check_same_day_home() {
         for expected in [
             "<title>Same Day Legal | Home</title>",
             "fm-page--same-day-legal",
-            r#"id="mcp-setup""#,
-            r#"href="/auth/signup""#,
-            "https://www.neonlaw.com/app/mcp",
-            r#"href="https://github.com/neon-law/navigator""#,
+            r#"id="attorney-options""#,
             r#"href="/app#pricing""#,
             "From $50",
             r#"href="mailto:"#,
@@ -176,13 +173,11 @@ async fn check_same_day_home() {
             );
         }
         let html = scraper::Html::parse_document(&home);
-        let hero_links = scraper::Selector::parse(".fm-hero a").unwrap();
-        let first_action = html.select(&hero_links).next().expect("homepage action");
-        assert_eq!(first_action.attr("href"), Some("/auth/signup"), "{host}");
-        assert!(first_action
-            .value()
-            .classes()
-            .any(|c| c == "nav-btn--primary"));
+        let removed = scraper::Selector::parse(
+            ".fm-hero a[href='/auth/signup'], .fm-hero a[href^='tel:'], #mcp-setup, a[href='/#mcp-setup']",
+        )
+        .unwrap();
+        assert!(html.select(&removed).next().is_none(), "{host}");
         let (status, signup) = get_on_host(&app, "/auth/signup", Some(host)).await;
         assert_eq!(status, StatusCode::OK, "{host}: {signup}");
         assert!(signup.contains(r#"action="/auth/signup/age""#), "{host}");

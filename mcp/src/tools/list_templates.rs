@@ -34,11 +34,12 @@ pub fn clarify_intent(intent: &str) -> Option<&'static str> {
 pub fn descriptor() -> Value {
     json!({
         "name": "list_templates",
-        "description": "List public Templates from Navigator's bundled shared catalog. For a natural-language \
-                        request to create a document or Work In Progress, pass the user's wording as intent. \
+        "description": "List public Templates from Navigator's bundled shared catalog. For a short \
+                        request such as “Create a work in progress”, pass that phrase as intent. Omit personal and matter details. \
                         Ask any returned clarification before suggesting a Template or taking action. \
+                        For a matching template with a start_path, offer a link on this server’s website to begin signed-in intake. \
                         Use the titles and descriptions to match clear requests, and ask when several fit.",
-        "annotations": { "readOnlyHint": true },
+        "annotations": { "readOnlyHint": true, "destructiveHint": false, "openWorldHint": false },
         "inputSchema": {
             "type": "object",
             "properties": { "intent": { "type": "string" } },
@@ -61,9 +62,16 @@ pub fn call(arguments: &Value) -> Result<Value, ToolError> {
         .map_err(|error| ToolError::Internal(error.to_string()))?;
     let text = templates
         .iter()
-        .map(|template| match &template.description {
-            Some(description) => format!("{} ({}) — {description}", template.title, template.code),
-            None => format!("{} ({})", template.title, template.code),
+        .map(|template| {
+            use std::fmt::Write as _;
+            let mut line = format!("{} ({})", template.title, template.code);
+            if let Some(description) = &template.description {
+                let _ = write!(line, " — {description}");
+            }
+            if let Some(path) = &template.start_path {
+                let _ = write!(line, " — Start intake: {path}");
+            }
+            line
         })
         .collect::<Vec<_>>()
         .join("\n");
@@ -89,9 +97,17 @@ mod tests {
         assert!(templates
             .iter()
             .all(|row| row["code"] != "onboarding__letter"));
+        let formation = templates
+            .iter()
+            .find(|row| row["code"] == "nv__llc_formation")
+            .unwrap();
+        assert_eq!(
+            formation["start_path"],
+            "/notations/nevada-llc-formation/start"
+        );
         assert!(templates
             .iter()
-            .all(|row| row.as_object().unwrap().len() == 3));
+            .all(|row| row.get("body").is_none() && row.get("questionnaire").is_none()));
 
         let result = call(&json!({ "intent": "Create a work in progress!" })).unwrap();
         assert!(result["structuredContent"]["clarification"].is_string());

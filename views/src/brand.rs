@@ -673,7 +673,6 @@ pub static SAME_DAY_LEGAL_BRANDING: Branding = Branding {
         logo_href: "/public/brand/same-day-legal/logo.svg",
         social_image: "",
         nav: &[
-            NavLink::leaf("Free MCP setup", "/#mcp-setup"),
             NavLink::leaf("Attorney options", "/#attorney-options"),
             NavLink::leaf("Legal services", "/#needs"),
             NavLink::leaf("Mobile app", SAME_DAY_LEGAL_APP_PATH),

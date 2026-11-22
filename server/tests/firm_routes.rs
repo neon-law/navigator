@@ -509,6 +509,10 @@ async fn the_home_explains_the_mcp_setup_and_the_quickstart() {
     let body = body_string(anon_get(&app, "/").await).await;
     for expected in [
         r#"id="connect-mcp""#,
+        r#"href="https://chatgpt.com/plugins""#,
+        r#"href="/start/llc-file""#,
+        r#"href="/notations/nevada-llc-formation""#,
+        r#"href="/app/projects""#,
         "https://www.neonlaw.com/app/mcp",
         "Navigator is open source under MIT OR Apache-2.0.",
         r#"id="video""#,

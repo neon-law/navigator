@@ -4,6 +4,7 @@ title: Mutual Non-Disclosure Agreement
 jurisdiction: US
 respondent_type: person_and_entity
 confidential: false
+start_path: /notations/mutual-nda/start
 signers:
   - role: company_signer
     delivery: emailed

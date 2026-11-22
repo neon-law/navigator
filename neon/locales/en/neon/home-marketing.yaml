@@ -11,26 +11,47 @@ bands:
   - kind: steps
     anchor: connect-mcp
     overline: Remote MCP
-    heading: Connect Navigator to your AI assistant
+    heading: Connect Navigator to ChatGPT
     description: >-
-      Browse public legal Templates from a chat app that supports remote MCP.
-      You can use Template discovery without a Navigator account.
+      Find public legal templates in chat. When you’re ready to start a Nevada LLC or draft an agreement,
+      sign in on Neon Law’s website to enter your details.
     items:
-      - title: Add a custom connector
+      - title: Add Navigator to ChatGPT
         body:
-          - - text: >-
-                Open your assistant's connector settings and choose the option to add a custom MCP server.
-                In Grok, open Connectors, choose New Connector, then select Custom.
-      - title: Enter the Navigator URL
+          - - text: "Sign in to "
+            - text: ChatGPT Plugins
+              href: https://chatgpt.com/plugins
+            - text: >-
+                , select +, then Add custom MCP server. Name it Navigator and describe it as a public legal template catalog.
+                If the option is missing, ask your workspace administrator to enable custom plugins.
+      - title: Connect to the public catalog
         body:
-          - - text: https://www.neonlaw.com/app/mcp
+          - - text: "Enter "
+            - text: https://www.neonlaw.com/app/mcp
               code: true
-            - text: " is the server URL. If asked for a transport, choose Streamable HTTP."
-      - title: Try a request in chat
+            - text: >-
+                . Choose no authentication and, if prompted for a transport, Streamable HTTP.
+                Review the connection, select Create as a plugin, then install Navigator.
+      - title: Find the Nevada LLC Formation template
         body:
-          - - text: >-
-                Ask “List Navigator’s public Templates.” If you ask “Create a work in progress,”
-                Navigator asks whether you want a matter summary or want to record time or a cost.
+          - - text: "In a new chat, type @, select Navigator, and ask "
+            - text: Help me form a Nevada LLC. Which template should I start?
+              code: true
+          - - text: "Look for "
+            - text: Nevada LLC Formation
+              href: /notations/nevada-llc-formation
+            - text: ". For an operating agreement, ask which template fits your ownership and management structure."
+      - title: Start your LLC paperwork
+        body:
+          - - text: Open the Nevada LLC questionnaire
+              href: /start/llc-file
+            - text: >-
+                , sign in, and enter your company name, registered agent, and management details.
+                A lawyer reviews the paperwork before signature. Formation requires a separate state filing.
+          - - text: "To return to an existing matter, open "
+            - text: My Projects
+              href: /app/projects
+            - text: "."
   - kind: project_network
     anchor: connected-project
     overline: One connected Project

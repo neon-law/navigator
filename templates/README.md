@@ -26,6 +26,7 @@ questionnaire without saving answers; a real Notation belongs to a Project.
 
 - [Mutual Non-Disclosure Agreement](notations/neon_law/mutual_nda.md)
 - [One-Way Non-Disclosure Agreement](notations/neon_law/one_way_nda.md)
+- [Nevada Single-Member LLC Operating Agreement](notations/neon_law/nevada_single_member_llc_operating_agreement.md)
 - [Advisor Agreement](notations/neon_law/advisor_agreement.md)
 - [Master Services Agreement](notations/neon_law/master_services_agreement.md)
 - [Employee Offer Letter](notations/neon_law/employee_offer_letter.md)

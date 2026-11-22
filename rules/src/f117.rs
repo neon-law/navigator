@@ -89,6 +89,7 @@ pub const ALLOWED_CUSTOM_TEXT_ROLES: &[&str] = &[
     "business_cookie_inventory", // List every cookie or tracker with provider, purpose, necessary/optional category, lifetime, and data recipients; reconcile against an actual scan.
     "business_liability", // a reasonable cap, measurement period, and exceptions appropriate to the service and applicable law.
     "business_local_notices", // Provide applicable state and consumer notices and current official complaint contacts.
+    "contributions", // Negotiated contribution terms, including noncash property, value, and due date.
     "business_order", // Describe the signed order, services, users, milestones, dependencies, and acceptance criteria.
     "business_permitted_use", // Describe permitted personal or business use.
     "business_prior_materials", // List retained pre-existing materials and their license terms, or state none.

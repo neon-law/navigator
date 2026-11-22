@@ -4,6 +4,7 @@ title: Master Services Agreement
 jurisdiction: US
 respondent_type: person_and_entity
 confidential: false
+start_path: /notations/master-services-agreement/start
 clauses:
   dispute:
     source: dispute_resolution@1

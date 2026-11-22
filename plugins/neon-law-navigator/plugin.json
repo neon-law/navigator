@@ -1,0 +1,84 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "neon-law-navigator",
+  "version": "0.1.0",
+  "description": "Find a public template for a Nevada LLC or business agreement. Open the matching intake on Neon Law’s website to sign in and begin. You can also open your existing Navigator Projects.",
+  "author": {
+    "name": "Neon Law",
+    "url": "https://www.neonlaw.com"
+  },
+  "homepage": "https://www.neonlaw.com",
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "Neon Law Navigator",
+        "shortDescription": "Start an LLC or agreement",
+        "longDescription": "Find a public template for a Nevada LLC or business agreement. Open the matching intake on Neon Law’s website to sign in and begin. You can also open your existing Navigator Projects.",
+        "developerName": "Neon Law",
+        "category": "Productivity",
+        "websiteURL": "https://www.neonlaw.com",
+        "supportURL": "https://www.neonlaw.com/contact",
+        "privacyPolicyURL": "https://www.neonlaw.com/privacy",
+        "termsOfServiceURL": "https://www.neonlaw.com/terms",
+        "defaultPrompt": [
+          "Help me form a Nevada LLC.",
+          "Find an operating agreement for my LLC.",
+          "Open my Navigator Projects."
+        ],
+        "composerIcon": "./assets/neon-law.png",
+        "logo": "./assets/neon-law.png"
+      },
+      "onboardingSkill": "./skills/get-started/SKILL.md",
+      "review": {
+        "test_cases": {
+          "positive": [
+            {
+              "description": "Start LLC formation",
+              "prompt": "Help me form a Nevada LLC.",
+              "tools_triggered": "list_templates",
+              "expected_behavior": "Offer Nevada LLC Formation and its signed-in intake link."
+            },
+            {
+              "description": "Match an operating agreement",
+              "prompt": "My Nevada LLC is member-managed and I am its only member. I own it personally. Help me start an operating agreement.",
+              "tools_triggered": "list_templates",
+              "expected_behavior": "Find the Nevada single-member operating agreement in the public catalog and offer its signed-in intake link."
+            },
+            {
+              "description": "Find a mutual NDA",
+              "prompt": "Help two companies start a mutual NDA.",
+              "tools_triggered": "list_templates",
+              "expected_behavior": "Show the mutual NDA and link to its intake."
+            },
+            {
+              "description": "Find an advisor agreement",
+              "prompt": "I need an advisor agreement.",
+              "tools_triggered": "list_templates",
+              "expected_behavior": "Show the Advisor Agreement and link to its intake."
+            },
+            {
+              "description": "Find a services agreement",
+              "prompt": "Help me start a master services agreement.",
+              "tools_triggered": "list_templates",
+              "expected_behavior": "Show the Master Services Agreement and link to its intake."
+            }
+          ],
+          "negative": [
+            {
+              "description": "Open the Projects sign-in page without reading a matter",
+              "prompt": "Open my Navigator Projects."
+            },
+            {
+              "description": "Do not send a document",
+              "prompt": "Email the signed agreement to my client."
+            },
+            {
+              "description": "Do not obtain matter records",
+              "prompt": "Read the filings in my private matter."
+            }
+          ]
+        }
+      }
+    }
+  }
+}
