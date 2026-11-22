@@ -1,6 +1,6 @@
 """Owned shell-child regression; no Docker/KIND/network/Cargo execution."""
 from pathlib import Path
-import subprocess,tempfile,json
+import subprocess,tempfile,json,re
 import sys
 root=Path(__file__).parent
 helper=Path(sys.argv[1]).resolve()
@@ -63,6 +63,8 @@ startup_alive
         public=task/'public';quick=public/'quickstart.log';cleanup=public/'cleanup.log'
         row={'mode':mode,'exit':result.returncode,'startup_exported':quick.exists(),'cleanup_exported':cleanup.exists(),'private_retained':(task/'private').exists(),'role_exported':(public/'role-private.log').exists()}
         assert result.returncode==1,row
+        if cleanup.exists() and 'Cleanup interrupted' in cleanup.read_text():
+            assert re.search(r'^failure_line=[1-9][0-9]*$', cleanup.read_text(), re.MULTILINE), row
         if mode == 'success_secondary_failure':
             assert cleanup.exists() and row['private_retained'] and not row['role_exported'], row
             text = cleanup.read_text()
