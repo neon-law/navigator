@@ -2239,6 +2239,15 @@ ci_matter_content_denied if {
     evidence_share_management
 }
 
+# Read one envelope after the handler verifies its Project.
+route_allow if {
+    count(input.path) == 6
+    array.slice(input.path, 0, 3) == ["app", "api", "projects"]
+    input.path[4] == "envelopes"
+    input.method == "GET"
+    is_lawyer(input.session)
+}
+
 # Refresh already-correlated envelopes; the handler enforces matter participation.
 route_allow if {
     count(input.path) == 6

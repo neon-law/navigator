@@ -3852,6 +3852,19 @@ fn canonical_document(base: &str) -> Value {
             }
           }
         },
+        "/app/api/projects/{id}/envelopes/{envelope_id}": {
+          "get": {
+            "summary": "Read a linked or uniquely matched envelope from the Firm account",
+            "parameters": [
+              { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+              { "name": "envelope_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+            ],
+            "responses": {
+              "200": { "description": "Current provider status, timestamps and ordered signers" },
+              "404": { "description": "Envelope unavailable or outside this Project" }
+            }
+          }
+        },
         "/app/api/projects/{id}/envelopes/refresh": {
           "post": {
             "summary": "Refresh the Project's known DocuSign envelopes",

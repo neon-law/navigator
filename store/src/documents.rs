@@ -1095,8 +1095,7 @@ pub async fn ingest_bytes_exactly_once(
 /// [`ingest_bytes_exactly_once`] for a caller that knows the document's
 /// identity — the signing record and per-kind metadata an executed document
 /// carries (LAW-344). Same `(Project, filename, content)` dedup; the
-/// identity rides onto the written row only when the ingest is the one that
-/// writes it, so a replay returns the already-tagged row untouched.
+/// provider filing also records its envelope when identical bytes were uploaded earlier.
 pub async fn ingest_bytes_exactly_once_as(
     db: &SurrealDb,
     storage: &Arc<dyn StorageService>,
@@ -1109,7 +1108,9 @@ pub async fn ingest_bytes_exactly_once_as(
     }
     let sha_hex = crate::assets::sha256_hex(bytes);
     if let Some(existing) =
-        crate::assets::find_filed_copy(db, args.project_id, args.filename, &sha_hex).await?
+        crate::assets::find_filed_copy(db, args.project_id, args.filename, &sha_hex)
+            .await?
+            .filter(|asset| matches_provider_filing(args, identity, asset))
     {
         return Ok(IngestedDocument {
             asset_id: existing.id,
@@ -1120,6 +1121,18 @@ pub async fn ingest_bytes_exactly_once_as(
         });
     }
     ingest_bytes_as(db, storage, args, identity, bytes).await
+}
+
+pub(crate) fn matches_provider_filing(
+    args: &IngestArgs<'_>,
+    identity: &DocumentIdentity<'_>,
+    existing: &crate::assets::Asset,
+) -> bool {
+    use crate::document_pointers::envelope_id_from_asset_metadata as envelope;
+    args.source != "docusign"
+        || (existing.source.as_deref() == Some("docusign")
+            && envelope(existing.metadata.as_ref()) == envelope(identity.metadata.as_ref())
+            && existing.signing == identity.signing)
 }
 
 /// Ingest one server-generated document under a caller-supplied stable key.

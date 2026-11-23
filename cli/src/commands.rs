@@ -1501,9 +1501,12 @@ pub enum ProjectEnvelopeCmd {
         #[command(flatten)]
         host: HostOpt,
     },
-    /// Refresh recorded `DocuSign` envelopes on this matter.
+    /// Refresh recorded envelopes, or read one directly from the Firm account by ID.
     Status {
         project_code: String,
+        /// Read status without registering the envelope or filing documents.
+        #[arg(long)]
+        envelope_id: Option<uuid::Uuid>,
         #[command(flatten)]
         host: HostOpt,
     },
@@ -2496,8 +2499,17 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
                 remote::notation_adopt_envelope(host.host.as_deref(), &project, &draft, envelope_id)
                     .await
             }
-            ProjectEnvelopeCmd::Status { project_code, host } => {
-                projects::status::refresh_envelopes(host.host.as_deref(), &project_code).await
+            ProjectEnvelopeCmd::Status {
+                project_code,
+                envelope_id,
+                host,
+            } => {
+                projects::status::refresh_envelopes(
+                    host.host.as_deref(),
+                    &project_code,
+                    envelope_id,
+                )
+                .await
             }
         },
         ProjectsCmd::FeedbackCheck {

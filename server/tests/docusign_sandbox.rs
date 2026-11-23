@@ -1,35 +1,11 @@
 #![allow(clippy::doc_markdown)]
-//! Live DocuSign **demo/sandbox** smoke test — Layer 4 validation.
+//! The draft contract prepares a synthetic PDF and reads signer progress by envelope ID.
+//! CI runs the contract against a loopback HTTP mock. The ignored live test runs the same
+//! contract using explicit DocuSign demo credentials. The embedded-signing test sends to a captive sandbox recipient
+//! when `NAVIGATOR_RUN_LIVE_SANDBOX=1`. Completing the signing ceremony and
+//! obtaining a real Certificate of Completion require a human signer.
 //!
-//! Unlike the wiremock contract tests (which prove we are consistent
-//! with *ourselves*), this proves we are consistent with *DocuSign*: it
-//! mints a real access token via JWT grant, builds a retainer PDF with
-//! anchored signature tabs, creates a real envelope in the demo
-//! environment, and requests an embedded recipient-view signing URL for
-//! the captive client. It is the only test that can catch a regression
-//! in our understanding of DocuSign's API (a wrong tab field name, a bad
-//! anchor, an envelope the server rejects, a broken recipient view).
-//!
-//! What it cannot do without a human (documented inline at the end):
-//! drive the signing ceremony to `completed`, download the executed
-//! documents, and capture real Connect completion/decline payloads + the
-//! HMAC header. Those steps ground the webhook + HMAC and must be run by
-//! hand against the sandbox Connect log.
-//!
-//! Not `#[ignore]`'d, but a live external-API test, so it runs only when
-//! `NAVIGATOR_RUN_LIVE_SANDBOX=1` is set (and self-skips green otherwise,
-//! plus self-skips when no DocuSign JWT env is present). The explicit
-//! opt-in keeps it from firing a real envelope on any ambient-credentials
-//! `cargo test` — notably a shell holding the production deployment's
-//! decrypted values (a `na4.docusign.net` PRODUCTION base URL). Run
-//! locally with the sandbox vars set:
-//!
-//! ```bash
-//! NAVIGATOR_RUN_LIVE_SANDBOX=1 cargo test -p server --test docusign_sandbox
-//! ```
-//!
-//! Required env — the CI `DOCUSIGN_SANDBOX_*` scheme, each falling back
-//! to the canonical `DOCUSIGN_*` name so `source .env` works locally:
+//! Live credentials use `DOCUSIGN_SANDBOX_*` or their corresponding `DOCUSIGN_*` names:
 //! - `DOCUSIGN_SANDBOX_INTEGRATION_KEY` / `DOCUSIGN_INTEGRATION_KEY`,
 //!   `DOCUSIGN_SANDBOX_USER_ID` / `DOCUSIGN_USER_ID`,
 //!   `DOCUSIGN_SANDBOX_RSA_KEY` / `DOCUSIGN_PRIVATE_KEY` (JWT grant; see
@@ -45,8 +21,8 @@ use uuid::Uuid;
 
 use portal::docusign_auth::DocuSignJwtAuth;
 use portal::signature::{
-    RecipientView, SendMode, SignatureField, SignatureFieldKind, SignatureManifest,
-    SignatureProvider, SignatureRecipient,
+    DocuSignSignatureProvider, RecipientView, SendMode, SignatureManifest, SignatureProvider,
+    SignatureRecipient,
 };
 use portal::signature_render::expand_signatures;
 
@@ -57,46 +33,162 @@ fn env(key: &str) -> Option<String> {
 /// Read a sandbox-scoped var, falling back to the canonical `DOCUSIGN_*`
 /// name. This lets a developer simply `source .env` (which uses the
 /// runtime scheme) to drive the live test, instead of exporting a
-/// parallel `DOCUSIGN_SANDBOX_*` set; CI still overrides with the
-/// sandbox names.
+/// parallel `DOCUSIGN_SANDBOX_*` set.
 fn sandbox_or_canonical(sandbox_key: &str, canonical_key: &str) -> Option<String> {
     env(sandbox_key).or_else(|| env(canonical_key))
 }
 
+fn demo_provider() -> Option<DocuSignSignatureProvider> {
+    assert!(
+        std::env::var_os("GITHUB_ACTIONS").is_none(),
+        "CI uses the local DocuSign mock"
+    );
+    let base = sandbox_or_canonical("DOCUSIGN_SANDBOX_BASE_URL", "DOCUSIGN_BASE_URL")?;
+    assert_eq!(
+        base.trim_end_matches('/'),
+        "https://demo.docusign.net/restapi"
+    );
+    let oauth = sandbox_or_canonical("DOCUSIGN_SANDBOX_OAUTH_BASE", "DOCUSIGN_OAUTH_BASE");
+    assert!(
+        matches!(
+            oauth.as_deref().map(|url| url.trim_end_matches('/')),
+            None | Some("https://account-d.docusign.com" | "account-d.docusign.com")
+        ),
+        "sandbox tests require the DocuSign demo OAuth host"
+    );
+    let auth = DocuSignJwtAuth::new(
+        sandbox_or_canonical(
+            "DOCUSIGN_SANDBOX_INTEGRATION_KEY",
+            "DOCUSIGN_INTEGRATION_KEY",
+        )?,
+        sandbox_or_canonical("DOCUSIGN_SANDBOX_USER_ID", "DOCUSIGN_USER_ID")?,
+        "https://account-d.docusign.com",
+        sandbox_or_canonical("DOCUSIGN_SANDBOX_RSA_KEY", "DOCUSIGN_PRIVATE_KEY")?.into_bytes(),
+    );
+    Some(DocuSignSignatureProvider::with_jwt_auth(
+        base,
+        sandbox_or_canonical("DOCUSIGN_SANDBOX_ACCOUNT_ID", "DOCUSIGN_ACCOUNT_ID")?,
+        auth,
+        "sandbox@example.com",
+        "Sandbox Signer",
+    ))
+}
+
+#[tokio::test]
+#[ignore = "creates an unsent draft in DocuSign demo using explicit sandbox credentials"]
+async fn sandbox_reads_an_unregistered_draft_by_id() {
+    let provider = demo_provider().expect("configure DocuSign demo JWT credentials");
+    let id = prepare_and_read_draft(&provider).await;
+    eprintln!("prepared DocuSign demo draft {id}");
+}
+
+async fn prepare_and_read_draft(provider: &DocuSignSignatureProvider) -> Uuid {
+    let (body, fields) = expand_signatures(
+        "Navigator sandbox consent.\n\n{{client.signature}}\n\n{{firm.signature}}",
+    );
+    let pdf = pdf::render(&body).expect("render synthetic consent PDF");
+    let recipients = [("firm", 2), ("client", 1)].map(|(role, routing_order)| SignatureRecipient {
+        role: role.into(),
+        email: format!("{role}@example.com"),
+        name: format!("Sandbox {role}"),
+        routing_order,
+        client_user_id: Some(role.into()),
+    });
+    let manifest = SignatureManifest {
+        recipients: recipients.to_vec(),
+        fields,
+    };
+    let draft = provider
+        .send_for_signature(Uuid::new_v4(), &pdf, &manifest, SendMode::Prepare)
+        .await
+        .expect("prepare an unsent DocuSign demo envelope");
+    let id = Uuid::parse_str(&draft.0).expect("DocuSign assigned an envelope UUID");
+    for _ in 0..2 {
+        let evidence = provider
+            .read_external_envelope(id)
+            .await
+            .expect("read the unregistered draft");
+        assert_eq!(evidence.envelope_id, id);
+        assert_eq!(evidence.status, "created");
+        assert!(evidence.sent_date_time.is_none());
+        assert_eq!(evidence.signers.len(), 2);
+        for (signer, (role, order)) in evidence
+            .signers
+            .iter()
+            .zip([("client", "1"), ("firm", "2")])
+        {
+            assert_eq!(signer.email, format!("{role}@example.com"));
+            assert_eq!(signer.routing_order.as_deref(), Some(order));
+            assert!(signer.signed_date_time.is_none());
+        }
+    }
+    id
+}
+
+/// Run the same PDF preparation and repeated draft reads as the live demo test in CI.
+#[tokio::test]
+async fn draft_contract_uses_mock_docusign_http() {
+    use serde_json::json;
+    use wiremock::{
+        matchers::{body_partial_json, header, method, path, query_param},
+        Mock, MockServer, ResponseTemplate,
+    };
+    let http = MockServer::start().await;
+    let provider = DocuSignSignatureProvider::new(
+        http.uri(),
+        "account",
+        "synthetic-token",
+        "firm@example.com",
+        "Test Firm",
+    );
+    let collection = "/v2.1/accounts/account/envelopes";
+    let id = Uuid::new_v4();
+    let path_to_draft = format!("{collection}/{id}");
+    let auth = || header("authorization", "Bearer synthetic-token");
+    Mock::given(method("POST"))
+        .and(path(collection))
+        .and(auth())
+        .and(body_partial_json(json!({"status":"created"})))
+        .respond_with(
+            ResponseTemplate::new(201).set_body_json(json!({"envelopeId":id,"status":"created"})),
+        )
+        .expect(1)
+        .mount(&http)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(path_to_draft.as_str()))
+        .and(auth())
+        .and(query_param("include", "documents"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            json!({"envelopeId":id,"status":"created","envelopeDocuments":[{"name":"Document"}]}),
+        ))
+        .expect(2)
+        .mount(&http)
+        .await;
+    Mock::given(method("GET")).and(path(format!("{path_to_draft}/recipients"))).and(auth())
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"signers":[
+            {"name":"Sandbox firm","email":"firm@example.com","status":"created","routingOrder":"2"},
+            {"name":"Sandbox client","email":"client@example.com","status":"created","routingOrder":"1"}
+        ]}))).expect(2).mount(&http).await;
+    assert_eq!(prepare_and_read_draft(&provider).await, id);
+    assert_eq!(http.received_requests().await.unwrap().len(), 5);
+}
+
 #[tokio::test]
 async fn sandbox_accepts_a_retainer_envelope_with_anchor_tabs() {
-    // Live external API that can reach PRODUCTION DocuSign when canonical
-    // `DOCUSIGN_*` creds are ambient (e.g. a shell holding the production
-    // deployment's decrypted values, whose base URL is `na4.docusign.net`). Opt in
-    // explicitly so it never fires a real envelope on a normal test run —
-    // only the dedicated nightly job and an on-demand run set the flag.
-    if std::env::var("NAVIGATOR_RUN_LIVE_SANDBOX").is_err() {
-        eprintln!("skipping live DocuSign sandbox test; set NAVIGATOR_RUN_LIVE_SANDBOX=1 to run");
+    if env("NAVIGATOR_RUN_LIVE_SANDBOX").as_deref() != Some("1") {
         return;
     }
-    // Self-skip off a runner without secrets (forks, local dev). Accept
-    // either the CI sandbox scheme or the canonical `.env` scheme.
-    let Some(auth) = DocuSignJwtAuth::from_sandbox_env().or_else(DocuSignJwtAuth::from_env) else {
-        eprintln!("skipping: no DocuSign JWT env (DOCUSIGN_SANDBOX_* or DOCUSIGN_*)");
+    let Some(provider) = demo_provider() else {
+        eprintln!("skipping: no DocuSign demo credentials");
         return;
     };
-    let (Some(base_url), Some(account_id), Some(signer_email)) = (
-        sandbox_or_canonical("DOCUSIGN_SANDBOX_BASE_URL", "DOCUSIGN_BASE_URL"),
-        sandbox_or_canonical("DOCUSIGN_SANDBOX_ACCOUNT_ID", "DOCUSIGN_ACCOUNT_ID"),
-        sandbox_or_canonical("DOCUSIGN_SANDBOX_SIGNER_EMAIL", "DOCUSIGN_SIGNER_EMAIL"),
-    ) else {
-        eprintln!("skipping: base URL / account id / signer email not set");
+    let Some(signer_email) =
+        sandbox_or_canonical("DOCUSIGN_SANDBOX_SIGNER_EMAIL", "DOCUSIGN_SIGNER_EMAIL")
+    else {
+        eprintln!("skipping: sandbox signer email is missing");
         return;
     };
-
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    let token = auth
-        .mint_access_token(now)
-        .await
-        .expect("JWT grant must mint a sandbox access token");
 
     // Render a tiny retainer whose body anchors a client signature.
     let (typst, fields) =
@@ -117,20 +209,8 @@ async fn sandbox_accepts_a_retainer_envelope_with_anchor_tabs() {
             routing_order: 1,
             client_user_id: Some(client_user_id.clone()),
         }],
-        fields: vec![SignatureField {
-            recipient_role: "client".into(),
-            kind: SignatureFieldKind::Signature,
-            anchor: fields[0].anchor.clone(),
-        }],
+        fields,
     };
-
-    let provider = portal::signature::DocuSignSignatureProvider::new(
-        base_url,
-        account_id,
-        token,
-        "support@neonlaw.com",
-        "Neon Law",
-    );
     let id = provider
         .send_for_signature(Uuid::new_v4(), &pdf, &manifest, SendMode::Send)
         .await
@@ -156,9 +236,8 @@ async fn sandbox_accepts_a_retainer_envelope_with_anchor_tabs() {
         .expect("DocuSign demo must issue an embedded recipient view URL");
     assert!(
         signing_url.starts_with("https://"),
-        "recipient view returns a real signing URL: {signing_url}"
+        "the demo recipient view uses HTTPS"
     );
-    eprintln!("embedded signing URL: {signing_url}");
 
     // Ground the scheme-less OAuth-base hardening against the REAL demo
     // OAuth server (not just the unit test in `docusign_auth`). Prod's
@@ -180,6 +259,10 @@ async fn sandbox_accepts_a_retainer_envelope_with_anchor_tabs() {
     };
     // `account-d.docusign.com` — the demo OAuth host, WITHOUT a scheme.
     let scheme_less = DocuSignJwtAuth::new(ik, user, "account-d.docusign.com", pem.into_bytes());
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
     let token2 = scheme_less
         .mint_access_token(now)
         .await

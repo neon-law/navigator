@@ -55,21 +55,17 @@ attachments ultimately use a promoted integration-key GUID. See the complete sig
 
 ### Testing never burns the production envelope quota
 
-The environment is selected by **which account, base, and OAuth host the credentials point at — not by the app.** So
-`cargo test`, CI, and the `#[ignore]` live test use credentials for the **demo environment**, which DocuSign documents
-as a free sandbox; see its [Developer account](https://developers.docusign.com/platform/account/) page:
+CI exercises the real DocuSign adapter against a loopback Wiremock server using synthetic credentials. The draft
+contract renders a PDF, creates one unsent envelope, and reads its status and recipients twice. The Project API test
+uses PostgreSQL to check participation, signer identity, and read-only behavior. Run the HTTP contract locally with:
 
-> A Docusign developer account (sometimes referred to as a demo account) enables you to develop and test your app in the
-  developer environment … which is isolated from the production environment. … a developer account … provides a free
-  sandbox environment … any documents sent are purely for testing and are not legally binding.
+```bash
+cargo test -p server --test docusign_sandbox draft_contract_uses_mock_docusign_http
+```
 
-So a full end-to-end integration test — render, create the envelope, sign it embedded, reach `completed`, download the
-executed documents, and receive the completion webhook — runs entirely against a demo attachment and consumes no
-production envelopes. Production traffic and deliberate production smoke tests use only the matching live attachment.
-
-**The rule that protects this:** `cargo test`, CI, and the live test use demo credentials from the local or CI
-environment. Never wire production DocuSign credentials into a test or CI path. The production allowance is reserved for
-real client retainers and any deliberate, manually run production smoke test.
+The opt-in live rehearsal uses the same draft check on a free [DocuSign developer
+account](https://developers.docusign.com/platform/account/). It requires the demo REST and OAuth endpoints. The live
+test refuses to use credentials on GitHub Actions. Production traffic uses its own account and credentials.
 
 If a promoted integration-key GUID exists in demo and production, production remains gated by its unique account, API
 user, RSA keypair, consent, and HMAC key. Treat the shared GUID as an identifier, never as proof of shared credentials.
@@ -130,7 +126,14 @@ draft. The CLI opens the sender view only with `--open`.
 ## Adopt an envelope sent from DocuSign
 
 In the Firm's DocuSign account, open the sent envelope and copy its Envelope ID from the envelope details. Run the
-command from the Project checkout after publishing the Draft used to prepare the envelope.
+read-only lookup with that ID to see its status and signers before deciding whether to register it.
+
+```bash
+navigator project envelope status "$project" --host "$host" --envelope-id "$envelope_id"
+```
+
+For an unregistered envelope, Navigator requires the same unique Project match as automatic completion filing. To
+register the envelope, run the following from the Project checkout after publishing the Draft.
 
 ```bash
 navigator project envelope register "$envelope_id" --host "$host" --project "$project" \
@@ -219,16 +222,22 @@ integration key + a registered redirect):
 
 ## Running the live test (Phase 0 grounding)
 
-The `#[ignore]` [sandbox test](../server/tests/docusign_sandbox.rs) mints a JWT token, creates a real sandbox envelope
-with an anchored signature tab, and requests an embedded recipient-view URL. It self-skips when the env is absent, so it
-is safe in the default suite.
+The [sandbox tests](../server/tests/docusign_sandbox.rs) use a DocuSign demo account. With demo JWT credentials in the
+environment, run the draft lookup to prepare a synthetic PDF and check its envelope ID, status, and signing order twice.
+DocuSign keeps the envelope in Drafts.
 
 ```bash
-set -a && source .env && set +a
-cargo test -p server --test docusign_sandbox -- --ignored --nocapture
+cargo test -p server --test docusign_sandbox sandbox_reads_an_unregistered_draft_by_id -- --ignored --nocapture
 ```
 
-Success prints `created sandbox envelope <id>` and `embedded signing URL: https://…`. Common errors map directly:
+To exercise embedded signing, configure the demo signer email and run the captive-recipient test. It dispatches a demo
+envelope and verifies that DocuSign issues a signing URL.
+
+```bash
+NAVIGATOR_RUN_LIVE_SANDBOX=1 cargo test -p server --test docusign_sandbox sandbox_accepts_a_retainer_envelope
+```
+
+Common errors map directly:
 
 - `issuer_not_found` — wrong integration key (likely the OAuth secret). `consent_required` — redo the consent grant.
   `invalid_grant` / `no_valid_keys` — the private key is not the one registered on the app.

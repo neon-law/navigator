@@ -12,6 +12,9 @@ use store::{persons::Role, postgres::PostgresDb};
 use tower::ServiceExt;
 use uuid::Uuid;
 
+#[path = "common/project_envelope_lookup.rs"]
+mod project_envelope_lookup;
+
 struct Fixture {
     app: axum::Router,
     pg: PostgresDb,

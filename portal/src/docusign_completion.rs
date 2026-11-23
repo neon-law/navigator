@@ -15,9 +15,9 @@ use store::{
 use uuid::Uuid;
 
 use crate::{
-    AppState,
     esignature_webhook::ConnectPayload,
     signature::{DocuSignSignatureProvider, SignatureProvider},
+    AppState,
 };
 
 pub(crate) async fn webhook(
@@ -232,15 +232,15 @@ async fn reconcile(state: &AppState, receipt: &Receipt) -> anyhow::Result<Outcom
     if provider.account_id() != receipt.account_id.to_string() {
         return Ok(Outcome::Review("account_changed"));
     }
-    for other in store::firms::all(db).await? {
-        if other.id == receipt.firm_id {
-            continue;
-        }
-        if let Ok(Some(other)) = state.signature_provider.for_firm(db, other.id).await {
-            if other.account_id() == provider.account_id() {
-                return Ok(Outcome::Review("account_used_by_multiple_firms"));
-            }
-        }
+    if !unique_account(
+        db,
+        state.signature_provider.as_ref(),
+        receipt.firm_id,
+        provider.account_id(),
+    )
+    .await?
+    {
+        return Ok(Outcome::Review("account_used_by_multiple_firms"));
     }
     let envelope = provider.read_external_envelope(receipt.envelope_id).await?;
     if envelope.status != "completed" || envelope.completed_date_time.is_none() {
@@ -271,34 +271,18 @@ async fn reconcile(state: &AppState, receipt: &Receipt) -> anyhow::Result<Outcom
     }
 
     let (fields, names) = provider.envelope_project_hints(receipt.envelope_id).await?;
-    let projects = store::projects::all(db).await?;
-    let mut signer_ids = Vec::new();
-    for signer in &envelope.signers {
-        if let Some(person) = store::persons::find_by_any_email(db, &signer.email).await? {
-            signer_ids.push(person.id);
-        }
+    let project = match identify_project(db, receipt.firm_id, &envelope, &fields, &names).await? {
+        Ok(project) => project,
+        Err(reason) => return Ok(Outcome::Review(reason)),
+    };
+    match receipt.project_id {
+        None => return Ok(Outcome::Assigned(project.id)),
+        Some(id) if id != project.id => return Ok(Outcome::Review("assigned_project_unavailable")),
+        Some(_) => {}
     }
-    let Some(project_id) = receipt.project_id else {
-        return Ok(
-            match match_project(receipt.firm_id, &projects, &signer_ids, &fields, &names) {
-                Ok(project) => Outcome::Assigned(project.id),
-                Err(reason) => Outcome::Review(reason),
-            },
-        );
-    };
-    let Some(project) = projects.iter().find(|p| {
-        p.id == project_id
-            && p.firm_id == Some(receipt.firm_id)
-            && matches!(p.status.as_str(), "pitch" | "open")
-    }) else {
-        return Ok(Outcome::Review("assigned_project_unavailable"));
-    };
-    let Some(client) = project
+    let client = project
         .client_dri_person_id
-        .filter(|id| signer_ids.contains(id))
-    else {
-        return Ok(Outcome::Review("client_not_signer"));
-    };
+        .ok_or_else(|| anyhow::anyhow!("Missing client DRI"))?;
 
     let lane = crate::signature_adoption::lock()
         .await
@@ -310,7 +294,7 @@ async fn reconcile(state: &AppState, receipt: &Receipt) -> anyhow::Result<Outcom
     {
         return Ok(Outcome::Retry);
     }
-    match onboarding_notation(db, project, client, &names).await? {
+    match onboarding_notation(db, &project, client, &names).await? {
         Onboarding::Notation(notation) => {
             crate::signature_adoption::reconcile(
                 db,
@@ -341,6 +325,42 @@ async fn reconcile(state: &AppState, receipt: &Receipt) -> anyhow::Result<Outcom
     }
     lane.commit().await?;
     Ok(Outcome::Filed(project.id))
+}
+
+pub(crate) async fn unique_account(
+    db: &store::surreal::SurrealDb,
+    connections: &dyn SignatureProvider,
+    firm: Uuid,
+    account: &str,
+) -> anyhow::Result<bool> {
+    for other in store::firms::all(db).await? {
+        if other.id == firm {
+            continue;
+        }
+        if let Ok(Some(other)) = connections.for_firm(db, other.id).await {
+            if other.account_id() == account {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
+}
+
+pub(crate) async fn identify_project(
+    db: &store::surreal::SurrealDb,
+    firm: Uuid,
+    envelope: &crate::signature::ExternalEnvelope,
+    fields: &[String],
+    names: &[String],
+) -> anyhow::Result<Result<Project, &'static str>> {
+    let projects = store::projects::all(db).await?;
+    let mut signer_ids = Vec::new();
+    for signer in &envelope.signers {
+        if let Some(person) = store::persons::find_by_any_email(db, &signer.email).await? {
+            signer_ids.push(person.id);
+        }
+    }
+    Ok(match_project(firm, &projects, &signer_ids, fields, names).cloned())
 }
 
 fn match_project<'a>(

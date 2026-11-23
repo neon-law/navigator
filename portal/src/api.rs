@@ -1062,6 +1062,11 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             post(send_notation_intake),
         ),
         (
+            "GET",
+            "/app/api/projects/{id}/envelopes/{envelope_id}",
+            get(lookup_project_envelope),
+        ),
+        (
             "POST",
             "/app/api/projects/{id}/envelopes/refresh",
             post(refresh_project_envelopes),
@@ -5054,6 +5059,75 @@ struct AdoptEnvelopeRequest {
     template_code: String,
     source: String,
     commit_sha: String,
+}
+
+/// Read provider state without registering, filing, or advancing the Project.
+async fn lookup_project_envelope(
+    State(state): State<ApiState>,
+    lawyer: LawyerSession,
+    Path((id, envelope_id)): Path<(Uuid, Uuid)>,
+) -> Result<Response, ApiError> {
+    use crate::signature::SignatureProvider as _;
+    use crate::signature_adoption::internal;
+    if !participates_as_firm(&state, &lawyer, id).await {
+        return Err(ApiError::NotFound);
+    }
+    let db = &state.surreal;
+    let firm = store::projects::find_by_id(db, id)
+        .await
+        .map_err(internal)?
+        .and_then(|project| project.firm_id)
+        .ok_or(ApiError::NotFound)?;
+    let provider = state
+        .signature_provider
+        .for_project(db, id)
+        .await
+        .map_err(ApiError::SignatureUnavailable)?
+        .ok_or(ApiError::NotFound)?;
+    if !crate::docusign_completion::unique_account(
+        db,
+        state.signature_provider.as_ref(),
+        firm,
+        provider.account_id(),
+    )
+    .await
+    .map_err(internal)?
+    {
+        return Err(ApiError::NotFound);
+    }
+    let signature = store::signatures::by_provider(
+        db,
+        store::signatures::SignatureProvider::DocuSign,
+        &envelope_id.to_string(),
+    )
+    .await
+    .map_err(internal)?;
+    if let Some(signature) = &signature {
+        if store::notations::find_by_id(db, signature.notation_id)
+            .await?
+            .is_none_or(|notation| notation.project_id != id)
+        {
+            return Err(ApiError::NotFound);
+        }
+    }
+    let envelope = provider
+        .read_external_envelope(envelope_id)
+        .await
+        .map_err(|_| ApiError::NotFound)?;
+    if signature.is_none() {
+        let (fields, names) = provider
+            .envelope_project_hints(envelope_id)
+            .await
+            .map_err(internal)?;
+        let matched =
+            crate::docusign_completion::identify_project(db, firm, &envelope, &fields, &names)
+                .await
+                .map_err(internal)?;
+        if !matched.is_ok_and(|project| project.id == id) {
+            return Err(ApiError::NotFound);
+        }
+    }
+    Ok(Json(envelope).into_response())
 }
 
 /// Refresh only envelopes already correlated to this participating Project.
