@@ -177,28 +177,6 @@ pub(crate) async fn participating_projects_on(
     .collect()
 }
 
-/// Return open Project IDs for one resolved Person within the receiving
-/// Firm and Brand. Discard other matter scopes in PostgreSQL.
-pub async fn open_participating_projects_in_brand_on(
-    pg: &PostgresDb,
-    person_id: Uuid,
-    firm_id: Uuid,
-    brand_key: &str,
-) -> Result<Vec<Uuid>, ProjectError> {
-    Ok(sqlx::query_scalar(
-        "SELECT project.id FROM person_project_role participation
-         JOIN project ON project.id = participation.project_id
-         WHERE participation.person_id = $1 AND project.firm_id = $2
-           AND project.brand = $3 AND project.status = 'open'
-         ORDER BY project.id",
-    )
-    .bind(person_id)
-    .bind(firm_id)
-    .bind(brand_key)
-    .fetch_all(pg.pool())
-    .await?)
-}
-
 /// All Projects in the existing stable directory order.
 pub async fn all_on(pg: &PostgresDb) -> Result<Vec<Project>, ProjectError> {
     sqlx::query("SELECT * FROM project ORDER BY name,id")

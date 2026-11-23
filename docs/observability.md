@@ -87,6 +87,11 @@ Public lead capture stores the submitted inquiry in the `lead` table through `PO
 the lead id, brand, source path, and outcome, never an email address, phone number, or form content. Conversion writes
 the Person directory (`store::persons::create`) and points `lead.person_id` at that row.
 
+The Inbox assignment preview emits `Inbox assignment preview completed` with the preview mode, Message count, and
+elapsed milliseconds for paging, archived source reads, address matching, and the Jev step. Use `first_suggestion_ms`
+for time to the first suggestion computed on pages with a match and `duration_ms` for total handler time. The response
+returns the page together, so use total handler time when measuring how long the caller waits for suggestions.
+
 ## Neon Law funnel
 
 The Neon Law funnel uses one identifier-only structured event family with the `funnel` target. Each event carries its
