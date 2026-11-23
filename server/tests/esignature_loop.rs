@@ -26,7 +26,8 @@ use portal::signature::DocuSignSignatureProvider;
 use portal::webhook_auth::sign_hmac_sha256_b64;
 use portal::AppState;
 use store::seed;
-use store::test_support::mem_surreal;
+use store::surreal::SurrealDb;
+use store::test_support::with_postgres;
 use tower::ServiceExt;
 use uuid::Uuid;
 use wiremock::matchers::{method, path};
@@ -35,7 +36,7 @@ use workflows::{InMemoryRuntime, MachineKind, StateMachineRuntime};
 
 const TEMPLATE_CODE: &str = "onboarding__letter";
 const HMAC_KEY: &str = "loop-test-hmac-key";
-const ENVELOPE_ID: &str = "env-loop-1";
+const ENVELOPE_ID: &str = "ca01e447-9c64-46f2-99d7-173b9cb6d460";
 
 fn completion_body() -> Vec<u8> {
     serde_json::to_vec(&serde_json::json!({
@@ -65,11 +66,12 @@ async fn body_string(resp: axum::http::Response<Body>) -> String {
 struct SentLoop {
     app: axum::Router,
     replay_state: AppState,
-    surreal: store::surreal::SurrealDb,
+    surreal: SurrealDb,
     storage: Arc<dyn cloud::StorageService>,
     nid: uuid::Uuid,
     docusign: MockServer,
     runtime: Arc<InMemoryRuntime>,
+    _storage_directory: tempfile::TempDir,
 }
 
 #[allow(clippy::too_many_lines)]
@@ -119,12 +121,13 @@ async fn sent_loop() -> SentLoop {
         .mount(&docusign)
         .await;
 
-    let surreal = mem_surreal().await;
+    let surreal = SurrealDb::uninitialized();
+    let storage_directory = tempfile::tempdir().unwrap();
     // `generate_pdf__retainer_pdf` is worker-dispatched and web reads
     // the template body + rendered PDF back from storage, so seed and
     // AppState share one storage handle.
     let storage: Arc<dyn cloud::StorageService> = Arc::new(
-        cloud::FsStorage::new(std::env::temp_dir().join("navigator-esignature-loop-storage"))
+        cloud::FsStorage::new(storage_directory.path().to_path_buf())
             .await
             .unwrap(),
     );
@@ -307,12 +310,17 @@ async fn sent_loop() -> SentLoop {
         nid,
         docusign,
         runtime,
+        _storage_directory: storage_directory,
     }
 }
 
 #[tokio::test]
-#[allow(clippy::too_many_lines)]
 async fn full_signature_loop_reaches_end_through_real_provider_and_webhook() {
+    with_postgres(check_signature_loop_reaches_end_through_real_provider_and_webhook()).await;
+}
+
+#[allow(clippy::too_many_lines)]
+async fn check_signature_loop_reaches_end_through_real_provider_and_webhook() {
     let SentLoop {
         app,
         surreal,
@@ -400,6 +408,10 @@ async fn full_signature_loop_reaches_end_through_real_provider_and_webhook() {
 /// same consumption path first delivery ran, and the loop closes.
 #[tokio::test]
 async fn journaled_receipt_recovers_after_a_mid_delivery_death() {
+    with_postgres(check_journaled_receipt_recovers_after_a_mid_delivery_death()).await;
+}
+
+async fn check_journaled_receipt_recovers_after_a_mid_delivery_death() {
     let SentLoop {
         replay_state,
         surreal,
@@ -488,8 +500,16 @@ async fn journaled_receipt_recovers_after_a_mid_delivery_death() {
 /// key keeps its one receipt row.
 #[tokio::test]
 async fn a_redelivered_completion_is_answered_from_the_journal() {
+    with_postgres(check_redelivered_completion_is_answered_from_the_journal()).await;
+}
+
+async fn check_redelivered_completion_is_answered_from_the_journal() {
     let SentLoop {
-        app, surreal, nid, ..
+        app,
+        surreal,
+        nid,
+        docusign,
+        ..
     } = sent_loop().await;
 
     let body = completion_body();
@@ -536,6 +556,45 @@ async fn a_redelivered_completion_is_answered_from_the_journal() {
         receipt.consumed_at.is_some(),
         "one consumed row for the event"
     );
+
+    let documents = store::assets::for_project(&surreal, row.project_id)
+        .await
+        .unwrap();
+    let mut filed: Vec<_> = documents
+        .iter()
+        .filter(|asset| asset.source.as_deref() == Some("docusign"))
+        .collect();
+    filed.sort_by_key(|asset| asset.filename.as_deref());
+    let envelope_id = Some(Uuid::parse_str(ENVELOPE_ID).unwrap());
+    assert_eq!(filed.len(), 2);
+    for (asset, expected_suffix, visibility) in [
+        (filed[0], "_certificate.pdf", "internal"),
+        (filed[1], "_signed.pdf", "client"),
+    ] {
+        assert!(asset
+            .filename
+            .as_deref()
+            .unwrap()
+            .ends_with(expected_suffix));
+        assert_eq!(asset.visibility, visibility);
+        assert_eq!(
+            store::document_pointers::envelope_id_from_asset_metadata(asset.metadata.as_ref()),
+            envelope_id
+        );
+    }
+
+    let requests = docusign.received_requests().await.unwrap();
+    for document in ["combined", "certificate"] {
+        let path = format!("/v2.1/accounts/acct-guid/envelopes/{ENVELOPE_ID}/documents/{document}");
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request.url.path() == path)
+                .count(),
+            1,
+            "a duplicate receipt must not fetch {document} again",
+        );
+    }
 }
 
 /// One unrecoverable receipt never stops the backlog: a receipt whose
@@ -543,6 +602,10 @@ async fn a_redelivered_completion_is_answered_from_the_journal() {
 /// the good receipt behind it recovers in the same sweep.
 #[tokio::test]
 async fn a_failed_replay_keeps_its_receipt_pending_and_the_backlog_moving() {
+    with_postgres(check_failed_replay_keeps_its_receipt_pending_and_the_backlog_moving()).await;
+}
+
+async fn check_failed_replay_keeps_its_receipt_pending_and_the_backlog_moving() {
     let SentLoop {
         replay_state,
         surreal,
