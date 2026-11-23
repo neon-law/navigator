@@ -498,13 +498,8 @@ async fn run_host(
                 None
             }
         } else {
-            crate::dri_digest::dbos_context(
-                surreal.clone(),
-                notifier_from_env(),
-                simulated_matters,
-                lookup,
-            )
-            .context("configure DBOS DriDigest")?
+            crate::dri_digest::dbos_context(surreal.clone(), simulated_matters, lookup)
+                .context("configure DBOS DriDigest")?
         };
         let billing_canary = if workflows::dbos_engine::billing_canary::enabled(lookup)
             .context("read NAVIGATOR_DBOS_BILLING_CANARY_ENABLED")?

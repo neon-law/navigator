@@ -1510,7 +1510,6 @@ fn dri_digest_context(
         .context("resolve simulated-matters deployment")?;
     workflows::dbos_engine::dri_digest::Context::from_lookup(
         rt.state.surreal.clone(),
-        workflows::notify::notifier_from_lookup(&lookup),
         simulated,
         lookup,
     )

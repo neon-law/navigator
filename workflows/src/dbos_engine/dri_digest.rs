@@ -2,8 +2,8 @@
 //!
 //! The workflow keeps the existing digest query and message semantics. Its
 //! stable daily id lets replicas and restarts join the same scheduled run.
-//! Slack's incoming webhook has no idempotency key, so a crash after delivery
-//! and before the checkpoint can post a duplicate.
+//! Its posts carry no receipt correlation, so a crash after delivery and
+//! before the checkpoint can post a duplicate.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -114,21 +114,21 @@ impl Context {
     }
 
     /// Construct a host context from the same Project accessors used by the
-    /// Restate service. The webhook is required whenever this schedule is
-    /// enabled; the generic notifier's capture-only fallback is not delivery.
+    /// Restate service. The digest posts with the Slack bot to
+    /// `SLACK_GENERAL_CHANNEL_ID`, beside `GeneralNag`'s open-matters notice;
+    /// both are required whenever this schedule is enabled.
     pub fn from_lookup<F>(
         surreal: store::surreal::SurrealDb,
-        notifier: Arc<dyn Notifier>,
         simulated: bool,
         lookup: F,
     ) -> Result<Self, super::SettingsError>
     where
         F: Fn(&str) -> Option<String>,
     {
-        validate_delivery_config(&lookup)?;
+        let (bot, channel) = super::general_channel_bot(lookup)?;
         Ok(Self {
             source: Arc::new(SurrealDriDigestSource(surreal)),
-            notifier,
+            notifier: Arc::new(crate::notify::ChannelNotifier::new(bot, channel)),
             simulated,
         })
     }
@@ -145,16 +145,6 @@ impl Context {
             simulated,
         }
     }
-}
-
-fn validate_delivery_config(
-    lookup: impl Fn(&str) -> Option<String>,
-) -> Result<(), super::SettingsError> {
-    lookup("SLACK_WEBHOOK_URL")
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
-        .ok_or(super::SettingsError::Missing("SLACK_WEBHOOK_URL"))?;
-    Ok(())
 }
 
 /// Whether this schedule is enabled. Only literal `true` opts in.
@@ -301,9 +291,7 @@ mod native_project_fixture;
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        enabled, slot, validate_delivery_config, workflow_id, DriDigestSource, ENABLED_ENV,
-    };
+    use super::{enabled, slot, workflow_id, DriDigestSource, ENABLED_ENV};
     use chrono::{TimeZone, Utc};
 
     #[test]
@@ -328,16 +316,33 @@ mod tests {
     }
 
     #[test]
-    fn enabled_schedule_requires_a_nonblank_slack_webhook() {
-        assert_eq!(
-            validate_delivery_config(|_| None).unwrap_err(),
-            super::super::SettingsError::Missing("SLACK_WEBHOOK_URL")
-        );
-        assert_eq!(
-            validate_delivery_config(|_| Some("  ".into())).unwrap_err(),
-            super::super::SettingsError::Missing("SLACK_WEBHOOK_URL")
-        );
-        assert!(validate_delivery_config(|_| Some("https://example.test/hook".into())).is_ok());
+    fn enabled_schedule_posts_with_the_bot_to_the_general_channel() {
+        use super::super::SettingsError::Missing;
+        let lookup = |token: &'static str, channel: &'static str| {
+            move |key: &str| match key {
+                "SLACK_BOT_TOKEN" => Some(token.to_owned()),
+                "SLACK_GENERAL_CHANNEL_ID" => Some(channel.to_owned()),
+                _ => None,
+            }
+        };
+        let surreal = store::surreal::SurrealDb::uninitialized;
+        for (token, channel, missing) in [
+            (" ", "C0GENERAL", "SLACK_BOT_TOKEN"),
+            ("xoxb-synthetic", " ", "SLACK_GENERAL_CHANNEL_ID"),
+        ] {
+            assert_eq!(
+                super::Context::from_lookup(surreal(), false, lookup(token, channel))
+                    .err()
+                    .unwrap(),
+                Missing(missing)
+            );
+        }
+        assert!(super::Context::from_lookup(
+            surreal(),
+            false,
+            lookup("xoxb-synthetic", "C0GENERAL")
+        )
+        .is_ok());
     }
 
     #[tokio::test]

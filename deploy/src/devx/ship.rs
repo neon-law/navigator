@@ -728,8 +728,8 @@ const DBOS_SCHEDULES: [DbosSchedule; 6] = [
             "dri-digest-trigger",
             "  - cron-dri-digest-trigger.yaml\n",
         )),
-        coordinates: &[],
-        secret: Some(SLACK_WEBHOOK_URL),
+        coordinates: &["SLACK_GENERAL_CHANNEL_ID"],
+        secret: Some("SLACK_BOT_TOKEN"),
     },
     DbosSchedule {
         env: "NAVIGATOR_DBOS_BILLING_DIGEST_ENABLED",
@@ -931,9 +931,6 @@ where
 /// switches and the coordinates switched-on schedules read.
 const DBOS_SCHEDULE_ENV_TOKEN: &str = "            # NAVIGATOR_DBOS_SCHEDULE_ENV\n";
 const LINEAR_BACKLOG_CHANNEL: &str = "SLACK_LINEAR_BACKLOG_CHANNEL_ID";
-
-/// The incoming webhook `DriDigest` on DBOS refuses to boot without.
-const SLACK_WEBHOOK_URL: &str = "SLACK_WEBHOOK_URL";
 
 /// Each schedule's switch, read as `"true"` or `"false"`, in
 /// [`DBOS_SCHEDULES`] order. An absent switch is off, except that a
@@ -9274,7 +9271,6 @@ mod tests {
             "NAVIGATOR_DBOS_BILLING_DIGEST_ENABLED".into(),
             "true".into(),
         );
-        deployment.encrypted_keys.insert(SLACK_WEBHOOK_URL.into());
         assert_eq!(
             retired_cronjobs(&deployment).unwrap(),
             [
@@ -9317,7 +9313,7 @@ mod tests {
     }
 
     #[test]
-    fn dri_digest_on_dbos_requires_its_webhook_secret() {
+    fn dri_digest_on_dbos_posts_with_the_bot_to_the_general_channel() {
         let mut deployment =
             super::super::deployments::Deployment::load(&fixture_tree(), "example-deployment")
                 .expect("fixture row loads");
@@ -9327,11 +9323,33 @@ mod tests {
         deployment
             .coordinates
             .insert("NAVIGATOR_DBOS_DRI_DIGEST_ENABLED".into(), "true".into());
-        deployment.encrypted_keys.remove(SLACK_WEBHOOK_URL);
+        deployment.encrypted_keys.remove("SLACK_WEBHOOK_URL");
+        deployment.encrypted_keys.remove("SLACK_BOT_TOKEN");
         let error = require_dbos_schedule_prerequisites(&deployment).unwrap_err();
-        assert!(error.to_string().contains(SLACK_WEBHOOK_URL), "{error}");
-        deployment.encrypted_keys.insert(SLACK_WEBHOOK_URL.into());
+        assert!(error.to_string().contains("SLACK_BOT_TOKEN"), "{error}");
+        deployment.encrypted_keys.insert("SLACK_BOT_TOKEN".into());
         require_dbos_schedule_prerequisites(&deployment).unwrap();
+
+        let get = |channel: Option<&'static str>| {
+            move |key: &str| match key {
+                "SLACK_GENERAL_CHANNEL_ID" => channel.map(str::to_owned),
+                "NAVIGATOR_DBOS_GENERAL_NAG_ENABLED" => Some("false".into()),
+                _ => with_schedules(Some("true"), None, Some("true"))(key),
+            }
+        };
+        let error =
+            resolve_substitutions_for_deployment("synthetic-deployment", "26.9.16", get(None))
+                .unwrap_err();
+        assert!(
+            error.to_string().contains("SLACK_GENERAL_CHANNEL_ID"),
+            "{error}"
+        );
+        let manifests = rendered_manifests(get(Some("C0SYNTHETIC")));
+        let web = manifest_doc(&manifests, "Deployment", WEB_DEPLOYMENT);
+        assert_eq!(
+            web_env_value(&web, "SLACK_GENERAL_CHANNEL_ID").as_deref(),
+            Some("C0SYNTHETIC")
+        );
     }
 
     #[test]

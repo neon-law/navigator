@@ -36,6 +36,7 @@
 //! The `dri-digest-trigger` `CronJob` fires nightly at 01:11 UTC, keyed on
 //! the UTC run date so a same-day double-fire is a no-op.
 
+#[cfg(feature = "restate-compatibility")]
 use std::sync::Arc;
 
 #[cfg(feature = "restate-compatibility")]
@@ -45,6 +46,7 @@ use serde::{Deserialize, Serialize};
 use store::projects::ProjectDriSummary;
 use store::surreal::SurrealDb;
 pub use workflows::dri_digest::dri_digest_message;
+#[cfg(feature = "restate-compatibility")]
 use workflows::Notifier;
 
 /// Request body for `DriDigest::run`. Empty — the trigger only starts the
@@ -94,7 +96,6 @@ pub struct DriDigestService {
 /// A disabled schedule does not validate delivery configuration.
 pub fn dbos_context(
     surreal: Option<SurrealDb>,
-    notifier: Arc<dyn Notifier>,
     simulated: bool,
     lookup: impl Fn(&str) -> Option<String>,
 ) -> Result<Option<workflows::dbos_engine::dri_digest::Context>, anyhow::Error> {
@@ -102,7 +103,7 @@ pub fn dbos_context(
         return Ok(None);
     }
     let surreal = surreal.ok_or_else(|| anyhow::anyhow!("DriDigest database not configured"))?;
-    workflows::dbos_engine::dri_digest::Context::from_lookup(surreal, notifier, simulated, lookup)
+    workflows::dbos_engine::dri_digest::Context::from_lookup(surreal, simulated, lookup)
         .map(Some)
         .map_err(Into::into)
 }
@@ -122,28 +123,16 @@ impl DriDigestService {
 #[cfg(test)]
 mod dbos_context_tests {
     use super::dbos_context;
-    use workflows::CapturingNotifier;
 
     #[tokio::test]
     async fn worker_context_is_gated_and_requires_delivery_configuration() {
-        let disabled = dbos_context(
-            None,
-            std::sync::Arc::new(CapturingNotifier::new()),
-            false,
-            |_| None,
-        )
-        .expect("disabled schedule has no database or webhook requirement");
+        let disabled = dbos_context(None, false, |_| None)
+            .expect("disabled schedule has no database or webhook requirement");
         assert!(disabled.is_none());
 
-        let invalid = dbos_context(
-            None,
-            std::sync::Arc::new(CapturingNotifier::new()),
-            false,
-            |key| {
-                (key == workflows::dbos_engine::dri_digest::ENABLED_ENV)
-                    .then(|| "sometimes".to_owned())
-            },
-        );
+        let invalid = dbos_context(None, false, |key| {
+            (key == workflows::dbos_engine::dri_digest::ENABLED_ENV).then(|| "sometimes".to_owned())
+        });
         assert!(invalid.is_err(), "invalid opt-in fails closed");
 
         let surreal = store::test_support::mem_surreal().await;
@@ -151,42 +140,29 @@ mod dbos_context_tests {
             workflows::dbos_engine::dri_digest::ENABLED_ENV => Some("true".to_owned()),
             _ => None,
         };
-        let missing_database = dbos_context(
-            None,
-            std::sync::Arc::new(CapturingNotifier::new()),
-            false,
-            |key| match key {
-                workflows::dbos_engine::dri_digest::ENABLED_ENV => Some("true".to_owned()),
-                "SLACK_WEBHOOK_URL" => Some("https://example.test/hook".to_owned()),
-                _ => None,
-            },
-        );
+        let missing_database = dbos_context(None, false, |key| match key {
+            workflows::dbos_engine::dri_digest::ENABLED_ENV => Some("true".to_owned()),
+            "SLACK_BOT_TOKEN" => Some("xoxb-synthetic".to_owned()),
+            "SLACK_GENERAL_CHANNEL_ID" => Some("C0GENERAL".to_owned()),
+            _ => None,
+        });
         assert!(
             missing_database.is_err(),
             "enabled delivery requires its store"
         );
 
-        let missing_webhook = dbos_context(
-            Some(surreal.clone()),
-            std::sync::Arc::new(CapturingNotifier::new()),
-            false,
-            enabled,
-        );
-        assert!(missing_webhook.is_err(), "enabled delivery fails closed");
+        let missing_bot = dbos_context(Some(surreal.clone()), false, enabled);
+        assert!(missing_bot.is_err(), "enabled delivery fails closed");
 
         let configured = |key: &str| match key {
             workflows::dbos_engine::dri_digest::ENABLED_ENV => Some("true".to_owned()),
-            "SLACK_WEBHOOK_URL" => Some("https://example.test/hook".to_owned()),
+            "SLACK_BOT_TOKEN" => Some("xoxb-synthetic".to_owned()),
+            "SLACK_GENERAL_CHANNEL_ID" => Some("C0GENERAL".to_owned()),
             _ => None,
         };
-        let context = dbos_context(
-            Some(surreal),
-            std::sync::Arc::new(CapturingNotifier::new()),
-            true,
-            configured,
-        )
-        .expect("valid delivery configuration")
-        .expect("enabled schedule has a context");
+        let context = dbos_context(Some(surreal), true, configured)
+            .expect("valid delivery configuration")
+            .expect("enabled schedule has a context");
         drop(context);
     }
 }

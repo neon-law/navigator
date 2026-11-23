@@ -117,20 +117,7 @@ impl Context {
     where
         F: Fn(&str) -> Option<String>,
     {
-        let channel_id = lookup("SLACK_GENERAL_CHANNEL_ID")
-            .map(|value| value.trim().to_owned())
-            .filter(|value| !value.is_empty())
-            .ok_or(super::SettingsError::Missing("SLACK_GENERAL_CHANNEL_ID"))?;
-        let token = lookup("SLACK_BOT_TOKEN")
-            .map(|value| value.trim().to_owned())
-            .filter(|value| !value.is_empty())
-            .ok_or(super::SettingsError::Missing("SLACK_BOT_TOKEN"))?;
-        let base_url = crate::harness_override(&lookup, "SLACK_API_BASE_URL")
-            .map_err(|_| super::SettingsError::Invalid("SLACK_API_BASE_URL"))?;
-        let slack: Arc<dyn SlackBot> = match base_url {
-            Some(base_url) => Arc::new(crate::SlackBotClient::with_base_url(token, base_url)),
-            None => Arc::new(crate::SlackBotClient::new(token)),
-        };
+        let (slack, channel_id) = super::general_channel_bot(lookup)?;
         Ok(Self {
             slack,
             channel_id,
