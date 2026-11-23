@@ -37,13 +37,10 @@ async fn credential(surreal: &SurrealDb, firm: Uuid) -> Result<ResolvedCredentia
 }
 
 fn client(key: &ResolvedCredential) -> Result<StripeInvoiceClient<'_>, BillingError> {
-    use store::config::{sample_matters, staging_from, DeploymentEnvironment};
-    let mode = DeploymentEnvironment::from_env().map_err(|_| refused())?;
-    let simulated = sample_matters(mode).map_err(|_| refused())?;
-    let staging = staging_from(|key| std::env::var(key).ok()).map_err(|_| refused())?;
+    let mode = store::firm_secrets::stripe_mode().map_err(|_| refused())?;
     StripeInvoiceClient::new(
         key.expose_for_provider_call(),
-        mode == DeploymentEnvironment::Production && !simulated && !staging,
+        mode == store::firm_secrets::Mode::Live,
     )
 }
 

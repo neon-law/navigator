@@ -15,3 +15,14 @@ reference, and `revoke_twilio_auth_token_by_ref` revokes one token within its ow
 all active Twilio tokens for that Firm. Other secret kinds replace their previous active version when saved.
 
 Schema: [`firm_integration_secret`](../../store/postgres/schema.sql).
+
+The Firm’s Admin DRI can rotate a Stripe credential from a logged-in Navigator CLI. Pipe the value into the command.
+
+```sh
+pbpaste | navigator site firm secret set --firm example --provider stripe --account nevada --kind secret --mode sandbox
+```
+
+Choose `nevada` or `operating` and `publishable` or `secret`. Staging accepts sandbox keys. Production with real matters
+accepts live keys. The invoice issuer reads the selected account’s secret key. Each version records the actor and time.
+Use `navigator site firm secret list --firm example` to see key metadata. Use `secret delete` with the same selectors to
+revoke the stored credential.

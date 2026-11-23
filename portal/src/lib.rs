@@ -101,6 +101,7 @@ pub(crate) mod efilings_api;
 mod ephemeris_reference;
 pub(crate) mod firm_admin_api;
 pub(crate) mod firm_forgejo_api;
+pub(crate) mod firm_secret_api;
 pub(crate) mod handoffs_api;
 pub(crate) mod inbox_import_api;
 pub(crate) mod lawyer_mailbox;
@@ -1020,6 +1021,7 @@ pub fn bootstrap_with_forgejo_oidc(
                 state.surreal.clone(),
                 crate::api::scope_project_request,
             ))
+            .layer(axum::Extension(state.runtime_kms.clone()))
             .layer(axum::Extension(state.attachment_scanner.clone()))
             .layer(axum::middleware::from_fn_with_state(
                 (state.sessions.clone(), crate::csrf::CsrfMode::Strict),

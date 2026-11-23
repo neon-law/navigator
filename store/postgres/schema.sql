@@ -5754,3 +5754,6 @@ CREATE TABLE project_envelope (
 );
 
 CREATE INDEX project_envelope_project ON project_envelope (project_id, observed_at DESC);
+
+-- Migration: 20261123010000_firm_secret_mode.sql
+ALTER TABLE firm_integration_secret ADD COLUMN stripe_mode TEXT CHECK (stripe_mode IS NULL OR (provider = 'stripe' AND stripe_mode IN ('sandbox', 'live')));

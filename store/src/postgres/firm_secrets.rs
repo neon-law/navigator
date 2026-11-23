@@ -1,19 +1,24 @@
 //! Serialized encrypted Firm integration-secret rotation.
 
-use crate::firm_secrets::{IntegrationProvider, IntegrationSecretKind, SecretStoreError};
+use crate::firm_secrets::{IntegrationProvider, Mode, SecretPutRequest, SecretStoreError};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use cloud::{KmsContext, RuntimeKms};
 use uuid::Uuid;
 
 pub(crate) async fn write_secret(
     pg: &crate::postgres::PostgresDb,
-    firm: Uuid,
-    provider: IntegrationProvider,
-    kind: IntegrationSecretKind,
+    request: SecretPutRequest<'_>,
     actor: Uuid,
-    value: &str,
+    stripe_mode: Option<Mode>,
     kms: &dyn RuntimeKms,
 ) -> Result<Uuid, SecretStoreError> {
+    let SecretPutRequest {
+        firm_id: firm,
+        provider,
+        kind,
+        value,
+        ..
+    } = request;
     let mut tx = pg
         .pool()
         .begin()
@@ -43,10 +48,10 @@ pub(crate) async fn write_secret(
             .bind(firm).bind(provider.as_str()).bind(kind.as_str()).execute(&mut *tx).await.map_err(|_| SecretStoreError::Postgres)?;
     }
     let id = Uuid::now_v7();
-    sqlx::query("INSERT INTO firm_integration_secret (id,firm_id,provider,kind,version,ciphertext,wrapped_dek,kms_key_version,kms_context,status,actor_id,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'active',$10,now(),now())")
+    sqlx::query("INSERT INTO firm_integration_secret (id,firm_id,provider,kind,version,ciphertext,wrapped_dek,kms_key_version,kms_context,status,actor_id,created_at,updated_at,stripe_mode) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'active',$10,now(),now(),$11)")
         .bind(id).bind(firm).bind(provider.as_str()).bind(kind.as_str()).bind(version)
         .bind(BASE64.encode(ciphertext)).bind(BASE64.encode(wrapped.ciphertext)).bind(wrapped.key_version)
-        .bind(context.aad()).bind(actor).execute(&mut *tx).await.map_err(|_| SecretStoreError::Postgres)?;
+        .bind(context.aad()).bind(actor).bind(stripe_mode.map(|m| m.to_string())).execute(&mut *tx).await.map_err(|_| SecretStoreError::Postgres)?;
     tx.commit().await.map_err(|_| SecretStoreError::Postgres)?;
     Ok(id)
 }

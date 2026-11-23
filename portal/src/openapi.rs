@@ -785,6 +785,12 @@ fn add_cli_operations(document: &mut Value) {
 #[allow(clippy::too_many_lines)]
 fn canonical_document(base: &str) -> Value {
     let contact_url = base.to_string();
+    let stripe_key_parameters = json!([
+      { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+      { "name": "account", "in": "path", "required": true, "schema": { "type": "string", "enum": ["nevada", "operating"] } },
+      { "name": "kind", "in": "path", "required": true, "schema": { "type": "string", "enum": ["publishable", "secret"] } },
+      { "name": "mode", "in": "path", "required": true, "schema": { "type": "string", "enum": ["sandbox", "live"] } }
+    ]);
     json!({
       "openapi": "3.1.0",
       "info": {
@@ -1287,6 +1293,38 @@ fn canonical_document(base: &str) -> Value {
               "403": { "description": "Caller is not Owner or Admin, or holds a scoped session" },
               "404": { "description": "Brand or target Firm unavailable to this caller" }
             }
+          }
+        },
+        "/app/api/firms/{id}/secrets": {
+          "get": {
+            "operationId": "listFirmStripeKeys",
+            "summary": "List active Stripe key metadata and the deployment mode",
+            "tags": ["Firms"],
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "responses": { "200": { "description": "Deployment mode and active keys with account, kind, recorded mode and update time" },
+                           "404": { "description": "Firm unavailable to caller" } }
+          }
+        },
+        "/app/api/firms/{id}/secrets/stripe/{account}/{kind}/{mode}": {
+          "put": {
+            "operationId": "setFirmStripeKey",
+            "parameters": stripe_key_parameters,
+            "summary": "Rotate a Stripe key as the Firm's Admin DRI",
+            "tags": ["Firms"],
+            "requestBody": { "required": true, "content": { "application/octet-stream": {
+              "schema": { "type": "string", "format": "binary", "writeOnly": true } } } },
+            "responses": { "204": { "description": "Encrypted key stored" },
+                           "400": { "description": "Invalid key kind or mode" },
+                           "404": { "description": "Firm unavailable to caller" } }
+          },
+          "delete": {
+            "operationId": "revokeFirmStripeKey",
+            "parameters": stripe_key_parameters,
+            "summary": "Revoke a stored Stripe credential as the Firm's Admin DRI",
+            "tags": ["Firms"],
+            "responses": { "204": { "description": "Key revoked in Navigator" },
+                           "400": { "description": "Invalid deployment mode" },
+                           "404": { "description": "Active key unavailable to caller" } }
           }
         },
         "/app/api/firms/{id}/forgejo-organization": {
