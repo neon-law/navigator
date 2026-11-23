@@ -870,7 +870,7 @@ const ARCHIVE_WRITE_ONLY_CONFIG_PATH: &str =
     "/var/lib/navigator/iceberg/config/archive-config.json";
 const ARCHIVE_WRITE_ONLY_OBJECTS: &[(&str, &str)] = &[
     ("configmap", "navigator-archive-write-only"),
-    ("persistentvolumeclaim", "navigator-archive-iceberg"),
+    ("secret", "navigator-archive-source-credentials"),
 ];
 
 fn write_only_archives<F>(get: &F) -> Result<bool>
@@ -884,7 +884,7 @@ where
         archives_on_dbos(get),
         "{ARCHIVE_WRITE_ONLY_CONFIG} requires {ARCHIVES_SCHEDULE_ENV} = true"
     );
-    ensure!(path == ARCHIVE_WRITE_ONLY_CONFIG_PATH, "{ARCHIVE_WRITE_ONLY_CONFIG} must name the persistent deployment configuration path {ARCHIVE_WRITE_ONLY_CONFIG_PATH}");
+    ensure!(path == ARCHIVE_WRITE_ONLY_CONFIG_PATH, "{ARCHIVE_WRITE_ONLY_CONFIG} must name the mounted deployment configuration path {ARCHIVE_WRITE_ONLY_CONFIG_PATH}");
     ensure!(
         non_empty_env("NAVIGATOR_ARCHIVE_SOURCE", get).is_none_or(|source| source == "postgres"),
         "write-only Archives requires a PostgreSQL source"
@@ -2233,35 +2233,29 @@ fn ensure_ordered_service_objects(
             Ok(serde_json::from_slice(&output.stdout)?)
         };
         let configuration = read("configmap", "navigator-archive-write-only")?;
-        let claim = read("persistentvolumeclaim", "navigator-archive-iceberg")?;
-        ensure_write_only_archive_mounts(&configuration, &claim)?;
+        ensure_write_only_archive_mounts(&configuration)?;
     }
     Ok(())
 }
 
-fn ensure_write_only_archive_mounts(
-    configuration: &serde_json::Value,
-    claim: &serde_json::Value,
-) -> Result<()> {
+fn ensure_write_only_archive_mounts(configuration: &serde_json::Value) -> Result<()> {
     let json = configuration["data"]["archive-config.json"]
         .as_str()
         .context("archive ConfigMap requires archive-config.json")?;
     let config: archives::write_only::operations::Config =
         serde_json::from_str(json).context("invalid write-only archive configuration")?;
     config.validate()?;
+    let source = config
+        .object_store
+        .as_ref()
+        .context("cloud Archives requires an object-backed sealed source")?;
     ensure!(
-        config.local_root == Path::new("/var/lib/navigator/iceberg/data"),
-        "archive local_root must use the persistent mount /var/lib/navigator/iceberg/data"
+        source.credentials_file == Path::new("/var/run/navigator-archive-source/credentials.json"),
+        "sealed source credentials must use the private mounted source identity"
     );
     ensure!(
-        claim["status"]["phase"] == "Bound",
-        "archive PVC must be Bound before release"
-    );
-    ensure!(
-        claim["spec"]["accessModes"]
-            .as_array()
-            .is_some_and(|modes| modes.iter().any(|mode| mode == "ReadWriteMany")),
-        "archive PVC requires ReadWriteMany for replicas and rolling updates"
+        !config.destinations.is_empty(),
+        "cloud Archives requires an independent destination"
     );
     Ok(())
 }
@@ -8904,7 +8898,7 @@ mod tests {
     }
 
     #[test]
-    fn write_only_archives_mounts_persistent_receipts_and_read_only_configuration() {
+    fn write_only_archives_mounts_private_source_credentials_without_a_filesystem_claim() {
         let selected = |key: &str| match key {
             NAVIGATOR_DBOS_ENABLED | ARCHIVES_SCHEDULE_ENV => Some("true".to_owned()),
             ARCHIVE_WRITE_ONLY_CONFIG => Some(ARCHIVE_WRITE_ONLY_CONFIG_PATH.to_owned()),
@@ -8918,15 +8912,18 @@ mod tests {
         );
         let pod = &web["spec"]["template"]["spec"];
         let volumes = pod["volumes"].as_sequence().unwrap();
-        let data = volumes
+        assert!(volumes
             .iter()
-            .find(|v| v["name"] == "archive-iceberg")
+            .all(|volume| volume.get("persistentVolumeClaim").is_none()
+                && volume.get("emptyDir").is_none()));
+        let source = volumes
+            .iter()
+            .find(|volume| volume["name"] == "archive-source-credentials")
             .unwrap();
         assert_eq!(
-            data["persistentVolumeClaim"]["claimName"],
-            "navigator-archive-iceberg"
+            source["secret"]["secretName"],
+            "navigator-archive-source-credentials"
         );
-        assert!(data.get("emptyDir").is_none());
         let config = volumes
             .iter()
             .find(|v| v["name"] == "archive-write-only-config")
@@ -8943,32 +8940,24 @@ mod tests {
     }
 
     #[test]
-    fn write_only_archives_requires_shared_bound_storage_at_the_configured_root() {
-        let config = |root: &str| {
-            serde_json::json!({"data": {"archive-config.json": serde_json::json!({
-            "format_version": 1,
-            "local_root": root,
-            "source_project_number": null,
-            "source_identity_sha256": "ab".repeat(32),
-            "capture": {"scope": "registered_navigator"},
-            "destinations": []
+    fn cloud_archive_preflight_requires_versioned_object_source_and_private_identity() {
+        let configuration = |version: u8, root: &str, credential: &str| {
+            serde_json::json!({"data":{"archive-config.json":serde_json::json!({
+            "format_version":version,"local_root":root,"object_store":{"bucket":"example-source-sealed","prefix":"sealed","credentials_file":credential,"max_generation_bytes":67_108_864,"max_object_bytes":16_777_216,"max_objects":4096,"max_rows_per_table":100_000},
+            "source_project_number":null,"source_identity_sha256":"ab".repeat(32),"capture":{"scope":"registered_navigator"},
+            "destinations":[{"project_number":11,"bucket":"example-independent-one","location":"us-west4","minimum_retention_seconds":788_940_000}]
         }).to_string()}})
         };
-        let claim = serde_json::json!({"status": {"phase": "Bound"}, "spec": {"accessModes": ["ReadWriteMany"]}});
-        let mounted = config("/var/lib/navigator/iceberg/data");
-        ensure_write_only_archive_mounts(&mounted, &claim).unwrap();
-        assert!(ensure_write_only_archive_mounts(&config("/tmp/iceberg"), &claim).is_err());
+        let identity = "/var/run/navigator-archive-source/credentials.json";
+        ensure_write_only_archive_mounts(&configuration(2, "", identity)).unwrap();
         for invalid in [
-            serde_json::json!({"status": {"phase": "Pending"}, "spec": {"accessModes": ["ReadWriteMany"]}}),
-            serde_json::json!({"status": {"phase": "Bound"}, "spec": {"accessModes": ["ReadWriteOnce"]}}),
+            configuration(1, "/synthetic/local", identity),
+            configuration(2, "/tmp/unretained", identity),
+            configuration(2, "", "/unmounted/credentials.json"),
+            serde_json::json!({"data":{"archive-config.json":"invalid"}}),
         ] {
-            assert!(ensure_write_only_archive_mounts(&mounted, &invalid).is_err());
+            assert!(ensure_write_only_archive_mounts(&invalid).is_err());
         }
-        assert!(ensure_write_only_archive_mounts(
-            &serde_json::json!({"data": {"archive-config.json": "invalid"}}),
-            &claim
-        )
-        .is_err());
     }
 
     #[test]

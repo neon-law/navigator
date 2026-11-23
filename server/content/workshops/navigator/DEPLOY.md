@@ -864,11 +864,11 @@ Only then switch the selected Project and prove gate, merge, publication and not
 ### Configure the source and the independent destination
 
 Keep one private archive configuration per environment. Use the reviewed Navigator and Forgejo coverage inventory, a
-persistent local filesystem outside Git, and destination buckets in a different Google Cloud project from the source.
+sealed-generation prefix in object storage, and destination buckets in a different Google Cloud project from the source.
 Set the source project number and the writer and verifier service account emails from private operator configuration.
 
 ```bash
-hudson ops archives config --local-root /var/lib/navigator/iceberg/data \
+hudson ops archives config --object-store source-store.json \
   --source-project-number "$SOURCE_PROJECT_NUMBER" --destinations destinations.json \
   --coverage coverage.json --out archive-config.json
 hudson ops archives provisioning-plan --config archive-config.json \
@@ -884,22 +884,23 @@ writes. Review inherited IAM and the live Workload Identity mapping.
 
 Use private operator configuration for actual project numbers, buckets, identities and receipts. A role binding alone
 does not establish effective permission. The [archive runbook](/docs/write-only-iceberg) owns destination JSON,
-source-reader requirements and the persistent GKE mount contract.
+source-reader requirements and the GCS-backed recovery contract. Cloud deployment needs no PVC or Filestore.
 
-### Capture locally and test the write-only copies
+### Seal the source and test the write-only copies
 
-Run capture with the writer ADC and retain the sealed generation and report on persistent storage:
+Run capture with separate source-store credentials and writer ADC. Object storage retains the sealed generation:
 
 ```bash
 GOOGLE_APPLICATION_CREDENTIALS="$WRITER_ADC" hudson ops archives capture \
-  --config archive-config.json --out capture-report.json
-hudson ops archives verify-local --config archive-config.json \
+  --config archive-config.json --capture-id "$CAPTURE_ID" --out capture-report.json
+hudson ops archives verify-sealed --config archive-config.json \
   --receipt capture-report.json --out local-verification.json
 ```
 
-Use a new private report directory for each run; outputs are not overwritten. Exercise restart and `--reuse-local` with
-the original report. Reuse must preserve the sealed generation and create fresh offsite attempt keys. Do not re-extract
-under an old receipt. Upload acknowledgements prove transport; local verification checks hashes and Iceberg scans.
+Use a new private report directory for each run; outputs are not overwritten. Exercise restart and `--reuse-sealed` with
+the original report. Explicit delivery attempts 1 through 3 reuse the frozen Parquet and create independent destination
+metadata. A lost upload acknowledgement stays unconfirmed. Do not re-extract under an old receipt. Source verification
+checks hashes and Iceberg scans; offsite acknowledgement proves transport. Keep local backups as a separate CLI mode.
 
 ---
 
@@ -908,7 +909,7 @@ acceptance. Keep PostgreSQL base backups, WAL and file backups active during the
 
 ### Approve the lock and prove recovery
 
-After staging capture and local tests pass, review the provisioning plan and approve the exact bucket, project and
+After staging capture and restart tests pass, review the provisioning plan and approve the exact bucket, project and
 retention duration. The current minimum is 25 years. The operator applies and reads back the policy, then performs the
 separate irreversible lock described in the [runbook](/docs/write-only-iceberg). The writer and DBOS schedule never lock
 buckets.

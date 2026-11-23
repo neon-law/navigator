@@ -149,33 +149,58 @@ pub async fn local(
     config: &Config,
 ) -> std::result::Result<Verification, crate::write_only::Error> {
     let result: anyhow::Result<_> = async {
-        let bundle = super::open(receipt, &config.local_root).await?;
+        let bundle = super::open_local(receipt, &config.local_root).await?;
         super::validate_sources(&bundle.inventory, config)?;
         ensure!(
             bundle.root == format!("file://{}", receipt.root.display()),
             "not a raw readable local backup"
         );
-        // Query the exact validated bytes, not a second mutable filesystem read.
-        let io = iceberg::io::FileIO::new_with_memory();
-        for (key, bytes, _) in &bundle.files {
-            io.new_output(format!("{}/{}", bundle.root, key))?
-                .write(bytes.clone().into())
-                .await?;
-        }
-        Ok(Verification {
-            inventory_uri: format!("{}/{}", bundle.root, bundle.descriptor),
-            inventory_sha256: receipt.inventory_sha256.clone(),
-            objects: bundle.files.len(),
-            query_counts: queries(io, &bundle.inventory).await?,
-            bucket_policy_checked: false,
-            writer_authorization_review_required: true,
-            catalog_promoted: false,
-            payloads: (&bundle.inventory.dependencies).into(),
-            restore_scope: restore_scope(&bundle.inventory)?,
-        })
+        from_bundle(bundle, receipt).await
     }
     .await;
     result.map_err(|_| crate::write_only::Error::Verification)
+}
+
+/// Query an exact sealed source generation; no destination credential is used.
+pub async fn sealed(
+    receipt: &LocalReceipt,
+    config: &Config,
+) -> std::result::Result<Verification, crate::write_only::Error> {
+    if let Some(object) = &config.object_store {
+        let result: Result<_> = async {
+            let store = super::object_store::connect(object).await?;
+            let bundle = super::object_store::open(store.as_ref(), config, receipt).await?;
+            from_bundle(bundle, receipt).await
+        }
+        .await;
+        result.map_err(|_| crate::write_only::Error::Verification)
+    } else {
+        local(receipt, config).await
+    }
+}
+
+pub(crate) async fn from_bundle(
+    bundle: super::Bundle,
+    receipt: &LocalReceipt,
+) -> Result<Verification> {
+    // Query the exact validated bytes, not a second mutable filesystem read.
+    let io = iceberg::io::FileIO::new_with_memory();
+    for (key, bytes, _) in &bundle.files {
+        io.new_output(format!("{}/{}", bundle.root, key))?
+            .write(bytes.clone().into())
+            .await?;
+    }
+    Ok(Verification {
+        inventory_uri: format!("{}/{}", bundle.root, bundle.descriptor),
+        inventory_sha256: receipt.inventory_sha256.clone(),
+        objects: bundle.files.len(),
+        query_counts: queries(io, &bundle.inventory).await?,
+        bucket_policy_checked: false,
+        writer_authorization_review_required: true,
+        catalog_promoted: false,
+        payloads: (&bundle.inventory.dependencies).into(),
+        restore_scope: restore_scope(&bundle.inventory)?,
+    })
 }
 
 fn integer(value: &serde_json::Value) -> Option<u64> {

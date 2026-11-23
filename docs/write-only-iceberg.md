@@ -4,17 +4,40 @@ title: Write-only Iceberg archives
 
 # Write-only Iceberg archives
 
-This explicit Archives mode seals a persistent local Iceberg generation and creates independent offsite attempts. The
-writer uses Application Default Credentials (ADC) without an ambient `gcloud` identity fallback. It sends only
-conditional object creates. It does not read, list, delete, overwrite, inspect bucket policy, or publish a catalog.
+DBOS Archives seals one generation in Google Cloud Storage and creates independent offsite attempts. Its source-store
+reader uses explicitly configured credentials. Offsite handles use separate Application Default Credentials (ADC) and
+send conditional object creates only. The verifier runs separately with read/control-plane access.
 
-The deployment operator supplies a read-only configuration file and a persistent private local archive mount. Do not use
-a temporary directory for scheduled receipts. A lost or changed sealed generation fails recovery; replaying its workflow
-never extracts a replacement snapshot under the old receipt.
+The cloud deployment needs no persistent filesystem, Filestore, PVC, or additional always-on service. Extraction and
+encoding use bounded memory. Object storage holds the sealed rows, immutable metadata, attempt fences and transport
+receipts; DBOS checkpoints their exact identities. A receipt is never permission to re-extract changed rows.
 
-## Configure and capture
+## Configure the object-backed source
 
-Prepare a destinations JSON array with distinct projects and buckets. The following identifiers are synthetic:
+Use an existing operator-approved bucket and a dedicated prefix. Its reader needs exact-object reads and immutable
+creates in that prefix, without destination read access. Keep the source bucket distinct from every offsite bucket.
+Review the prefix's retention and referenced-generation policy before activation; a telemetry or expiring PITR prefix is
+not an interchangeable archive source. These operations apply no lifecycle, deletion or retention changes.
+
+Prepare a private source-store JSON file. The identifiers below are synthetic:
+
+```json
+{
+  "bucket": "example-sealed-archive-source",
+  "prefix": "sealed-generations",
+  "credentials_file": "/var/run/navigator-archive-source/credentials.json",
+  "max_generation_bytes": 67108864,
+  "max_object_bytes": 16777216,
+  "max_objects": 4096,
+  "max_rows_per_table": 100000
+}
+```
+
+The credential file contains the independently approved source identity configuration. Its client never changes process
+ADC or falls back to an ambient `gcloud` identity. The source and destination credential files must differ. Keep actual
+buckets, project numbers, credential configuration and receipts in the private operator store.
+
+Prepare a destinations JSON array with independently owned projects and distinct buckets:
 
 ```json
 [
@@ -23,47 +46,61 @@ Prepare a destinations JSON array with distinct projects and buckets. The follow
     "bucket": "example-independent-archive-a",
     "location": "us-west4",
     "minimum_retention_seconds": 788940000
-  },
-  {
-    "project_number": 100000000002,
-    "bucket": "example-independent-archive-b",
-    "location": "us-central1",
-    "minimum_retention_seconds": 788940000
   }
 ]
 ```
 
-Use the existing reviewed paired coverage file to bind Navigator and Forgejo identities. Source readers use the existing
-archive PostgreSQL and Forgejo reader credential configuration. The operator runs these commands with source admission
-and reader access; those privileges are not granted to the cloud writer identity.
+Bind admitted Navigator and Forgejo identities and the reviewed paired coverage file:
 
 ```bash
-hudson ops archives config --local-root /var/lib/navigator/iceberg \
-  --destinations destinations.json --coverage coverage.json --out archive-config.json
-hudson ops archives capture --config archive-config.json --out capture-report.json
+hudson ops archives config --object-store source-store.json \
+  --source-project-number "$SOURCE_PROJECT_NUMBER" --destinations destinations.json \
+  --coverage coverage.json --out archive-config.json
 ```
 
-For deliberately narrower registered Navigator domain coverage, use `--registered-navigator-only` instead of
-`--coverage`. This does not capture the DBOS system journal. A paired capture records individual database snapshots,
-coverage and non-MVCC repair obligations; it does not claim a cross-database atomic snapshot.
+Version 2 identifies object-backed configuration and carries no local root. Version 1 retains explicit local backups;
+versions and receipt backing are checked rather than interpreting a filesystem path as a GCS location. Each paired
+capture records individual database snapshots, coverage and non-MVCC repair obligations. It is not cross-database
+atomic.
 
-Set `NAVIGATOR_ARCHIVE_WRITE_ONLY_CONFIG` to the operator-managed file path for the existing selected DBOS Archives
-schedule. `NAVIGATOR_ARCHIVE_SOURCE` must be absent or `postgres`. Without this explicit configuration, the existing
-archive mode and its guards remain in effect. Workflow input binds the configuration digest before uploading.
+## Capture and recover an exact generation
 
-Each destination receives its own immutable attempt prefix and complete destination-specific Iceberg URI closure. The
-final inventory is written last. An upload acknowledgement proves transport acknowledgement, not verification. Lost
-acknowledgements remain unconfirmed. A repeated used attempt never probes remote existence with writer credentials. To
-attempt delivery again, reuse the sealed generation and create new destination attempt keys:
+Give a CLI capture an explicit stable identity. The DBOS schedule uses its existing workflow identity:
 
 ```bash
-hudson ops archives capture --config archive-config.json \
-  --reuse-local capture-report.json --out retry-report.json
+GOOGLE_APPLICATION_CREDENTIALS="$WRITER_ADC" hudson ops archives capture \
+  --config archive-config.json --capture-id "$CAPTURE_ID" --out capture-report.json
+hudson ops archives verify-sealed --config archive-config.json \
+  --receipt capture-report.json --out source-verification.json
 ```
+
+Use a new private report path for each invocation; Hudson refuses to overwrite reports. A source generation is committed
+only after all objects and its versioned seal are stored. Source readback can resolve the source's lost create
+acknowledgement. The stable capture identity locates that seal after a process or checkpoint loss, with exact object
+versions, hashes, cutoffs and source fingerprints. A capture fence without a complete seal refuses extraction; a fresh
+cutoff requires a new explicit capture identity.
+
+Prepared destination metadata references that destination's own Parquet paths. Its source-store receipt references the
+original frozen Parquet versions, so preparation does not store another full source data copy. Offsite metadata never
+references source-bucket data. Source reads validate the complete closure before destination work.
+
+Each destination attempt has a durable source-store fence. An acknowledged outcome survives a lost DBOS checkpoint. An
+upload without a durable outcome stays unconfirmed and is not automatically repeated. The writer never probes the
+destination to resolve uncertainty; the separate reader does that. For an explicit retry, reuse the sealed report and
+select a new delivery attempt, from 1 through 3:
+
+```bash
+GOOGLE_APPLICATION_CREDENTIALS="$WRITER_ADC" hudson ops archives capture \
+  --config archive-config.json --capture-id "$CAPTURE_ID" --reuse-sealed capture-report.json \
+  --delivery-attempt 1 --out retry-report.json
+```
+
+The retry preserves the original rows and cutoff. It does not open PostgreSQL or recapture an unavailable generation.
+Upload acknowledgement proves transport, not remote verification, catalog publication or restore acceptance.
 
 ## Deploy with DBOS Archives
 
-Select DBOS Archives in the deployment's private `config.toml` and name the mounted configuration:
+Select the existing Archives schedule in the deployment's private configuration:
 
 ```toml
 NAVIGATOR_DBOS_ENABLED = "true"
@@ -71,90 +108,96 @@ NAVIGATOR_DBOS_ARCHIVES_ENABLED = "true"
 NAVIGATOR_ARCHIVE_WRITE_ONLY_CONFIG = "/var/lib/navigator/iceberg/config/archive-config.json"
 ```
 
-Provision `navigator-archive-write-only` as a ConfigMap with the non-secret `archive-config.json` key. Generate that
-configuration with `--local-root /var/lib/navigator/iceberg/data`. Provision a Bound `navigator-archive-iceberg` PVC
-with `ReadWriteMany` access and storage writable by group 65532. Replicas and rolling updates must share the sealed
-generations and receipts. Size and retain the filesystem through the environment's storage policy; the renderer does not
-create, resize, or delete this claim. `ops ship` checks the configuration, persistent path and claim before apply.
+Provision `navigator-archive-write-only` as a ConfigMap with the non-secret `archive-config.json` key. Provision the
+approved source credential configuration as `navigator-archive-source-credentials`, key `credentials.json`. The renderer
+mounts configuration and credentials read-only; group 65532 can read the source credential file. Keep verifier
+credentials out of `web`. The cloud preflight requires version 2, the mounted credential path and an independent
+configured destination. Local configuration is an operator CLI mode, not a cloud volume requirement.
 
-The renderer mounts the configuration read-only and the persistent claim at the configured local root. It removes the
-Restate Archives trigger when DBOS Archives is selected. It does not provision destination buckets, grant IAM, or
-validate effective cloud permissions. Independently provision the writer's ADC and separate verifier identity under the
-create-only contract above before enabling the schedule. Keep verifier credentials out of `web`.
+`NAVIGATOR_ARCHIVE_SOURCE` must be absent or `postgres`. Source admission, archive database readers, reviewed coverage,
+source-store IAM, offsite writer ADC and the native worker configuration must be ready before enabling the schedule. The
+renderer removes the Restate Archives trigger when DBOS Archives is selected. It provisions no bucket or IAM role.
 
-## Verify with a separate identity
+## Keep storage and retry costs bounded
 
-The verifier uses a separately provisioned read/control-plane ADC identity. Do not put its credentials in the writer
-process. It checks the destination project, location, uniform bucket access and locked retention, every object hash, and
-the complete embedded metadata/Avro/Parquet URI closure before executing Iceberg scans. Unknown acknowledgements can be
-resolved only by this reader. A policy check is not proof of effective inherited writer IAM.
+The configured byte, row and object limits fail closed. Raw source sizes are checked inside the extraction snapshot
+before decoding; encoded buffers and the total generation are bounded too. One extraction gate per source prevents
+concurrent replica extraction. Destination preparation and upload are sequential, and each delivery attempt is fenced.
+No background loop creates more copies after a lost acknowledgement.
+
+Account for object count and API operations as well as bytes. Independent Iceberg tables need metadata and Avro objects;
+source verification uses metadata and generation-pinned reads. The source stores frozen Parquet once and destination
+metadata separately; each offsite attempt writes a complete independent copy. Explicit retries and partial attempts can
+therefore increase retained objects even when their source rows are shared.
+
+Review storage class, minimum storage duration, early-deletion charges, retrieval and verification reads, and regional
+network transfer together. Small frequently verified archives can cost more in operations than stored bytes. This
+transport does not select Coldline/Archive, alter lifecycle rules or delete referenced source generations. Retention
+cleanup remains an independently authorized operation after all required references and recovery evidence are safe.
+
+## Keep explicit local backups
+
+For a raw local Iceberg copy, use a private persistent directory and version 1:
 
 ```bash
-hudson ops archives verify-local --config archive-config.json \
-  --receipt capture-report.json --out local-verification.json
-hudson ops archives verify-cloud --config archive-config.json \
-  --destination 0 --report capture-report.json --out offsite-verification.json
-hudson ops archives provisioning-plan --config archive-config.json \
-  --writer serviceAccount:archive-writer@example.invalid \
-  --verifier serviceAccount:archive-verifier@example.invalid --out proposed-policy.json
+hudson ops archives config --local-root /private/archive-data \
+  --registered-navigator-only --destinations destinations.json --out local-config.json
+hudson ops archives capture --config local-config.json --out local-report.json
+hudson ops archives verify-local --config local-config.json \
+  --receipt local-report.json --out local-verification.json
 ```
 
-The provisioning plan applies nothing. The deployment operator separately validates independent project ownership,
-uniform access, retention locking, effective inherited IAM and denied writer read/list/delete/overwrite operations. The
-writer binding requests only `roles/storage.objectCreator`; verification and catalog promotion remain separate. Reports
-always retain `writer_authorization_review_required: true` and `catalog_promoted: false`. The operator records any
-separate acceptance outside these transport reports. No boolean in configuration substitutes for that evidence.
+`--registered-navigator-only` is deliberately narrower than paired coverage and does not capture the DBOS system
+journal. Local reuse requires the original sealed files; a missing or changed file refuses recovery. `--reuse-local`
+remains a spelling for `--reuse-sealed`, and `verify-local` remains a spelling for `verify-sealed`.
 
 ## Test, approve, then lock
 
-Use a separate private configuration and destination bucket for each environment. For a GCP source, pass its actual
-project number to `hudson ops archives config` with `--source-project-number`; each destination must belong to a
-different project. Keep project numbers, bucket names, credential configuration and receipts in the operator-managed
-store. Hudson creates report files without overwrite, so use a new private report directory for each test or attempt.
+Use separate private configurations and destinations for each environment. During testing keep destinations unlocked.
+Run capture, verify the sealed source, restart/reuse it, and prove denied writer destination reads, listing, deletion,
+updates, administration and cross-environment writes. Review inherited IAM and the live Workload Identity mapping. IAM
+diagnostics alone do not prove an upload or restore succeeded.
 
-During testing, keep the destination unlocked. Run `capture` with the writer's ADC, then `verify-local` against the
-sealed generation. Test restart and `--reuse-local` from the persistent archive mount. Confirm writer object creation is
-allowed and object get/list/delete/update, bucket administration and cross-environment writes are denied. Check
-inherited policies and the live workload identity mapping as well as direct bucket grants. IAM diagnostics do not prove
-that a real upload or restore succeeded.
+The separate cloud verifier requires locked retention and refuses an unlocked test bucket. Source verification and
+transport acknowledgement are separate evidence; do not weaken cloud verification to pass a test. Render the proposal:
 
-The current `verify-cloud` contract requires locked retention and fails for an unlocked test bucket. Do not label that
-state a verified offsite archive or weaken the check to make a test pass. Local verification and upload acknowledgements
-remain separate evidence. Complete independent cloud reads and recovery checks in staging before production.
+```bash
+hudson ops archives provisioning-plan --config archive-config.json \
+  --writer "serviceAccount:$ARCHIVE_WRITER_EMAIL" \
+  --verifier "serviceAccount:$ARCHIVE_VERIFIER_EMAIL" --out proposed-policy.json
+```
 
-The provisioning plan records the intended retention period and separate writer/verifier permissions. Review it with the
-deployment operator after capture and local tests pass. The current minimum is 788940000 seconds, or 25 years. Record
-explicit approval of the bucket, owning project and duration before the separate control-plane lock operation.
-
-Use an independently authorized operator credential for the following commands. Set `ARCHIVE_BUCKET` and
-`RETENTION_PERIOD` from the approved private plan; use seconds with an `s` suffix, such as `788940000s`:
+The plan applies nothing. After capture and restart tests pass, obtain explicit approval of the bucket, owning project
+and retention duration. The current minimum is 788940000 seconds, or 25 years. With separately authorized control-plane
+credentials, set and read back the reviewed policy:
 
 ```bash
 gcloud storage buckets update "gs://$ARCHIVE_BUCKET" --retention-period="$RETENTION_PERIOD"
 gcloud storage buckets describe "gs://$ARCHIVE_BUCKET" --format=json
 ```
 
-Read back the project, location, public access prevention, uniform access and exact retention period. After approval,
-[lock the reviewed policy](https://docs.cloud.google.com/storage/docs/using-bucket-lock):
+`RETENTION_PERIOD` uses seconds with an `s` suffix. Verify project, location, public access prevention, uniform access
+and the exact period before the independently approved irreversible lock:
 
 ```bash
 gcloud storage buckets update "gs://$ARCHIVE_BUCKET" --lock-retention-period
 ```
 
-A locked policy cannot be removed or shortened. This control-plane action belongs to the operator, never the writer or
-DBOS schedule. Hudson's `provisioning-plan` applies nothing. Read the locked policy back, then run `verify-cloud` with
-the separate verifier ADC and the exact capture report. Preserve its object-hash and Iceberg query results, and
-independently rehearse the required restore. Repeat acceptance with production's own identities.
+Read the locked policy back, then use the separate verifier ADC and the exact report:
+
+```bash
+GOOGLE_APPLICATION_CREDENTIALS="$VERIFIER_ADC" hudson ops archives verify-cloud \
+  --config archive-config.json --destination 0 --report capture-report.json \
+  --out offsite-verification.json
+```
+
+The verifier checks bucket policy, exact inventory, object hashes and the complete metadata/Avro/Parquet URI closure
+before executing Iceberg scans. Reports keep `writer_authorization_review_required: true` and `catalog_promoted: false`.
+Repeat independent reading and isolated restore acceptance in staging before production.
 
 ## Recovery scope
 
-Verification reports contain the captured source fingerprints, per-database manifest where present, actual query counts,
-and a structured restore scope. They authorize no target writes, activation, or provider-effect replay. Logical native
-origin rows do not attest a different database as freshly created. Restore admission and physical identity acceptance
-remain separate contracts.
-
-Asset, document, attachment, Notation and Git bytes referenced by table rows are not copied by this structured lane. The
-inventory distinguishes referenced payloads from copied payloads and marks dependency enumeration incomplete. Recovery
-also needs the corresponding Git/LFS and object backups, encryption keys and credentials. Table readability does not
-prove those dependencies survived loss of the primary project. Keep the physical base/WAL and DBOS recovery guards until
-the required restore and effect-recovery scope has been independently demonstrated.
+Structured tables do not copy Asset, document, attachment, Notation or Git bytes. Keep matching Git/LFS/object backups,
+encryption keys and configuration. A logical origin row does not attest a newly created restore target. Restore
+admission, physical PostgreSQL base/WAL restoration, DBOS recovery and provider-effect replay remain separate gates. No
+archive report authorizes target writes, activation, deletion or provider-effect replay.

@@ -43,6 +43,14 @@ impl Capture {
         navigator: crate::coverage::DatabaseSource<'_>,
         forgejo: crate::coverage::DatabaseSource<'_>,
     ) -> Result<Self> {
+        Self::paired_with_bounds(navigator, forgejo, None).await
+    }
+
+    pub(crate) async fn paired_with_bounds(
+        navigator: crate::coverage::DatabaseSource<'_>,
+        forgejo: crate::coverage::DatabaseSource<'_>,
+        bounds: Option<&crate::postgres::ExportBounds>,
+    ) -> Result<Self> {
         ensure!(
             navigator.name == "navigator" && forgejo.name == "forgejo",
             "invalid paired source names"
@@ -50,8 +58,10 @@ impl Capture {
         let generation = Uuid::new_v4();
         let mut databases = Vec::new();
         let mut tables = Vec::new();
+        let mut encoded_bytes = 0usize;
         for source in [navigator, forgejo] {
-            let mut extracted = crate::coverage::extract_database(source, generation).await?;
+            let mut extracted =
+                crate::coverage::extract_database_with_bounds(source, generation, bounds).await?;
             let mut objects: HashMap<_, _> = extracted.objects.into_iter().collect();
             for entry in &mut extracted.manifest.tables {
                 let bytes = objects
@@ -66,6 +76,15 @@ impl Capture {
                 let name = format!("{}_{encoded}", extracted.manifest.database);
                 // This capture-local identity is rebound to the final destination path below.
                 entry.key.clone_from(&name);
+                encoded_bytes = encoded_bytes
+                    .checked_add(bytes.len())
+                    .context("capture byte count overflow")?;
+                if let Some(bounds) = bounds {
+                    ensure!(
+                        encoded_bytes <= bounds.generation_bytes,
+                        "capture byte bound exceeded"
+                    );
+                }
                 tables.push((name, entry.rows, bytes));
             }
             ensure!(
@@ -105,7 +124,15 @@ impl Capture {
                 && !root_uri.split('/').any(|part| part == "." || part == ".."),
             "archive root must be an absolute file or GCS URI without traversal"
         );
-        let prefix = format!("attempts/{}", Uuid::new_v4());
+        self.bundle_at(root_uri, &format!("attempts/{}", Uuid::new_v4()))
+            .await
+    }
+
+    pub(crate) async fn bundle_at(&self, root_uri: &str, prefix: &str) -> Result<Bundle> {
+        ensure!(
+            operations::safe_key(prefix),
+            "invalid archive attempt identity"
+        );
         let mut bundle = Bundle {
             root: root_uri.to_owned(),
             inventory: Inventory {
@@ -391,7 +418,7 @@ async fn local_object(path: &Path, bytes: &[u8]) -> Result<()> {
 pub mod operations;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 pub(crate) mod payloads;
 

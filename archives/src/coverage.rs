@@ -345,7 +345,16 @@ pub(super) async fn extract_database(
     source: DatabaseSource<'_>,
     generation: uuid::Uuid,
 ) -> Result<ExtractedDatabase> {
+    extract_database_with_bounds(source, generation, None).await
+}
+
+pub(super) async fn extract_database_with_bounds(
+    source: DatabaseSource<'_>,
+    generation: uuid::Uuid,
+    bounds: Option<&crate::postgres::ExportBounds>,
+) -> Result<ExtractedDatabase> {
     let mut objects = Vec::new();
+    let mut encoded = 0usize;
     let mut tx = source.pool.begin().await?;
     sqlx::raw_sql("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY; SET LOCAL search_path = pg_catalog; SET LOCAL row_security = off; SET LOCAL statement_timeout = '300s'; SET LOCAL TimeZone='UTC'; SET LOCAL DateStyle='ISO, YMD'; SET LOCAL extra_float_digits=3; SET LOCAL bytea_output='hex'; SET LOCAL IntervalStyle='iso_8601'; SET LOCAL lc_monetary='C'")
         .execute(&mut *tx).await?;
@@ -375,9 +384,23 @@ pub(super) async fn extract_database(
             relation: relation.clone(),
             columns,
         });
-        let (rows, bytes) =
-            crate::postgres::export_table_in_schema(&mut tx, &relation.schema, &relation.name)
-                .await?;
+        let (rows, bytes) = crate::postgres::export_table_bounded(
+            &mut tx,
+            &relation.schema,
+            &relation.name,
+            None,
+            bounds,
+        )
+        .await?;
+        encoded = encoded
+            .checked_add(bytes.len())
+            .context("capture byte count overflow")?;
+        if let Some(bounds) = bounds {
+            anyhow::ensure!(
+                encoded <= bounds.generation_bytes,
+                "capture byte bound exceeded"
+            );
+        }
         let table = format!("{}.{}", relation.schema, relation.name);
         // Encode each name component to avoid object-prefix collisions.
         let key = format!(
@@ -396,21 +419,7 @@ pub(super) async fn extract_database(
         });
         objects.push((key, bytes));
     }
-    let mut recovery_plan = if source.name == "navigator" {
-        match store::postgres::native_origin::recovery_plan::capture(&mut tx).await {
-            Ok(plan) => plan,
-            // Coverage and the raw authority rows remain recoverable evidence
-            // during an unsupported or pending upgrade. They authorize no native
-            // activation; catalog/storage failures still fail the generation.
-            Err(
-                store::postgres::native_origin::OriginError::Recovery
-                | store::postgres::native_origin::OriginError::Identity,
-            ) => None,
-            Err(error) => return Err(error.into()),
-        }
-    } else {
-        None
-    };
+    let mut recovery_plan = capture_recovery_plan(source.name, &mut tx).await?;
     if let Some(plan) = &mut recovery_plan {
         bind_exported_sequences(plan, &schemas, &tables, &objects)?;
     }
@@ -442,6 +451,28 @@ pub(super) async fn extract_database(
         recovery_plan,
     };
     Ok(ExtractedDatabase { manifest, objects })
+}
+
+async fn capture_recovery_plan(
+    source_name: &str,
+    tx: &mut Transaction<'_, Postgres>,
+) -> Result<Option<store::postgres::native_origin::recovery_plan::RecoveryPlan>> {
+    let recovery_plan = if source_name == "navigator" {
+        match store::postgres::native_origin::recovery_plan::capture(tx).await {
+            Ok(plan) => plan,
+            // Coverage and the raw authority rows remain recoverable evidence
+            // during an unsupported or pending upgrade. They authorize no native
+            // activation; catalog/storage failures still fail the generation.
+            Err(
+                store::postgres::native_origin::OriginError::Recovery
+                | store::postgres::native_origin::OriginError::Identity,
+            ) => None,
+            Err(error) => return Err(error.into()),
+        }
+    } else {
+        None
+    };
+    Ok(recovery_plan)
 }
 
 fn bind_exported_sequences(

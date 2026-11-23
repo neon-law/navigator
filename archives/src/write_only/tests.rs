@@ -5,10 +5,10 @@ use cloud::{ImmutableObject, ObjectListing, StorageError, StoredObject};
 use futures::TryStreamExt as _;
 
 #[derive(Default)]
-struct CreateOnly {
-    objects: Mutex<BTreeMap<String, Vec<u8>>>,
+pub(crate) struct CreateOnly {
+    pub(crate) objects: Mutex<BTreeMap<String, Vec<u8>>>,
     // Fail after committing this index, simulating a server success/lost ACK.
-    lost_ack: Option<usize>,
+    pub(crate) lost_ack: Option<usize>,
 }
 
 #[async_trait::async_trait]

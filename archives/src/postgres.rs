@@ -510,11 +510,24 @@ pub(super) struct Extracted {
     pub(super) tables: Vec<(String, usize, Vec<u8>)>,
 }
 
+pub(crate) mod bounded;
+pub(crate) use bounded::ExportBounds;
+
 pub(super) async fn extract(
     pool: &PgPool,
     tables: &[&str],
     after_table: &dyn AfterTable,
     prior: &std::collections::HashMap<&str, Vec<u8>>,
+) -> Result<Extracted> {
+    extract_with_bounds(pool, tables, after_table, prior, None).await
+}
+
+pub(super) async fn extract_with_bounds(
+    pool: &PgPool,
+    tables: &[&str],
+    after_table: &dyn AfterTable,
+    prior: &std::collections::HashMap<&str, Vec<u8>>,
+    bounds: Option<&ExportBounds>,
 ) -> Result<Extracted> {
     let mut tx = pool.begin().await.context("begin export transaction")?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
@@ -536,11 +549,33 @@ pub(super) async fn extract(
     .context("take export snapshot")?;
 
     let mut out = Vec::with_capacity(tables.len());
+    let mut encoded = 0usize;
     for table in tables {
-        let (rows, bytes) =
-            export_table_with_prior(&mut tx, table, prior.get(table).map(Vec::as_slice))
+        let (rows, bytes) = match bounds {
+            Some(bounds) => {
+                export_table_bounded(
+                    &mut tx,
+                    "public",
+                    table,
+                    prior.get(table).map(Vec::as_slice),
+                    Some(bounds),
+                )
                 .await
-                .with_context(|| format!("export PostgreSQL table `{table}`"))?;
+            }
+            None => {
+                export_table_with_prior(&mut tx, table, prior.get(table).map(Vec::as_slice)).await
+            }
+        }
+        .with_context(|| format!("export PostgreSQL table `{table}`"))?;
+        encoded = encoded
+            .checked_add(bytes.len())
+            .context("archive byte count overflow")?;
+        if let Some(bounds) = bounds {
+            anyhow::ensure!(
+                encoded <= bounds.generation_bytes,
+                "capture byte bound exceeded"
+            );
+        }
         out.push(((*table).to_string(), rows, bytes));
         after_table.after(table).await;
     }
@@ -726,14 +761,6 @@ fn quote_ident(name: &str) -> String {
 /// Read one table through a server-side cursor, `FETCH_ROWS` at a time, into
 /// one Parquet file. An empty table yields a valid zero-row file, so the
 /// generation records it rather than omitting it.
-pub(super) async fn export_table_in_schema(
-    tx: &mut Transaction<'_, Postgres>,
-    schema: &str,
-    table: &str,
-) -> Result<(usize, Vec<u8>)> {
-    export_table_in_schema_with_prior(tx, schema, table, None).await
-}
-
 async fn export_table_with_prior(
     tx: &mut Transaction<'_, Postgres>,
     table: &str,
@@ -748,6 +775,19 @@ pub(super) async fn export_table_in_schema_with_prior(
     table: &str,
     prior: Option<&[u8]>,
 ) -> Result<(usize, Vec<u8>)> {
+    export_table_bounded(tx, schema, table, prior, None).await
+}
+
+pub(super) async fn export_table_bounded(
+    tx: &mut Transaction<'_, Postgres>,
+    schema: &str,
+    table: &str,
+    prior: Option<&[u8]>,
+    bounds: Option<&ExportBounds>,
+) -> Result<(usize, Vec<u8>)> {
+    if let Some(bounds) = bounds {
+        bounds.check_source(tx, schema, table).await?;
+    }
     let columns = columns(tx, schema, table).await?;
     let arrow_schema = arrow_schema_with_field_ids(&columns, prior)?;
     let select = columns
@@ -778,7 +818,7 @@ pub(super) async fn export_table_in_schema_with_prior(
         .await
         .context("open export cursor")?;
 
-    let mut buffer = Vec::new();
+    let mut buffer = bounded::Buffer::new(bounds.map_or(usize::MAX, |bounds| bounds.object_bytes));
     let properties = WriterProperties::builder()
         .set_compression(Compression::SNAPPY)
         .build();
@@ -821,7 +861,7 @@ pub(super) async fn export_table_in_schema_with_prior(
         .await
         .context("close export cursor")?;
     writer.close().context("close parquet writer")?;
-    Ok((total, buffer))
+    Ok((total, buffer.into_bytes()))
 }
 
 fn arrow_schema_with_field_ids(
