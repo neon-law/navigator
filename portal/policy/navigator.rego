@@ -1675,6 +1675,18 @@ route_allow if {
     is_lawyer(input.session)
 }
 
+# Read the signed-in lawyer dashboard's Firm-scoped open Project inventory.
+route_allow if {
+    input.path == ["app", "api", "lawyer", "deadline-projects"]
+    input.method == "GET"
+    is_lawyer(input.session)
+}
+
+ci_matter_content_denied if {
+    input.path == ["app", "api", "lawyer", "deadline-projects"]
+    input.session.source == "ci"
+}
+
 ci_matter_content_denied if {
     input.session.source == "ci"
     input.path == ["app", "api", "onboarding-agreements"]

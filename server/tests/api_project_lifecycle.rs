@@ -461,3 +461,83 @@ async fn agreements_list_existing_runs_and_filings_only_on_participating_project
         serde_json::json!({"project":"another-project","title":"Signed.pdf","state":"filed","notation_id":null,"document_id":filed,"envelope_id":null})
     );
 }
+
+#[tokio::test]
+async fn deadline_inventory_matches_dashboard_firm_scope_and_open_projects() {
+    let Some(fx) = Fixture::new(None).await else {
+        return;
+    };
+    let pool = fx.pg.pool();
+    let current_firm = Uuid::now_v7();
+    let other_firm = Uuid::now_v7();
+    let current_brand = Uuid::now_v7();
+    let other_brand = Uuid::now_v7();
+    let entity: Uuid = sqlx::query_scalar("SELECT entity_id FROM project WHERE id=$1")
+        .bind(fx.project)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO firm(id,name,slug,status,entity_id) VALUES ($1,'Synthetic Current Firm','synthetic-current-firm','active',$3),($2,'Synthetic Other Firm','synthetic-other-firm','active',NULL)")
+        .bind(current_firm).bind(other_firm).bind(entity).execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO brand(id,name,brand_key) VALUES ($1,'Synthetic Current Brand','neon'),($2,'Synthetic Other Brand','outside-synthetic')")
+        .bind(current_brand).bind(other_brand).execute(pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO firm_brand(firm_id,brand_key) VALUES ($1,'neon'),($2,'outside-synthetic')",
+    )
+    .bind(current_firm)
+    .bind(other_firm)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE project SET firm_id=$2,brand='neon' WHERE id=$1")
+        .bind(fx.project)
+        .bind(current_firm)
+        .execute(pool)
+        .await
+        .unwrap();
+    let sibling = Uuid::now_v7();
+    let closed = Uuid::now_v7();
+    let outside = Uuid::now_v7();
+    let legacy = Uuid::now_v7();
+    sqlx::query("INSERT INTO project(id,code,name,status,entity_id,brand,firm_id) VALUES ($1,'synthetic-no-checkout','Synthetic No Checkout','open',$5,'neon',$6),($2,'synthetic-closed','Synthetic Closed','closed',$5,'neon',$6),($3,'synthetic-outside-firm','Synthetic Outside','open',$5,'outside-synthetic',$7),($4,'synthetic-unscoped-legacy','Synthetic Unscoped','open',$5,'outside-synthetic',NULL)")
+        .bind(sibling).bind(closed).bind(outside).bind(legacy).bind(entity).bind(current_firm).bind(other_firm)
+        .execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO person_project_role(person_id,project_id,participation) VALUES ($1,$2,'lawyer'),($1,$3,'lawyer'),($1,$4,'lawyer'),($1,$5,'lawyer'),($1,$6,'lawyer')")
+        .bind(fx.lawyer).bind(fx.project).bind(sibling).bind(closed).bind(outside).bind(legacy)
+        .execute(pool).await.unwrap();
+
+    let rows = json(
+        fx.get(
+            "/app/api/lawyer/deadline-projects",
+            Some(Role::Lawyer),
+            Some(fx.lawyer),
+        )
+        .await,
+    )
+    .await;
+    let mut codes = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["code"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    codes.sort_unstable();
+    assert_eq!(codes, ["synthetic-no-checkout", "synthetic-onboarding"]);
+
+    sqlx::query("DELETE FROM firm_brand WHERE firm_id=$1 AND brand_key='neon'")
+        .bind(current_firm)
+        .execute(pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        fx.get(
+            "/app/api/lawyer/deadline-projects",
+            Some(Role::Lawyer),
+            Some(fx.lawyer)
+        )
+        .await
+        .status(),
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "an unresolved host Firm fails closed instead of exposing unscoped Projects"
+    );
+}
