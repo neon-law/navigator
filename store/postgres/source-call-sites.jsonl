@@ -74,7 +74,12 @@
 {"file":"archives/src/postgres.rs","line":1604,"function":"postgres_types_round_trip_through_parquet_and_iceberg","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"archives/src/postgres.rs","line":1608,"function":"postgres_types_round_trip_through_parquet_and_iceberg","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"archives/src/postgres.rs","line":1835,"function":"delete","operation":"delete","sql_operations":[],"tables":[],"transaction":false}
-{"file":"archives/src/postgres/bounded.rs","line":17,"function":"check_source","operation":"query_as","sql_operations":[],"tables":[],"transaction":false}
+{"file":"archives/src/postgres/bounded.rs","line":18,"function":"check_source","operation":"query_as","sql_operations":[],"tables":[],"transaction":false}
+{"file":"archives/src/postgres/bounded.rs","line":69,"function":"bounded_sequence_capture_preserves_state_and_enforces_raw_limit","operation":"begin","sql_operations":[],"tables":[],"transaction":true}
+{"file":"archives/src/postgres/bounded.rs","line":70,"function":"bounded_sequence_capture_preserves_state_and_enforces_raw_limit","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
+{"file":"archives/src/postgres/bounded.rs","line":70,"function":"bounded_sequence_capture_preserves_state_and_enforces_raw_limit","operation":"query","sql_operations":["CREATE"],"tables":[],"transaction":false}
+{"file":"archives/src/postgres/bounded.rs","line":91,"function":"bounded_sequence_capture_preserves_state_and_enforces_raw_limit","operation":"query_as","sql_operations":["SELECT"],"tables":[],"transaction":false}
+{"file":"archives/src/postgres/bounded.rs","line":104,"function":"bounded_sequence_capture_preserves_state_and_enforces_raw_limit","operation":"rollback","sql_operations":[],"tables":[],"transaction":true}
 {"file":"archives/src/recovery.rs","line":60,"function":"rehydrate","operation":"query_scalar","sql_operations":["SELECT"],"tables":[],"transaction":false}
 {"file":"archives/src/recovery.rs","line":90,"function":"rehydrate","operation":"begin","sql_operations":[],"tables":[],"transaction":true}
 {"file":"archives/src/recovery.rs","line":91,"function":"rehydrate","operation":"execute","sql_operations":[],"tables":[],"transaction":false}

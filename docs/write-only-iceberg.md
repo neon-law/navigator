@@ -81,7 +81,9 @@ atomic.
 
 ## Capture and recover an exact generation
 
-Give a CLI capture an explicit stable identity. The DBOS schedule uses its existing workflow identity:
+Give a CLI capture an explicit stable identity. The DBOS schedule uses its existing workflow identity. GKE metadata
+capture runs in the deployed executor or an approved GKE operator runtime. An operator machine uses explicit-file source
+authentication and separate writer ADC; setting writer ADC does not provide a GKE metadata endpoint:
 
 ```bash
 GOOGLE_APPLICATION_CREDENTIALS="$WRITER_ADC" hudson ops archives capture \
@@ -134,6 +136,12 @@ requires the mounted credential path and Secret. Local backups remain an operato
 `NAVIGATOR_ARCHIVE_SOURCE` must be absent or `postgres`. Source admission, archive database readers, reviewed coverage,
 source-store IAM, offsite writer ADC and the native worker configuration must be ready before enabling the schedule. The
 renderer removes the Restate Archives trigger when DBOS Archives is selected. It provisions no bucket or IAM role.
+
+The authenticated Archives **Run now** control uses the locally registered workflow in the lightweight web host. It
+freezes the same mounted configuration as a scheduled run and starts a distinct `Archives:manual-<uuid>` identity. It
+needs no worker ingress URL or bearer token. The combined host uses its authenticated DBOS ingress. A selected local
+owner that cannot admit the run refuses it; it does not fall back to another executor or Restate. A queued notice proves
+admission only. Inspect the exact workflow and completed report before verification or recovery acceptance.
 
 ## Keep storage and retry costs bounded
 
