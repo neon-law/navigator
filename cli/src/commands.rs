@@ -2265,6 +2265,9 @@ impl EfilingDetails {
 pub enum ParticipantCmd {
     /// List participation rows, including their identifiers and DRI flags.
     List {
+        /// Show only this Person's assignments on the Project.
+        #[arg(long)]
+        person_id: Option<uuid::Uuid>,
         /// Project code. Defaults to project.name in navigator.yaml.
         #[arg(long)]
         project: Option<String>,
@@ -2975,8 +2978,13 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
             }
         },
         ProjectsCmd::Participant { action } => match action {
-            ParticipantCmd::List { host, project } => {
-                projects::participant::list(host.host.as_deref(), project.as_deref()).await
+            ParticipantCmd::List {
+                host,
+                project,
+                person_id,
+            } => {
+                projects::participant::list(host.host.as_deref(), project.as_deref(), person_id)
+                    .await
             }
             ParticipantCmd::Remove {
                 host,

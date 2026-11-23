@@ -44,7 +44,14 @@ async fn coordinates(host: Option<&str>, project: Option<&str>) -> Result<(Strin
     Ok((base, token, id))
 }
 
-pub async fn list(host: Option<&str>, project: Option<&str>) -> ExitCode {
+#[derive(serde::Deserialize, serde::Serialize)]
+struct Participant {
+    person_id: Uuid,
+    #[serde(flatten)]
+    fields: serde_json::Map<String, serde_json::Value>,
+}
+
+pub async fn list(host: Option<&str>, project: Option<&str>, person_id: Option<Uuid>) -> ExitCode {
     let result = async {
         let (base, token, id) = coordinates(host, project).await?;
         let response = reqwest::Client::new()
@@ -57,8 +64,11 @@ pub async fn list(host: Option<&str>, project: Option<&str>) -> ExitCode {
         if !response.status().is_success() {
             return Err(anyhow!("participant list refused: {}", response.status()));
         }
-        let rows: serde_json::Value = response.json().await.context("parse participants")?;
-        println!("{rows}");
+        let mut rows: Vec<Participant> = response.json().await.context("parse participants")?;
+        if let Some(id) = person_id {
+            rows.retain(|row| row.person_id == id);
+        }
+        println!("{}", serde_json::to_string(&rows)?);
         Ok(())
     }
     .await;

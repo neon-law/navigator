@@ -28,40 +28,45 @@ async fn participant_dri_designates_and_clears_through_the_authenticated_door() 
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
             {"id":id,"code":"acme"}
         ])))
-        .expect(3)
+        .expect(5)
         .mount(&server)
         .await;
-    let rows = serde_json::json!([{"id":row,"person_id":Uuid::now_v7(),
-        "participation":"client","is_client_dri":false,"is_lawyer_dri":false}]);
+    let person = Uuid::now_v7();
+    let rows = serde_json::json!([{"id":row,"person_id":person,
+        "participation":"client","is_client_dri":false,"is_lawyer_dri":false},{"id":Uuid::now_v7(),"person_id":Uuid::now_v7(),"participation":"lawyer"}]);
     Mock::given(method("GET"))
         .and(path(format!("/app/api/projects/{id}/participants")))
         .and(header("authorization", "Bearer test-token"))
         .respond_with(ResponseTemplate::new(200).set_body_json(&rows))
-        .expect(1)
+        .expect(3)
         .mount(&server)
         .await;
-    let output = Command::cargo_bin("navigator")
-        .unwrap()
-        .current_dir(root.path())
-        .env("NAVIGATOR_CREDENTIALS_FILE", &credentials)
-        .args([
-            "project",
-            "participant",
-            "list",
-            "--project",
-            "acme",
-            "--host",
-            &host,
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&output).unwrap(),
-        rows
-    );
+    for (filter, expected) in [
+        (None, rows.clone()),
+        (Some(person), serde_json::json!([rows[0]])),
+        (Some(Uuid::now_v7()), serde_json::json!([])),
+    ] {
+        let mut cmd = Command::cargo_bin("navigator").unwrap();
+        cmd.current_dir(root.path())
+            .env("NAVIGATOR_CREDENTIALS_FILE", &credentials)
+            .args([
+                "project",
+                "participant",
+                "list",
+                "--project",
+                "acme",
+                "--host",
+                &host,
+            ]);
+        if let Some(id) = filter {
+            cmd.arg("--person-id").arg(id.to_string());
+        }
+        let result = cmd.assert().success();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&result.get_output().stdout).unwrap(),
+            expected
+        );
+    }
     for verb in ["PUT", "DELETE"] {
         Mock::given(method(verb))
             .and(path(format!(

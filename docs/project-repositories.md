@@ -298,15 +298,16 @@ folder names `navigator project set <code> --drive-folder <link>` as missing wor
 filed document visibility and generated onboarding instruments. Filing establishes presence; execution remains
 unverified. A pitch names the missing onboarding work. This command performs only authenticated reads.
 
-**`navigator project participant list` reads the participation ledger as JSON.** Use a row's `id` with `navigator
-project participant dri <id>` to designate it, or add `--clear` to remove its marker. The side follows the Person's
-role; designation adds a DRI without displacing other holders. The server enforces actor authorization, records the
-change in the relationship log, and refuses to clear the last lawyer DRI. Use `navigator project participant remove <id>`
-to remove the assignment. Designate a successor before removing the last lawyer DRI. Firm membership is managed
-separately. The calendar membership worker reconciles managed reader grants and event guests on its next successful
-pass. All three commands take `--project` and `--host`,
-defaulting to this checkout's manifest. POST and PATCH participant bodies accept `person_id` only; unknown fields,
-including `is_client_dri` and `is_lawyer_dri`, fail with a named `400` error.
+**`navigator project participant list` reads the participation ledger as JSON.** Pass `--person-id <person-id>` to check
+one Person's assignment before or after removal. An empty array means the Project has no row for that Person. Use a
+row's `id` with `navigator project participant dri <id>` to designate it, or add `--clear` to remove its marker. The
+side follows the Person's role; designation adds a DRI without displacing other holders. The server enforces actor
+authorization, records the change in the relationship log, and refuses to clear the last lawyer DRI. Use `navigator
+project participant remove <id>` to remove the assignment. Designate a successor before removing the last lawyer DRI.
+Firm membership is managed separately. The calendar membership worker reconciles managed reader grants and event guests
+on its next successful pass. All three commands take `--project` and `--host`, defaulting to this checkout's manifest.
+POST and PATCH participant bodies accept `person_id` only; unknown fields, including `is_client_dri` and
+`is_lawyer_dri`, fail with a named `400` error.
 
 **`navigator project sync` reconciles the complete live Project with the checkout, in both directions.** Run it with no
 positional arguments from the repository root. It reads the Project code and host from `navigator.yaml`, asks the live
