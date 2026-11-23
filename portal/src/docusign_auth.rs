@@ -216,8 +216,23 @@ impl DocuSignJwtAuth {
             .map_err(|e| SignatureError::Provider(e.to_string()))?;
         let status = resp.status();
         if !status.is_success() {
+            let body = resp.json::<serde_json::Value>().await.unwrap_or_default();
+            let reason = match (body["error"].as_str(), body["error_description"].as_str()) {
+                (Some("invalid_grant"), Some("no_valid_keys_or_signatures")) => {
+                    ": the RSA signing key does not match the integration's registered keys"
+                }
+                (Some("consent_required"), _)
+                | (Some("invalid_grant"), Some("consent_required")) => {
+                    ": the DocuSign user must grant this integration impersonation consent"
+                }
+                (Some("issuer_not_found"), _)
+                | (Some("invalid_grant"), Some("issuer_not_found")) => {
+                    ": the integration key is unknown in this DocuSign environment"
+                }
+                _ => "",
+            };
             return Err(SignatureError::Provider(format!(
-                "docusign oauth responded {status}"
+                "docusign oauth responded {status}{reason}"
             )));
         }
         let token: TokenResponse = resp
@@ -438,6 +453,27 @@ LwIDAQAB
         let minted = auth.mint(0).await.expect("mint succeeds against the mock");
         assert_eq!(minted.access_token, "tok-xyz");
         assert_eq!(minted.expires_in, 3600);
+    }
+
+    #[tokio::test]
+    async fn jwt_refusals_explain_the_failed_check_without_exposing_the_response() {
+        let server = MockServer::start().await;
+        let auth = DocuSignJwtAuth::new("ik", "user", server.uri(), test_priv_pem().as_bytes());
+        for (detail, expected) in [
+            ("no_valid_keys_or_signatures", "registered keys"),
+            ("consent_required", "impersonation consent"),
+            ("issuer_not_found", "integration key is unknown"),
+            ("private provider details", "400 Bad Request"),
+        ] {
+            server.reset().await;
+            Mock::given(method("POST")).and(path("/oauth/token"))
+                .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                    "error": "invalid_grant", "error_description": detail, "details": "private provider details"
+                }))).mount(&server).await;
+            let message = auth.mint(0).await.unwrap_err().to_string();
+            assert!(message.contains(expected), "{message}");
+            assert!(!message.contains("private provider details"));
+        }
     }
 
     #[tokio::test]

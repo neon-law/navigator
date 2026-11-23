@@ -129,7 +129,8 @@ draft. The CLI opens the sender view only with `--open`.
 
 ## Adopt an envelope sent from DocuSign
 
-Run the command from the Project checkout after publishing the Draft used to prepare the envelope.
+In the Firm's DocuSign account, open the sent envelope and copy its Envelope ID from the envelope details. Run the
+command from the Project checkout after publishing the Draft used to prepare the envelope.
 
 ```bash
 navigator project envelope register "$envelope_id" --host "$host" --project "$project" \

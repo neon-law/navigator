@@ -6148,7 +6148,10 @@ struct NotationStatus {
 fn server_error(status: reqwest::StatusCode, body: &str) -> String {
     if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
         let error = v.get("error").and_then(serde_json::Value::as_str);
-        let reason = v.get("reason").and_then(serde_json::Value::as_str);
+        let reason = v
+            .get("reason")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| v.get("message").and_then(serde_json::Value::as_str));
         match (error, reason) {
             (Some(e), Some(r)) => return format!("{status}: {e} — {r}"),
             (_, Some(r)) => return format!("{status}: {r}"),
@@ -10507,6 +10510,17 @@ mod tests {
                 r#"{"error":"already approved","reason":"the notation left review"}"#,
             ),
             "409 Conflict: already approved — the notation left review"
+        );
+    }
+
+    #[test]
+    fn adoption_refusal_includes_the_failed_check() {
+        assert_eq!(
+            server_error(
+                reqwest::StatusCode::UNPROCESSABLE_ENTITY,
+                r#"{"error":"envelope_adoption","message":"The Project's client DRI is not an envelope signer"}"#,
+            ),
+            "422 Unprocessable Entity: envelope_adoption — The Project's client DRI is not an envelope signer"
         );
     }
 
