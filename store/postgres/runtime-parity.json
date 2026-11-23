@@ -1341,8 +1341,18 @@
     "runtime_tests": [
       {
         "file": "store/tests/person_phones.rs",
+        "function": "differently_formatted_spellings_of_one_number_converge_on_one_row",
+        "proves": "Equivalent spellings update the same PostgreSQL row and preserve its identifier across label and primary changes."
+      },
+      {
+        "file": "store/tests/person_phones.rs",
         "function": "setting_a_number_primary_demotes_the_previous_primary",
-        "proves": "Row identity is stable across label and primary changes: differently formatted spellings converge on one row and exactly one primary survives each write, the facts the whole-row projection must reproduce."
+        "proves": "Promotion selects one primary. Explicit demotion clears that designation."
+      },
+      {
+        "file": "store/tests/person_phones.rs",
+        "function": "the_legacy_phone_column_seeds_one_primary_row_and_then_leaves_alone",
+        "proves": "Adopting a historical phone on PostgreSQL creates a primary mobile row and rerunning adoption preserves later edits."
       },
       {
         "file": "store/src/postgres_mirror/identity_detail_tests.rs",
@@ -1351,7 +1361,7 @@
       }
     ],
     "remaining": [
-      "Production activation and full native mutation/authorization acceptance remain separate from captured transport; the referenced legacy mutation fixture is not native application acceptance."
+      "Production activation and route-level authorization require separate acceptance."
     ]
   },
   "person_project_role": {

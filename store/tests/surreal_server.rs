@@ -1,34 +1,10 @@
-//! The server-mode `SurrealDB` lane (#1093).
+//! Remote Source compatibility tests for WebSocket authentication, namespace
+//! selection, schema introspection, and cancellation over the wire.
 //!
-//! # Why this exists beside the embedded tests
-//!
-//! `store::surreal`'s unit tests run against `mem://`, an engine inside
-//! the test process. That covers the query surface but skips everything
-//! that only exists when the engine is somewhere else: the WebSocket
-//! protocol, `signin` with root credentials, and namespace/database
-//! selection over a wire. Every deployment uses exactly that path — the
-//! KIND dependency tier locally, Surreal Cloud in production — so it
-//! needs a test that speaks it.
-//!
-//! # The env contract
-//!
-//! The contract (see `docs/test-database.md`):
-//!
-//! - **`NAVIGATOR_SURREAL_ENDPOINT` set** → run against that engine. CI
-//!   starts one for this lane; locally it is the
-//!   worktree's port-forwarded tier, already in `.devx/env`.
-//! - **unset** → skip, so `cargo test` stays zero-config on a laptop
-//!   with no tier running.
-//!
-//! `NAV_REQUIRE_SURREAL=1` turns the skip into a failure, which is what
-//! keeps "skips when unconfigured" from quietly becoming "never runs":
-//! CI sets it, so a broken engine there is a red build, not a silent
-//! pass. This lane owns that flag rather than borrowing
-//! `NAV_REQUIRE_HARNESS`, which arms the browser harness
-//! (`features::webdriver`) and the Restate broker fixture: those live in
-//! `navigator dev e2e`, not in the workspace test job that starts this
-//! engine, so one flag for all three would fail the suites whose fixture
-//! that job never brings up.
+//! Set the Source connection variables to exercise a disposable server.
+//! An absent endpoint leaves this optional lane idle. `NAV_REQUIRE_SURREAL=1`
+//! requires the fixture, and `NAVIGATOR_FORBID_SURREAL=1` rejects a configured
+//! server before connecting. The primary coverage job provisions PostgreSQL.
 
 use std::future::Future;
 use std::sync::{Arc, Mutex};
@@ -45,10 +21,13 @@ use tracing_subscriber::layer::SubscriberExt;
 /// what keeps two tests in this file from colliding on one server.
 fn config(database: &str) -> Option<SurrealConfig> {
     match SurrealConfig::from_env() {
-        Ok(config) => Some(SurrealConfig {
-            database: database.to_string(),
-            ..config
-        }),
+        Ok(config) => {
+            store::surreal::test_support::refuse_when_forbidden();
+            Some(SurrealConfig {
+                database: database.to_string(),
+                ..config
+            })
+        }
         Err(SurrealConfigError::MissingEnv(name)) => {
             assert!(
                 std::env::var("NAV_REQUIRE_SURREAL").as_deref() != Ok("1"),

@@ -838,9 +838,8 @@ jobs:
       - name: cargo test with coverage
         env:
           # A test that starts SurrealDB fails here instead of running: the
-          # selection below should have left it out. Deliberately not
-          # `NAV_REQUIRE_HARNESS`, which arms the browser suites and the
-          # Restate broker fixture this job does not start.
+          # selection below should have left it out. The native fixture is
+          # required here. The browser gate requires its own harness.
           NAVIGATOR_FORBID_SURREAL: "1"
           NAVIGATOR_TEST_POSTGRES_PORT: "25432"
           NAV_REQUIRE_POSTGRES: "1"

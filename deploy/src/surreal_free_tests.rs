@@ -5,9 +5,9 @@
 //! to it, but CI no longer tests it: the embedded engine costs about a second
 //! per test, was ~96% of the suite's run time, and made the gate cost ~6x more
 //! under `SurrealDB` 4. Every test defined in a file that starts an engine is
-//! left out of the run. Every file that names `SurrealDB` at all (`surreal`, any
-//! case, on a non-comment line) is left out of the coverage measurement, so the
-//! floor measures the code CI still tests.
+//! left out of the run. The coverage filter omits files naming the Source engine,
+//! except integration tests that run the native PostgreSQL fixture. Those tests
+//! can pass a disconnected Source handle through the application API.
 //!
 //! Writes three files into `--out`:
 //!
@@ -352,13 +352,16 @@ fn select(root: &Path) -> Result<Selection> {
                 continue;
             }
             let relative_to_root = path.strip_prefix(root).unwrap_or(&path);
-            ignored.push(relative_to_root.to_string_lossy().replace('.', "\\."));
-            // A cucumber runner reaches the engine through a shared module, so
-            // naming `SurrealDB` is enough there.
+            let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+            let native_test = targets.contains_key(&canonical)
+                && code_lines(&source).any(|line| line.contains("with_required_postgres("))
+                && !binary_starts_engine(&canonical);
+            if !native_test {
+                ignored.push(relative_to_root.to_string_lossy().replace('.', "\\."));
+            }
             if package != "features" && !starts_engine(&source) {
                 continue;
             }
-            let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
             let relative = path.strip_prefix(&crate_dir).unwrap_or(&path);
             let mut components = relative.components();
             let top = components
@@ -560,6 +563,14 @@ mod tests {
         assert!(selection
             .nextest_filter
             .contains("(package(server) & kind(test) & binary(=api_project_notations))"));
+        for (package, binary) in [("server", "twilio_summary"), ("store", "person_phones")] {
+            assert!(!selection
+                .nextest_filter
+                .contains(&format!("binary(={binary})")));
+            assert!(!selection
+                .coverage_ignore
+                .contains(&format!("{package}/tests/{binary}\\.rs")));
+        }
         assert!(!selection.nextest_filter.contains("surreal_free_tests::"));
     }
     #[test]

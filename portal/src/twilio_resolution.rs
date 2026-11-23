@@ -214,6 +214,24 @@ fn canonical_host(host_lookup: &impl Fn(&str) -> Option<String>) -> Option<Strin
 }
 
 #[cfg(test)]
+pub(crate) async fn registry_state(
+    db: &store::surreal::SurrealDb,
+    pg: &store::postgres::PostgresDb,
+    brand: &str,
+    number: &str,
+    token: &str,
+    host: &str,
+) -> (crate::AppState, uuid::Uuid) {
+    let (firm, _) = store::test_support::seed_firm_with_new_brand(db, brand).await;
+    store::test_support::twilio::register_number(db, pg, firm, brand, number, token).await;
+    let mut state = crate::test_support::app_state(db.clone()).await;
+    state.canonical_host = crate::CanonicalHost::new(Some(host.to_string()));
+    state.twilio_registry = Some(std::sync::Arc::new(pg.clone()));
+    state.runtime_kms = std::sync::Arc::new(cloud::FakeKms::new("spine-test"));
+    (state, firm)
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use cloud::FakeKms;
@@ -291,60 +309,68 @@ mod tests {
 
     #[tokio::test]
     async fn two_numbers_in_one_firm_keep_independent_credentials() {
-        let Some(pg) = crate::twilio_registry_harness::postgres().await else {
-            return;
-        };
-        let db = store::test_support::mem_surreal().await;
-        let firm = store::test_support::seed_firm_with_brand(&db, "neon").await;
-        let first = crate::twilio_registry_harness::register_number(
-            &db,
-            &pg,
-            firm,
-            "neon",
-            "+15551230011",
-            "token-one",
-        )
-        .await;
-        let second = crate::twilio_registry_harness::register_number(
-            &db,
-            &pg,
-            firm,
-            "neon",
-            "+15551230012",
-            "token-two",
-        )
-        .await;
-        assert_ne!(first, second);
-        let kms = FakeKms::new("spine-test");
-        let spine = Spine {
-            registry: &pg,
-            surreal: &db,
-            kms: &kms,
-        };
-        for (number, token) in [("+15551230011", "token-one"), ("+15551230012", "token-two")] {
-            let fields = vec![
-                ("From".into(), "+15555550100".into()),
-                ("MessageSid".into(), "synthetic-independent-number".into()),
-                ("To".into(), number.into()),
-            ];
-            let signature = crate::twilio_sms::twilio_signature(
-                token,
-                "https://www.example.com/webhook/twilio/sms",
-                &fields,
-            );
-            let resolved = spine
-                .resolve(
-                    Lane::SmsIngest,
-                    host_lookup(&[("NAVIGATOR_PUBLIC_HOST", "www.example.com")]),
-                    number,
-                    &fields,
-                    Some(&signature),
-                )
+        store::test_support::with_required_postgres(async {
+            let first_token = store::test_support::twilio::auth_token();
+            let second_token = store::test_support::twilio::auth_token();
+            let pg = store::postgres::PostgresDb::application().await.unwrap();
+            let db = store::surreal::SurrealDb::uninitialized();
+            let firm = store::test_support::seed_firm_with_new_brand(&db, "neon")
                 .await
-                .expect("adding another number must preserve this number's token");
-            assert_eq!(resolved.firm_id, firm);
-            assert_eq!(resolved.registration.number_e164, number);
-        }
+                .0;
+            let first = store::test_support::twilio::register_number(
+                &db,
+                &pg,
+                firm,
+                "neon",
+                "+15551230011",
+                &first_token,
+            )
+            .await;
+            let second = store::test_support::twilio::register_number(
+                &db,
+                &pg,
+                firm,
+                "neon",
+                "+15551230012",
+                &second_token,
+            )
+            .await;
+            assert_ne!(first, second);
+            let kms = FakeKms::new("spine-test");
+            let spine = Spine {
+                registry: &pg,
+                surreal: &db,
+                kms: &kms,
+            };
+            for (number, token) in [
+                ("+15551230011", &first_token),
+                ("+15551230012", &second_token),
+            ] {
+                let fields = vec![
+                    ("From".into(), "+15555550100".into()),
+                    ("MessageSid".into(), "synthetic-independent-number".into()),
+                    ("To".into(), number.into()),
+                ];
+                let signature = crate::twilio_sms::twilio_signature(
+                    token,
+                    "https://www.example.com/webhook/twilio/sms",
+                    &fields,
+                );
+                let resolved = spine
+                    .resolve(
+                        Lane::SmsIngest,
+                        host_lookup(&[("NAVIGATOR_PUBLIC_HOST", "www.example.com")]),
+                        number,
+                        &fields,
+                        Some(&signature),
+                    )
+                    .await
+                    .expect("adding another number must preserve this number's token");
+                assert_eq!(resolved.firm_id, firm);
+                assert_eq!(resolved.registration.number_e164, number);
+            }
+        })
+        .await;
     }
 
     /// Two Brands share one deployment, each number with its own token: a
@@ -353,103 +379,110 @@ mod tests {
     /// the registry is the PostgreSQL table the spine reads.
     #[tokio::test]
     async fn a_cross_signed_request_is_rejected_and_the_own_token_verifies() {
-        let Some(pg) = crate::twilio_registry_harness::postgres().await else {
-            return;
-        };
-        let db = store::test_support::mem_surreal().await;
-        // The same key version the harness sealed the tokens under.
-        let kms = FakeKms::new("spine-test");
-        let neon_firm = store::test_support::seed_firm_with_brand(&db, "neon").await;
-        let vesta_firm = store::test_support::seed_firm_with_brand(&db, "vesta").await;
-        let neon_number = "+15551230001";
-        let vesta_number = "+15551230002";
+        store::test_support::with_required_postgres(async {
+            let neon_token = store::test_support::twilio::auth_token();
+            let vesta_token = store::test_support::twilio::auth_token();
+            let pg = store::postgres::PostgresDb::application().await.unwrap();
+            let db = store::surreal::SurrealDb::uninitialized();
+            // The same key version the harness sealed the tokens under.
+            let kms = FakeKms::new("spine-test");
+            let neon_firm = store::test_support::seed_firm_with_new_brand(&db, "neon")
+                .await
+                .0;
+            let vesta_firm = store::test_support::seed_firm_with_new_brand(&db, "vesta")
+                .await
+                .0;
+            let neon_number = "+15551230001";
+            let vesta_number = "+15551230002";
 
-        let neon_ref = crate::twilio_registry_harness::register_number(
-            &db,
-            &pg,
-            neon_firm,
-            "neon",
-            neon_number,
-            "token-neon",
-        )
-        .await;
-        let vesta_ref = crate::twilio_registry_harness::register_number(
-            &db,
-            &pg,
-            vesta_firm,
-            "vesta",
-            vesta_number,
-            "token-vesta",
-        )
-        .await;
-        assert_ne!(neon_ref, vesta_ref, "each number resolves its own secret");
+            let neon_ref = store::test_support::twilio::register_number(
+                &db,
+                &pg,
+                neon_firm,
+                "neon",
+                neon_number,
+                &neon_token,
+            )
+            .await;
+            let vesta_ref = store::test_support::twilio::register_number(
+                &db,
+                &pg,
+                vesta_firm,
+                "vesta",
+                vesta_number,
+                &vesta_token,
+            )
+            .await;
+            assert_ne!(neon_ref, vesta_ref, "each number resolves its own secret");
 
-        let spine = Spine {
-            registry: &pg,
-            surreal: &db,
-            kms: &kms,
-        };
-        let signed = |token: &str, number: &str| {
-            let fields = vec![
-                ("From".to_string(), "+15555550100".to_string()),
-                ("MessageSid".to_string(), "SM1".to_string()),
-                ("To".to_string(), number.to_string()),
+            let spine = Spine {
+                registry: &pg,
+                surreal: &db,
+                kms: &kms,
+            };
+            let signed = |token: &str, number: &str| {
+                let fields = vec![
+                    ("From".to_string(), "+15555550100".to_string()),
+                    ("MessageSid".to_string(), "SM1".to_string()),
+                    ("To".to_string(), number.to_string()),
+                ];
+                crate::twilio_sms::twilio_signature(
+                    token,
+                    &format!("https://www.example.com{}", Lane::SmsIngest.signed_path()),
+                    &fields,
+                )
+            };
+            let fields: Vec<(String, String)> = vec![
+                ("From".into(), "+15555550100".into()),
+                ("MessageSid".into(), "SM1".into()),
+                ("To".into(), vesta_number.into()),
             ];
-            crate::twilio_sms::twilio_signature(
-                token,
-                &format!("https://www.example.com{}", Lane::SmsIngest.signed_path()),
-                &fields,
-            )
-        };
-        let fields: Vec<(String, String)> = vec![
-            ("From".into(), "+15555550100".into()),
-            ("MessageSid".into(), "SM1".into()),
-            ("To".into(), vesta_number.into()),
-        ];
 
-        let cross = spine
-            .resolve(
-                Lane::SmsIngest,
-                host_lookup(&[("NAVIGATOR_PUBLIC_HOST", "www.example.com")]),
-                vesta_number,
-                &fields,
-                Some(&signed("token-neon", vesta_number)),
-            )
-            .await
-            .unwrap_err();
-        assert_eq!(
-            cross,
-            ResolutionError::BadSignature,
-            "neon's token must not verify vesta's traffic"
-        );
+            let cross = spine
+                .resolve(
+                    Lane::SmsIngest,
+                    host_lookup(&[("NAVIGATOR_PUBLIC_HOST", "www.example.com")]),
+                    vesta_number,
+                    &fields,
+                    Some(&signed(&neon_token, vesta_number)),
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(
+                cross,
+                ResolutionError::BadSignature,
+                "neon's token must not verify vesta's traffic"
+            );
 
-        let own = spine
-            .resolve(
-                Lane::SmsIngest,
-                host_lookup(&[("NAVIGATOR_PUBLIC_HOST", "www.example.com")]),
-                vesta_number,
-                &fields,
-                Some(&signed("token-vesta", vesta_number)),
-            )
-            .await
-            .expect("the number's own token verifies");
-        assert_eq!(own.firm_id, vesta_firm);
-        assert_eq!(own.registration.brand_key, "vesta");
-        assert_eq!(own.registration.number_e164, vesta_number);
+            let own = spine
+                .resolve(
+                    Lane::SmsIngest,
+                    host_lookup(&[("NAVIGATOR_PUBLIC_HOST", "www.example.com")]),
+                    vesta_number,
+                    &fields,
+                    Some(&signed(&vesta_token, vesta_number)),
+                )
+                .await
+                .expect("the number's own token verifies");
+            assert_eq!(own.firm_id, vesta_firm);
+            assert_eq!(own.registration.brand_key, "vesta");
+            assert_eq!(own.registration.number_e164, vesta_number);
 
-        let unknown = spine
-            .resolve(
-                Lane::SmsIngest,
-                host_lookup(&[("NAVIGATOR_PUBLIC_HOST", "www.example.com")]),
-                "+15551239999",
-                &fields,
-                Some(&signed("token-vesta", vesta_number)),
-            )
-            .await
-            .unwrap_err();
-        assert_eq!(
-            unknown,
-            ResolutionError::UnknownNumber("+15551239999".into())
-        );
+            let unknown = spine
+                .resolve(
+                    Lane::SmsIngest,
+                    host_lookup(&[("NAVIGATOR_PUBLIC_HOST", "www.example.com")]),
+                    "+15551239999",
+                    &fields,
+                    Some(&signed(&vesta_token, vesta_number)),
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(
+                unknown,
+                ResolutionError::UnknownNumber("+15551239999".into())
+            );
+        })
+        .await;
     }
 }

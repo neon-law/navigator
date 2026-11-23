@@ -147,3 +147,18 @@ async fn assert_reapply_preserves_person_defaults(
     assert!(preserved_after_reapply.email_confirmed);
     assert!(!persons::is_admitted(db, preserved_id).await.unwrap());
 }
+
+#[tokio::test]
+async fn the_schema_refuses_an_e164_that_does_not_start_with_a_plus() {
+    let db = store::surreal::test_support::mem().await;
+    let person = Uuid::now_v7();
+    let error = db
+        .query(
+            "CREATE person_phone SET person_id = $person, e164 = '7025550142', is_primary = true",
+        )
+        .bind(("person", store::surreal::record_id("person", person)))
+        .await
+        .unwrap()
+        .check();
+    assert!(error.is_err(), "the field ASSERT must refuse a bare number");
+}
