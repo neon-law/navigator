@@ -20,6 +20,9 @@
 //! an invalid code through `store::projects::is_valid_code`, and the crate
 //! stays a leaf below `store`.
 
+pub mod workspace_skills;
+pub use workspace_skills::WORKSPACE_SKILLS;
+
 /// The Project manifest every scaffold carries, at the repository root.
 pub const PROJECT_MANIFEST: &str = "navigator.yaml";
 
