@@ -1768,7 +1768,6 @@ fn formation_pdf_refuses_missing_or_mismatched_pinned_blanks() {
     }
 }
 
-
 // --- One Firm resolution feeds the letterhead and the body (LAW-466) -------
 
 /// A letter whose signature block prints `{{firm.legal_name}}` — the body
@@ -1852,7 +1851,8 @@ fn a_project_brand_fills_the_signature_and_the_letterhead_from_one_resolution() 
     // The wordmark draws its letters with tracking, which extraction renders
     // as spaces between glyphs; compare on the space-stripped text.
     assert!(
-        text.replace(' ', "").contains(&branding.firm.site_name.to_uppercase()),
+        text.replace(' ', "")
+            .contains(&branding.firm.site_name.to_uppercase()),
         "the wordmark is the display name, distinct from the entity: {text}"
     );
 }
@@ -1890,4 +1890,3 @@ fn a_synthetic_rename_never_splits_between_letterhead_and_body() {
         "the renamed document never carries the registry name too: {text}"
     );
 }
-

@@ -591,7 +591,7 @@ fn resolve_firm_identity(
         }
     };
     if let Some((_, answered)) = answers.iter().find(|(key, _)| key == "firm.legal_name") {
-        identity.letterhead.entity.clone_from(&answered);
+        identity.letterhead.entity.clone_from(answered);
     }
     Ok(identity)
 }
