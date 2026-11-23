@@ -269,10 +269,12 @@ fn random_refactor_skill_grounds_a_file_against_stdlib_and_repo() {
         "M-STATIC-VERIFICATION",
         "M-UPSTREAM-GUIDELINES",
         "M-REGULAR-FN",
+        "M-AVOID-WRAPPERS",
         "M-LOG-STRUCTURED",
         "Writing Automated Tests",
         "instrument-coverage",
         "coverage floor",
+        "fail-under-lines",
     ] {
         assert!(
             skill.contains(required),
