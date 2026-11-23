@@ -194,12 +194,9 @@ pub static WEB_REQUIREMENTS: &[Requirement] = &[
     // is deployment configuration, not secret material, and KIND remains
     // keyless through the CI-harness integration relaxation.
     required!(integration "RESTATE_IDENTITY_KEY"),
-    // Target-aware Slack Web API delivery for per-Project private channels.
-    // The bot token is required for both staging and production once this
-    // feature is enabled; local/KIND uses the capturing backend when absent.
-    required!(integration "SLACK_BOT_TOKEN"),
-    // Runtime KMS stands alone: it seals Firm integration secrets and Brand
-    // social account tokens, and `web` and `workflows-service` each build it
+    // Runtime KMS stands alone: it seals Firm integration secrets (the Slack
+    // bot token every Slack call uses among them) and Brand social account
+    // tokens, and `web` and `workflows-service` each build it
     // from this one key. The Notion lane needs it to decrypt its token, so a
     // Notion database demands the key; the key never demands Notion.
     required!(integration "NAVIGATOR_RUNTIME_KMS_KEY" if "NAVIGATOR_NOTION_DATABASE_ID"),
@@ -295,10 +292,6 @@ pub static WEB_REQUIREMENTS: &[Requirement] = &[
     // as "not configured", so the key is its own trigger and a row without it
     // declines provisioning.
     required!(integration "NAVIGATOR_FORGEJO_PROVISIONER_TOKEN" if "NAVIGATOR_FORGEJO_PROVISIONER_TOKEN"),
-    // DriDigest on DBOS posts through this incoming webhook. A row that does
-    // not host it declines the key, so it is its own trigger; `ops ship`
-    // demands it when `NAVIGATOR_DBOS_DRI_DIGEST_ENABLED` is on.
-    required!(integration "SLACK_WEBHOOK_URL" if "SLACK_WEBHOOK_URL"),
     // Twilio SMS intake: the number rides inline env, and once a deployment
     // names one, `portal::twilio_sms` refuses to boot without the token that
     // authenticates each text.

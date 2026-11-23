@@ -5,10 +5,10 @@
 //! its channel through that bot — the channel create-or-adopt, the main-push
 //! notice, the Nightly Project Update's membership and canvas work. The worker
 //! resolves the token from the Project's `firm_id` at the moment a lane needs
-//! the bot and never falls back to another Firm's token or to a
-//! deployment-wide `SLACK_BOT_TOKEN`; that token serves only the deployment's
-//! own channels. The resolved value lives inside the bot client and is never
-//! journaled, logged, or returned.
+//! the bot and never falls back to another Firm's token. Work with no Project
+//! in context posts with the deployment's Slack Firm through
+//! [`workflows::firm_slack`]. The resolved value lives inside the bot client
+//! and is never journaled, logged, or returned.
 
 use std::sync::Arc;
 

@@ -719,7 +719,7 @@ const DBOS_SCHEDULES: [DbosSchedule; 6] = [
         default_on: true,
         retires: Some(retired("general-nag", "  - cron-general-nag.yaml\n")),
         coordinates: &["SLACK_GENERAL_CHANNEL_ID"],
-        secret: Some("SLACK_BOT_TOKEN"),
+        secret: Some(RUNTIME_KMS_KEY),
     },
     DbosSchedule {
         env: "NAVIGATOR_DBOS_DRI_DIGEST_ENABLED",
@@ -729,7 +729,7 @@ const DBOS_SCHEDULES: [DbosSchedule; 6] = [
             "  - cron-dri-digest-trigger.yaml\n",
         )),
         coordinates: &["SLACK_GENERAL_CHANNEL_ID"],
-        secret: Some("SLACK_BOT_TOKEN"),
+        secret: Some(RUNTIME_KMS_KEY),
     },
     DbosSchedule {
         env: "NAVIGATOR_DBOS_BILLING_DIGEST_ENABLED",
@@ -950,6 +950,9 @@ where
 const DBOS_SCHEDULE_ENV_TOKEN: &str = "            # NAVIGATOR_DBOS_SCHEDULE_ENV\n";
 const LINEAR_BACKLOG_CHANNEL: &str = "SLACK_LINEAR_BACKLOG_CHANNEL_ID";
 
+/// The key that unseals the Slack Firm's bot token every Slack post uses.
+const RUNTIME_KMS_KEY: &str = "NAVIGATOR_RUNTIME_KMS_KEY";
+
 /// Each schedule's switch, read as `"true"` or `"false"`, in
 /// [`DBOS_SCHEDULES`] order. An absent switch is off, except that a
 /// `default_on` schedule is on wherever `NAVIGATOR_DBOS_ENABLED = "true"` and
@@ -1144,6 +1147,8 @@ where
         "NAVIGATOR_GITHUB_ORG",
         "NAVIGATOR_EXPORTS_BUCKET",
         "SLACK_FINANCE_CHANNEL_ID",
+        "SLACK_FIRM_ID",
+        "SLACK_OPS_CHANNEL_ID",
     ] {
         if let Some(value) = non_empty_env(key, get) {
             let quoted = serde_json::to_string(&value)?;
@@ -1207,7 +1212,7 @@ fn require_dbos_schedule_prerequisites(deployment: &super::deployments::Deployme
                 == Some("true"),
             "{LINEAR_BACKLOG_CHANNEL} requires {NAVIGATOR_DBOS_ENABLED}"
         );
-        for key in ["LINEAR_BACKLOG_READ_KEY", "SLACK_BOT_TOKEN"] {
+        for key in ["LINEAR_BACKLOG_READ_KEY", RUNTIME_KMS_KEY] {
             ensure!(
                 deployment.encrypted_keys.contains(key),
                 "{LINEAR_BACKLOG_CHANNEL} requires {key} in the deployment secret"
@@ -9348,7 +9353,7 @@ mod tests {
         deployment
             .coordinates
             .insert(NAVIGATOR_DBOS_ENABLED.into(), "true".into());
-        for key in ["LINEAR_BACKLOG_READ_KEY", "SLACK_BOT_TOKEN"] {
+        for key in ["LINEAR_BACKLOG_READ_KEY", RUNTIME_KMS_KEY] {
             let error = require_dbos_schedule_prerequisites(&deployment).unwrap_err();
             assert!(error.to_string().contains(key), "{error}");
             deployment.encrypted_keys.insert(key.into());
@@ -9423,9 +9428,9 @@ mod tests {
                 "sandbox-credit-reset-trigger"
             ]
         );
-        deployment.encrypted_keys.remove("SLACK_BOT_TOKEN");
+        deployment.encrypted_keys.remove(RUNTIME_KMS_KEY);
         let error = require_dbos_schedule_prerequisites(&deployment).unwrap_err();
-        assert!(error.to_string().contains("SLACK_BOT_TOKEN"), "{error}");
+        assert!(error.to_string().contains(RUNTIME_KMS_KEY), "{error}");
         deployment.coordinates.insert(
             "NAVIGATOR_DBOS_BILLING_DIGEST_ENABLED".into(),
             "true".into(),
@@ -9482,11 +9487,10 @@ mod tests {
         deployment
             .coordinates
             .insert("NAVIGATOR_DBOS_DRI_DIGEST_ENABLED".into(), "true".into());
-        deployment.encrypted_keys.remove("SLACK_WEBHOOK_URL");
-        deployment.encrypted_keys.remove("SLACK_BOT_TOKEN");
+        deployment.encrypted_keys.remove(RUNTIME_KMS_KEY);
         let error = require_dbos_schedule_prerequisites(&deployment).unwrap_err();
-        assert!(error.to_string().contains("SLACK_BOT_TOKEN"), "{error}");
-        deployment.encrypted_keys.insert("SLACK_BOT_TOKEN".into());
+        assert!(error.to_string().contains(RUNTIME_KMS_KEY), "{error}");
+        deployment.encrypted_keys.insert(RUNTIME_KMS_KEY.into());
         require_dbos_schedule_prerequisites(&deployment).unwrap();
 
         let get = |channel: Option<&'static str>| {
@@ -12397,8 +12401,6 @@ spec:
         "SENDGRID_INBOUND_PUBLIC_KEY",
         "SENDGRID_INBOUND_SECRET",
         "SESSION_SECRET",
-        "SLACK_BOT_TOKEN",
-        "SLACK_WEBHOOK_URL",
         "TWILIO_ACCOUNT_SID",
         "TWILIO_AUTH_TOKEN",
     ];

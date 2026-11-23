@@ -733,7 +733,7 @@ fn validate_configuration(channel_id: &str, slack_enabled: bool) -> Result<(), W
     }
     if !slack_enabled {
         return Err(WorkflowStepError::terminal(
-            "SLACK_BOT_TOKEN must be configured for the Nightly Project Update",
+            "the deployment's Slack bot must be configured for the Nightly Project Update",
         ));
     }
     Ok(())

@@ -8,8 +8,8 @@ use workflows::{CapturingEmail, CapturingNotifier, CapturingSlackBot, SlackBot};
 
 const CHANNEL: &str = "local-capture";
 const EXPLICIT_DELIVERY: &[&str] = &[
-    "SLACK_BOT_TOKEN",
-    "SLACK_WEBHOOK_URL",
+    "SLACK_FIRM_ID",
+    "SLACK_OPS_CHANNEL_ID",
     "SLACK_API_BASE_URL",
     "SLACK_GENERAL_CHANNEL_ID",
     "SLACK_FINANCE_CHANNEL_ID",

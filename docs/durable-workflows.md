@@ -288,9 +288,10 @@ Every other scheduled workflow proves an *integration* — `Archives` proves the
 itself alive right now?*
 
 `Heartbeat` answers it, and it runs on DBOS inside `web`, not on Restate ([DBOS durability](dbos-durability.md)). It is
-two steps (`beat` → `notify`) that depend on nothing but the ops Slack webhook. It fires every six hours (00, 06, 12, 18
-UTC) under the workflow id `Heartbeat-<UTC date>T<hour>`, so every replica and restart runs a slot once. Each run posts
-one line to the engineering Slack channel: a heart glyph, `Durable execution OK`, and the beat timestamp.
+two steps (`beat` → `notify`) that depend on nothing but the deployment's Slack bot and `SLACK_OPS_CHANNEL_ID`. It fires
+every six hours (00, 06, 12, 18 UTC) under the workflow id `Heartbeat-<UTC date>T<hour>`, so every replica and restart
+runs a slot once. Each run posts one line to the engineering Slack channel: a heart glyph, `Durable execution OK`, and
+the beat timestamp.
 
 The signal that matters most is the missing one: **a six-hour window with no heartbeat line means the DBOS executor in
 `web` may be down.** Check the `web` pod logs for `DBOS launched`, then the slot's row in `dbos.workflow_status`.

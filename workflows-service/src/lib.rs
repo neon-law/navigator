@@ -35,7 +35,6 @@ pub mod notation_reset;
 #[cfg(feature = "restate-compatibility")]
 pub mod notation_service;
 pub mod notation_transport;
-pub mod notify_config;
 pub mod project_slack;
 pub mod registry;
 pub mod request_identity;
@@ -50,8 +49,6 @@ pub use notation_service::NotationService;
 pub use notation_transport::{
     CurrentStateResponse, QuestionnaireSignalBody, SignalResponse, StartBody, WorkflowSignalBody,
 };
-pub use notify_config::bot_from_env as slack_bot_from_env;
-pub use notify_config::from_env as notifier_from_env;
 
 /// Test support: record the fields a span is created with, so a test can assert
 /// a root span carries `navigator.keep` without a collector or an exporter.

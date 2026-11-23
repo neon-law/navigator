@@ -51,6 +51,7 @@ impl Context {
     /// # Errors
     /// Returns an error if a destination is configured without its credentials.
     pub fn from_lookup(
+        slack: Arc<dyn crate::SlackBot>,
         get: impl Fn(&str) -> Option<String>,
     ) -> Result<Option<Self>, super::SettingsError> {
         let value = |key| get(key).filter(|value| !value.trim().is_empty());
@@ -68,8 +69,6 @@ impl Context {
         let mut key = reqwest::header::HeaderValue::from_str(&key)
             .map_err(|_| super::SettingsError::Invalid(API_KEY))?;
         key.set_sensitive(true);
-        let token =
-            value("SLACK_BOT_TOKEN").ok_or(super::SettingsError::Missing("SLACK_BOT_TOKEN"))?;
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
             .redirect(reqwest::redirect::Policy::none())
@@ -79,7 +78,7 @@ impl Context {
             client,
             endpoint: ENDPOINT.to_owned(),
             key,
-            slack: Arc::new(crate::SlackBotClient::new(token)),
+            slack,
             channel,
         }))
     }
@@ -403,10 +402,12 @@ mod tests {
         let server = MockServer::start().await;
         let lookup = |key: &str| match key {
             CHANNEL => Some("C012BACKLOG".to_owned()),
-            API_KEY | "SLACK_BOT_TOKEN" => Some("synthetic".to_owned()),
+            API_KEY => Some("synthetic".to_owned()),
             _ => None,
         };
-        let mut context = Context::from_lookup(lookup).unwrap().unwrap();
+        let mut context = Context::from_lookup(Arc::new(crate::CapturingSlackBot::new()), lookup)
+            .unwrap()
+            .unwrap();
         context.endpoint = server.uri();
         let response = |id, next, cursor| {
             serde_json::json!({

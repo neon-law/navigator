@@ -75,7 +75,6 @@ pub fn worker_env(fixtures: &str, matter_project_id: Uuid) -> Vec<(String, Strin
         [
             ("GOOGLE_METADATA_URL", format!("{fixtures}/token")),
             ("NAVIGATOR_SUMMARY_VERTEX_BASE_URL", fixtures.to_string()),
-            ("SLACK_BOT_TOKEN", "synthetic-slack-token".to_string()),
             ("SLACK_API_BASE_URL", format!("{fixtures}/slack")),
         ]
         .into_iter()

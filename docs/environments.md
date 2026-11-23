@@ -135,7 +135,7 @@ per row: `#messages` in production, `#staging-messages` in staging.
 Every hosted row uses `NAVIGATOR_ENVIRONMENT=production` and `NAVIGATOR_CREDENTIAL_ENVIRONMENT=production`.
 `<deployment>` remains the proving release ring through its config, namespace, data plane, and hostname—not through a
 weaker runtime profile. The same `NAVIGATOR_SIMULATED_MATTERS=true` coordinate that discloses the synthetic data plane
-also appends a final `from Staging` line to every Slack body that deployment posts (ops webhook, Project-channel bot,
+also appends a final `from Staging` line to every Slack body that deployment posts (ops notices, Project-channel bot,
 and Firm-private notices). Restate jobs do not rewrite their bodies with a second staging parenthetical. Local KIND is
 `NAVIGATOR_ENVIRONMENT=dev` and does not. Set `GOOGLE_OAUTH_REQUIRED_HD=<deployment>` on both rows. This value is the
 selected Workspace login domain, not necessarily the site's public hostname.

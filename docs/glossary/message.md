@@ -11,9 +11,9 @@ a Project.
 New inbound Messages retain their Slack notice state and receipt on the original record. A pending notice is recovered
 by the scheduled reconciler. The worker reserves it before sending, stores the Slack channel and timestamp after
 confirmation, and keeps an ambiguous send unknown until a correlated history receipt confirms it. An unknown notice is
-never blindly sent again. The deployment's messages channel belongs to `SLACK_MESSAGES_FIRM_ID`, or the Firm wearing
-Neon when that setting is absent. Other Firms and missing configuration produce a disabled notice without exposing
-message bodies. Historical Messages without a notice state are not replayed.
+never blindly sent again. The deployment's messages channel belongs to `SLACK_FIRM_ID`, or the Firm wearing Neon when
+that setting is absent. Other Firms and missing configuration produce a disabled notice without exposing message bodies.
+Historical Messages without a notice state are not replayed.
 
 - Schema and queries: [`store::inbox`](../../store/src/inbox.rs) —
   [`store/postgres/schema.sql`](../../store/postgres/schema.sql)

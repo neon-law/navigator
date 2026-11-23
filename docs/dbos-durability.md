@@ -195,8 +195,9 @@ disabled, including the retained identity-claim route.
 
 `Heartbeat` runs only on DBOS. It has two steps, `beat` then `notify`. The schedule loop starts it at 00:00, 06:00,
 12:00, and 18:00 UTC with the workflow id `Heartbeat-<UTC date>T<hour>`, and starts the current slot on launch. A
-restart inside a slot joins that slot's run. `notify` retries five times. Slack's webhook takes no idempotency key, so
-`notify` is at least once: a crash between Slack's reply and the checkpoint posts the line twice.
+restart inside a slot joins that slot's run. `notify` retries five times. Its post to `SLACK_OPS_CHANNEL_ID` carries no
+receipt correlation, so `notify` is at least once: a crash between Slack's reply and the checkpoint posts the line
+twice.
 
 A workflow recovers only on an executor running the version that started it. Drain or finish pending runs before
 removing a version.
@@ -211,7 +212,8 @@ On a deployment with `NAVIGATOR_DBOS_ENABLED=true`, ship defaults `GeneralNag` t
 `NAVIGATOR_DBOS_GENERAL_NAG_ENABLED=false` to keep the Restate schedule during handover.
 
 When enabled, the schedule uses `GeneralNag-<UTC date>` and starts at 01:11 UTC; a same-date start on another replica
-joins the existing run. Before enabling it, configure `SLACK_BOT_TOKEN` and `SLACK_GENERAL_CHANNEL_ID`.
+joins the existing run. Before enabling it, configure `SLACK_GENERAL_CHANNEL_ID` and the deployment's Slack Firm bot
+([Slack](third-party-integrations.md#deployment-slack-app)).
 
 When GeneralNag selects DBOS, `ops ship` renders the switch and `SLACK_GENERAL_CHANNEL_ID` into `web`. It omits the
 `general-nag` Restate CronJob from the render and deletes the live one, since `kubectl apply` does not prune. Set the
@@ -230,9 +232,8 @@ external evidence, so this is receipt reconciliation rather than a provider exac
 
 DBOS can host `DriDigest` when both `NAVIGATOR_DBOS_ENABLED=true` and `NAVIGATOR_DBOS_DRI_DIGEST_ENABLED=true`. The
 service flag defaults off. Enabling the DBOS executor alone does not start another digest while the Restate CronJob
-remains active. The DBOS digest posts with the Slack bot to `SLACK_GENERAL_CHANNEL_ID`, beside `GeneralNag`'s
-open-matters notice; an enabled host requires `SLACK_BOT_TOKEN` and that channel and fails boot when either is absent or
-blank.
+remains active. The DBOS digest posts with the deployment's Slack Firm bot to `SLACK_GENERAL_CHANNEL_ID`, beside
+`GeneralNag`'s open-matters notice; an enabled host fails boot when that channel is absent or blank.
 
 The schedule uses the existing 01:11 UTC daily slot and the workflow id `DriDigest-<UTC date>`. It reads the same DRI
 summary and, outside simulated-matters deployments, posts the same open-matters and pitches follow-up. The Restate
@@ -240,7 +241,7 @@ workflow and CronJob remain the rollback path until deployment configuration swi
 
 Switch engines the same way as `GeneralNag`, with `NAVIGATOR_DBOS_DRI_DIGEST_ENABLED = "true"`; ship drops and deletes
 the `dri-digest-trigger` CronJob and renders `SLACK_GENERAL_CHANNEL_ID` into `web`. Ship refuses the switch unless the
-row's `secrets.enc.yaml` carries `SLACK_BOT_TOKEN`.
+row's `secrets.enc.yaml` carries `NAVIGATOR_RUNTIME_KMS_KEY`, which unseals the bot token.
 
 The `query`, `notify`, `counts`, and `notify_counts` steps checkpoint separately. Its posts carry no receipt
 correlation: a crash after Slack accepts either notice and before its DBOS checkpoint can post that notice again. The
@@ -261,9 +262,8 @@ DBOS hosts `NotationReset` when both `NAVIGATOR_DBOS_ENABLED=true` and `NAVIGATO
 workflow id is `NotationReset-<UTC date>` and the slot is 04:20 UTC. Steps are `started`, `discover`, one
 `delete-notation-<id>` or `delete-preview-<id>` per draft, `finished`, and `post`. A delete re-run by recovery re-reads
 the row and finds it gone, so the deletes need no effect key. `chat.postMessage` takes no idempotency key, so a crash
-after Slack accepts the message and before its checkpoint posts it twice. An enabled host needs `SLACK_BOT_TOKEN` and
-the messages channel: `SLACK_STAGING_MESSAGES_CHANNEL_ID` on a simulated-matters deployment, `SLACK_MESSAGES_CHANNEL_ID`
-otherwise.
+after Slack accepts the message and before its checkpoint posts it twice. An enabled host needs the messages channel:
+`SLACK_STAGING_MESSAGES_CHANNEL_ID` on a simulated-matters deployment, `SLACK_MESSAGES_CHANNEL_ID` otherwise.
 
 Switch engines with `NAVIGATOR_DBOS_NOTATION_RESET_ENABLED = "true"` in the row's `config.toml` and `ops ship`. Ship
 renders the switch and both messages channels into `web`, drops `notation-reset-trigger` from the render, and deletes
@@ -275,8 +275,8 @@ CronJob.
 `ProfitDigest` runs on DBOS when the application PostgreSQL host and the deployment's messages channel are configured.
 The daily run `ProfitDigest-<UTC date>` starts at 14:00 UTC and catches up on a late start. It posts the [Profit
 Digest](glossary/profit-digest.md) to the messages channel: `SLACK_STAGING_MESSAGES_CHANNEL_ID` on a simulated-matters
-deployment, `SLACK_MESSAGES_CHANNEL_ID` otherwise. An enabled host needs `SLACK_BOT_TOKEN`, the channel, `NAV_BASE_URL`,
-and the application's PostgreSQL login, and fails the boot without them.
+deployment, `SLACK_MESSAGES_CHANNEL_ID` otherwise. An enabled host needs the channel, `NAV_BASE_URL`, and the
+application's PostgreSQL login, and fails the boot without them.
 
 Its steps read yesterday's `expected_cash` event, read and render the Firm rollups in `read`, publish today's
 `expected_cash` event, and `post`. The post uses its Effect Key as Slack's `client_msg_id` and reuses a retained
@@ -286,8 +286,8 @@ receipt, the `GeneralNag` rule. A day with no open contingent matter posts nothi
 
 The Linear backlog digest is a built-in DBOS feature. It runs when the web executor has a private Slack destination and
 its credentials. Set `SLACK_LINEAR_BACKLOG_CHANNEL_ID` to the destination's channel ID and provide
-`LINEAR_BACKLOG_READ_KEY` and `SLACK_BOT_TOKEN` as deployment secrets. The Linear key needs read access to both teams.
-Use a separate test channel in staging.
+`LINEAR_BACKLOG_READ_KEY` and `NAVIGATOR_RUNTIME_KMS_KEY` as deployment secrets. The Linear key needs read access to
+both teams. Use a separate test channel in staging.
 
 Grant `chat:write` and `groups:history` by following [Deployment Slack app][deployment-slack-app].
 

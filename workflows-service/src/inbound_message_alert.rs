@@ -459,13 +459,17 @@ impl InboundMessageAlertService {
         if receipt.state.as_deref() != Some("pending") {
             return Ok(receipt.state.unwrap_or_else(|| "historical".into()));
         }
-        // A deployment-wide channel has one owning Firm. Never route another
-        // Firm's inbound metadata into it. Invalid explicit configuration fails closed.
-        let owning_firm = match std::env::var("SLACK_MESSAGES_FIRM_ID").ok() {
-            Some(value) => Uuid::parse_str(&value).ok(),
-            None => store::firms::firm_id_for_brand_key(&self.surreal, "neon")
+        // A deployment-wide channel belongs to the deployment's Slack Firm.
+        // Never route another Firm's inbound metadata into it. Invalid
+        // explicit configuration fails closed.
+        let owning_firm = match workflows::firm_slack::DeploymentSlackFirm::from_lookup(|key| {
+            std::env::var(key).ok()
+        }) {
+            Ok(firm) => firm
+                .resolve(&self.surreal)
                 .await
                 .map_err(WorkflowStepError::retryable)?,
+            Err(_) => None,
         };
         let channel_id = owning_firm.and_then(|firm_id| {
             workflows::post_slack_notification::select_post_notice_channel(

@@ -73,6 +73,7 @@ pub use gcs::{GcsStorage, GcsStorageConfig};
 pub use kms::{
     open, runtime_kms_from_env, seal, AdcTokenSource, FakeKms, GoogleKms, GoogleKmsConfig,
     KmsContext, KmsError, KmsTokenSource, NoRuntimeKms, RuntimeKms, WrappedDataKey,
+    RUNTIME_KMS_KEY_ENV,
 };
 pub use notion::{
     ensure_private_page, extract_page_id as notion_page_id_from_url, FakeNotion, NotionClient,

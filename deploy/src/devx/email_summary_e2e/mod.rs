@@ -285,15 +285,15 @@ mod tests {
                 "image": "navigator-workflows-service:dev",
                 "env": [
                     { "name": "NAVIGATOR_CI_HARNESS", "value": "1" },
-                    { "name": "SLACK_BOT_TOKEN", "value": "stale" },
+                    { "name": "SLACK_API_BASE_URL", "value": "stale" },
                     { "name": "UNRELATED", "value": "kept" }
                 ]
             }] } } }
         });
         let env = vec![
             (
-                "SLACK_BOT_TOKEN".to_string(),
-                "synthetic-slack-token".to_string(),
+                "SLACK_API_BASE_URL".to_string(),
+                "http://fixtures/slack".to_string(),
             ),
             ("NEW".to_string(), "1".to_string()),
         ];
@@ -315,7 +315,7 @@ mod tests {
             vec![
                 ("NAVIGATOR_CI_HARNESS", "1"),
                 ("UNRELATED", "kept"),
-                ("SLACK_BOT_TOKEN", "synthetic-slack-token"),
+                ("SLACK_API_BASE_URL", "http://fixtures/slack"),
                 ("NEW", "1"),
             ]
         );

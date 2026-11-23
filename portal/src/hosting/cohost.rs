@@ -59,9 +59,11 @@ mod combined_workflow_tests {
     }
 }
 
+#[allow(clippy::too_many_arguments)] // One boot's hosting choices and transports.
 pub(super) async fn run(
     host_dbos: bool,
     combined: bool,
+    ops_notifier: Arc<dyn workflows::Notifier>,
     dbos_schedules: dbos_engine::Schedules,
     sent_email_export: Option<Arc<dyn archives::sent_email_export::ExportSource>>,
     archives: Option<archives::workflow::DbosContext>,
@@ -86,7 +88,7 @@ pub(super) async fn run(
         let lookup = |key: &str| std::env::var(key).ok();
         super::with_dbos_hosting_and_external(
             lookup,
-            workflows::notify::notifier_from_lookup(lookup),
+            ops_notifier,
             dbos_schedules,
             move |dbos| super::register_archive_schedules(dbos, sent_email_export, archives),
             self::serve_http(stop, serve, super::shutdown_signal()),
@@ -179,6 +181,7 @@ mod tests {
         Box::pin(run(
             false,
             false,
+            Arc::new(workflows::CapturingNotifier::new()),
             dbos_engine::Schedules::default(),
             None,
             None,

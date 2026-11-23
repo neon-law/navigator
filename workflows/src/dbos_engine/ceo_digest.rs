@@ -16,8 +16,8 @@
 //! - **`CeoDigestAlert`** — weekdays at 12:00 UTC. A parent fans out the same
 //!   way; each child posts to the Firm's channel only when its needs-you list
 //!   is non-empty, deduplicated by effect-key receipt correlation (the
-//!   strongest available pattern — the incoming Slack webhook has no
-//!   idempotency key).
+//!   strongest available pattern — `chat.postMessage` has no idempotency
+//!   key).
 //!
 //! Both cadences run in UTC. The 12:00 slot is 07:00 US Eastern in winter and
 //! 08:00 in summer; the repository has no timezone machinery and the drift is
@@ -600,44 +600,24 @@ pub struct Context {
 }
 
 impl Context {
-    /// Resolve the live bot and this deployment's messages channel around the
-    /// caller's source, prose provider, and email backend. A
-    /// simulated-matters deployment posts to
-    /// `SLACK_STAGING_MESSAGES_CHANNEL_ID`, any other to
-    /// `SLACK_MESSAGES_CHANNEL_ID`.
+    /// Post with the deployment's bot to its [`super::messages_channel`]
+    /// around the caller's source, prose provider, and email backend.
     ///
     /// # Errors
     ///
-    /// Fails when the channel or `SLACK_BOT_TOKEN` is unset or blank, or a
-    /// Slack API override is set outside the CI harness.
+    /// Fails when that channel is unset or blank.
     pub fn from_lookup<F>(
         source: Arc<dyn DigestSource>,
         prose: Arc<dyn ProseProvider>,
         email: Arc<dyn EmailService>,
+        slack: Arc<dyn SlackBot>,
         simulated: bool,
         lookup: F,
     ) -> Result<Self, SettingsError>
     where
         F: Fn(&str) -> Option<String>,
     {
-        let required = |key: &'static str| {
-            lookup(key)
-                .map(|value| value.trim().to_owned())
-                .filter(|value| !value.is_empty())
-                .ok_or(SettingsError::Missing(key))
-        };
-        let channel_id = required(if simulated {
-            "SLACK_STAGING_MESSAGES_CHANNEL_ID"
-        } else {
-            "SLACK_MESSAGES_CHANNEL_ID"
-        })?;
-        let token = required("SLACK_BOT_TOKEN")?;
-        let api = crate::harness_override(&lookup, "SLACK_API_BASE_URL")
-            .map_err(|_| SettingsError::Invalid("SLACK_API_BASE_URL"))?;
-        let slack: Arc<dyn SlackBot> = match api {
-            Some(api) => Arc::new(crate::SlackBotClient::with_base_url(token, api)),
-            None => Arc::new(crate::SlackBotClient::new(token)),
-        };
+        let channel_id = super::messages_channel(lookup, simulated)?;
         Ok(Self {
             source,
             prose,
@@ -1310,78 +1290,29 @@ mod tests {
     }
 
     #[test]
-    fn context_construction_demands_channel_token_and_harness_for_overrides() {
+    fn context_construction_demands_the_environments_messages_channel() {
         let (source, prose, email) = unreachable_dependencies();
-        // A live deployment demands the production messages channel...
-        assert_eq!(
+        let context = |simulated: bool, entries: &'static [(&'static str, &'static str)]| {
             Context::from_lookup(
                 source.clone(),
                 prose.clone(),
                 email.clone(),
-                false,
-                lookup_with(&[("SLACK_BOT_TOKEN", "token")]),
+                Arc::new(crate::CapturingSlackBot::new()),
+                simulated,
+                lookup_with(entries),
             )
-            .err()
-            .expect("from_lookup must refuse"),
+        };
+        assert_eq!(
+            context(false, &[]).err().expect("from_lookup must refuse"),
             SettingsError::Missing("SLACK_MESSAGES_CHANNEL_ID"),
         );
-        // ...a simulated deployment the staging channel.
         assert_eq!(
-            Context::from_lookup(
-                source.clone(),
-                prose.clone(),
-                email.clone(),
-                true,
-                lookup_with(&[("SLACK_BOT_TOKEN", "token")]),
-            )
-            .err()
-            .expect("from_lookup must refuse"),
+            context(true, &[("SLACK_MESSAGES_CHANNEL_ID", "channel")])
+                .err()
+                .expect("from_lookup must refuse"),
             SettingsError::Missing("SLACK_STAGING_MESSAGES_CHANNEL_ID"),
         );
-        // The bot token is required, and a blank one is as good as none.
-        for lookup in [
-            lookup_with(&[("SLACK_MESSAGES_CHANNEL_ID", "channel")]),
-            lookup_with(&[
-                ("SLACK_MESSAGES_CHANNEL_ID", "channel"),
-                ("SLACK_BOT_TOKEN", "   "),
-            ]),
-        ] {
-            assert_eq!(
-                Context::from_lookup(source.clone(), prose.clone(), email.clone(), false, lookup)
-                    .err()
-                    .expect("from_lookup must refuse"),
-                SettingsError::Missing("SLACK_BOT_TOKEN"),
-            );
-        }
-        // An API override outside the CI harness is refused.
-        assert_eq!(
-            Context::from_lookup(
-                source.clone(),
-                prose.clone(),
-                email.clone(),
-                false,
-                lookup_with(&[
-                    ("SLACK_MESSAGES_CHANNEL_ID", "channel"),
-                    ("SLACK_BOT_TOKEN", "token"),
-                    ("SLACK_API_BASE_URL", "http://127.0.0.1:9999"),
-                ]),
-            )
-            .err()
-            .expect("from_lookup must refuse"),
-            SettingsError::Invalid("SLACK_API_BASE_URL"),
-        );
-        // Everything present: the context carries the resolved channel.
-        let context = Context::from_lookup(
-            source,
-            prose,
-            email,
-            false,
-            lookup_with(&[
-                ("SLACK_MESSAGES_CHANNEL_ID", "channel"),
-                ("SLACK_BOT_TOKEN", "token"),
-            ]),
-        )
-        .unwrap();
+        let context = context(false, &[("SLACK_MESSAGES_CHANNEL_ID", "channel")]).unwrap();
         assert_eq!(context.channel_id, "channel");
     }
 

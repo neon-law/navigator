@@ -96,6 +96,7 @@ pub struct DriDigestService {
 /// A disabled schedule does not validate delivery configuration.
 pub fn dbos_context(
     surreal: Option<SurrealDb>,
+    slack: std::sync::Arc<dyn workflows::SlackBot>,
     simulated: bool,
     lookup: impl Fn(&str) -> Option<String>,
 ) -> Result<Option<workflows::dbos_engine::dri_digest::Context>, anyhow::Error> {
@@ -103,7 +104,7 @@ pub fn dbos_context(
         return Ok(None);
     }
     let surreal = surreal.ok_or_else(|| anyhow::anyhow!("DriDigest database not configured"))?;
-    workflows::dbos_engine::dri_digest::Context::from_lookup(surreal, simulated, lookup)
+    workflows::dbos_engine::dri_digest::Context::from_lookup(surreal, slack, simulated, lookup)
         .map(Some)
         .map_err(Into::into)
 }
@@ -124,46 +125,39 @@ impl DriDigestService {
 mod dbos_context_tests {
     use super::dbos_context;
 
-    #[tokio::test]
-    async fn worker_context_is_gated_and_requires_delivery_configuration() {
-        let disabled = dbos_context(None, false, |_| None)
-            .expect("disabled schedule has no database or webhook requirement");
+    #[test]
+    fn worker_context_is_gated_and_requires_delivery_configuration() {
+        let bot = || std::sync::Arc::new(workflows::CapturingSlackBot::new());
+        let enabled = workflows::dbos_engine::dri_digest::ENABLED_ENV;
+        let disabled = dbos_context(None, bot(), false, |_| None)
+            .expect("disabled schedule has no database or channel requirement");
         assert!(disabled.is_none());
 
-        let invalid = dbos_context(None, false, |key| {
-            (key == workflows::dbos_engine::dri_digest::ENABLED_ENV).then(|| "sometimes".to_owned())
+        let invalid = dbos_context(None, bot(), false, |key| {
+            (key == enabled).then(|| "sometimes".to_owned())
         });
         assert!(invalid.is_err(), "invalid opt-in fails closed");
 
-        let surreal = store::test_support::mem_surreal().await;
-        let enabled = |key: &str| match key {
-            workflows::dbos_engine::dri_digest::ENABLED_ENV => Some("true".to_owned()),
-            _ => None,
-        };
-        let missing_database = dbos_context(None, false, |key| match key {
-            workflows::dbos_engine::dri_digest::ENABLED_ENV => Some("true".to_owned()),
-            "SLACK_BOT_TOKEN" => Some("xoxb-synthetic".to_owned()),
+        let configured = |key: &str| match key {
+            key if key == enabled => Some("true".to_owned()),
             "SLACK_GENERAL_CHANNEL_ID" => Some("C0GENERAL".to_owned()),
             _ => None,
-        });
+        };
+        let surreal = store::surreal::SurrealDb::uninitialized;
         assert!(
-            missing_database.is_err(),
+            dbos_context(None, bot(), false, configured).is_err(),
             "enabled delivery requires its store"
         );
-
-        let missing_bot = dbos_context(Some(surreal.clone()), false, enabled);
-        assert!(missing_bot.is_err(), "enabled delivery fails closed");
-
-        let configured = |key: &str| match key {
-            workflows::dbos_engine::dri_digest::ENABLED_ENV => Some("true".to_owned()),
-            "SLACK_BOT_TOKEN" => Some("xoxb-synthetic".to_owned()),
-            "SLACK_GENERAL_CHANNEL_ID" => Some("C0GENERAL".to_owned()),
-            _ => None,
-        };
-        let context = dbos_context(Some(surreal), true, configured)
-            .expect("valid delivery configuration")
-            .expect("enabled schedule has a context");
-        drop(context);
+        assert!(
+            dbos_context(Some(surreal()), bot(), false, |key| {
+                (key == enabled).then(|| "true".to_owned())
+            })
+            .is_err(),
+            "enabled delivery requires its channel"
+        );
+        assert!(dbos_context(Some(surreal()), bot(), true, configured)
+            .unwrap()
+            .is_some());
     }
 }
 

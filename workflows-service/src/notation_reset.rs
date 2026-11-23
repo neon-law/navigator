@@ -271,7 +271,7 @@ fn validate_configuration(channel_id: &str, slack_enabled: bool) -> Result<(), W
     }
     if !slack_enabled {
         return Err(WorkflowStepError::terminal(
-            "SLACK_BOT_TOKEN must be configured for the notation reset",
+            "the deployment's Slack bot must be configured for the notation reset",
         ));
     }
     Ok(())
@@ -449,7 +449,7 @@ mod tests {
         let channel = validate_configuration("", true).unwrap_err();
         assert!(format!("{channel:?}").contains("messages channel id"));
         let bot = validate_configuration("C-MESSAGES", false).unwrap_err();
-        assert!(format!("{bot:?}").contains("SLACK_BOT_TOKEN"));
+        assert!(format!("{bot:?}").contains("Slack bot"));
     }
 
     #[tokio::test]

@@ -623,7 +623,7 @@ struct BasicResponse {
 }
 
 /// Slack Web API adapter. The bot token is injected by the Firm-secret
-/// resolver; `SLACK_BOT_TOKEN` is never consulted here.
+/// resolver; no deployment-wide token exists.
 pub struct SlackClient {
     http: reqwest::Client,
     base_url: String,
@@ -642,8 +642,7 @@ impl std::fmt::Debug for SlackClient {
 
 impl SlackClient {
     /// The production client. The bot token is the Firm's resolved provider
-    /// credential, so `SLACK_BOT_TOKEN` is never consulted here. Staging
-    /// labeling follows [`labels_slack_from_staging_env`].
+    /// credential. Staging labeling follows [`labels_slack_from_staging_env`].
     #[must_use]
     pub fn new(token: impl Into<String>) -> Self {
         Self::from_parts(token, SLACK_BASE_URL, labels_slack_from_staging_env())

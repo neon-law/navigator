@@ -2,8 +2,9 @@
 //!
 //! Neon Law Navigator's durable workflows prove their liveness by notifying firm ops
 //! (the six-hourly `Heartbeat`, the nightly `Archives` digest, the
-//! `BillingCanary`, …). That signal goes to an incoming **Slack** webhook on
-//! the engineering channel — where engineers already watch — and **no longer
+//! `BillingCanary`, …). That signal goes to the deployment's Slack ops channel
+//! ([`OPS_CHANNEL_ENV`]), posted by the deployment's Firm bot
+//! ([`crate::firm_slack`]) — where engineers already watch — and **no longer
 //! also goes out as email**: a recurring liveness signal is trivial to lose in
 //! an inbox (the very failure mode that hid a real heartbeat gap once), so once
 //! Slack delivery proved reliable the firm dropped the duplicate ops email (the
@@ -11,9 +12,9 @@
 //!
 //! Two pieces:
 //!
-//! - [`Notifier`] — the trait, with a real [`SlackNotifier`] (POSTs
-//!   `{"text": …}` to an incoming webhook) and a [`CapturingNotifier`] that
-//!   keeps messages in memory for KIND/tests so nothing leaves the binary.
+//! - [`Notifier`] — the trait, with a real [`ChannelNotifier`] (posts through a
+//!   [`SlackBot`] to one channel) and a [`CapturingNotifier`] that keeps
+//!   messages in memory for KIND/tests so nothing leaves the binary.
 //! - [`SlackOpsDelivery`] — an [`EmailService`] adapter that delivers an ops
 //!   notice to a [`Notifier`] (Slack) *instead of* sending email. The ops
 //!   workflows render their notice as an [`OutboundEmail`] and hand it to their
@@ -51,17 +52,12 @@ use crate::email::service::{EmailError, EmailService, OutboundEmail, SendReceipt
 /// notifier outage must never be conflated with — nor fail — an email send.
 #[derive(Debug, Error)]
 pub enum NotifyError {
-    /// The HTTP request to the webhook never completed (DNS, TLS, timeout).
+    /// Slack did not accept the notice.
     #[error("transport error: {0}")]
     Transport(String),
-    /// The webhook returned a non-2xx status (e.g. 404 for a revoked webhook).
-    #[error("notification endpoint rejected the message: status {0}")]
-    Rejected(u16),
 }
 
-/// Why a Slack Web API request failed. The bot client is separate from the
-/// legacy incoming-webhook notifier because Web API calls choose a channel at
-/// request time and therefore can serve one private channel per Project.
+/// Why a Slack Web API request failed.
 #[derive(Debug, Error)]
 pub enum SlackBotError {
     /// The request did not complete.
@@ -1318,78 +1314,24 @@ impl Notifier for CapturingNotifier {
     }
 }
 
-/// The ops [`Notifier`] a process builds from its environment:
-/// `SLACK_WEBHOOK_URL` set and non-empty selects [`SlackNotifier`]; unset or
-/// empty selects [`CapturingNotifier`], so KIND and tests never post to a real
-/// channel. A missing webhook is a valid configuration, never a boot failure.
-pub fn notifier_from_lookup<F: Fn(&str) -> Option<String>>(get: F) -> Arc<dyn Notifier> {
-    match get("SLACK_WEBHOOK_URL").filter(|s| !s.is_empty()) {
-        Some(url) => Arc::new(SlackNotifier::new(url)),
+/// The channel the deployment's ops notices post to.
+pub const OPS_CHANNEL_ENV: &str = "SLACK_OPS_CHANNEL_ID";
+
+/// The ops [`Notifier`] a process builds: the deployment's bot posting to
+/// [`OPS_CHANNEL_ENV`] when it is set, a [`CapturingNotifier`] otherwise, so
+/// KIND and tests never post to a real channel. An unset channel is a valid
+/// configuration, never a boot failure.
+pub fn ops_notifier(
+    bot: Arc<dyn SlackBot>,
+    get: impl Fn(&str) -> Option<String>,
+) -> Arc<dyn Notifier> {
+    match get(OPS_CHANNEL_ENV).filter(|channel| !channel.trim().is_empty()) {
+        Some(channel) => Arc::new(ChannelNotifier::new(bot, channel.trim())),
         None => Arc::new(CapturingNotifier::new()),
     }
 }
 
-/// Posts to a Slack **incoming webhook**. The webhook URL already pins the
-/// destination channel, so the only payload is the message text.
-#[derive(Clone)]
-pub struct SlackNotifier {
-    http: reqwest::Client,
-    webhook_url: String,
-    from_staging: bool,
-}
-
-impl SlackNotifier {
-    /// Production constructor: targets the given incoming-webhook URL
-    /// (`SLACK_WEBHOOK_URL`). Staging labeling follows
-    /// [`cloud::labels_slack_from_staging_env`].
-    #[must_use]
-    pub fn new(webhook_url: impl Into<String>) -> Self {
-        Self {
-            http: reqwest::Client::new(),
-            webhook_url: webhook_url.into(),
-            from_staging: cloud::labels_slack_from_staging_env(),
-        }
-    }
-
-    #[cfg(test)]
-    fn with_staging_origin(webhook_url: impl Into<String>, from_staging: bool) -> Self {
-        Self {
-            http: reqwest::Client::new(),
-            webhook_url: webhook_url.into(),
-            from_staging,
-        }
-    }
-
-    /// Build the JSON body for the Slack incoming-webhook endpoint. Pure —
-    /// exposed for unit-testing the request shape without an HTTP round-trip.
-    #[must_use]
-    pub fn build_request_body(text: &str) -> serde_json::Value {
-        json!({ "text": text })
-    }
-}
-
-#[async_trait]
-impl Notifier for SlackNotifier {
-    async fn notify(&self, text: String) -> Result<(), NotifyError> {
-        let text = cloud::outbound_slack_text(&text, self.from_staging);
-        let resp = self
-            .http
-            .post(&self.webhook_url)
-            .json(&Self::build_request_body(&text))
-            .send()
-            .await
-            .map_err(|e| NotifyError::Transport(e.to_string()))?;
-        let status = resp.status();
-        if status.is_success() {
-            Ok(())
-        } else {
-            Err(NotifyError::Rejected(status.as_u16()))
-        }
-    }
-}
-
-/// Posts with a Slack bot to one channel, for notices whose deployment holds
-/// the bot token rather than an incoming webhook.
+/// Posts with a Slack bot to one channel.
 #[derive(Clone)]
 pub struct ChannelNotifier {
     bot: Arc<dyn SlackBot>,
@@ -1522,22 +1464,31 @@ mod tests {
     use super::{
         ops_slack_messages, upsert_channel_canvas, CanvasWrite, CapturingNotifier,
         CapturingSlackBot, Notifier, NotifyError, SlackBot, SlackBotClient, SlackBotError,
-        SlackNotifier, SlackOpsDelivery, SLACK_CHUNK_BUDGET,
+        SlackOpsDelivery, SLACK_CHUNK_BUDGET,
     };
     use crate::email::service::{EmailError, EmailService, OutboundEmail};
     use async_trait::async_trait;
 
+    use std::sync::Arc;
+
     #[tokio::test]
-    async fn channel_notifier_posts_through_the_bot_to_its_channel() {
+    async fn ops_notices_post_through_the_bot_to_the_ops_channel_or_capture() {
         let bot = CapturingSlackBot::new();
-        let notifier = super::ChannelNotifier::new(Arc::new(bot.clone()), "C0GENERAL");
+        let notifier = super::ops_notifier(Arc::new(bot.clone()), |key| {
+            (key == super::OPS_CHANNEL_ENV).then(|| " C0OPS ".to_owned())
+        });
         notifier.notify("digest".into()).await.unwrap();
         assert_eq!(
             bot.posted_messages(),
-            [("C0GENERAL".to_owned(), "digest".to_owned())]
+            [("C0OPS".to_owned(), "digest".to_owned())]
         );
+        let unset = CapturingSlackBot::new();
+        super::ops_notifier(Arc::new(unset.clone()), |_| None)
+            .notify("captured".into())
+            .await
+            .unwrap();
+        assert!(unset.posted_messages().is_empty());
     }
-    use std::sync::Arc;
 
     fn ops_email() -> OutboundEmail {
         OutboundEmail::new(
@@ -1545,12 +1496,6 @@ mod tests {
             "Durable execution OK — heartbeat 2026-06-19 18:00 UTC",
             "The durable-execution heartbeat ran end to end.",
         )
-    }
-
-    #[test]
-    fn slack_body_is_text_field() {
-        let body = SlackNotifier::build_request_body("hello ops");
-        assert_eq!(body, serde_json::json!({ "text": "hello ops" }));
     }
 
     #[tokio::test]
@@ -2564,28 +2509,6 @@ mod tests {
             .expect("Slack post succeeds");
     }
 
-    #[tokio::test]
-    async fn staging_webhook_notify_appends_from_staging() {
-        use wiremock::matchers::{body_json, method};
-        use wiremock::{Mock, ResponseTemplate};
-
-        let server = wiremock::MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(body_json(serde_json::json!({
-                "text": "hello ops\nfrom Staging"
-            })))
-            .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
-            .expect(1)
-            .mount(&server)
-            .await;
-
-        let notifier = SlackNotifier::with_staging_origin(server.uri(), true);
-        notifier
-            .notify("hello ops".into())
-            .await
-            .expect("webhook post succeeds");
-    }
-
     #[test]
     fn ops_slack_short_body_is_one_bold_subject_then_fenced_body() {
         let msgs = ops_slack_messages(&ops_email());
@@ -2725,7 +2648,7 @@ mod tests {
     #[async_trait]
     impl Notifier for FailingNotifier {
         async fn notify(&self, _text: String) -> Result<(), NotifyError> {
-            Err(NotifyError::Rejected(404))
+            Err(NotifyError::Transport("refused".into()))
         }
     }
 

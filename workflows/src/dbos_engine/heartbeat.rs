@@ -1,7 +1,7 @@
 //! `Heartbeat`: the durable-execution liveness canary.
 //!
 //! It depends on nothing — no application table, no object storage, no third
-//! party but the ops Slack webhook — so a posted line can only mean the engine
+//! party but the deployment's Slack bot — so a posted line can only mean the engine
 //! accepted a run, checkpointed a step, and ran a second step to completion.
 //! `beat` checkpoints the instant the engine ran it, and `notify` posts that
 //! checkpointed instant to the ops Slack channel. A recovery after `beat`
@@ -13,9 +13,9 @@
 //! [`workflow_id`] derives from that slot. A restart, or a second replica,
 //! computes the same id, and a second start joins the first run.
 //!
-//! **`notify` is at least once.** Slack's incoming webhook takes no
-//! idempotency key, so a crash between Slack's reply and the step's
-//! checkpoint posts the line twice. A duplicate liveness line is harmless.
+//! **`notify` is at least once.** Its post carries no receipt correlation,
+//! so a crash between Slack's reply and the step's checkpoint posts the line
+//! twice. A duplicate liveness line is harmless.
 
 use std::sync::Arc;
 use std::time::Duration;

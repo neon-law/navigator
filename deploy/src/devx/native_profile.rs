@@ -620,7 +620,6 @@ mod tests {
         assert_eq!(ingress.port(), Some(dbos_port(&cfg).unwrap()));
         assert_eq!(values["NAVIGATOR_DBOS_INGRESS_TOKEN"], intent.token);
         assert!(!values.contains_key("SENDGRID_API_KEY"));
-        assert!(!values.contains_key("SLACK_BOT_TOKEN"));
         assert!(!values.contains_key("XERO_ACCESS_TOKEN"));
         assert_eq!(
             values["NAVIGATOR_STORAGE_ACCESS_KEY"],

@@ -75,17 +75,14 @@ pub struct Context {
 }
 
 impl Context {
-    /// Resolve the live bot and the messages channel this deployment posts to.
-    /// A simulated-matters deployment posts to
-    /// `SLACK_STAGING_MESSAGES_CHANNEL_ID`, any other to
-    /// `SLACK_MESSAGES_CHANNEL_ID`.
+    /// Post with the deployment's bot to its [`super::messages_channel`].
     ///
     /// # Errors
     ///
-    /// Fails when the channel or `SLACK_BOT_TOKEN` is unset or blank, or a
-    /// Slack API override is set outside the CI harness.
+    /// Fails when that channel is unset or blank.
     pub fn from_lookup<F>(
         surreal: SurrealDb,
+        slack: Arc<dyn SlackBot>,
         environment: &'static str,
         simulated: bool,
         lookup: F,
@@ -93,24 +90,7 @@ impl Context {
     where
         F: Fn(&str) -> Option<String>,
     {
-        let required = |key: &'static str| {
-            lookup(key)
-                .map(|value| value.trim().to_owned())
-                .filter(|value| !value.is_empty())
-                .ok_or(super::SettingsError::Missing(key))
-        };
-        let channel_id = required(if simulated {
-            "SLACK_STAGING_MESSAGES_CHANNEL_ID"
-        } else {
-            "SLACK_MESSAGES_CHANNEL_ID"
-        })?;
-        let token = required("SLACK_BOT_TOKEN")?;
-        let base_url = crate::harness_override(&lookup, "SLACK_API_BASE_URL")
-            .map_err(|_| super::SettingsError::Invalid("SLACK_API_BASE_URL"))?;
-        let slack: Arc<dyn SlackBot> = match base_url {
-            Some(base_url) => Arc::new(crate::SlackBotClient::with_base_url(token, base_url)),
-            None => Arc::new(crate::SlackBotClient::new(token)),
-        };
+        let channel_id = super::messages_channel(lookup, simulated)?;
         Ok(Self {
             surreal,
             slack,
@@ -329,6 +309,7 @@ mod tests {
         let configured = |simulated: bool, pairs: &'static [(&'static str, &'static str)]| {
             Context::from_lookup(
                 store::surreal::test_support::unreachable(),
+                std::sync::Arc::new(crate::CapturingSlackBot::new()),
                 "staging",
                 simulated,
                 move |key| {
@@ -341,7 +322,7 @@ mod tests {
             .map(|context| context.channel_id)
         };
         assert_eq!(
-            configured(true, &[("SLACK_BOT_TOKEN", "xoxb-test")]).unwrap_err(),
+            configured(true, &[]).unwrap_err(),
             super::super::SettingsError::Missing("SLACK_STAGING_MESSAGES_CHANNEL_ID")
         );
         assert_eq!(
@@ -349,16 +330,11 @@ mod tests {
             super::super::SettingsError::Missing("SLACK_MESSAGES_CHANNEL_ID")
         );
         assert_eq!(
-            configured(true, &[("SLACK_STAGING_MESSAGES_CHANNEL_ID", "C-STAGING")]).unwrap_err(),
-            super::super::SettingsError::Missing("SLACK_BOT_TOKEN")
-        );
-        assert_eq!(
             configured(
                 true,
                 &[
                     ("SLACK_STAGING_MESSAGES_CHANNEL_ID", "C-STAGING"),
                     ("SLACK_MESSAGES_CHANNEL_ID", "C-MESSAGES"),
-                    ("SLACK_BOT_TOKEN", "xoxb-test"),
                 ]
             )
             .unwrap(),

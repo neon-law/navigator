@@ -950,7 +950,9 @@ async fn boot(brand: Site, host_dbos: bool) -> anyhow::Result<()> {
     let dbos_schedules = dbos_schedules(&rt, host_dbos, combined, lookup).await?;
     let sent_email_export = sent_email_export_source(host_dbos, lookup).await?;
     // The combined worker registers Archives; this host still supplies Sent Email Export.
-    let archives = archives_context(host_dbos && !combined, rt.config.environment, lookup)?;
+    let (slack, _) = deployment_slack(&rt, lookup)?;
+    let ops_notifier = workflows::notify::ops_notifier(slack.clone(), lookup);
+    let archives = archives_context(host_dbos && !combined, rt.config.environment, slack, lookup)?;
     let router = crate::bootstrap(
         rt.state,
         &rt.public_dir,
@@ -1010,6 +1012,7 @@ async fn boot(brand: Site, host_dbos: bool) -> anyhow::Result<()> {
     let served = Box::pin(cohost::run(
         host_dbos,
         combined,
+        ops_notifier,
         dbos_schedules,
         sent_email_export,
         archives,
@@ -1077,6 +1080,7 @@ async fn sent_email_export_source(
 fn archives_context(
     host_dbos: bool,
     environment: store::DeploymentEnvironment,
+    slack: Arc<dyn workflows::SlackBot>,
     lookup: impl Fn(&str) -> Option<String> + Copy,
 ) -> anyhow::Result<Option<archives::workflow::DbosContext>> {
     if !host_dbos || !dbos_engine::enabled(lookup).context("read NAVIGATOR_DBOS_ENABLED")? {
@@ -1090,7 +1094,7 @@ fn archives_context(
     }
     let simulated = store::sample_matters_from(environment, lookup)
         .context("resolve simulated-matters deployment")?;
-    archives::workflow::DbosContext::from_lookup(simulated, lookup)
+    archives::workflow::DbosContext::from_lookup(slack, simulated, lookup)
         .map(Some)
         .context("configure DBOS Archives")
 }
@@ -1109,15 +1113,32 @@ fn worker_schedule<T>(
     }
 }
 
+/// The deployment's Slack bot every hosted schedule posts with, and whether
+/// it posts rather than captures.
+fn deployment_slack(
+    rt: &HostRuntime,
+    lookup: impl Fn(&str) -> Option<String>,
+) -> anyhow::Result<(Arc<dyn workflows::SlackBot>, bool)> {
+    workflows::firm_slack::deployment_bot_or_capture(
+        rt.state.surreal.clone(),
+        rt.state.runtime_kms.clone(),
+        lookup,
+    )
+    .map_err(anyhow::Error::msg)
+    .context("configure the deployment's Slack bot")
+}
+
 /// Build application-owned schedules, deferring worker contexts when cohosted.
 /// Resolve each flag before context construction so unused schedules require
 /// no credentials or storage.
+#[allow(clippy::too_many_lines)] // One gate per hosted schedule.
 async fn dbos_schedules(
     rt: &HostRuntime,
     host_dbos: bool,
     combined: bool,
     lookup: impl Fn(&str) -> Option<String> + Copy,
 ) -> anyhow::Result<dbos_engine::Schedules> {
+    let (slack, _) = deployment_slack(rt, lookup)?;
     let general_nag =
         worker_schedule(combined, should_host_general_nag(host_dbos, lookup), || {
             general_nag_context(rt).context("configure DBOS GeneralNag")
@@ -1164,7 +1185,7 @@ async fn dbos_schedules(
         combined,
         should_host_billing_canary(host_dbos, lookup),
         || {
-            workflows::dbos_engine::billing_canary::Context::from_lookup(lookup)
+            workflows::dbos_engine::billing_canary::Context::from_lookup(slack.clone(), lookup)
                 .context("configure DBOS BillingCanary")
         },
     )?;
@@ -1172,7 +1193,7 @@ async fn dbos_schedules(
         combined,
         should_host_billing_digest(host_dbos, lookup),
         || {
-            workflows::dbos_engine::billing_digest::Context::from_lookup(lookup)
+            workflows::dbos_engine::billing_digest::Context::from_lookup(slack.clone(), lookup)
                 .context("configure DBOS BillingDigest")
         },
     )?;
@@ -1189,7 +1210,7 @@ async fn dbos_schedules(
     let enabled = host_dbos && dbos_engine::enabled(lookup)?;
     let (linear_backlog, daily_cost_export) = if enabled {
         (
-            dbos_engine::linear_backlog::Context::from_lookup(lookup)?,
+            dbos_engine::linear_backlog::Context::from_lookup(slack.clone(), lookup)?,
             workflows::flags::daily_cost_export(lookup)?,
         )
     } else {
@@ -1340,6 +1361,7 @@ async fn profit_digest_context(
             rt.state.surreal.clone(),
             pg,
         )),
+        deployment_slack(rt, lookup)?.0,
         simulated,
         lookup,
     )
@@ -1355,6 +1377,7 @@ fn notation_reset_context(
         .context("resolve simulated-matters deployment")?;
     workflows::dbos_engine::notation_reset::Context::from_lookup(
         rt.state.surreal.clone(),
+        deployment_slack(rt, &lookup)?.0,
         workflows::notation_reset::environment_label(rt.config.environment, simulated),
         simulated,
         lookup,
@@ -1510,6 +1533,7 @@ fn dri_digest_context(
         .context("resolve simulated-matters deployment")?;
     workflows::dbos_engine::dri_digest::Context::from_lookup(
         rt.state.surreal.clone(),
+        deployment_slack(rt, &lookup)?.0,
         simulated,
         lookup,
     )
@@ -1547,6 +1571,7 @@ async fn ceo_digest_context(
         )),
         Arc::new(prose),
         crate::email::from_lookup(lookup).context("configure the CEO digest email backend")?,
+        deployment_slack(rt, lookup)?.0,
         simulated,
         lookup,
     )
@@ -1575,6 +1600,7 @@ fn general_nag_context(
         .context("resolve simulated-matters deployment")?;
     workflows::dbos_engine::general_nag::Context::from_lookup(
         rt.state.surreal.clone(),
+        deployment_slack(rt, lookup)?.0,
         simulated,
         lookup,
     )
@@ -1680,13 +1706,19 @@ mod tests {
     /// fails the boot instead of leaving the archive unscheduled.
     #[test]
     fn archives_needs_dbos_its_own_switch_and_complete_coverage() {
+        let bot = || {
+            std::sync::Arc::new(workflows::CapturingSlackBot::new())
+                as std::sync::Arc<dyn workflows::SlackBot>
+        };
         let environment = store::DeploymentEnvironment::Production;
         let dbos = workflows::dbos_engine::ENABLED_ENV;
         let switch = archives::workflow::DBOS_ENABLED_ENV;
         let on = |key: &str| (key == dbos || key == switch).then(|| "true".to_owned());
-        assert!(archives_context(false, environment, on).unwrap().is_none());
+        assert!(archives_context(false, environment, bot(), on)
+            .unwrap()
+            .is_none());
         let dbos_only = |key: &str| (key == dbos).then(|| "true".to_owned());
-        assert!(archives_context(true, environment, dbos_only)
+        assert!(archives_context(true, environment, bot(), dbos_only)
             .unwrap()
             .is_none());
         let malformed = |key: &str| match key {
@@ -1694,8 +1726,8 @@ mod tests {
             key if key == switch => Some("yes".to_owned()),
             _ => None,
         };
-        assert!(archives_context(true, environment, malformed).is_err());
-        let Err(error) = archives_context(true, environment, on) else {
+        assert!(archives_context(true, environment, bot(), malformed).is_err());
+        let Err(error) = archives_context(true, environment, bot(), on) else {
             panic!("an enabled schedule without its coverage settings must fail the boot");
         };
         assert!(
@@ -1885,6 +1917,7 @@ mod schedule_owner_tests {
         let build = || {
             dbos_engine::general_nag::Context::from_lookup(
                 store::surreal::SurrealDb::uninitialized(),
+                Arc::new(workflows::CapturingSlackBot::new()),
                 true,
                 lookup,
             )
