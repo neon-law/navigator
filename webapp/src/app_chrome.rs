@@ -175,7 +175,7 @@ pub fn firm_app_logo() -> Option<AppLogo> {
 
 /// The bundled G&S mark is available on all application hosts.
 #[cfg(feature = "server")]
-fn compiled_app_mark_src(key: views::brand::BrandKey, fallback: &str) -> &str {
+pub(crate) fn compiled_app_mark_src(key: views::brand::BrandKey, fallback: &str) -> &str {
     if key == views::brand::BrandKey::GuiebShook {
         "/public/brand/guieb-shook/logo.svg"
     } else {

@@ -801,7 +801,7 @@ fn register_project_routes(r: Router<AdminState>) -> Router<AdminState> {
         // identity comes from the form.
         .route(
             &format!("{prefix}/{{project_code}}/view-as-client"),
-            post(project_view_as_client),
+            get(project_view_as_client).post(project_view_as_client),
         )
         .route(
             &format!("{prefix}/{{project_code}}/testimonial"),
@@ -2216,8 +2216,8 @@ async fn admin_person_welcome(
     Redirect::to(&format!("/app/admin/people/{id}?notice={notice}")).into_response()
 }
 
-/// `POST /app/projects/{project_code}/view-as-client` — let a firm member who
-/// can already open this matter inspect its client rendering, read-only. The
+/// GET opens the preview form on the Project Brand. POST lets a firm member who
+/// can already open this matter inspect its read-only client rendering. The
 /// target is the matter's first client DRI in stable participation order,
 /// never a person id supplied by the browser. Matters open with that DRI, and
 /// if a later edit has left none, the preview is unavailable rather than
@@ -2231,6 +2231,7 @@ async fn admin_person_welcome(
 async fn project_view_as_client(
     State(state): State<AdminState>,
     session: Option<Extension<SessionData>>,
+    method: axum::http::Method,
     headers: HeaderMap,
     cookies: tower_cookies::Cookies,
     Path(project_code): Path<String>,
@@ -2305,7 +2306,11 @@ async fn project_view_as_client(
             )
                 .into_response();
         };
-        return Redirect::to(&format!("{origin}/app/projects/{}", project.code)).into_response();
+        return Redirect::to(&format!(
+            "{origin}/app/projects/{}/view-as-client",
+            project.code
+        ))
+        .into_response();
     }
     let client_id = match store::projects::participations_for_project(&state.surreal, project.id)
         .await
@@ -2324,7 +2329,11 @@ async fn project_view_as_client(
         }
     };
     let Some(client_id) = client_id else {
-        return not_found_response();
+        return (
+            StatusCode::CONFLICT,
+            "This Project needs a client DRI before its client view can be previewed.",
+        )
+            .into_response();
     };
     let target = match store::persons::find_by_id(&state.surreal, client_id).await {
         Ok(Some(person)) if person.role == store::persons::Role::Client => person,
@@ -2338,6 +2347,19 @@ async fn project_view_as_client(
                 .into_response();
         }
     };
+
+    if method != axum::http::Method::POST {
+        return (
+            [(header::CACHE_CONTROL, "private, no-store")],
+            webapp::portal_project_detail::confirm_client_preview(
+                &project.code,
+                &project.name,
+                &target.name,
+                &session.csrf_token,
+            ),
+        )
+            .into_response();
+    }
 
     let mut effective = SessionData::fresh(
         target
@@ -7806,6 +7828,7 @@ mod tests {
             let response = super::project_view_as_client(
                 S(state.clone()),
                 session.map(Ext),
+                axum::http::Method::POST,
                 axum::http::HeaderMap::new(),
                 cookies.clone(),
                 P(code),
@@ -7819,6 +7842,7 @@ mod tests {
         let entered = super::project_view_as_client(
             S(state.clone()),
             Some(Ext(session_for(&lawyer))),
+            axum::http::Method::POST,
             axum::http::HeaderMap::new(),
             cookies.clone(),
             P(code.clone()),
@@ -7839,6 +7863,7 @@ mod tests {
         let nested = super::project_view_as_client(
             S(state.clone()),
             Some(Ext(effective.clone())),
+            axum::http::Method::POST,
             axum::http::HeaderMap::new(),
             tower_cookies::Cookies::default(),
             P(code),

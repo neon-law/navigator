@@ -43,6 +43,42 @@ pub const VIEW_AS_CLIENT_STOP_ACTION: &str = "/app/view-as-client/stop";
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ViewingAsDri(pub Option<ClientDriView>);
 
+/// A cross-Brand preview navigates first. Its POST needs the session and
+/// CSRF token issued on the Project's own host.
+#[component]
+pub fn ViewAsClient(
+    code: String,
+    csrf: String,
+    portal_link: Option<String>,
+    #[props(default)] icon: bool,
+) -> Element {
+    let class = if icon {
+        "nav-btn nav-btn--secondary lawyer-detail__resource-action"
+    } else {
+        "nav-btn nav-btn--secondary"
+    };
+    let label = if icon {
+        rsx! { super::resource_mark::UserGlyph { class: "project-resources__mark".to_string() } }
+    } else {
+        rsx! { "View as Client" }
+    };
+    if let Some(href) = portal_link {
+        return rsx! {
+            a {
+                class, href, target: "_blank", rel: "noopener noreferrer",
+                title: "View as Client (opens in a new tab)", aria_label: "View as Client",
+                {label}
+            }
+        };
+    }
+    rsx! {
+        form { class: "lawyer-detail__resource-action-form", method: "post", action: "/app/projects/{code}/view-as-client",
+            input { r#type: "hidden", name: "_csrf", value: csrf }
+            button { class, title: "View as Client", aria_label: "View as Client", r#type: "submit", {label} }
+        }
+    }
+}
+
 /// The banner itself. Renders nothing when `view` is `None`, so a page can
 /// place it unconditionally at the top of its chrome.
 ///

@@ -92,6 +92,8 @@ pub struct ClerkProjectDetailView {
     /// only the current browser lens; it does not change a matter.
     #[serde(default)]
     pub csrf_token: String,
+    #[serde(default)]
+    pub client_preview_link: Option<String>,
 }
 
 /// Read the injected viewer tier, defaulting to the least-privileged tier when
@@ -212,6 +214,7 @@ pub async fn get_clerk_project() -> Result<ClerkProjectDetailView, ServerFnError
             resources: crate::project_resources::ProjectResourcesView::default(),
             role,
             csrf_token: csrf_token.clone(),
+            client_preview_link: None,
         })
     };
     let Some(person_id) = injected_person_id()
@@ -259,6 +262,7 @@ pub async fn get_clerk_project() -> Result<ClerkProjectDetailView, ServerFnError
     )
     .await;
     Ok(ClerkProjectDetailView {
+        client_preview_link: crate::brand_website::client_preview_link(&project).await,
         page_tabs,
         tokens_href: crate::app_chrome::app_tokens_href_from_context().await,
         firm_name,
@@ -407,12 +411,8 @@ pub fn ClerkProjectDetail() -> Element {
                         dt { "Supervising lawyer" }
                         dd { "{project.lawyer_dri}" }
                     }
-                    form {
-                        class: "lawyer-detail__inline-form",
-                        method: "post",
-                        action: "/app/projects/{project.code}/view-as-client",
-                        input { r#type: "hidden", name: "_csrf", value: "{view.csrf_token}" }
-                        button { class: "nav-btn nav-btn--secondary", r#type: "submit", "View as Client" }
+                    crate::components::dri_view::ViewAsClient {
+                        code: project.code.clone(), csrf: view.csrf_token.clone(), portal_link: view.client_preview_link.clone(),
                     }
                     crate::project_resources::ProjectResourcesPanel { view: view.resources.clone() }
                     div { class: "nav-form-notice", role: "note",
