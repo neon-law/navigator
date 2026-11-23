@@ -138,6 +138,7 @@ folder even when it is empty:
 | `documents/Client Production/Agreements/` | The client's executed private agreements | `agreement` |
 | `documents/Client Production/Screenshots/` | Screenshots the client supplied | none |
 | `documents/Correspondence (Served)/` | Letters served or received | `letter` |
+| `documents/Mail (Correspondence)/` | Original filed email messages | explicit folder set by `mail parse` |
 | `documents/Discovery (Served)/` | Discovery served or received | none; a pointer names it with `folder:` |
 | `documents/Docket Filings/` | Court paper and docket ingest | `pleading`, `filing` |
 | `documents/Court Rules/` | Local rules and standing orders | none |

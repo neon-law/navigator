@@ -30,6 +30,8 @@ folder follows from `kind`: `exhibit` → Client Production, `letter` → Corres
 Production/Screenshots` subfolders (LAW-215) hold their documents only where a pointer's `folder:` names them or a
 migration filed them there; no `kind` maps to them by default.
 
+The `Mail (Correspondence)` folder holds original .eml messages.
+
 The Project page shows the same layout. A lawyer sees every Matter Folder, empty ones included, with each document at
 its path below `documents/`. A client sees only the documents shared with them, each once as its newest shared revision,
 under only the folders that hold one. The page reads the live Document's folder and falls back to its kind's default.

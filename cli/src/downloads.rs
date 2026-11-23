@@ -302,7 +302,7 @@ fn parse_where_froms(raw: &str) -> Option<Vec<String>> {
 
 /// The sha256 of a file, read in bounded chunks so a large attachment never
 /// sits whole in memory.
-fn file_sha256(path: &Path) -> Result<String> {
+pub(crate) fn file_sha256(path: &Path) -> Result<String> {
     let mut file = std::fs::File::open(path).with_context(|| format!("read {}", path.display()))?;
     let mut hasher = sha2::Sha256::new();
     let mut buffer = vec![0u8; 64 * 1024];

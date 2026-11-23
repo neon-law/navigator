@@ -2232,6 +2232,49 @@ fn tracked_file_admitted(relative: &str) -> bool {
     })
 }
 
+/// Ignored mail exists only on a working checkout. Match its bytes to a
+/// trackable pointer, including originals filed under a different name.
+fn validate_saved_mail(
+    root: &Path,
+    files: &[PathBuf],
+    errors: &mut Vec<Finding>,
+) -> anyhow::Result<()> {
+    let mail = root.join(MAIL_DIRECTORY);
+    if !mail.is_dir() {
+        return Ok(());
+    }
+    let mut hashes = std::collections::HashSet::new();
+    for path in files
+        .iter()
+        .filter(|p| p.starts_with(root.join(POINTER_DIRECTORY)))
+    {
+        let Some(slug) = crate::document_sync::slug_for_pointer(path.strip_prefix(root)?) else {
+            continue;
+        };
+        if slug
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("eml"))
+        {
+            if let Some(pointer) = crate::document_sync::read_pointer(path)? {
+                hashes.insert(pointer.current_version.sha256);
+            }
+        }
+    }
+    for entry in walkdir::WalkDir::new(mail).follow_root_links(false) {
+        let entry = entry?;
+        let path = entry.path();
+        if entry.file_type().is_file()
+            && path
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("eml"))
+            && !hashes.contains(&crate::downloads::file_sha256(path)?)
+        {
+            errors.push(Finding::at(path, "saved .eml has no matching document pointer; file it with navigator mail parse and include the pointer under blobs/"));
+        }
+    }
+    Ok(())
+}
+
 /// Hold every git-tracked or stageable file to [`TRACKED_FILE_CODE`], and
 /// each present [`CANONICAL_TRACKED_FILES`] entry to its canonical bytes.
 /// Local `project gate` writes a drifted `.gitignore` or `.gitattributes`
@@ -2252,6 +2295,12 @@ fn validate_tracked_files(
             return;
         }
     };
+    if let Err(error) = validate_saved_mail(root, &files, errors) {
+        errors.push(Finding::at(
+            root.join(MAIL_DIRECTORY),
+            format!("check saved mail: {error:#}"),
+        ));
+    }
     for path in files {
         let Ok(relative) = path.strip_prefix(root) else {
             continue;
@@ -5241,6 +5290,31 @@ jobs:
              sha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n  \
              size_bytes: 42\n"
         )
+    }
+
+    #[test]
+    fn saved_mail_requires_a_trackable_pointer_to_the_same_bytes() {
+        let repo = tempfile::tempdir().unwrap();
+        let root = repo.path();
+        fs::create_dir(root.join("mail")).unwrap();
+        fs::create_dir(root.join("blobs")).unwrap();
+        let eml = root.join("mail/2026.10.30_request.eml");
+        fs::write(&eml, b"synthetic message").unwrap();
+        let mut errors = Vec::new();
+        super::validate_saved_mail(root, &[], &mut errors).unwrap();
+        assert_eq!(errors.len(), 1);
+        let pointer = root.join("blobs/saved.eml.yaml");
+        let mut parsed =
+            model::document_pointers::DocumentPointer::from_yaml(&pointer_yaml("internal"))
+                .unwrap();
+        parsed.current_version.sha256 = model::documents::sha256_hex(b"synthetic message");
+        fs::write(&pointer, parsed.to_yaml().unwrap()).unwrap();
+        errors.clear();
+        super::validate_saved_mail(root, std::slice::from_ref(&pointer), &mut errors).unwrap();
+        assert!(errors.is_empty());
+        fs::write(eml, b"different message").unwrap();
+        super::validate_saved_mail(root, &[pointer], &mut errors).unwrap();
+        assert_eq!(errors.len(), 1);
     }
 
     fn client_visibility_warnings(root: &Path) -> Vec<String> {

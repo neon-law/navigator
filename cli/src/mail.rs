@@ -20,6 +20,7 @@ pub mod attachments;
 mod login;
 mod packet;
 mod signature;
+mod source;
 
 const GMAIL_API: &str = "https://gmail.googleapis.com/gmail/v1";
 const GOOGLE_TOKEN_API: &str = "https://oauth2.googleapis.com/token";
@@ -47,8 +48,8 @@ const PARSE_HELP: &str = "\
 How a local .eml files:
   The message is parsed locally, then its bytes travel through the document
   lane into object storage — never inside the filing request. The full raw
-  message files as a matter document (mail/<message ref>/source,
-  message/rfc822), each attachment as one under mail/<message ref>/<index>,
+  message files as an internal matter document with a dated .eml pointer in
+  the Project checkout. Each attachment files as one under mail/<message ref>/<index>,
   and the Communication request carries only headers, text, and references
   to those documents. Re-filing the same message dedups: already-held
   documents are reused, and the Communication reports deduped instead of
@@ -261,6 +262,12 @@ pub enum MailAction {
         /// a Gmail message or local .eml, filed internal. Defaults to `letter`.
         #[arg(long, value_parser = crate::parse_asset_kind)]
         kind: Option<String>,
+        /// Visibility of the original local .eml document. Defaults to internal.
+        #[arg(long, value_parser = crate::commands::parse_document_visibility)]
+        visibility: Option<String>,
+        /// Gmail thread ID for a local .eml saved without thread metadata.
+        #[arg(long)]
+        gmail_thread_id: Option<String>,
     },
     /// Save a Gmail message's .eml copy under the git-ignored mail/ folder.
     Save {
@@ -721,6 +728,8 @@ struct GmailThread {
 
 #[derive(Debug, Deserialize)]
 struct RawGmailMessage {
+    #[serde(rename = "threadId")]
+    thread_id: Option<String>,
     /// URL-safe base64 of the complete RFC 822 message.
     raw: Option<String>,
 }
@@ -2167,6 +2176,8 @@ async fn run_inner(action: MailAction) -> Result<()> {
             .await
         }
         MailAction::Parse {
+            visibility,
+            gmail_thread_id,
             reference,
             project,
             host,
@@ -2177,6 +2188,8 @@ async fn run_inner(action: MailAction) -> Result<()> {
                 project.as_deref(),
                 host.as_deref(),
                 kind.as_deref(),
+                visibility.as_deref(),
+                gmail_thread_id.as_deref(),
             )
             .await
         }
@@ -2915,9 +2928,28 @@ async fn parse_command(
     project: Option<&str>,
     host: Option<&str>,
     kind: Option<&str>,
+    visibility: Option<&str>,
+    thread_id: Option<&str>,
 ) -> Result<()> {
-    if Path::new(reference).exists() {
-        return parse_local_file(reference, project, host, kind).await;
+    let path = Path::new(reference);
+    if (visibility.is_some() || thread_id.is_some())
+        && !(path.is_file()
+            && path
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("eml")))
+    {
+        anyhow::bail!("--visibility and --gmail-thread-id apply only to a local .eml");
+    }
+    if path.exists() {
+        return parse_local_file(
+            reference,
+            project,
+            host,
+            kind,
+            visibility.unwrap_or("internal"),
+            thread_id,
+        )
+        .await;
     }
     let message_id = gmail_message_id(reference).ok_or_else(|| {
         unresolved_reference_or(
@@ -3050,6 +3082,8 @@ async fn parse_local_file(
     project: Option<&str>,
     host: Option<&str>,
     kind: Option<&str>,
+    visibility: &str,
+    thread_id: Option<&str>,
 ) -> Result<()> {
     let local = crate::projects::manifest::read(Path::new("."));
     let project_code = project
@@ -3061,7 +3095,7 @@ async fn parse_local_file(
         .extension()
         .is_some_and(|extension| extension.eq_ignore_ascii_case("eml"))
     {
-        return parse_eml_file(path, project_code, host, kind).await;
+        return parse_eml_file(path, project_code, host, kind, visibility, thread_id).await;
     }
     println!("Uploading {} as a {kind} document", path.display());
     let exit = crate::remote::document_upload(
@@ -3090,13 +3124,27 @@ async fn parse_eml_file(
     project_code: &str,
     host: Option<&str>,
     kind: &str,
+    visibility: &str,
+    thread_id: Option<&str>,
 ) -> Result<()> {
-    let local = crate::projects::manifest::read(Path::new("."));
-    let host = host.or_else(|| local.as_ref().and_then(|m| m.host.as_deref()));
-    let (base, navigator_token) = crate::remote::resolve(host)?;
-    let project_id =
-        crate::projects::surfaces::resolve_project_id(&base, &navigator_token, project_code)
-            .await?;
+    let target = crate::upload_slug::resolve(Path::new("."), project_code, path, None)?;
+    let manifest = crate::projects::manifest::read(&target.root);
+    let checkout = manifest
+        .as_ref()
+        .filter(|m| m.project.as_deref() == Some(project_code));
+    if let (Some(explicit), Some(declared)) = (host, checkout.and_then(|m| m.host.as_deref())) {
+        anyhow::ensure!(
+            crate::credentials::base_url(explicit) == crate::credentials::base_url(declared),
+            "the selected host differs from the Project checkout"
+        );
+    }
+    let host = host.or_else(|| manifest.as_ref().and_then(|m| m.host.as_deref()));
+    let source = source::SourceFile {
+        path,
+        visibility,
+        thread_id,
+        checkout: checkout.map(|_| target.root.as_path()),
+    };
     let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
     // Parse client-side first: nothing that cannot file (not MIME, no date,
     // no body) reaches the network, and no request below ever carries the
@@ -3105,16 +3153,7 @@ async fn parse_eml_file(
     let parsed = parse_eml_for_filing(&bytes)
         .ok_or_else(|| anyhow!("{} is not a fileable email message", path.display()))?;
     let client = crate::remote::DocumentClient::connect(host, project_code).await?;
-    let filed = upload_and_file_eml(
-        &client,
-        &base,
-        &navigator_token,
-        project_id,
-        &parsed,
-        &bytes,
-        kind,
-    )
-    .await?;
+    let filed = upload_and_file_eml(&client, &source, &parsed, &bytes, kind).await?;
     let summary = eml_filing_summary(&filed);
     println!("Filed {} as a Communication", path.display());
     if summary.deduped {
@@ -3139,9 +3178,7 @@ async fn parse_eml_file(
 /// headers, text, `source_ref`, and the document references.
 async fn upload_and_file_eml(
     client: &crate::remote::DocumentClient,
-    base: &str,
-    navigator_token: &str,
-    project_id: Uuid,
+    source: &source::SourceFile<'_>,
     parsed: &ParsedEmlFile,
     bytes: &[u8],
     kind: &str,
@@ -3156,21 +3193,8 @@ async fn upload_and_file_eml(
         "received_at": parsed.occurred_at,
         "subject": parsed.subject,
     });
-    let source_pointer = client
-        .upload_bytes_with_details(
-            &format!("{slug_ref}.eml"),
-            bytes,
-            kind,
-            None,
-            None,
-            Some("message/rfc822"),
-            Some(&format!("mail/{slug_ref}/source.eml")),
-            None,
-            None,
-            None,
-            &crate::remote::DocumentExecution::default(),
-            Some(provenance.clone()),
-        )
+    let (source_slug, source_pointer) = source
+        .upload(client, parsed, bytes, kind, provenance.clone())
         .await?;
     let mut attachment_ids = Vec::with_capacity(parsed.attachments.len());
     for (index, attachment) in parsed.attachments.iter().enumerate() {
@@ -3208,9 +3232,11 @@ async fn upload_and_file_eml(
         "text_body": parsed.body,
         "occurred_at": parsed.occurred_at,
     });
+    let base = client.base();
+    let project_id = client.project_id();
     let response = reqwest::Client::new()
         .post(format!("{base}/app/api/projects/{project_id}/mail/eml"))
-        .bearer_auth(navigator_token)
+        .bearer_auth(client.token())
         .json(&request)
         .timeout(std::time::Duration::from_secs(30))
         .send()
@@ -3219,7 +3245,13 @@ async fn upload_and_file_eml(
     if !response.status().is_success() {
         return Err(refused("file the .eml", response).await);
     }
-    response.json().await.context("read the door's response")
+    let filed = response.json().await.context("read the door's response")?;
+    if let Some(root) = source.checkout {
+        let path =
+            crate::document_sync::write_uploaded_pointer(root, &source_slug, &source_pointer)?;
+        println!("Filed pointer {}", path.display());
+    }
+    Ok(filed)
 }
 
 /// One local `.eml` parsed for filing — the shape the reference request
@@ -3227,6 +3259,7 @@ async fn upload_and_file_eml(
 /// (`portal/src/eml_filing.rs`) field for field, so the same message files
 /// to the same Communication through either variant during the transition.
 struct ParsedEmlFile {
+    gmail_thread: Option<String>,
     /// `<Message-ID>` without the angle brackets, else the content digest.
     message_ref: String,
     /// `eml:<message_ref>`, the id the message dedups on.
@@ -3303,7 +3336,13 @@ fn parse_eml_for_filing(raw: &[u8]) -> Option<ParsedEmlFile> {
     if body.is_empty() && attachments.is_empty() {
         return None;
     }
+    let gmail_thread = message
+        .headers()
+        .iter()
+        .find(|h| h.raw_name().eq_ignore_ascii_case("X-GM-THRID"))
+        .map(|h| String::from_utf8_lossy(h.raw_value()).trim().to_owned());
     Some(ParsedEmlFile {
+        gmail_thread,
         source_ref: format!("eml:{message_ref}"),
         message_ref,
         from,
@@ -3541,7 +3580,14 @@ async fn save_message_command(
         conventional_mail_name(&sent_on, message.subject().unwrap_or(""))
     };
     let path = dir.unwrap_or_else(|| Path::new(MAIL_DIRECTORY)).join(&name);
-    match write_saved_mail(&path, &raw)? {
+    let saved = write_saved_mail(&path, &raw)?;
+    if let Some(id) = raw_field.thread_id {
+        write_saved_mail(
+            &source::thread_receipt(&path, &model::documents::sha256_hex(&raw)),
+            id.as_bytes(),
+        )?;
+    }
+    match saved {
         SavedMail::Written => println!("Saved {}", path.display()),
         SavedMail::AlreadySaved => println!("Already saved: {}", path.display()),
     }
@@ -5891,9 +5937,16 @@ see docs/mail-cli.md#provision-gmail-for-navigator-mail."
 
     #[tokio::test]
     async fn parse_save_and_file_references_are_named_when_unusable() {
-        let error = parse_command("definitely-absent-reference.txt", Some("p"), None, None)
-            .await
-            .unwrap_err();
+        let error = parse_command(
+            "definitely-absent-reference.txt",
+            Some("p"),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap_err();
         assert!(
             error
                 .to_string()
@@ -6011,49 +6064,7 @@ see docs/mail-cli.md#provision-gmail-for-navigator-mail."
         assert!(!error.contains("secret echo"), "{error}");
     }
 
-    #[tokio::test]
-    async fn a_reference_filing_uploads_documents_and_files_only_references() {
-        use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let server = MockServer::start().await;
-        let project_id = Uuid::now_v7();
-        let client = crate::remote::DocumentClient::for_check_tests(server.uri(), project_id);
-        let documents_door = format!("/app/api/projects/{project_id}/documents");
-        let eml_door = format!("/app/api/projects/{project_id}/mail/eml");
-        let pointer = |bytes: &[u8]| {
-            json!({
-                "kind": "letter",
-                "visibility": "internal",
-                "current_version": {
-                    "version": 1,
-                    "asset_id": Uuid::now_v7(),
-                    "created_at": "2026-11-20T12:00:00Z",
-                    "sha256": model::documents::sha256_hex(bytes),
-                    "size_bytes": bytes.len()
-                }
-            })
-        };
-        Mock::given(method("POST"))
-            .and(path(&documents_door))
-            .respond_with(ResponseTemplate::new(201).set_body_json(pointer(b"x")))
-            .mount(&server)
-            .await;
-        Mock::given(method("POST"))
-            .and(path(&eml_door))
-            .respond_with(ResponseTemplate::new(201).set_body_json(json!({
-                "source_ref": "eml:signing-1@example.test",
-                "direction": "inbound",
-                "deduped": false,
-                "communication_id": Uuid::now_v7(),
-                "attachments": [],
-                "filed": [],
-                "skipped": []
-            })))
-            .mount(&server)
-            .await;
-
-        let raw = b"\
+    const SIGNING_QUESTION: &[u8] = b"\
 From: Client <client@example.test>\r\n\
 To: Lawyer <lawyer@example.test>\r\n\
 Subject: Signing question\r\n\
@@ -6071,24 +6082,85 @@ Content-Disposition: attachment; filename=\"retainer.pdf\"\r\n\
 \r\n\
 PDF-BYTES\r\n\
 --BOUND--\r\n";
+
+    #[tokio::test]
+    async fn a_reference_filing_uploads_documents_and_files_only_references() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let project_id = Uuid::now_v7();
+        let client = crate::remote::DocumentClient::for_check_tests(server.uri(), project_id);
+        let documents_door = format!("/app/api/projects/{project_id}/documents");
+        let eml_door = format!("/app/api/projects/{project_id}/mail/eml");
+        let raw = SIGNING_QUESTION;
+        let revision = json!({
+            "asset_id": Uuid::now_v7(), "version": 1, "created_at": "2026-11-20T12:00:00Z",
+            "sha256": model::documents::sha256_hex(raw), "size_bytes": raw.len()
+        });
+        let source_response =
+            json!({"kind":"letter","visibility":"internal","current_version":revision});
+        let mut revision = revision;
+        revision["filename"] = json!("message.eml");
+        revision["operative"] = json!(true);
+        Mock::given(method("GET"))
+            .and(path(format!("{documents_door}/revisions")))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"kind":"letter", "revisions":[revision]})),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(&documents_door))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+            .mount(&server)
+            .await;
+        Mock::given(method("PATCH"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(&documents_door))
+            .respond_with(ResponseTemplate::new(201).set_body_json(source_response))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(&eml_door))
+            .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+                "source_ref": "eml:signing-1@example.test",
+                "direction": "inbound",
+                "deduped": false,
+                "communication_id": Uuid::now_v7(),
+                "attachments": [],
+                "filed": [],
+                "skipped": []
+            })))
+            .mount(&server)
+            .await;
+
         let parsed = parse_eml_for_filing(raw).expect("the message parses");
         assert_eq!(parsed.attachments.len(), 1);
-        upload_and_file_eml(
-            &client,
-            &server.uri(),
-            "navigator-token",
-            project_id,
-            &parsed,
-            raw,
-            "letter",
-        )
-        .await
-        .unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("2025.10.09_Signing question.eml");
+        let receipt = source::thread_receipt(&path, &model::documents::sha256_hex(raw));
+        write_saved_mail(&receipt, b"abc123").unwrap();
+        let source = source::SourceFile {
+            path: &path,
+            checkout: Some(root.path()),
+            visibility: "internal",
+            thread_id: None,
+        };
+        upload_and_file_eml(&client, &source, &parsed, raw, "letter")
+            .await
+            .unwrap();
 
         let requests = server.received_requests().await.unwrap();
         let document_bodies: Vec<serde_json::Value> = requests
             .iter()
-            .filter(|request| request.url.path() == documents_door)
+            .filter(|request| {
+                request.method.as_str() == "POST" && request.url.path() == documents_door
+            })
             .map(|request| serde_json::from_slice(&request.body).unwrap())
             .collect();
         assert_filed_eml_documents(&document_bodies, &parsed);
@@ -6101,15 +6173,32 @@ PDF-BYTES\r\n\
             .expect("one filing request");
         let filing_body: serde_json::Value = serde_json::from_slice(&filing.body).unwrap();
         assert_reference_filing_body(&filing_body);
+        let blob = root
+            .path()
+            .join("blobs/mail/signing-1-example.test/2025.10.09_signing-question.eml.yaml");
+        let pointer = crate::document_sync::read_pointer(&blob).unwrap().unwrap();
+        assert_eq!(
+            pointer.current_version.asset_id.to_string(),
+            filing_body["source_document"]
+        );
+        assert_eq!(
+            pointer.evidence.unwrap().source.as_deref(),
+            Some("Gmail thread abc123")
+        );
+        assert_eq!(pointer.folder.unwrap().as_str(), "Mail (Correspondence)");
     }
 
     fn assert_filed_eml_documents(bodies: &[serde_json::Value], parsed: &ParsedEmlFile) {
         assert_eq!(bodies.len(), 2, "source plus one attachment");
         let source = bodies
             .iter()
-            .find(|body| body["slug"] == "mail/signing-1-example.test/source.eml")
+            .find(|body| {
+                body["slug"] == "mail/signing-1-example.test/2025.10.09_signing-question.eml"
+            })
             .expect("the raw message files as the source document");
         assert_eq!(source["content_type"], "message/rfc822");
+        assert_eq!(source["visibility"], "internal");
+        assert_eq!(source["evidence"]["source"], "Gmail thread abc123");
         assert_eq!(source["mail_provenance"]["message_id"], parsed.source_ref);
         assert_eq!(
             source["mail_provenance"]["subject"],
@@ -6757,7 +6846,7 @@ Can I sign electronically?\r\n\
         let pdf = directory.path().join("letter.pdf");
         std::fs::write(&pdf, b"%PDF-1.4").unwrap();
         for path in [&eml, &pdf] {
-            let error = parse_command(path.to_str().unwrap(), None, None, None)
+            let error = parse_command(path.to_str().unwrap(), None, None, None, None, None)
                 .await
                 .unwrap_err();
             assert!(error.to_string().contains("pass --project"), "{error}");

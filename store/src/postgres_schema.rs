@@ -1748,6 +1748,7 @@ mod tests {
             ("20261122180000_personal_project.sql", include_str!("../postgres/migrations/20261122180000_personal_project.sql")),
             ("20261123003000_project_envelope.sql", include_str!("../postgres/migrations/20261123003000_project_envelope.sql")),
             ("20261123010000_firm_secret_mode.sql", include_str!("../postgres/migrations/20261123010000_firm_secret_mode.sql")),
+            ("20261123054600_add_mail_project_folder_slot.sql", include_str!("../postgres/migrations/20261123054600_add_mail_project_folder_slot.sql")),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

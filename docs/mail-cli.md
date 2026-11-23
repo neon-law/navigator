@@ -248,7 +248,12 @@ makes for a whole thread, but for a single message the lawyer points at:
 - **Local .eml.** A path to a saved .eml files from its own bytes: headers, Date, and body come from the message, and
   the Message-ID header (or a content digest when the message has none) scopes the source reference so re-filing the
   same .eml dedupes. A message from the signed-in lawyer's own address files as outbound, whoever it went to; any other
-  files as inbound. Each attachment files as a document of kind `letter` (`--kind` overrides).
+  files as inbound. Each attachment files as a document of kind `letter` (`--kind` overrides). In the Project checkout,
+  parse writes the original message’s dated pointer under `blobs/mail/`. Include it in the Project pull request so
+  another checkout can sync the original into `documents/Mail (Correspondence)/`. The original defaults to internal.
+  Explicit `--visibility client` shares the full original, including embedded attachments. The evidence source
+  identifies the Gmail thread from the save receipt or the message’s `X-GM-THRID` header. For an older saved copy, pass
+  a verified `--gmail-thread-id`. Without a thread ID, the pointer records the message reference.
 - **PDF or any other file.** Any other local path rides the existing `navigator document upload` lane as a document,
   defaulting to kind `letter` (`--kind` overrides; the asset-lane kinds are accepted), visibility `internal`.
 
