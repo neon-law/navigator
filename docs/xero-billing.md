@@ -37,6 +37,11 @@ distinct from the platform. A dedicated Nevada credential uses `dedicated_nevada
 and the Firm's `STRIPE_NEVADA_APP_KEY`. Its authenticated account ID must match the registered destination. Staging
 accepts sandbox credentials. Production accepts live credentials.
 
+On GKE, the deployment-owned `navigator-stripe-routing` ConfigMap supplies these settings to the web issuer. Set
+`operating` and `nevada` to `1` to enable their respective routes. Omit a switch to disable it. The `trust-routes` entry
+contains the Firm and state destinations described above. Restart the web deployment after changing this ConfigMap.
+Store each account's provider key through Firm integration secrets.
+
 Navigator creates an unsent draft on the authenticated Stripe account and reserves the underlying work for review. The
 billing batch retains the account and invoice identity so a retry cannot silently move to a different account. A Stripe
 draft does not create a Xero receivable or settle time and expenses. The Stripe path does not collect payments or
