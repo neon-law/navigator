@@ -4957,25 +4957,31 @@ async fn prefill_from_saved_answers(
     loop {
         let step = fetch_step(client, base, token, notation_id).await?;
         let Some(question) = step.question else {
-            if answered == 0 {
-                // Every answer is already filed. A completion an earlier
-                // fill could not carry to review resumes here; the server
-                // drives a notation still at BEGIN exactly once.
-                let resp = client
-                    .post(format!("{base}/app/lawyer/notations/{notation_id}/step"))
-                    .bearer_auth(token)
-                    .form(&[("_nav_action", "resume")])
-                    .send()
-                    .await
-                    .context("POST step (resume)")?;
-                let status = resp.status();
-                if !status.is_success() && !status.is_redirection() && status.as_u16() != 422 {
-                    let body = resp.text().await.unwrap_or_default();
-                    return Err(anyhow!(
-                        "the questionnaire is complete but did not reach lawyer review: {}",
-                        server_error(status, &body),
-                    ));
-                }
+            if answered > 0 {
+                println!(
+                    "{} {} questions prefilled from the answers file",
+                    palette::dim("prefilled"),
+                    palette::highlight(answered.to_string()),
+                );
+                return Ok(());
+            }
+            // Every answer is already filed. A completion an earlier fill
+            // could not carry to review resumes here; the server drives a
+            // notation still at BEGIN exactly once.
+            let resp = client
+                .post(format!("{base}/app/lawyer/notations/{notation_id}/step"))
+                .bearer_auth(token)
+                .form(&[("_nav_action", "resume")])
+                .send()
+                .await
+                .context("POST step (resume)")?;
+            let status = resp.status();
+            if !status.is_success() && !status.is_redirection() && status.as_u16() != 422 {
+                let body = resp.text().await.unwrap_or_default();
+                return Err(anyhow!(
+                    "the questionnaire is complete but did not reach lawyer review: {}",
+                    server_error(status, &body),
+                ));
             }
             let state = fetch_status(base, token, notation_id).await?.state;
             if state == "BEGIN" {
@@ -4984,9 +4990,8 @@ async fn prefill_from_saved_answers(
                 ));
             }
             println!(
-                "{} {} questions prefilled from the answers file — state {}",
-                palette::dim("prefilled"),
-                palette::highlight(answered.to_string()),
+                "{} every question was already answered — state {}",
+                palette::dim("resumed"),
                 palette::highlight(&state),
             );
             return Ok(());
@@ -10357,7 +10362,6 @@ mod tests {
             .expect(1)
             .mount(&server)
             .await;
-        mount_review_state(&server, second, "lawyer_review").await;
 
         // Prefill half: open the second notation from the saved file.
         assert_eq!(
