@@ -180,16 +180,15 @@ pub(crate) async fn daily_billing(
         return not_found_response();
     };
     let brand = brand.map(|Extension(b)| b).unwrap_or_default();
-    let projects = match store::access::visible_lawyer_projects_for_brand(
+    let Ok(projects) = store::access::visible_lawyer_projects_for_brand(
         &db,
         actor.person_id,
         actor.role,
         brand.as_str(),
     )
     .await
-    {
-        Ok(projects) => projects,
-        Err(_) => return axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    else {
+        return axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     let Some(project) = projects.into_iter().find(|p| p.code == form.project) else {
         return not_found_response();
