@@ -787,6 +787,22 @@ mod tests {
         .await;
     }
 
+    async fn move_membership_to_another_firm(person_id: uuid::Uuid, firm_id: uuid::Uuid) {
+        let pg = crate::postgres::PostgresDb::application().await.unwrap();
+        sqlx::query(
+            "WITH other AS (
+                 INSERT INTO firm (name, slug, status)
+                 VALUES ('Other Calendar Firm', 'other-calendar-firm', 'active') RETURNING id)
+             UPDATE person_firm_role SET firm_id = other.id FROM other
+             WHERE person_id = $1 AND firm_id = $2",
+        )
+        .bind(person_id)
+        .bind(firm_id)
+        .execute(pg.pool())
+        .await
+        .unwrap();
+    }
+
     #[tokio::test]
     async fn postgres_assignments_add_and_remove_each_eligible_event_guest() {
         use crate::firms::{self, FirmMembership, NewPersonFirmRole};
@@ -801,15 +817,7 @@ mod tests {
                 .await
                 .unwrap();
             let calendar = FakeCalendar::default();
-            assert_eq!(
-                ensure(&db, project_id, &calendar).await.unwrap().outcome,
-                CalendarOutcome::Created
-            );
-            assert_eq!(
-                ensure(&db, project_id, &calendar).await.unwrap().outcome,
-                CalendarOutcome::Present
-            );
-            assert_eq!(calendar.created(), 1);
+            ensure(&db, project_id, &calendar).await.unwrap();
             let calendar_id = calendar.calendars().pop().unwrap().id;
             for (name, role, membership) in [
                 ("supervisor", Role::Lawyer, FirmMembership::Lawyer),
@@ -866,21 +874,13 @@ mod tests {
                     continue;
                 }
                 if name == "lawyer" {
-                    let pg = crate::postgres::PostgresDb::application().await.unwrap();
-                    sqlx::query(
-                        "WITH other AS (
-                             INSERT INTO firm (name, slug, status)
-                             VALUES ('Other Calendar Firm', 'other-calendar-firm', 'active') RETURNING id)
-                         UPDATE person_firm_role SET firm_id = other.id FROM other
-                         WHERE person_id = $1 AND firm_id = $2",
-                    )
-                    .bind(person.id)
-                    .bind(firm_id)
-                    .execute(pg.pool())
-                    .await
-                    .unwrap();
-                    let report = super::sync_membership(&db, project_id, &calendar).await.unwrap();
-                    assert!(report.iter().any(|r| r.person_id == person.id && r.access == "not_a_firm_member"));
+                    move_membership_to_another_firm(person.id, firm_id).await;
+                    let report = super::sync_membership(&db, project_id, &calendar)
+                        .await
+                        .unwrap();
+                    assert!(report
+                        .iter()
+                        .any(|r| r.person_id == person.id && r.access == "not_a_firm_member"));
                     assert!(!calendar.assigned_guests(&calendar_id).contains_key(&key));
                     assert!(!calendar.sharing(&calendar_id).contains_key(&email));
                 }

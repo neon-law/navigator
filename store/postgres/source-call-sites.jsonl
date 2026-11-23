@@ -6682,8 +6682,8 @@
 {"file":"store/src/project_calendar.rs","line":707,"function":"a_closed_calendar_waits_for_an_archive_covering_its_latest_events","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
 {"file":"store/src/project_calendar.rs","line":707,"function":"a_closed_calendar_waits_for_an_archive_covering_its_latest_events","operation":"query","sql_operations":["UPDATE"],"tables":["project"],"transaction":false}
 {"file":"store/src/project_calendar.rs","line":711,"function":"a_closed_calendar_waits_for_an_archive_covering_its_latest_events","operation":"query_scalar","sql_operations":["SELECT"],"tables":[],"transaction":false}
-{"file":"store/src/project_calendar.rs","line":870,"function":"postgres_assignments_add_and_remove_each_eligible_event_guest","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
-{"file":"store/src/project_calendar.rs","line":870,"function":"postgres_assignments_add_and_remove_each_eligible_event_guest","operation":"query","sql_operations":["INSERT","UPDATE"],"tables":["firm","person_firm_role"],"transaction":false}
+{"file":"store/src/project_calendar.rs","line":792,"function":"move_membership_to_another_firm","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
+{"file":"store/src/project_calendar.rs","line":792,"function":"move_membership_to_another_firm","operation":"query","sql_operations":["INSERT","UPDATE"],"tables":["firm","person_firm_role"],"transaction":false}
 {"file":"store/src/project_calendar.rs","line":1035,"function":"a_deleted_recorded_calendar_is_reported_not_replaced","operation":"delete","sql_operations":[],"tables":[],"transaction":false}
 {"file":"store/src/project_calendar.rs","line":1094,"function":"setup_on_a_closed_matter_stays_read_only","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
 {"file":"store/src/project_calendar.rs","line":1094,"function":"setup_on_a_closed_matter_stays_read_only","operation":"query","sql_operations":["UPDATE"],"tables":["project"],"transaction":false}
