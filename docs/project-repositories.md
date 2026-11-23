@@ -1234,8 +1234,8 @@ it. When both exist, choose the root with `--dir <path>`. `navigator project cre
 --resume` sync new checkouts through this resolver; scaffold's `--dir` still selects its repository destination.
 `navigator sync`, `project create`, and `project watch` accept `--dir` for the root, and watch defaults to it. Each
 clone includes the Project's committed Agent Skills under `.agents/skills/`. `sync --dry-run` reports checkout presence
-separately from whether a source repository is configured. It does not contact a forge, create the root, or change
-files. A failed checkout leaves the opened Project available for a sync retry.
+separately from whether a source repository is configured, and the workspace drift below. It does not contact a forge,
+create the root, or change files. A failed checkout leaves the opened Project available for a sync retry.
 
 Missing repositories are cloned with `jj git clone --colocate`. Clean existing Git directories are colocated with jj; a
 directory with local edits is left in place. Sync checks the Project and host in the manifest, configures the secondary
@@ -1243,6 +1243,31 @@ Forgejo remote and both origin push destinations during the dual run, and fetche
 conflicts, unexpected remotes, or unsafe paths skip that Project and make the run fail after the other Projects are
 processed. Closed Project checkouts are reported and retained. Document hydration stays in `project sync` and `project
 watch`; one-shot sync handles source checkouts only.
+
+### The workspace root
+
+The same sync maintains the root around the checkouts in two layers:
+
+| Path | Holds | Owner |
+| -- | -- | -- |
+| `AGENTS.md` | Generic workspace rules | This release; a hand-written file is reported, never overwritten |
+| `.agents/skills/<skill>/` | `project_scaffold::WORKSPACE_SKILLS` | This release; `.navigator-owned` lists them |
+| `.firm/<firm-slug>/` | The Firm's [Firm Library](glossary/firm-library.md) checkout | The Firm |
+| `.agents/skills/<firm-slug>/<skill>` | Links into `.firm/<firm-slug>/skills/` | Sync |
+| `.claude/skills/` | Links to the generic skills and to `<firm-slug>-<skill>` | Sync |
+| `<code>/.claude/skills/` | Links to the generic skills plus that Project's Firm skills | Sync |
+
+Sync reads every checkout's `navigator.yaml`, groups them by `host`, and asks each host for the signed-in person's Firms
+and their Firm Library repositories (`GET /app/api/firm-libraries`). A checkout's Firm is its manifest `firm`, or the
+only Firm that host lists. Each Firm's library is cloned or fast-forwarded with `jj`; one with local edits is not moved.
+A Firm skill replaces the generic skill of the same name inside that Firm's checkouts, and sync reports the override. A
+checkout never links another Firm's skills.
+
+Each Firm fails closed alone: an unreadable host, a Firm with no library, or an unreachable repository is named under
+`missing:` while the generic layer and every other Firm still install. A Firm skill without a `SKILL.md`, or one naming
+a Project code in the workspace, is not linked. Removing a Firm's last checkout removes its library and links on the
+next sync, unless the library holds local edits. Sync owns only what it wrote: a local skill folder or a link it did not
+make stays.
 
 These are **source** roots. Git never stores legal files. Drive is an optional ingest dropbox read through its API, not
 the working-file store, and no workstation mount of it is read.

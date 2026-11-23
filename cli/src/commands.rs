@@ -123,7 +123,9 @@ enum Command {
         #[arg(long, hide = true)]
         ci: bool,
     },
-    /// Synchronize your participating open and pitch Project checkouts.
+    /// Synchronize your participating open and pitch Project checkouts, the
+    /// workspace `AGENTS.md`, the generic skills, and each of your Firms'
+    /// Firm Library skills.
     Sync {
         /// Target Navigator host.
         #[arg(long)]

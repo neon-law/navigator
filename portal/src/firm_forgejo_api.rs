@@ -6,6 +6,9 @@
 //! provisioning identity, so no person holds site administration. The forge
 //! work and the record are [`store::firms::forgejo_organization::provision`];
 //! this module only authorizes, opens PostgreSQL, and maps the outcome.
+//!
+//! `GET /app/api/firm-libraries` tells a signed-in Person where each of their
+//! Firms' Firm Library repositories lives on that Forgejo.
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -17,7 +20,7 @@ use store::firm_capability::FirmCapability;
 use store::firms::forgejo_organization::{self as organization, ProvisionError};
 use uuid::Uuid;
 
-use crate::api::{AdminSession, ApiError, ApiState};
+use crate::api::{AdminSession, ApiError, ApiState, AuthedSession};
 
 fn refused(status: StatusCode, error: &'static str, message: Option<&str>) -> Response {
     (
@@ -108,6 +111,28 @@ pub(crate) async fn provision(
             Err(error) => provision_error(&error, firm_id),
         },
     )
+}
+
+/// `GET /app/api/firm-libraries` — every Firm the caller belongs to, with
+/// the clone URL of its Firm Library on this deployment's Forgejo
+/// ([`store::firm_library::locations_for_person`]).
+pub(crate) async fn libraries(AuthedSession(session): AuthedSession) -> Result<Response, ApiError> {
+    if session.scope.is_some() {
+        return Err(ApiError::Forbidden);
+    }
+    let person_id = session.person_id.ok_or(ApiError::NotFound)?;
+    let Ok(pg) = store::postgres::PostgresDb::from_env().await else {
+        return Ok(refused(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "firm_libraries_require_postgresql",
+            None,
+        ));
+    };
+    let root = crate::forgejo_push_pipeline::forgejo_root_url_from_env();
+    let locations = store::firm_library::locations_for_person(&pg, person_id, root.as_deref())
+        .await
+        .map_err(|error| ApiError::Db(error.to_string()))?;
+    Ok(Json(locations).into_response())
 }
 
 #[cfg(test)]
@@ -228,5 +253,21 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         let firms: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(firms[0]["slug"], "example-law-pc", "{body}");
+    }
+
+    #[tokio::test]
+    async fn any_signed_in_person_reaches_the_firm_libraries_door() {
+        // The door reads PostgreSQL only; no SurrealDB engine answers here.
+        let db = store::surreal::test_support::unreachable();
+        let app = crate::router(crate::test_support::app_state(db).await);
+        let route = "/app/api/firm-libraries";
+
+        let (status, _) = send(&app, "GET", route, "").await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "no session");
+        // A client is admitted, not refused as a non-administrator; without
+        // PostgreSQL the door says so rather than answering an empty list.
+        let (status, body) = send(&app, "GET", route, &bearer(Uuid::now_v7(), Role::Client)).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+        assert!(body.contains("firm_libraries_require_postgresql"), "{body}");
     }
 }

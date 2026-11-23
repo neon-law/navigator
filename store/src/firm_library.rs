@@ -21,7 +21,7 @@
 use std::sync::Arc;
 
 use cloud::StorageService;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::surreal::SurrealDb;
@@ -272,6 +272,58 @@ pub async fn persist_draft(
     ))
 }
 
+/// Where one Firm's library lives, as a Person who belongs to that Firm
+/// reads it: the Firm's slug and the `https` clone URL of
+/// `<organization>/library` on this deployment's Forgejo.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Location {
+    pub slug: String,
+    /// `None` when the Firm has no recorded Forgejo organization or the
+    /// deployment has no Forgejo.
+    pub repository_url: Option<String>,
+}
+
+/// Every Firm `person_id` belongs to — a Firm role (`person_firm_role`) or
+/// participation in a Project the Firm owns (`project.firm_id`) — with its
+/// library's [`Location`], sorted by slug. No other Firm is ever listed.
+///
+/// `forgejo_root` is the deployment's Forgejo root URL
+/// (`NAVIGATOR_FORGEJO_ROOT_URL`); the organization is the Firm's own
+/// `firm_forgejo_organization` row.
+///
+/// # Errors
+/// A PostgreSQL failure.
+pub async fn locations_for_person(
+    pg: &crate::postgres::PostgresDb,
+    person_id: Uuid,
+    forgejo_root: Option<&str>,
+) -> Result<Vec<Location>, sqlx::Error> {
+    let rows: Vec<(String, Option<String>)> = sqlx::query_as(
+        "SELECT f.slug, o.organization FROM firm f \
+         LEFT JOIN firm_forgejo_organization o ON o.firm_id = f.id \
+         WHERE f.slug IS NOT NULL AND ( \
+           EXISTS (SELECT 1 FROM person_firm_role r WHERE r.firm_id = f.id AND r.person_id = $1) \
+           OR EXISTS (SELECT 1 FROM person_project_role pr JOIN project p ON p.id = pr.project_id \
+                      WHERE p.firm_id = f.id AND pr.person_id = $1)) \
+         ORDER BY f.slug",
+    )
+    .bind(person_id)
+    .fetch_all(pg.pool())
+    .await?;
+    let root = forgejo_root
+        .map(|root| root.trim().trim_end_matches('/'))
+        .filter(|root| !root.is_empty());
+    Ok(rows
+        .into_iter()
+        .map(|(slug, organization)| Location {
+            slug,
+            repository_url: root
+                .zip(organization)
+                .map(|(root, organization)| format!("{root}/{organization}/{REPOSITORY}.git")),
+        })
+        .collect())
+}
+
 /// [`sync`] against the process's configured repository store, for the
 /// matter-opening doors. Never an error: a process with no repository
 /// store yields `None`, as [`sync_or_default`] does for the rest.
@@ -509,5 +561,69 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+    }
+
+    // Needs a live PostgreSQL; self-skips without one.
+    #[tokio::test]
+    async fn a_person_lists_only_the_firms_they_belong_to_with_each_librarys_clone_url() {
+        let Some((options, database)) = crate::postgres_mirror::tests::fresh_schema().await else {
+            return;
+        };
+        let pg = crate::postgres_mirror::tests::connect(&options, &database).await;
+        let [member, participant, outsider, firm_a, firm_b, firm_c, entity] =
+            std::array::from_fn(|_| Uuid::now_v7());
+        // Firm A and Firm B each have an organization; `member` holds a Firm
+        // role in A only. `participant` holds no Firm role, only a Project of
+        // Firm C, which has no organization.
+        let seed = format!(
+            "INSERT INTO person (id,name,email) VALUES \
+               ('{member}','Synthetic Person','{member}@example.com'), \
+               ('{participant}','Synthetic Person','{participant}@example.com'), \
+               ('{outsider}','Synthetic Person','{outsider}@example.com'); \
+             INSERT INTO firm (id,name,slug,status) VALUES ('{firm_a}','example-a','example-a','active'), \
+               ('{firm_b}','example-b','example-b','active'), ('{firm_c}','example-c','example-c','active'); \
+             INSERT INTO firm_forgejo_organization (firm_id,organization,forgejo_id,owner_login) VALUES \
+               ('{firm_a}','example-a',1,'synthetic-owner'), ('{firm_b}','example-b',2,'synthetic-owner'); \
+             INSERT INTO person_firm_role (person_id,firm_id,membership) VALUES ('{member}','{firm_a}','lawyer'); \
+             INSERT INTO entity_type (id,name) VALUES ('{entity}','Synthetic Entity Type'); \
+             INSERT INTO jurisdiction (id,name) VALUES ('{entity}','Synthetic Jurisdiction'); \
+             INSERT INTO entity (id,name,entity_type_id,jurisdiction_id) \
+               VALUES ('{entity}','Synthetic Entity','{entity}','{entity}'); \
+             INSERT INTO project (id,code,name,status,entity_id,firm_id) \
+               VALUES ('{entity}','example-matter','Synthetic Matter','active','{entity}','{firm_c}'); \
+             INSERT INTO person_project_role (person_id,project_id,participation) \
+               VALUES ('{participant}','{entity}','client');"
+        );
+        sqlx::raw_sql(sqlx::AssertSqlSafe(seed))
+            .execute(pg.pool())
+            .await
+            .unwrap();
+
+        let root = Some("https://forge.example.test/");
+        assert_eq!(
+            locations_for_person(&pg, member, root).await.unwrap(),
+            vec![Location {
+                slug: "example-a".into(),
+                repository_url: Some("https://forge.example.test/example-a/library.git".into()),
+            }],
+            "a Firm A member never sees Firm B"
+        );
+        assert_eq!(
+            locations_for_person(&pg, participant, root).await.unwrap(),
+            vec![Location {
+                slug: "example-c".into(),
+                repository_url: None,
+            }],
+            "a Project participant sees the owning Firm; it has no organization"
+        );
+        assert!(locations_for_person(&pg, outsider, root)
+            .await
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            locations_for_person(&pg, member, None).await.unwrap()[0].repository_url,
+            None,
+            "no Forgejo configured"
+        );
     }
 }
