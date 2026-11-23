@@ -4152,6 +4152,15 @@ async fn inject_notation_preview(
         demo_questions: found.demo_questions.clone(),
         demo_workflow: found.demo_workflow.clone(),
         questionnaire_error: found.questionnaire_error.clone(),
+        // LAW-466: the published preview binds the Firm legal name this
+        // deployment's PDF prints — the same compiled registry `for_brand`
+        // reads. A doc that already carries one keeps it.
+        firm_legal_name: found.firm_legal_name.clone().or_else(|| {
+            let branding =
+                views::brand::brand_key().resolve_branding(&views::brand::DEFAULT_BRANDING);
+            let entity = branding.firm.legal_entity.trim();
+            (!entity.is_empty()).then(|| entity.to_string())
+        }),
     };
     req.extensions_mut()
         .insert(webapp::notation_preview::InjectedNotationPreview { content, mode });

@@ -80,6 +80,10 @@ pub fn QuestionnaireDemo(
     /// page already renders that document in its own section.
     #[props(default = true)]
     embed_document: bool,
+    /// The Firm's legal name the PDF render would bind (LAW-466), resolved
+    /// through the same Brand chain; `None` leaves the token to its wash.
+    #[props(default)]
+    firm_legal_name: Option<String>,
 ) -> Element {
     let Some(total) = std::num::NonZeroUsize::new(questions.len()) else {
         return rsx! {};
@@ -178,7 +182,7 @@ pub fn QuestionnaireDemo(
             section { class: "notation-template-body", "aria-label": "Template body",
                 h2 { "Body" }
                 div { class: "notation-live-template",
-                    dangerous_inner_html: "{render_live_template(&template_html, &questions, &answers.read())}"
+                    dangerous_inner_html: "{render_live_template(&template_html, &questions, &answers.read(), firm_legal_name.as_deref())}"
                 }
             }
         }
@@ -376,12 +380,17 @@ fn replace_unanswered(mut html: String, questions: &[DemoQuestion]) -> String {
 
 /// Render the same template on every answer change. Answer text is escaped
 /// before it reaches the template's already-rendered HTML.
+///
+/// `firm_legal_name` is the Firm's legal name the PDF render would bind
+/// (LAW-466), resolved through the same Brand chain; `None` leaves the
+/// token to its wash. An answer under `firm.legal_name` wins over it.
 pub(crate) fn render_live_template(
     template_html: &str,
     questions: &[DemoQuestion],
     answers: &BTreeMap<String, String>,
+    firm_legal_name: Option<&str>,
 ) -> String {
-    let context = preview_context(questions, answers);
+    let context = preview_context(questions, answers, firm_legal_name);
     let mut display: BTreeMap<String, String> = questions
         .iter()
         .filter_map(|question| {
@@ -408,6 +417,7 @@ pub(crate) fn render_live_template(
 fn preview_context(
     questions: &[DemoQuestion],
     answers: &BTreeMap<String, String>,
+    firm_legal_name: Option<&str>,
 ) -> BTreeMap<String, String> {
     let mut context: BTreeMap<String, String> = answers
         .iter()
@@ -429,6 +439,15 @@ fn preview_context(
                 context.insert(format!("{}.name", question.code), value.clone());
             }
         }
+    }
+    // The preview shows the name the PDF will print (LAW-466): the Firm's
+    // legal name bound from the same Brand resolution the render uses. With
+    // no resolvable Brand the key stays absent and the token washes — the
+    // same fallback the PDF body gets, never a separate warning.
+    if let Some(name) = firm_legal_name {
+        context
+            .entry("firm.legal_name".to_string())
+            .or_insert_with(|| name.to_string());
     }
     context
 }
@@ -666,8 +685,29 @@ mod tests {
             ..DemoQuestion::default()
         }];
         let answers = BTreeMap::from([("person__client".into(), "<Acme & Co>".into())]);
-        let rendered = render_live_template("Dear {{person__client.name}}", &questions, &answers);
+        let rendered =
+            render_live_template("Dear {{person__client.name}}", &questions, &answers, None);
         assert_eq!(rendered, "Dear &lt;Acme &amp; Co&gt;");
+    }
+
+    /// LAW-466: the preview binds `firm.legal_name` from the same Brand
+    /// resolution the PDF render uses, and when nothing resolves the key
+    /// stays absent — the token takes its wash, exactly as the PDF body's
+    /// unresolvable name does.
+    #[test]
+    fn firm_legal_name_is_bound_when_a_brand_resolves_and_absent_otherwise() {
+        let questions = Vec::new();
+        let answers = BTreeMap::new();
+        let template = "Sincerely,\n\n{{firm.legal_name}}";
+        let filled = render_live_template(template, &questions, &answers, Some("Guieb & Shook PC"));
+        assert!(filled.contains("Guieb &amp; Shook PC"), "{filled}");
+        assert!(!filled.contains("{{"), "{filled}");
+        let absent = render_live_template(template, &questions, &answers, None);
+        assert!(
+            absent.contains("notation-live-template__blank"),
+            "the token washes when no Brand resolves: {absent}"
+        );
+        assert!(!absent.contains("Guieb"), "{absent}");
     }
 
     fn interactive(answer_type: &str, prompt: &str, choices: Vec<(&str, &str)>) -> DemoQuestion {
@@ -702,6 +742,7 @@ mod tests {
                 questions,
                 template_html: String::new(),
                 embed_document: true,
+                firm_legal_name: None,
             },
         );
         dom.rebuild_in_place();
@@ -723,6 +764,7 @@ mod tests {
                 questions,
                 template_html: "<p>Hello</p>".to_string(),
                 embed_document: true,
+                firm_legal_name: None,
             },
         );
         dom.rebuild_in_place();
@@ -900,7 +942,7 @@ mod tests {
         let code = questions[0].code.clone();
         let token = format!("{{{{{code}}}}}");
         let template = ["Hello ", &token, ". {{#if ", &code, "}}Named.{{/if}}"].concat();
-        let empty = render_live_template(&template, &questions, &BTreeMap::new());
+        let empty = render_live_template(&template, &questions, &BTreeMap::new(), None);
         assert!(!empty.contains("{{"), "{empty}");
         assert!(!empty.contains("Named."), "{empty}");
         assert!(empty.contains("Client name"), "{empty}");
@@ -908,6 +950,7 @@ mod tests {
             &template,
             &questions,
             &BTreeMap::from([(code, "<Acme>".to_string())]),
+            None,
         );
         assert!(filled.contains("&lt;Acme&gt;"), "{filled}");
         assert!(filled.contains("Named."), "{filled}");
@@ -944,6 +987,7 @@ mod tests {
                 question.code,
                 r#"[{"product":"<script>","seats":"2"}]"#.to_string(),
             )]),
+            None,
         );
         assert!(filled.contains("&lt;script&gt;"), "{filled}");
         assert!(!filled.contains("<script>"), "{filled}");

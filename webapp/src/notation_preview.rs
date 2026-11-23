@@ -85,6 +85,10 @@ pub struct PreviewDoc {
     /// empty. `None` with an empty question list is a template with no
     /// questionnaire at all.
     pub questionnaire_error: Option<String>,
+    /// The Firm's legal name the PDF render would bind (LAW-466), resolved
+    /// through the same Brand chain the render uses. `None` when nothing
+    /// resolves: the token stays open and takes its wash.
+    pub firm_legal_name: Option<String>,
 }
 
 /// Everything the page renders, resolved ahead of the render — the router's
@@ -108,6 +112,10 @@ pub struct NotationPreviewContent {
     /// panel's body. See [`PreviewDoc::questionnaire_error`].
     #[serde(default)]
     pub questionnaire_error: Option<String>,
+    /// The Firm's legal name the PDF render would bind (LAW-466). Defaults
+    /// to `None` so snapshots saved before the field existed still parse.
+    #[serde(default)]
+    pub firm_legal_name: Option<String>,
 }
 
 /// Whether a notation is shown in the published catalog or a local author
@@ -278,11 +286,12 @@ pub fn NotationPreviewPage(
                     QuestionnaireDemo {
                         questions: content.demo_questions.clone(),
                         template_html: content.stage_html.clone(),
+                        firm_legal_name: content.firm_legal_name.clone(),
                     }
                 } else {
                     Accordion { title: "Body".to_string(),
                         div {
-                            dangerous_inner_html: "{render_live_template(&content.stage_html, &content.demo_questions, &std::collections::BTreeMap::new())}"
+                            dangerous_inner_html: "{render_live_template(&content.stage_html, &content.demo_questions, &std::collections::BTreeMap::new(), content.firm_legal_name.as_deref())}"
                         }
                     }
                 }
@@ -332,6 +341,7 @@ mod tests {
             demo_questions: Vec::new(),
             demo_workflow: Vec::new(),
             questionnaire_error: None,
+            firm_legal_name: None,
         }
     }
 
@@ -352,6 +362,7 @@ mod tests {
             demo_questions: Vec::new(),
             demo_workflow: Vec::new(),
             questionnaire_error: None,
+            firm_legal_name: None,
         }
     }
 

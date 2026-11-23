@@ -129,6 +129,9 @@ pub fn from_markdown(slug: &str, source_href: &str, src: &str) -> PreviewDoc {
         stage_html: views::harvard_outline::stage_html(&doc),
         origin_url,
         questionnaire_error,
+        // Brand-agnostic by construction: the caller binds the Firm's
+        // legal name from the Brand chain it serves (LAW-466).
+        firm_legal_name: None,
     }
 }
 
