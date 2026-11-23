@@ -102,7 +102,11 @@ async fn exercise() {
     )
     .await
     .unwrap();
-    assert!(resolved.expose_for_provider_call() == good);
+    let matches_submitted_key = resolved.expose_for_provider_call() == good;
+    assert!(
+        matches_submitted_key,
+        "the issuer must receive the submitted key"
+    );
     let listing = directory_json(&app, &directory, &dri, good).await;
     assert_eq!(listing["keys"][0]["account"], "nevada");
     assert_eq!(listing["keys"][0]["kind"], "secret");
