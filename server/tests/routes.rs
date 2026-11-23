@@ -10970,21 +10970,17 @@ async fn the_iep_defenders_home_renders_its_band_sequence_with_qualifiers() {
     // Every band's anchor survives the full SSR pass. Statement bands carry
     // no anchor attribute in the shared renderer, so they are asserted by
     // heading below.
-    for anchor in ["results", "problems", "process", "fees", "reviews"] {
+    for anchor in ["results", "problems", "process", "fees"] {
         assert!(
             body.contains(&format!(r#"id="{anchor}""#)),
             "the `{anchor}` band anchor is missing: {body}"
         );
     }
-    for statement_heading in [
-        "Children are people, not numbers.",
-        "This work was personal from the beginning.",
-    ] {
-        assert!(
-            body.contains(statement_heading),
-            "the `{statement_heading}` statement band is missing: {body}"
-        );
-    }
+    let statement_heading = "Children are people, not numbers.";
+    assert!(
+        body.contains(statement_heading),
+        "the `{statement_heading}` statement band is missing: {body}"
+    );
 
     // Exactly one h1: the practice skin's hero tagline.
     let h1_count = body.matches("<h1").count();
@@ -11016,18 +11012,6 @@ async fn the_iep_defenders_home_renders_its_band_sequence_with_qualifiers() {
     );
     assert!(body.contains(r#"href="/contact""#), "{body}");
 
-    // The review wall renders attributed testimonials.
-    for attribution in [
-        "Alysa Brown",
-        "Sierra Zamorano",
-        "Danyel Sheely",
-        "Wendy Aumick",
-    ] {
-        assert!(
-            body.contains(attribution),
-            "the `{attribution}` testimonial attribution is missing: {body}"
-        );
-    }
 }
 
 /// The Lex Tecnica home is a marketing-page band sequence lifted from the

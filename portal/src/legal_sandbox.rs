@@ -848,7 +848,7 @@ mod tests {
             ),
             turn(
                 TurnKind::ToolResult,
-                r#"{"cases":[{"name":"Rarig v. Testing"}]}"#,
+                r#"{"cases":[{"name":"Cruller v. Prine"}]}"#,
                 Some("search_case_law"),
             ),
         ];
