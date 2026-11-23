@@ -27,6 +27,7 @@ aws-credential-types.workspace = true
 aws-sdk-s3.workspace = true
 live-inquiry.workspace = true
 rand.workspace = true
+roxmltree.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

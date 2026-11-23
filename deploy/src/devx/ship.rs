@@ -688,14 +688,14 @@ const DBOS_WEB_PATCH: WebPatch = WebPatch {
 };
 
 /// A daily workflow the DBOS executor in `web` hosts: its `config.toml`
-/// switch, the Restate trigger `CronJob` it retires (none for a workflow born
-/// on DBOS), the `config.toml` coordinates rendered into `web` beside the
+/// switch, the Restate trigger `CronJob` it retires, the
+/// `config.toml` coordinates rendered into `web` beside the
 /// switch, the row secret `web` refuses to boot without, and whether an
 /// absent switch means on wherever the executor runs.
 struct DbosSchedule {
     env: &'static str,
     default_on: bool,
-    retires: Option<RetiredCronJob>,
+    retires: RetiredCronJob,
     coordinates: &'static [&'static str],
     secret: Option<&'static str>,
 }
@@ -713,52 +713,42 @@ const fn retired(cronjob: &'static str, resource: &'static str) -> RetiredCronJo
     RetiredCronJob { cronjob, resource }
 }
 
-const DBOS_SCHEDULES: [DbosSchedule; 6] = [
+const DBOS_SCHEDULES: [DbosSchedule; 5] = [
     DbosSchedule {
         env: "NAVIGATOR_DBOS_GENERAL_NAG_ENABLED",
         default_on: true,
-        retires: Some(retired("general-nag", "  - cron-general-nag.yaml\n")),
+        retires: retired("general-nag", "  - cron-general-nag.yaml\n"),
         coordinates: &["SLACK_GENERAL_CHANNEL_ID"],
         secret: Some(RUNTIME_KMS_KEY),
     },
     DbosSchedule {
         env: "NAVIGATOR_DBOS_DRI_DIGEST_ENABLED",
         default_on: false,
-        retires: Some(retired(
-            "dri-digest-trigger",
-            "  - cron-dri-digest-trigger.yaml\n",
-        )),
+        retires: retired("dri-digest-trigger", "  - cron-dri-digest-trigger.yaml\n"),
         coordinates: &["SLACK_GENERAL_CHANNEL_ID"],
         secret: Some(RUNTIME_KMS_KEY),
     },
     DbosSchedule {
         env: "NAVIGATOR_DBOS_BILLING_DIGEST_ENABLED",
         default_on: false,
-        retires: Some(retired(
+        retires: retired(
             "billing-digest-trigger",
             "  - cron-billing-digest-trigger.yaml\n",
-        )),
+        ),
         coordinates: &[],
         secret: None,
     },
     DbosSchedule {
         env: "NAVIGATOR_DBOS_NOTATION_RESET_ENABLED",
         default_on: false,
-        retires: Some(retired(
+        retires: retired(
             "notation-reset-trigger",
             "  - cron-notation-reset-trigger.yaml\n",
-        )),
+        ),
         coordinates: &[
             "SLACK_MESSAGES_CHANNEL_ID",
             "SLACK_STAGING_MESSAGES_CHANNEL_ID",
         ],
-        secret: None,
-    },
-    DbosSchedule {
-        env: "NAVIGATOR_DBOS_PROJECT_CALENDAR_MEMBERSHIP_ENABLED",
-        default_on: false,
-        retires: None,
-        coordinates: &[],
         secret: None,
     },
     // Archives also renders `web-archives.yaml` and the coverage ConfigMap;
@@ -766,10 +756,7 @@ const DBOS_SCHEDULES: [DbosSchedule; 6] = [
     DbosSchedule {
         env: ARCHIVES_SCHEDULE_ENV,
         default_on: false,
-        retires: Some(retired(
-            "archives-trigger",
-            "  - cron-archives-trigger.yaml\n",
-        )),
+        retires: retired("archives-trigger", "  - cron-archives-trigger.yaml\n"),
         coordinates: &[
             "NAVIGATOR_ARCHIVES_BUCKET",
             "SLACK_MESSAGES_CHANNEL_ID",
@@ -1006,25 +993,16 @@ where
             "            - name: {}\n              value: \"{enabled}\"\n",
             schedule.env
         );
-        if store::workflow_engine::disabled_billing_flag(schedule.env) {
-            if let Some(retired) = schedule.retires {
-                substitutions.push(Substitution {
-                    token: retired.resource,
-                    env: schedule.env,
-                    value: String::new(),
-                });
-            }
-            continue;
-        }
-        if !enabled {
-            continue;
-        }
-        if let Some(retired) = schedule.retires {
+        let billing_disabled = store::workflow_engine::disabled_billing_flag(schedule.env);
+        if enabled || billing_disabled {
             substitutions.push(Substitution {
-                token: retired.resource,
+                token: schedule.retires.resource,
                 env: schedule.env,
                 value: String::new(),
             });
+        }
+        if !enabled || billing_disabled {
+            continue;
         }
         for key in schedule.coordinates {
             let value = non_empty_env(key, get).with_context(|| {
@@ -1256,12 +1234,8 @@ fn retired_cronjobs(deployment: &super::deployments::Deployment) -> Result<Vec<&
     Ok(flags
         .into_iter()
         .zip(&DBOS_SCHEDULES)
-        .filter_map(|(enabled, schedule)| {
-            schedule
-                .retires
-                .filter(|_| enabled)
-                .map(|retired| retired.cronjob)
-        })
+        .filter(|(enabled, _)| *enabled)
+        .map(|(_, schedule)| schedule.retires.cronjob)
         .chain(
             COHOST_CRONJOBS
                 .iter()
@@ -8619,10 +8593,7 @@ mod tests {
                 assert!(
                     !text.contains("workflows-service") && !text.contains("navigator-workflows")
                 );
-                for schedule in DBOS_SCHEDULES
-                    .iter()
-                    .filter_map(|schedule| schedule.retires)
-                {
+                for schedule in DBOS_SCHEDULES.iter().map(|schedule| schedule.retires) {
                     assert!(!has("CronJob", schedule.cronjob), "{}", schedule.cronjob);
                 }
                 let web = manifest_doc(&manifests, "Deployment", WEB_DEPLOYMENT);
@@ -9330,7 +9301,7 @@ mod tests {
         for schedule in DBOS_SCHEDULES
             .iter()
             .filter(|s| !store::workflow_engine::disabled_billing_flag(s.env))
-            .filter_map(|s| s.retires)
+            .map(|s| s.retires)
         {
             assert!(
                 renders_cronjob(&manifests, schedule.cronjob),

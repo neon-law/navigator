@@ -1708,11 +1708,32 @@ erDiagram
         string source_key
         datetime verified_at
     }
+    project_calendar_event_backup {
+        datetime backed_up_at
+        string calendar_id
+        string etag
+        uuid firm_id
+        string ics
+        uuid project_id
+        string resource_href
+    }
     project_calendar_grant {
         string calendar_id
         string email
         uuid firm_id
         boolean notified
+        uuid project_id
+    }
+    project_calendar_retirement {
+        uuid archive_generation
+        string calendar_id
+        string capture_xid
+        string content_sha256
+        string delete_etag
+        datetime deleted_at
+        json event_versions
+        uuid firm_id
+        string owner_mailbox
         uuid project_id
     }
     project_cost_events {
@@ -2435,8 +2456,12 @@ erDiagram
     legal_plan }o--|| project : references
     person }o--|| project : references
     project_archive_generation }o--|| project_archive_item : references
+    firm }o--|| project_calendar_event_backup : references
+    project }o--|| project_calendar_event_backup : references
     firm }o--|| project_calendar_grant : references
     project }o--|| project_calendar_grant : references
+    firm }o--|| project_calendar_retirement : references
+    project }o--|| project_calendar_retirement : references
     person }o--|| project_cost_events : references
     project_costs }o--|| project_cost_events : references
     asset }o--|| project_costs : references

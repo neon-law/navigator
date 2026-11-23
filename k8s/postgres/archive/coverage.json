@@ -1339,7 +1339,21 @@
       {
         "action": "export",
         "schema": "public",
+        "name": "project_calendar_event_backup",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
         "name": "project_calendar_grant",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "project_calendar_retirement",
         "kind": "table",
         "accessible": true
       },

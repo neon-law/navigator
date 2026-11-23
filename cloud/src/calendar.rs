@@ -16,6 +16,9 @@
 //! calendars, and the account's domain-wide delegation must also grant the
 //! calendar scope.
 
+mod caldav;
+pub use caldav::CalendarEventBackup;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
@@ -162,6 +165,8 @@ pub enum CalendarError {
         #[source]
         source: reqwest::Error,
     },
+    #[error("CalDAV returned an incomplete event backup")]
+    InvalidEventBackup,
     #[error("Calendar API response while creating a calendar did not include an id")]
     MissingCalendarId,
     #[error("Calendar API response while writing an event did not include an id")]
@@ -187,6 +192,14 @@ pub trait CalendarService: Send + Sync {
             .is_some_and(|calendar| calendar.id == id))
     }
 
+    /// Version of the calendar resource itself, or absence after a completed deletion.
+    async fn calendar_etag(&self, calendar_id: &str) -> Result<Option<String>, CalendarError>;
+    /// Remove a closed Project's secondary calendar at the verified resource version.
+    async fn delete_calendar(&self, calendar_id: &str, etag: &str) -> Result<(), CalendarError>;
+
+    /// Require the selected owner to be the only identity able to change events at retirement.
+    async fn verify_retirement_acl(&self, id: &str, owner: &str) -> Result<(), CalendarError>;
+
     /// Every person the calendar is shared with, owner included.
     async fn members(&self, calendar_id: &str) -> Result<Vec<CalendarMember>, CalendarError>;
     /// Share the calendar with `email` at `role`, without a notification
@@ -211,8 +224,12 @@ pub trait CalendarService: Send + Sync {
     /// Verify that the Firm's delegation can act as this Workspace member.
     async fn verify_workspace_member(&self, email: &str) -> Result<(), CalendarError>;
 
-    /// Verify access using the participant's Workspace identity.
-    async fn verify_reader(&self, calendar_id: &str, email: &str) -> Result<bool, CalendarError>;
+    /// Verify event access as the participant and add a missing calendar to their list.
+    async fn ensure_reader_calendar(
+        &self,
+        calendar_id: &str,
+        email: &str,
+    ) -> Result<bool, CalendarError>;
 
     /// Reconcile guests on events organized by the Project Calendar.
     async fn sync_event_guests(
@@ -220,6 +237,12 @@ pub trait CalendarService: Send + Sync {
         calendar_id: &str,
         desired: &BTreeMap<String, String>,
     ) -> Result<BTreeMap<String, BTreeMap<String, usize>>, CalendarError>;
+
+    /// Read the complete iCalendar resources on a verified private calendar.
+    async fn event_backups(
+        &self,
+        calendar_id: &str,
+    ) -> Result<Vec<CalendarEventBackup>, CalendarError>;
 
     /// Read a Project Calendar only when its recorded id agrees with the
     /// unique calendar the deployment owns under the Project code.
@@ -359,6 +382,33 @@ impl GoogleCalendar {
         Ok(calendar)
     }
 
+    async fn ensure_listed(&self, id: &str) -> Result<(), CalendarError> {
+        let action = "checking the participant's calendar list";
+        let token = self.token().await?;
+        let response = self
+            .http
+            .get(self.url(&["users", "me", "calendarList", id]))
+            .bearer_auth(&token)
+            .query(&[("fields", "id")])
+            .send()
+            .await
+            .map_err(|source| CalendarError::Request { action, source })?;
+        if response.status() != reqwest::StatusCode::NOT_FOUND {
+            Self::checked(Ok(response), action)?;
+            return Ok(());
+        }
+        Self::checked(
+            self.http
+                .post(self.url(&["users", "me", "calendarList"]))
+                .bearer_auth(token)
+                .json(&serde_json::json!({"id": id, "selected": true}))
+                .send()
+                .await,
+            "adding the Project Calendar to the participant's list",
+        )?;
+        Ok(())
+    }
+
     fn project_summary<'a>(&self, code: &'a str) -> std::borrow::Cow<'a, str> {
         if self.namespace == Some("staging") {
             format!("staging-{code}").into()
@@ -491,6 +541,13 @@ impl GoogleCalendar {
 
 #[async_trait]
 impl CalendarService for GoogleCalendar {
+    async fn event_backups(
+        &self,
+        calendar_id: &str,
+    ) -> Result<Vec<CalendarEventBackup>, CalendarError> {
+        self.caldav_events(calendar_id).await
+    }
+
     async fn events_in_window(
         &self,
         calendar_id: &str,
@@ -651,6 +708,75 @@ impl CalendarService for GoogleCalendar {
             && !other_namespace)
     }
 
+    async fn calendar_etag(&self, id: &str) -> Result<Option<String>, CalendarError> {
+        let action = "reading the calendar version";
+        let response = self
+            .http
+            .get(self.url(&["calendars", id]))
+            .bearer_auth(self.token().await?)
+            .query(&[("fields", "id,etag")])
+            .send()
+            .await
+            .map_err(|source| CalendarError::Request { action, source })?;
+        if matches!(response.status().as_u16(), 404 | 410) {
+            return Ok(None);
+        }
+        let resource = Self::checked(Ok(response), action)?
+            .json::<CalendarResource>()
+            .await
+            .map_err(|source| CalendarError::Response { action, source })?;
+        if resource.id.as_deref() != Some(id) {
+            return Err(CalendarError::InvalidEventBackup);
+        }
+        resource
+            .etag
+            .filter(|etag| !etag.is_empty())
+            .map(Some)
+            .ok_or(CalendarError::InvalidEventBackup)
+    }
+
+    async fn delete_calendar(&self, id: &str, etag: &str) -> Result<(), CalendarError> {
+        let action = "deleting the archived secondary calendar";
+        Self::checked(
+            self.http
+                .delete(self.url(&["calendars", id]))
+                .bearer_auth(self.token().await?)
+                .header(reqwest::header::IF_MATCH, etag)
+                .send()
+                .await,
+            action,
+        )?;
+        Ok(())
+    }
+
+    async fn verify_retirement_acl(&self, id: &str, owner: &str) -> Result<(), CalendarError> {
+        let mut owner_found = false;
+        for rule in self.acl_rules(id).await? {
+            if rule.role == "owner"
+                && rule.scope.kind == "user"
+                && rule
+                    .scope
+                    .value
+                    .as_deref()
+                    .is_some_and(|value| value.eq_ignore_ascii_case(owner))
+            {
+                owner_found = true;
+            } else if !matches!(rule.role.as_str(), "none" | "freeBusyReader" | "reader") {
+                return Err(CalendarError::Api {
+                    action: "verifying the closed calendar has a single writer",
+                    status: 409,
+                });
+            }
+        }
+        if !owner_found {
+            return Err(CalendarError::Api {
+                action: "verifying the closed calendar owner",
+                status: 403,
+            });
+        }
+        Ok(())
+    }
+
     async fn members(&self, calendar_id: &str) -> Result<Vec<CalendarMember>, CalendarError> {
         Ok(self
             .user_acl_rules(calendar_id)
@@ -749,7 +875,11 @@ impl CalendarService for GoogleCalendar {
         Self::for_owner(email).await?.token().await.map(|_| ())
     }
 
-    async fn verify_reader(&self, calendar_id: &str, email: &str) -> Result<bool, CalendarError> {
+    async fn ensure_reader_calendar(
+        &self,
+        calendar_id: &str,
+        email: &str,
+    ) -> Result<bool, CalendarError> {
         let participant = Self::for_owner(email).await?;
         let action = "reading Project Calendar as the assigned participant";
         let response = participant
@@ -767,10 +897,14 @@ impl CalendarService for GoogleCalendar {
             .json::<serde_json::Value>()
             .await
             .map_err(|source| CalendarError::Response { action, source })?;
-        Ok(matches!(
+        let readable = matches!(
             CalendarRole::from_api(list["accessRole"].as_str().unwrap_or_default()),
             Some(CalendarRole::Reader | CalendarRole::Writer | CalendarRole::Owner)
-        ))
+        );
+        if readable {
+            participant.ensure_listed(calendar_id).await?;
+        }
+        Ok(readable)
     }
 
     async fn sync_event_guests(
@@ -1039,6 +1173,7 @@ struct CalendarListEntry {
 #[derive(Deserialize)]
 struct CalendarResource {
     id: Option<String>,
+    etag: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1266,6 +1401,7 @@ struct FakeCalendarState {
 
 #[derive(Debug)]
 struct FakeCalendarEntry {
+    backups: Vec<CalendarEventBackup>,
     summary: String,
     assigned_guests: BTreeMap<String, String>,
     members: BTreeMap<String, CalendarRole>,
@@ -1282,6 +1418,17 @@ impl FakeCalendar {
             .lock()
             .expect("fake calendar mutex poisoned")
             .created
+    }
+
+    /// Supply the `CalDAV` resources returned by a simulated calendar.
+    pub fn set_event_backups(&self, id: &str, backups: Vec<CalendarEventBackup>) {
+        self.state
+            .lock()
+            .expect("fake calendar mutex poisoned")
+            .calendars
+            .get_mut(id)
+            .expect("fixture calendar exists")
+            .backups = backups;
     }
 
     /// Every calendar's id and summary, in id order.
@@ -1366,6 +1513,18 @@ impl FakeCalendar {
 
 #[async_trait]
 impl CalendarService for FakeCalendar {
+    async fn event_backups(
+        &self,
+        calendar_id: &str,
+    ) -> Result<Vec<CalendarEventBackup>, CalendarError> {
+        let state = self.state.lock().expect("fake calendar mutex poisoned");
+        let calendar = state
+            .calendars
+            .get(calendar_id)
+            .ok_or(CalendarError::InvalidEventBackup)?;
+        Ok(calendar.backups.clone())
+    }
+
     async fn events_in_window(
         &self,
         calendar_id: &str,
@@ -1428,6 +1587,7 @@ impl CalendarService for FakeCalendar {
         state.calendars.insert(
             id.clone(),
             FakeCalendarEntry {
+                backups: Vec::new(),
                 summary: summary.to_string(),
                 assigned_guests: BTreeMap::new(),
                 members: BTreeMap::from([(FAKE_CALENDAR_OWNER.to_string(), CalendarRole::Owner)]),
@@ -1442,6 +1602,35 @@ impl CalendarService for FakeCalendar {
     async fn calendar_exists(&self, calendar_id: &str) -> Result<bool, CalendarError> {
         let state = self.state.lock().expect("fake calendar mutex poisoned");
         Ok(state.calendars.contains_key(calendar_id))
+    }
+
+    async fn calendar_etag(&self, id: &str) -> Result<Option<String>, CalendarError> {
+        Ok(self.calendar_exists(id).await?.then(|| id.to_owned()))
+    }
+    async fn delete_calendar(&self, id: &str, etag: &str) -> Result<(), CalendarError> {
+        if self.calendar_etag(id).await?.as_deref() != Some(etag) {
+            return Err(CalendarError::Api {
+                action: "conditional calendar deletion",
+                status: 412,
+            });
+        }
+        self.delete(id);
+        Ok(())
+    }
+
+    async fn verify_retirement_acl(&self, id: &str, owner: &str) -> Result<(), CalendarError> {
+        let sharing = self.sharing(id);
+        if sharing.get(owner) == Some(&CalendarRole::Owner)
+            && !sharing.iter().any(|(email, role)| {
+                email != owner && matches!(role, CalendarRole::Owner | CalendarRole::Writer)
+            })
+        {
+            return Ok(());
+        }
+        Err(CalendarError::Api {
+            action: "verifying retirement access",
+            status: 409,
+        })
     }
 
     async fn members(&self, calendar_id: &str) -> Result<Vec<CalendarMember>, CalendarError> {
@@ -1486,7 +1675,11 @@ impl CalendarService for FakeCalendar {
         Ok(())
     }
 
-    async fn verify_reader(&self, calendar_id: &str, email: &str) -> Result<bool, CalendarError> {
+    async fn ensure_reader_calendar(
+        &self,
+        calendar_id: &str,
+        email: &str,
+    ) -> Result<bool, CalendarError> {
         Ok(self
             .sharing(calendar_id)
             .get(email)
@@ -2131,6 +2324,36 @@ mod tests {
             message.contains("NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT"),
             "{message}"
         );
+    }
+
+    #[tokio::test]
+    async fn lists_new_project_calendars_and_preserves_existing_display_preferences() {
+        let server = MockServer::start().await;
+        for (id, response) in [
+            (
+                "existing",
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"selected":false,"hidden":true})),
+            ),
+            ("new", ResponseTemplate::new(404)),
+        ] {
+            Mock::given(method("GET"))
+                .and(path(format!("/users/me/calendarList/{id}")))
+                .respond_with(response)
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+        Mock::given(method("POST"))
+            .and(path("/users/me/calendarList"))
+            .and(body_json(serde_json::json!({"id":"new","selected":true})))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let participant = google(&server);
+        participant.ensure_listed("existing").await.unwrap();
+        participant.ensure_listed("new").await.unwrap();
     }
 
     #[tokio::test]

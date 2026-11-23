@@ -1046,7 +1046,6 @@ data, credentials, and release automation separate when reasoning about a deploy
 | `NAVIGATOR_DBOS_PROJECT_SLACK_ENABLED` | Selects DBOS for Project Slack work. Requires the Slack bot. |
 | `NAVIGATOR_DBOS_PURCHASE_ACTIVATION_ENABLED` | Registers purchase activation in web. |
 | `NAVIGATOR_DBOS_RECONCILE_INVOICES_ENABLED` | Selects DBOS for invoice reconciliation. |
-| `NAVIGATOR_DBOS_PROJECT_CALENDAR_MEMBERSHIP_ENABLED` | Reconciles Project Calendar access and event invitations. |
 | `NAVIGATOR_DBOS_RETENTION_PURGE_ENABLED` | Registers the retention purge in web. Requires Firm authority config. |
 | `NAVIGATOR_DBOS_SANDBOX_CREDIT_RESET_ENABLED` | Routes the sandbox credit reset trigger to DBOS ingress. |
 | `NAVIGATOR_DBOS_SENT_EMAIL_EXPORT_ENABLED` | Registers the sent email export in web. |
@@ -1056,6 +1055,8 @@ data, credentials, and release automation separate when reasoning about a deploy
 
 DBOS switches opt in with `true` and default off. Use `false` to turn them off. Set the executor or worker selector and
 the workflow switch together with the credentials its host needs.
+
+Project Calendar membership runs on the DBOS web host for Firms with a Google Workspace calendar owner in Firm Settings.
 
 See the [DBOS runbook](../../../../docs/dbos-durability.md) for schedule ownership, prerequisites, and rollback.
 

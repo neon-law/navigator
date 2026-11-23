@@ -28,10 +28,12 @@ pub(crate) async fn reconcile(
     let firm_id = project
         .firm_id
         .ok_or_else(|| failed("resolving the owning Firm"))?;
-    let owner = store::firms::calendar_owner(surreal, firm_id)
+    let Some(owner) = store::firms::calendar_owner(surreal, firm_id)
         .await
         .map_err(|_| failed("resolving the Firm calendar owner"))?
-        .ok_or_else(|| failed("resolving the Firm calendar owner"))?;
+    else {
+        return Ok(TagOutcome::Calendar { synced: false });
+    };
     let calendar = cloud::GoogleCalendar::for_owner(&owner)
         .await
         .map_err(|_| failed("opening the Firm calendar"))?;

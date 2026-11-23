@@ -245,6 +245,24 @@ pub async fn seed_entity(surreal: &crate::surreal::SurrealDb) -> Uuid {
     .id
 }
 
+/// An open synthetic Project and its owning Firm for PostgreSQL calendar and archive tests.
+pub async fn seed_calendar_project() -> (uuid::Uuid, uuid::Uuid) {
+    let pg = crate::postgres::PostgresDb::configured()
+        .await
+        .unwrap()
+        .unwrap();
+    sqlx::query_as::<_, (uuid::Uuid, uuid::Uuid)>(
+        "WITH j AS (INSERT INTO jurisdiction (name) VALUES ('Calendar jurisdiction') RETURNING id),
+              t AS (INSERT INTO entity_type (name) VALUES ('Calendar entity type') RETURNING id),
+              e AS (INSERT INTO entity (name, entity_type_id, jurisdiction_id)
+                    SELECT 'Calendar entity', t.id, j.id FROM t,j RETURNING id),
+              f AS (INSERT INTO firm (name, slug, status, entity_id)
+                    SELECT 'Calendar Firm', 'calendar-firm', 'active', id FROM e RETURNING id)
+         INSERT INTO project (code, name, status, brand, entity_id, firm_id)
+         SELECT 'calendar-test', 'Calendar test', 'open', 'neon', e.id, f.id FROM e,f RETURNING id, firm_id"
+    ).fetch_one(pg.pool()).await.unwrap()
+}
+
 /// The shared synthetic Entity Type and Jurisdiction ids [`seed_entity`]
 /// uses, created on first use.
 pub async fn seed_entity_parents(surreal: &crate::surreal::SurrealDb) -> (Uuid, Uuid) {

@@ -22,6 +22,10 @@ impl Source for CalendarSource {
         Ok(Vec::new())
     }
 
+    async fn backup(&self, _: Uuid) -> Result<u64, SyncError> {
+        Ok(0)
+    }
+
     async fn sync(&self, project_id: Uuid) -> Result<Vec<ParticipantSync>, SyncError> {
         if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
             assert_eq!(project_id, self.before);

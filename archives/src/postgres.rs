@@ -85,7 +85,9 @@ pub const POSTGRES_TABLES: &[&str] = &[
     "project_slack_delivery",
     "project_slack_delivery_reconciliation",
     "project",
+    "project_calendar_event_backup",
     "project_calendar_grant",
+    "project_calendar_retirement",
     "project_folder",
     "project_costs",
     "project_cost_events",
@@ -303,6 +305,32 @@ impl AfterTable for NoPause {
     async fn after(&self, _table: &str) {}
 }
 
+pub(crate) async fn confirm_calendar_backups(
+    db: &store::postgres::PostgresDb,
+    generation: &crate::coverage::PairedManifest,
+) -> Result<()> {
+    let navigator = generation
+        .databases
+        .iter()
+        .find(|db| db.database == "navigator")
+        .context("Navigator archive watermark missing")?;
+    let covered = [
+        "public.project_calendar_event_backup",
+        "public.project_calendar_retirement",
+    ]
+    .iter()
+    .all(|name| navigator.tables.iter().any(|entry| entry.table == *name));
+    if covered {
+        store::project_calendar::confirm_archived_calendars(
+            db,
+            &navigator.snapshot,
+            generation.generation,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
 /// Export the configured PostgreSQL sources after normal application admission.
 /// Only explicit `all` compatibility runs may skip an unconfigured PostgreSQL source
 /// or export without application admission; raw recovery helpers are independent.
@@ -374,7 +402,7 @@ pub async fn export_configured<F: Fn(&str) -> Option<String>>(
         )
         .await?;
         let base = format!("gs://{}", required("NAVIGATOR_ARCHIVES_BUCKET")?);
-        crate::coverage::export_pair(
+        let generation = crate::coverage::export_pair(
             crate::coverage::DatabaseSource {
                 name: "navigator",
                 pool: archive_reader.as_ref().unwrap_or(db.pool()),
@@ -388,7 +416,9 @@ pub async fn export_configured<F: Fn(&str) -> Option<String>>(
             storage,
             &base,
         )
-        .await
+        .await?;
+        confirm_calendar_backups(&db, &generation).await?;
+        Ok::<_, anyhow::Error>(generation)
     }
     .await;
     Some(match outcome {
