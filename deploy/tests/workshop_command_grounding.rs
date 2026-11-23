@@ -122,9 +122,11 @@ fn tokenize(args: &str) -> Vec<String> {
     tokens
 }
 
-/// Replace an angle-bracket placeholder (`<notation-id>`) with the nil UUID.
+/// Substitute synthetic values for typed inputs without reading the operator's environment.
 fn normalize(token: &str) -> String {
-    if token.starts_with('<') && token.ends_with('>') {
+    if token == "$SOURCE_PROJECT_NUMBER" {
+        "1".to_string()
+    } else if token.starts_with('<') && token.ends_with('>') {
         PLACEHOLDER.to_string()
     } else {
         token.to_string()
