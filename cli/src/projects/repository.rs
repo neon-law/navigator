@@ -170,14 +170,6 @@ const ALLOWED_ROOTS: &[&str] = &[
     ".gitignore",
     ".gitattributes",
     "AGENTS.md",
-    // Every one of these repositories is proprietary, and a licence belongs at
-    // the root where a reader looks for it. A portal-bearing repository could
-    // hide one inside `portal/`; a templates-only Project has nowhere to put it
-    // at all, so refusing it here made the layout unsatisfiable for that shape.
-    "LICENSE.md",
-    "LICENSE",
-    "LICENSE-APACHE-2",
-    "LICENSE-MIT",
     "README.md",
     // A Vite application at the repository root (no `apps/` grouping) is named
     // `portal`. These are the files that shape requires at the root.
@@ -1292,8 +1284,13 @@ fn validate_layout_entry(
         &mut seen.tooling_directories,
         warnings,
     );
+    // A root licence file is [`LICENCE_FILE_CODE`]'s finding, which names the
+    // path and says to delete it. The generic unlisted-root wording would
+    // report the same file a second time.
+    let licence_root = components.len() == 1 && root_licence_file(first);
     if !mirrored
         && !tooling_root
+        && !licence_root
         && first != NOTES_DIRECTORY
         && first != MAIL_DIRECTORY
         && !ALLOWED_ROOTS.contains(&first.as_str())
@@ -2198,22 +2195,31 @@ pub const CANONICAL_GITATTRIBUTES: &str = "* text=auto eol=lf\n";
 /// already owns the byte check and names its own fix: `.github/CODEOWNERS`
 /// (`validate_codeowners`) and `.claude/settings.json`
 /// (`validate_claude_settings`).
-///
-/// The three licence files are the ones the scaffold writes, held to
-/// Navigator's own texts; a Firm that writes its own licence writes
-/// `LICENSE.md`.
 const CANONICAL_TRACKED_FILES: &[(&str, Option<&str>)] = &[
     (".gitignore", Some(ROOT_GITIGNORE)),
     (".gitattributes", Some(CANONICAL_GITATTRIBUTES)),
     (".github/CODEOWNERS", None),
     (CLAUDE_SETTINGS, None),
-    ("LICENSE", Some(include_str!("../../../LICENSE"))),
-    ("LICENSE-MIT", Some(include_str!("../../../LICENSE-MIT"))),
-    (
-        "LICENSE-APACHE-2",
-        Some(include_str!("../../../LICENSE-APACHE-2")),
-    ),
 ];
+
+/// `Y028` — a Project repository is private matter work product. A root file
+/// whose name begins with `LICENSE`, `COPYING`, or `UNLICENSE` is a licence
+/// file: the finding names the path and says to delete it. The match is
+/// case-insensitive. A file under another directory is judged by the
+/// Markdown-and-YAML rule.
+pub const LICENCE_FILE_CODE: &str = "Y028";
+
+const LICENCE_PREFIXES: &[&str] = &["LICENSE", "COPYING", "UNLICENSE"];
+
+fn root_licence_file(relative: &str) -> bool {
+    if relative.contains('/') {
+        return false;
+    }
+    let name = relative.to_ascii_uppercase();
+    LICENCE_PREFIXES
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
+}
 
 /// Whether `relative` (slash-separated) may be committed at all.
 fn tracked_file_admitted(relative: &str) -> bool {
@@ -2314,6 +2320,16 @@ fn validate_tracked_files(
             .map(|component| component.as_os_str().to_string_lossy())
             .collect::<Vec<_>>()
             .join("/");
+        if root_licence_file(&relative) {
+            errors.push(Finding::at(
+                &path,
+                format!(
+                    "{LICENCE_FILE_CODE}: `{relative}` is a licence file at the repository root. \
+                     Delete it. A Project repository is private matter work product"
+                ),
+            ));
+            continue;
+        }
         if !tracked_file_admitted(&relative) {
             errors.push(Finding::at(
                 &path,
@@ -2345,18 +2361,6 @@ fn validate_tracked_files(
         // gate reports it and never rewrites it.
         if *relative == ".gitignore" {
             root_gitignore_drift(&path, &current, errors, warnings);
-            continue;
-        }
-        // A licence is a grant of rights; the gate never rewrites one.
-        let licence = relative.starts_with("LICENSE");
-        if licence {
-            errors.push(Finding::at(
-                &path,
-                format!(
-                    "{TRACKED_FILE_CODE}: `{relative}` must match the text this release ships \
-                     byte for byte; a Firm's own licence is `LICENSE.md`"
-                ),
-            ));
             continue;
         }
         if write_fixes {
@@ -2477,9 +2481,9 @@ fn repair_root_gitignore(root: &Path, repaired: &mut Vec<String>) -> anyhow::Res
     Ok(())
 }
 
-/// `navigator project gate --tracked-files`: only [`TRACKED_FILE_CODE`], for
-/// the shared workflow's required `ci` job. Nothing is written. Prints each
-/// finding and returns how many there were.
+/// `navigator project gate --tracked-files`: [`TRACKED_FILE_CODE`] and
+/// [`LICENCE_FILE_CODE`], for the shared workflow's required `ci` job.
+/// Nothing is written. Prints each finding and returns how many there were.
 #[must_use]
 pub fn validate_tracked_files_only(root: &Path) -> usize {
     let mut errors = Vec::new();
@@ -2491,9 +2495,12 @@ pub fn validate_tracked_files_only(root: &Path) -> usize {
     for error in &errors {
         eprintln!("{}: error: {}", error.path.display(), error.message);
     }
+    let markdown_findings = errors
+        .iter()
+        .filter(|error| error.message.starts_with(TRACKED_FILE_CODE))
+        .count();
     println!(
-        "{TRACKED_FILE_CODE}: {} finding(s) against the Markdown-and-YAML rule",
-        errors.len()
+        "{TRACKED_FILE_CODE}: {markdown_findings} finding(s) against the Markdown-and-YAML rule"
     );
     errors.len()
 }
@@ -3202,18 +3209,6 @@ pub fn emit_scaffold_for(
             cd_workflow_for(DEFAULT_WORKFLOW_HOME, crate::cli_version()),
         ),
         (".github/CODEOWNERS".to_string(), CODEOWNERS.to_string()),
-        (
-            "LICENSE".to_string(),
-            include_str!("../../../LICENSE").to_string(),
-        ),
-        (
-            "LICENSE-MIT".to_string(),
-            include_str!("../../../LICENSE-MIT").to_string(),
-        ),
-        (
-            "LICENSE-APACHE-2".to_string(),
-            include_str!("../../../LICENSE-APACHE-2").to_string(),
-        ),
     ];
     let forgejo = forge == model::forge::ForgeBackend::Forgejo;
     let forgejo_workflows = if forgejo {
@@ -3741,18 +3736,14 @@ esac
         assert!(!is_release_tag("26.7.27.4"));
     }
 
-    /// The generated gate is one always-running required job.
-    ///
-    /// A `paths:` filter here would let a required check pass by being skipped,
-    /// so the job name matches the one `navigator github setup` binds and the gate
-    /// carries no filter at all.
     #[test]
-    fn a_licence_at_the_root_is_part_of_the_layout() {
-        // Every one of these repositories is proprietary. A templates-only
-        // Project has no `portal/` to hide a licence inside, so refusing it at
-        // the root made the layout unsatisfiable for that shape rather than
-        // merely opinionated.
-        assert!(ALLOWED_ROOTS.contains(&"LICENSE.md"));
+    fn a_licence_at_the_root_is_outside_the_layout() {
+        for name in ["LICENSE.md", "LICENSE", "LICENSE-APACHE-2", "LICENSE-MIT"] {
+            assert!(
+                !ALLOWED_ROOTS.contains(&name),
+                "{name} is not a Project repository root"
+            );
+        }
     }
 
     #[test]
@@ -3760,6 +3751,11 @@ esac
         assert!(ALLOWED_ROOTS.contains(&".gitattributes"));
     }
 
+    /// The generated gate is one always-running required job.
+    ///
+    /// A `paths:` filter here would let a required check pass by being skipped,
+    /// so the job name matches the one `navigator github setup` binds and the gate
+    /// carries no filter at all.
     #[test]
     fn a_reusable_workflow_call_with_a_matching_pin_passes() {
         let contents = r"name: ci
@@ -5427,7 +5423,6 @@ jobs:
             "documents/exhibit.png",
             ".agents/skills/server/run.sh",
             "seeds/lookup.js",
-            "LICENSE.txt",
             "Makefile",
         ];
         let root = tempfile::tempdir().unwrap();
@@ -5448,6 +5443,48 @@ jobs:
         assert!(findings.iter().all(|finding| finding.contains("`pages:`")));
     }
 
+    /// A root licence file is refused by name, including when its bytes are the
+    /// product's own text, and the gate never rewrites it.
+    #[test]
+    fn a_root_licence_file_is_refused_by_name() {
+        let root = tempfile::tempdir().unwrap();
+        scaffold_minimal(root.path());
+        let licence = include_str!("../../../LICENSE");
+        fs::write(root.path().join("LICENSE"), licence).unwrap();
+        for name in ["LICENSE.md", "COPYING", "UNLICENSE", "license.txt"] {
+            fs::write(root.path().join(name), "rights\n").unwrap();
+        }
+        fs::create_dir_all(root.path().join("drafts")).unwrap();
+        fs::write(root.path().join("drafts/LICENSE.md"), "A draft title.\n").unwrap();
+
+        let findings = tracked_file_findings(root.path(), true);
+        for name in [
+            "LICENSE",
+            "LICENSE.md",
+            "COPYING",
+            "UNLICENSE",
+            "license.txt",
+        ] {
+            assert!(
+                findings.iter().any(|finding| {
+                    finding.starts_with(&format!("Y028: `{name}` "))
+                        && finding.contains("Delete it")
+                }),
+                "no finding names `{name}`: {findings:#?}"
+            );
+        }
+        assert!(
+            findings
+                .iter()
+                .all(|finding| !finding.contains("drafts/LICENSE.md")),
+            "{findings:#?}"
+        );
+        assert_eq!(
+            fs::read_to_string(root.path().join("LICENSE")).unwrap(),
+            licence
+        );
+    }
+
     /// The canonical non-text files are admitted only by their exact path:
     /// a `.gitignore` anywhere but the root — the retired `documents/.gitignore`
     /// included — or a second `settings.json`, is refused.
@@ -5457,7 +5494,7 @@ jobs:
         assert!(!tracked_file_admitted("documents/.gitignore"));
         assert!(tracked_file_admitted(".github/CODEOWNERS"));
         assert!(tracked_file_admitted(".claude/settings.json"));
-        assert!(tracked_file_admitted("LICENSE"));
+        assert!(!tracked_file_admitted("LICENSE"));
         assert!(!tracked_file_admitted("drafts/.gitignore"));
         assert!(!tracked_file_admitted("CODEOWNERS"));
         assert!(!tracked_file_admitted(".agents/settings.json"));
@@ -5481,14 +5518,18 @@ jobs:
 
         let findings = tracked_file_findings(root.path(), false);
         assert_eq!(findings.len(), 3, "{findings:#?}");
-        for relative in [".gitattributes", "LICENSE"] {
-            assert!(
-                findings
-                    .iter()
-                    .any(|finding| finding.starts_with(&format!("Y024: `{relative}` must match"))),
-                "{findings:#?}"
-            );
-        }
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.starts_with("Y024: `.gitattributes` must match")),
+            "{findings:#?}"
+        );
+        assert!(
+            findings.iter().any(|finding| {
+                finding.starts_with("Y028: `LICENSE` ") && finding.contains("Delete it")
+            }),
+            "{findings:#?}"
+        );
         assert!(
             findings
                 .iter()

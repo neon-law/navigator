@@ -45,6 +45,8 @@ const SECTION_DATA_CODE: &str = "Y023";
 /// `Y024` refuses every tracked Project-repository file that is not Markdown or
 /// YAML or a canonical file at its release bytes, in `cli/src/projects/repository.rs`.
 const TRACKED_FILE_CODE: &str = "Y024";
+/// `Y028` refuses a root licence file in a Project repository.
+const LICENCE_FILE_CODE: &str = "Y028";
 /// `F001` is the formatting pass's code: under `--ci` the gate withholds a fix
 /// it would otherwise have written, and reports the file instead.
 const UNFORMATTED_CODE: &str = "F001";
@@ -94,6 +96,7 @@ fn all_shipped_codes() -> BTreeSet<&'static str> {
     codes.insert(MANIFEST_PAGES_CODE);
     codes.insert(SECTION_DATA_CODE);
     codes.insert(TRACKED_FILE_CODE);
+    codes.insert(LICENCE_FILE_CODE);
     codes.insert(UNFORMATTED_CODE);
     codes.insert(PUBLIC_SNAPSHOT_CODE);
     codes.insert(cli::pii_audit::CODE);
@@ -120,6 +123,6 @@ fn every_shipped_code_has_an_entry_in_the_gate_docs() {
 /// Pin the exhaustive count so a rule addition or removal is a visible diff here, not a silent
 /// change to how many codes the doc is supposed to cover.
 #[test]
-fn the_shipped_code_count_is_one_hundred_and_twenty_three() {
-    assert_eq!(all_shipped_codes().len(), 123);
+fn the_shipped_code_count_is_one_hundred_and_twenty_four() {
+    assert_eq!(all_shipped_codes().len(), 124);
 }

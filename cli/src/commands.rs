@@ -1344,11 +1344,12 @@ pub enum ProjectsCmd {
     /// job asks it after `verify` has already run those, including the origin
     /// pass, over the same tree.
     Gate {
-        /// Run only `Y024`: every git-tracked or stageable file must be
+        /// Run `Y024` and `Y028`: every git-tracked or stageable file must be
         /// Markdown or YAML, or one of the canonical files at its release
-        /// bytes. Writes no repository content; each offending path is named.
-        /// Downloads the pinned release if it is not cached. The shared
-        /// workflow's required `ci` job runs this.
+        /// bytes, and a root licence file is refused. Writes no repository
+        /// content; each offending path is named. Downloads the pinned
+        /// release if it is not cached. The shared workflow's required `ci`
+        /// job runs this.
         #[arg(long, conflicts_with_all = ["check", "deep", "ci"])]
         tracked_files: bool,
         /// Never writes to the live site.
@@ -4214,8 +4215,8 @@ pub fn gate_root() -> Result<PathBuf, String> {
     ))
 }
 
-/// `navigator project gate --tracked-files` — only `Y024`, over the Project
-/// repository at the current root (ENG-1136, ENG-1139).
+/// `navigator project gate --tracked-files` — `Y024` and `Y028`, over the
+/// Project repository at the current root (ENG-1136, ENG-1139).
 #[must_use]
 pub fn run_tracked_files_gate() -> ExitCode {
     let root = match gate_root() {

@@ -502,6 +502,32 @@ fn tracked_files_gate_names_each_non_markdown_or_yaml_path() {
         .stderr(str::contains("Y024: `tests/a.mjs` cannot be committed"));
 }
 
+/// A root `LICENSE` fails the gate by name. The hand-built shell has none.
+#[test]
+fn a_root_licence_file_fails_the_project_gate() {
+    let dir = TempDir::new().unwrap();
+    scaffold(dir.path(), "example-project");
+    assert!(!dir.path().join("LICENSE").exists());
+    fs::write(dir.path().join("LICENSE"), "All rights reserved.\n").unwrap();
+
+    let assert = navigator()
+        .current_dir(dir.path())
+        .args(["project", "gate", "--tracked-files"])
+        .assert()
+        .failure()
+        .code(1);
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
+    assert!(
+        stderr.contains("Y028: `LICENSE`") && stderr.contains("Delete it"),
+        "{stderr}"
+    );
+
+    gate(dir.path())
+        .failure()
+        .stderr(str::contains("Y028: `LICENSE`"))
+        .stderr(str::contains("Delete it"));
+}
+
 fn gate(dir: &Path) -> assert_cmd::assert::Assert {
     navigator()
         .current_dir(dir)

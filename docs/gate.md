@@ -443,22 +443,23 @@ literally and the columns disappear.
 | `Y023` | Warning | A section in `pages:` reads a data source the live matter has no rows of. | No |
 | `Y024` | Error | A Project repository tracks only Markdown, YAML, and canonical files at release bytes. | Locally |
 | `Y026` | Error | Each `pages[].draft` resolves to a tracked regular file under `drafts/` or `templates/`. | No |
+| `Y028` | Error | A root `LICENSE*`, `COPYING*`, or `UNLICENSE*` file is deleted. | No |
 
 `Y024` runs inside the Project-repository check over every file `git ls-files` tracks or would stage. A file is admitted
 when its name ends in `.md`, `.yml`, or `.yaml`, and is not a package-manager file that happens to be YAML
 (`pnpm-lock.yaml`, `pnpm-workspace.yaml`, `.yarnrc.yml`). The only other admitted paths are a fixed list of canonical
-files: the root `.gitignore`, `.gitattributes`, `.github/CODEOWNERS`, `.claude/settings.json`, and the `LICENSE`,
-`LICENSE-MIT`, and `LICENSE-APACHE-2` texts the scaffold writes. Each is held to this release's bytes. The CODEOWNERS
-check and the Claude settings check already own two of them. `Y024` owns the rest. A drifted `.gitattributes` is
-rewritten by local `project gate` and reported under `--ci`. The root `.gitignore` is never rewritten (LAW-181): one
-that lacks `/documents/`, `*.pdf`, `*.docx`, or `*.local` is an error, one that lacks another canonical line is a
-warning, and lines a Project adds are not drift. `navigator project repository sync-skills` restores the missing lines
-and keeps the Project's own. A drifted licence text is always reported and never rewritten, because a licence is a grant
-of rights; a Firm's own licence is `LICENSE.md`. Every other path is one error naming it. That covers a `package.json`
-or lockfile, `*.ts`, `*.tsx`, `*.js`, or `*.mjs`, `*.py`, `*.sh`, code under `tests/`, and any binary, under synced
-`.agents/` and `seeds/` too. `navigator project gate --tracked-files` runs only this rule, writes nothing, and reads no
-network. The shared workflow's required `ci` job runs it, so a pull request that adds a script fails the check GitHub
-requires.
+files: the root `.gitignore`, `.gitattributes`, `.github/CODEOWNERS`, and `.claude/settings.json`. Each is held to this
+release's bytes. The CODEOWNERS check and the Claude settings check already own two of them. `Y024` owns the rest. A
+drifted `.gitattributes` is rewritten by local `project gate` and reported under `--ci`. The root `.gitignore` is never
+rewritten (LAW-181): one that lacks `/documents/`, `*.pdf`, `*.docx`, or `*.local` is an error, one that lacks another
+canonical line is a warning, and lines a Project adds are not drift. `navigator project repository sync-skills` restores
+the missing lines and keeps the Project's own. `Y028` refuses a tracked root file whose name begins with `LICENSE`,
+`COPYING`, or `UNLICENSE`, in any case. The finding names the path and says to delete it. A Project repository is
+private matter work product. A licence file under another directory is outside `Y028`. Every other path is one `Y024`
+error naming it. That covers a `package.json` or lockfile, `*.ts`, `*.tsx`, `*.js`, or `*.mjs`, `*.py`, `*.sh`, code
+under `tests/`, and any binary, under synced `.agents/` and `seeds/` too. `navigator project gate --tracked-files` runs
+`Y024` and `Y028`, writes nothing, and reads no network. The shared workflow's required `ci` job runs it, so a pull
+request that adds a script or a root licence file fails the check GitHub requires.
 
 `Y010` runs inside the Project-repository check the gate applies when the root is a Project repository. It reads each
 `templates/<code>.md` or `drafts/<code>.md` and compares any `Neon Law` spelled with a corporate suffix (`, Inc.`,
