@@ -477,7 +477,7 @@ async fn deadline_inventory_matches_dashboard_firm_scope_and_open_projects() {
         .fetch_one(pool)
         .await
         .unwrap();
-    sqlx::query("INSERT INTO firm(id,name,status,entity_id) VALUES ($1,'Synthetic Current Firm','active',$3),($2,'Synthetic Other Firm','active',$3)")
+    sqlx::query("INSERT INTO firm(id,name,slug,status,entity_id) VALUES ($1,'Synthetic Current Firm','synthetic-current-firm','active',$3),($2,'Synthetic Other Firm','synthetic-other-firm','active',NULL)")
         .bind(current_firm).bind(other_firm).bind(entity).execute(pool).await.unwrap();
     sqlx::query("INSERT INTO brand(id,name,brand_key) VALUES ($1,'Synthetic Current Brand','neon'),($2,'Synthetic Other Brand','outside-synthetic')")
         .bind(current_brand).bind(other_brand).execute(pool).await.unwrap();
