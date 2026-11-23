@@ -301,7 +301,10 @@ unverified. A pitch names the missing onboarding work. This command performs onl
 **`navigator project participant list` reads the participation ledger as JSON.** Use a row's `id` with `navigator
 project participant dri <id>` to designate it, or add `--clear` to remove its marker. The side follows the Person's
 role; designation adds a DRI without displacing other holders. The server enforces actor authorization, records the
-change in the relationship log, and refuses to clear the last lawyer DRI. Both commands take `--project` and `--host`,
+change in the relationship log, and refuses to clear the last lawyer DRI. Use `navigator project participant remove <id>`
+to remove the assignment. Designate a successor before removing the last lawyer DRI. Firm membership is managed
+separately. The calendar membership worker reconciles managed reader grants and event guests on its next successful
+pass. All three commands take `--project` and `--host`,
 defaulting to this checkout's manifest. POST and PATCH participant bodies accept `person_id` only; unknown fields,
 including `is_client_dri` and `is_lawyer_dri`, fail with a named `400` error.
 

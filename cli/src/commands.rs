@@ -2271,6 +2271,16 @@ pub enum ParticipantCmd {
         #[command(flatten)]
         host: HostOpt,
     },
+    /// Remove one participation row from the Project.
+    Remove {
+        /// Participation row id from project participant list.
+        participation_id: uuid::Uuid,
+        /// Project code. Defaults to project.name in navigator.yaml.
+        #[arg(long)]
+        project: Option<String>,
+        #[command(flatten)]
+        host: HostOpt,
+    },
     /// Designate a participant as a DRI on the side their role permits.
     Dri {
         /// Participation row id from project participant list.
@@ -2967,6 +2977,18 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
         ProjectsCmd::Participant { action } => match action {
             ParticipantCmd::List { host, project } => {
                 projects::participant::list(host.host.as_deref(), project.as_deref()).await
+            }
+            ParticipantCmd::Remove {
+                host,
+                project,
+                participation_id,
+            } => {
+                projects::participant::remove(
+                    host.host.as_deref(),
+                    project.as_deref(),
+                    participation_id,
+                )
+                .await
             }
             ParticipantCmd::Dri {
                 host,
