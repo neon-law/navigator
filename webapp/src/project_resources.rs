@@ -284,6 +284,45 @@ fn configured(value: Option<&String>) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Toolbar links for the lawyer workbench, including folder settings until verification succeeds.
+pub(crate) fn resource_actions(view: &ProjectResourcesView) -> Element {
+    let needs_drive_setup = view.can_configure
+        && !view
+            .resources
+            .iter()
+            .any(|resource| resource.kind == ResourceKind::PrivateDriveFolder);
+    rsx! {
+        for resource in &view.resources {
+            a {
+                key: "{resource.kind.name()}",
+                "data-resource": resource.kind.name(),
+                class: "nav-btn nav-btn--secondary lawyer-detail__resource-action",
+                href: "{resource.url}",
+                title: resource.kind.label(),
+                aria_label: resource.kind.label(),
+                target: "_blank",
+                rel: "noopener noreferrer",
+                ResourceMarkGlyph {
+                    mark: resource.kind.mark(),
+                    class: "project-resources__mark".to_string(),
+                }
+            }
+        }
+        if needs_drive_setup {
+            a {
+                class: "nav-btn nav-btn--secondary lawyer-detail__resource-action",
+                href: "/app/projects/{view.project_code}/edit#private-drive-folder",
+                title: "Configure private Google Drive folder",
+                aria_label: "Configure private Google Drive folder",
+                ResourceMarkGlyph {
+                    mark: ResourceMark::GoogleDrive,
+                    class: "project-resources__mark".to_string(),
+                }
+            }
+        }
+    }
+}
+
 /// The resources panel.
 ///
 /// Renders nothing at all when the reader has no visible resources, rather than
@@ -373,6 +412,37 @@ mod tests {
 
     fn render(view: ProjectResourcesView) -> String {
         dioxus_ssr::render_element(rsx! { ProjectResourcesPanel { view } })
+    }
+
+    #[test]
+    fn toolbar_opens_the_verified_working_folder_or_its_settings() {
+        let mut view = ProjectResourcesView {
+            project_code: "sample-litigation".into(),
+            can_configure: true,
+            ..Default::default()
+        };
+        let settings = "/app/projects/sample-litigation/edit#private-drive-folder";
+        let toolbar =
+            |view: &ProjectResourcesView| dioxus_ssr::render_element(super::resource_actions(view));
+        let pending = toolbar(&view);
+        assert!(pending.contains(settings));
+        assert!(pending.contains(r#"data-resource-mark="google-drive""#));
+        assert!(!pending.contains("drive.google.com"));
+
+        view.resources = visible_resources(&every_link(), ViewerRole::Lawyer);
+        let verified = toolbar(&view);
+        assert!(verified.contains("https://drive.google.com/drive/folders/1QaBcD_2-efG"));
+        assert_eq!(
+            verified
+                .matches(r#"data-resource-mark="google-drive""#)
+                .count(),
+            1
+        );
+        assert!(!verified.contains(settings));
+
+        view.resources.clear();
+        view.can_configure = false;
+        assert!(!toolbar(&view).contains("google-drive"));
     }
 
     /// Lawyer tiers see the configured resources. Drive coordinates additionally

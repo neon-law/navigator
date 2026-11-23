@@ -4089,6 +4089,19 @@ async fn projects_create_lawyer_only(
     .await
     {
         Ok(created) => {
+            use store::project_folder_reconcile::{
+                reconcile_from_env, FolderOutcome, FolderReconcileReport,
+            };
+            match Box::pin(reconcile_from_env(&state.surreal, created.id)).await {
+                Ok(Some(FolderReconcileReport {
+                    outcome: FolderOutcome::Blocked(reason),
+                    ..
+                })) => {
+                    tracing::warn!(project_id = %created.id, ?reason, "Project folder verification blocked")
+                }
+                Err(_) => tracing::warn!(project_id = %created.id, "Project folder setup failed"),
+                Ok(_) => {}
+            }
             // Creating a matter lands on the matter. Its engagement letter is
             // the next step, not this one — the show page names that gap and
             // links to it, so lawyers choose the retainer deliberately.

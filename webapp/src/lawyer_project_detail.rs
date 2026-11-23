@@ -927,7 +927,7 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
                 },
                 role,
             ),
-            can_configure: role.is_lawyer_tier(),
+            can_configure: viewer.is_firm_side(),
             project_code: code_for_resources,
         },
         trust,
@@ -1088,22 +1088,7 @@ pub fn LawyerProjectDetail() -> Element {
                     a { class: "nav-btn nav-btn--secondary lawyer-detail__resource-action", href: "/app/projects/{view.code}/edit", title: "Edit project", aria_label: "Edit project",
                         crate::components::resource_mark::PencilGlyph { class: "project-resources__mark".to_string() }
                     }
-                    for resource in &view.resources.resources {
-                        a {
-                            key: "{resource.kind.name()}",
-                            "data-resource": resource.kind.name(),
-                            class: "nav-btn nav-btn--secondary lawyer-detail__resource-action",
-                            href: "{resource.url}",
-                            title: resource.kind.label(),
-                            aria_label: resource.kind.label(),
-                            target: "_blank",
-                            rel: "noopener noreferrer",
-                            crate::components::resource_mark::ResourceMarkGlyph {
-                                mark: resource.kind.mark(),
-                                class: "project-resources__mark".to_string(),
-                            }
-                        }
-                    }
+                    {crate::project_resources::resource_actions(&view.resources)}
                     if let Some(url) = view.repository_url.as_ref() {
                         a {
                             class: "nav-btn nav-btn--secondary lawyer-detail__resource-action",

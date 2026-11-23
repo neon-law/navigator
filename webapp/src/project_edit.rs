@@ -258,12 +258,13 @@ pub async fn get_project_edit_form() -> Result<ProjectEditView, ServerFnError> {
         ViewerRole::Clerk => store::persons::Role::Clerk,
         ViewerRole::Client => store::persons::Role::Client,
     };
-    let Some(viewer) = store::access::matter_viewer(&surreal, person_id, store_role, project_id)
+    if !store::access::matter_viewer(&surreal, person_id, store_role, project_id)
         .await
         .map_err(ServerFnError::new)?
-    else {
+        .is_some_and(store::access::MatterViewer::is_firm_side)
+    {
         return Ok(hidden(role).await);
-    };
+    }
 
     let Some(project) = store::projects::find_by_id(&surreal, project_id)
         .await
@@ -281,10 +282,7 @@ pub async fn get_project_edit_form() -> Result<ProjectEditView, ServerFnError> {
         })
         .collect();
 
-    let brands = if let Some(firm_id) = project
-        .firm_id
-        .filter(|_| role.is_admin_tier() && viewer.is_firm_side())
-    {
+    let brands = if let Some(firm_id) = project.firm_id.filter(|_| role.is_admin_tier()) {
         project_brand_options(&surreal, store_role, person_id, firm_id).await?
     } else {
         Vec::new()
@@ -393,17 +391,13 @@ pub(crate) const SHARED_NOTION_HELP: &str =
 
 /// The help line under the Drive folder field.
 ///
-/// Names what the field accepts and what happens next, because the folder is
-/// adopted, not made: setup creates a folder only when none is recorded here.
-pub(crate) const DRIVE_FOLDER_HELP: &str =
-    "Optional — an existing folder in the firm\u{2019}s Projects shared drive, pasted as its \
-     Google Drive link or its id. Firm-only: a client never sees it. Navigator confirms the \
-     folder with Google Drive when it saves, and project setup adopts it instead of creating \
-     a new one.";
+/// The optional coordinate for adopting a folder during Project setup.
+const DRIVE_FOLDER_HELP: &str =
+    "To use an existing folder, enter its link or ID from the firm’s Projects shared drive.";
 
 /// The Drive card: the matter's one firm-only folder, so unlike
 /// [`resource_card`] it has no client-sharing toggle.
-fn drive_card(drive_folder_id: &str) -> Element {
+fn drive_card(drive_folder_id: &str, project_code: &str) -> Element {
     let field = Field::text(
         "Private Google Drive folder",
         "drive_folder_id",
@@ -412,7 +406,7 @@ fn drive_card(drive_folder_id: &str) -> Element {
     .placeholder("https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOp")
     .help(DRIVE_FOLDER_HELP);
     rsx! {
-        fieldset { class: "nav-fieldset project-edit__resource-card",
+        fieldset { id: "private-drive-folder", class: "nav-fieldset project-edit__resource-card",
             legend { class: "nav-fieldset__legend",
                 ResourceMarkGlyph {
                     mark: ResourceMark::GoogleDrive,
@@ -421,6 +415,11 @@ fn drive_card(drive_folder_id: &str) -> Element {
                 "Google Drive"
             }
             {field.render()}
+            p {
+                "Run "
+                code { "navigator project setup {project_code}" }
+                " to create or verify this Project’s folder. The toolbar opens it once access is verified."
+            }
         }
     }
 }
@@ -573,7 +572,7 @@ fn edit_body(view: &ProjectEditView) -> Element {
                 }
                 {slack_card}
                 {notion_card}
-                {drive_card(&view.drive_folder_id)}
+                {drive_card(&view.drive_folder_id, &view.project_code)}
                 {repository_field.render()}
             }),
         }
@@ -796,6 +795,7 @@ mod tests {
     #[test]
     fn the_drive_card_offers_the_stored_folder_and_no_share_toggle() {
         let html = render(&view());
+        assert!(html.contains(r#"id="private-drive-folder""#), "{html}");
         assert!(html.contains(r#"name="drive_folder_id""#), "{html}");
         assert!(html.contains("Private Google Drive folder"), "{html}");
         assert!(
