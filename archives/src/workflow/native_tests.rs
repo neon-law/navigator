@@ -811,3 +811,49 @@ async fn complete_object_restart(
     })
     .await;
 }
+
+#[tokio::test]
+async fn the_published_iceberg_snapshot_restores_the_event_before_calendar_retirement() {
+    use cloud::calendar::{
+        CalendarEventBackup, CalendarService, FakeCalendar, FAKE_CALENDAR_OWNER,
+    };
+    use store::project_calendar::{backup_events, ensure};
+    with_pair(|nav, companion| async move {
+        let db = store::surreal::SurrealDb::uninitialized();
+        let (project, firm) = store::test_support::seed_calendar_project().await;
+        store::firms::set_calendar_owner(&db, store::persons::Role::Owner, None, firm, FAKE_CALENDAR_OWNER).await.unwrap();
+        let calendar = FakeCalendar::default();
+        ensure(&db, project, &calendar).await.unwrap();
+        let id = calendar.calendars().pop().unwrap().id;
+        let ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:synthetic\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+        calendar.set_event_backups(&id, vec![CalendarEventBackup { href: "/sample.ics".into(), etag: "one".into(), ics: ics.into() }]);
+        sqlx::query("UPDATE project SET status='closed' WHERE id=$1").bind(project).execute(&nav).await.unwrap();
+        backup_events(&db, project, &calendar).await.unwrap();
+
+        let storage = CollisionStorage::locked();
+        let generation = paired(&nav, &companion, storage.as_ref()).await.unwrap();
+        let source = generation.databases.iter().find(|db| db.database == "navigator").unwrap();
+        let entry = source.tables.iter().find(|table| table.table == "public.project_calendar_event_backup").unwrap();
+        let prefix = entry.key.split_once("/data/").unwrap().0;
+        let metadata = source.iceberg_metadata_keys.iter().find(|key| key.starts_with(prefix)).unwrap();
+        let io = iceberg::io::FileIO::new_with_memory();
+        for key in storage.keys().into_iter().filter(|key| key.starts_with(prefix)) {
+            io.new_output(format!("gs://synthetic-archives/{key}")).unwrap()
+                .write(storage.get(&key).await.unwrap().bytes.into()).await.unwrap();
+        }
+        let table = iceberg::table::StaticTable::from_metadata_file(
+            &format!("gs://synthetic-archives/{metadata}"),
+            iceberg::TableIdent::from_strs(["calendar", "backup"]).unwrap(), io
+        ).await.unwrap();
+        let batches: Vec<_> = table.reader_builder().build().read(table.scan().build().unwrap().plan_files().await.unwrap())
+            .unwrap().stream().try_collect().await.unwrap();
+        assert_eq!(batches.iter().map(arrow_array58::RecordBatch::num_rows).sum::<usize>(), 1);
+        let column = batches[0].column_by_name("ics").unwrap();
+        assert_eq!(column.as_any().downcast_ref::<arrow_array58::StringArray>().unwrap().value(0), ics);
+        assert!(calendar.calendar_exists(&id).await.unwrap());
+        let pg = store::postgres::PostgresDb::application().await.unwrap();
+        crate::postgres::confirm_calendar_backups(&pg, &generation).await.unwrap();
+        backup_events(&db, project, &calendar).await.unwrap();
+        assert!(!calendar.calendar_exists(&id).await.unwrap());
+    }).await;
+}

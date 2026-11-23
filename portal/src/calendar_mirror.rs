@@ -72,19 +72,9 @@ pub(crate) struct MembershipSource {
 #[async_trait::async_trait]
 impl Source for MembershipSource {
     async fn candidates(&self) -> Result<Vec<Uuid>, SyncError> {
-        Ok(store::projects::all(&self.surreal)
+        store::project_calendar::membership_candidates(&self.surreal)
             .await
-            .map_err(|_| sync_error("reading Project Calendar assignments"))?
-            .into_iter()
-            .filter(|project| {
-                project.firm_id.is_some()
-                    && project
-                        .calendar_id
-                        .as_ref()
-                        .is_some_and(|id| !id.trim().is_empty())
-            })
-            .map(|project| project.id)
-            .collect())
+            .map_err(|_| sync_error("reading Project Calendar candidates"))
     }
 
     async fn sync(
@@ -114,6 +104,25 @@ impl Source for MembershipSource {
                     provider_error(error)
                 }
                 _ => sync_error("reading calendar assignment or grant records"),
+            })
+    }
+
+    async fn backup(&self, project_id: Uuid) -> Result<u64, SyncError> {
+        let _guard = crate::integrations_api::calendar_lock(project_id)
+            .await
+            .map_err(|()| sync_error("locking Project Calendar"))?;
+        let calendar = self
+            .providers
+            .calendar(&self.surreal, project_id)
+            .await
+            .map_err(|error| sync_error(error.slug()))?;
+        store::project_calendar::backup_events(&self.surreal, project_id, calendar.as_ref())
+            .await
+            .map_err(|error| match error {
+                store::project_calendar::ProjectCalendarError::Calendar(source) => {
+                    provider_error(source)
+                }
+                _ => sync_error("saving Project Calendar event backups"),
             })
     }
 }

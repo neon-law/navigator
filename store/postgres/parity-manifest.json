@@ -618,7 +618,21 @@
     },
     {
       "extra_column": null,
+      "extra_table": "project_calendar_event_backup",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
       "extra_table": "project_calendar_grant",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "project_calendar_retirement",
       "missing_column": null,
       "missing_table": null,
       "table": null
@@ -2257,7 +2271,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 191,
+    "table_count": 193,
     "tables": {
       "address": {
         "columns": {
@@ -5655,6 +5669,32 @@
           "project_archive_generation"
         ]
       },
+      "project_calendar_event_backup": {
+        "columns": {
+          "backed_up_at": "TIMESTAMPTZ",
+          "calendar_id": "TEXT",
+          "etag": "TEXT",
+          "firm_id": "UUID",
+          "ics": "TEXT",
+          "project_id": "UUID",
+          "resource_href": "TEXT"
+        },
+        "foreign_keys": [
+          [
+            "firm_id",
+            "firm"
+          ],
+          [
+            "project_id",
+            "project"
+          ]
+        ],
+        "name": "project_calendar_event_backup",
+        "references": [
+          "firm",
+          "project"
+        ]
+      },
       "project_calendar_grant": {
         "columns": {
           "calendar_id": "TEXT",
@@ -5674,6 +5714,35 @@
           ]
         ],
         "name": "project_calendar_grant",
+        "references": [
+          "firm",
+          "project"
+        ]
+      },
+      "project_calendar_retirement": {
+        "columns": {
+          "archive_generation": "UUID",
+          "calendar_id": "TEXT",
+          "capture_xid": "TEXT",
+          "content_sha256": "TEXT",
+          "delete_etag": "TEXT",
+          "deleted_at": "TIMESTAMPTZ",
+          "event_versions": "JSONB",
+          "firm_id": "UUID",
+          "owner_mailbox": "TEXT",
+          "project_id": "UUID"
+        },
+        "foreign_keys": [
+          [
+            "firm_id",
+            "firm"
+          ],
+          [
+            "project_id",
+            "project"
+          ]
+        ],
+        "name": "project_calendar_retirement",
         "references": [
           "firm",
           "project"

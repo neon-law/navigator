@@ -13,6 +13,9 @@
 //! Project's `booking_url`. The DBOS job tracks the direct grants it creates
 //! and preserves other Google Calendar grants.
 
+mod retirement;
+pub use retirement::confirm_archived_calendars;
+
 use std::collections::BTreeMap;
 
 use uuid::Uuid;
@@ -159,6 +162,117 @@ pub async fn ensure(
     })
 }
 
+/// Open Projects and recorded calendars whose Firm has a Workspace calendar owner.
+pub async fn membership_candidates(surreal: &SurrealDb) -> Result<Vec<Uuid>, ProjectCalendarError> {
+    let db = crate::postgres::PostgresDb::application()
+        .await
+        .map_err(sync_db)?;
+    let groups = sqlx::query_as::<_, (Uuid, Vec<Uuid>)>(
+        "SELECT firm_id, array_agg(id ORDER BY id) FROM project
+         WHERE firm_id IS NOT NULL AND (status = 'open' OR calendar_id ~ '[^[:space:]]')
+         GROUP BY firm_id ORDER BY firm_id",
+    )
+    .fetch_all(db.pool())
+    .await
+    .map_err(sync_db)?;
+    let mut candidates = Vec::new();
+    for (firm, projects) in groups {
+        if crate::firms::calendar_owner(surreal, firm)
+            .await
+            .map_err(sync_db)?
+            .is_some()
+        {
+            candidates.extend(projects);
+        }
+    }
+    Ok(candidates)
+}
+
+async fn verify_private_calendar(
+    calendar: &dyn CalendarService,
+    code: &str,
+    calendar_id: &str,
+) -> Result<(), ProjectCalendarError> {
+    if !calendar
+        .recorded_calendar_matches(code, calendar_id)
+        .await?
+    {
+        return Err(CalendarError::Api {
+            action: "verifying Project Calendar ownership",
+            status: 404,
+        }
+        .into());
+    }
+    calendar.verify_private_acl(calendar_id).await?;
+    Ok(())
+}
+
+/// Preserve every observed event revision on the verified private calendar.
+pub async fn backup_events(
+    surreal: &SurrealDb,
+    project_id: Uuid,
+    calendar: &dyn CalendarService,
+) -> Result<u64, ProjectCalendarError> {
+    let project = find(surreal, project_id).await?;
+    let firm_id = project
+        .firm_id
+        .ok_or_else(|| ProjectCalendarError::Db("Project Firm is missing".into()))?;
+    let Some(calendar_id) = configured(&project) else {
+        return Ok(0);
+    };
+    let db = crate::postgres::PostgresDb::application()
+        .await
+        .map_err(sync_db)?;
+    let Some(owner) = crate::firms::calendar_owner(surreal, firm_id)
+        .await
+        .map_err(sync_db)?
+    else {
+        return Ok(0);
+    };
+    if retirement::finish_missing(&db, project_id, firm_id, &calendar_id, &owner, calendar).await? {
+        return Ok(0);
+    }
+    verify_private_calendar(calendar, &project.code, &calendar_id).await?;
+    let mut events = calendar.event_backups(&calendar_id).await?;
+    let closed = matches!(project.status.as_str(), "closed" | "archived");
+    let inventory = closed.then(|| retirement::Inventory::capture(&mut events));
+    let mut resources = Vec::with_capacity(events.len());
+    let mut etags = Vec::with_capacity(events.len());
+    let mut bodies = Vec::with_capacity(events.len());
+    for event in events {
+        resources.push(event.href);
+        etags.push(event.etag);
+        bodies.push(event.ics);
+    }
+    let (inserted, complete) = sqlx::query_as::<_, (i64, bool)>(
+        "WITH incoming AS (SELECT * FROM unnest($4::text[], $5::text[], $6::text[]) AS e(href,etag,ics)),
+         saved AS (INSERT INTO project_calendar_event_backup (project_id,firm_id,calendar_id,resource_href,etag,ics)
+                   SELECT $1,$2,$3,href,etag,ics FROM incoming ON CONFLICT DO NOTHING RETURNING 1),
+         existing AS (SELECT 1 FROM incoming i JOIN project_calendar_event_backup b
+                      ON (b.project_id,b.firm_id,b.calendar_id,b.resource_href,b.etag,b.ics)=($1,$2,$3,i.href,i.etag,i.ics))
+         SELECT count(*), count(*)+(SELECT count(*) FROM existing)=(SELECT count(*) FROM incoming) FROM saved",
+    )
+    .bind(project_id).bind(firm_id).bind(&calendar_id)
+    .bind(&resources).bind(&etags).bind(&bodies)
+    .fetch_one(db.pool()).await.map_err(sync_db)?;
+    if !complete {
+        return Err(CalendarError::InvalidEventBackup.into());
+    }
+    if let Some(inventory) = inventory {
+        retirement::retire(
+            &db,
+            &project,
+            firm_id,
+            &calendar_id,
+            &owner,
+            &inventory,
+            calendar,
+        )
+        .await?;
+    }
+    u64::try_from(inserted).map_err(sync_db)
+}
+
 /// Provider readback for one assigned Person, without persisting their
 /// delivery address or event details in DBOS.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -185,29 +299,28 @@ pub async fn sync_membership(
         .map_err(sync_db)?
         .ok_or_else(|| ProjectCalendarError::Db("PostgreSQL not configured".into()))?;
     let project = find(surreal, project_id).await?;
-    let (Some(firm_id), Some(calendar_id)) = (project.firm_id, configured(&project)) else {
-        return Err(ProjectCalendarError::Db(
-            "Project calendar or Firm is missing".into(),
-        ));
+    let firm_id = project
+        .firm_id
+        .ok_or_else(|| ProjectCalendarError::Db("Project Firm is missing".into()))?;
+    let Some(owner) = crate::firms::calendar_owner(surreal, firm_id)
+        .await
+        .map_err(sync_db)?
+    else {
+        return Ok(Vec::new());
+    };
+    let calendar_id = match configured(&project) {
+        Some(id) => id,
+        None if project.status == "open" => {
+            ensure(surreal, project_id, calendar).await?;
+            configured(&find(surreal, project_id).await?)
+                .ok_or_else(|| ProjectCalendarError::Db("Project calendar is missing".into()))?
+        }
+        None => return Ok(Vec::new()),
     };
 
     // A recorded id is an operator input. Verify it still identifies this
     // Project's calendar in the owning Firm's Workspace before ACL or event writes.
-    if !calendar
-        .recorded_calendar_matches(&project.code, &calendar_id)
-        .await?
-    {
-        return Err(CalendarError::Api {
-            action: "verifying Project Calendar ownership",
-            status: 404,
-        }
-        .into());
-    }
-    calendar.verify_private_acl(&calendar_id).await?;
-    let owner = crate::firms::calendar_owner(surreal, firm_id)
-        .await
-        .map_err(sync_db)?
-        .ok_or_else(|| ProjectCalendarError::Db("Firm calendar owner is missing".into()))?;
+    verify_private_calendar(calendar, &project.code, &calendar_id).await?;
     let (desired, guests, mut report) = current_roster(surreal, &project, firm_id, &owner).await?;
 
     reconcile_reader_grants(
@@ -306,7 +419,7 @@ async fn reconcile_reader_grants(
             source,
         };
         if !calendar
-            .verify_reader(calendar_id, email)
+            .ensure_reader_calendar(calendar_id, email)
             .await
             .map_err(error_for)?
         {
@@ -532,7 +645,9 @@ mod tests {
     use super::{close, ensure, CalendarOutcome};
     use crate::persons::{self, NewPerson, Role};
     use crate::projects::{self, OpenMatterCommand, UpdateProjectCommand};
-    use crate::test_support::{mem_surreal, seed_entity, seed_firm_with_brand};
+    use crate::test_support::{
+        mem_surreal, seed_calendar_project, seed_entity, seed_firm_with_brand,
+    };
 
     async fn open_matter(surreal: &crate::surreal::SurrealDb) -> projects::Project {
         seed_firm_with_brand(surreal, "neon").await;
@@ -578,21 +693,106 @@ mod tests {
         assert!(!super::receives_event_invitation(Role::Owner));
     }
 
-    async fn seed_calendar_project() -> (uuid::Uuid, uuid::Uuid) {
-        let pg = crate::postgres::PostgresDb::configured()
-            .await
-            .unwrap()
-            .unwrap();
-        sqlx::query_as::<_, (uuid::Uuid, uuid::Uuid)>(
-            "WITH j AS (INSERT INTO jurisdiction (name) VALUES ('Calendar jurisdiction') RETURNING id),
-                  t AS (INSERT INTO entity_type (name) VALUES ('Calendar entity type') RETURNING id),
-                  e AS (INSERT INTO entity (name, entity_type_id, jurisdiction_id)
-                        SELECT 'Calendar entity', t.id, j.id FROM t,j RETURNING id),
-                  f AS (INSERT INTO firm (name, slug, status, entity_id)
-                        SELECT 'Calendar Firm', 'calendar-firm', 'active', id FROM e RETURNING id)
-             INSERT INTO project (code, name, status, brand, entity_id, firm_id)
-             SELECT 'calendar-test', 'Calendar test', 'open', 'neon', e.id, f.id FROM e,f RETURNING id, firm_id"
-        ).fetch_one(pg.pool()).await.unwrap()
+    #[tokio::test]
+    async fn replay_keeps_each_calendar_event_revision_once() {
+        use super::backup_events;
+        use cloud::calendar::CalendarEventBackup;
+
+        crate::test_support::with_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            let (project, firm) = seed_calendar_project().await;
+            crate::firms::set_calendar_owner(&db, Role::Owner, None, firm, FAKE_CALENDAR_OWNER).await.unwrap();
+            let calendar = FakeCalendar::default();
+            ensure(&db, project, &calendar).await.unwrap();
+            let id = calendar.calendars().pop().unwrap().id;
+            for etag in ["one", "two"] {
+                calendar.set_event_backups(&id, vec![CalendarEventBackup {
+                    href: "/event.ics".into(), etag: etag.into(),
+                    ics: format!("BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nSUMMARY:{etag}\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"),
+                }]);
+                assert_eq!(backup_events(&db, project, &calendar).await.unwrap(), 1);
+                assert_eq!(backup_events(&db, project, &calendar).await.unwrap(), 0);
+            }
+            let pg = crate::postgres::PostgresDb::application().await.unwrap();
+            let saved = sqlx::query_scalar::<_, String>("SELECT ics FROM project_calendar_event_backup WHERE project_id=$1 ORDER BY etag")
+                .bind(project).fetch_all(pg.pool()).await.unwrap();
+            assert_eq!(saved.len(), 2);
+            assert!(saved[0].contains("SUMMARY:one\r\n"));
+            assert!(saved[1].contains("SUMMARY:two\r\n"));
+        }).await;
+    }
+
+    #[tokio::test]
+    async fn a_closed_calendar_waits_for_an_archive_covering_its_latest_events() {
+        use cloud::calendar::CalendarEventBackup;
+        crate::test_support::with_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            let pg = crate::postgres::PostgresDb::application().await.unwrap();
+            let (project, firm) = seed_calendar_project().await;
+            crate::firms::set_calendar_owner(&db, Role::Owner, None, firm, FAKE_CALENDAR_OWNER).await.unwrap();
+            let calendar = FakeCalendar::default();
+            ensure(&db, project, &calendar).await.unwrap();
+            let id = calendar.calendars().pop().unwrap().id;
+            sqlx::query("UPDATE project SET status='closed' WHERE id=$1").bind(project).execute(pg.pool()).await.unwrap();
+
+            let snapshot = || sqlx::query_scalar::<_, String>("SELECT pg_current_snapshot()::text").fetch_one(pg.pool());
+            let too_early = snapshot().await.unwrap();
+            super::backup_events(&db, project, &calendar).await.unwrap();
+            super::confirm_archived_calendars(&pg, &too_early, uuid::Uuid::now_v7()).await.unwrap();
+            super::backup_events(&db, project, &calendar).await.unwrap();
+            assert!(calendar.calendar_exists(&id).await.unwrap());
+
+            super::confirm_archived_calendars(&pg, &snapshot().await.unwrap(), uuid::Uuid::now_v7()).await.unwrap();
+            calendar.set_event_backups(&id, vec![CalendarEventBackup {
+                href: "/late.ics".into(), etag: "late".into(), ics: "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:late\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n".into(),
+            }]);
+            super::backup_events(&db, project, &calendar).await.unwrap();
+            assert!(calendar.calendar_exists(&id).await.unwrap());
+            super::confirm_archived_calendars(&pg, &snapshot().await.unwrap(), uuid::Uuid::now_v7()).await.unwrap();
+            sqlx::query("UPDATE project SET status='open' WHERE id=$1").bind(project).execute(pg.pool()).await.unwrap();
+            super::backup_events(&db, project, &calendar).await.unwrap();
+            assert!(calendar.calendar_exists(&id).await.unwrap());
+            sqlx::query("UPDATE project SET status='closed' WHERE id=$1").bind(project).execute(pg.pool()).await.unwrap();
+            super::backup_events(&db, project, &calendar).await.unwrap();
+            assert!(!calendar.calendar_exists(&id).await.unwrap());
+            assert!(projects::find_by_id(&db, project).await.unwrap().unwrap().calendar_id.is_none());
+            let count: i64 = sqlx::query_scalar("SELECT count(*) FROM project_calendar_event_backup WHERE project_id=$1")
+                .bind(project).fetch_one(pg.pool()).await.unwrap();
+            assert_eq!(count, 1);
+        }).await;
+    }
+
+    #[tokio::test]
+    async fn membership_candidates_follow_the_firm_calendar_owner() {
+        use crate::firms::set_calendar_owner;
+
+        crate::test_support::with_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            let (project, firm) = seed_calendar_project().await;
+            set_calendar_owner(&db, Role::Owner, None, firm, FAKE_CALENDAR_OWNER)
+                .await
+                .unwrap();
+            assert_eq!(super::membership_candidates(&db).await.unwrap(), [project]);
+            let calendar = FakeCalendar::default();
+            for _ in 0..2 {
+                super::sync_membership(&db, project, &calendar)
+                    .await
+                    .unwrap();
+            }
+            assert_eq!(calendar.created(), 1);
+            let saved = projects::find_by_id(&db, project).await.unwrap().unwrap();
+            assert_eq!(
+                saved.calendar_id.as_deref(),
+                Some(calendar.calendars()[0].id.as_str())
+            );
+            assert_eq!(super::membership_candidates(&db).await.unwrap(), [project]);
+
+            set_calendar_owner(&db, Role::Owner, None, firm, "")
+                .await
+                .unwrap();
+            assert!(super::membership_candidates(&db).await.unwrap().is_empty());
+        })
+        .await;
     }
 
     #[tokio::test]

@@ -14,17 +14,19 @@ owner. Setup, the Deadline mirror, and closing check the recorded id against the
 missing or mismatched calendar returns `recorded_resource_missing`. Verify the intended calendar and use `navigator
 project set --calendar <id>` to correct the link. A rerun reuses the verified calendar.
 
-The opted-in DBOS membership job checks recorded calendars after setup and rechecks assignments in each five-minute
-slot. A Project participant needs the matching Firm role, a confirmed address in the owner's Google Workspace domain,
-and successful Workspace delegation. Clerks also require a supervising Lawyer DRI. Eligible participants receive reader
-access. Eligible Clerks, Lawyers, and Admins are invited to events organized by the Project Calendar, including
-recurring series. Google controls invitations on events organized elsewhere. The job preserves existing manual grants
-and guests and removes the direct access and event guests it added when an assignment ends. It refuses automatic sharing
-on calendars with public or domain-wide access.
+When the Firm has a [Workspace calendar owner](firm-calendar-settings.md), DBOS checks assignments on its recorded
+calendars every five minutes. It also provisions missing calendars for open Projects. A participant needs the matching
+Firm role, a confirmed address in the owner's domain, and successful Workspace delegation. Clerks also require a
+supervising Lawyer DRI. Eligible participants receive reader access. The job adds the calendar to each participant's
+Google Calendar list with its events selected and preserves existing display preferences. Eligible Clerks, Lawyers, and
+Admins are invited to events organized by the Project Calendar, including recurring series. Google controls invitations
+on events organized elsewhere. The job preserves manual grants and guests and removes the access and guests it added
+when an assignment ends. It refuses automatic sharing on calendars with public or domain-wide access. An hourly [event
+backup](project-calendar-event-backup.md) preserves event revisions for the Firm.
 
-Closing the Project makes every writer a reader and clears the [Booking Link](booking-link.md); the calendar and its
-events are kept as part of the matter's record. The matter page links the calendar to the firm side only, as a
-[Resource](resource.md).
+Closing the Project makes writers readers and clears the [Booking Link](booking-link.md). The firm-side matter page
+links to the shared calendar under Resources until [Project Calendar Retirement](project-calendar-retirement.md)
+completes. The event backups remain available after the live calendar is deleted.
 
 Create, update, complete, and cancel [Deadlines](deadline.md) in Navigator. The mirror reads its own calendar events to
 reconcile changes and preserves unrelated events.

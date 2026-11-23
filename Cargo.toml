@@ -157,6 +157,7 @@ jsonwebtoken = { version = "12", default-features = false, features = ["use_pem"
 p256 = "0.14"
 rand = "0.10"
 rust_decimal = { version = "1.43", default-features = false, features = ["serde", "std"] }
+roxmltree = "0.21"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "query", "form", "multipart"] }
 # Rust-native Rego interpreter. The compatibility gate uses only the
 # thread-safe core needed by Navigator's policy; the default feature set

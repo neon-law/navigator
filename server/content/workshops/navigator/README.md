@@ -136,9 +136,9 @@ Have each attendee sign in with the role relevant to their work. Keep the browse
 The matter has one private, shared Project Calendar. When you check a proposed time, use your own calendar and the
 shared calendar for this matter.
 
-With calendar membership sync enabled, assigning a Clerk, Lawyer, or Admin to the Project adds that person to events
-organized by its calendar. Ending the assignment removes the event invitations Navigator added. Calendar reader access
-and event invitations are separate. Check the guest list on the event to see who was invited.
+When the Firm has a Workspace calendar owner, DBOS invites eligible Clerks, Lawyers, and Admins assigned to the Project
+to events organized by its calendar. Ending the assignment removes the invitations Navigator added. The guest list shows
+who was invited.
 
 At 03:33 UTC each day, the DBOS Nightly Project Update syncs open Projects’ shared calendars and posts the daily update
 in each Project’s internal Slack channel.

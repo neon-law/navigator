@@ -5763,3 +5763,29 @@ ALTER TABLE firm_integration_secret ADD COLUMN stripe_mode TEXT CHECK (stripe_mo
 ALTER TABLE project_folder DROP CONSTRAINT project_folder_slot_check;
 
 ALTER TABLE project_folder ADD CONSTRAINT project_folder_slot_check CHECK (slot IN ( 'root', 'client_submissions', 'Client Production', 'Client Production/Agreements', 'Client Production/Screenshots', 'Correspondence (Served)', 'Costs', 'Mail (Correspondence)', 'Discovery (Served)', 'Docket Filings', 'Court Rules', 'Engagement', 'Work Product', 'Work Product/Client Calls (Work Product)', 'Work Product/Correspondence (Work Product)', 'Work Product/Discovery (Work Product)', 'Work Product/Motions (Work Product)', 'Work Product/Pleadings (Work Product)', 'Work Product/Research (Work Product)', 'Work Product/Stipulations (Work Product)' ));
+
+-- Migration: 20261123190000_create_project_calendar_event_backup.sql
+CREATE TABLE project_calendar_event_backup (
+    project_id UUID NOT NULL REFERENCES project(id),
+    firm_id UUID NOT NULL REFERENCES firm(id),
+    calendar_id TEXT NOT NULL,
+    resource_href TEXT NOT NULL,
+    etag TEXT NOT NULL,
+    ics TEXT NOT NULL,
+    backed_up_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (project_id, firm_id, calendar_id, resource_href, etag)
+);
+
+CREATE TABLE project_calendar_retirement (
+    project_id UUID NOT NULL REFERENCES project(id),
+    firm_id UUID NOT NULL REFERENCES firm(id),
+    calendar_id TEXT NOT NULL,
+    owner_mailbox TEXT NOT NULL,
+    event_versions JSONB NOT NULL,
+    content_sha256 TEXT NOT NULL,
+    capture_xid TEXT NOT NULL DEFAULT pg_current_xact_id()::text,
+    archive_generation UUID,
+    delete_etag TEXT,
+    deleted_at TIMESTAMPTZ,
+    PRIMARY KEY (project_id, firm_id, calendar_id)
+);

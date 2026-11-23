@@ -371,17 +371,26 @@ carries — and the door and the CLI verb accept `dry-run` to rehearse without t
 
 ## Project Calendar membership
 
-Opt in with `NAVIGATOR_DBOS_PROJECT_CALENDAR_MEMBERSHIP_ENABLED=true` on the DBOS web host after applying PostgreSQL
-migrations. Setup creates or adopts the private calendar; the membership schedule discovers recorded calendars,
-including those linked by hand, and checks current assignments every five minutes. Each Project gets its own DBOS
-workflow and shares a write lock with setup and the Deadline mirror. The workflow retries a failed pass and the next
-slot repairs drift. Check the workflow output for Person IDs, access readback, calendar notification requests, and event
-response counts. A provider failure remains a failed workflow. Google Calendar reports attendee responses and accepts
-notification requests; it does not provide an email delivery receipt.
+The DBOS web host checks Projects every five minutes for Firms with a Google Workspace owner in [Firm Calendar
+Settings](glossary/firm-calendar-settings.md). For an open Project without a calendar ID, the job creates or adopts its
+private calendar and records the ID. It checks manually linked calendars too. Clearing the Firm owner stops new jobs for
+that Firm. Each Project shares a write lock with setup and the Deadline mirror. The workflow retries a failed pass, and
+the next slot repairs drift. The workflow output reports Person IDs, access readback, calendar notification requests,
+and event response counts.
+
+An independent hourly DBOS job reads iCalendar event resources through Google's CalDAV API with the delegated owner's
+credentials. Enable the CalDAV API on the Workspace integration's Google Cloud project. Each new resource revision is
+saved in PostgreSQL and included in the next configured [Iceberg Archive](glossary/iceberg-archive.md) export. A failed
+backup is visible separately from membership repair. For a closed or archived Project, the job records the final event
+inventory and waits for a published paired Iceberg generation that includes it. It then checks the current Project,
+ownership, sharing rules, and event contents before deleting the secondary calendar and clearing its link. A changed
+event requires a new archive. The delegated owner must have exclusive write access during retirement.
+
+[Google's CalDAV guide](https://developers.google.com/workspace/calendar/caldav/v2/guide).
 
 On staging, run setup twice on a synthetic Project, assign a verified Workspace Clerk or Admin, and check the recorded
 ID, access readback, and event response status. Change the assignment and verify that the job removes only its own
-direct grants and guests. Confirm that an external address cannot receive access before enabling the job for production.
+direct grants and guests. Confirm that an external address cannot receive access during the staging check.
 
 ## Notation worker opt-in
 

@@ -1230,7 +1230,12 @@ async fn dbos_schedules(
             Arc::new(crate::plan_retainers::PlanRetainers(rt.state.clone()))
                 as Arc<dyn dbos_engine::plan_retainers::Source>
         }),
-        project_calendar: calendar_membership_schedule(rt, host_dbos, lookup)?,
+        project_calendar: enabled.then(|| {
+            Arc::new(crate::calendar_mirror::MembershipSource {
+                surreal: rt.state.surreal.clone(),
+                providers: Arc::clone(&rt.state.integration_providers),
+            }) as Arc<dyn dbos_engine::project_calendar::Source>
+        }),
         purchase_activation,
         billing_canary,
         billing_digest,
@@ -1238,27 +1243,6 @@ async fn dbos_schedules(
         profit_digest,
         ceo_digest: ceo_digest_schedule(rt, host_dbos, lookup).await?,
     })
-}
-
-fn calendar_membership_schedule(
-    rt: &HostRuntime,
-    host_dbos: bool,
-    lookup: impl Fn(&str) -> Option<String> + Copy,
-) -> anyhow::Result<Option<Arc<dyn dbos_engine::project_calendar::Source>>> {
-    Ok(
-        if host_dbos
-            && dbos_engine::enabled(lookup)?
-            && dbos_engine::project_calendar::enabled(lookup)?
-        {
-            Some(Arc::new(crate::calendar_mirror::MembershipSource {
-                surreal: rt.state.surreal.clone(),
-                providers: Arc::clone(&rt.state.integration_providers),
-            })
-                as Arc<dyn dbos_engine::project_calendar::Source>)
-        } else {
-            None
-        },
-    )
 }
 
 /// Resolve the independent SourceImports gate and build its context, so an
