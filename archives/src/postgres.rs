@@ -228,6 +228,7 @@ pub const POSTGRES_TABLES: &[&str] = &[
     "esignature_webhook_journal",
     "docusign_completion",
     "docusign_completion_cursor",
+    "project_envelope",
     "forgejo_push_webhook_journal",
     "project_pull_request_notice",
     "social_oauth_attempt",

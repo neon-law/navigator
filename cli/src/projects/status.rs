@@ -32,11 +32,15 @@ pub async fn run(host: Option<&str>, project: Option<&str>, json: bool) -> ExitC
 }
 
 /// Refresh the matter's already-linked envelopes through the Firm-scoped provider.
-pub async fn refresh_envelopes(host: Option<&str>, project: &str) -> ExitCode {
+pub async fn refresh_envelopes(
+    host: Option<&str>,
+    project: &str,
+    envelope_id: Option<uuid::Uuid>,
+) -> ExitCode {
     let result: Result<()> = async {
         let (base, token) = remote::resolve(host)?;
         let id = surfaces::resolve_project_id(&base, &token, project).await?;
-        let value = refresh_known(&base, &token, id).await?;
+        let value = read_envelopes(&base, &token, id, envelope_id).await?;
         println!("{}", serde_json::to_string_pretty(&value)?);
         Ok(())
     }
@@ -50,18 +54,26 @@ pub async fn refresh_envelopes(host: Option<&str>, project: &str) -> ExitCode {
     }
 }
 
-async fn refresh_known(base: &str, token: &str, id: uuid::Uuid) -> Result<serde_json::Value> {
-    let response = remote::authenticated_client_builder(base)?
+async fn read_envelopes(
+    base: &str,
+    token: &str,
+    id: uuid::Uuid,
+    envelope_id: Option<uuid::Uuid>,
+) -> Result<serde_json::Value> {
+    let client = remote::authenticated_client_builder(base)?
         .timeout(Duration::from_secs(120))
-        .build()?
-        .post(format!("{base}/app/api/projects/{id}/envelopes/refresh"))
-        .bearer_auth(token)
-        .json(&serde_json::json!({}))
-        .send()
-        .await?;
+        .build()?;
+    let url = format!("{base}/app/api/projects/{id}/envelopes");
+    let request = match envelope_id {
+        Some(envelope) => client.get(format!("{url}/{envelope}")),
+        None => client
+            .post(format!("{url}/refresh"))
+            .json(&serde_json::json!({})),
+    };
+    let response = request.bearer_auth(token).send().await?;
     anyhow::ensure!(
         response.status().is_success(),
-        "envelope refresh failed: {}",
+        "envelope status failed: {}",
         response.status()
     );
     let value: serde_json::Value = response.json().await?;
@@ -141,19 +153,36 @@ fn print_status(value: &serde_json::Value) {
     {
         for adoption in adoptions {
             let envelope = &adoption["envelope"];
+            let notation = adoption["notation_id"]
+                .as_str()
+                .map_or_else(String::new, |id| format!(" (Notation {id})"));
             println!(
-                "DocuSign envelope {}: {} (Notation {})",
+                "DocuSign envelope {}: {}{notation}",
                 envelope["envelopeId"].as_str().unwrap_or("unknown"),
                 envelope["status"].as_str().unwrap_or("unknown"),
-                adoption["notation_id"],
             );
             if let Some(signers) = envelope["signers"].as_array() {
                 for signer in signers {
+                    let signed = signer["signedDateTime"]
+                        .as_str()
+                        .map_or_else(String::new, |at| format!(" ({at})"));
                     println!(
-                        "  {}: {}",
+                        "  {}: {}{signed}",
                         signer["name"].as_str().unwrap_or("unknown"),
                         signer["status"].as_str().unwrap_or("unknown")
                     );
+                }
+            }
+            if let Some(sent) = envelope["sentDateTime"].as_str() {
+                println!("  sent: {sent}");
+            }
+            for document in envelope["envelopeDocuments"]
+                .as_array()
+                .into_iter()
+                .flatten()
+            {
+                if let Some(name) = document["name"].as_str() {
+                    println!("  document: {name}");
                 }
             }
         }
@@ -177,6 +206,28 @@ mod envelope_tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[tokio::test]
+    async fn lookup_reads_one_envelope_without_registering_or_refreshing() {
+        let server = MockServer::start().await;
+        let project = uuid::Uuid::new_v4();
+        let envelope = uuid::Uuid::new_v4();
+        Mock::given(method("GET"))
+            .and(path(format!(
+                "/app/api/projects/{project}/envelopes/{envelope}"
+            )))
+            .and(header("authorization", "Bearer test-token"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"status": "sent"})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let result = read_envelopes(&server.uri(), "test-token", project, Some(envelope))
+            .await
+            .unwrap();
+        assert_eq!(result["status"], "sent");
+    }
+
+    #[tokio::test]
     async fn matter_envelope_status_refreshes_the_scoped_record_and_reports_refusals() {
         for status in [200, 403] {
             let server = MockServer::start().await;
@@ -191,7 +242,7 @@ mod envelope_tests {
                 .expect(1)
                 .mount(&server)
                 .await;
-            let result = refresh_known(&server.uri(), "test-token", id).await;
+            let result = read_envelopes(&server.uri(), "test-token", id, None).await;
             assert_eq!(result.is_ok(), status == 200);
         }
     }

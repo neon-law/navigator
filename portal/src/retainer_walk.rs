@@ -2003,8 +2003,7 @@ pub(crate) async fn render_and_park(
         });
     }
     let assembly_started = std::time::Instant::now();
-    let document_payload =
-        approval_document_payload(deps, notation_id, notation_row.template_id).await?;
+    let document_payload = approval_document_payload(deps, &notation_row).await?;
 
     // Fire `approved`: the worker renders + persists the PDF on entering
     // `generate_pdf__retainer_pdf`. We do NOT advance past it — the send
@@ -2036,10 +2035,10 @@ pub(crate) async fn render_and_park(
 
 async fn approval_document_payload(
     deps: &RenderDeps<'_>,
-    notation_id: Uuid,
-    template_id: Uuid,
+    notation: &store::notations::Notation,
 ) -> Result<String, WorkflowDriveError> {
-    let template = store::templates::find_by_id(deps.surreal, template_id)
+    let notation_id = notation.id;
+    let template = store::templates::find_by_id(deps.surreal, notation.template_id)
         .await?
         .ok_or(WorkflowDriveError::TemplateMissing(notation_id))?;
     let source = store::templates::body(deps.surreal, deps.storage, &template).await?;
@@ -2049,8 +2048,21 @@ async fn approval_document_payload(
     let body = store::notation_clauses::splice(&source, &clauses);
     let (keys, labels) =
         build_answer_context(deps.surreal, Some(deps.storage), notation_id).await?;
+    let source = if template.kind.as_deref() == Some("pleading") {
+        let markdown =
+            rules::frontmatter::split(&body).map_or(body.as_str(), |(_, markdown)| markdown);
+        crate::pleading::source(
+            deps.surreal,
+            notation.project_id,
+            &body,
+            substitute_template_body(markdown, &keys, &labels),
+        )
+        .await?
+    } else {
+        typst_body_from_template(&body, &keys, &labels, template.kind.as_deref())
+    };
     let (typst_source, fields) = crate::signature_render::expand_signatures_for_firm(
-        &typst_body_from_template(&body, &keys, &labels, template.kind.as_deref()),
+        &source,
         labels.get("firm.legal_name").map(String::as_str),
     );
 

@@ -16,7 +16,7 @@
 
 use std::path::{Path, PathBuf};
 
-use word::matter::{Filing, Matter};
+use word::matter::Matter;
 
 use super::manifest;
 
@@ -255,23 +255,7 @@ fn read_resolved(path: &Path, contents: &str) -> Result<Matter, String> {
     Ok(matter)
 }
 
-/// A notation's own caption fields, from its frontmatter.
-#[must_use]
-pub fn filing_from(contents: &str) -> Filing {
-    let field = |key: &str| {
-        rules::frontmatter::extract(contents)
-            .and_then(|fm| rules::frontmatter::field(fm, key))
-            .filter(|value| !value.is_empty())
-    };
-    Filing {
-        caption_title: field("caption_title").unwrap_or_default(),
-        footer_title: field("footer_title").unwrap_or_default(),
-        hearing_date: field("hearing_date"),
-        hearing_time: field("hearing_time"),
-        reservation_id: field("reservation_id"),
-        document_code: field("document_code"),
-    }
-}
+pub use model::pleading::filing_from;
 
 /// The caption fence for the pleading at `file` whose source is `contents`.
 ///
@@ -304,7 +288,7 @@ fn caption_for_export(file: &Path, contents: &str, final_export: bool) -> Result
     match (matter, problems.is_empty()) {
         (Some(matter), true) => {
             if final_export {
-                require_assigned(&matter)?;
+                model::pleading::require_assigned(&matter)?;
             }
             let style = pleading_frame(file, contents)?.caption_style(&jurisdiction_of(contents));
             Ok(word::matter::compose(&matter, &filing, style).to_fence())
@@ -360,29 +344,6 @@ pub fn signed_on(file: &Path) -> Result<Option<String>, String> {
 /// Names each pending assignment, or a missing caption field.
 pub fn caption_for_final(file: &Path, contents: &str) -> Result<String, String> {
     caption_for_export(file, contents, true)
-}
-
-fn require_assigned(matter: &Matter) -> Result<(), String> {
-    let pending: Vec<_> = [
-        ("matter.department", matter.department.as_str()),
-        ("matter.judicial_officer", matter.judicial_officer.as_str()),
-    ]
-    .into_iter()
-    .filter_map(|(field, value)| {
-        value
-            .trim()
-            .eq_ignore_ascii_case(word::matter::PENDING)
-            .then_some(field)
-    })
-    .collect();
-    if pending.is_empty() {
-        Ok(())
-    } else {
-        Err(format!(
-            "this pleading cannot be exported: {} pending; record the court's assignment or use --preview",
-            pending.join(", ")
-        ))
-    }
 }
 
 /// [`caption_for`] for a preview. A preview captions exactly what a final

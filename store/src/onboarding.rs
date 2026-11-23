@@ -93,6 +93,45 @@ pub struct EsignSummary {
     pub state: String,
 }
 
+/// Existing onboarding agreements on the caller's participating Projects, including standalone filings.
+pub async fn agreements(
+    pg: &PostgresDb,
+    projects: &[Uuid],
+) -> Result<Vec<model::projects::OnboardingAgreement>, sqlx::Error> {
+    crate::postgres_backfill::family::require_scope(
+        pg,
+        crate::postgres_backfill::family::Family::Notation,
+    )
+    .await
+    .map_err(|e| sqlx::Error::Configuration(Box::new(e)))?;
+    let rows = sqlx::query_scalar::<_, sqlx::types::Json<model::projects::OnboardingAgreement>>(
+        "WITH runs AS (
+            SELECT n.project_id, t.title, n.id AS notation_id, COALESCE(s.state,n.state) AS state,
+                   s.provider_id AS envelope_id
+            FROM notation n JOIN template t ON t.id=n.template_id
+            LEFT JOIN LATERAL (SELECT state,provider_id FROM signature WHERE notation_id=n.id
+                               ORDER BY inserted_at DESC,id DESC LIMIT 1) s ON true
+            WHERE n.project_id=ANY($1) AND t.kind='onboarding'
+        ), filings AS (
+            SELECT DISTINCT ON (a.project_id,COALESCE(a.slug,a.id::text)) a.project_id,a.filename,a.id,a.metadata,a.source
+            FROM asset a WHERE a.project_id=ANY($1) AND a.kind='onboarding' AND a.deleted_at IS NULL
+            ORDER BY a.project_id,COALESCE(a.slug,a.id::text),a.inserted_at DESC,a.id DESC
+        ), agreements AS (
+            SELECT p.code AS project,r.title,r.state,r.notation_id,NULL::uuid AS document_id,r.envelope_id
+            FROM runs r JOIN project p ON p.id=r.project_id
+            UNION ALL
+            SELECT p.code,COALESCE(f.filename,'Onboarding agreement'),'filed',NULL,f.id,f.metadata->>'docusign_envelope_id'
+            FROM filings f JOIN project p ON p.id=f.project_id
+            WHERE NOT EXISTS (SELECT 1 FROM runs r WHERE r.project_id=f.project_id AND
+                (EXISTS (SELECT 1 FROM notation_document d WHERE d.notation_id=r.notation_id AND d.original_asset_id=f.id)
+                 OR EXISTS (SELECT 1 FROM signature s WHERE s.notation_id=r.notation_id AND s.provider='docusign'
+                            AND (s.provider_id=f.metadata->>'verified_onboarding_envelope_id' OR
+                                 (f.source='docusign' AND s.provider_id=f.metadata->>'docusign_envelope_id')))))
+        ) SELECT to_jsonb(a) FROM agreements a ORDER BY a.project,a.title,a.notation_id,a.document_id"
+    ).bind(projects).fetch_all(pg.pool()).await?;
+    Ok(rows.into_iter().map(|row| row.0).collect())
+}
+
 /// The latest unexecuted onboarding e-signature request per project, for projects that have one.
 pub async fn pending_esign(
     pg: &PostgresDb,

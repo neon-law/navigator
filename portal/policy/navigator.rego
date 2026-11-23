@@ -1668,6 +1668,18 @@ route_allow if {
 	is_admin(input.session)
 }
 
+# The handler restricts the inventory to the lawyer's participating Projects.
+route_allow if {
+    input.path == ["app", "api", "onboarding-agreements"]
+    input.method == "GET"
+    is_lawyer(input.session)
+}
+
+ci_matter_content_denied if {
+    input.session.source == "ci"
+    input.path == ["app", "api", "onboarding-agreements"]
+}
+
 # Read every matter's lifecycle fields: GET /app/api/project-lifecycle.
 # Admin-only, and it carries its own noun because the projects GET rule admits
 # any authenticated caller up to five segments. Three segments and GET.
@@ -2237,6 +2249,15 @@ ci_matter_content_denied if {
 ci_matter_content_denied if {
     input.session.source == "ci"
     evidence_share_management
+}
+
+# Read one envelope after the handler verifies its Project.
+route_allow if {
+    count(input.path) == 6
+    array.slice(input.path, 0, 3) == ["app", "api", "projects"]
+    input.path[4] == "envelopes"
+    input.method == "GET"
+    is_lawyer(input.session)
 }
 
 # Refresh already-correlated envelopes; the handler enforces matter participation.

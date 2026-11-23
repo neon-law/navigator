@@ -149,6 +149,14 @@ fn project_page_link(tab: &crate::sections::page::PageTab, current: &str) -> Ele
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct EnvelopeRow {
+    pub id: String,
+    pub status: String,
+    pub documents: Vec<String>,
+    pub signers: Vec<String>,
+}
+
 /// The rendered lawyer workbench — every field wasm-safe (plain scalars; no
 /// `store`/`SeaORM`/`cloud`/`repos` type crosses to the client build).
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
@@ -223,6 +231,8 @@ pub struct LawyerDetailView {
     pub document_folders: Vec<String>,
     #[serde(default)]
     pub notations: Vec<ProjectNotationRow>,
+    #[serde(default)]
+    pub envelopes: Vec<EnvelopeRow>,
     /// The `?error=` flash a refused write redirects back with — a re-upload
     /// whose kind conflicts with its chain, a DRI change, or an admin's
     /// testimonial save.
@@ -777,6 +787,31 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
             }
         })
         .collect();
+    let envelopes = match pg
+        .as_ref()
+        .filter(|_| active_tab == MatterTab::Documents && role.is_lawyer_tier())
+    {
+        Some(pg) => store::project_envelopes::for_project(pg, id)
+            .await
+            .map_err(server_error)?
+            .into_iter()
+            .map(|envelope| EnvelopeRow {
+                id: envelope.envelope_id.to_string(),
+                status: envelope.status,
+                documents: envelope
+                    .envelope_documents
+                    .into_iter()
+                    .map(|doc| doc.name)
+                    .collect(),
+                signers: envelope
+                    .signers
+                    .into_iter()
+                    .map(|s| format!("{} ({})", s.name, s.status))
+                    .collect(),
+            })
+            .collect(),
+        None => Vec::new(),
+    };
     let notations = if active_tab == MatterTab::Documents {
         project_notation_board(&surreal, &storage, id)
             .await
@@ -904,6 +939,7 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
             .map(|folder| folder.as_str().to_string())
             .collect(),
         notations,
+        envelopes,
         error,
         active_tab,
         asset_kind_choices: asset_kind_choices(),
@@ -1245,6 +1281,25 @@ pub fn LawyerProjectDetail() -> Element {
                     MatterTab::Communications => rsx! { {communications_tab(&view)} {notes_tab(&view)} },
                     MatterTab::Documents => rsx! {
                         ProjectNotationBoard { rows: view.notations.clone() }
+                        if !view.envelopes.is_empty() {
+                            section { class: "lawyer-detail__section",
+                                h2 { "DocuSign envelopes" }
+                                ul {
+                                    for envelope in &view.envelopes {
+                                        li { key: "{envelope.id}",
+                                            code { "{envelope.id}" }
+                                            " — {envelope.status}"
+                                            for document in &envelope.documents {
+                                                div { "{document}" }
+                                            }
+                                            for signer in &envelope.signers {
+                                                div { "{signer}" }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         section { class: "lawyer-detail__section project-documents",
                             h2 { "Documents" }
                             {documents_table(&view)}

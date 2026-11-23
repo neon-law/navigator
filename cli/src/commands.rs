@@ -327,11 +327,23 @@ fn run_forgejo(action: ForgejoCmd) -> ExitCode {
 /// The Notation envelope verbs a lawyer runs from a Project checkout.
 #[derive(Subcommand)]
 pub enum NotationCmd {
+    /// List existing onboarding agreements across your participating Projects.
+    Onboarding {
+        /// Navigator site whose session to use.
+        #[arg(long)]
+        host: Option<String>,
+        /// Print the agreement rows as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     #[command(flatten)]
     Render(crate::notation_render::RenderCmd),
     /// Work with a Notation's signature envelope.
     #[command(name = "envelope")]
     Envelope {
+        /// Select a site directly when working outside a Project checkout.
+        #[arg(long, global = true)]
+        host: Option<String>,
         #[command(subcommand)]
         action: EnvelopeCmd,
     },
@@ -552,6 +564,9 @@ fn run() -> ExitCode {
             runtime().block_on(crate::assumptions::run(firm, host, action))
         }
         Command::Notation {
+            action: NotationCmd::Onboarding { host, json },
+        } => runtime().block_on(remote::onboarding_agreements(host.as_deref(), json)),
+        Command::Notation {
             action: NotationCmd::Render(action),
         } => crate::notation_render::run(action),
         Command::Validate {
@@ -565,17 +580,20 @@ fn run() -> ExitCode {
         }
         Command::Projects { action } => runtime().block_on(run_projects(action)),
         Command::Notation {
-            action: NotationCmd::Envelope { action },
+            action: NotationCmd::Envelope { host, action },
         } => match action {
-            EnvelopeCmd::Prepare { notation_id, open } => {
-                runtime().block_on(remote::notation_envelope(notation_id, true, open))
-            }
-            EnvelopeCmd::Send { notation_id } => {
-                runtime().block_on(remote::notation_envelope(notation_id, false, false))
-            }
-            EnvelopeCmd::Status { notation_id } => {
-                runtime().block_on(remote::notation_envelope_status(notation_id))
-            }
+            EnvelopeCmd::Prepare { notation_id, open } => runtime().block_on(
+                remote::notation_envelope(host.as_deref(), notation_id, true, open),
+            ),
+            EnvelopeCmd::Send { notation_id } => runtime().block_on(remote::notation_envelope(
+                host.as_deref(),
+                notation_id,
+                false,
+                false,
+            )),
+            EnvelopeCmd::Status { notation_id } => runtime().block_on(
+                remote::notation_envelope_status(host.as_deref(), notation_id),
+            ),
         },
         Command::Relationship { action } => runtime().block_on(relationship_log::run(action)),
         Command::Glossary { action } => crate::glossary::run(action),
@@ -1498,9 +1516,12 @@ pub enum ProjectEnvelopeCmd {
         #[command(flatten)]
         host: HostOpt,
     },
-    /// Refresh recorded `DocuSign` envelopes on this matter.
+    /// Refresh recorded envelopes, or read one directly from the Firm account by ID.
     Status {
         project_code: String,
+        /// Read status without registering the envelope or filing documents.
+        #[arg(long)]
+        envelope_id: Option<uuid::Uuid>,
         #[command(flatten)]
         host: HostOpt,
     },
@@ -2493,8 +2514,17 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
                 remote::notation_adopt_envelope(host.host.as_deref(), &project, &draft, envelope_id)
                     .await
             }
-            ProjectEnvelopeCmd::Status { project_code, host } => {
-                projects::status::refresh_envelopes(host.host.as_deref(), &project_code).await
+            ProjectEnvelopeCmd::Status {
+                project_code,
+                envelope_id,
+                host,
+            } => {
+                projects::status::refresh_envelopes(
+                    host.host.as_deref(),
+                    &project_code,
+                    envelope_id,
+                )
+                .await
             }
         },
         ProjectsCmd::FeedbackCheck {

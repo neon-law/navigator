@@ -2310,6 +2310,24 @@ fn canonical_document(base: &str) -> Value {
             }
           }
         },
+        "/app/api/onboarding-agreements": {
+          "get": {
+            "summary": "List existing onboarding agreements across the lawyer's participating Projects",
+            "responses": {
+              "200": { "description": "Notation runs and separately filed onboarding documents", "content": {
+                "application/json": { "schema": { "type": "array", "items": { "type": "object",
+                  "required": ["project", "title", "state", "notation_id", "document_id", "envelope_id"],
+                  "properties": {
+                    "project": { "type": "string" }, "title": { "type": "string" }, "state": { "type": "string" },
+                    "notation_id": { "type": ["string", "null"], "format": "uuid" },
+                    "document_id": { "type": ["string", "null"], "format": "uuid" },
+                    "envelope_id": { "type": ["string", "null"] }
+                  } } } } } },
+              "401": { "description": "Authentication required" },
+              "403": { "description": "Lawyer session required" }
+            }
+          }
+        },
         "/app/api/project-lifecycle": {
           "get": {
             "summary": "Read every matter's lifecycle fields (admin)",
@@ -3849,6 +3867,19 @@ fn canonical_document(base: &str) -> Value {
               "500": { "description": "The marker could not be cleared (database error)", "content": { "application/json": {
                 "schema": { "$ref": "#/components/schemas/ApiError" }
               } } }
+            }
+          }
+        },
+        "/app/api/projects/{id}/envelopes/{envelope_id}": {
+          "get": {
+            "summary": "Read a linked or uniquely matched envelope from the Firm account",
+            "parameters": [
+              { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+              { "name": "envelope_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+            ],
+            "responses": {
+              "200": { "description": "Current provider status, timestamps and ordered signers" },
+              "404": { "description": "Envelope unavailable or outside this Project" }
             }
           }
         },

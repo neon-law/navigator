@@ -1,6 +1,56 @@
 use super::*;
 use crate::postgres_mirror::tests::{connect, fresh_schema};
 
+#[tokio::test]
+async fn adoption_links_an_existing_upload_and_reuses_the_filing_on_retry() {
+    let Some((pg, project, _)) = native_notation_fixture().await else {
+        return;
+    };
+    let root = tempfile::tempdir().unwrap();
+    let storage: Arc<dyn StorageService> =
+        Arc::new(cloud::FsStorage::new(root.path()).await.unwrap());
+    let upload = IngestArgs {
+        project_id: project,
+        source: "upload",
+        filename: "signed.pdf",
+        kind: "onboarding",
+        content_type: "application/pdf",
+        description: None,
+        secondary_storage_key: None,
+        visibility: "internal",
+    };
+    let identity = DocumentIdentity::default();
+    file_document(&pg, &storage, &upload, &identity, None, b"signed")
+        .await
+        .unwrap();
+    let provider = IngestArgs {
+        source: "docusign",
+        ..upload
+    };
+    let envelope = Uuid::new_v4();
+    let tagged = DocumentIdentity {
+        metadata: Some(serde_json::json!({"docusign_envelope_id": envelope})),
+        ..identity
+    };
+    let recorded = file_document(&pg, &storage, &provider, &tagged, None, b"signed")
+        .await
+        .unwrap();
+    assert!(matches!(recorded, Filed::Revision(_)));
+    let replay = file_document(&pg, &storage, &provider, &tagged, None, b"signed")
+        .await
+        .unwrap();
+    assert!(matches!(replay, Filed::Unchanged { .. }));
+    let revisions = revisions(&pg, project, upload.filename).await.unwrap();
+    assert_eq!(revisions.len(), 2);
+    assert_eq!(revisions[0].storage_key, revisions[1].storage_key);
+    assert_eq!(
+        crate::document_pointers::envelope_id_from_asset_metadata(revisions[0].metadata.as_ref()),
+        Some(envelope)
+    );
+    assert!(official_projects(&pg, &[project]).await.unwrap().is_empty());
+    pg.pool().close().await;
+}
+
 async fn native_notation_fixture() -> Option<(PostgresDb, Uuid, Uuid)> {
     let (options, database) = fresh_schema().await?;
     let pg = connect(&options, &database).await;

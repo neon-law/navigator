@@ -4799,6 +4799,9 @@ pub async fn notation_create(
 ) -> ExitCode {
     run(async {
         let (base, token) = resolve(host)?;
+        let saved = answers_from
+            .map(crate::answers_file::load_answers_file)
+            .transpose()?;
         // No-redirect client so we read the 303 `Location` (the step URL)
         // rather than following it into the walker's HTML.
         let client = reqwest::Client::builder()
@@ -4846,8 +4849,7 @@ pub async fn notation_create(
             palette::dim("created notation; questionnaire ready — notation"),
             palette::highlight(notation_id.to_string()),
         );
-        if let Some(path) = answers_from {
-            let saved = crate::answers_file::load_answers_file(path)?;
+        if let Some(saved) = saved {
             prefill_from_saved_answers(&client, &base, &token, notation_id, &saved).await?;
         }
         println!(
@@ -4874,6 +4876,25 @@ pub async fn notation_create_on_project(
     project_code: &str,
     answers_from: Option<&Path>,
 ) -> ExitCode {
+    match crate::projects::lifecycle::checkout_draft(Path::new("."), project_code, template_code) {
+        Ok(Some(published)) => {
+            return notation_create(
+                host,
+                template_code,
+                client_email,
+                project_code,
+                answers_from,
+                None,
+                Some(&published),
+            )
+            .await;
+        }
+        Ok(None) => {}
+        Err(error) => {
+            eprintln!("navigator site notation create: {error:#}");
+            return ExitCode::FAILURE;
+        }
+    }
     run(async {
         let saved = answers_from.map(crate::answers_file::load_answers_file).transpose()?;
         let (base, token) = resolve(host)?;
@@ -5122,6 +5143,41 @@ pub async fn notation_list(host: Option<&str>, project_code: &str, json: bool) -
     .await
 }
 
+/// List existing agreements with the identifiers needed to prepare a Notation or read a filed document.
+pub async fn onboarding_agreements(host: Option<&str>, json: bool) -> ExitCode {
+    run(async {
+        let (base, token) = resolve(host)?;
+        let rows: Vec<model::projects::OnboardingAgreement> = authenticated_client_builder(&base)?
+            .build()?
+            .get(format!("{base}/app/api/onboarding-agreements"))
+            .bearer_auth(token)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        if json {
+            println!("{}", serde_json::to_string_pretty(&rows)?);
+        } else if rows.is_empty() {
+            println!("No onboarding agreements on your participating Projects.");
+        } else {
+            for row in rows {
+                let reference = row
+                    .notation_id
+                    .map(|id| format!("notation {id}"))
+                    .or_else(|| row.document_id.map(|id| format!("document {id}")))
+                    .unwrap_or_default();
+                println!(
+                    "{}  {}  {}  {}",
+                    row.project, row.title, row.state, reference
+                );
+            }
+        }
+        Ok(())
+    })
+    .await
+}
+
 /// `navigator project notations` — the manifest-scoped workflow board and its
 /// pre-flight status. Exit non-zero when a template has never run or a review
 /// state has exceeded the requested age.
@@ -5238,34 +5294,33 @@ struct NotationEnvelope {
 /// creating a second one — and stamps the returned envelope id on the
 /// notation's document pointer in the checkout, the committed `blobs/**`
 /// YAML the signed copy files under.
-pub async fn notation_envelope(notation_id: Uuid, prepare: bool, open: bool) -> ExitCode {
-    notation_envelope_in(Path::new("."), notation_id, prepare, open).await
+pub async fn notation_envelope(
+    host: Option<&str>,
+    notation_id: Uuid,
+    prepare: bool,
+    open: bool,
+) -> ExitCode {
+    notation_envelope_in(Path::new("."), host, notation_id, prepare, open).await
 }
 
 /// [`notation_envelope`] against an explicit checkout root — the testable
 /// core; the command reads the checkout the process sits in.
 async fn notation_envelope_in(
     root: &Path,
+    explicit_host: Option<&str>,
     notation_id: Uuid,
     prepare: bool,
     open: bool,
 ) -> ExitCode {
-    let Some(manifest) = crate::projects::manifest::read(root) else {
-        eprintln!("navigator notation envelope: no navigator.yaml in the current directory");
-        return ExitCode::from(2);
-    };
-    let (Some(host), Some(project_code)) = (manifest.host.as_deref(), manifest.project.as_deref())
-    else {
-        eprintln!("navigator notation envelope: navigator.yaml must declare host and project.name");
+    let Some((host, project_code)) = envelope_target(root, explicit_host) else {
         return ExitCode::from(2);
     };
     run(async {
-        let client = DocumentClient::connect(Some(host), project_code).await?;
-        let url = format!("{}/app/api/notations/{notation_id}/signature", client.base);
+        let (base, token, client) = envelope_transport(&host, project_code.as_deref()).await?;
+        let url = format!("{base}/app/api/notations/{notation_id}/signature");
         let response = client
-            .client
             .post(&url)
-            .bearer_auth(&client.token)
+            .bearer_auth(&token)
             .json(&serde_json::json!({ "prepare": prepare }))
             .send()
             .await
@@ -5287,12 +5342,13 @@ async fn notation_envelope_in(
                 palette::highlight(envelope.notation_id.to_string()),
                 envelope.state
             );
-            let href = sender_view_url(&client.base, envelope.notation_id);
+            let href = sender_view_url(&base, envelope.notation_id);
             println!("open in DocuSign: {href}");
             if open {
                 let _ = crate::host::open_browser(&href);
             }
-            println!("dispatch it with: navigator notation envelope send {notation_id}");
+            let site = explicit_host.map(|_| format!(" --host {base}")).unwrap_or_default();
+            println!("after approval, dispatch with: navigator notation envelope send {notation_id}{site}");
             return Ok(());
         }
         println!(
@@ -5301,10 +5357,41 @@ async fn notation_envelope_in(
             palette::highlight(envelope.notation_id.to_string()),
             envelope.state
         );
-        stamp_envelope_on_pointer(root, host, project_code, &envelope).await;
+        if let Some(project_code) = project_code {
+            stamp_envelope_on_pointer(root, &host, &project_code, &envelope).await;
+        }
         Ok(())
     })
     .await
+}
+
+/// An explicit site selects a remote Notation without writing a local Project pointer.
+fn envelope_target(root: &Path, host: Option<&str>) -> Option<(String, Option<String>)> {
+    if let Some(host) = host {
+        return Some((host.to_owned(), None));
+    }
+    let Some(manifest) = crate::projects::manifest::read(root) else {
+        eprintln!("navigator notation envelope: no navigator.yaml in the current directory; select a site with --host");
+        return None;
+    };
+    let (Some(host), Some(project)) = (manifest.host, manifest.project) else {
+        eprintln!("navigator notation envelope: navigator.yaml must declare host and project.name");
+        return None;
+    };
+    Some((host, Some(project)))
+}
+
+async fn envelope_transport(
+    host: &str,
+    project: Option<&str>,
+) -> Result<(String, String, reqwest::Client)> {
+    if let Some(project) = project {
+        let site = DocumentClient::connect(Some(host), project).await?;
+        return Ok((site.base, site.token, site.client));
+    }
+    let (base, token) = resolve(Some(host))?;
+    let client = authenticated_client_builder(&base)?.build()?;
+    Ok((base, token, client))
 }
 
 fn sender_view_url(base: &str, notation_id: Uuid) -> String {
@@ -5394,29 +5481,26 @@ struct NotationSignatureStatus {
 /// code — comes from the `navigator.yaml` in the current checkout. The
 /// read is the REST status door's composition: the durable signature
 /// record the prepare/send flow wrote, stamped by the completion webhook.
-pub async fn notation_envelope_status(notation_id: Uuid) -> ExitCode {
-    notation_envelope_status_in(Path::new("."), notation_id).await
+pub async fn notation_envelope_status(host: Option<&str>, notation_id: Uuid) -> ExitCode {
+    notation_envelope_status_in(Path::new("."), host, notation_id).await
 }
 
 /// [`notation_envelope_status`] against an explicit checkout root — the
 /// testable core; the command reads the checkout the process sits in.
-async fn notation_envelope_status_in(root: &Path, notation_id: Uuid) -> ExitCode {
-    let Some(manifest) = crate::projects::manifest::read(root) else {
-        eprintln!("navigator notation envelope: no navigator.yaml in the current directory");
-        return ExitCode::from(2);
-    };
-    let (Some(host), Some(project_code)) = (manifest.host.as_deref(), manifest.project.as_deref())
-    else {
-        eprintln!("navigator notation envelope: navigator.yaml must declare host and project.name");
+async fn notation_envelope_status_in(
+    root: &Path,
+    explicit_host: Option<&str>,
+    notation_id: Uuid,
+) -> ExitCode {
+    let Some((host, project_code)) = envelope_target(root, explicit_host) else {
         return ExitCode::from(2);
     };
     run(async {
-        let client = DocumentClient::connect(Some(host), project_code).await?;
-        let url = format!("{}/app/api/notations/{notation_id}/signature", client.base);
+        let (base, token, client) = envelope_transport(&host, project_code.as_deref()).await?;
+        let url = format!("{base}/app/api/notations/{notation_id}/signature");
         let response = client
-            .client
             .get(&url)
-            .bearer_auth(&client.token)
+            .bearer_auth(&token)
             .send()
             .await
             .with_context(|| format!("GET {url}"))?;
@@ -5456,7 +5540,7 @@ async fn notation_envelope_status_in(root: &Path, notation_id: Uuid) -> ExitCode
             println!("  {}: {}", signer.role, step);
         }
         if let Some(href) = &envelope.sender_view_href {
-            println!("open in DocuSign: {}{href}", client.base);
+            println!("open in DocuSign: {base}{href}");
         }
         Ok(())
     })
@@ -6148,7 +6232,10 @@ struct NotationStatus {
 fn server_error(status: reqwest::StatusCode, body: &str) -> String {
     if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
         let error = v.get("error").and_then(serde_json::Value::as_str);
-        let reason = v.get("reason").and_then(serde_json::Value::as_str);
+        let reason = v
+            .get("reason")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| v.get("message").and_then(serde_json::Value::as_str));
         match (error, reason) {
             (Some(e), Some(r)) => return format!("{status}: {e} — {r}"),
             (_, Some(r)) => return format!("{status}: {r}"),
@@ -10510,6 +10597,17 @@ mod tests {
         );
     }
 
+    #[test]
+    fn adoption_refusal_includes_the_failed_check() {
+        assert_eq!(
+            server_error(
+                reqwest::StatusCode::UNPROCESSABLE_ENTITY,
+                r#"{"error":"envelope_adoption","message":"The Project's client DRI is not an envelope signer"}"#,
+            ),
+            "422 Unprocessable Entity: envelope_adoption — The Project's client DRI is not an envelope signer"
+        );
+    }
+
     /// Either field alone still beats printing the raw body.
     #[test]
     fn a_json_error_body_carrying_one_field_renders_that_field() {
@@ -13450,7 +13548,7 @@ mod tests {
         )
         .unwrap();
 
-        let exit = super::notation_envelope_in(dir.path(), notation_id, false, false).await;
+        let exit = super::notation_envelope_in(dir.path(), None, notation_id, false, false).await;
         assert_eq!(exit, ExitCode::SUCCESS);
 
         // The envelope id landed on the pointer the signed copy files
@@ -13518,7 +13616,7 @@ mod tests {
         )
         .unwrap();
 
-        let exit = super::notation_envelope_in(dir.path(), notation_id, true, false).await;
+        let exit = super::notation_envelope_in(dir.path(), None, notation_id, true, false).await;
         assert_eq!(exit, ExitCode::SUCCESS);
 
         let unstamped = model::document_pointers::DocumentPointer::from_yaml(
@@ -13563,7 +13661,7 @@ mod tests {
                 ],
                 "sender_view_href": format!("/app/lawyer/notations/{notation_id}/sender-view"),
             })))
-            .expect(1)
+            .expect(2)
             .mount(&server)
             .await;
 
@@ -13574,7 +13672,11 @@ mod tests {
         )
         .unwrap();
 
-        let exit = super::notation_envelope_status_in(dir.path(), notation_id).await;
+        let exit = super::notation_envelope_status_in(dir.path(), None, notation_id).await;
+        assert_eq!(exit, ExitCode::SUCCESS);
+        let empty = tempfile::tempdir().unwrap();
+        let exit =
+            super::notation_envelope_status_in(empty.path(), Some(&server_uri), notation_id).await;
         assert_eq!(exit, ExitCode::SUCCESS);
     }
 
@@ -13613,7 +13715,7 @@ mod tests {
         )
         .unwrap();
 
-        let exit = super::notation_envelope_status_in(dir.path(), notation_id).await;
+        let exit = super::notation_envelope_status_in(dir.path(), None, notation_id).await;
         assert_eq!(exit, ExitCode::SUCCESS);
     }
 }

@@ -1367,6 +1367,13 @@
       {
         "action": "export",
         "schema": "public",
+        "name": "project_envelope",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
         "name": "project_folder",
         "kind": "table",
         "accessible": true

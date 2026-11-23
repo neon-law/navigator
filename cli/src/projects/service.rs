@@ -247,42 +247,11 @@ pub fn certificate_for(
     } else {
         filing.caption_title.clone()
     };
-    let served: Vec<word::service::Served> = pointer
-        .service
-        .iter()
-        .map(|record| word::service::Served {
-            recipient: record.recipient.clone(),
-            counsel_for: record.counsel_for.clone(),
-            method: record.method.certificate_phrase().to_string(),
-            served_on: court_date(record.served_on),
-            address: record.address.clone(),
-        })
-        .collect();
-    let executed_on = pointer
-        .service
-        .iter()
-        .map(|record| record.served_on)
-        .max()
-        .map(court_date)
-        .unwrap_or_default();
-    let declarant_name = pointer
-        .service
-        .first()
-        .map(|record| record.declarant.clone())
-        .unwrap_or_default();
-    let executed_at = matter.counsel.address.last().cloned().unwrap_or_default();
-    let declarant = word::service::Declarant {
-        name: declarant_name,
-        business_address: matter.counsel.address.join(", "),
-        executed_on,
-        executed_at,
-    };
-    Ok(word::service::compose(&title, &served, &declarant))
-}
-
-/// `2026-03-05` as a court writes it: `March 5, 2026`.
-fn court_date(date: chrono::NaiveDate) -> String {
-    word::matter::display_date(&date.format("%Y-%m-%d").to_string()).unwrap_or_default()
+    Ok(model::pleading::certificate(
+        &title,
+        &matter,
+        &pointer.service,
+    ))
 }
 
 #[cfg(test)]

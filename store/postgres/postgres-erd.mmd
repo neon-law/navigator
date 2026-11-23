@@ -1762,6 +1762,14 @@ erDiagram
         string title
         datetime updated_at
     }
+    project_envelope {
+        uuid account_id
+        uuid envelope_id
+        json evidence
+        uuid firm_id
+        datetime observed_at
+        uuid project_id
+    }
     project_folder {
         string drive_folder_id
         uuid id
@@ -2435,6 +2443,8 @@ erDiagram
     asset }o--|| project_deadlines : references
     person }o--|| project_deadlines : references
     project }o--|| project_deadlines : references
+    firm }o--|| project_envelope : references
+    project }o--|| project_envelope : references
     project }o--|| project_folder : references
     project_folder }o--|| project_folder : references
     project_handoff }o--|| project_handoff_acknowledgment : references

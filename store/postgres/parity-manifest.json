@@ -639,6 +639,13 @@
     },
     {
       "extra_column": null,
+      "extra_table": "project_envelope",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
       "extra_table": "project_folder",
       "missing_column": null,
       "missing_table": null,
@@ -2249,7 +2256,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 190,
+    "table_count": 191,
     "tables": {
       "address": {
         "columns": {
@@ -5767,6 +5774,31 @@
         "references": [
           "asset",
           "person",
+          "project"
+        ]
+      },
+      "project_envelope": {
+        "columns": {
+          "account_id": "UUID",
+          "envelope_id": "UUID",
+          "evidence": "JSONB",
+          "firm_id": "UUID",
+          "observed_at": "TIMESTAMPTZ",
+          "project_id": "UUID"
+        },
+        "foreign_keys": [
+          [
+            "firm_id",
+            "firm"
+          ],
+          [
+            "project_id",
+            "project"
+          ]
+        ],
+        "name": "project_envelope",
+        "references": [
+          "firm",
           "project"
         ]
       },

@@ -3594,3 +3594,17 @@ test_billing_report_stays_with_signed_in_lawyers if {
         not authz.allow with input as {"path": path, "method": "POST", "session": lawyer_session}
     }
 }
+
+test_envelope_lookup_requires_lawyer if {
+    authz.allow with input as {"path": ["app", "api", "projects", "p1", "envelopes", "id"], "method": "GET", "session": lawyer_session}
+    not authz.allow with input as {"path": ["app", "api", "projects", "p1", "envelopes", "id"], "method": "GET", "session": client_session}
+}
+
+test_onboarding_agreements_require_a_lawyer_session if {
+    path := ["app", "api", "onboarding-agreements"]
+    authz.allow with input as {"path": path, "method": "GET", "session": lawyer_session}
+    every session in [null, client_session, clerk_session, {"role": "owner", "source": "ci"}] {
+        not authz.allow with input as {"path": path, "method": "GET", "session": session}
+    }
+    not authz.allow with input as {"path": path, "method": "POST", "session": lawyer_session}
+}

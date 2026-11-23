@@ -476,15 +476,19 @@ pub fn validate_gate(root: &Path, repository: Option<&str>, write_fixes: bool) -
 #[must_use]
 pub fn draft_directory(root: &Path) -> &'static str {
     use rules::project_blueprints::{BlueprintDirectory, BlueprintSelection};
-    match rules::project_blueprints::select(
-        root.join(TEMPLATE_DIRECTORY).is_dir(),
-        root.join(DRAFT_DIRECTORY).is_dir(),
-    ) {
+    match blueprint_directory(root) {
         BlueprintSelection::Selected(directory) => directory.as_str(),
         BlueprintSelection::Absent | BlueprintSelection::Ambiguous => {
             BlueprintDirectory::Drafts.as_str()
         }
     }
+}
+
+pub(super) fn blueprint_directory(root: &Path) -> rules::project_blueprints::BlueprintSelection {
+    rules::project_blueprints::select(
+        root.join(TEMPLATE_DIRECTORY).is_dir(),
+        root.join(DRAFT_DIRECTORY).is_dir(),
+    )
 }
 
 /// Choose the Draft directory. `drafts/` is canonical and passes silently;
@@ -497,10 +501,7 @@ fn blueprint_selection(
     warnings: &mut Vec<Finding>,
 ) -> rules::project_blueprints::BlueprintSelection {
     use rules::project_blueprints::{BlueprintDirectory, BlueprintSelection};
-    let selection = rules::project_blueprints::select(
-        root.join(TEMPLATE_DIRECTORY).is_dir(),
-        root.join(DRAFT_DIRECTORY).is_dir(),
-    );
+    let selection = blueprint_directory(root);
     match selection {
         BlueprintSelection::Ambiguous => errors.push(Finding::at(
             root,

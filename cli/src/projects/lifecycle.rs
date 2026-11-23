@@ -531,6 +531,41 @@ fn require_template_matches_main(root: &Path, kind: &str) -> Result<remote::Publ
     published_draft(root, &relative)
 }
 
+pub(crate) fn checkout_draft(
+    root: &Path,
+    project: &str,
+    code: &str,
+) -> Result<Option<remote::PublishedDraft>> {
+    use rules::project_blueprints::BlueprintSelection;
+    if manifest::read(root)
+        .and_then(|manifest| manifest.project)
+        .as_deref()
+        != Some(project)
+    {
+        return Ok(None);
+    }
+    anyhow::ensure!(
+        !code.is_empty()
+            && code
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_')),
+        "expected a Draft code"
+    );
+    let directory = match super::repository::blueprint_directory(root) {
+        BlueprintSelection::Selected(directory) => directory.as_str(),
+        BlueprintSelection::Absent => return Ok(None),
+        BlueprintSelection::Ambiguous => {
+            anyhow::bail!("choose one Project Draft directory: drafts/ or templates/")
+        }
+    };
+    let relative = format!("{directory}/{code}.md");
+    if !root.join(&relative).is_file() {
+        return Ok(None);
+    }
+    git_text(root, &["fetch", "origin", "main"]).context("refresh the published Project Draft")?;
+    published_draft(root, &relative).map(Some)
+}
+
 pub(crate) fn published_draft(root: &Path, relative: &str) -> Result<remote::PublishedDraft> {
     let exists = git(
         root,
@@ -696,9 +731,10 @@ pub fn github_owner_name(remote: &str) -> Result<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ensure_archive_ready, github_owner_name, has_signed_pointer, project_coordinates,
-        require_template_matches_main, run_offboard, run_open, scaffold_draft, template_code,
-        template_path, template_relative, write_template_stub, OFFBOARDING, ONBOARDING,
+        checkout_draft, ensure_archive_ready, github_owner_name, has_signed_pointer,
+        project_coordinates, require_template_matches_main, run_offboard, run_open, scaffold_draft,
+        template_code, template_path, template_relative, write_template_stub, OFFBOARDING,
+        ONBOARDING,
     };
     use std::path::{Path, PathBuf};
     use std::process::{Command, ExitCode};
@@ -974,6 +1010,21 @@ mod tests {
         .unwrap();
         let changed = require_template_matches_main(root.path(), ONBOARDING).unwrap_err();
         assert!(changed.to_string().contains("differs from origin/main"));
+    }
+
+    #[test]
+    fn a_published_project_draft_is_selected_only_for_its_own_matter() {
+        let root = tempfile::tempdir().unwrap();
+        init_project_repository(root.path(), ONBOARDING);
+        let code = project_coordinates(root.path()).unwrap().code;
+        assert!(checkout_draft(root.path(), &code, "onboarding__letter")
+            .unwrap()
+            .is_some());
+        assert!(
+            checkout_draft(root.path(), "another-project", "onboarding__letter")
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

@@ -1,3 +1,14 @@
+/// An existing onboarding Notation or a separately filed onboarding document.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct OnboardingAgreement {
+    pub project: String,
+    pub title: String,
+    pub state: String,
+    pub notation_id: Option<uuid::Uuid>,
+    pub document_id: Option<uuid::Uuid>,
+    pub envelope_id: Option<String>,
+}
+
 /// Whether a matter code is safe as a URL segment, a bare-repo directory name,
 /// and an object-storage key prefix.
 ///

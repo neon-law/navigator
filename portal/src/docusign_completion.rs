@@ -41,6 +41,16 @@ pub(crate) async fn webhook(
         return Err(StatusCode::UNAUTHORIZED);
     }
     if !payload.is_completed() {
+        if payload.reports_progress() {
+            let envelope = payload
+                .data
+                .envelope_id
+                .parse()
+                .map_err(|_| StatusCode::BAD_REQUEST)?;
+            observe_progress(&state, firm, account, envelope)
+                .await
+                .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+        }
         return progress(&state, firm, payload, &body).await;
     }
     let envelope = payload
@@ -55,6 +65,52 @@ pub(crate) async fn webhook(
         .await
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     Ok(StatusCode::ACCEPTED)
+}
+
+async fn observe_progress(
+    state: &AppState,
+    firm: Uuid,
+    account: Uuid,
+    id: Uuid,
+) -> anyhow::Result<()> {
+    let db = &state.surreal;
+    let provider = state
+        .signature_provider
+        .for_firm(db, firm)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("Firm connection unavailable"))?;
+    anyhow::ensure!(
+        provider.account_id() == account.to_string(),
+        "Firm connection changed"
+    );
+    if !unique_account(
+        db,
+        state.signature_provider.as_ref(),
+        firm,
+        provider.account_id(),
+    )
+    .await?
+    {
+        return Ok(());
+    }
+    let started = Utc::now();
+    let envelope = provider.read_external_envelope(id).await?;
+    let project_id =
+        if let Some(signature) = signatures::by_provider(db, DocuSign, &id.to_string()).await? {
+            let notation = store::notations::find_by_id(db, signature.notation_id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("Missing Notation"))?;
+            notation.project_id
+        } else {
+            let (fields, names) = provider.envelope_project_hints(id).await?;
+            let Ok(project) = identify_project(db, firm, &envelope, &fields, &names).await? else {
+                return Ok(());
+            };
+            project.id
+        };
+    let pg = PostgresDb::from_env().await?;
+    store::project_envelopes::observe(&pg, firm, account, project_id, started, &envelope).await?;
+    Ok(())
 }
 
 async fn progress(
@@ -232,16 +288,17 @@ async fn reconcile(state: &AppState, receipt: &Receipt) -> anyhow::Result<Outcom
     if provider.account_id() != receipt.account_id.to_string() {
         return Ok(Outcome::Review("account_changed"));
     }
-    for other in store::firms::all(db).await? {
-        if other.id == receipt.firm_id {
-            continue;
-        }
-        if let Ok(Some(other)) = state.signature_provider.for_firm(db, other.id).await {
-            if other.account_id() == provider.account_id() {
-                return Ok(Outcome::Review("account_used_by_multiple_firms"));
-            }
-        }
+    if !unique_account(
+        db,
+        state.signature_provider.as_ref(),
+        receipt.firm_id,
+        provider.account_id(),
+    )
+    .await?
+    {
+        return Ok(Outcome::Review("account_used_by_multiple_firms"));
     }
+    let started = Utc::now();
     let envelope = provider.read_external_envelope(receipt.envelope_id).await?;
     if envelope.status != "completed" || envelope.completed_date_time.is_none() {
         return Ok(Outcome::Retry);
@@ -260,6 +317,15 @@ async fn reconcile(state: &AppState, receipt: &Receipt) -> anyhow::Result<Outcom
         {
             return Ok(Outcome::Review("envelope_linked_elsewhere"));
         }
+        store::project_envelopes::observe(
+            &PostgresDb::from_env().await?,
+            receipt.firm_id,
+            receipt.account_id,
+            project.id,
+            started,
+            &envelope,
+        )
+        .await?;
         crate::esignature_webhook::consume_receipt(
             state,
             &signature,
@@ -271,33 +337,27 @@ async fn reconcile(state: &AppState, receipt: &Receipt) -> anyhow::Result<Outcom
     }
 
     let (fields, names) = provider.envelope_project_hints(receipt.envelope_id).await?;
-    let projects = store::projects::all(db).await?;
-    let mut signer_ids = Vec::new();
-    for signer in &envelope.signers {
-        if let Some(person) = store::persons::find_by_any_email(db, &signer.email).await? {
-            signer_ids.push(person.id);
-        }
+    let project = match identify_project(db, receipt.firm_id, &envelope, &fields, &names).await? {
+        Ok(project) => project,
+        Err(reason) => return Ok(Outcome::Review(reason)),
+    };
+    store::project_envelopes::observe(
+        &PostgresDb::from_env().await?,
+        receipt.firm_id,
+        receipt.account_id,
+        project.id,
+        started,
+        &envelope,
+    )
+    .await?;
+    match receipt.project_id {
+        None => return Ok(Outcome::Assigned(project.id)),
+        Some(id) if id != project.id => return Ok(Outcome::Review("assigned_project_unavailable")),
+        Some(_) => {}
     }
-    let Some(project_id) = receipt.project_id else {
-        return Ok(
-            match match_project(receipt.firm_id, &projects, &signer_ids, &fields, &names) {
-                Ok(project) => Outcome::Assigned(project.id),
-                Err(reason) => Outcome::Review(reason),
-            },
-        );
-    };
-    let Some(project) = projects
-        .iter()
-        .find(|p| p.id == project_id && p.firm_id == Some(receipt.firm_id) && p.status == "open")
-    else {
-        return Ok(Outcome::Review("assigned_project_unavailable"));
-    };
-    let Some(client) = project
+    let client = project
         .client_dri_person_id
-        .filter(|id| signer_ids.contains(id))
-    else {
-        return Ok(Outcome::Review("client_not_signer"));
-    };
+        .ok_or_else(|| anyhow::anyhow!("Missing client DRI"))?;
 
     let lane = crate::signature_adoption::lock()
         .await
@@ -309,7 +369,7 @@ async fn reconcile(state: &AppState, receipt: &Receipt) -> anyhow::Result<Outcom
     {
         return Ok(Outcome::Retry);
     }
-    match onboarding_notation(db, project, client, &names).await? {
+    match onboarding_notation(db, &project, client, &names).await? {
         Onboarding::Notation(notation) => {
             crate::signature_adoption::reconcile(
                 db,
@@ -342,6 +402,60 @@ async fn reconcile(state: &AppState, receipt: &Receipt) -> anyhow::Result<Outcom
     Ok(Outcome::Filed(project.id))
 }
 
+pub(crate) async fn unique_account(
+    db: &store::surreal::SurrealDb,
+    connections: &dyn SignatureProvider,
+    firm: Uuid,
+    account: &str,
+) -> anyhow::Result<bool> {
+    for other in store::firms::all(db).await? {
+        if other.id == firm {
+            continue;
+        }
+        if let Ok(Some(other)) = connections.for_firm(db, other.id).await {
+            if other.account_id() == account {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
+}
+
+pub(crate) async fn identify_project(
+    db: &store::surreal::SurrealDb,
+    firm: Uuid,
+    envelope: &crate::signature::ExternalEnvelope,
+    fields: &[String],
+    names: &[String],
+) -> anyhow::Result<Result<Project, &'static str>> {
+    let mut projects = store::projects::all(db).await?;
+    let roles = store::projects::all_participations(db).await?;
+    resolve_designated_clients(&mut projects, roles);
+    let mut signer_ids = Vec::new();
+    for signer in &envelope.signers {
+        if let Some(person) = store::persons::find_by_any_email(db, &signer.email).await? {
+            signer_ids.push(person.id);
+        }
+    }
+    Ok(match_project(firm, &projects, &signer_ids, fields, names).cloned())
+}
+
+fn resolve_designated_clients(
+    projects: &mut [Project],
+    roles: Vec<store::projects::PersonProjectRole>,
+) {
+    let mut designated = std::collections::HashMap::<_, Vec<_>>::new();
+    for role in roles.into_iter().filter(|role| role.is_client_dri) {
+        designated.entry(role.project_id).or_default().push(role);
+    }
+    for project in projects {
+        project.client_dri_person_id = crate::api::project_client_dri(
+            project.client_dri_person_id,
+            designated.get(&project.id).map_or(&[], Vec::as_slice),
+        );
+    }
+}
+
 fn match_project<'a>(
     firm: Uuid,
     projects: &'a [Project],
@@ -367,7 +481,7 @@ fn match_project<'a>(
     }
     let mut matches = projects.iter().filter(|project| {
         project.firm_id == Some(firm)
-            && project.status == "open"
+            && matches!(project.status.as_str(), "pitch" | "open")
             && match hints.first() {
                 Some(code) => project.code.eq_ignore_ascii_case(code),
                 None => project
@@ -525,6 +639,16 @@ mod tests {
     }
 
     #[test]
+    fn a_pitch_can_receive_its_first_completed_envelope() {
+        let firm = Uuid::new_v4();
+        let client = Uuid::new_v4();
+        let mut project = open_project(firm, client, "new-pitch");
+        project.status = "pitch".into();
+        let matched = match_project(firm, std::slice::from_ref(&project), &[client], &[], &[]);
+        assert_eq!(matched.unwrap().id, project.id);
+    }
+
+    #[test]
     fn differing_hints_refuse_rather_than_guessing() {
         let firm = Uuid::new_v4();
         let client = Uuid::new_v4();
@@ -543,6 +667,45 @@ mod tests {
             .unwrap_err(),
             "ambiguous_project_hint"
         );
+    }
+
+    #[test]
+    fn an_unpinned_client_designation_matches_the_signer_only_on_its_own_project() {
+        let firm = Uuid::new_v4();
+        let client = Uuid::new_v4();
+        let mut projects = [
+            open_project(firm, client, "first"),
+            open_project(firm, client, "second"),
+        ];
+        projects[0].client_dri_person_id = None;
+        let role = |project_id, person_id| store::projects::PersonProjectRole {
+            id: Uuid::new_v4(),
+            project_id,
+            person_id,
+            participation: "client".into(),
+            is_client_dri: true,
+            is_lawyer_dri: false,
+            inserted_at: String::new(),
+            updated_at: String::new(),
+        };
+        let first = projects[0].id;
+        let second = projects[1].id;
+        super::resolve_designated_clients(
+            &mut projects,
+            vec![role(first, client), role(second, Uuid::new_v4())],
+        );
+        assert_eq!(
+            match_project(firm, &projects, &[client], &[], &[])
+                .unwrap()
+                .id,
+            first
+        );
+        projects[0].client_dri_person_id = None;
+        super::resolve_designated_clients(
+            &mut projects,
+            vec![role(first, client), role(first, Uuid::new_v4())],
+        );
+        assert!(match_project(firm, &projects, &[client], &[], &[]).is_err());
     }
 
     #[test]
