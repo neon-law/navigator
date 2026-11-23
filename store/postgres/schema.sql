@@ -5763,3 +5763,10 @@ ALTER TABLE firm_integration_secret ADD COLUMN stripe_mode TEXT CHECK (stripe_mo
 ALTER TABLE project_folder DROP CONSTRAINT project_folder_slot_check;
 
 ALTER TABLE project_folder ADD CONSTRAINT project_folder_slot_check CHECK (slot IN ( 'root', 'client_submissions', 'Client Production', 'Client Production/Agreements', 'Client Production/Screenshots', 'Correspondence (Served)', 'Costs', 'Mail (Correspondence)', 'Discovery (Served)', 'Docket Filings', 'Court Rules', 'Engagement', 'Work Product', 'Work Product/Client Calls (Work Product)', 'Work Product/Correspondence (Work Product)', 'Work Product/Discovery (Work Product)', 'Work Product/Motions (Work Product)', 'Work Product/Pleadings (Work Product)', 'Work Product/Research (Work Product)', 'Work Product/Stipulations (Work Product)' ));
+
+-- Migration: 20261123131000_create_project_list.sql
+-- Keep the Project as a composite so the directory reads the current Project row type.
+CREATE VIEW project_list WITH (security_invoker = true) AS
+SELECT membership.person_id, membership.participation, membership.is_client_dri, p AS project
+FROM person_project_role AS membership
+JOIN project AS p ON p.id = membership.project_id;

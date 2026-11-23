@@ -152,6 +152,31 @@ pub async fn find_by_name_on(pg: &PostgresDb, name: &str) -> Result<Option<Proje
         .transpose()
 }
 
+/// Fetch the participant's Project rows under one admission check. The C collation
+/// preserves the directory's Rust string ordering across database locales.
+pub(crate) async fn participating_projects_on(
+    pg: &PostgresDb,
+    person: Uuid,
+    lens: crate::access::ProjectLens,
+    code: Option<&str>,
+) -> Result<Vec<Project>, ProjectError> {
+    sqlx::query(
+        r#"SELECT (project).* FROM project_list
+           WHERE person_id = $1 AND (is_client_dri OR participation = ANY($2)) = $3
+             AND ($4::text IS NULL OR (project).code = $4)
+           ORDER BY (project).name COLLATE "C", (project).id"#,
+    )
+    .bind(person)
+    .bind(crate::projects::PARTICIPATION_CLIENT_SIDE)
+    .bind(lens == crate::access::ProjectLens::Client)
+    .bind(code)
+    .fetch_all(pg.pool())
+    .await?
+    .iter()
+    .map(row)
+    .collect()
+}
+
 /// Return open Project IDs for one resolved Person within the receiving
 /// Firm and Brand. Discard other matter scopes in PostgreSQL.
 pub async fn open_participating_projects_in_brand_on(

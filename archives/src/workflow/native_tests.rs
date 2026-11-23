@@ -40,10 +40,12 @@ async fn reviewed(pool: &PgPool) -> CoverageManifest {
         .into_iter()
         .map(
             |relation| match (relation.schema.as_str(), relation.name.as_str()) {
-                ("public", "person_directory" | "firm_visible_person") => Rule::Derived {
-                    relation,
-                    reason: "recreated by the canonical Navigator schema".into(),
-                },
+                ("public", "person_directory" | "firm_visible_person" | "project_list") => {
+                    Rule::Derived {
+                        relation,
+                        reason: "recreated by the canonical Navigator schema".into(),
+                    }
+                }
                 ("public", "geography_columns" | "geometry_columns") => Rule::Derived {
                     relation,
                     reason: "recreated by PostGIS".into(),
