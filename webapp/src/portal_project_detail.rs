@@ -252,7 +252,7 @@ pub struct ProjectDetailView {
     /// inferring anything from the effective client session.
     #[serde(default)]
     pub viewing_as_dri: Option<crate::components::ClientDriView>,
-    /// The deploy's brand mark for the navbar. `None` when the mounted brand
+    /// The Project Brand’s mark for the navbar. `None` when the Brand
     /// configures none.
     #[serde(default)]
     pub logo: Option<crate::components::AppLogo>,
@@ -399,7 +399,6 @@ pub async fn get_project_detail() -> Result<ProjectDetailView, ServerFnError> {
     // The navbar renders on the 404 body too, so the mark is resolved before the
     // first early return rather than only on the happy path.
     let logo = crate::app_chrome::app_logo_from_context().await;
-    let tokens_href = crate::app_chrome::app_tokens_href_from_context().await;
     let csrf_token = dioxus_fullstack_core::FullstackContext::extract::<
         axum::Extension<crate::csrf::CsrfToken>,
         _,
@@ -443,6 +442,7 @@ pub async fn get_project_detail() -> Result<ProjectDetailView, ServerFnError> {
     if !visible {
         return Ok(not_found(id, role, logo, csrf_token));
     }
+    let tokens_href = crate::brand_style::brand_tokens_href(&project.brand);
     let (logo, brand_name, legal_entity) = project_brand_chrome(&surreal, &project.brand).await;
     let client_dri =
         store::projects::participation_for_person(&surreal, person_id.unwrap_or_default(), id)
@@ -652,6 +652,29 @@ pub async fn get_project_detail() -> Result<ProjectDetailView, ServerFnError> {
     })
 }
 
+/// Finish a cross-Brand preview using a native form on the Project's host.
+#[cfg(feature = "server")]
+pub fn confirm_client_preview(
+    code: &str,
+    project: &str,
+    client: &str,
+    csrf: &str,
+) -> axum::response::Html<String> {
+    let body = dioxus_ssr::render_element(rsx! {
+        main { class: "nav-theme portal-detail",
+            h1 { "View as Client" }
+            p { "Open {project} as {client} in read-only mode." }
+            crate::components::dri_view::ViewAsClient { code: code.to_string(), csrf: csrf.to_string() }
+            a { href: "/app/projects/{code}", "Back to Project" }
+        }
+    });
+    axum::response::Html(crate::error_pages::standalone_document(
+        "View as Client",
+        views::brand::FIRM_BRAND.site_name,
+        &body,
+    ))
+}
+
 /// Resolve the Project's brand after the client-scope gate succeeds. The
 /// project row carries a closed compiled key, while the store row supplies an
 /// uploaded logo or a firm-specific legal entity when either has changed.
@@ -670,14 +693,6 @@ async fn project_brand_chrome(
         || project_brand.to_string(),
         |branding| branding.firm.legal_entity.to_string(),
     );
-    let fallback_logo = branding.and_then(|branding| {
-        (!branding.firm.logo_href.is_empty()).then(|| crate::components::AppLogo {
-            src: branding.firm.logo_href.to_string(),
-            href: branding.firm.home_href.to_string(),
-            brand_name: fallback_name.clone(),
-        })
-    });
-
     let brand = store::brands::find_by_key(surreal, project_brand)
         .await
         .ok()
@@ -700,7 +715,15 @@ async fn project_brand_chrome(
                     brand_name: brand_name.clone(),
                 })
         })
-        .or(fallback_logo);
+        .or_else(|| {
+            let key = compiled?;
+            let firm = &branding?.firm;
+            (!firm.logo_href.is_empty()).then(|| crate::components::AppLogo {
+                src: crate::app_chrome::compiled_app_mark_src(key, firm.logo_href).to_string(),
+                href: firm.home_href.to_string(),
+                brand_name: brand_name.clone(),
+            })
+        });
 
     (logo, brand_name, legal_entity)
 }

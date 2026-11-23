@@ -249,6 +249,8 @@ pub struct LawyerDetailView {
     /// The upload form's file and byte limits and the copy stating them.
     #[serde(default)]
     pub upload_limits: crate::lawyer_project_documents::UploadFormLimits,
+    #[serde(default)]
+    pub client_preview_link: Option<String>,
     pub csrf_token: String,
     /// The matter calendar's active sort, read from `?sort=`/`?dir=` and
     /// normalised to the advertised columns.
@@ -890,6 +892,7 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         crate::project_resources::verified_drive_links(&surreal, person_id, role, id).await;
 
     Ok(LawyerDetailView {
+        client_preview_link: crate::brand_website::client_preview_link(&project).await,
         page_tabs,
         onboarding,
         id: project.id.to_string(),
@@ -1128,11 +1131,8 @@ pub fn LawyerProjectDetail() -> Element {
                             }
                         }
                     }
-                    form { class: "lawyer-detail__resource-action-form", method: "post", action: "/app/projects/{view.code}/view-as-client",
-                        input { r#type: "hidden", name: "_csrf", value: "{csrf}" }
-                        button { class: "nav-btn nav-btn--secondary lawyer-detail__resource-action", title: "View as Client", aria_label: "View as Client", r#type: "submit",
-                            crate::components::resource_mark::UserGlyph { class: "project-resources__mark".to_string() }
-                        }
+                    crate::components::dri_view::ViewAsClient {
+                        code: view.code.clone(), csrf: csrf.clone(), portal_link: view.client_preview_link.clone(), icon: true,
                     }
                 }
                 // The reader's open Timer — on every tab, because time runs

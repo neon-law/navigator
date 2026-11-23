@@ -152,12 +152,11 @@ There is no separate Clerk route: the shared matter route selects this supervise
 participation. The Clerk's access is therefore the same matter-surface participation fact described below, not a second
 coordination-surface grant.
 
-On an assigned matter, the `View as Client` control starts a read-only session viewing that matter's client DRI and
-takes the Clerk to the client rendering. The banner names the DRI being viewed, says the view is read-only, and provides
-the single exit back to the Clerk session. Every read continues through the DRI's ordinary client-side authorization,
-but every mutating request is refused outright regardless — this is a view, never a way to act as the client. The server
-resolves both the current Clerk's supervised access and the matter's client DRI rather than accepting either identity
-from the browser.
+On an assigned matter, a firm participant can use `View as Client` to open the Project as its client DRI. From another
+Brand, the control opens a new tab on the Project's portal, where the reviewer signs in if needed. Submitting the form
+starts a read-only session. The banner names the client DRI and offers a way back to the reviewer's session. The server
+checks the reviewer's participation, resolves the Project's client DRI, and applies that client's ordinary read
+permissions. The reviewer exits the preview to resume firm-side work.
 
 A lawyer already participating in the matter controls this directly, by adding or removing the Clerk's participation row
 through `POST` / `DELETE /app/api/projects/{id}/participants[/{role_id}]` — see [Participation](#participation) below.

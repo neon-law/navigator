@@ -13,26 +13,7 @@ pub(crate) fn access() -> ClientPortal<'static> {
     }
 }
 
-/// Resolve a registered Project Brand on this deployment. A custom installation
-/// supplies its own origin when the deployment has no corresponding Brand host.
-pub(crate) fn project_origin(brand: &str, base: &str) -> Option<String> {
-    let key = views::brand::BrandKey::parse(brand)?;
-    let mut url = url::Url::parse(base).ok()?;
-    let host = url.host_str()?;
-    if matches!(host, "localhost" | "127.0.0.1" | "[::1]") {
-        let port = std::env::var(key.local_port_env_var().unwrap_or("PORT"))
-            .ok()?
-            .parse()
-            .ok()?;
-        url.set_port(Some(port)).ok()?;
-        return Some(url.origin().ascii_serialization());
-    }
-    let registered = views::brand::admitted_brand_key(host)
-        .or_else(|| views::brand::admitted_brand_key_for_apex(host));
-    registered
-        .filter(|_| key.is_live())
-        .map(|_| key.public_home_href_for(Some(host)))
-}
+pub(crate) use views::brand::project_origin;
 
 /// The Firm theme may already have been resolved by the outer request layer.
 pub(crate) async fn apply_host_mark(request: &mut Request) {
