@@ -290,6 +290,14 @@ pod's loopback address. The cohost listener must bind `0.0.0.0` at a fixed port 
 reaches both Service and NetworkPolicy. The native policy preserves web's existing port and admits DBOS traffic only
 from those two same-namespace trigger pod selectors. No external Ingress exposes the DBOS endpoint.
 
+Only this profile hosts NightlyProjectUpdate, YoutubeCommentsPoller, and SocialPublishReconciler in `web`. A mixed
+deployment's `web` executor runs the app-owned daily schedules alone and binds no authenticated DBOS ingress, and the
+`web` artifact's embedded registry refuses partial caller ownership. On a mixed row,
+`NAVIGATOR_DBOS_NIGHTLY_PROJECT_UPDATE_ENABLED`, `NAVIGATOR_DBOS_YOUTUBE_COMMENTS_POLLER_ENABLED`, and
+`NAVIGATOR_DBOS_SOCIAL_PUBLISH_RECONCILER_ENABLED` therefore change nothing in the render: their Restate CronJobs stay
+as they are, so a row can stage every selector before it selects the complete profile. None of the three moves into
+`web` by itself.
+
 Native ship keeps automatic BillingCanary and invoice reconciliation starts off by default while registering their
 manual DBOS routes. Opt in explicitly with `NAVIGATOR_DBOS_BILLING_CANARY_SCHEDULE_ENABLED=true` or
 `NAVIGATOR_DBOS_RECONCILE_INVOICES_SCHEDULE_ENABLED=true`; false keeps the timer off, and malformed values are refused.

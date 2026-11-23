@@ -230,19 +230,21 @@ external evidence, so this is receipt reconciliation rather than a provider exac
 
 DBOS can host `DriDigest` when both `NAVIGATOR_DBOS_ENABLED=true` and `NAVIGATOR_DBOS_DRI_DIGEST_ENABLED=true`. The
 service flag defaults off. Enabling the DBOS executor alone does not start another digest while the Restate CronJob
-remains active. An enabled host requires `SLACK_WEBHOOK_URL` and fails boot when it is absent or blank.
+remains active. The DBOS digest posts with the Slack bot to `SLACK_GENERAL_CHANNEL_ID`, beside `GeneralNag`'s
+open-matters notice; an enabled host requires `SLACK_BOT_TOKEN` and that channel and fails boot when either is absent or
+blank.
 
 The schedule uses the existing 01:11 UTC daily slot and the workflow id `DriDigest-<UTC date>`. It reads the same DRI
 summary and, outside simulated-matters deployments, posts the same open-matters and pitches follow-up. The Restate
 workflow and CronJob remain the rollback path until deployment configuration switches engines together.
 
 Switch engines the same way as `GeneralNag`, with `NAVIGATOR_DBOS_DRI_DIGEST_ENABLED = "true"`; ship drops and deletes
-the `dri-digest-trigger` CronJob. Ship refuses the switch unless the row's `secrets.enc.yaml` carries
-`SLACK_WEBHOOK_URL`, an optional per-row key that the Restate worker never received in GKE.
+the `dri-digest-trigger` CronJob and renders `SLACK_GENERAL_CHANNEL_ID` into `web`. Ship refuses the switch unless the
+row's `secrets.enc.yaml` carries `SLACK_BOT_TOKEN`.
 
-The `query`, `notify`, `counts`, and `notify_counts` steps checkpoint separately. Incoming Slack webhooks have no
-idempotency key: a crash after Slack accepts either notice and before its DBOS checkpoint can post that notice again.
-The daily workflow id deduplicates ordinary duplicate starts; it cannot make Slack delivery exactly once.
+The `query`, `notify`, `counts`, and `notify_counts` steps checkpoint separately. Its posts carry no receipt
+correlation: a crash after Slack accepts either notice and before its DBOS checkpoint can post that notice again. The
+daily workflow id deduplicates ordinary duplicate starts; it cannot make Slack delivery exactly once.
 
 ## Late starts
 

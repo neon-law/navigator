@@ -171,13 +171,7 @@ fn explicit_delivery_configuration_is_never_silently_replaced() {
     }
     let source = SurrealDb::uninitialized();
     assert!(general_nag::Context::from_lookup(source.clone(), true, |_| None).is_err());
-    assert!(dri_digest::Context::from_lookup(
-        source.clone(),
-        Arc::new(CapturingNotifier::new()),
-        true,
-        |_| None
-    )
-    .is_err());
+    assert!(dri_digest::Context::from_lookup(source.clone(), true, |_| None).is_err());
     assert!(notation_reset::Context::from_lookup(source, "Development", true, |_| None).is_err());
 }
 

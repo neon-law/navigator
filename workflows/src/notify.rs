@@ -1388,6 +1388,34 @@ impl Notifier for SlackNotifier {
     }
 }
 
+/// Posts with a Slack bot to one channel, for notices whose deployment holds
+/// the bot token rather than an incoming webhook.
+#[derive(Clone)]
+pub struct ChannelNotifier {
+    bot: Arc<dyn SlackBot>,
+    channel_id: String,
+}
+
+impl ChannelNotifier {
+    #[must_use]
+    pub fn new(bot: Arc<dyn SlackBot>, channel_id: impl Into<String>) -> Self {
+        Self {
+            bot,
+            channel_id: channel_id.into(),
+        }
+    }
+}
+
+#[async_trait]
+impl Notifier for ChannelNotifier {
+    async fn notify(&self, text: String) -> Result<(), NotifyError> {
+        self.bot
+            .post_message(&self.channel_id, &text)
+            .await
+            .map_err(|error| NotifyError::Transport(error.to_string()))
+    }
+}
+
 /// Slack rejects a single message's `text` past 4000 characters and splits it
 /// into separate messages at that boundary — which lands mid-code-block for a
 /// long ops digest, leaving the first message an *unterminated* fence that
@@ -1498,6 +1526,17 @@ mod tests {
     };
     use crate::email::service::{EmailError, EmailService, OutboundEmail};
     use async_trait::async_trait;
+
+    #[tokio::test]
+    async fn channel_notifier_posts_through_the_bot_to_its_channel() {
+        let bot = CapturingSlackBot::new();
+        let notifier = super::ChannelNotifier::new(Arc::new(bot.clone()), "C0GENERAL");
+        notifier.notify("digest".into()).await.unwrap();
+        assert_eq!(
+            bot.posted_messages(),
+            [("C0GENERAL".to_owned(), "digest".to_owned())]
+        );
+    }
     use std::sync::Arc;
 
     fn ops_email() -> OutboundEmail {

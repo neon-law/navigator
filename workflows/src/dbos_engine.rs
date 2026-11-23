@@ -787,6 +787,28 @@ pub fn effect_key() -> Option<String> {
     Some(format!("{workflow_id}/{step_id}"))
 }
 
+/// The live bot and `SLACK_GENERAL_CHANNEL_ID` that the daily `#general`
+/// notices post with. A capture-only backend never counts as delivery.
+pub(crate) fn general_channel_bot(
+    lookup: impl Fn(&str) -> Option<String>,
+) -> Result<(Arc<dyn crate::SlackBot>, String), SettingsError> {
+    let required = |key: &'static str| {
+        lookup(key)
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+            .ok_or(SettingsError::Missing(key))
+    };
+    let channel_id = required("SLACK_GENERAL_CHANNEL_ID")?;
+    let token = required("SLACK_BOT_TOKEN")?;
+    let base_url = crate::harness_override(&lookup, "SLACK_API_BASE_URL")
+        .map_err(|_| SettingsError::Invalid("SLACK_API_BASE_URL"))?;
+    let slack: Arc<dyn crate::SlackBot> = match base_url {
+        Some(base_url) => Arc::new(crate::SlackBotClient::with_base_url(token, base_url)),
+        None => Arc::new(crate::SlackBotClient::new(token)),
+    };
+    Ok((slack, channel_id))
+}
+
 /// Post `text` to `channel` at most once per [`effect_key`]: reuse a receipt
 /// already in the channel's history since `oldest`, or post with the key as
 /// Slack's correlation. `false` when the step has no key, Slack refuses, or
