@@ -13,7 +13,12 @@ use crate::{
 };
 
 pub async fn dri(host: Option<&str>, project: Option<&str>, row: Uuid, clear: bool) -> ExitCode {
-    match change(host, project, row, clear).await {
+    let method = if clear {
+        reqwest::Method::DELETE
+    } else {
+        reqwest::Method::PUT
+    };
+    match change(host, project, row, method, "/dri").await {
         Ok(()) => {
             println!(
                 "participant DRI {}",
@@ -39,7 +44,14 @@ async fn coordinates(host: Option<&str>, project: Option<&str>) -> Result<(Strin
     Ok((base, token, id))
 }
 
-pub async fn list(host: Option<&str>, project: Option<&str>) -> ExitCode {
+#[derive(serde::Deserialize, serde::Serialize)]
+struct Participant {
+    person_id: Uuid,
+    #[serde(flatten)]
+    fields: serde_json::Map<String, serde_json::Value>,
+}
+
+pub async fn list(host: Option<&str>, project: Option<&str>, person_id: Option<Uuid>) -> ExitCode {
     let result = async {
         let (base, token, id) = coordinates(host, project).await?;
         let response = reqwest::Client::new()
@@ -52,8 +64,11 @@ pub async fn list(host: Option<&str>, project: Option<&str>) -> ExitCode {
         if !response.status().is_success() {
             return Err(anyhow!("participant list refused: {}", response.status()));
         }
-        let rows: serde_json::Value = response.json().await.context("parse participants")?;
-        println!("{rows}");
+        let mut rows: Vec<Participant> = response.json().await.context("parse participants")?;
+        if let Some(id) = person_id {
+            rows.retain(|row| row.person_id == id);
+        }
+        println!("{}", serde_json::to_string(&rows)?);
         Ok(())
     }
     .await;
@@ -66,28 +81,50 @@ pub async fn list(host: Option<&str>, project: Option<&str>) -> ExitCode {
     }
 }
 
-async fn change(host: Option<&str>, project: Option<&str>, row: Uuid, clear: bool) -> Result<()> {
+pub async fn remove(host: Option<&str>, project: Option<&str>, row: Uuid) -> ExitCode {
+    match change(host, project, row, reqwest::Method::DELETE, "").await {
+        Ok(()) => {
+            println!("Project participant removed");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("navigator project participant remove: {error:#}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+async fn change(
+    host: Option<&str>,
+    project: Option<&str>,
+    row: Uuid,
+    method: reqwest::Method,
+    suffix: &str,
+) -> Result<()> {
     let (base, token, id) = coordinates(host, project).await?;
-    let method = if clear {
-        reqwest::Method::DELETE
-    } else {
-        reqwest::Method::PUT
-    };
     let response = reqwest::Client::new()
         .request(
             method,
-            format!("{base}/app/api/projects/{id}/participants/{row}/dri"),
+            format!("{base}/app/api/projects/{id}/participants/{row}{suffix}"),
         )
         .timeout(Duration::from_secs(30))
         .bearer_auth(token)
         .send()
         .await
-        .context("change participant DRI")?;
+        .context("change Project participation")?;
     if response.status() != reqwest::StatusCode::NO_CONTENT {
-        return Err(anyhow!(
-            "participant DRI change refused: {}",
-            response.status()
-        ));
+        let status = response.status();
+        if status == reqwest::StatusCode::CONFLICT
+            && response
+                .json::<serde_json::Value>()
+                .await
+                .is_ok_and(|body| body["error"] == "dri_lockout")
+        {
+            return Err(anyhow!(
+                "designate another lawyer DRI on this Project first"
+            ));
+        }
+        return Err(anyhow!("participant change refused: {status}"));
     }
     Ok(())
 }

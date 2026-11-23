@@ -10,8 +10,9 @@ is the Project code, prefixed with `staging-` on staging. Its Calendar API id is
 repository records the same id as `navigator.yaml` `project.calendar_id`.
 
 `navigator project setup` creates or adopts the named calendar and records its id. A new calendar starts with only its
-owner. A re-run creates no second calendar. A missing recorded calendar is reported as `recorded_resource_missing`.
-`navigator project set --calendar <id>` records an id by hand.
+owner. Setup, the Deadline mirror, and closing check the recorded id against the expected name and delegated owner. A
+missing or mismatched calendar returns `recorded_resource_missing`. Verify the intended calendar and use `navigator
+project set --calendar <id>` to correct the link. A rerun reuses the verified calendar.
 
 The opted-in DBOS membership job checks recorded calendars after setup and rechecks assignments in each five-minute
 slot. A Project participant needs the matching Firm role, a confirmed address in the owner's Google Workspace domain,
