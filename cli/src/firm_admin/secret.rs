@@ -12,7 +12,7 @@ use reqwest::Method;
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Read the Stripe key from a pipe and rotate the selected credential.
+    /// Store a Stripe key from standard input.
     Set(Target),
     /// Show active Stripe key metadata for the Firm.
     List(Firm),

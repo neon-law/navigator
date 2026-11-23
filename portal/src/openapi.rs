@@ -1302,6 +1302,8 @@ fn canonical_document(base: &str) -> Value {
             "tags": ["Firms"],
             "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
             "responses": { "200": { "description": "Deployment mode and active keys with account, kind, recorded mode and update time" },
+                           "401": { "description": "No authenticated session" },
+                           "403": { "description": "Role or session scope refused" },
                            "404": { "description": "Firm unavailable to caller" } }
           }
         },
@@ -1315,6 +1317,8 @@ fn canonical_document(base: &str) -> Value {
               "schema": { "type": "string", "format": "binary", "writeOnly": true } } } },
             "responses": { "204": { "description": "Encrypted key stored" },
                            "400": { "description": "Invalid key kind or mode" },
+                           "401": { "description": "No authenticated session" },
+                           "403": { "description": "Role or session scope refused" },
                            "404": { "description": "Firm unavailable to caller" } }
           },
           "delete": {
@@ -1324,6 +1328,8 @@ fn canonical_document(base: &str) -> Value {
             "tags": ["Firms"],
             "responses": { "204": { "description": "Key revoked in Navigator" },
                            "400": { "description": "Invalid deployment mode" },
+                           "401": { "description": "No authenticated session" },
+                           "403": { "description": "Role or session scope refused" },
                            "404": { "description": "Active key unavailable to caller" } }
           }
         },
