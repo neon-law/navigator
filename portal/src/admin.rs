@@ -4097,7 +4097,7 @@ async fn projects_create_lawyer_only(
                     outcome: FolderOutcome::Blocked(reason),
                     ..
                 })) => {
-                    tracing::warn!(project_id = %created.id, ?reason, "Project folder verification blocked")
+                    tracing::warn!(project_id = %created.id, ?reason, "Project folder verification blocked");
                 }
                 Err(_) => tracing::warn!(project_id = %created.id, "Project folder setup failed"),
                 Ok(_) => {}
