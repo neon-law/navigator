@@ -81,6 +81,16 @@ fn the_lean_navigator_names_only_its_own_verbs() {
 }
 
 #[test]
+fn sync_rejects_a_checkout_directory_override() {
+    Command::cargo_bin("navigator")
+        .unwrap()
+        .args(["sync", "--host", "site.example.test", "--dir", "."])
+        .assert()
+        .code(2)
+        .stderr(predicates::str::contains("unexpected argument '--dir'"));
+}
+
+#[test]
 fn an_operator_verb_is_not_in_the_lean_navigator() {
     Command::cargo_bin("navigator")
         .unwrap()

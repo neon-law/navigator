@@ -1226,10 +1226,11 @@ lawyer lens, read from the same skeletons the gate checks.
 
 ## Local checkouts
 
-`navigator sync --host <host>` keeps the signed-in person's participating open and pitch Projects one level below
-`~/Work`, at `~/Work/<code>`. `--dir` selects another root; `--dry-run` reports missing, present, unavailable, and
-occupied paths without contacting a forge or changing files. `project create` finishes by creating that matter's
-checkout through the same sync operation. A failed checkout leaves the opened Project available for a sync retry.
+`navigator sync --host <host>` keeps the signed-in person's participating open and pitch Projects under `~/Work/<code>`,
+wherever the command runs. Each clone includes the Project's committed Agent Skills under `.agents/skills/`. `--dry-run`
+reports missing, present, unavailable, and occupied paths without contacting a forge or changing files. `project create`
+finishes by creating that matter's checkout through the same sync operation. A failed checkout leaves the opened Project
+available for a sync retry.
 
 Missing repositories are cloned with `jj git clone --colocate`. Clean existing Git directories are colocated with jj; a
 directory with local edits is left in place. Sync checks the Project and host in the manifest, configures the secondary

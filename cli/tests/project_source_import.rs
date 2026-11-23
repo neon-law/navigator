@@ -141,6 +141,35 @@ fn import(credentials: &Path, host: &str, dir: &Path, extra: &[&str]) -> Run {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn sync_uses_only_the_work_folder_under_home_from_any_directory() {
+    let server = MockServer::start().await;
+    let host = server.uri();
+    let home = TempDir::new().unwrap();
+    let cwd = TempDir::new().unwrap();
+    let login = credentials(&home, &host, Some("lawyer@example.com"));
+    Mock::given(method("GET"))
+        .and(path("/app/api/projects"))
+        .and(header("authorization", "Bearer test-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let sync = || {
+        let mut cmd = command(&login);
+        cmd.current_dir(cwd.path())
+            .env("HOME", home.path())
+            .args(["sync", "--host", &host]);
+        cmd
+    };
+    sync().arg("--dry-run").assert().success();
+    assert!(!home.path().join("Work").exists());
+    sync().assert().success();
+    assert!(home.path().join("Work").is_dir());
+    assert_eq!(fs::read_dir(cwd.path()).unwrap().count(), 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn import_source_uploads_the_canonical_zip_under_a_tree_derived_key() {
     let server = MockServer::start().await;
     let host = server.uri();
