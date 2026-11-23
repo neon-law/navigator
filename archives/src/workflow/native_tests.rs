@@ -455,6 +455,7 @@ async fn real_write_only_sdk_restarts_join_same_receipt_and_refuse_missing_local
         let root = storage.path().canonicalize().unwrap();
         let config = crate::write_only::operations::Config {
             format_version: 1,
+            object_store: None,
             local_root: root.clone(),
             source_project_number: None,
             source_identity_sha256: crate::write_only::operations::source_identity(pg.pool())
@@ -464,6 +465,8 @@ async fn real_write_only_sdk_restarts_join_same_receipt_and_refuse_missing_local
             destinations: Vec::new(),
         };
         let request = crate::write_only::operations::Request {
+            capture_id: None,
+            delivery_attempt: 0,
             config_sha256: config.digest().unwrap(),
             config,
             reuse_local: None,
@@ -566,6 +569,8 @@ async fn assert_closed_source_replay(
     let retry = RunRequest {
         scheduled_for: None,
         write_only: Some(crate::write_only::operations::Request {
+            capture_id: None,
+            delivery_attempt: 0,
             reuse_local: Some(saved.local),
             ..request
         }),
@@ -622,6 +627,186 @@ async fn record_real_sdk_checkpoint(navigator: &PgPool) {
                 .await
                 .unwrap(),
             17
+        );
+    })
+    .await;
+}
+
+struct ObjectBackedSource {
+    pg: store::postgres::PostgresDb,
+    reads: AtomicUsize,
+    source: Arc<crate::write_only::operations::object_store::tests::Memory>,
+    target: Arc<crate::write_only::tests::CreateOnly>,
+    first: AtomicBool,
+    prepared: tokio::sync::Notify,
+}
+#[async_trait::async_trait]
+impl ArchivesDbosPhases for ObjectBackedSource {
+    async fn write_only_postgres(
+        &self,
+    ) -> Result<store::postgres::PostgresDb, ArchivesDbosPhaseError> {
+        self.reads.fetch_add(1, Ordering::SeqCst);
+        Ok(self.pg.clone())
+    }
+    async fn write_only_store(
+        &self,
+        _: &crate::write_only::operations::object_store::Config,
+    ) -> Result<Arc<dyn crate::write_only::operations::object_store::Store>, ArchivesDbosPhaseError>
+    {
+        Ok(self.source.clone())
+    }
+    async fn write_only_destination(
+        &self,
+        _: String,
+    ) -> Result<Arc<dyn cloud::StorageService>, ArchivesDbosPhaseError> {
+        if self.first.swap(false, Ordering::SeqCst) {
+            self.prepared.notify_one();
+            std::future::pending::<()>().await;
+        }
+        Ok(self.target.clone())
+    }
+    async fn snapshot(
+        &self,
+        _: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<SnapshotSummary, ArchivesDbosPhaseError> {
+        panic!("object capture must not enter analytical storage")
+    }
+    async fn cost(&self) -> Result<(), ArchivesDbosPhaseError> {
+        panic!("not the object-backed path")
+    }
+    async fn promote(&self, _: &SnapshotSummary) -> Vec<String> {
+        panic!("create-only writer cannot promote")
+    }
+    fn render_digest(&self, _: &SnapshotSummary) -> Result<String, ArchivesDbosPhaseError> {
+        panic!("not the object-backed digest")
+    }
+}
+#[tokio::test]
+async fn write_only_object_store_sdk_replacement_resumes_sealed_bytes_after_source_closes() {
+    object_store_sdk_restart(false).await;
+}
+#[tokio::test]
+async fn write_only_object_store_lost_capture_checkpoint_reuses_committed_seal() {
+    object_store_sdk_restart(true).await;
+}
+async fn object_store_sdk_restart(capture_checkpoint_loss: bool) {
+    store::test_support::with_postgres(async {
+        let pg = store::postgres::PostgresDb::application().await.unwrap();
+        let database: String = sqlx::query_scalar("SELECT current_database()::text")
+            .fetch_one(pg.pool())
+            .await
+            .unwrap();
+        let port = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT").unwrap();
+        let url = format!("postgresql://postgres:synthetic@127.0.0.1:{port}/{database}");
+        let mut config = crate::write_only::operations::object_store::tests::configured();
+        config.source_identity_sha256 = crate::write_only::operations::source_identity(pg.pool())
+            .await
+            .unwrap();
+        let phases = Arc::new(ObjectBackedSource {
+            pg: pg.clone(),
+            reads: AtomicUsize::new(0),
+            source: Arc::new(crate::write_only::operations::object_store::tests::Memory::default()),
+            target: Arc::new(crate::write_only::tests::CreateOnly::default()),
+            first: AtomicBool::new(!capture_checkpoint_loss),
+            prepared: tokio::sync::Notify::new(),
+        });
+        phases
+            .source
+            .pause_after_seal
+            .store(capture_checkpoint_loss, Ordering::SeqCst);
+        let input = RunRequest {
+            scheduled_for: None,
+            write_only: Some(crate::write_only::operations::Request {
+                capture_id: None,
+                delivery_attempt: 0,
+                config_sha256: config.digest().unwrap(),
+                config,
+                reuse_local: None,
+            }),
+        };
+        let slack = Arc::new(workflows::CapturingSlackBot::new());
+        let first = write_only_runtime(&url);
+        let workflow = register_dbos_with(
+            &first,
+            slack.clone(),
+            "synthetic-archive".into(),
+            true,
+            phases.clone(),
+        )
+        .unwrap();
+        first.launch().await.unwrap();
+        let pending = workflow
+            .start_with(
+                input.clone(),
+                dbos::StartOptions {
+                    workflow_id: Some("object-backed-stable-request"),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(60), async {
+            if capture_checkpoint_loss {
+                phases.source.sealed.notified().await;
+            } else {
+                phases.prepared.notified().await;
+            }
+        })
+        .await
+        .unwrap();
+        first.shutdown().await;
+        drop(pending);
+        drop(workflow);
+        assert_eq!(phases.reads.load(Ordering::SeqCst), 1);
+        pg.pool().close().await;
+        complete_object_restart(&url, phases, slack, input).await;
+    })
+    .await;
+}
+
+async fn complete_object_restart(
+    url: &str,
+    phases: Arc<ObjectBackedSource>,
+    slack: Arc<workflows::CapturingSlackBot>,
+    input: RunRequest,
+) {
+    let second = write_only_runtime(url);
+    let workflow = register_dbos_with(
+        &second,
+        slack.clone(),
+        "synthetic-archive".into(),
+        true,
+        phases.clone(),
+    )
+    .unwrap();
+    drain_sdk(&second, async {
+        second.launch().await.unwrap();
+        let report = tokio::time::timeout(
+            std::time::Duration::from_secs(60),
+            workflow.run_with(
+                input,
+                dbos::RunOptions {
+                    workflow_id: Some("object-backed-stable-request"),
+                    ..Default::default()
+                },
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let saved = report.write_only.unwrap();
+        assert!(saved.all_destinations_acknowledged && saved.local.object_store.is_some());
+        assert!(saved.local.root.as_os_str().is_empty());
+        assert_eq!(
+            phases.reads.load(Ordering::SeqCst),
+            1,
+            "replacement must never reopen PostgreSQL"
+        );
+        assert!(!phases.target.objects.lock().unwrap().is_empty());
+        assert_eq!(
+            slack.posted_messages().len(),
+            1,
+            "recovery emits one correlated digest"
         );
     })
     .await;

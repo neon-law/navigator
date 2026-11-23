@@ -10,8 +10,19 @@ use serde::Serialize;
 pub enum ArchivesCmd {
     /// Bind admitted source identities and reviewed paired coverage into private config.
     Config {
-        #[arg(long)]
-        local_root: PathBuf,
+        #[arg(
+            long,
+            conflicts_with = "object_store",
+            required_unless_present = "object_store"
+        )]
+        local_root: Option<PathBuf>,
+        /// Explicit source bucket/prefix, credential path and byte/object limits JSON.
+        #[arg(
+            long,
+            conflicts_with = "local_root",
+            required_unless_present = "local_root"
+        )]
+        object_store: Option<PathBuf>,
         #[arg(long)]
         destinations: PathBuf,
         #[arg(long)]
@@ -32,19 +43,26 @@ pub enum ArchivesCmd {
         #[arg(long)]
         out: PathBuf,
     },
-    /// Capture registered Navigator tables once, retain raw local Iceberg, create offsite objects.
+    /// Seal Navigator rows once in the configured local/object store, then create offsite objects.
     /// Acknowledged uploads still require separate verification/catalog registration.
     Capture {
         #[arg(long)]
         config: PathBuf,
-        /// Exact prior local receipt; never reads PostgreSQL or re-extracts when supplied.
-        #[arg(long)]
+        /// Exact sealed source receipt; never reads PostgreSQL or re-extracts when supplied.
+        #[arg(long, alias = "reuse-sealed")]
         reuse_local: Option<PathBuf>,
+        /// Stable operator-selected identity for object capture/recovery; changed cutoffs need new identities.
+        #[arg(long)]
+        capture_id: Option<String>,
+        /// Explicit bounded retry from an existing sealed generation.
+        #[arg(long, default_value_t=0, value_parser=clap::value_parser!(u8).range(0..=3))]
+        delivery_attempt: u8,
         #[arg(long)]
         out: PathBuf,
     },
-    /// Check every local object hash and query actual raw-file Iceberg tables, without source reads.
-    VerifyLocal {
+    /// Verify the sealed source objects and query Iceberg without PostgreSQL reads.
+    #[command(alias = "verify-local")]
+    VerifySealed {
         #[arg(long)]
         config: PathBuf,
         #[arg(long)]
@@ -123,31 +141,22 @@ async fn execute(command: ArchivesCmd) -> Result<ExitCode> {
     match command {
         ArchivesCmd::Config {
             local_root,
+            object_store,
             destinations,
             source_project_number,
             coverage,
             registered_navigator_only: _,
             out,
         } => {
-            let pg = store::postgres::PostgresDb::application().await?;
-            let capture = match coverage {
-                Some(path) => operations::CaptureScope::Paired {
-                    coverage: read(&path).await?,
-                    forgejo_identity_sha256: operations::forgejo_source_identity(&pg).await?,
-                },
-                None => operations::CaptureScope::RegisteredNavigator,
-            };
-            let config = Config {
-                format_version: 1,
+            configure(
                 local_root,
-                destinations: read(&destinations).await?,
+                object_store,
+                destinations,
                 source_project_number,
-                source_identity_sha256: operations::source_identity(pg.pool()).await?,
-                capture,
-            };
-            config.validate()?;
-            write(&out, &config).await?;
-            Ok(ExitCode::SUCCESS)
+                coverage,
+                out,
+            )
+            .await
         }
         ArchivesCmd::SourceIdentity { out } => {
             let pg = store::postgres::PostgresDb::application().await?;
@@ -158,6 +167,8 @@ async fn execute(command: ArchivesCmd) -> Result<ExitCode> {
         ArchivesCmd::Capture {
             config,
             reuse_local,
+            capture_id,
+            delivery_attempt,
             out,
         } => {
             let config: Config = read(&config).await?;
@@ -166,6 +177,8 @@ async fn execute(command: ArchivesCmd) -> Result<ExitCode> {
                 None => None,
             };
             let request = Request {
+                capture_id,
+                delivery_attempt,
                 config_sha256: config.digest()?,
                 config,
                 reuse_local,
@@ -180,7 +193,7 @@ async fn execute(command: ArchivesCmd) -> Result<ExitCode> {
             eprintln!("Archive transport report written; cloud verification/catalog promotion remain separate");
             Ok(code)
         }
-        ArchivesCmd::VerifyLocal {
+        ArchivesCmd::VerifySealed {
             config,
             receipt,
             out,
@@ -188,7 +201,7 @@ async fn execute(command: ArchivesCmd) -> Result<ExitCode> {
             let config: Config = read(&config).await?;
             let receipt = read_local(&receipt).await?;
             config.validate()?;
-            write(&out, &operations::verify::local(&receipt, &config).await?).await?;
+            write(&out, &operations::verify::sealed(&receipt, &config).await?).await?;
             Ok(ExitCode::SUCCESS)
         }
         ArchivesCmd::VerifyCloud {
@@ -218,6 +231,40 @@ async fn execute(command: ArchivesCmd) -> Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
     }
+}
+
+async fn configure(
+    local_root: Option<PathBuf>,
+    object_store: Option<PathBuf>,
+    destinations: PathBuf,
+    source_project_number: Option<u64>,
+    coverage: Option<PathBuf>,
+    out: PathBuf,
+) -> Result<ExitCode> {
+    let pg = store::postgres::PostgresDb::application().await?;
+    let capture = match coverage {
+        Some(path) => operations::CaptureScope::Paired {
+            coverage: read(&path).await?,
+            forgejo_identity_sha256: operations::forgejo_source_identity(&pg).await?,
+        },
+        None => operations::CaptureScope::RegisteredNavigator,
+    };
+    let object_store: Option<operations::object_store::Config> = match object_store {
+        Some(path) => Some(read(&path).await?),
+        None => None,
+    };
+    let config = Config {
+        format_version: if object_store.is_some() { 2 } else { 1 },
+        object_store,
+        local_root: local_root.unwrap_or_default(),
+        destinations: read(&destinations).await?,
+        source_project_number,
+        source_identity_sha256: operations::source_identity(pg.pool()).await?,
+        capture,
+    };
+    config.validate()?;
+    write(&out, &config).await?;
+    Ok(ExitCode::SUCCESS)
 }
 
 async fn verify_cloud_report(
@@ -261,6 +308,43 @@ async fn verify_cloud_report(
 #[cfg(test)]
 mod tests {
     use clap::Parser as _;
+
+    #[test]
+    fn cloud_archive_config_accepts_object_source_and_refuses_ambiguous_backing() {
+        let base = [
+            "hudson",
+            "ops",
+            "archives",
+            "config",
+            "--destinations",
+            "/synthetic/destinations.json",
+            "--coverage",
+            "/synthetic/coverage.json",
+            "--out",
+            "/synthetic/config.json",
+        ];
+        assert!(crate::Cli::try_parse_from(base).is_err());
+        let object = base
+            .into_iter()
+            .chain(["--object-store", "/synthetic/source-store.json"]);
+        assert!(crate::Cli::try_parse_from(object.clone()).is_ok());
+        assert!(
+            crate::Cli::try_parse_from(object.chain(["--local-root", "/synthetic/local"])).is_err()
+        );
+        assert!(crate::Cli::try_parse_from([
+            "hudson",
+            "ops",
+            "archives",
+            "verify-sealed",
+            "--config",
+            "/synthetic/config.json",
+            "--receipt",
+            "/synthetic/receipt.json",
+            "--out",
+            "/synthetic/verification.json"
+        ])
+        .is_ok());
+    }
 
     #[test]
     fn archive_commands_require_explicit_reviewed_scope_and_report_bound_verification() {

@@ -1,5 +1,5 @@
-# Operator-provisioned configuration and persistent receipts for DBOS Archives.
-# The claim must support concurrent mounts during rolling updates and replicas.
+# Immutable GCS generations and DBOS receipts need no persistent filesystem.
+# GKE metadata authenticates a separate, source-bucket-bound client.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -8,9 +8,6 @@ metadata:
 spec:
   template:
     spec:
-      securityContext:
-        fsGroup: 65532
-        fsGroupChangePolicy: OnRootMismatch
       containers:
         - name: web
           env:
@@ -20,8 +17,6 @@ spec:
             - name: archive-write-only-config
               mountPath: /var/lib/navigator/iceberg/config
               readOnly: true
-            - name: archive-iceberg
-              mountPath: /var/lib/navigator/iceberg/data
       volumes:
         - name: archive-write-only-config
           configMap:
@@ -29,6 +24,3 @@ spec:
             items:
               - key: archive-config.json
                 path: archive-config.json
-        - name: archive-iceberg
-          persistentVolumeClaim:
-            claimName: navigator-archive-iceberg

@@ -1,4 +1,4 @@
-//! Explicit immutable configuration and persistent local receipts for operator/DBOS use.
+//! Explicit immutable configuration and versioned sealed receipts for operator/DBOS use.
 use std::{
     collections::BTreeSet,
     path::{Path, PathBuf},
@@ -14,7 +14,10 @@ use super::{Acknowledged, Bundle, Capture, Inventory, Unconfirmed};
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub format_version: u8,
-    /// A persistent, private, operator-owned mounted filesystem; never an implicit tempdir.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object_store: Option<object_store::Config>,
+    /// Version-one local backup root; empty for the version-two object-backed source.
+    #[serde(default)]
     pub local_root: PathBuf,
     /// None explicitly denotes a non-GCP source (for example local PostgreSQL).
     pub source_project_number: Option<u64>,
@@ -60,11 +63,20 @@ impl Config {
     }
 
     fn validate_inner(&self) -> anyhow::Result<()> {
-        ensure!(self.format_version == 1, "unsupported backup configuration");
-        ensure!(
-            self.local_root.is_absolute(),
-            "persistent local root must be absolute"
-        );
+        match (&self.object_store, self.format_version) {
+            (None, 1) => ensure!(
+                self.local_root.is_absolute(),
+                "persistent local root must be absolute"
+            ),
+            (Some(store), 2) => {
+                store.validate()?;
+                ensure!(
+                    self.local_root.as_os_str().is_empty(),
+                    "object storage must not claim a local mount"
+                );
+            }
+            _ => bail!("unsupported archive configuration/storage version"),
+        }
         ensure!(
             self.source_project_number != Some(0),
             "source project identity is required"
@@ -90,9 +102,36 @@ impl Config {
                 "Forgejo source identity SHA256 is required"
             );
         }
+        if let Some(store) = &self.object_store {
+            let tables = match &self.capture {
+                CaptureScope::RegisteredNavigator => crate::postgres::POSTGRES_TABLES.len(),
+                CaptureScope::Paired { coverage, .. } => coverage
+                    .navigator
+                    .relations
+                    .len()
+                    .checked_add(coverage.forgejo.relations.len())
+                    .context("coverage count overflow")?,
+            };
+            ensure!(
+                tables
+                    .checked_mul(4)
+                    .is_some_and(|objects| objects <= store.max_objects),
+                "capture coverage exceeds object budget"
+            );
+        }
         let mut projects = BTreeSet::new();
         let mut buckets = BTreeSet::new();
+        ensure!(
+            self.destinations.len() <= 4,
+            "too many archive destinations"
+        );
         for destination in &self.destinations {
+            ensure!(
+                self.object_store
+                    .as_ref()
+                    .is_none_or(|store| store.bucket != destination.bucket),
+                "sealed source must not share an offsite bucket"
+            );
             ensure!(
                 !destination.location.is_empty()
                     && destination.location.len() <= 63
@@ -130,10 +169,12 @@ impl Config {
     }
 }
 
-/// Checkpointed local inventory identity. Paths alone do not authorize reconstruction.
+/// Checkpointed sealed inventory identity with explicit local or versioned object backing.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct LocalReceipt {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object_store: Option<object_store::Receipt>,
     pub root: PathBuf,
     pub root_uri: String,
     pub inventory_key: String,
@@ -156,7 +197,11 @@ pub(super) fn safe_key(key: &str) -> bool {
 }
 
 /// A receipt can only resolve inside the explicitly configured persistent root.
-pub(crate) async fn open(receipt: &LocalReceipt, configured_root: &Path) -> Result<Bundle> {
+pub(crate) async fn open_local(receipt: &LocalReceipt, configured_root: &Path) -> Result<Bundle> {
+    ensure!(
+        receipt.object_store.is_none(),
+        "object-backed receipt cannot be opened as local files"
+    );
     let root = configured_root
         .canonicalize()
         .context("persistent archive storage is unavailable")?;
@@ -240,6 +285,7 @@ async fn seal(bundle: &Bundle, root: &Path) -> Result<LocalReceipt> {
     bundle.verify_local(root).await?;
     let (tables, rows) = cardinality(&bundle.files)?;
     Ok(LocalReceipt {
+        object_store: None,
         cutoff_at: bundle.inventory.cutoff_at,
         tables,
         rows,
@@ -262,7 +308,7 @@ pub(crate) async fn prepare(
         .canonicalize()
         .context("configured persistent root must exist")?;
     if let Some(existing) = existing {
-        let bundle = open(existing, &root).await?;
+        let bundle = open_local(existing, &root).await?;
         validate_sources(&bundle.inventory, config)?;
         ensure!(
             bundle.root == format!("file://{}", root.display()),
@@ -281,16 +327,38 @@ pub(crate) async fn prepare(
         source_identity(pg.pool()).await? == config.source_identity_sha256,
         "source database identity differs from immutable request"
     );
-    let capture = match &config.capture {
-        CaptureScope::RegisteredNavigator => Capture::navigator(pg).await?,
+    let capture = capture(pg, config).await?;
+    let mut bundle = capture
+        .bundle(&format!("file://{}", root.display()))
+        .await?;
+    bind_sources(&mut bundle, config);
+    seal(&bundle, &root).await
+}
+
+pub(super) async fn capture(pg: &store::postgres::PostgresDb, config: &Config) -> Result<Capture> {
+    Ok(match &config.capture {
+        CaptureScope::RegisteredNavigator => match &config.object_store {
+            Some(store) => Capture(
+                crate::postgres::extract_with_bounds(
+                    pg.pool(),
+                    crate::postgres::POSTGRES_TABLES,
+                    &crate::postgres::NoPause,
+                    &std::collections::HashMap::new(),
+                    Some(&store.bounds()),
+                )
+                .await?,
+                None,
+            ),
+            None => Capture::navigator(pg).await?,
+        },
         CaptureScope::Paired {
             coverage,
             forgejo_identity_sha256,
         } => capture_pair(pg, config, coverage, forgejo_identity_sha256).await?,
-    };
-    let mut bundle = capture
-        .bundle(&format!("file://{}", root.display()))
-        .await?;
+    })
+}
+
+pub(super) fn bind_sources(bundle: &mut Bundle, config: &Config) {
     bundle.inventory.source_identity_sha256 = Some(config.source_identity_sha256.clone());
     bundle.inventory.forgejo_identity_sha256 = match &config.capture {
         CaptureScope::Paired {
@@ -299,12 +367,15 @@ pub(crate) async fn prepare(
         } => Some(forgejo_identity_sha256.clone()),
         CaptureScope::RegisteredNavigator => None,
     };
-    seal(&bundle, &root).await
 }
 
 /// Reconstruct only the frozen Parquet from the sealed receipt, not from PostgreSQL.
 async fn frozen(receipt: &LocalReceipt, root: &Path) -> Result<Capture> {
-    let bundle = open(receipt, root).await?;
+    let bundle = open_local(receipt, root).await?;
+    frozen_bundle(bundle)
+}
+
+pub(super) fn frozen_bundle(bundle: Bundle) -> Result<Capture> {
     let mut tables = Vec::new();
     for (key, bytes, _) in &bundle.files {
         if !key.ends_with("/data/snapshot.parquet") {
@@ -380,7 +451,7 @@ pub(crate) async fn prepare_destination(
         .destinations
         .get(destination)
         .context("unknown backup destination")?;
-    let original = open(local, &config.local_root).await?;
+    let original = open_local(local, &config.local_root).await?;
     validate_sources(&original.inventory, config)?;
     ensure!(
         original.inventory.source_identity_sha256.as_ref() == Some(&config.source_identity_sha256),
@@ -445,7 +516,7 @@ pub(crate) async fn upload(
         .destinations
         .get(destination)
         .context("unknown backup destination")?;
-    let bundle = open(prepared, &config.local_root).await?;
+    let bundle = open_local(prepared, &config.local_root).await?;
     validate_sources(&bundle.inventory, config)?;
     ensure!(
         bundle.inventory.local_generation_sha256.as_deref() == Some(source_inventory_sha256),
@@ -486,10 +557,15 @@ pub(crate) async fn upload(
     })
 }
 
+pub mod object_store;
 pub mod verify;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Request {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_id: Option<String>,
+    #[serde(default, skip_serializing_if = "delivery_is_zero")]
+    pub delivery_attempt: u8,
     pub config: Config,
     pub config_sha256: String,
     /// Explicit recovery/retry refers to an already sealed generation, never recaptures.
@@ -497,8 +573,17 @@ pub struct Request {
     pub reuse_local: Option<LocalReceipt>,
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref)] // Serde skip predicate takes a borrowed field.
+fn delivery_is_zero(value: &u8) -> bool {
+    *value == 0
+}
+
 impl Request {
     pub(crate) fn validate(&self) -> Result<()> {
+        ensure!(
+            self.delivery_attempt <= 3,
+            "delivery attempt bound exceeded"
+        );
         ensure!(
             self.config.digest()? == self.config_sha256,
             "archive request configuration changed"
@@ -530,6 +615,9 @@ pub struct Report {
 pub async fn execute(request: &Request) -> std::result::Result<Report, crate::write_only::Error> {
     let result: anyhow::Result<_> = async {
         request.validate()?;
+        if request.config.object_store.is_some() {
+            return object_store::execute(request).await;
+        }
         let pg = if request.reuse_local.is_none() {
             Some(store::postgres::PostgresDb::application().await?)
         } else {
@@ -660,19 +748,27 @@ async fn capture_pair(
                 database_identity(&forgejo).await? == forgejo_identity_sha256,
                 "Forgejo reader connected to a different bound source"
             );
-            Capture::paired(
-                crate::coverage::DatabaseSource {
-                    name: "navigator",
-                    pool: &navigator,
-                    coverage: &coverage.navigator,
-                },
-                crate::coverage::DatabaseSource {
-                    name: "forgejo",
-                    pool: &forgejo,
-                    coverage: &coverage.forgejo,
-                },
-            )
-            .await
+            let navigator_source = crate::coverage::DatabaseSource {
+                name: "navigator",
+                pool: &navigator,
+                coverage: &coverage.navigator,
+            };
+            let forgejo_source = crate::coverage::DatabaseSource {
+                name: "forgejo",
+                pool: &forgejo,
+                coverage: &coverage.forgejo,
+            };
+            match &config.object_store {
+                Some(store) => {
+                    Capture::paired_with_bounds(
+                        navigator_source,
+                        forgejo_source,
+                        Some(&store.bounds()),
+                    )
+                    .await
+                }
+                None => Capture::paired(navigator_source, forgejo_source).await,
+            }
         }
         .await;
         forgejo.close().await;

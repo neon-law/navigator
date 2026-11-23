@@ -1,28 +1,9 @@
-//! `gcloud auth print-access-token` as a credential of last resort.
+//! Operator-only token fallback for clients that explicitly permit the gcloud identity.
 //!
-//! `google-cloud-auth` supports fewer credential shapes than the `gcloud`
-//! CLI does, and the gap bites in two places that look unrelated and are
-//! the same thing:
+//! ADC and gcloud use separate credential stores. An operator client can probe this fallback when its configured
+//! credential is unavailable. Strict archive source, writer and verifier clients never select this provider.
 //!
-//! - **CI.** Workload Identity Federation — what
-//!   `google-github-actions/auth` configures — writes an `external_account`
-//!   credential file, which `google-cloud-auth` rejects outright with
-//!   `unsupported account external_account`. Ship run 144483561 died there
-//!   on the registry tag preflight, and release 26.8.12's
-//!   `publish-cli-archives` jobs died there opening the GCS client, in both
-//!   cases *after* the same job had already authenticated `gcloud` from
-//!   that very file.
-//! - **Operators.** `gcloud auth login` and `gcloud auth
-//!   application-default login` write to separate stores, so a fresh login
-//!   with stale ADC fails the same call — the recurring `missing field
-//!   access_token` confusion in `docs/cloud-operations.md`.
-//!
-//! Both are cases where a perfectly good credential is already sitting in
-//! `gcloud`. Ask it rather than failing the command.
-//!
-//! Two consumers share this module: [`gcs`](crate::gcs), through
-//! [`GcloudTokenSourceProvider`], and the CLI's `devx gcp` REST client,
-//! through [`access_token`] directly.
+//! GCS operator clients use [`GcloudTokenSourceProvider`]; Hudson's GCP REST client uses [`access_token`] directly.
 
 use std::process::Command;
 use std::sync::Arc;

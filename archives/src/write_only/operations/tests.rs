@@ -3,6 +3,7 @@ use super::*;
 fn config(root: &Path) -> Config {
     Config {
         format_version: 1,
+        object_store: None,
         local_root: root.to_owned(),
         source_project_number: None,
         source_identity_sha256: "ab".repeat(32),
@@ -19,6 +20,8 @@ fn config(root: &Path) -> Config {
 #[test]
 fn config_cannot_retarget_a_journaled_request_or_lower_existing_locked_retention() {
     let mut request = Request {
+        capture_id: None,
+        delivery_attempt: 0,
         config: config(Path::new("/synthetic-private-archive")),
         config_sha256: String::new(),
         reuse_local: None,

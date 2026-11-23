@@ -15,8 +15,11 @@ use google_cloud_storage::http::objects::upload::{Media, UploadObjectRequest, Up
 use google_cloud_storage::http::objects::Object;
 use google_cloud_storage::http::Error as GcsHttpError;
 use google_cloud_storage::sign::SignedURLOptions;
+use tokio::io::AsyncReadExt as _;
 
 use crate::{ImmutableObject, StorageError, StorageService, StoredObject, VersionedObject};
+
+mod archive_identity;
 
 /// Configuration for the GCS backend. The bucket name is resolved from
 /// `NAVIGATOR_DOCUMENTS_BUCKET` (preferred) falling back to
@@ -306,6 +309,110 @@ impl GcsStorage {
             client: Arc::new(GcsClient::new(client_config)),
             bucket: Arc::new(bucket),
             emulator: false,
+        })
+    }
+
+    /// GKE source identity uses only the metadata server; ADC files and CLI fallback are excluded.
+    pub async fn archive_from_gke_metadata(bucket: String) -> Result<Self, StorageError> {
+        Ok(Self {
+            client: Arc::new(GcsClient::new(archive_identity::configuration().await?)),
+            bucket: Arc::new(bucket),
+            emulator: false,
+        })
+    }
+
+    /// Explicit source-store credentials; never changes process ADC or falls back to gcloud.
+    pub async fn archive_from_credentials(
+        bucket: String,
+        path: &std::path::Path,
+    ) -> Result<Self, StorageError> {
+        let refused = || StorageError::Unsupported("sealed source credentials unavailable");
+        if !path.is_absolute()
+            || std::fs::metadata(path).map_err(|_| refused())?.len() > 1024 * 1024
+        {
+            return Err(refused());
+        }
+        if std::env::var_os("GOOGLE_APPLICATION_CREDENTIALS").is_some_and(|writer| {
+            std::fs::canonicalize(writer).ok() == std::fs::canonicalize(path).ok()
+        }) {
+            return Err(StorageError::Unsupported(
+                "source and destination credential files must differ",
+            ));
+        }
+        let file = tokio::fs::File::open(path).await.map_err(|_| refused())?;
+        let mut bytes = Vec::new();
+        file.take(1024 * 1024 + 1)
+            .read_to_end(&mut bytes)
+            .await
+            .map_err(|_| refused())?;
+        if bytes.len() > 1024 * 1024 {
+            return Err(refused());
+        }
+        let credentials: google_cloud_auth::credentials::CredentialsFile =
+            serde_json::from_slice(&bytes).map_err(|_| refused())?;
+        let config = ClientConfig::default()
+            .with_credentials(credentials)
+            .await
+            .map_err(|_| refused())?;
+        Ok(Self {
+            client: Arc::new(GcsClient::new(config)),
+            bucket: Arc::new(bucket),
+            emulator: false,
+        })
+    }
+
+    /// Source/verifier read: reject oversized metadata before downloading an exact generation.
+    pub async fn archive_read_bounded(
+        &self,
+        key: &str,
+        generation: Option<u64>,
+        limit: usize,
+    ) -> Result<VersionedObject, StorageError> {
+        let refused = || StorageError::Unsupported("bounded archive source read refused");
+        let requested = generation
+            .map(i64::try_from)
+            .transpose()
+            .map_err(|_| refused())?;
+        if requested.is_some_and(|value| value <= 0) {
+            return Err(refused());
+        }
+        let mut request = GetObjectRequest {
+            bucket: (*self.bucket).clone(),
+            object: key.to_owned(),
+            generation: requested,
+            ..Default::default()
+        };
+        let metadata = self
+            .client
+            .get_object(&request)
+            .await
+            .map_err(|error| map_gcs_error(&error, key))?;
+        let size = usize::try_from(metadata.size).map_err(|_| refused())?;
+        let generation = u64::try_from(metadata.generation).map_err(|_| refused())?;
+        if size > limit
+            || generation == 0
+            || requested.is_some_and(|value| value != metadata.generation)
+        {
+            return Err(refused());
+        }
+        request.generation = Some(metadata.generation);
+        let bytes = self
+            .client
+            .download_object(&request, &Range::default())
+            .await
+            .map_err(|error| map_gcs_error(&error, key))?;
+        if bytes.len() != size || bytes.len() > limit {
+            return Err(refused());
+        }
+        Ok(VersionedObject {
+            object: StoredObject {
+                key: key.to_owned(),
+                bytes,
+                content_type: metadata
+                    .content_type
+                    .unwrap_or_else(|| "application/octet-stream".into()),
+            },
+            generation,
         })
     }
 
@@ -1444,6 +1551,121 @@ mod tests {
         })
         .unwrap_err();
         assert!(matches!(err, StorageError::MissingEnv(_)), "got {err:?}");
+    }
+    #[tokio::test]
+    async fn archive_source_read_bounds_before_download_and_pins_observed_generation() {
+        use wiremock::matchers::{method, path, query_param, query_param_is_missing};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        let mut metadata = object_json("sealed.parquet", None);
+        metadata["generation"] = "17".into();
+        Mock::given(method("GET"))
+            .and(path("/storage/v1/b/navigator/o/sealed.parquet"))
+            .and(query_param_is_missing("alt"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(metadata))
+            .expect(2)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/storage/v1/b/navigator/o/sealed.parquet"))
+            .and(query_param("alt", "media"))
+            .and(query_param("generation", "17"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"data".to_vec()))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let source = GcsStorage::new_from_config(GcsStorageConfig {
+            bucket: "navigator".into(),
+            endpoint: Some(server.uri()),
+        })
+        .await
+        .unwrap();
+        let object = source
+            .archive_read_bounded("sealed.parquet", None, 4)
+            .await
+            .unwrap();
+        assert_eq!(object.object.bytes, b"data");
+        assert_eq!(object.generation, 17);
+        assert!(source
+            .archive_read_bounded("sealed.parquet", Some(17), 3)
+            .await
+            .is_err());
+        assert!(source
+            .archive_read_bounded("sealed.parquet", Some(0), 4)
+            .await
+            .is_err());
+    }
+    #[tokio::test]
+    async fn archive_source_accepts_projected_token_federation_without_a_private_key() {
+        use wiremock::matchers::{body_string_contains, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/synthetic-sts"))
+            .and(body_string_contains("subject_token=synthetic-projected-jwt"))
+            .and(body_string_contains("grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token":"synthetic-source-access-token","token_type":"Bearer","expires_in":3600
+            })))
+            .expect(1)
+            .mount(&server).await;
+        let storage = tempfile::tempdir().unwrap();
+        let token = storage.path().join("projected-token");
+        tokio::fs::write(&token, b"synthetic-projected-jwt")
+            .await
+            .unwrap();
+        let credentials = storage.path().join("external-account.json");
+        let configuration = serde_json::json!({
+            "type":"external_account",
+            "audience":"identitynamespace:synthetic-pool:synthetic-provider",
+            "subject_token_type":"urn:ietf:params:oauth:token-type:jwt",
+            "token_url":format!("{}/synthetic-sts",server.uri()),
+            "credential_source":{"file":token,"format":{"type":"text"}}
+        });
+        tokio::fs::write(&credentials, serde_json::to_vec(&configuration).unwrap())
+            .await
+            .unwrap();
+        assert!(
+            GcsStorage::archive_from_credentials("example-sealed-source".into(), &credentials)
+                .await
+                .is_ok()
+        );
+        // A missing projected token must not become an ambient ADC identity.
+        tokio::fs::remove_file(token).await.unwrap();
+        let error =
+            GcsStorage::archive_from_credentials("example-sealed-source".into(), &credentials)
+                .await
+                .err()
+                .unwrap();
+        assert_eq!(error.to_string(),"operation not supported on this storage backend: sealed source credentials unavailable");
+    }
+
+    #[tokio::test]
+    async fn archive_source_credentials_are_explicit_bounded_and_never_fall_back() {
+        let storage = tempfile::tempdir().unwrap();
+        let path = storage.path().join("synthetic-source.json");
+        tokio::fs::write(&path, b"synthetic invalid credential material")
+            .await
+            .unwrap();
+        let error = GcsStorage::archive_from_credentials("example-sealed-source".into(), &path)
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(error.to_string(),"operation not supported on this storage backend: sealed source credentials unavailable");
+        tokio::fs::write(&path, vec![b'x'; 1024 * 1024 + 1])
+            .await
+            .unwrap();
+        assert!(
+            GcsStorage::archive_from_credentials("example-sealed-source".into(), &path)
+                .await
+                .is_err()
+        );
+        assert!(GcsStorage::archive_from_credentials(
+            "example-sealed-source".into(),
+            std::path::Path::new("relative-source.json")
+        )
+        .await
+        .is_err());
     }
 }
 

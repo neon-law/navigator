@@ -147,6 +147,24 @@ pub trait ArchivesDbosPhases: Send + Sync + 'static {
             .await
             .map_err(|_| ArchivesDbosPhaseError)
     }
+    async fn write_only_store(
+        &self,
+        config: &crate::write_only::operations::object_store::Config,
+    ) -> Result<Arc<dyn crate::write_only::operations::object_store::Store>, ArchivesDbosPhaseError>
+    {
+        crate::write_only::operations::object_store::connect(config)
+            .await
+            .map_err(|_| ArchivesDbosPhaseError)
+    }
+    async fn write_only_destination(
+        &self,
+        bucket: String,
+    ) -> Result<Arc<dyn cloud::StorageService>, ArchivesDbosPhaseError> {
+        cloud::GcsStorage::archive_from_adc(bucket)
+            .await
+            .map(|storage| Arc::new(storage) as Arc<dyn cloud::StorageService>)
+            .map_err(|_| ArchivesDbosPhaseError)
+    }
     async fn snapshot(
         &self,
         scheduled_for: Option<DateTime<Utc>>,
@@ -1117,6 +1135,7 @@ mod tests {
         let path = root.path().join("archive-config.json");
         let mut config = crate::write_only::operations::Config {
             format_version: 1,
+            object_store: None,
             local_root: root.path().canonicalize().unwrap(),
             source_project_number: None,
             source_identity_sha256: "a".repeat(64),
@@ -1893,6 +1912,8 @@ impl RunRequest {
                 let config =
                     crate::write_only::operations::Config::read(std::path::Path::new(&path))?;
                 Some(crate::write_only::operations::Request {
+                    capture_id: None,
+                    delivery_attempt: 0,
                     config_sha256: config.digest()?,
                     config,
                     reuse_local: None,

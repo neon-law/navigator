@@ -868,10 +868,23 @@ where
 const ARCHIVE_WRITE_ONLY_CONFIG: &str = "NAVIGATOR_ARCHIVE_WRITE_ONLY_CONFIG";
 const ARCHIVE_WRITE_ONLY_CONFIG_PATH: &str =
     "/var/lib/navigator/iceberg/config/archive-config.json";
-const ARCHIVE_WRITE_ONLY_OBJECTS: &[(&str, &str)] = &[
-    ("configmap", "navigator-archive-write-only"),
-    ("persistentvolumeclaim", "navigator-archive-iceberg"),
-];
+const ARCHIVE_WRITE_ONLY_OBJECTS: &[(&str, &str)] =
+    &[("configmap", "navigator-archive-write-only")];
+const ARCHIVE_SOURCE_AUTHENTICATION: &str = "NAVIGATOR_ARCHIVE_SOURCE_AUTHENTICATION";
+
+fn archive_source_authentication<F>(
+    get: &F,
+) -> Result<archives::write_only::operations::object_store::Authentication>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    use archives::write_only::operations::object_store::Authentication;
+    match non_empty_env(ARCHIVE_SOURCE_AUTHENTICATION, get).as_deref() {
+        None | Some("gke_metadata") => Ok(Authentication::GkeMetadata),
+        Some("credentials_file") => Ok(Authentication::CredentialsFile),
+        Some(_) => anyhow::bail!("invalid archive source authentication mode"),
+    }
+}
 
 fn write_only_archives<F>(get: &F) -> Result<bool>
 where
@@ -884,7 +897,7 @@ where
         archives_on_dbos(get),
         "{ARCHIVE_WRITE_ONLY_CONFIG} requires {ARCHIVES_SCHEDULE_ENV} = true"
     );
-    ensure!(path == ARCHIVE_WRITE_ONLY_CONFIG_PATH, "{ARCHIVE_WRITE_ONLY_CONFIG} must name the persistent deployment configuration path {ARCHIVE_WRITE_ONLY_CONFIG_PATH}");
+    ensure!(path == ARCHIVE_WRITE_ONLY_CONFIG_PATH, "{ARCHIVE_WRITE_ONLY_CONFIG} must name the mounted deployment configuration path {ARCHIVE_WRITE_ONLY_CONFIG_PATH}");
     ensure!(
         non_empty_env("NAVIGATOR_ARCHIVE_SOURCE", get).is_none_or(|source| source == "postgres"),
         "write-only Archives requires a PostgreSQL source"
@@ -908,6 +921,11 @@ where
     }
     if write_only {
         patches.push_str("  - path: postgres/web/web-archives-write-only.yaml\n    target:\n      kind: Deployment\n      name: navigator-web\n");
+        if archive_source_authentication(get)?
+            == archives::write_only::operations::object_store::Authentication::CredentialsFile
+        {
+            patches.push_str("  - path: postgres/web/web-archives-source-file.yaml\n    target:\n      kind: Deployment\n      name: navigator-web\n");
+        }
     }
     Ok(vec![
         Substitution {
@@ -2177,7 +2195,7 @@ const ORDERED_SERVICE_OBJECTS: &[(&str, &str)] = &[
 ];
 
 /// Check prerequisite names without reading Secret data. Write-only Archives
-/// also validates its non-secret configuration and shared persistent claim.
+/// also validates its non-secret configuration and mode-specific identity mount.
 /// These cluster-owned inputs must exist before the first apply.
 fn ensure_ordered_service_objects(
     cfg: &ShipConfig,
@@ -2222,48 +2240,77 @@ fn ensure_ordered_service_objects(
         missing.join(", ")
     );
     if write_only {
-        let read = |kind: &str, name: &str| -> Result<serde_json::Value> {
-            let output = kubectl(cfg)
-                .args(["get", kind, name, "-o", "json"])
-                .output()?;
-            ensure!(
-                output.status.success(),
-                "cannot inspect archive {kind}/{name}"
-            );
-            Ok(serde_json::from_slice(&output.stdout)?)
-        };
-        let configuration = read("configmap", "navigator-archive-write-only")?;
-        let claim = read("persistentvolumeclaim", "navigator-archive-iceberg")?;
-        ensure_write_only_archive_mounts(&configuration, &claim)?;
+        ensure_archive_source_prerequisites(cfg, deployment)?;
+    }
+    Ok(())
+}
+
+fn ensure_archive_source_prerequisites(
+    cfg: &ShipConfig,
+    deployment: &super::deployments::Deployment,
+) -> Result<()> {
+    let read = |kind: &str, name: &str| -> Result<serde_json::Value> {
+        let output = kubectl(cfg)
+            .args(["get", kind, name, "-o", "json"])
+            .output()?;
+        ensure!(
+            output.status.success(),
+            "cannot inspect archive {kind}/{name}"
+        );
+        Ok(serde_json::from_slice(&output.stdout)?)
+    };
+    let configuration = read("configmap", "navigator-archive-write-only")?;
+    let rendered_mode =
+        archive_source_authentication(&|key| deployment.coordinates.get(key).cloned())?;
+    if ensure_write_only_archive_mounts(&configuration, &rendered_mode)? {
+        let result = kubectl(cfg)
+            .args([
+                "get",
+                "secret",
+                "navigator-archive-source-credentials",
+                "-o",
+                "name",
+            ])
+            .output()?;
+        ensure!(
+            result.status.success(),
+            "explicit archive source credentials Secret is missing"
+        );
     }
     Ok(())
 }
 
 fn ensure_write_only_archive_mounts(
     configuration: &serde_json::Value,
-    claim: &serde_json::Value,
-) -> Result<()> {
+    rendered_mode: &archives::write_only::operations::object_store::Authentication,
+) -> Result<bool> {
     let json = configuration["data"]["archive-config.json"]
         .as_str()
         .context("archive ConfigMap requires archive-config.json")?;
     let config: archives::write_only::operations::Config =
         serde_json::from_str(json).context("invalid write-only archive configuration")?;
     config.validate()?;
+    let source = config
+        .object_store
+        .as_ref()
+        .context("cloud Archives requires an object-backed sealed source")?;
     ensure!(
-        config.local_root == Path::new("/var/lib/navigator/iceberg/data"),
-        "archive local_root must use the persistent mount /var/lib/navigator/iceberg/data"
+        source.authentication
+            == archives::write_only::operations::object_store::Authentication::GkeMetadata
+            || source.credentials_file
+                == Path::new("/var/run/navigator-archive-source/credentials.json"),
+        "sealed source credentials must use the private mounted source identity"
     );
     ensure!(
-        claim["status"]["phase"] == "Bound",
-        "archive PVC must be Bound before release"
+        !config.destinations.is_empty(),
+        "cloud Archives requires an independent destination"
     );
     ensure!(
-        claim["spec"]["accessModes"]
-            .as_array()
-            .is_some_and(|modes| modes.iter().any(|mode| mode == "ReadWriteMany")),
-        "archive PVC requires ReadWriteMany for replicas and rolling updates"
+        &source.authentication == rendered_mode,
+        "archive source configuration and rendered authentication mode differ"
     );
-    Ok(())
+    Ok(source.authentication
+        == archives::write_only::operations::object_store::Authentication::CredentialsFile)
 }
 
 fn pin_service_images(
@@ -8903,11 +8950,84 @@ mod tests {
         assert!(!renders_cronjob(&manifests, "dri-digest-trigger"));
     }
 
+    fn assert_archive_adds_only_configuration_volumes(web: &serde_yaml::Value, file: bool) {
+        let baseline = rendered_manifests(|key| match key {
+            NAVIGATOR_DBOS_ENABLED | ARCHIVES_SCHEDULE_ENV => Some("true".to_owned()),
+            _ => native_ship_env(key),
+        });
+        let baseline_web = manifest_doc(&baseline, "Deployment", WEB_DEPLOYMENT);
+        let named = |sequence: &serde_yaml::Value| {
+            sequence
+                .as_sequence()
+                .unwrap()
+                .iter()
+                .map(|volume| (volume["name"].as_str().unwrap().to_owned(), volume.clone()))
+                .collect::<std::collections::BTreeMap<_, _>>()
+        };
+        let baseline = named(&baseline_web["spec"]["template"]["spec"]["volumes"]);
+        let current = named(&web["spec"]["template"]["spec"]["volumes"]);
+        for (name, volume) in &baseline {
+            assert_eq!(
+                current.get(name),
+                Some(volume),
+                "archive activation must preserve existing application volumes"
+            );
+        }
+        let added: Vec<_> = current
+            .iter()
+            .filter(|(name, _)| !baseline.contains_key(*name))
+            .collect();
+        let expected = if file {
+            vec!["archive-source-credentials", "archive-write-only-config"]
+        } else {
+            vec!["archive-write-only-config"]
+        };
+        assert_eq!(
+            added
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>(),
+            expected
+        );
+        assert!(added
+            .iter()
+            .all(|(_, volume)| (volume.get("configMap").is_some()
+                || volume.get("secret").is_some())
+                && volume.get("persistentVolumeClaim").is_none()
+                && volume.get("emptyDir").is_none()));
+        let baseline_mounts =
+            named(&baseline_web["spec"]["template"]["spec"]["containers"][0]["volumeMounts"]);
+        let current_mounts =
+            named(&web["spec"]["template"]["spec"]["containers"][0]["volumeMounts"]);
+        for (name, mount) in &baseline_mounts {
+            assert_eq!(
+                current_mounts.get(name),
+                Some(mount),
+                "archive activation must preserve existing application mounts"
+            );
+        }
+        let added_mounts: Vec<_> = current_mounts
+            .iter()
+            .filter(|(name, _)| !baseline_mounts.contains_key(*name))
+            .collect();
+        assert_eq!(
+            added_mounts
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>(),
+            expected
+        );
+        assert!(added_mounts
+            .iter()
+            .all(|(_, mount)| mount["readOnly"] == true));
+    }
+
     #[test]
-    fn write_only_archives_mounts_persistent_receipts_and_read_only_configuration() {
+    fn write_only_archives_mounts_private_source_credentials_without_a_filesystem_claim() {
         let selected = |key: &str| match key {
             NAVIGATOR_DBOS_ENABLED | ARCHIVES_SCHEDULE_ENV => Some("true".to_owned()),
             ARCHIVE_WRITE_ONLY_CONFIG => Some(ARCHIVE_WRITE_ONLY_CONFIG_PATH.to_owned()),
+            ARCHIVE_SOURCE_AUTHENTICATION => Some("credentials_file".to_owned()),
             _ => native_ship_env(key),
         };
         let manifests = rendered_manifests(selected);
@@ -8918,15 +9038,15 @@ mod tests {
         );
         let pod = &web["spec"]["template"]["spec"];
         let volumes = pod["volumes"].as_sequence().unwrap();
-        let data = volumes
+        assert_archive_adds_only_configuration_volumes(&web, true);
+        let source = volumes
             .iter()
-            .find(|v| v["name"] == "archive-iceberg")
+            .find(|volume| volume["name"] == "archive-source-credentials")
             .unwrap();
         assert_eq!(
-            data["persistentVolumeClaim"]["claimName"],
-            "navigator-archive-iceberg"
+            source["secret"]["secretName"],
+            "navigator-archive-source-credentials"
         );
-        assert!(data.get("emptyDir").is_none());
         let config = volumes
             .iter()
             .find(|v| v["name"] == "archive-write-only-config")
@@ -8943,32 +9063,71 @@ mod tests {
     }
 
     #[test]
-    fn write_only_archives_requires_shared_bound_storage_at_the_configured_root() {
-        let config = |root: &str| {
-            serde_json::json!({"data": {"archive-config.json": serde_json::json!({
-            "format_version": 1,
-            "local_root": root,
-            "source_project_number": null,
-            "source_identity_sha256": "ab".repeat(32),
-            "capture": {"scope": "registered_navigator"},
-            "destinations": []
+    fn write_only_archives_metadata_mode_mounts_no_source_credentials_or_data_volume() {
+        let manifests = rendered_manifests(|key| match key {
+            NAVIGATOR_DBOS_ENABLED | ARCHIVES_SCHEDULE_ENV => Some("true".to_owned()),
+            ARCHIVE_WRITE_ONLY_CONFIG => Some(ARCHIVE_WRITE_ONLY_CONFIG_PATH.to_owned()),
+            _ => native_ship_env(key),
+        });
+        let web = manifest_doc(&manifests, "Deployment", WEB_DEPLOYMENT);
+        let pod = &web["spec"]["template"]["spec"];
+        assert_archive_adds_only_configuration_volumes(&web, false);
+        assert!(pod["containers"][0]["volumeMounts"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .all(|mount| mount["name"] != "archive-source-credentials"));
+        assert!(pod["volumes"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .any(|volume| volume["name"] == "archive-write-only-config"));
+    }
+
+    #[test]
+    fn cloud_archive_preflight_requires_versioned_object_source_and_private_identity() {
+        use archives::write_only::operations::object_store::Authentication;
+        let configuration = |version: u8, root: &str, credential: &str| {
+            serde_json::json!({"data":{"archive-config.json":serde_json::json!({
+            "format_version":version,"local_root":root,"object_store":{"bucket":"example-source-sealed","prefix":"sealed","credentials_file":credential,"max_generation_bytes":67_108_864,"max_object_bytes":16_777_216,"max_objects":4096,"max_rows_per_table":100_000},
+            "source_project_number":null,"source_identity_sha256":"ab".repeat(32),"capture":{"scope":"registered_navigator"},
+            "destinations":[{"project_number":11,"bucket":"example-independent-one","location":"us-west4","minimum_retention_seconds":788_940_000}]
         }).to_string()}})
         };
-        let claim = serde_json::json!({"status": {"phase": "Bound"}, "spec": {"accessModes": ["ReadWriteMany"]}});
-        let mounted = config("/var/lib/navigator/iceberg/data");
-        ensure_write_only_archive_mounts(&mounted, &claim).unwrap();
-        assert!(ensure_write_only_archive_mounts(&config("/tmp/iceberg"), &claim).is_err());
-        for invalid in [
-            serde_json::json!({"status": {"phase": "Pending"}, "spec": {"accessModes": ["ReadWriteMany"]}}),
-            serde_json::json!({"status": {"phase": "Bound"}, "spec": {"accessModes": ["ReadWriteOnce"]}}),
-        ] {
-            assert!(ensure_write_only_archive_mounts(&mounted, &invalid).is_err());
-        }
+        let identity = "/var/run/navigator-archive-source/credentials.json";
         assert!(ensure_write_only_archive_mounts(
-            &serde_json::json!({"data": {"archive-config.json": "invalid"}}),
-            &claim
+            &configuration(2, "", identity),
+            &Authentication::CredentialsFile
+        )
+        .unwrap());
+        let mut metadata = configuration(2, "", "");
+        let mut private: serde_json::Value =
+            serde_json::from_str(metadata["data"]["archive-config.json"].as_str().unwrap())
+                .unwrap();
+        private["object_store"]["authentication"] = "gke_metadata".into();
+        metadata["data"]["archive-config.json"] = private.to_string().into();
+        assert!(
+            !ensure_write_only_archive_mounts(&metadata, &Authentication::GkeMetadata).unwrap()
+        );
+        assert!(
+            ensure_write_only_archive_mounts(&metadata, &Authentication::CredentialsFile).is_err()
+        );
+        assert!(ensure_write_only_archive_mounts(
+            &configuration(2, "", identity),
+            &Authentication::GkeMetadata
         )
         .is_err());
+        for invalid in [
+            configuration(1, "/synthetic/local", identity),
+            configuration(2, "/tmp/unretained", identity),
+            configuration(2, "", "/unmounted/credentials.json"),
+            serde_json::json!({"data":{"archive-config.json":"invalid"}}),
+        ] {
+            assert!(
+                ensure_write_only_archive_mounts(&invalid, &Authentication::CredentialsFile)
+                    .is_err()
+            );
+        }
     }
 
     #[test]
