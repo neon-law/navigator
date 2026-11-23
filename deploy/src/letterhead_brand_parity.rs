@@ -20,13 +20,14 @@
 //! `pdf::Letterhead::default()` is what a template outside any Project renders
 //! on, so it is pinned to the default Brand's resolved letterhead.
 
+use cli::rendering_letterhead::{for_brand, for_project};
 use views::brand::{BrandKey, DEFAULT_BRANDING};
 
 /// The letterhead outside a Project is the default Brand's own, less the
 /// Firm's legal name, which only the Brand registry carries.
 #[test]
 fn the_default_letterhead_is_the_default_brands() {
-    let resolved = super::for_brand(BrandKey::Neon).expect("the default Brand resolves");
+    let resolved = for_brand(BrandKey::Neon).expect("the default Brand resolves");
     assert_eq!(
         pdf::Letterhead::default(),
         pdf::Letterhead {
@@ -45,10 +46,17 @@ fn every_registered_host_wears_its_brands_letterhead() {
     for key in BrandKey::ALL.iter().copied() {
         let branding = key.resolve_branding(&DEFAULT_BRANDING);
         for host in key.hosts() {
-            let letterhead = super::for_project(None, Some(host))
-                .unwrap_or_else(|error| panic!("{host}: {error}"));
+            let letterhead =
+                for_project(None, Some(host)).unwrap_or_else(|error| panic!("{host}: {error}"));
             assert_eq!(letterhead.name, branding.firm.site_name, "{host}");
             assert_eq!(letterhead.entity, branding.firm.legal_entity, "{host}");
+            // The wordmark and the entity line are deliberately distinct
+            // (LAW-466): a signature block quoting the display name is not
+            // the Firm's legal identity.
+            assert_ne!(
+                letterhead.name, letterhead.entity,
+                "the wordmark must not swallow the legal entity: {host}"
+            );
             assert_eq!(letterhead.phone, branding.firm_phone.trim(), "{host}");
             assert_eq!(letterhead.web, key.canonical_host(), "{host}");
             let labels: Vec<&str> = key.canonical_host().split('.').collect();

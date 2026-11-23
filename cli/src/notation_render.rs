@@ -222,7 +222,16 @@ pub fn run_render(
     // An unanswered Signer Box prints as an empty rule for the signer's
     // hand, in the preview and the final render alike.
     let mut answer_context = rendered_answers(&contents, answers);
-    fill_firm_legal_name(file, &mut answer_context);
+    // LAW-466: the Firm identity is resolved exactly once — one manifest
+    // read, one Brand resolution — and the letterhead and the body's
+    // `{{firm.legal_name}}` are two consumers of that one answer, so the
+    // two surfaces cannot disagree.
+    let Ok(identity) = resolve_firm_identity(file, answers, &format, ci)
+        .map_err(|message| eprintln!("navigator: {message}"))
+    else {
+        return ExitCode::from(2);
+    };
+    fill_firm_legal_name(identity.legal_name, &mut answer_context);
     fill_firm_office(file, &contents, &mut answer_context);
     let Ok(body) = pleading_body(file, &contents, &profile, &answer_context, preview)
         .map_err(|message| eprintln!("navigator: {message}"))
@@ -233,18 +242,13 @@ pub fn run_render(
         return ExitCode::from(1);
     }
 
-    let Ok(rendered) =
-        project_letterhead(file, &format, ci).map_err(|message| eprintln!("navigator: {message}"))
-    else {
-        return ExitCode::from(2);
-    };
     // Every letter render names the letterhead it wore: which source
     // framed it, which revision of that source (LAW-266).
-    eprintln!("{}", rendered.provenance);
-    for warning in &rendered.warnings {
+    eprintln!("{}", identity.provenance);
+    for warning in &identity.warnings {
         eprintln!("navigator: {warning}");
     }
-    let letterhead = rendered.letterhead;
+    let letterhead = identity.letterhead;
     // A memo is the Firm's analysis for its client, so every page of it
     // says it is privileged, whatever its author typed (LAW-224).
     let privileged = field("kind").as_deref() == Some("memo");
@@ -410,13 +414,13 @@ fn final_body_is_finished(body: &str) -> bool {
     false
 }
 
-/// Binds `firm.legal_name` to the Project's Firm legal name unless the
-/// answers already supply one.
+/// Binds `firm.legal_name` to the Firm legal name the render already
+/// resolved (LAW-466), unless the answers already supply one.
 fn fill_firm_legal_name(
-    file: &Path,
+    legal_name: Option<String>,
     answer_context: &mut std::collections::BTreeMap<String, String>,
 ) {
-    if let Some(name) = project_firm_legal_name(file) {
+    if let Some(name) = legal_name {
         answer_context
             .entry("firm.legal_name".to_string())
             .or_insert_with(|| pdf::markdown::bold_answer(&name));
@@ -481,76 +485,125 @@ fn fill_firm_office(
     }
 }
 
-/// The Firm legal name behind the Project's declared Brand, when `file` sits
-/// in a Project whose `navigator.yaml` resolves to one. A template outside
-/// any Project names the default Brand's Firm, the same Brand whose
-/// letterhead frames it; a Project that resolves to no Brand names none.
-fn project_firm_legal_name(file: &Path) -> Option<String> {
-    let letterhead = match projects::matter::find_manifest(file) {
-        Some(path) => {
-            let contents = std::fs::read_to_string(&path).ok()?;
-            let manifest = projects::manifest::parse(&contents).ok()?;
-            letterhead::for_project(manifest.brand.as_deref(), manifest.host.as_deref()).ok()?
-        }
-        None => letterhead::for_brand(views::brand::BrandKey::Neon).ok()?,
-    };
-    let name = letterhead.entity.trim();
-    if name.is_empty() {
-        None
-    } else {
-        Some(name.to_string())
-    }
+/// The Firm identity one render wears (LAW-466): the frame it is drawn in
+/// and the legal name its body binds, resolved together.
+struct FirmIdentity {
+    /// The frame the document is drawn in.
+    letterhead: pdf::Letterhead,
+    /// The provenance line the render reports beside the letterhead.
+    provenance: String,
+    /// Non-fatal degradations the render announces on stderr.
+    warnings: Vec<String>,
+    /// The resolved Brand's Firm legal name, as the body's
+    /// `{{firm.legal_name}}` prints it. `None` when nothing resolves: the
+    /// placeholder then washes in a preview or refuses a final render, the
+    /// fallback the body always had.
+    legal_name: Option<String>,
 }
 
-/// The letterhead for a render of `file` framed as `format`, with the
-/// provenance the render reports on stderr.
+/// The Brand's legal name a compiled letterhead carries, trimmed of
+/// padding; `None` when the Brand names none.
+fn compiled_legal_name(letterhead: &pdf::Letterhead) -> Option<String> {
+    let name = letterhead.entity.trim();
+    (!name.is_empty()).then(|| name.to_string())
+}
+
+/// Resolve the Project's identity exactly once (LAW-466): one manifest
+/// read and one Brand resolution per render, returning the letterhead the
+/// document wears and the legal name its body binds, so the two surfaces
+/// cannot disagree.
 ///
-/// The Project's Brand frames the letter (LAW-265, ENG-1148):
-/// `letterhead` resolves `project.brand`, else `project.host`, from
-/// the nearest `navigator.yaml`. Which letterhead that Brand wears comes
-/// from one of two sources. When the deployment's letterhead door is
-/// reachable, the Brand's runtime letterhead row — the same rows
-/// `/app/admin/brands` edits, served over HTTPS with the `site login`
-/// bearer — frames the letter; when it is not, the compiled registry
-/// does, and the fallback is announced, never silent: a template
-/// re-render reflects the letterhead its Brand currently publishes, while
-/// executed and filed artifacts keep their stored bytes (ENG-1148), so a
-/// re-render may differ from what was sent — on purpose. A Brand the
-/// registry does not know is a refusal, never the default letterhead.
-/// Only the letter frame carries one, so no other frame reads the
-/// manifest; a template outside any Project renders on the default
-/// Brand's letterhead.
+/// A `Letter` frame wears the Project's letterhead — the runtime row the
+/// deployment serves when it answers, the compiled registry when it
+/// cannot (LAW-266) — and its `entity` line is the body's
+/// `{{firm.legal_name}}`. Every other frame wears no letterhead, but its
+/// body still binds the name, from the same manifest read. A template
+/// outside any Project names the default Brand's Firm.
+///
+/// An explicit `firm.legal_name` answer wins on both surfaces at once
+/// (LAW-466): a letter may name a matter-specific signing entity, but its
+/// letterhead then names the same entity, so the two can never split.
+///
+/// The fallback asymmetry is deliberate, not unified: an unresolvable
+/// Brand refuses a letter (the letterhead would name the wrong firm) and
+/// leaves any other frame nameless (the placeholder washes or the final
+/// render refuses, as it already did).
+///
+/// # Errors
+/// A letter whose manifest cannot be read or parsed, or whose Brand does
+/// not resolve, or whose letterhead row cannot be read under `--ci`.
+fn resolve_firm_identity(
+    file: &Path,
+    answers: &[(String, String)],
+    format: &pdf::OutputFormat,
+    ci: bool,
+) -> Result<FirmIdentity, String> {
+    let letter = matches!(format, pdf::OutputFormat::Letter(_));
+    let manifest = match projects::matter::find_manifest(file) {
+        Some(path) => match std::fs::read_to_string(&path)
+            .map_err(|error| format!("read {}: {error}", projects::manifest::FILE))
+            .and_then(|text| projects::manifest::parse(&text))
+        {
+            Ok(manifest) => Some(manifest),
+            // A letter refuses; any other frame renders nameless.
+            Err(message) if letter => return Err(message),
+            Err(_) => None,
+        },
+        None => None,
+    };
+    let mut identity = match manifest.as_ref() {
+        Some(manifest) if letter => {
+            let key =
+                letterhead::resolve_brand(manifest.brand.as_deref(), manifest.host.as_deref())
+                    .map_err(|error| error.to_string())?;
+            let rendered = attempt_runtime_letterhead(key, ci)?;
+            FirmIdentity {
+                legal_name: compiled_legal_name(&rendered.letterhead),
+                letterhead: rendered.letterhead,
+                provenance: rendered.provenance,
+                warnings: rendered.warnings,
+            }
+        }
+        // No frame to wear, but the body still binds the name, from the
+        // same one manifest read.
+        Some(manifest) => {
+            let legal_name =
+                letterhead::for_project(manifest.brand.as_deref(), manifest.host.as_deref())
+                    .ok()
+                    .and_then(|compiled| compiled_legal_name(&compiled));
+            FirmIdentity {
+                letterhead: pdf::Letterhead::default(),
+                provenance: String::new(),
+                warnings: Vec::new(),
+                legal_name,
+            }
+        }
+        None => {
+            let legal_name = letterhead::for_brand(views::brand::BrandKey::Neon)
+                .ok()
+                .and_then(|compiled| compiled_legal_name(&compiled));
+            FirmIdentity {
+                letterhead: pdf::Letterhead::default(),
+                provenance: String::new(),
+                warnings: Vec::new(),
+                legal_name,
+            }
+        }
+    };
+    if let Some((_, answered)) = answers.iter().find(|(key, _)| key == "firm.legal_name") {
+        identity.letterhead.entity.clone_from(answered);
+    }
+    Ok(identity)
+}
+
+/// The letterhead resolution's intermediate: the frame a render wears,
+/// with the provenance the render reports beside it and the degradations
+/// it announces. `resolve_firm_identity` (LAW-466) is the one caller that
+/// turns this into a render's identity.
 struct ProjectLetterhead {
     letterhead: pdf::Letterhead,
     provenance: String,
     warnings: Vec<String>,
-}
-
-fn project_letterhead(
-    file: &Path,
-    format: &pdf::OutputFormat,
-    ci: bool,
-) -> Result<ProjectLetterhead, String> {
-    if !matches!(format, pdf::OutputFormat::Letter(_)) {
-        return Ok(ProjectLetterhead {
-            letterhead: pdf::Letterhead::default(),
-            provenance: String::new(),
-            warnings: Vec::new(),
-        });
-    }
-    let Some(path) = projects::matter::find_manifest(file) else {
-        return Ok(ProjectLetterhead {
-            letterhead: pdf::Letterhead::default(),
-            provenance: String::new(),
-            warnings: Vec::new(),
-        });
-    };
-    let contents = std::fs::read_to_string(&path)
-        .map_err(|error| format!("read {}: {error}", projects::manifest::FILE))?;
-    let manifest = projects::manifest::parse(&contents)?;
-    let key = letterhead::resolve_brand(manifest.brand.as_deref(), manifest.host.as_deref())
-        .map_err(|error| error.to_string())?;
-    attempt_runtime_letterhead(key, ci)
 }
 
 /// The runtime source, tried within a bounded budget so a hung deployment

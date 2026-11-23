@@ -1767,3 +1767,126 @@ fn formation_pdf_refuses_missing_or_mismatched_pinned_blanks() {
         }
     }
 }
+
+// --- One Firm resolution feeds the letterhead and the body (LAW-466) -------
+
+/// A letter whose signature block prints `{{firm.legal_name}}` — the body
+/// consumer of the render's one Firm-identity resolution.
+const LETTER_SIGNS_WITH_FIRM_NAME: &str = "\
+---
+kind: letter
+title: Test Demand
+respondent_type: entity
+confidential: true
+output: letter
+questionnaire:
+  BEGIN:
+    _: END
+  END: {}
+workflow:
+  BEGIN:
+    intake_submitted: lawyer_review
+  lawyer_review:
+    approved: END
+    rejected: END
+  END: {}
+---
+
+# Demand
+
+Pay the sum of `{{amount}}` to **NEON LAW** without delay.
+
+- First point
+- Second point
+
+Sincerely,
+
+{{firm.legal_name}}
+";
+
+/// The signature fixture inside a Project whose `navigator.yaml` carries the
+/// given `project:` fields.
+fn firm_name_letter_in_project(work: &TempDir, project_fields: &str) -> std::path::PathBuf {
+    fs::write(
+        work.path().join("navigator.yaml"),
+        format!("version: v26.10.6\nproject:\n  name: acme\n{project_fields}"),
+    )
+    .unwrap();
+    write(work, "demand.md", LETTER_SIGNS_WITH_FIRM_NAME)
+}
+
+/// Rendered-PDF text, extracted in-process — no poppler dependency.
+fn pdf_text(pdf: &std::path::Path) -> String {
+    let bytes = fs::read(pdf).expect("read the rendered pdf");
+    pdf_extract::extract_text_from_mem(&bytes).expect("extract the rendered pdf's text")
+}
+
+#[test]
+fn a_project_brand_fills_the_signature_and_the_letterhead_from_one_resolution() {
+    let key = other_brand();
+    let branding = key.resolve_branding(&views::brand::DEFAULT_BRANDING);
+    let work = TempDir::new().unwrap();
+    let src = firm_name_letter_in_project(&work, &format!("  host: {}\n", key.hosts()[1]));
+    let out = work.path().join("demand.pdf");
+    let result = render_pdf(&[
+        src.as_os_str(),
+        "--out".as_ref(),
+        out.as_os_str(),
+        "--answer".as_ref(),
+        "amount=5000 USD".as_ref(),
+    ]);
+    assert!(
+        result.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+
+    let text = pdf_text(&out);
+    assert_eq!(
+        text.matches(branding.firm.legal_entity).count(),
+        2,
+        "the Brand's legal name prints as the letterhead entity line and the \
+         signature block, the same string, nowhere else: {text}"
+    );
+    // The wordmark draws its letters with tracking, which extraction renders
+    // as spaces between glyphs; compare on the space-stripped text.
+    assert!(
+        text.replace(' ', "")
+            .contains(&branding.firm.site_name.to_uppercase()),
+        "the wordmark is the display name, distinct from the entity: {text}"
+    );
+}
+
+#[test]
+fn a_synthetic_rename_never_splits_between_letterhead_and_body() {
+    let key = other_brand();
+    let branding = key.resolve_branding(&views::brand::DEFAULT_BRANDING);
+    let work = TempDir::new().unwrap();
+    let src = firm_name_letter_in_project(&work, &format!("  host: {}\n", key.hosts()[1]));
+    let out = work.path().join("demand.pdf");
+    let result = render_pdf(&[
+        src.as_os_str(),
+        "--out".as_ref(),
+        out.as_os_str(),
+        "--answer".as_ref(),
+        "amount=5000 USD".as_ref(),
+        "--answer".as_ref(),
+        "firm.legal_name=Other Name PC".as_ref(),
+    ]);
+    assert!(
+        result.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+
+    let text = pdf_text(&out);
+    assert_eq!(
+        text.matches("Other Name PC").count(),
+        2,
+        "the answered name drives the letterhead entity and the signature alike: {text}"
+    );
+    assert!(
+        !text.contains(branding.firm.legal_entity),
+        "the renamed document never carries the registry name too: {text}"
+    );
+}

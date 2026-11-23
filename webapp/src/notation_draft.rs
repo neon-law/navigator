@@ -140,6 +140,9 @@ pub fn project_draft_source(source: &str) -> NotationPreviewContent {
         stage_html: views::harvard_outline::stage_html(&doc),
         origin_url,
         questionnaire_error,
+        // The draft page is a working surface, not a published preview: no
+        // Brand binding rides along, so `firm.legal_name` washes (LAW-466).
+        firm_legal_name: None,
     }
 }
 
@@ -239,7 +242,7 @@ pub fn NotationDraftPage(
                 section { class: "notation-draft__body",
                     h2 { "Document" }
                     div {
-                        dangerous_inner_html: "{render_live_template(&content.stage_html, &content.demo_questions, &std::collections::BTreeMap::new())}"
+                        dangerous_inner_html: "{render_live_template(&content.stage_html, &content.demo_questions, &std::collections::BTreeMap::new(), None)}"
                     }
                 }
                 if !content.demo_workflow.is_empty() {
@@ -280,6 +283,7 @@ mod tests {
                     <section class=\"harvard-unit harvard-unit--depth-1\" data-harvard-path=\"I\">\
                     <h2>Scope of the engagement</h2></section></article>"
                 .to_string(),
+            firm_legal_name: None,
             origin_url: None,
             demo_questions: vec![DemoQuestion {
                 code: "custom_text__client_name".to_string(),

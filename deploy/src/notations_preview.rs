@@ -165,6 +165,24 @@ async fn run_offline_lint(found: &Resolved, slug: &str, port: u16) -> Result<()>
         &found.path.display().to_string(),
         &found.src,
     );
+    // LAW-466: the preview binds the same Firm legal name the PDF render
+    // would print — one Brand resolution through the manifest, else the
+    // default Brand, exactly the render's chain. Nothing resolvable leaves
+    // the key absent, so the token washes as it does in a PDF.
+    let mut doc = doc;
+    doc.firm_legal_name = cli::projects::matter::find_manifest(&found.path)
+        .and_then(|path| {
+            let contents = std::fs::read_to_string(&path).ok()?;
+            let manifest = cli::projects::manifest::parse(&contents).ok()?;
+            cli::rendering_letterhead::for_project(
+                manifest.brand.as_deref(),
+                manifest.host.as_deref(),
+            )
+            .ok()
+        })
+        .or_else(|| cli::rendering_letterhead::for_brand(views::brand::BrandKey::Neon).ok())
+        .map(|letterhead| letterhead.entity.trim().to_string())
+        .filter(|entity| !entity.is_empty());
 
     let questions = doc.demo_questions.len();
     let states = doc.demo_workflow.len();

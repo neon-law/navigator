@@ -248,6 +248,9 @@ async fn serve() -> SocketAddr {
             transitions: vec![("submit".to_string(), "END".to_string())],
         }],
         questionnaire_error: None,
+        // The synthetic preview has no Brand, so the Firm legal-name seed stays
+        // absent and the token takes the existing blank wash (B6 semantics).
+        firm_legal_name: None,
     })
     .await
 }

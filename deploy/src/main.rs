@@ -22,6 +22,8 @@ mod gmail_client;
 mod import;
 use cli::inbox;
 mod journal;
+#[cfg(test)]
+mod letterhead_brand_parity;
 use cli::lsp_download;
 mod lsp_publish;
 use cli::mail;

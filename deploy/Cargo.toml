@@ -106,6 +106,8 @@ lopdf.workspace = true
 neon.workspace = true
 nix = { workspace = true, features = ["term"] }
 predicates.workspace = true
+# Rendered-PDF text assertions read in-process, with no poppler dependency.
+pdf-extract.workspace = true
 # `start_paused` lets a test fire the gate's 30 s request timeouts against a
 # slow mock without waiting for them in real time.
 tokio = { workspace = true, features = ["test-util"] }
