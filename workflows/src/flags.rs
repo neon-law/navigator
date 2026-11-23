@@ -24,6 +24,27 @@ pub enum SettingsError {
     Invalid(&'static str),
 }
 
+/// Setting the table opts the real production deployment into read-only daily reporting.
+pub const GCP_COST_EXPORT_TABLE: &str = "NAVIGATOR_GCP_COST_EXPORT_TABLE";
+
+pub const GCP_COST_READER: &str = "NAVIGATOR_GCP_COST_READER";
+
+pub fn daily_cost_export(
+    get: impl Fn(&str) -> Option<String>,
+) -> anyhow::Result<Option<billing::gcp_cost_daily::ExportTable>> {
+    let Some(table) = get(GCP_COST_EXPORT_TABLE).filter(|s| !s.trim().is_empty()) else {
+        return Ok(None);
+    };
+    if get(store::config::NAVIGATOR_ENVIRONMENT).as_deref() != Some("production")
+        || store::config::staging_from(&get)?
+        || store::sample_matters_from(store::DeploymentEnvironment::Production, &get)?
+    {
+        return Ok(None);
+    }
+    let reader = get(GCP_COST_READER).ok_or(SettingsError::Missing(GCP_COST_READER))?;
+    billing::gcp_cost_daily::ExportTable::parse(table.trim(), reader.trim()).map(Some)
+}
+
 /// Parse one workflow-specific switch with the same strict `true` / `false`
 /// contract as the executor switch.
 ///
@@ -96,5 +117,45 @@ mod tests {
             flag_enabled("FLAG", Some("yes")),
             Err(SettingsError::Invalid("FLAG"))
         );
+    }
+}
+
+#[cfg(test)]
+mod daily_cost_tests {
+    use super::{daily_cost_export, GCP_COST_EXPORT_TABLE, GCP_COST_READER};
+
+    #[test]
+    fn only_configured_live_production_selects_the_billing_export() {
+        let configured =
+            |profile: Option<&str>, staging: &str, simulated: &str, reader: Option<&str>| {
+                daily_cost_export(|key| {
+                    match key {
+                        GCP_COST_EXPORT_TABLE => Some("x.sample.billing"),
+                        GCP_COST_READER => reader,
+                        store::config::NAVIGATOR_ENVIRONMENT => profile,
+                        store::config::NAVIGATOR_STAGING => Some(staging),
+                        store::config::NAVIGATOR_SIMULATED_MATTERS => Some(simulated),
+                        _ => None,
+                    }
+                    .map(str::to_owned)
+                })
+            };
+        let reader = Some(concat!("reader@", "x", ".iam.gserviceaccount.com"));
+        assert!(configured(Some("production"), "false", "false", reader)
+            .unwrap()
+            .is_some());
+        for (profile, staging, simulated) in [
+            (None, "false", "false"),
+            (Some("dev"), "false", "false"),
+            (Some("production"), "true", "false"),
+            (Some("production"), "false", "true"),
+        ] {
+            assert!(configured(profile, staging, simulated, None)
+                .unwrap()
+                .is_none());
+        }
+        assert!(configured(Some("production"), "false", "false", None).is_err());
+        assert!(configured(Some("production"), "false", "false", Some("invalid/reader")).is_err());
+        assert!(daily_cost_export(|_| None).unwrap().is_none());
     }
 }

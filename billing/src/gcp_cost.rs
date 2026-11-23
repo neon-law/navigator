@@ -462,16 +462,18 @@ pub async fn adc_token_provider() -> Result<Arc<dyn TokenProvider>> {
     {
         return Ok(Arc::new(StaticToken("unused".into())));
     }
-    Ok(Arc::new(AdcToken::new().await?))
+    Ok(Arc::new(
+        AdcToken::new("https://www.googleapis.com/auth/bigquery").await?,
+    ))
 }
 
-struct AdcToken {
+pub(super) struct AdcToken {
     source: Arc<dyn google_cloud_token::TokenSource>,
 }
 
 impl AdcToken {
-    async fn new() -> Result<Self> {
-        let scopes: [&str; 1] = ["https://www.googleapis.com/auth/bigquery"];
+    pub(super) async fn new(scope: &str) -> Result<Self> {
+        let scopes = [scope];
         let config = google_cloud_auth::project::Config::default().with_scopes(&scopes);
         let provider = google_cloud_auth::token::DefaultTokenSourceProvider::new(config)
             .await

@@ -113,6 +113,7 @@ const WORKSPACE_DEPENDENCIES: &[&str] = &[
     "rgb",
     "model",
     "rules",
+    "rust_decimal",
     "rustix",
     "sandbox-skills",
     "scraper",

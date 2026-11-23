@@ -29,6 +29,7 @@ pub mod daily;
 /// The nightly Deadline-mirror reconcile schedule.
 pub mod deadline_mirror;
 pub mod dri_digest;
+pub mod gcp_cost_daily;
 pub mod general_nag;
 pub mod heartbeat;
 pub mod linear_backlog;
@@ -205,6 +206,7 @@ fn valid_executor_id(value: &str) -> bool {
 /// The optional schedules a host enables beside the always-on Heartbeat.
 #[derive(Default)]
 pub struct Schedules {
+    pub daily_cost_export: Option<billing::gcp_cost_daily::ExportTable>,
     pub linear_backlog: Option<linear_backlog::Context>,
     pub general_nag: Option<general_nag::Context>,
     pub dri_digest: Option<dri_digest::Context>,
@@ -228,6 +230,7 @@ impl Schedules {
     #[must_use]
     pub fn with_application_schedules(self, application: Self) -> Self {
         Self {
+            daily_cost_export: application.daily_cost_export,
             general_nag: self.general_nag,
             dri_digest: self.dri_digest,
             billing_canary: self.billing_canary,
@@ -529,10 +532,12 @@ impl Executor {
         let ceo_digest = register_optional(&dbos, schedules.ceo_digest, ceo_digest::register)?;
         let linear_backlog =
             register_optional(&dbos, schedules.linear_backlog, linear_backlog::register)?;
-        let starters = retainers
-            .into_iter()
-            .chain(calendar)
-            .chain(register_external(&dbos)?);
+        let starters =
+            register_optional(&dbos, schedules.daily_cost_export, gcp_cost_daily::register)?
+                .into_iter()
+                .chain(retainers)
+                .chain(calendar)
+                .chain(register_external(&dbos)?);
         dbos.launch().await?;
         tracing::info!(app_name = APP_NAME, "DBOS launched");
         let stop = dbos::CancellationToken::new();

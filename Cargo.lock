@@ -1494,6 +1494,7 @@ dependencies = [
  "chrono",
  "gcloud-auth",
  "reqwest 0.13.5",
+ "rust_decimal",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

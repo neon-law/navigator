@@ -1144,11 +1144,8 @@ async fn dbos_schedules(
     } else {
         None
     };
-    let deadline_mirror = if should_host_deadline_mirror(host_dbos, lookup)? {
-        Some(deadline_mirror_context(rt))
-    } else {
-        None
-    };
+    let deadline_mirror =
+        should_host_deadline_mirror(host_dbos, lookup)?.then(|| deadline_mirror_context(rt));
     let purchase_activation = if should_host_purchase_activation(host_dbos, lookup)? {
         let pg = store::postgres::PostgresDb::from_env()
             .await
@@ -1189,15 +1186,18 @@ async fn dbos_schedules(
     } else {
         profit_digest_context(rt, host_dbos, lookup).await?
     };
-    let ceo_digest = ceo_digest_schedule(rt, host_dbos, lookup).await?;
-    let linear_backlog = if host_dbos && dbos_engine::enabled(lookup)? {
-        dbos_engine::linear_backlog::Context::from_lookup(lookup)?
+    let enabled = host_dbos && dbos_engine::enabled(lookup)?;
+    let (linear_backlog, daily_cost_export) = if enabled {
+        (
+            dbos_engine::linear_backlog::Context::from_lookup(lookup)?,
+            workflows::flags::daily_cost_export(lookup)?,
+        )
     } else {
-        None
+        (None, None)
     };
-    let project_calendar = calendar_membership_schedule(rt, host_dbos, lookup)?;
 
     Ok(dbos_engine::Schedules {
+        daily_cost_export,
         linear_backlog,
         general_nag,
         dri_digest,
@@ -1205,17 +1205,17 @@ async fn dbos_schedules(
         source_imports,
         retention_purge,
         deadline_mirror,
-        plan_retainers: (host_dbos && dbos_engine::enabled(lookup)?).then(|| {
+        plan_retainers: enabled.then(|| {
             Arc::new(crate::plan_retainers::PlanRetainers(rt.state.clone()))
                 as Arc<dyn dbos_engine::plan_retainers::Source>
         }),
-        project_calendar,
+        project_calendar: calendar_membership_schedule(rt, host_dbos, lookup)?,
         purchase_activation,
         billing_canary,
         billing_digest,
         notation_reset,
         profit_digest,
-        ceo_digest,
+        ceo_digest: ceo_digest_schedule(rt, host_dbos, lookup).await?,
     })
 }
 
