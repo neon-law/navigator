@@ -689,196 +689,193 @@ mod tests {
         assert!(InboundSms::from_params(&params(&[("MessageSid", "SM1"), ("To", "+2")])).is_none());
     }
 
-    /// The registry lane: a seeded Firm with `number` registered for its
-    /// own token, and a state whose webhook lanes resolve through
-    /// PostgreSQL with the host the spine should sign.
-    async fn registry_state(
-        db: &store::surreal::SurrealDb,
-        pg: &store::postgres::PostgresDb,
-        brand: &str,
-        number: &str,
-        token: &str,
-        host: &str,
-    ) -> (crate::AppState, uuid::Uuid) {
-        let firm = store::test_support::seed_firm_with_brand(db, brand).await;
-        crate::twilio_registry_harness::register_number(db, pg, firm, brand, number, token).await;
-        let mut state = crate::test_support::app_state(db.clone()).await;
-        state.canonical_host = crate::CanonicalHost::new(Some(host.to_string()));
-        state.twilio_registry = Some(std::sync::Arc::new(pg.clone()));
-        state.runtime_kms = std::sync::Arc::new(cloud::FakeKms::new("spine-test"));
-        (state, firm)
-    }
+    use crate::twilio_resolution::registry_state;
 
     #[tokio::test]
     async fn signed_sms_is_saved_without_a_summary_service_and_unsigned_callbacks_are_denied() {
-        let Some(pg) = crate::twilio_registry_harness::postgres().await else {
-            return;
-        };
-        let db = store::test_support::mem_surreal().await;
-        let number = "+15551234444";
-        let (mut state, _) = registry_state(
-            &db,
-            &pg,
-            "neon",
-            number,
-            "registry-token",
-            "www.neonlaw.com",
-        )
-        .await;
-        state.summary_intake = None;
-        let fields = params(&[
-            ("MessageSid", "synthetic-sid"),
-            ("From", "+15555550100"),
-            ("To", number),
-            ("Body", "Synthetic inquiry"),
-        ]);
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            SIGNATURE_HEADER,
-            twilio_signature(
+        store::test_support::with_required_postgres(async {
+            let pg = store::postgres::PostgresDb::application().await.unwrap();
+            let db = store::surreal::SurrealDb::uninitialized();
+            let number = "+15551234444";
+            let (mut state, _) = registry_state(
+                &db,
+                &pg,
+                "neon",
+                number,
                 "registry-token",
-                &format!("https://www.neonlaw.com{SMS_WEBHOOK_PATH}"),
-                &fields,
+                "www.neonlaw.com",
             )
-            .parse()
-            .unwrap(),
-        );
-        let body = url::form_urlencoded::Serializer::new(String::new())
-            .extend_pairs(&fields)
-            .finish();
-        let response = webhook(State(state.clone()), headers, Bytes::from(body)).await;
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(
-            store::inbox_alerts::awaiting_reconciliation(&db, 15)
-                .await
-                .unwrap()
-                .len(),
-            1
-        );
-        assert_eq!(
-            status(
-                State(state),
-                HeaderMap::new(),
-                Bytes::from_static(
-                    b"MessageSid=synthetic-sid&MessageStatus=delivered&From=%2B15551234444"
+            .await;
+            state.summary_intake = None;
+            let fields = params(&[
+                ("MessageSid", "synthetic-sid"),
+                ("From", "+15555550100"),
+                ("To", number),
+                ("Body", "Synthetic inquiry"),
+            ]);
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                SIGNATURE_HEADER,
+                twilio_signature(
+                    "registry-token",
+                    &format!("https://www.neonlaw.com{SMS_WEBHOOK_PATH}"),
+                    &fields,
                 )
-            )
-            .await
-            .status(),
-            StatusCode::UNAUTHORIZED
-        );
+                .parse()
+                .unwrap(),
+            );
+            let body = url::form_urlencoded::Serializer::new(String::new())
+                .extend_pairs(&fields)
+                .finish();
+            let response = webhook(State(state.clone()), headers, Bytes::from(body)).await;
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(
+                store::inbox_alerts::awaiting_reconciliation(&db, 15)
+                    .await
+                    .unwrap()
+                    .len(),
+                1
+            );
+            assert_eq!(
+                status(
+                    State(state),
+                    HeaderMap::new(),
+                    Bytes::from_static(
+                        b"MessageSid=synthetic-sid&MessageStatus=delivered&From=%2B15551234444"
+                    )
+                )
+                .await
+                .status(),
+                StatusCode::UNAUTHORIZED
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn signed_delivery_callback_updates_the_original_outbound_message() {
-        let Some(pg) = crate::twilio_registry_harness::postgres().await else {
-            return;
-        };
-        let db = store::test_support::mem_surreal().await;
-        let number = "+15551234444";
-        let (state, firm) = registry_state(
-            &db,
-            &pg,
-            "neon",
-            number,
-            "registry-token",
-            "www.neonlaw.com",
-        )
+        store::test_support::with_required_postgres(async {
+            let pg = store::postgres::PostgresDb::application().await.unwrap();
+            let db = store::surreal::SurrealDb::uninitialized();
+            let number = "+15551234444";
+            let (state, firm) = registry_state(
+                &db,
+                &pg,
+                "neon",
+                number,
+                "registry-token",
+                "www.neonlaw.com",
+            )
+            .await;
+            let resolved = crate::twilio_resolution::ResolvedTwilioWebhook {
+                registration: store::brand_phone_numbers::find_by_number(&pg, number)
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                firm_id: firm,
+            };
+            let sms = InboundSms {
+                message_sid: "synthetic-inbound".into(),
+                from: "+15555550100".into(),
+                to: number.into(),
+                body: "Synthetic inquiry".into(),
+                media_count: 0,
+            };
+            let saved = ingest_sms(&db, &resolved, &sms).await.unwrap();
+            let outbound = store::inbox::reserve_acknowledgment(&db, &saved, "Received")
+                .await
+                .unwrap()
+                .unwrap();
+            store::inbox::acknowledgment_submitted(
+                &db,
+                outbound,
+                Some("synthetic-outbound".into()),
+            )
+            .await
+            .unwrap();
+            let fields = params(&[
+                ("MessageSid", "synthetic-outbound"),
+                ("MessageStatus", "delivered"),
+                ("From", number),
+            ]);
+            let callback = format!("https://www.neonlaw.com{SMS_STATUS_PATH}");
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                SIGNATURE_HEADER,
+                twilio_signature("registry-token", &callback, &fields)
+                    .parse()
+                    .unwrap(),
+            );
+            let body = url::form_urlencoded::Serializer::new(String::new())
+                .extend_pairs(&fields)
+                .finish();
+            assert_eq!(
+                status(State(state), headers, Bytes::from(body))
+                    .await
+                    .status(),
+                StatusCode::NO_CONTENT
+            );
+            assert_eq!(
+                store::inbox::message_by_id(&db, outbound)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .delivery_state,
+                "delivered"
+            );
+        })
         .await;
-        let resolved = crate::twilio_resolution::ResolvedTwilioWebhook {
-            registration: store::brand_phone_numbers::find_by_number(&pg, number)
-                .await
-                .unwrap()
-                .unwrap(),
-            firm_id: firm,
-        };
-        let sms = InboundSms {
-            message_sid: "synthetic-inbound".into(),
-            from: "+15555550100".into(),
-            to: number.into(),
-            body: "Synthetic inquiry".into(),
-            media_count: 0,
-        };
-        let saved = ingest_sms(&db, &resolved, &sms).await.unwrap();
-        db.query("UPDATE $id SET direction = 'outbound', provider_ref = 'synthetic-outbound', delivery_state = 'submitted'")
-            .bind(("id", store::surreal::record_id("message", saved.message_id))).await.unwrap().check().unwrap();
-        let fields = params(&[
-            ("MessageSid", "synthetic-outbound"),
-            ("MessageStatus", "delivered"),
-            ("From", number),
-        ]);
-        let callback = format!("https://www.neonlaw.com{SMS_STATUS_PATH}");
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            SIGNATURE_HEADER,
-            twilio_signature("registry-token", &callback, &fields)
-                .parse()
-                .unwrap(),
-        );
-        let body = url::form_urlencoded::Serializer::new(String::new())
-            .extend_pairs(&fields)
-            .finish();
-        assert_eq!(
-            status(State(state), headers, Bytes::from(body))
-                .await
-                .status(),
-            StatusCode::NO_CONTENT
-        );
-        assert_eq!(
-            store::inbox::message_by_id(&db, saved.message_id)
-                .await
-                .unwrap()
-                .unwrap()
-                .delivery_state,
-            "delivered"
-        );
     }
 
     #[tokio::test]
     async fn a_picture_only_message_keeps_a_transcript_receipt() {
-        let Some(pg) = crate::twilio_registry_harness::postgres().await else {
-            return;
-        };
-        let db = store::test_support::mem_surreal().await;
-        let number = "+15551234444";
-        let firm = store::test_support::seed_firm_with_brand(&db, "neon").await;
-        crate::twilio_registry_harness::register_number(
-            &db,
-            &pg,
-            firm,
-            "neon",
-            number,
-            "registry-token",
-        )
-        .await;
-        let resolved = crate::twilio_resolution::ResolvedTwilioWebhook {
-            registration: store::brand_phone_numbers::find_by_number(&pg, number)
+        store::test_support::with_required_postgres(async {
+            let pg = store::postgres::PostgresDb::application().await.unwrap();
+            let db = store::surreal::SurrealDb::uninitialized();
+            let number = "+15551234444";
+            let firm = store::test_support::seed_firm_with_new_brand(&db, "neon")
+                .await
+                .0;
+            store::test_support::twilio::register_number(
+                &db,
+                &pg,
+                firm,
+                "neon",
+                number,
+                "registry-token",
+            )
+            .await;
+            let resolved = crate::twilio_resolution::ResolvedTwilioWebhook {
+                registration: store::brand_phone_numbers::find_by_number(&pg, number)
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                firm_id: firm,
+            };
+            let sms = InboundSms {
+                message_sid: "synthetic-media-id".into(),
+                from: "synthetic-sender".into(),
+                to: number.into(),
+                body: String::new(),
+                media_count: 1,
+            };
+            let saved = ingest_sms(&db, &resolved, &sms).await.unwrap();
+            let message = store::inbox::message_by_id(&db, saved.message_id)
                 .await
                 .unwrap()
-                .unwrap(),
-            firm_id: firm,
-        };
-        let sms = InboundSms {
-            message_sid: "synthetic-media-id".into(),
-            from: "synthetic-sender".into(),
-            to: number.into(),
-            body: String::new(),
-            media_count: 1,
-        };
-        let saved = ingest_sms(&db, &resolved, &sms).await.unwrap();
-        let message = store::inbox::message_by_id(&db, saved.message_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(message
-            .body
-            .contains("1 picture or file attachment(s) remain in Twilio"));
-        assert!(message.attachment_asset_id.is_none());
+                .unwrap();
+            assert!(message
+                .body
+                .contains("1 picture or file attachment(s) remain in Twilio"));
+            assert!(message.attachment_asset_id.is_none());
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn an_unconfigured_deployment_does_not_expose_the_route() {
-        let state = crate::test_support::app_state(store::test_support::mem_surreal().await).await;
+        let state =
+            crate::test_support::app_state(store::surreal::SurrealDb::uninitialized()).await;
         let response = webhook(State(state.clone()), HeaderMap::new(), Bytes::new()).await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
         let response = status(State(state.clone()), HeaderMap::new(), Bytes::new()).await;
@@ -890,26 +887,27 @@ mod tests {
 
     #[tokio::test]
     async fn an_unsigned_text_is_refused() {
-        let Some(pg) = crate::twilio_registry_harness::postgres().await else {
-            return;
-        };
-        let db = store::test_support::mem_surreal().await;
-        let (state, _) = registry_state(
-            &db,
-            &pg,
-            "neon",
-            "+15551234444",
-            "registry-token",
-            "www.neonlaw.com",
-        )
+        store::test_support::with_required_postgres(async {
+            let pg = store::postgres::PostgresDb::application().await.unwrap();
+            let db = store::surreal::SurrealDb::uninitialized();
+            let (state, _) = registry_state(
+                &db,
+                &pg,
+                "neon",
+                "+15551234444",
+                "registry-token",
+                "www.neonlaw.com",
+            )
+            .await;
+            let body = Bytes::from_static(b"MessageSid=SM1&From=%2B15555550100&To=%2B15551234444");
+            let response = webhook(State(state.clone()), HeaderMap::new(), body.clone()).await;
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            let mut headers = HeaderMap::new();
+            headers.insert(SIGNATURE_HEADER, "AAAA".parse().unwrap());
+            let response = webhook(State(state), headers, body).await;
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        })
         .await;
-        let body = Bytes::from_static(b"MessageSid=SM1&From=%2B15555550100&To=%2B15551234444");
-        let response = webhook(State(state.clone()), HeaderMap::new(), body.clone()).await;
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-        let mut headers = HeaderMap::new();
-        headers.insert(SIGNATURE_HEADER, "AAAA".parse().unwrap());
-        let response = webhook(State(state), headers, body).await;
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
     /// A request signed with a registered number's own credential but
@@ -917,104 +915,93 @@ mod tests {
     /// the caller's token proves nothing about an unregistered callee.
     #[tokio::test]
     async fn a_signed_text_to_another_number_is_not_ours() {
-        let Some(pg) = crate::twilio_registry_harness::postgres().await else {
-            return;
-        };
-        let db = store::test_support::mem_surreal().await;
-        let (state, _) = registry_state(
-            &db,
-            &pg,
-            "neon",
-            "+15551234444",
-            "registry-token",
-            "www.neonlaw.com",
-        )
-        .await;
-        let signed = params(&[
-            ("MessageSid", "SM1"),
-            ("From", "+15555550100"),
-            ("To", "+15550000000"),
-        ]);
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            SIGNATURE_HEADER,
-            twilio_signature(
+        store::test_support::with_required_postgres(async {
+            let pg = store::postgres::PostgresDb::application().await.unwrap();
+            let db = store::surreal::SurrealDb::uninitialized();
+            let (state, _) = registry_state(
+                &db,
+                &pg,
+                "neon",
+                "+15551234444",
                 "registry-token",
-                "https://www.neonlaw.com/webhook/twilio/sms",
-                &signed,
+                "www.neonlaw.com",
             )
-            .parse()
-            .unwrap(),
-        );
-        let body = Bytes::from_static(b"MessageSid=SM1&From=%2B15555550100&To=%2B15550000000");
-        let response = webhook(State(state), headers, body).await;
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-        // Fail closed: nothing was ingested for the unregistered callee.
-        let mut conversations = db
-            .query("SELECT VALUE id FROM inbox_conversation")
+            .await;
+            let signed = params(&[
+                ("MessageSid", "SM1"),
+                ("From", "+15555550100"),
+                ("To", "+15550000000"),
+            ]);
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                SIGNATURE_HEADER,
+                twilio_signature(
+                    "registry-token",
+                    "https://www.neonlaw.com/webhook/twilio/sms",
+                    &signed,
+                )
+                .parse()
+                .unwrap(),
+            );
+            let body = Bytes::from_static(b"MessageSid=SM1&From=%2B15555550100&To=%2B15550000000");
+            let response = webhook(State(state), headers, body).await;
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+            // Fail closed: nothing was ingested for the unregistered callee.
+            let (conversations, messages): (i64, i64) = sqlx::query_as(
+                "SELECT (SELECT count(*) FROM inbox_conversation), (SELECT count(*) FROM message)",
+            )
+            .fetch_one(pg.pool())
             .await
-            .unwrap()
-            .check()
             .unwrap();
-        let rows: Vec<surrealdb::types::RecordId> = conversations.take(0).unwrap();
-        assert!(
-            rows.is_empty(),
-            "an unregistered callee must not create a conversation"
-        );
-        let mut messages = db
-            .query("SELECT VALUE id FROM message")
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-        let rows: Vec<surrealdb::types::RecordId> = messages.take(0).unwrap();
-        assert!(
-            rows.is_empty(),
-            "an unregistered callee must not create a message"
-        );
+            assert_eq!((conversations, messages), (0, 0));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn twilio_intake_saves_one_shared_message_even_without_summaries() {
-        let Some(pg) = crate::twilio_registry_harness::postgres().await else {
-            return;
-        };
-        let db = store::test_support::mem_surreal().await;
-        let firm = store::test_support::seed_firm_with_brand(&db, "neon").await;
-        let number = "+15551234444";
-        crate::twilio_registry_harness::register_number(
-            &db,
-            &pg,
-            firm,
-            "neon",
-            number,
-            "registry-token",
-        )
-        .await;
-        let resolved = crate::twilio_resolution::ResolvedTwilioWebhook {
-            registration: store::brand_phone_numbers::find_by_number(&pg, number)
+        store::test_support::with_required_postgres(async {
+            let pg = store::postgres::PostgresDb::application().await.unwrap();
+            let db = store::surreal::SurrealDb::uninitialized();
+            let firm = store::test_support::seed_firm_with_new_brand(&db, "neon")
+                .await
+                .0;
+            let number = "+15551234444";
+            store::test_support::twilio::register_number(
+                &db,
+                &pg,
+                firm,
+                "neon",
+                number,
+                "registry-token",
+            )
+            .await;
+            let resolved = crate::twilio_resolution::ResolvedTwilioWebhook {
+                registration: store::brand_phone_numbers::find_by_number(&pg, number)
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                firm_id: firm,
+            };
+            let sms = InboundSms {
+                message_sid: "synthetic-sms-id".into(),
+                from: "synthetic-sender".into(),
+                to: number.into(),
+                body: "Synthetic inquiry".into(),
+                media_count: 0,
+            };
+            let first = ingest_sms(&db, &resolved, &sms).await.unwrap();
+            let replay = ingest_sms(&db, &resolved, &sms).await.unwrap();
+            assert_eq!(first.message_id, replay.message_id);
+            assert!(replay.deduped);
+            let conversation = store::inbox::conversation_by_id(&db, first.conversation_id)
                 .await
                 .unwrap()
-                .unwrap(),
-            firm_id: firm,
-        };
-        let sms = InboundSms {
-            message_sid: "synthetic-sms-id".into(),
-            from: "synthetic-sender".into(),
-            to: number.into(),
-            body: "Synthetic inquiry".into(),
-            media_count: 0,
-        };
-        let first = ingest_sms(&db, &resolved, &sms).await.unwrap();
-        let replay = ingest_sms(&db, &resolved, &sms).await.unwrap();
-        assert_eq!(first.message_id, replay.message_id);
-        assert!(replay.deduped);
-        let conversation = store::inbox::conversation_by_id(&db, first.conversation_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(conversation.firm_id, firm);
-        assert_eq!(conversation.channel, store::inbox::channel::SMS);
-        assert_eq!(conversation.provider_account, number);
+                .unwrap();
+            assert_eq!(conversation.firm_id, firm);
+            assert_eq!(conversation.channel, store::inbox::channel::SMS);
+            assert_eq!(conversation.provider_account, number);
+        })
+        .await;
     }
 }

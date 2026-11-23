@@ -1289,7 +1289,17 @@ async fn prepare_postgres_fixture(
 pub fn with_postgres(
     test: impl std::future::Future<Output = ()>,
 ) -> impl std::future::Future<Output = ()> {
-    with_postgres_history(test, FixtureHistory::Native)
+    with_postgres_history(test, FixtureHistory::Native, false)
+}
+
+/// Run a native test whose assertions require a PostgreSQL fixture.
+///
+/// # Panics
+/// Panics when the local test server is unspecified or the fixture fails.
+pub fn with_required_postgres(
+    test: impl std::future::Future<Output = ()>,
+) -> impl std::future::Future<Output = ()> {
+    with_postgres_history(test, FixtureHistory::Native, true)
 }
 
 /// Exercise captured-enrollment validation using explicit synthetic history.
@@ -1298,7 +1308,7 @@ pub fn with_postgres(
 pub fn with_captured_postgres(
     test: impl std::future::Future<Output = ()>,
 ) -> impl std::future::Future<Output = ()> {
-    with_postgres_history(test, FixtureHistory::Captured)
+    with_postgres_history(test, FixtureHistory::Captured, false)
 }
 
 /// Run an owned, genuinely migrated schema-only target for historical input
@@ -1306,7 +1316,7 @@ pub fn with_captured_postgres(
 pub fn with_unactivated_postgres(
     test: impl std::future::Future<Output = ()>,
 ) -> impl std::future::Future<Output = ()> {
-    with_postgres_history(test, FixtureHistory::SchemaOnly)
+    with_postgres_history(test, FixtureHistory::SchemaOnly, false)
 }
 
 enum FixtureHistory {
@@ -1318,6 +1328,7 @@ enum FixtureHistory {
 fn with_postgres_history(
     test: impl std::future::Future<Output = ()>,
     history: FixtureHistory,
+    required: bool,
 ) -> impl std::future::Future<Output = ()> {
     let test = Box::pin(test);
     async move {
@@ -1325,7 +1336,10 @@ fn with_postgres_history(
         use futures::FutureExt as _;
         use sqlx::postgres::{PgConnectOptions, PgSslMode};
         let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {
-            assert_ne!(std::env::var("NAV_REQUIRE_POSTGRES").as_deref(), Ok("1"));
+            assert!(
+                !required && std::env::var("NAV_REQUIRE_POSTGRES").as_deref() != Ok("1"),
+                "this native test requires NAVIGATOR_TEST_POSTGRES_PORT"
+            );
             return;
         };
         let database =

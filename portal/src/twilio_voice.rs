@@ -429,28 +429,7 @@ mod tests {
         );
     }
 
-    /// The registry lane: a seeded Firm with `number` registered for its
-    /// own token, and a state whose webhook lanes resolve through
-    /// PostgreSQL with the host the spine should sign.
-    async fn registry_state(
-        db: &store::surreal::SurrealDb,
-        pg: &store::postgres::PostgresDb,
-        brand: &str,
-        number: &str,
-        token: &str,
-        host: &str,
-    ) -> (crate::AppState, uuid::Uuid) {
-        let firm = store::test_support::seed_firm_with_brand(db, brand).await;
-        crate::twilio_registry_harness::register_number(db, pg, firm, brand, number, token).await;
-        let mut state = crate::test_support::app_state(db.clone()).await;
-        state.canonical_host = crate::CanonicalHost::new(Some(host.to_string()));
-        state.twilio_registry = Some(std::sync::Arc::new(pg.clone()));
-        // The harness seals the number's token with this same fake KMS; the
-        // default state's NoRuntimeKms refuses every unwrap, so the lane
-        // would 503 before signature verification ever runs.
-        state.runtime_kms = std::sync::Arc::new(cloud::FakeKms::new("spine-test"));
-        (state, firm)
-    }
+    use crate::twilio_resolution::registry_state;
 
     fn signed_body(token: &str, host: &str, fields: &[(String, String)]) -> (HeaderMap, Bytes) {
         let signature = crate::twilio_sms::twilio_signature(
@@ -475,91 +454,92 @@ mod tests {
     /// its `MessageSid` — and one alert key, not a duplicate per delivery.
     #[tokio::test]
     async fn a_signed_call_lands_once_and_replays_to_the_same_row() {
-        let Some(pg) = crate::twilio_registry_harness::postgres().await else {
-            return;
-        };
-        let db = store::test_support::mem_surreal().await;
-        let number = "+15551234444";
-        let (state, firm) = registry_state(
-            &db,
-            &pg,
-            "neon",
-            number,
-            "registry-token",
-            "www.neonlaw.com",
-        )
-        .await;
-        let owner = store::persons::create(
-            &db,
-            &store::persons::NewPerson::with_role(
-                "Synthetic owner",
-                format!("voice-{}@example.com", uuid::Uuid::now_v7()),
-                store::persons::Role::Owner,
-            ),
-        )
-        .await
-        .unwrap()
-        .id;
-        let fields = params(&[
-            ("CallSid", "CAsynthetic-completed"),
-            ("From", "+15555550100"),
-            ("To", number),
-            ("CallStatus", "completed"),
-            ("CallDuration", "42"),
-            ("StartTime", "Fri, 30 Oct 2026 18:00:00 +0000"),
-        ]);
-        let (headers, body) = signed_body("registry-token", "www.neonlaw.com", &fields);
-
-        let first = status(State(state.clone()), headers, body).await;
-        assert_eq!(first.status(), StatusCode::OK);
-        let (headers, body) = signed_body("registry-token", "www.neonlaw.com", &fields);
-        let replay = status(State(state.clone()), headers, body).await;
-        assert_eq!(replay.status(), StatusCode::OK);
-
-        let rows = store::inbox::list_intake(&db, owner).await.unwrap();
-        let voice: Vec<_> = rows
-            .iter()
-            .filter(|row| row.channel == store::inbox::channel::VOICE)
-            .collect();
-        assert_eq!(voice.len(), 1, "one call, one conversation");
-        assert_eq!(voice[0].firm_id, firm);
-        assert_eq!(voice[0].brand_key.as_deref(), Some("neon"));
-        assert_eq!(voice[0].external_address, "+15555550100");
-
-        let detail = store::inbox::intake_detail(&db, owner, voice[0].id)
-            .await
-            .unwrap();
-        assert_eq!(
-            detail.messages.len(),
-            1,
-            "a redelivered CallSid never writes a second message"
-        );
-        assert_eq!(
-            detail.messages[0].occurred_at, "2026-10-30T18:00:00+00:00",
-            "the provider's StartTime is authoritative, not the clock"
-        );
-        assert_eq!(
-            store::inbox_alerts::awaiting_reconciliation(&db, 15)
-                .await
-                .unwrap()
-                .len(),
-            1,
-            "repeated deliveries attach to the same alert"
-        );
-        let billed = store::billed_calls::find_by_call_sid(&pg, "CAsynthetic-completed")
+        store::test_support::with_required_postgres(async {
+            let pg = store::postgres::PostgresDb::application().await.unwrap();
+            let db = store::surreal::SurrealDb::uninitialized();
+            let number = "+15551234444";
+            let (state, firm) = registry_state(
+                &db,
+                &pg,
+                "neon",
+                number,
+                "registry-token",
+                "www.neonlaw.com",
+            )
+            .await;
+            let owner = store::persons::create(
+                &db,
+                &store::persons::NewPerson::with_role(
+                    "Synthetic owner",
+                    format!("voice-{}@example.com", uuid::Uuid::now_v7()),
+                    store::persons::Role::Owner,
+                ),
+            )
             .await
             .unwrap()
-            .expect("a completed call bills");
-        assert_eq!(billed.firm_id, firm);
-        assert_eq!(billed.conversation_id, voice[0].id);
-        assert_eq!(billed.duration_seconds, 42);
-        assert_eq!(billed.tenths, 1, "42s rounds up to one tenth");
-        assert_eq!(billed.project_id, None, "the call parks until attributed");
-        assert_eq!(
-            billed.call_started_at.to_rfc3339(),
-            "2026-10-30T18:00:00+00:00",
-            "the provider's StartTime is the billing record's time"
-        );
+            .id;
+            let fields = params(&[
+                ("CallSid", "CAsynthetic-completed"),
+                ("From", "+15555550100"),
+                ("To", number),
+                ("CallStatus", "completed"),
+                ("CallDuration", "42"),
+                ("StartTime", "Fri, 30 Oct 2026 18:00:00 +0000"),
+            ]);
+            let (headers, body) = signed_body("registry-token", "www.neonlaw.com", &fields);
+
+            let first = status(State(state.clone()), headers, body).await;
+            assert_eq!(first.status(), StatusCode::OK);
+            let (headers, body) = signed_body("registry-token", "www.neonlaw.com", &fields);
+            let replay = status(State(state.clone()), headers, body).await;
+            assert_eq!(replay.status(), StatusCode::OK);
+
+            let rows = store::inbox::list_intake(&db, owner).await.unwrap();
+            let voice: Vec<_> = rows
+                .iter()
+                .filter(|row| row.channel == store::inbox::channel::VOICE)
+                .collect();
+            assert_eq!(voice.len(), 1, "one call, one conversation");
+            assert_eq!(voice[0].firm_id, firm);
+            assert_eq!(voice[0].brand_key.as_deref(), Some("neon"));
+            assert_eq!(voice[0].external_address, "+15555550100");
+
+            let detail = store::inbox::intake_detail(&db, owner, voice[0].id)
+                .await
+                .unwrap();
+            assert_eq!(
+                detail.messages.len(),
+                1,
+                "a redelivered CallSid never writes a second message"
+            );
+            assert_eq!(
+                detail.messages[0].occurred_at, "2026-10-30T18:00:00+00:00",
+                "the provider's StartTime is authoritative, not the clock"
+            );
+            assert_eq!(
+                store::inbox_alerts::awaiting_reconciliation(&db, 15)
+                    .await
+                    .unwrap()
+                    .len(),
+                1,
+                "repeated deliveries attach to the same alert"
+            );
+            let billed = store::billed_calls::find_by_call_sid(&pg, "CAsynthetic-completed")
+                .await
+                .unwrap()
+                .expect("a completed call bills");
+            assert_eq!(billed.firm_id, firm);
+            assert_eq!(billed.conversation_id, voice[0].id);
+            assert_eq!(billed.duration_seconds, 42);
+            assert_eq!(billed.tenths, 1, "42s rounds up to one tenth");
+            assert_eq!(billed.project_id, None, "the call parks until attributed");
+            assert_eq!(
+                billed.call_started_at.to_rfc3339(),
+                "2026-10-30T18:00:00+00:00",
+                "the provider's StartTime is the billing record's time"
+            );
+        })
+        .await;
     }
 
     /// A late mid-call retry after the terminal event changes nothing: the
@@ -567,99 +547,100 @@ mod tests {
     /// event creates no conversation at all.
     #[tokio::test]
     async fn an_out_of_order_mid_call_event_is_absorbed_by_the_call_sid_idempotency() {
-        let Some(pg) = crate::twilio_registry_harness::postgres().await else {
-            return;
-        };
-        let db = store::test_support::mem_surreal().await;
-        let number = "+15551234444";
-        let (state, _) = registry_state(
-            &db,
-            &pg,
-            "neon",
-            number,
-            "registry-token",
-            "www.neonlaw.com",
-        )
-        .await;
-        let owner = store::persons::create(
-            &db,
-            &store::persons::NewPerson::with_role(
-                "Synthetic owner",
-                format!("voice-{}@example.com", uuid::Uuid::now_v7()),
-                store::persons::Role::Owner,
-            ),
-        )
-        .await
-        .unwrap()
-        .id;
-        let completed = params(&[
-            ("CallSid", "CAsynthetic-order"),
-            ("From", "+15555550100"),
-            ("To", number),
-            ("CallStatus", "completed"),
-            ("CallDuration", "42"),
-            ("StartTime", "Fri, 30 Oct 2026 18:00:00 +0000"),
-        ]);
-        let (headers, body) = signed_body("registry-token", "www.neonlaw.com", &completed);
-        assert_eq!(
-            status(State(state.clone()), headers, body).await.status(),
-            StatusCode::OK
-        );
-
-        // The same call, redelivered out of order as its own ringing event.
-        let ringing = params(&[
-            ("CallSid", "CAsynthetic-order"),
-            ("From", "+15555550100"),
-            ("To", number),
-            ("CallStatus", "ringing"),
-        ]);
-        let (headers, body) = signed_body("registry-token", "www.neonlaw.com", &ringing);
-        assert_eq!(
-            status(State(state.clone()), headers, body).await.status(),
-            StatusCode::NO_CONTENT,
-            "a mid-call event is acknowledged, not ingested"
-        );
-
-        // A different call that is still ringing has no transcript row yet.
-        let fresh_ringing = params(&[
-            ("CallSid", "CAsynthetic-fresh"),
-            ("From", "+15555550101"),
-            ("To", number),
-            ("CallStatus", "in-progress"),
-        ]);
-        let (headers, body) = signed_body("registry-token", "www.neonlaw.com", &fresh_ringing);
-        assert_eq!(
-            status(State(state.clone()), headers, body).await.status(),
-            StatusCode::NO_CONTENT
-        );
-
-        let rows = store::inbox::list_intake(&db, owner).await.unwrap();
-        let voice: Vec<_> = rows
-            .iter()
-            .filter(|row| row.channel == store::inbox::channel::VOICE)
-            .collect();
-        assert_eq!(voice.len(), 1, "only the completed call is in the record");
-        let detail = store::inbox::intake_detail(&db, owner, voice[0].id)
-            .await
-            .unwrap();
-        assert_eq!(detail.messages.len(), 1);
-        assert_eq!(
-            detail.messages[0].body, "Call from +15555550100 — completed (42s).",
-            "the late ringing retry did not rewrite the completed call"
-        );
-        let billed = store::billed_calls::find_by_call_sid(&pg, "CAsynthetic-order")
+        store::test_support::with_required_postgres(async {
+            let pg = store::postgres::PostgresDb::application().await.unwrap();
+            let db = store::surreal::SurrealDb::uninitialized();
+            let number = "+15551234444";
+            let (state, _) = registry_state(
+                &db,
+                &pg,
+                "neon",
+                number,
+                "registry-token",
+                "www.neonlaw.com",
+            )
+            .await;
+            let owner = store::persons::create(
+                &db,
+                &store::persons::NewPerson::with_role(
+                    "Synthetic owner",
+                    format!("voice-{}@example.com", uuid::Uuid::now_v7()),
+                    store::persons::Role::Owner,
+                ),
+            )
             .await
             .unwrap()
-            .expect("the completed call bills");
-        assert_eq!(billed.duration_seconds, 42);
-        assert_eq!(billed.tenths, 1, "the late retry did not re-bill");
-        assert!(
-            store::billed_calls::find_by_call_sid(&pg, "CAsynthetic-fresh")
+            .id;
+            let completed = params(&[
+                ("CallSid", "CAsynthetic-order"),
+                ("From", "+15555550100"),
+                ("To", number),
+                ("CallStatus", "completed"),
+                ("CallDuration", "42"),
+                ("StartTime", "Fri, 30 Oct 2026 18:00:00 +0000"),
+            ]);
+            let (headers, body) = signed_body("registry-token", "www.neonlaw.com", &completed);
+            assert_eq!(
+                status(State(state.clone()), headers, body).await.status(),
+                StatusCode::OK
+            );
+
+            // The same call, redelivered out of order as its own ringing event.
+            let ringing = params(&[
+                ("CallSid", "CAsynthetic-order"),
+                ("From", "+15555550100"),
+                ("To", number),
+                ("CallStatus", "ringing"),
+            ]);
+            let (headers, body) = signed_body("registry-token", "www.neonlaw.com", &ringing);
+            assert_eq!(
+                status(State(state.clone()), headers, body).await.status(),
+                StatusCode::NO_CONTENT,
+                "a mid-call event is acknowledged, not ingested"
+            );
+
+            // A different call that is still ringing has no transcript row yet.
+            let fresh_ringing = params(&[
+                ("CallSid", "CAsynthetic-fresh"),
+                ("From", "+15555550101"),
+                ("To", number),
+                ("CallStatus", "in-progress"),
+            ]);
+            let (headers, body) = signed_body("registry-token", "www.neonlaw.com", &fresh_ringing);
+            assert_eq!(
+                status(State(state.clone()), headers, body).await.status(),
+                StatusCode::NO_CONTENT
+            );
+
+            let rows = store::inbox::list_intake(&db, owner).await.unwrap();
+            let voice: Vec<_> = rows
+                .iter()
+                .filter(|row| row.channel == store::inbox::channel::VOICE)
+                .collect();
+            assert_eq!(voice.len(), 1, "only the completed call is in the record");
+            let detail = store::inbox::intake_detail(&db, owner, voice[0].id)
+                .await
+                .unwrap();
+            assert_eq!(detail.messages.len(), 1);
+            assert_eq!(
+                detail.messages[0].body, "Call from +15555550100 — completed (42s).",
+                "the late ringing retry did not rewrite the completed call"
+            );
+            let billed = store::billed_calls::find_by_call_sid(&pg, "CAsynthetic-order")
                 .await
                 .unwrap()
-                .is_none(),
-            "a call that has not completed never bills"
-        );
+                .expect("the completed call bills");
+            assert_eq!(billed.duration_seconds, 42);
+            assert_eq!(billed.tenths, 1, "the late retry did not re-bill");
+            assert!(
+                store::billed_calls::find_by_call_sid(&pg, "CAsynthetic-fresh")
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "a call that has not completed never bills"
+            );
+        })
+        .await;
     }
 
     /// A completed call without a duration is a zero-duration call: it
@@ -668,174 +649,177 @@ mod tests {
     /// never writes a billing row at all.
     #[tokio::test]
     async fn a_zero_duration_call_bills_zero_and_a_missed_call_never_bills() {
-        let Some(pg) = crate::twilio_registry_harness::postgres().await else {
-            return;
-        };
-        let db = store::test_support::mem_surreal().await;
-        let number = "+15551234444";
-        let (state, firm) = registry_state(
-            &db,
-            &pg,
-            "neon",
-            number,
-            "registry-token",
-            "www.neonlaw.com",
-        )
-        .await;
-        let owner = store::persons::create(
-            &db,
-            &store::persons::NewPerson::with_role(
-                "Synthetic owner",
-                format!("voice-{}@example.com", uuid::Uuid::now_v7()),
-                store::persons::Role::Owner,
-            ),
-        )
-        .await
-        .unwrap()
-        .id;
-
-        let zero = params(&[
-            ("CallSid", "CAsynthetic-zero"),
-            ("From", "+15555550100"),
-            ("To", number),
-            ("CallStatus", "completed"),
-            ("CallDuration", "0"),
-            ("StartTime", "Fri, 30 Oct 2026 18:00:00 +0000"),
-        ]);
-        let (headers, body) = signed_body("registry-token", "www.neonlaw.com", &zero);
-        assert_eq!(
-            status(State(state.clone()), headers, body).await.status(),
-            StatusCode::OK
-        );
-        let billed = store::billed_calls::find_by_call_sid(&pg, "CAsynthetic-zero")
+        store::test_support::with_required_postgres(async {
+            let pg = store::postgres::PostgresDb::application().await.unwrap();
+            let db = store::surreal::SurrealDb::uninitialized();
+            let number = "+15551234444";
+            let (state, firm) = registry_state(
+                &db,
+                &pg,
+                "neon",
+                number,
+                "registry-token",
+                "www.neonlaw.com",
+            )
+            .await;
+            let owner = store::persons::create(
+                &db,
+                &store::persons::NewPerson::with_role(
+                    "Synthetic owner",
+                    format!("voice-{}@example.com", uuid::Uuid::now_v7()),
+                    store::persons::Role::Owner,
+                ),
+            )
             .await
             .unwrap()
-            .expect("a zero-duration call is recorded, not skipped");
-        assert_eq!(billed.duration_seconds, 0);
-        assert_eq!(billed.tenths, 0, "a zero-duration call bills zero");
-        assert_eq!(billed.firm_id, firm);
+            .id;
 
-        let missed = params(&[
-            ("CallSid", "CAsynthetic-missed"),
-            ("From", "+15555550101"),
-            ("To", number),
-            ("CallStatus", "no-answer"),
-            ("StartTime", "Fri, 30 Oct 2026 18:05:00 +0000"),
-        ]);
-        let (headers, body) = signed_body("registry-token", "www.neonlaw.com", &missed);
-        assert_eq!(
-            status(State(state.clone()), headers, body).await.status(),
-            StatusCode::OK
-        );
-        let rows = store::inbox::list_intake(&db, owner).await.unwrap();
-        let missed_row = rows
-            .iter()
-            .find(|row| row.external_address == "+15555550101")
-            .expect("the missed call lands in the transcript");
-        assert_eq!(
-            missed_row.channel,
-            store::inbox::channel::VOICE,
-            "the missed call is a voice conversation"
-        );
-        assert!(
-            store::billed_calls::find_by_call_sid(&pg, "CAsynthetic-missed")
+            let zero = params(&[
+                ("CallSid", "CAsynthetic-zero"),
+                ("From", "+15555550100"),
+                ("To", number),
+                ("CallStatus", "completed"),
+                ("CallDuration", "0"),
+                ("StartTime", "Fri, 30 Oct 2026 18:00:00 +0000"),
+            ]);
+            let (headers, body) = signed_body("registry-token", "www.neonlaw.com", &zero);
+            assert_eq!(
+                status(State(state.clone()), headers, body).await.status(),
+                StatusCode::OK
+            );
+            let billed = store::billed_calls::find_by_call_sid(&pg, "CAsynthetic-zero")
                 .await
                 .unwrap()
-                .is_none(),
-            "a call that never completed never writes a billing row"
-        );
+                .expect("a zero-duration call is recorded, not skipped");
+            assert_eq!(billed.duration_seconds, 0);
+            assert_eq!(billed.tenths, 0, "a zero-duration call bills zero");
+            assert_eq!(billed.firm_id, firm);
+
+            let missed = params(&[
+                ("CallSid", "CAsynthetic-missed"),
+                ("From", "+15555550101"),
+                ("To", number),
+                ("CallStatus", "no-answer"),
+                ("StartTime", "Fri, 30 Oct 2026 18:05:00 +0000"),
+            ]);
+            let (headers, body) = signed_body("registry-token", "www.neonlaw.com", &missed);
+            assert_eq!(
+                status(State(state.clone()), headers, body).await.status(),
+                StatusCode::OK
+            );
+            let rows = store::inbox::list_intake(&db, owner).await.unwrap();
+            let missed_row = rows
+                .iter()
+                .find(|row| row.external_address == "+15555550101")
+                .expect("the missed call lands in the transcript");
+            assert_eq!(
+                missed_row.channel,
+                store::inbox::channel::VOICE,
+                "the missed call is a voice conversation"
+            );
+            assert!(
+                store::billed_calls::find_by_call_sid(&pg, "CAsynthetic-missed")
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "a call that never completed never writes a billing row"
+            );
+        })
+        .await;
     }
 
     /// A call to a number outside the registry is refused before any Brand
     /// is considered, and nothing is ingested.
     #[tokio::test]
     async fn a_call_to_an_unregistered_number_is_refused_without_ingesting() {
-        let Some(pg) = crate::twilio_registry_harness::postgres().await else {
-            return;
-        };
-        let db = store::test_support::mem_surreal().await;
-        let (state, _) = registry_state(
-            &db,
-            &pg,
-            "neon",
-            "+15551234444",
-            "registry-token",
-            "www.neonlaw.com",
-        )
+        store::test_support::with_required_postgres(async {
+            let pg = store::postgres::PostgresDb::application().await.unwrap();
+            let db = store::surreal::SurrealDb::uninitialized();
+            let (state, _) = registry_state(
+                &db,
+                &pg,
+                "neon",
+                "+15551234444",
+                "registry-token",
+                "www.neonlaw.com",
+            )
+            .await;
+            let owner = store::persons::create(
+                &db,
+                &store::persons::NewPerson::with_role(
+                    "Synthetic owner",
+                    format!("voice-{}@example.com", uuid::Uuid::now_v7()),
+                    store::persons::Role::Owner,
+                ),
+            )
+            .await
+            .unwrap()
+            .id;
+            let fields = params(&[
+                ("CallSid", "CAsynthetic-foreign"),
+                ("From", "+15555550100"),
+                ("To", "+15559999999"),
+                ("CallStatus", "completed"),
+                ("CallDuration", "42"),
+                ("StartTime", "Fri, 30 Oct 2026 18:00:00 +0000"),
+            ]);
+            let (headers, body) = signed_body("registry-token", "www.neonlaw.com", &fields);
+            let response = status(State(state.clone()), headers, body).await;
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+            assert!(
+                store::inbox::list_intake(&db, owner)
+                    .await
+                    .unwrap()
+                    .is_empty(),
+                "an unregistered number ingests nothing"
+            );
+        })
         .await;
-        let owner = store::persons::create(
-            &db,
-            &store::persons::NewPerson::with_role(
-                "Synthetic owner",
-                format!("voice-{}@example.com", uuid::Uuid::now_v7()),
-                store::persons::Role::Owner,
-            ),
-        )
-        .await
-        .unwrap()
-        .id;
-        let fields = params(&[
-            ("CallSid", "CAsynthetic-foreign"),
-            ("From", "+15555550100"),
-            ("To", "+15559999999"),
-            ("CallStatus", "completed"),
-            ("CallDuration", "42"),
-            ("StartTime", "Fri, 30 Oct 2026 18:00:00 +0000"),
-        ]);
-        let (headers, body) = signed_body("registry-token", "www.neonlaw.com", &fields);
-        let response = status(State(state.clone()), headers, body).await;
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-        assert!(
-            store::inbox::list_intake(&db, owner)
-                .await
-                .unwrap()
-                .is_empty(),
-            "an unregistered number ingests nothing"
-        );
     }
 
     /// Without the registry configured the lane is off at 404 — the same
     /// answer an unknown number gets — and an unsigned callback is 401.
     #[tokio::test]
     async fn an_unconfigured_lane_is_off_and_an_unsigned_callback_is_denied() {
-        let db = store::test_support::mem_surreal().await;
-        let unconfigured = crate::test_support::app_state(db.clone()).await;
-        let fields = params(&[
-            ("CallSid", "CA1"),
-            ("From", "+15555550100"),
-            ("To", "+15551234444"),
-            ("CallStatus", "completed"),
-            ("StartTime", "Fri, 30 Oct 2026 18:00:00 +0000"),
-        ]);
-        let (headers, body) = signed_body("registry-token", "www.neonlaw.com", &fields);
-        assert_eq!(
-            status(State(unconfigured.clone()), headers, body)
-                .await
-                .status(),
-            StatusCode::NOT_FOUND
-        );
+        store::test_support::with_required_postgres(async {
+            let db = store::surreal::SurrealDb::uninitialized();
+            let unconfigured = crate::test_support::app_state(db.clone()).await;
+            let fields = params(&[
+                ("CallSid", "CA1"),
+                ("From", "+15555550100"),
+                ("To", "+15551234444"),
+                ("CallStatus", "completed"),
+                ("StartTime", "Fri, 30 Oct 2026 18:00:00 +0000"),
+            ]);
+            let (headers, body) = signed_body("registry-token", "www.neonlaw.com", &fields);
+            assert_eq!(
+                status(State(unconfigured.clone()), headers, body)
+                    .await
+                    .status(),
+                StatusCode::NOT_FOUND
+            );
 
-        let Some(pg) = crate::twilio_registry_harness::postgres().await else {
-            return;
-        };
-        let (state, _) = registry_state(
-            &db,
-            &pg,
-            "neon",
-            "+15551234444",
-            "registry-token",
-            "www.neonlaw.com",
-        )
+            let pg = store::postgres::PostgresDb::application().await.unwrap();
+            let (state, _) = registry_state(
+                &db,
+                &pg,
+                "neon",
+                "+15551234444",
+                "registry-token",
+                "www.neonlaw.com",
+            )
+            .await;
+            let body = url::form_urlencoded::Serializer::new(String::new())
+                .extend_pairs(&fields)
+                .finish();
+            assert_eq!(
+                status(State(state), HeaderMap::new(), Bytes::from(body))
+                    .await
+                    .status(),
+                StatusCode::UNAUTHORIZED,
+                "a callback without the signature header never ingests"
+            );
+        })
         .await;
-        let body = url::form_urlencoded::Serializer::new(String::new())
-            .extend_pairs(&fields)
-            .finish();
-        assert_eq!(
-            status(State(state), HeaderMap::new(), Bytes::from(body))
-                .await
-                .status(),
-            StatusCode::UNAUTHORIZED,
-            "a callback without the signature header never ingests"
-        );
     }
 }

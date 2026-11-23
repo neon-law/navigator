@@ -10,9 +10,9 @@ rather than truncating it; retained or partially initialized history requires ex
 
 PostgreSQL is the storage authority, so tests exercise it directly. The fixture is one disposable container of the
 pinned `navigator/postgres` image on loopback port 25432, with `store/postgres/schema.sql` applied. Tests read the port
-from `NAVIGATOR_TEST_POSTGRES_PORT` and self-skip without it. `NAV_REQUIRE_POSTGRES=1` turns that skip into a failure.
-Start the fixture locally the way CI does (the `start PostgreSQL for covered journal tests` step in
-`.github/workflows/ci.yml`):
+from `NAVIGATOR_TEST_POSTGRES_PORT`. The required native fixture fails when the port is missing. Optional fixture tests
+skip without the port unless `NAV_REQUIRE_POSTGRES=1` is set. Start the fixture locally the way CI does (the `start
+PostgreSQL for covered journal tests` step in `.github/workflows/ci.yml`):
 
 ```bash
 docker run -d --name test-postgres --shm-size=256m -p 127.0.0.1:25432:5432 \
@@ -126,8 +126,8 @@ cargo nextest run --workspace \
 cargo test -p features --features store/surreal-compatibility
 ```
 
-Without the PostgreSQL fixture running, its tests skip. The cucumber BDD suites in `features` keep `cargo test`; their
-custom harness does not speak nextest's protocol, so the workspace nextest profile excludes that package.
+Provide the PostgreSQL fixture when running the full workspace. The Cucumber BDD suites in `features` use `cargo test`
+because their custom harness uses a different test protocol.
 
 A package-filtered `webapp` run needs the crate's `server` feature. A workspace nextest invocation already compiles
 `webapp` through dependents that enable it; running the crate alone does not:
@@ -147,9 +147,8 @@ NAV_REQUIRE_SURREAL=1 cargo nextest run --workspace \
 
 ## How CI runs them
 
-The primary Rust coverage job does not start SurrealDB. It starts the PostgreSQL fixture and sets
-`NAVIGATOR_TEST_POSTGRES_PORT`. `hudson ops surreal-free-tests` leaves out every test in a file that starts a SurrealDB
-engine, every test binary and cucumber runner that reaches one, and leaves every file that names SurrealDB out of the
-coverage measurement. The job sets `NAVIGATOR_FORBID_SURREAL=1`, so a test that starts an engine anyway fails instead of
-running. KIND e2e covers the real stack, browser, and accessibility. Draft pull requests skip the Rust suite; marking
-one ready runs it.
+The primary Rust coverage job provisions PostgreSQL and sets `NAV_REQUIRE_POSTGRES=1` and `NAVIGATOR_FORBID_SURREAL=1`.
+`hudson ops surreal-free-tests` filters out engine-backed test modules, integration binaries, and Cucumber runners.
+Integration tests that use `with_required_postgres` and reach no Source engine stay in the coverage measurement,
+including tests that pass a disconnected Source handle through application APIs. The KIND gate exercises the browser and
+accessibility suites. Marking a draft pull request ready starts the Rust suite.
