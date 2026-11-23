@@ -2255,9 +2255,9 @@ fn validate_saved_mail(
             .extension()
             .is_some_and(|ext| ext.eq_ignore_ascii_case("eml"))
         {
-            if let Some(pointer) = crate::document_sync::read_pointer(path)? {
-                hashes.insert(pointer.current_version.sha256);
-            }
+            hashes.extend(
+                crate::document_sync::read_pointer(path)?.map(|p| p.current_version.sha256),
+            );
         }
     }
     for entry in walkdir::WalkDir::new(mail).follow_root_links(false) {

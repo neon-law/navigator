@@ -15,3 +15,5 @@ description: File an original email and verify its Project document pointer.
    `documents/Mail (Correspondence)/`.
 
 Prepare any outgoing email as a draft for lawyer review.
+
+For Project terms, follow the **Find the term first** section of `AGENTS.md`.
