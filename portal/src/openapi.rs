@@ -2372,6 +2372,18 @@ fn canonical_document(base: &str) -> Value {
             }
           }
         },
+        "/app/api/lawyer/deadline-projects": {
+          "get": {
+            "summary": "List the signed-in lawyer dashboard's open Projects for deadline reporting",
+            "description": "Returns the open Projects visible to the signed-in lawyer, narrowed to the Firm worn by this deployment using the same scope as the lawyer dashboard. The deadline brief reads each Project's existing deadline endpoint independently and reports partial coverage. Read-only; no checkout is required.",
+            "responses": {
+              "200": { "description": "The dashboard-scoped open Project inventory", "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object", "required": ["id", "code", "name", "status"], "properties": { "id": { "type": "string", "format": "uuid" }, "code": { "type": "string" }, "name": { "type": "string" }, "status": { "type": "string", "const": "open" } } } } } } },
+              "401": { "description": "Authentication required" },
+              "403": { "description": "Lawyer session required" },
+              "500": { "description": "The Project inventory could not be read" }
+            }
+          }
+        },
         "/app/api/project-lifecycle": {
           "get": {
             "summary": "Read every matter's lifecycle fields (admin)",

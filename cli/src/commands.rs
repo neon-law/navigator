@@ -2051,6 +2051,32 @@ pub enum DeadlineCmd {
         #[command(flatten)]
         host: HostOpt,
     },
+    /// Brief the signed-in lawyer on deadlines across visible open matters.
+    Brief {
+        /// Restrict the report to one visible Project code.
+        #[arg(long)]
+        project: Option<String>,
+        /// Include only deadlines due on this lawyer-local date or earlier.
+        #[arg(long)]
+        due_by: Option<String>,
+        /// Include only deadlines due on the current date in --timezone.
+        #[arg(long)]
+        today: bool,
+        /// Include open deadlines whose due instant is before the as-of instant.
+        #[arg(long)]
+        overdue: bool,
+        /// Deadline status to include. Defaults to open.
+        #[arg(long, value_parser = ["open", "complete", "cancelled"], default_value = "open")]
+        status: String,
+        /// IANA time zone. Defaults to TZ, the system time zone, or UTC.
+        #[arg(long)]
+        timezone: Option<String>,
+        /// Print the complete report as JSON.
+        #[arg(long)]
+        json: bool,
+        #[command(flatten)]
+        host: HostOpt,
+    },
     /// Store a deadline and print the row that was written.
     Create {
         /// What is due, such as the pleading or response (at most 200 characters).
@@ -2817,6 +2843,28 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
             }
             DeadlineCmd::List { host, project } => {
                 projects::deadline::list(host.host.as_deref(), project.as_deref()).await
+            }
+            DeadlineCmd::Brief {
+                host,
+                project,
+                due_by,
+                today,
+                overdue,
+                status,
+                timezone,
+                json,
+            } => {
+                projects::deadline_brief::brief(
+                    host.host.as_deref(),
+                    project.as_deref(),
+                    due_by.as_deref(),
+                    today,
+                    overdue,
+                    &status,
+                    timezone.as_deref(),
+                    json,
+                )
+                .await
             }
             DeadlineCmd::Create {
                 host,

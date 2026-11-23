@@ -3608,3 +3608,12 @@ test_onboarding_agreements_require_a_lawyer_session if {
     }
     not authz.allow with input as {"path": path, "method": "POST", "session": lawyer_session}
 }
+
+test_deadline_project_inventory_requires_a_lawyer_session if {
+    path := ["app", "api", "lawyer", "deadline-projects"]
+    authz.allow with input as {"path": path, "method": "GET", "session": lawyer_session}
+    every session in [null, client_session, clerk_session, {"role": "owner", "source": "ci"}] {
+        not authz.allow with input as {"path": path, "method": "GET", "session": session}
+    }
+    not authz.allow with input as {"path": path, "method": "POST", "session": lawyer_session}
+}

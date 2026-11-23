@@ -536,6 +536,11 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             get(reconcile_private_terms_door),
         ),
         ("GET", "/app/api/onboarding-agreements", get(onboarding_agreements)),
+        (
+            "GET",
+            "/app/api/lawyer/deadline-projects",
+            get(lawyer_deadline_projects),
+        ),
         // Own noun, same reason as `project-repositories`: this reads every
         // matter's lifecycle without granting a matter-content read.
         (
@@ -2435,6 +2440,67 @@ async fn onboarding_agreements(
         .await
         .map_err(|e| ApiError::Db(e.to_string()))?;
     Ok(Json(rows).into_response())
+}
+
+/// The dashboard's open matter inventory for the read-only deadline brief.
+/// Keep its Firm boundary identical to `webapp::lawyer_dashboard` so an
+/// Owner/Admin with participation at another Firm does not broaden this view.
+async fn lawyer_deadline_projects(
+    State(state): State<ApiState>,
+    lawyer: LawyerSession,
+) -> Result<Response, ApiError> {
+    let mut projects = store::access::visible_projects_as_lawyer(
+        &state.surreal,
+        lawyer.0.person_id,
+        lawyer.0.role,
+    )
+    .await
+    .map_err(ApiError::Db)?;
+    let firm_id =
+        store::firms::firm_id_for_brand_key(&state.surreal, views::brand::brand_key().as_str())
+            .await
+            .map_err(|error| ApiError::Db(error.to_string()))?;
+    let firm_id = firm_id.ok_or_else(|| ApiError::Db("host brand has no Firm".into()))?;
+    let firm_brands = store::firms::brand_keys_for_firm(&state.surreal, firm_id)
+        .await
+        .map_err(|error| ApiError::Db(error.to_string()))?;
+    projects.retain(|project| {
+        deadline_project_in_dashboard_scope(
+            &project.status,
+            project.firm_id,
+            &project.brand,
+            Some(firm_id),
+            &firm_brands,
+        )
+    });
+    let rows = projects
+        .into_iter()
+        .map(|project| {
+            serde_json::json!({
+                "id": project.id,
+                "code": project.code,
+                "name": project.name,
+                "status": project.status
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(Json(rows).into_response())
+}
+
+fn deadline_project_in_dashboard_scope(
+    status: &str,
+    project_firm_id: Option<Uuid>,
+    project_brand: &str,
+    firm_id: Option<Uuid>,
+    firm_brands: &[String],
+) -> bool {
+    let Some(firm_id) = firm_id else {
+        return false;
+    };
+    status == "open"
+        && (project_firm_id == Some(firm_id)
+            || (project_firm_id.is_none()
+                && firm_brands.iter().any(|brand| brand == project_brand)))
 }
 
 /// Live lifecycle evidence for a firm-side participant. Filing establishes
@@ -11675,6 +11741,56 @@ mod tests {
     use axum::Json;
     use std::collections::BTreeSet;
     use uuid::Uuid;
+
+    #[test]
+    fn deadline_inventory_fails_closed_across_firms_and_legacy_rows() {
+        let current = Uuid::new_v4();
+        let other = Uuid::new_v4();
+        let brands = vec!["house-brand".to_string()];
+
+        assert!(super::deadline_project_in_dashboard_scope(
+            "open",
+            Some(current),
+            "outside-brand",
+            Some(current),
+            &brands
+        ));
+        assert!(super::deadline_project_in_dashboard_scope(
+            "open",
+            None,
+            "house-brand",
+            Some(current),
+            &brands
+        ));
+        assert!(!super::deadline_project_in_dashboard_scope(
+            "open",
+            Some(other),
+            "outside-brand",
+            Some(current),
+            &brands
+        ));
+        assert!(!super::deadline_project_in_dashboard_scope(
+            "open",
+            None,
+            "outside-brand",
+            Some(current),
+            &brands
+        ));
+        assert!(!super::deadline_project_in_dashboard_scope(
+            "open",
+            None,
+            "house-brand",
+            None,
+            &brands
+        ));
+        assert!(!super::deadline_project_in_dashboard_scope(
+            "closed",
+            Some(current),
+            "house-brand",
+            Some(current),
+            &brands
+        ));
+    }
 
     #[test]
     fn forgejo_repository_url_must_match_the_firm_project_and_safe_transport() {
