@@ -22,7 +22,7 @@
         "termsOfServiceURL": "https://www.neonlaw.com/terms",
         "defaultPrompt": [
           "Help me form a Nevada LLC.",
-          "Find an operating agreement for my LLC.",
+          "Show me a one-way NDA template.",
           "Show me a mutual NDA template."
         ],
         "composerIcon": "./assets/neon-law.png",
@@ -37,12 +37,6 @@
               "prompt": "Help me form a Nevada LLC.",
               "tools_triggered": "list_templates",
               "expected_behavior": "Offer Nevada LLC Formation and its signed-in intake link."
-            },
-            {
-              "description": "Match an operating agreement",
-              "prompt": "My Nevada LLC is member-managed and I am its only member. I own it personally. Help me start an operating agreement.",
-              "tools_triggered": "list_templates",
-              "expected_behavior": "Check the catalog and say when the requested operating agreement is unavailable."
             },
             {
               "description": "Find the Mutual Non-Disclosure Agreement preview",
@@ -61,12 +55,18 @@
               "prompt": "Help me start a master services agreement.",
               "tools_triggered": "list_templates",
               "expected_behavior": "Show the Master Services Agreement with its public preview link on Neon Law’s website."
+            },
+            {
+              "description": "Find a one-way NDA when one party is disclosing",
+              "prompt": "Only my company will share confidential information. Show me a one-way NDA.",
+              "tools_triggered": "list_templates",
+              "expected_behavior": "Show the One-Way Non-Disclosure Agreement with its public preview link."
             }
           ],
           "negative": [
             {
-              "description": "Give the Projects sign-in link. The public catalog has no access to a person’s matters.",
-              "prompt": "Open my Navigator Projects."
+              "description": "Check the catalog and say the requested operating agreement is unavailable.",
+              "prompt": "My Nevada LLC is member-managed and I am its only member. I own it personally. Help me start an operating agreement."
             },
             {
               "description": "Explain that the catalog cannot send documents. Direct the person to their signed-in Project for correspondence.",
