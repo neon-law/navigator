@@ -865,15 +865,15 @@ Only then switch the selected Project and prove gate, merge, publication and not
 
 Keep one private archive configuration per environment. Use the reviewed Navigator and Forgejo coverage inventory, a
 persistent local filesystem outside Git, and destination buckets in a different Google Cloud project from the source.
-Pass the source project number explicitly:
+Set the source project number and the writer and verifier service account emails from private operator configuration.
 
 ```bash
 hudson ops archives config --local-root /var/lib/navigator/iceberg/data \
   --source-project-number "$SOURCE_PROJECT_NUMBER" --destinations destinations.json \
   --coverage coverage.json --out archive-config.json
 hudson ops archives provisioning-plan --config archive-config.json \
-  --writer serviceAccount:archive-writer@example.invalid \
-  --verifier serviceAccount:archive-verifier@example.invalid --out proposed-policy.json
+  --writer "serviceAccount:$ARCHIVE_WRITER_EMAIL" \
+  --verifier "serviceAccount:$ARCHIVE_VERIFIER_EMAIL" --out proposed-policy.json
 ```
 
 The plan applies nothing. Give the writer only `roles/storage.objectCreator` on its destination. Keep the verifier's
