@@ -2,6 +2,7 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, NaiveDate, Utc};
+use model::billing_report::{FilingReview, FilingReviewTotal};
 use serde::{Deserialize, Serialize};
 use sqlx::{types::Json, Postgres, Transaction};
 use uuid::Uuid;
@@ -709,7 +710,8 @@ struct PlanTotals {
     net_collected_this_week_cents: i64,
     net_collected_without_attorney_time_cents: i64,
     net_collected_per_attorney_hour_cents: Option<i64>,
-    eligible_unsubmitted_count: usize,
+    #[serde(flatten)]
+    filing_review: FilingReviewTotal,
     needs_verification_count: usize,
     submitted_unpaid_count: usize,
     denied_count: usize,
@@ -724,6 +726,7 @@ struct PlanTotals {
 pub struct Worklist {
     as_of: NaiveDate,
     plans: BTreeMap<String, PlanTotals>,
+    filing_review: FilingReview,
 }
 
 pub async fn worklist(
@@ -804,6 +807,7 @@ fn summarize(
     show_projects: bool,
 ) -> Result<Worklist, ClaimError> {
     let mut plans = BTreeMap::<String, PlanTotals>::new();
+    let mut filing_review = FilingReview::default();
     for row in rows {
         let totals = plans.entry(row.plan).or_default();
         let state = row.state.0;
@@ -827,10 +831,27 @@ fn summarize(
         };
         totals.pending_attorney_minutes += i64::from(pending_minutes);
         match state.stage {
-            Stage::Completed | Stage::Prepared if estimate.is_some() => {
-                totals.eligible_unsubmitted_count += 1;
+            Stage::Completed | Stage::Prepared => {
+                if let Some(cents) = estimate {
+                    let carrier = match state.work.service {
+                        Service::AragAdviceOnly | Service::AragRepresentation => {
+                            &mut filing_review.arag
+                        }
+                        Service::LegalEaseLegalGuard | Service::LegalEasePaymentAuthorization => {
+                            &mut filing_review.legal_ease
+                        }
+                    };
+                    for subtotal in [&mut totals.filing_review, carrier] {
+                        subtotal.eligible_unsubmitted_count += 1;
+                        subtotal.eligible_unsubmitted_cents = subtotal
+                            .eligible_unsubmitted_cents
+                            .checked_add(cents)
+                            .ok_or(ClaimError::Invalid("filing review total is too large"))?;
+                    }
+                } else {
+                    totals.needs_verification_count += 1;
+                }
             }
-            Stage::Completed | Stage::Prepared => totals.needs_verification_count += 1,
             Stage::Denied => totals.denied_count += 1,
             Stage::Submitted
                 if state.net_cents == 0
@@ -874,6 +895,7 @@ fn summarize(
     Ok(Worklist {
         as_of: today,
         plans,
+        filing_review,
     })
 }
 

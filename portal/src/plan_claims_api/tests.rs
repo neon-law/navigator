@@ -219,9 +219,13 @@ async fn a_closed_project_reconciles_claims_through_the_authenticated_routes() {
         assert_eq!(plan["net_collected_per_attorney_hour_cents"], 2500);
         assert_eq!(plan["approved_outstanding_cents"], 4000);
         assert_eq!(plan["eligible_unsubmitted_count"], 1);
+        assert_eq!(plan["eligible_unsubmitted_cents"], 10_000);
+        let filing_review = report["filing_review"].clone();
+        assert_eq!(filing_review["ARAG"]["eligible_unsubmitted_cents"], 10_000);
         assert_eq!(plan["items"].as_array().unwrap().len(), 2);
         let (status, report) = read(&totals_route, admin, Role::Admin).await;
         assert_eq!(status, StatusCode::OK, "{report}");
+        assert_eq!(report["filing_review"], filing_review);
         assert_eq!(report["plans"]["ARAG Group Legal"]["items"], json!([]));
         assert_eq!(report["plans"]["ARAG Group Legal"]["net_collected_cents"], 5000);
         let (status, history) = read(&route, lawyer, Role::Lawyer).await;

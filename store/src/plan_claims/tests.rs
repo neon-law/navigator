@@ -191,3 +191,66 @@ fn a_receipt_establishes_submission_without_pricing_missing_coverage() {
         .unwrap();
     assert_eq!(state.net_cents, 0);
 }
+
+#[test]
+fn filing_review_groups_verified_unfiled_work_by_carrier() {
+    let today = date("2026-11-21");
+    let fixed = Some(Authorization::FixedFee {
+        reference: "sample-benefit".into(),
+        cents: 8_050,
+    });
+    let arag = claim(Service::AragAdviceOnly, fixed);
+    let legal_ease = claim(
+        Service::LegalEasePaymentAuthorization,
+        Some(Authorization::CappedHours {
+            reference: "sample-approval".into(),
+            rate_cents_per_hour: 12_000,
+            covered_minutes: 60,
+            pending_minutes: 30,
+        }),
+    );
+    let row = |plan: &str, work, stage| {
+        let mut state = ClaimState::new(work);
+        state.stage = stage;
+        ReviewRow {
+            id: Uuid::new_v4(),
+            code: "sample-matter".into(),
+            plan: plan.into(),
+            state: Json(state),
+            recorded_this_week: true,
+            net_collected_this_week_cents: 0,
+        }
+    };
+    let report = summarize(
+        today,
+        vec![
+            row("ARAG Group Legal", arag.clone(), Stage::Completed),
+            row("ARAG", arag.clone(), Stage::Prepared),
+            row("ARAG", arag, Stage::Submitted),
+            row("Legal Ease", legal_ease, Stage::Prepared),
+            row(
+                "Legal Ease",
+                claim(Service::LegalEaseLegalGuard, None),
+                Stage::Completed,
+            ),
+        ],
+        false,
+    )
+    .unwrap();
+    let json = serde_json::to_value(report).unwrap();
+    let totals = |count, cents| {
+        serde_json::json!({
+            "eligible_unsubmitted_count": count, "eligible_unsubmitted_cents": cents
+        })
+    };
+    assert_eq!(json["filing_review"]["ARAG"], totals(2, 16_100));
+    assert_eq!(json["filing_review"]["LegalEASE"], totals(1, 12_000));
+    assert_eq!(json["plans"]["Legal Ease"]["needs_verification_count"], 1);
+    assert_eq!(
+        json["plans"]["ARAG Group Legal"]["eligible_unsubmitted_cents"],
+        8_050
+    );
+    let empty = serde_json::to_value(summarize(today, vec![], false).unwrap()).unwrap();
+    assert_eq!(empty["filing_review"]["ARAG"], totals(0, 0));
+    assert_eq!(empty["filing_review"]["LegalEASE"], totals(0, 0));
+}

@@ -63,7 +63,7 @@ async fn read(route: &str, token: &str, json: bool) -> Result<String> {
     }
 }
 
-fn finish(command: &str, result: Result<String>) -> ExitCode {
+pub(crate) fn finish(command: &str, result: Result<String>) -> ExitCode {
     match result {
         Ok(text) => {
             println!("{}", text.trim_end());
@@ -76,7 +76,7 @@ fn finish(command: &str, result: Result<String>) -> ExitCode {
     }
 }
 
-fn money(cents: Option<i64>) -> String {
+pub(crate) fn money(cents: Option<i64>) -> String {
     cents.map_or_else(
         || "unknown".into(),
         |cents| {
