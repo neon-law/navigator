@@ -28,7 +28,7 @@ pub fn resolve(home: &Path, explicit: Option<&Path>) -> Result<PathBuf> {
             "both ~/Work and ~/Projects exist; choose the Project checkout root explicitly with --dir <path>"
         ),
         (true, false) => Ok(work),
-        (false, true) | (false, false) => Ok(projects),
+        (false, _) => Ok(projects),
     }
 }
 

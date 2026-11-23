@@ -72,9 +72,7 @@ fn checkout_preview(dir: &Path, projects: Vec<Project>) -> Result<Vec<CheckoutPr
         .into_iter()
         .filter(|p| matches!(p.status.as_str(), "open" | "pitch"))
     {
-        let checkout = if !model::workspace::is_valid_slug(&project.code) {
-            CheckoutState::NeedsAttention
-        } else {
+        let checkout = if model::workspace::is_valid_slug(&project.code) {
             let root = dir.join(&project.code);
             match std::fs::symlink_metadata(&root) {
                 Ok(metadata) if metadata.is_dir() && root.join(".jj").is_dir() => {
@@ -85,6 +83,8 @@ fn checkout_preview(dir: &Path, projects: Vec<Project>) -> Result<Vec<CheckoutPr
                 }
                 _ => CheckoutState::NeedsAttention,
             }
+        } else {
+            CheckoutState::NeedsAttention
         };
         report.push(CheckoutPreview {
             code: project.code,
@@ -130,13 +130,12 @@ pub async fn sync_project(host: Option<&str>, code: &str, root: Option<&Path>) -
 }
 
 async fn sync_once(host: &str, code: Option<&str>, root: &Path) -> Result<()> {
-    let dir = root;
-    std::fs::create_dir_all(&dir)?;
+    std::fs::create_dir_all(root)?;
     ensure!(
-        !std::fs::symlink_metadata(&dir)?.is_symlink(),
-        "Work path is a symlink"
+        !std::fs::symlink_metadata(root)?.is_symlink(),
+        "checkout root is a symlink"
     );
-    let dir = dir.canonicalize()?;
+    let dir = root.canonicalize()?;
     let (base, token) = remote::resolve(Some(host))?;
     let projects = visible_projects(&base, &token).await?;
     let mut failed = false;
