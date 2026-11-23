@@ -5,9 +5,8 @@
 //! `project.calendar_id` before sharing, so a partial failure can resume
 //! against the same calendar.
 //!
-//! A recorded id is checked by id, never rediscovered by name: a calendar
-//! someone renamed in Google is still the recorded one, and a deleted one is
-//! reported rather than silently replaced.
+//! Setup and cleanup verify the recorded id against the expected Project name
+//! and owning account. A missing or mismatched calendar requires review.
 //!
 //! Firm-side participants receive read access. Navigator writes Deadline
 //! events through the delegated Calendar owner. A client books through the
@@ -32,13 +31,13 @@ pub enum CalendarOutcome {
     /// This pass found an unrecorded calendar named for the Project and
     /// recorded its id.
     Adopted,
-    /// The recorded calendar exists.
+    /// The recorded calendar matches the Project name and owner.
     Present,
     /// The matter is closed: writers were made readers and the booking link
     /// was cleared.
     ReadOnly,
-    /// A calendar id is recorded but the calendar no longer exists. Nothing is
-    /// created in its place; a person decides whether to clear the id.
+    /// The recorded id cannot be verified as this Project's calendar. An
+    /// operator reviews the link before another calendar can be provisioned.
     RecordedResourceMissing,
 }
 
@@ -131,10 +130,9 @@ pub async fn ensure(
         return close(surreal, project_id, calendar).await;
     }
     let outcome = if let Some(recorded) = configured(&project) {
-        if !calendar.calendar_exists(&recorded).await?
-            && !calendar
-                .recorded_calendar_matches(&project.code, &recorded)
-                .await?
+        if !calendar
+            .recorded_calendar_matches(&project.code, &recorded)
+            .await?
         {
             return Ok(CalendarReport {
                 outcome: CalendarOutcome::RecordedResourceMissing,
@@ -487,10 +485,9 @@ pub async fn close(
             changed: 0,
         });
     };
-    if !calendar.calendar_exists(&calendar_id).await?
-        && !calendar
-            .recorded_calendar_matches(&project.code, &calendar_id)
-            .await?
+    if !calendar
+        .recorded_calendar_matches(&project.code, &calendar_id)
+        .await?
     {
         return Ok(CalendarReport {
             outcome: CalendarOutcome::RecordedResourceMissing,
@@ -596,6 +593,46 @@ mod tests {
              INSERT INTO project (code, name, status, brand, entity_id, firm_id)
              SELECT 'calendar-test', 'Calendar test', 'open', 'neon', e.id, f.id FROM e,f RETURNING id, firm_id"
         ).fetch_one(pg.pool()).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_recorded_calendar_for_another_project_is_never_used_for_cleanup() {
+        crate::test_support::with_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            let (project, _) = seed_calendar_project().await;
+            let calendar = FakeCalendar::default();
+            let other = calendar.create_calendar("other-project").await.unwrap();
+            let writer = "writer@calendar.test";
+            calendar
+                .set_member_role(&other.id, writer, CalendarRole::Writer)
+                .await
+                .unwrap();
+            projects::set_calendar_id(&db, project, &other.id)
+                .await
+                .unwrap();
+
+            assert_eq!(
+                ensure(&db, project, &calendar).await.unwrap().outcome,
+                CalendarOutcome::RecordedResourceMissing
+            );
+            let preview = crate::deadline_calendar::reconcile(&db, &calendar, project, None, true)
+                .await
+                .unwrap();
+            assert_eq!(
+                preview.outcome,
+                crate::deadline_calendar::MirrorOutcome::RecordedResourceMissing
+            );
+            assert_eq!(
+                close(&db, project, &calendar).await.unwrap().outcome,
+                CalendarOutcome::RecordedResourceMissing
+            );
+            assert_eq!(
+                calendar.sharing(&other.id).get(writer),
+                Some(&CalendarRole::Writer)
+            );
+            assert_eq!(calendar.created(), 1);
+        })
+        .await;
     }
 
     #[tokio::test]

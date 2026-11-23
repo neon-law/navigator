@@ -50,7 +50,7 @@ pub enum MirrorOutcome {
     Mirrored,
     /// The matter is not open: nothing was written and nothing is planned.
     SkippedClosed,
-    /// A calendar id is recorded but the calendar no longer exists. A person
+    /// The recorded id cannot be verified as this Project's calendar. A person
     /// decides whether to clear it; the mirror refuses to invent a second
     /// calendar where one was recorded.
     RecordedResourceMissing,
@@ -129,7 +129,10 @@ pub async fn reconcile(
     let recorded = recorded_calendar_id(&project);
     if dry_run {
         return if let Some(calendar_id) = recorded {
-            if calendar.calendar_exists(&calendar_id).await? {
+            if calendar
+                .recorded_calendar_matches(&project.code, &calendar_id)
+                .await?
+            {
                 reconcile_rows(surreal, calendar, &calendar_id, &project, base_url, dry_run).await
             } else {
                 Ok(MirrorReport::empty(
