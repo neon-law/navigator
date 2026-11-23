@@ -4957,20 +4957,42 @@ async fn prefill_from_saved_answers(
     loop {
         let step = fetch_step(client, base, token, notation_id).await?;
         let Some(question) = step.question else {
-            if answered == 0 && !saved.is_empty() {
-                let keys = saved
-                    .keys()
-                    .map(String::as_str)
-                    .collect::<Vec<_>>()
-                    .join(", ");
+            if answered > 0 {
+                println!(
+                    "{} {} questions prefilled from the answers file",
+                    palette::dim("prefilled"),
+                    palette::highlight(answered.to_string()),
+                );
+                return Ok(());
+            }
+            // Every answer is already filed. A completion an earlier fill
+            // could not carry to review resumes here; the server drives a
+            // notation still at BEGIN exactly once.
+            let resp = client
+                .post(format!("{base}/app/lawyer/notations/{notation_id}/step"))
+                .bearer_auth(token)
+                .form(&[("_nav_action", "resume")])
+                .send()
+                .await
+                .context("POST step (resume)")?;
+            let status = resp.status();
+            if !status.is_success() && !status.is_redirection() && status.as_u16() != 422 {
+                let body = resp.text().await.unwrap_or_default();
                 return Err(anyhow!(
-                    "no key in the answers file matched a question; unrecognized: {keys}"
+                    "the questionnaire is complete but did not reach lawyer review: {}",
+                    server_error(status, &body),
+                ));
+            }
+            let state = fetch_status(base, token, notation_id).await?.state;
+            if state == "BEGIN" {
+                return Err(anyhow!(
+                    "the questionnaire is complete but notation {notation_id} is still at BEGIN"
                 ));
             }
             println!(
-                "{} {} questions prefilled from the answers file",
-                palette::dim("prefilled"),
-                palette::highlight(answered.to_string()),
+                "{} every question was already answered — state {}",
+                palette::dim("resumed"),
+                palette::highlight(&state),
             );
             return Ok(());
         };
@@ -10362,6 +10384,17 @@ mod tests {
         assert_emailed_notation_prefill(&server, second).await;
     }
 
+    /// Serve `state` from the notation status read the fill ends with.
+    async fn mount_review_state(server: &MockServer, notation_id: Uuid, state: &str) {
+        Mock::given(method("GET"))
+            .and(path(format!("/app/lawyer/notations/{notation_id}/review")))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "state": state })),
+            )
+            .mount(server)
+            .await;
+    }
+
     async fn assert_emailed_notation_prefill(server: &MockServer, notation_id: Uuid) {
         let requests = server.received_requests().await.unwrap();
         let create = requests
@@ -10441,45 +10474,49 @@ mod tests {
                 || request.url.path() != format!("/app/lawyer/notations/{notation}/step")));
     }
 
+    /// LAW-465: a fill whose answers are all filed resumes the notation's
+    /// workflow, then reads the state back. A notation still at BEGIN
+    /// afterwards fails the fill by saying so.
     #[tokio::test(flavor = "current_thread")]
-    async fn fill_names_unrecognized_keys_when_none_match_a_question() {
+    async fn fill_of_a_completed_questionnaire_resumes_and_reports_the_state() {
         let _lock = CREDENTIALS_ENV_LOCK.lock().await;
-        let server = MockServer::start().await;
-        let uri = server.uri();
-        let _env = CredentialsEnv::new(&uri);
-        let notation = Uuid::new_v4();
-        Mock::given(method("GET"))
-            .and(path(format!("/app/lawyer/notations/{notation}/step")))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "complete": true,
-                "question": null
-            })))
-            .expect(1)
-            .mount(&server)
-            .await;
-        let dir = tempfile::tempdir().unwrap();
-        let answers = dir.path().join("answers.yaml");
-        std::fs::write(
-            &answers,
-            "custom_single_choice__governing_law: nevada\nstate:\n  nested: true\n",
-        )
-        .unwrap();
-        let error = super::notation_prefill(Some(uri.as_str()), notation, &answers)
-            .await
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("unrecognized"), "{error}");
-        assert!(
-            error.contains("custom_single_choice__governing_law"),
-            "{error}"
-        );
-        assert!(error.contains("state"), "{error}");
-        assert!(server
-            .received_requests()
-            .await
-            .unwrap()
-            .iter()
-            .all(|request| request.method == "GET"));
+        for (state, succeeds) in [("lawyer_review", true), ("BEGIN", false)] {
+            let server = MockServer::start().await;
+            let uri = server.uri();
+            let _env = CredentialsEnv::new(&uri);
+            let notation = Uuid::new_v4();
+            Mock::given(method("GET"))
+                .and(path(format!("/app/lawyer/notations/{notation}/step")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "complete": true,
+                    "question": null
+                })))
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(path(format!("/app/lawyer/notations/{notation}/step")))
+                .respond_with(ResponseTemplate::new(303))
+                .expect(1)
+                .mount(&server)
+                .await;
+            mount_review_state(&server, notation, state).await;
+            let dir = tempfile::tempdir().unwrap();
+            let answers = dir.path().join("answers.yaml");
+            std::fs::write(&answers, "custom_single_choice__governing_law: nevada\n").unwrap();
+            let outcome = super::notation_prefill(Some(uri.as_str()), notation, &answers).await;
+            if succeeds {
+                outcome.unwrap();
+            } else {
+                let error = outcome.unwrap_err().to_string();
+                assert!(error.contains("still at BEGIN"), "{error}");
+            }
+            let requests = server.received_requests().await.unwrap();
+            let resume = requests
+                .iter()
+                .find(|request| request.method == "POST")
+                .expect("the fill resumed the completed questionnaire");
+            assert_eq!(resume.body, b"_nav_action=resume");
+        }
     }
 
     impl Drop for CredentialsEnv {
