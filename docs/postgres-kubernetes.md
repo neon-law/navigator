@@ -134,10 +134,26 @@ durability](dbos-durability.md) has the operator steps.
 Set `NAVIGATOR_DBOS_ARCHIVES_ENABLED = "true"` to run the Archives schedule on the DBOS executor in `web`. It needs the
 DBOS opt-in above. `ops ship` adds `examples/deploy/k8s/gke/postgres/web/web-archives.yaml` and the reviewed
 `navigator-archive-coverage` ConfigMap, then deletes the Restate `archives-trigger` CronJob. Each 05:55 and 17:55 UTC
-run exports the whole `navigator` and `forgejo` databases to Iceberg as `navigator_archive`. Add
-`NAVIGATOR_POSTGRES_ARCHIVE_PASSWORD` to the PostgreSQL service file, apply it with `hudson ops secrets apply --service
-postgres`, and re-run the roles Job before the first ship with the switch on. See [Iceberg
+run exports the whole `navigator` and `forgejo` databases to Iceberg as `navigator_archive`. See [Iceberg
 archive](iceberg-archive.md#where-it-runs).
+
+Provision the login before the first ship with the switch on. On a row rolled from its published record:
+
+```bash
+openssl rand -hex 32 | hudson ops secrets set <row> --project-id <project> \
+  NAVIGATOR_POSTGRES_ARCHIVE_PASSWORD --service postgres
+hudson ops secrets apply --deployment <row> --project-id <project> --service postgres --dry-run
+hudson ops secrets apply --deployment <row> --project-id <project> --service postgres
+hudson ops deployments set <row> --project-id <project> NAVIGATOR_DBOS_ARCHIVES_ENABLED=true
+```
+
+`ops secrets set` writes the password to Secret Manager and its name to the record's PostgreSQL inventory; it projects
+nothing. `ops secrets apply --service postgres` reads every PostgreSQL key the record lists from Secret Manager
+`versions/latest` and server-side applies every Secret in the table those keys supply, `navigator-postgres-archive`
+among them. It reads every value before it writes, so a key with no value fails naming `ops secrets set` and changes
+nothing. The next `ops ship` runs the roles Job, which creates `navigator_archive` from the new Secret before `web`
+rolls. A row with a private tree adds the key to its encrypted PostgreSQL service file and applies it with `hudson ops
+secrets apply --deployment <row> --service postgres` instead.
 
 ### Migration Job
 
@@ -195,7 +211,9 @@ that PostgreSQL does not hold yet), delete the Job, and create it again.
 Changing a Secret does not change a role's password. Rotate one environment at a time:
 
 1. Update the value in that environment's encrypted PostgreSQL service file and run
-   `hudson ops secrets apply --deployment <name> --service postgres`.
+   `hudson ops secrets apply --deployment <name> --service postgres`. On a row rolled from its published record, pipe
+   the new value to `hudson ops secrets set <name> --project-id <project> <KEY> --service postgres` and run `hudson ops
+   secrets apply --deployment <name> --project-id <project> --service postgres`.
 2. Re-apply the environment's PostgreSQL overlay; the roles Job sets every password from its Secret.
 3. Restart the clients of the rotated login (`web` through `ops ship --restart-only`, or the WAL archive pod).
 
