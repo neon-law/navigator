@@ -135,6 +135,12 @@ requires the mounted credential path and Secret. Local backups remain an operato
 source-store IAM, offsite writer ADC and the native worker configuration must be ready before enabling the schedule. The
 renderer removes the Restate Archives trigger when DBOS Archives is selected. It provisions no bucket or IAM role.
 
+The authenticated Archives **Run now** control uses the locally registered workflow in the lightweight web host. It
+freezes the same mounted configuration as a scheduled run and starts a distinct `Archives:manual-<uuid>` identity. It
+needs no worker ingress URL or bearer token. The combined host uses its authenticated DBOS ingress. A selected local
+owner that cannot admit the run refuses it; it does not fall back to another executor or Restate. A queued notice proves
+admission only. Inspect the exact workflow and completed report before verification or recovery acceptance.
+
 ## Keep storage and retry costs bounded
 
 The configured byte, row and object limits fail closed. Raw source sizes are checked inside the extraction snapshot

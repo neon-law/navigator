@@ -67,6 +67,7 @@ pub(super) async fn run(
     dbos_schedules: dbos_engine::Schedules,
     sent_email_export: Option<Arc<dyn archives::sent_email_export::ExportSource>>,
     archives: Option<archives::workflow::DbosContext>,
+    local_archives: Option<crate::cron_schedules::LocalArchives>,
     stop: CancellationToken,
     serve: impl Future<Output = anyhow::Result<()>>,
 ) -> anyhow::Result<()> {
@@ -79,7 +80,14 @@ pub(super) async fn run(
                     Ok(())
                 },
                 dbos_schedules,
-                move |dbos| super::register_archive_schedules(dbos, sent_email_export, archives),
+                move |dbos| {
+                    super::register_archive_schedules(
+                        dbos,
+                        sent_email_export,
+                        archives,
+                        local_archives,
+                    )
+                },
                 ready,
             )
         })
@@ -90,7 +98,9 @@ pub(super) async fn run(
             lookup,
             ops_notifier,
             dbos_schedules,
-            move |dbos| super::register_archive_schedules(dbos, sent_email_export, archives),
+            move |dbos| {
+                super::register_archive_schedules(dbos, sent_email_export, archives, local_archives)
+            },
             self::serve_http(stop, serve, super::shutdown_signal()),
         )
         .await
@@ -183,6 +193,7 @@ mod tests {
             false,
             Arc::new(workflows::CapturingNotifier::new()),
             dbos_engine::Schedules::default(),
+            None,
             None,
             None,
             CancellationToken::new(),

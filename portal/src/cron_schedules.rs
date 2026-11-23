@@ -7,8 +7,43 @@ use axum::{
     extract::Path,
     http::StatusCode,
     response::{IntoResponse, Redirect, Response},
+    Extension,
 };
+use std::sync::{Arc, OnceLock};
 use uuid::Uuid;
+
+/// The Archives handle registered by this process before its executor launches.
+#[derive(Clone, Default)]
+pub(crate) struct LocalArchives(Arc<OnceLock<archives::workflow::ArchivesDbosWorkflow>>);
+
+impl LocalArchives {
+    pub(crate) fn register(
+        &self,
+        workflow: archives::workflow::ArchivesDbosWorkflow,
+    ) -> dbos::Result<()> {
+        self.0.set(workflow).map_err(|_| {
+            dbos::Error::Config("Archives already registered for manual starts".into())
+        })
+    }
+
+    async fn start(&self, run_key: &str) -> Result<(), workflows::TriggerError> {
+        let workflow = self.0.get().ok_or(workflows::TriggerError::Transport)?;
+        let request = archives::workflow::RunRequest::configured(None)
+            .map_err(|_| workflows::TriggerError::Transport)?;
+        let workflow_id = format!("Archives:{run_key}");
+        workflow
+            .start_with(
+                request,
+                dbos::StartOptions {
+                    workflow_id: Some(&workflow_id),
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_err(|_| workflows::TriggerError::Transport)?;
+        Ok(())
+    }
+}
 
 struct ManualJob {
     slug: &'static str,
@@ -45,7 +80,10 @@ const MANUAL_JOBS: &[ManualJob] = &[
 ];
 
 /// `POST /app/admin/schedules/:job/run` — queue one configured scheduled workflow.
-pub async fn run(Path(slug): Path<String>) -> Response {
+pub(crate) async fn run(
+    Path(slug): Path<String>,
+    local: Option<Extension<LocalArchives>>,
+) -> Response {
     let broker = restate_broker_url();
     let token = std::env::var("RESTATE_AUTH_TOKEN").ok();
     let dbos_ingress = dbos_ingress_url();
@@ -66,13 +104,14 @@ pub async fn run(Path(slug): Path<String>) -> Response {
         dbos_ingress.as_deref(),
         dbos_token.as_deref(),
         dbos_enabled,
+        local.as_ref().map(|Extension(local)| local),
     )
     .await
 }
 
 #[cfg(test)]
 async fn run_configured(slug: &str, broker: Option<&str>, token: Option<&str>) -> Response {
-    run_configured_with_dbos(slug, broker, token, None, None, false).await
+    run_configured_with_dbos(slug, broker, token, None, None, false, None).await
 }
 
 async fn run_configured_with_dbos(
@@ -82,18 +121,23 @@ async fn run_configured_with_dbos(
     dbos_ingress: Option<&str>,
     dbos_token: Option<&str>,
     dbos_enabled: bool,
+    local: Option<&LocalArchives>,
 ) -> Response {
     let Some(job) = MANUAL_JOBS.iter().find(|job| job.slug == slug) else {
         return StatusCode::NOT_FOUND.into_response();
     };
     let run_key = format!("manual-{}", Uuid::new_v4());
     let queued = if dbos_enabled {
-        match (
-            dbos_ingress.filter(|url| !url.trim().is_empty()),
-            dbos_token.filter(|token| !token.trim().is_empty()),
-        ) {
-            (Some(ingress), Some(token)) => trigger_dbos(ingress, token, job, &run_key).await,
-            _ => Err(workflows::TriggerError::Transport),
+        if let Some(local) = local.filter(|_| job.service == "Archives") {
+            local.start(&run_key).await
+        } else {
+            match (
+                dbos_ingress.filter(|url| !url.trim().is_empty()),
+                dbos_token.filter(|token| !token.trim().is_empty()),
+            ) {
+                (Some(ingress), Some(token)) => trigger_dbos(ingress, token, job, &run_key).await,
+                _ => Err(workflows::TriggerError::Transport),
+            }
         }
     } else if let Some(broker) = broker {
         trigger(broker, token, job, &run_key).await.map(|_| ())
@@ -182,6 +226,7 @@ mod tests {
     use super::{
         normalize_broker_url, run, run_configured, run_configured_with_dbos, trigger, MANUAL_JOBS,
     };
+    use sqlx::ConnectOptions as _;
     use wiremock::{
         matchers::{body_partial_json, header, method, path_regex},
         Mock, MockServer, ResponseTemplate,
@@ -197,6 +242,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn local_archives_starts_the_registered_sdk_workflow_once() {
+        store::test_support::with_postgres(async {
+            use futures::FutureExt as _;
+            let pg = store::postgres::PostgresDb::application().await.unwrap();
+            let url = pg.pool().connect_options().to_url_lossy().to_string();
+            let runtime = dbos::DBOS::new(workflows::dbos_engine::config(&url, "manual-archives-test"));
+            let starts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let counted = starts.clone();
+            let workflow = runtime.register_workflow("Archives", move |request: archives::workflow::RunRequest| {
+                let counted = counted.clone();
+                async move {
+                    assert!(request.scheduled_for.is_none());
+                    assert!(request.write_only.is_none());
+                    counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Ok::<_, dbos::Error<archives::workflow::ArchivesDbosError>>(archives::workflow::RunReport {
+                        run_date: chrono::Utc::now().date_naive(),
+                        invocation_id: dbos::workflow_id().unwrap(),
+                        tables: 0, rows: 0, failures: 0, write_only: None,
+                    })
+                }
+            }).unwrap();
+            let local = super::LocalArchives::default();
+            local.register(workflow).unwrap();
+            runtime.launch().await.unwrap();
+            let result = std::panic::AssertUnwindSafe(async {
+            let key = format!("manual-{}", uuid::Uuid::new_v4());
+            local.start(&key).await.unwrap();
+            local.start(&key).await.unwrap();
+            let id = format!("Archives:{key}");
+            let handle = runtime.retrieve_workflow::<archives::workflow::RunReport, archives::workflow::ArchivesDbosError>(&id).unwrap();
+            let report = tokio::time::timeout(std::time::Duration::from_secs(20), handle.result()).await.unwrap().unwrap();
+            assert_eq!(report.invocation_id, id);
+            assert_eq!(starts.load(std::sync::atomic::Ordering::SeqCst), 1);
+            }).catch_unwind().await;
+            runtime.shutdown().await;
+            if let Err(panic) = result { std::panic::resume_unwind(panic); }
+        }).await;
+    }
+
+    #[tokio::test]
+    async fn local_archive_owner_never_falls_back_to_remote_engines() {
+        let remote = MockServer::start().await;
+        let local = super::LocalArchives::default();
+        let response = run_configured_with_dbos(
+            "archives",
+            Some(&remote.uri()),
+            Some("synthetic-token"),
+            Some(&remote.uri()),
+            Some("synthetic-token"),
+            true,
+            Some(&local),
+        )
+        .await;
+        assert!(location(&response).contains("notice=not_queued:archives"));
+        assert!(remote.received_requests().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn retired_manual_billing_controls_never_submit() {
         let server = MockServer::start().await;
         for slug in ["billing-canary", "billing-digest", "reconcile-invoices"] {
@@ -208,6 +311,7 @@ mod tests {
                     Some(&server.uri()),
                     Some("token"),
                     dbos,
+                    None,
                 )
                 .await;
                 assert!(location(&response).contains("notice=not_queued:"));
@@ -267,6 +371,7 @@ mod tests {
                 Some(&dbos.uri()),
                 Some("synthetic-dbos-token"),
                 true,
+                None,
             )
             .await;
             assert!(location(&response).contains("notice=queued:"));
@@ -303,6 +408,7 @@ mod tests {
                     url.as_deref(),
                     token,
                     true,
+                    None,
                 )
                 .await;
                 assert!(location(&response).contains("notice=not_queued:"));
@@ -313,7 +419,7 @@ mod tests {
 
     #[tokio::test]
     async fn run_covers_unknown_unavailable_accepted_and_rejected_jobs() {
-        let response = run(Path("unknown".to_string())).await;
+        let response = run(Path("unknown".to_string()), None).await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
         let response = run_configured("archives", None, None).await;
