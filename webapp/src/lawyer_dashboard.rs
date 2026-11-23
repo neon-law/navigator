@@ -126,6 +126,15 @@ pub struct ConflictFindingView {
     pub confidence_pct: i32,
 }
 
+/// A participating Project's onboarding agreement and its existing review or document page.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct AgreementLink {
+    pub project: String,
+    pub title: String,
+    pub state: String,
+    pub href: String,
+}
+
 /// The whole rendered dashboard.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
 pub struct DashboardView {
@@ -137,6 +146,8 @@ pub struct DashboardView {
     pub closed_projects: u64,
     /// The current page of the status-filtered list.
     pub rows: Vec<ProjectLink>,
+    #[serde(default)]
+    pub agreements: Vec<AgreementLink>,
     /// `open` or `closed` — which tab is active.
     pub status: String,
     pub page: u64,
@@ -297,6 +308,34 @@ pub async fn get_lawyer_dashboard() -> Result<DashboardView, ServerFnError> {
         })
         .collect();
 
+    let project_ids = projects
+        .iter()
+        .map(|project| project.id)
+        .collect::<Vec<_>>();
+    let pg = store::postgres::PostgresDb::from_env()
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    let agreements = store::onboarding::agreements(&pg, &project_ids)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?
+        .into_iter()
+        .filter_map(|row| {
+            let href = if let Some(id) = row.notation_id {
+                format!("/app/lawyer/notations/{id}/review")
+            } else {
+                format!(
+                    "/app/projects/{}/documents/{}",
+                    row.project, row.document_id?
+                )
+            };
+            Some(AgreementLink {
+                project: row.project,
+                title: row.title,
+                state: row.state,
+                href,
+            })
+        })
+        .collect();
     let calendar_events = calendar_events_for_projects(&surreal, &projects).await?;
     let conflict_findings = conflict_findings_for_projects(&surreal, &projects).await?;
     let pipeline =
@@ -311,6 +350,7 @@ pub async fn get_lawyer_dashboard() -> Result<DashboardView, ServerFnError> {
         active_projects,
         closed_projects,
         rows,
+        agreements,
         status: status.to_string(),
         page: u64::try_from(page).unwrap_or(u64::MAX),
         total_pages: u64::try_from(total_pages).unwrap_or(u64::MAX),
@@ -656,6 +696,25 @@ fn lawyer_dashboard_body(view: &DashboardView) -> Element {
                     a { class: "nav-btn nav-btn--primary", href: crate::inbox::INBOX_PATH, "Open Inbox" }
                 }
             }
+            details { id: "onboarding-agreements",
+                summary { "Onboarding agreements ({view.agreements.len()})" }
+                if view.agreements.is_empty() {
+                    p { "No onboarding agreements on your Projects." }
+                } else {
+                    table { class: "admin-table", aria_label: "Onboarding agreements",
+                        thead { tr { th { scope: "col", "Project" } th { scope: "col", "Agreement" } th { scope: "col", "Status" } } }
+                        tbody {
+                            for agreement in &view.agreements {
+                                tr {
+                                    td { "{agreement.project}" }
+                                    td { a { href: "{agreement.href}", "{agreement.title}" } }
+                                    td { "{agreement.state}" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             ProjectKpiOverview { view: view.clone() }
             deadlines::WorkbenchDeadlines { entries: view.deadlines.clone(), now: view.deadlines_now }
             crate::projected_cash::PipelineCard { view: view.pipeline.clone() }
@@ -985,10 +1044,31 @@ mod tests {
         assert!(html.contains("Open Inbox"), "{html}");
     }
 
+    #[test]
+    fn agreement_list_opens_the_existing_review_page() {
+        let mut fixture = view();
+        let review = "/app/lawyer/notations/01941f80-0000-7000-8000-000000000001/review";
+        fixture.agreements.push(AgreementLink {
+            project: "sample-estate".into(),
+            title: "Engagement letter".into(),
+            state: "requested".into(),
+            href: review.into(),
+        });
+        let html = dioxus_ssr::render_element(lawyer_dashboard_body(&fixture));
+        assert!(html.contains("Onboarding agreements (1)"));
+        assert!(html.contains(&format!("href=\"{review}\"")));
+        assert!(
+            html.contains("Engagement letter")
+                && html.contains("sample-estate")
+                && html.contains("requested")
+        );
+    }
+
     fn view() -> DashboardView {
         DashboardView {
             tokens_href: String::new(),
             firm_name: "Neon Law".to_string(),
+            agreements: vec![],
             total_projects: 3,
             pitch_projects: 1,
             active_projects: 1,

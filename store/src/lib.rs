@@ -112,6 +112,7 @@ pub mod disclosures;
 pub mod document_comments;
 pub mod docusign_completion;
 pub mod evidence_shares;
+pub mod project_envelopes;
 pub use model::document_pointers;
 pub mod attorney_calendars;
 pub mod document_retention;

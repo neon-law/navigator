@@ -532,6 +532,7 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             "/app/api/project-private-terms-reconciliation",
             get(reconcile_private_terms_door),
         ),
+        ("GET", "/app/api/onboarding-agreements", get(onboarding_agreements)),
         // Own noun, same reason as `project-repositories`: this reads every
         // matter's lifecycle without granting a matter-content read.
         (
@@ -2409,6 +2410,30 @@ fn linked_drive_folder(project: &store::projects::Project) -> Option<&str> {
         .filter(|id| !id.is_empty())
 }
 
+async fn onboarding_agreements(
+    State(state): State<ApiState>,
+    lawyer: LawyerSession,
+) -> Result<Response, ApiError> {
+    let projects = store::access::visible_projects_as_lawyer(
+        &state.surreal,
+        lawyer.0.person_id,
+        lawyer.0.role,
+    )
+    .await
+    .map_err(ApiError::Db)?;
+    let ids = projects
+        .into_iter()
+        .map(|project| project.id)
+        .collect::<Vec<_>>();
+    let db = store::postgres::PostgresDb::from_env()
+        .await
+        .map_err(|e| ApiError::Db(e.to_string()))?;
+    let rows = store::onboarding::agreements(&db, &ids)
+        .await
+        .map_err(|e| ApiError::Db(e.to_string()))?;
+    Ok(Json(rows).into_response())
+}
+
 /// Live lifecycle evidence for a firm-side participant. Filing establishes
 /// onboarding presence; `onboarding.status` carries the execution reading —
 /// `official` once the onboarding envelope is verified as completed.
@@ -2462,6 +2487,35 @@ async fn project_status_door(
         ));
     }
     let remotes = repository_remotes(&state, &project, &lawyer.0).await?;
+    let (envelopes, adopted_envelopes) = stored_project_envelopes(&state, id).await?;
+    Ok(Json(serde_json::json!({
+        "code": project.code,
+        "status": if project.status == "archived" { "archived" } else { lifecycle.label() },
+        "history": history,
+        "project_status": project.status,
+        // Project creation is the opening timestamp; there is no separate opened_at column.
+        "opened_at": project.inserted_at,
+        "closed_at": project.closed_at,
+        "source_state": store::project_surfaces::source_state(&project),
+        "drive_folder_id": drive_folder_id,
+        "onboarding": {
+            "filed": opening.contains(&id),
+            "status": onboarding_status.label(),
+            "documents": documents,
+            "execution_verified": onboarding_status == store::projects::OnboardingStatus::Official
+        },
+        "repository_remotes": remotes,
+        "envelopes": envelopes,
+        "adopted_envelopes": adopted_envelopes,
+        "missing": missing
+    }))
+    .into_response())
+}
+
+async fn stored_project_envelopes(
+    state: &ApiState,
+    id: Uuid,
+) -> Result<(Vec<serde_json::Value>, Vec<serde_json::Value>), ApiError> {
     let mut adopted_envelopes = Vec::new();
     let mut envelopes = Vec::new();
     for notation in store::notations::list_by_project(&state.surreal, id).await? {
@@ -2493,28 +2547,27 @@ async fn project_status_door(
             }
         }
     }
-    Ok(Json(serde_json::json!({
-        "code": project.code,
-        "status": if project.status == "archived" { "archived" } else { lifecycle.label() },
-        "history": history,
-        "project_status": project.status,
-        // Project creation is the opening timestamp; there is no separate opened_at column.
-        "opened_at": project.inserted_at,
-        "closed_at": project.closed_at,
-        "source_state": store::project_surfaces::source_state(&project),
-        "drive_folder_id": drive_folder_id,
-        "onboarding": {
-            "filed": opening.contains(&id),
-            "status": onboarding_status.label(),
-            "documents": documents,
-            "execution_verified": onboarding_status == store::projects::OnboardingStatus::Official
-        },
-        "repository_remotes": remotes,
-        "envelopes": envelopes,
-        "adopted_envelopes": adopted_envelopes,
-        "missing": missing
-    }))
-    .into_response())
+    if let Some(pg) = store::postgres::PostgresDb::configured()
+        .await
+        .map_err(crate::signature_adoption::internal)?
+    {
+        for observed in store::project_envelopes::for_project(&pg, id)
+            .await
+            .map_err(crate::signature_adoption::internal)?
+        {
+            let key = observed.envelope_id.to_string();
+            if let Some(entry) = envelopes
+                .iter_mut()
+                .find(|entry| entry["envelope"]["envelopeId"].as_str() == Some(&key))
+            {
+                entry["envelope"] =
+                    serde_json::to_value(observed).map_err(crate::signature_adoption::internal)?;
+            } else {
+                envelopes.push(serde_json::json!({"notation_id": null, "envelope": observed}));
+            }
+        }
+    }
+    Ok((envelopes, adopted_envelopes))
 }
 
 pub(crate) fn project_client_dri(
@@ -5067,11 +5120,19 @@ async fn lookup_project_envelope(
     lawyer: LawyerSession,
     Path((id, envelope_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Response, ApiError> {
-    use crate::signature::SignatureProvider as _;
-    use crate::signature_adoption::internal;
     if !participates_as_firm(&state, &lawyer, id).await {
         return Err(ApiError::NotFound);
     }
+    Ok(Json(read_project_envelope(&state, id, envelope_id).await?).into_response())
+}
+
+async fn read_project_envelope(
+    state: &ApiState,
+    id: Uuid,
+    envelope_id: Uuid,
+) -> Result<crate::signature::ExternalEnvelope, ApiError> {
+    use crate::signature::SignatureProvider as _;
+    use crate::signature_adoption::internal;
     let db = &state.surreal;
     let firm = store::projects::find_by_id(db, id)
         .await
@@ -5127,7 +5188,7 @@ async fn lookup_project_envelope(
             return Err(ApiError::NotFound);
         }
     }
-    Ok(Json(envelope).into_response())
+    Ok(envelope)
 }
 
 /// Refresh only envelopes already correlated to this participating Project.
@@ -5148,6 +5209,20 @@ async fn refresh_project_envelopes(
     let provider =
         crate::firm_docusign::resolved(scoped.as_ref(), state.signature_provider.as_ref());
     let lane = lock().await?;
+    let account = if let Some(provider) = scoped.as_ref() {
+        let pg = store::postgres::PostgresDb::from_env()
+            .await
+            .map_err(internal)?;
+        let firm = store::projects::find_by_id(&state.surreal, id)
+            .await
+            .map_err(internal)?
+            .and_then(|project| project.firm_id)
+            .ok_or(ApiError::NotFound)?;
+        let account = provider.account_id().parse().map_err(internal)?;
+        Some((pg, firm, account))
+    } else {
+        None
+    };
     let mut refreshed = Vec::new();
     for notation in store::notations::list_by_project(&state.surreal, id).await? {
         let Some(signature) = store::signatures::latest_for_notation(&state.surreal, notation.id)
@@ -5156,7 +5231,11 @@ async fn refresh_project_envelopes(
         else {
             continue;
         };
+        if signature.provider != store::signatures::SignatureProvider::DocuSign.as_str() {
+            continue;
+        }
         let envelope_id = signature.provider_id.parse().map_err(internal)?;
+        let started = chrono::Utc::now();
         let envelope = provider
             .read_external_envelope(envelope_id)
             .await
@@ -5178,7 +5257,32 @@ async fn refresh_project_envelopes(
             &envelope,
         )
         .await?;
+        if let Some((pg, firm, account)) = &account {
+            store::project_envelopes::observe(pg, *firm, *account, id, started, &envelope)
+                .await
+                .map_err(internal)?;
+        }
         refreshed.push(serde_json::json!({"notation_id": notation.id, "envelope": envelope}));
+    }
+    if let Some((pg, firm, account)) = &account {
+        let saved = store::project_envelopes::for_project(pg, id)
+            .await
+            .map_err(internal)?;
+        for previous in saved {
+            let key = previous.envelope_id.to_string();
+            if refreshed
+                .iter()
+                .any(|entry| entry["envelope"]["envelopeId"].as_str() == Some(&key))
+            {
+                continue;
+            }
+            let started = chrono::Utc::now();
+            let envelope = read_project_envelope(&state, id, previous.envelope_id).await?;
+            store::project_envelopes::observe(pg, *firm, *account, id, started, &envelope)
+                .await
+                .map_err(internal)?;
+            refreshed.push(serde_json::json!({"notation_id": null, "envelope": envelope}));
+        }
     }
     lane.commit().await.map_err(internal)?;
     Ok(Json(serde_json::json!({"envelopes": refreshed})).into_response())
@@ -5216,6 +5320,7 @@ async fn adopt_envelope(
         .map_err(ApiError::SignatureUnavailable)?;
     let provider =
         crate::firm_docusign::resolved(scoped.as_ref(), state.signature_provider.as_ref());
+    let started = chrono::Utc::now();
     let mut envelope = provider
         .read_external_envelope(input.envelope_id)
         .await
@@ -5249,6 +5354,21 @@ async fn adopt_envelope(
             .map_err(internal)?;
         reconcile(db, &state.storage, provider, notation.id, &latest).await?;
         envelope = latest;
+    }
+    if let (Some(firm), Some(provider)) = (project.firm_id, scoped.as_ref()) {
+        let pg = store::postgres::PostgresDb::from_env()
+            .await
+            .map_err(internal)?;
+        store::project_envelopes::observe(
+            &pg,
+            firm,
+            provider.account_id().parse().map_err(internal)?,
+            id,
+            started,
+            &envelope,
+        )
+        .await
+        .map_err(internal)?;
     }
     lane.commit().await.map_err(internal)?;
     if envelope.status == "completed" {

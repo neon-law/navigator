@@ -406,3 +406,58 @@ async fn postgres_status_reports_repository_remotes_and_requested_envelopes() {
     assert_eq!(body["envelopes"][0]["envelope"]["status"], "requested");
     assert!(body["adopted_envelopes"].as_array().unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn agreements_list_existing_runs_and_filings_only_on_participating_projects() {
+    let Some(fx) = Fixture::new(None).await else {
+        return;
+    };
+    let path = "/app/api/onboarding-agreements";
+    let pool = fx.pg.pool();
+    let template = Uuid::now_v7();
+    let run = Uuid::now_v7();
+    let envelope = Uuid::now_v7().to_string();
+    let second = Uuid::now_v7();
+    sqlx::query("INSERT INTO project(id,code,name,status,entity_id,brand) SELECT $1,'another-project','Another Project',status,entity_id,brand FROM project WHERE id=$2")
+        .bind(second).bind(fx.project).execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO template(id,code,title,respondent_type,is_current,kind,inserted_at,updated_at) VALUES ($1,'retainer','Historic agreement','person',false,'onboarding',now(),now()),($2,'unused','Unused agreement','person',true,'onboarding',now(),now())")
+        .bind(template).bind(Uuid::now_v7()).execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO notation(id,template_id,person_id,project_id,state) VALUES ($1,$2,$3,$4,'begin')")
+        .bind(run).bind(template).bind(fx.lawyer).bind(fx.project).execute(pool).await.unwrap();
+    PostgresDb::with_test_db(
+        fx.pg.clone(),
+        store::signatures::record_request(
+            &store::surreal::SurrealDb::uninitialized(),
+            run,
+            store::signatures::SignatureProvider::DocuSign,
+            &envelope,
+        ),
+    )
+    .await
+    .unwrap();
+    let filed = Uuid::now_v7();
+    sqlx::query("INSERT INTO asset(id,project_id,storage_key,filename,content_type,byte_size,sha256_hex,kind,metadata,source)
+        VALUES ($1,$2,'standalone','Signed.pdf','application/pdf',1,'synthetic','onboarding',NULL,'upload'),
+               ($3,$4,'duplicate','Duplicate.pdf','application/pdf',1,'synthetic','onboarding',$5,'upload'),
+               (gen_random_uuid(),$4,'completed','Certificate.pdf','application/pdf',1,'synthetic','onboarding',$6,'docusign')")
+        .bind(filed).bind(second).bind(Uuid::now_v7()).bind(fx.project)
+        .bind(serde_json::json!({"docusign_envelope_id":envelope,"verified_onboarding_envelope_id":envelope}))
+        .bind(serde_json::json!({"docusign_envelope_id":envelope}))
+        .execute(pool).await.unwrap();
+    let rows = json(fx.get(path, Some(Role::Owner), Some(fx.lawyer)).await).await;
+    assert_eq!(rows, serde_json::json!([]));
+    fx.participate().await;
+    let rows = json(fx.get(path, Some(Role::Lawyer), Some(fx.lawyer)).await).await;
+    assert_eq!(
+        rows,
+        serde_json::json!([{"project":"synthetic-onboarding","title":"Historic agreement","state":"requested","notation_id":run,"document_id":null,"envelope_id":envelope}])
+    );
+    sqlx::query("INSERT INTO person_project_role(person_id,project_id,participation) VALUES ($1,$2,'lawyer')")
+        .bind(fx.lawyer).bind(second).execute(pool).await.unwrap();
+    let rows = json(fx.get(path, Some(Role::Lawyer), Some(fx.lawyer)).await).await;
+    assert_eq!(rows.as_array().unwrap().len(), 2);
+    assert_eq!(
+        rows[0],
+        serde_json::json!({"project":"another-project","title":"Signed.pdf","state":"filed","notation_id":null,"document_id":filed,"envelope_id":null})
+    );
+}

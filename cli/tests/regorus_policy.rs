@@ -530,9 +530,10 @@ fn regorus_matches_every_checked_in_policy_decision() {
     // Plan intake adds lawyer-tier authorization checks for review and decisions.
     // Personal and Project billing reports admit interactive lawyers for reads.
     // Reading one Project envelope requires the lawyer tier.
+    // The onboarding agreement list also denies CI sessions and other HTTP methods.
     assert_eq!(
         test_names.len(),
-        711,
+        712,
         "the policy decision inventory changed; review every new or removed rule"
     );
 

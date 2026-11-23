@@ -111,6 +111,10 @@ async fn prepare_and_read_draft(provider: &DocuSignSignatureProvider) -> Uuid {
         assert_eq!(evidence.envelope_id, id);
         assert_eq!(evidence.status, "created");
         assert!(evidence.sent_date_time.is_none());
+        assert!(evidence
+            .envelope_documents
+            .iter()
+            .any(|doc| doc.name == "Document"));
         assert_eq!(evidence.signers.len(), 2);
         for (signer, (role, order)) in evidence
             .signers

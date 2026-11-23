@@ -134,6 +134,13 @@ struct EnvelopeSummary {
 }
 
 impl ConnectPayload {
+    pub(crate) fn reports_progress(&self) -> bool {
+        matches!(
+            self.event.as_deref(),
+            Some("envelope-sent" | "envelope-delivered" | "recipient-completed")
+        ) || self.terminal_state().is_some()
+    }
+
     /// True when this callback reports the envelope as fully executed.
     pub(crate) fn is_completed(&self) -> bool {
         self.event.as_deref() == Some("envelope-completed")

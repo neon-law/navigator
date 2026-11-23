@@ -278,33 +278,7 @@ pub enum SignatureError {
     TabValidation(String),
 }
 
-/// Envelope evidence returned by the Firm's configured DocuSign account.
-#[derive(Debug, serde::Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ExternalEnvelope {
-    pub envelope_id: Uuid,
-    pub status: String,
-    pub completed_date_time: Option<chrono::DateTime<chrono::FixedOffset>>,
-    #[serde(default)]
-    pub sent_date_time: Option<chrono::DateTime<chrono::FixedOffset>>,
-    #[serde(default)]
-    pub delivered_date_time: Option<chrono::DateTime<chrono::FixedOffset>>,
-    #[serde(default)]
-    pub status_changed_date_time: Option<chrono::DateTime<chrono::FixedOffset>>,
-    #[serde(default)]
-    pub signers: Vec<ExternalSigner>,
-}
-
-#[derive(Debug, serde::Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ExternalSigner {
-    pub name: String,
-    pub email: String,
-    pub status: String,
-    pub signed_date_time: Option<chrono::DateTime<chrono::FixedOffset>>,
-    #[serde(default)]
-    pub routing_order: Option<String>,
-}
+pub use store::project_envelopes::{ExternalEnvelope, ExternalSigner};
 
 #[async_trait]
 pub trait SignatureProvider: Send + Sync {
@@ -1972,7 +1946,7 @@ impl SignatureProvider for DocuSignSignatureProvider {
                 .map(|url| self.http.get(url).bearer_auth(&token))
         };
         let (envelope, recipients) = tokio::try_join!(
-            get(&path)?.send(),
+            get(&path)?.query(&[("include", "documents")]).send(),
             get(&format!("{path}/recipients"))?.send(),
         )
         .map_err(|error| SignatureError::Provider(error.to_string()))?;
@@ -3451,6 +3425,7 @@ mod tests {
                     "completedDateTime": "2026-01-02T03:04:05Z",
                     "sentDateTime": "2026-01-01T01:00:00Z",
                     "deliveredDateTime": "2026-01-01T02:00:00Z",
+                    "envelopeDocuments": [{"name":"Consent.pdf"}],
                     "statusChangedDateTime": "2026-01-02T03:04:05Z"
                 }),
             ),
@@ -3480,6 +3455,14 @@ mod tests {
         assert!(envelope.sent_date_time.is_some());
         assert!(envelope.delivered_date_time.is_some());
         assert!(envelope.status_changed_date_time.is_some());
+        assert_eq!(envelope.envelope_documents[0].name, "Consent.pdf");
+        assert!(server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .any(|request| request.url.path() == endpoint
+                && request.url.query() == Some("include=documents")));
         assert_eq!(envelope.signers[0].routing_order.as_deref(), Some("1"));
         assert_eq!(
             envelope.completed_date_time.unwrap().to_rfc3339(),

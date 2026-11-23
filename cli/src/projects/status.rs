@@ -153,19 +153,36 @@ fn print_status(value: &serde_json::Value) {
     {
         for adoption in adoptions {
             let envelope = &adoption["envelope"];
+            let notation = adoption["notation_id"]
+                .as_str()
+                .map_or_else(String::new, |id| format!(" (Notation {id})"));
             println!(
-                "DocuSign envelope {}: {} (Notation {})",
+                "DocuSign envelope {}: {}{notation}",
                 envelope["envelopeId"].as_str().unwrap_or("unknown"),
                 envelope["status"].as_str().unwrap_or("unknown"),
-                adoption["notation_id"],
             );
             if let Some(signers) = envelope["signers"].as_array() {
                 for signer in signers {
+                    let signed = signer["signedDateTime"]
+                        .as_str()
+                        .map_or_else(String::new, |at| format!(" ({at})"));
                     println!(
-                        "  {}: {}",
+                        "  {}: {}{signed}",
                         signer["name"].as_str().unwrap_or("unknown"),
                         signer["status"].as_str().unwrap_or("unknown")
                     );
+                }
+            }
+            if let Some(sent) = envelope["sentDateTime"].as_str() {
+                println!("  sent: {sent}");
+            }
+            for document in envelope["envelopeDocuments"]
+                .as_array()
+                .into_iter()
+                .flatten()
+            {
+                if let Some(name) = document["name"].as_str() {
+                    println!("  document: {name}");
                 }
             }
         }

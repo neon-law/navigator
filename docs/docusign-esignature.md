@@ -3,7 +3,7 @@
 How Neon Law Navigator sends a retainer for signature, how a client reaches the signing ceremony from the portal — the
 ceremony itself runs on DocuSign's own site, never inside a Navigator page — and how each cloud deployment receives an
 isolated DocuSign attachment. The web app resolves credentials from each [Firm connection](#firm-connection). Standalone
-sandbox tools read local credentials from a gitignored `.env`.
+sandbox tools read credentials from the local environment or a gitignored `.env.local`.
 
 The signature seam lives under `portal/src/`: [`signature.rs`](../portal/src/signature.rs) (the `SignatureProvider`
 trait, the provider selection, and the DocuSign + fake impls), JWT-grant auth in
@@ -92,6 +92,22 @@ envelope status <notation-id>` reads per-signer state.
 After preparing a draft, open the sender-view URL printed by the CLI to review the placed fields. Add `--open` to
 `navigator notation envelope prepare <notation-id>` to launch the browser. Continue back to Navigator, then run
 `navigator notation envelope send <notation-id>` to dispatch.
+
+On the lawyer workbench, expand **Onboarding agreements** to open a Notation for review or read a filed agreement. The
+CLI lists the same kinds of agreements across your participating Projects. Use a Notation ID to prepare a
+signature-enabled Notation for review.
+
+```bash
+navigator notation onboarding --host "$SITE"
+navigator notation envelope prepare "$NOTATION_ID" --host "$SITE" --open
+navigator notation envelope status "$NOTATION_ID" --host "$SITE"
+```
+
+After the lawyer approves the document, recipients, and fields, send the prepared envelope.
+
+```bash
+navigator notation envelope send "$NOTATION_ID" --host "$SITE"
+```
 
 Signed templates today:
 
@@ -230,6 +246,23 @@ DocuSign keeps the envelope in Drafts.
 cargo test -p server --test docusign_sandbox sandbox_reads_an_unregistered_draft_by_id -- --ignored --nocapture
 ```
 
+For local runs, put the demo JWT settings in the gitignored `.env.local` or select a staging Google Cloud project whose
+Secret Manager holds the same settings. The script compiles the test, loads its credentials, and prints the draft ID.
+
+```bash
+script/ceremony-docusign.sh --check-draft
+script/ceremony-docusign.sh --check-draft --project-id "$STAGING_PROJECT"
+```
+
+On a simulated staging site, configure the sample Project's owning Firm under **Integration secrets → DocuSign
+connection**. Navigator encrypts the connection with the deployment's KMS key. Give the Project a client DRI whose email
+matches a test signer. Prepare a Notation through the staging site or create a draft on the demo web app, then read its
+status through the staging Navigator session.
+
+```bash
+navigator project envelope status "$PROJECT_CODE" --envelope-id "$ENVELOPE_ID" --host "$STAGING_HOST"
+```
+
 To exercise embedded signing, configure the demo signer email and run the captive-recipient test. It dispatches a demo
 envelope and verifies that DocuSign issues a signing URL.
 
@@ -344,15 +377,19 @@ envelopes.
 ## Account completion filing
 
 Add `connect_hmac_key` to the Firm's connection JSON and set the same key in DocuSign Connect. Configure an account-wide
-JSON callback at `/webhook/esignature/firm/<firm-id>`. Subscribe to envelope completed, delivered, declined, voided, and
-expired, and recipient completed. The endpoint verifies the raw signature and account ID and journals completed
-envelopes in PostgreSQL before acknowledging them. The Firm connection's DocuSign user needs permission to read
-completed envelopes sent by the other users in that account. Connect can omit document bytes.
+JSON callback at `/webhook/esignature/firm/<firm-id>`. Subscribe to envelope sent, completed, delivered, declined,
+voided, and expired, and recipient completed. The endpoint verifies the raw signature and account ID and journals
+completed envelopes in PostgreSQL before acknowledging them. The Firm connection's DocuSign user needs permission to
+read envelopes sent by the other users in that account. Connect can omit document bytes.
 
-The worker verifies completion with DocuSign, then matches the envelope to a pitch or open Project in that Firm. It uses the
-`project_code` envelope custom field, then a recognizable `<project-code>__` filename prefix, then the signing client
-DRI's email. A known client DRI must be a signer even when a code selects the Project. Missing and ambiguous assignments
-appear under **DocuSign completion review** on the Firm's admin page for manual verification and adoption.
+A verified progress callback reads the envelope and its ordered signers from the Firm account. Uniquely matched
+envelopes appear under Documents on the lawyer matter page and in `navigator project status`, including envelopes sent
+from the DocuSign web app before a Notation exists.
+
+The worker verifies completion with DocuSign, then matches the envelope to a pitch or open Project in that Firm. It uses
+the `project_code` envelope custom field, then a recognizable `<project-code>__` filename prefix, then the signing
+client DRI's email. A known client DRI must be a signer even when a code selects the Project. Missing and ambiguous
+assignments appear under **DocuSign completion review** on the Firm's admin page for manual verification and adoption.
 
 The worker files the signed PDF and the Certificate of Completion with the verified envelope ID. For an onboarding or
 engagement document, Navigator links the completion to the onboarding Notation and marks the engagement official after
