@@ -179,8 +179,8 @@ mod tests {
     const PROJECT: &str = "7f1c2d3e-0000-4000-8000-000000000001";
     const IMPORTS: &str = "/app/api/projects/7f1c2d3e-0000-4000-8000-000000000001/source-imports";
 
-    /// Every file a fresh scaffold writes must be importable: a root the
-    /// scaffold adds (a license text, say) has to join the headless layout.
+    /// Every file a fresh scaffold writes must be importable, and the scaffold
+    /// writes no licence file.
     #[test]
     fn a_fresh_scaffold_is_a_valid_headless_source_tree() {
         let root = tempfile::tempdir().unwrap();
@@ -203,8 +203,11 @@ mod tests {
                 .success());
         }
         let tree = tree_from_checkout(&directory).unwrap();
-        for license in ["LICENSE", "LICENSE-MIT", "LICENSE-APACHE-2"] {
-            assert!(tree.files.contains_key(license), "{license} missing");
+        for license in ["LICENSE", "LICENSE.md", "LICENSE-MIT", "LICENSE-APACHE-2"] {
+            assert!(
+                !tree.files.contains_key(license),
+                "{license} is not part of a Project repository"
+            );
         }
     }
 

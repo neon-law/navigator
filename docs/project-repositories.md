@@ -33,7 +33,6 @@ holds that Project's notation templates and application workspaces side by side:
 ├── .agents/skills/    # kept identical to Navigator's own canonical copies
 ├── .gitignore         # ignores root /documents/, /notes/, and /mail/
 ├── AGENTS.md
-├── LICENSE.md
 └── README.md
 ```
 
@@ -963,18 +962,20 @@ The shell a fresh repository carries: `.gitattributes` pinning checkout text fil
 canonical `* @shicholas` ownership rule, a versioned nested `navigator.yaml`, the thin PR-only `ci.yml` caller, the thin
 `cd.yml` caller for pushes to `main`, `README.md`, `AGENTS.md`, and the canonical `.agents/skills/` catalog copied
 byte-for-byte. It also carries a root `.gitignore` that ignores `/documents/` and `notes/`, and one `drafts/<code>.md`
-for the notation the Project actually opens on. A repository commits only Markdown and YAML (rule `Y024`): every tracked
-or stageable file is `*.md`, `*.yml`, or `*.yaml`, apart from the canonical `.gitignore`, `.gitattributes`,
-`.github/CODEOWNERS`, and `.claude/settings.json`, each held to this release's bytes. No `package.json` or lockfile, no
-TypeScript, JavaScript, Python, or shell, no `tests/` code, and no binaries; the finding names each path. A `tests/`
-folder may hold Markdown notes, but anything worth checking about a template or seed is a gate rule in the CLI instead.
-`AGENTS.md` is the only portable contract file and `.agents/skills/` the only skill catalog. The narrow `.claude/`
-exception is root `.claude/settings.json`. It denies Claude Code Gmail send, reply and forward tools while preserving
-draft creation. The rules match the tool name under any MCP server prefix — `claude_ai_Gmail` in the CLI, a connector
-UUID in the desktop app — plus the Codex Gmail tool families, and hold in bypass-permissions mode. The gate requires it
-byte-for-byte. The gate names retired mirrors and gives a remedy instead of anonymous root-layout wording. It also
-refuses an `apps/<app>/CLAUDE.md`. `navigator project gate` requires the canonical CODEOWNERS file and that `AGENTS.md`
-exist and name the Lawyers team as where a Navigator CLI gap is filed rather than recorded as a workaround in the matter
+for the notation the Project actually opens on. Copy no licence file from Navigator or from another Project repository.
+A tracked root file whose name begins with `LICENSE`, `COPYING`, or `UNLICENSE` fails the gate (`Y028`), which names the
+path and says to delete it. A repository commits only Markdown and YAML (rule `Y024`): every tracked or stageable file
+is `*.md`, `*.yml`, or `*.yaml`, apart from the canonical `.gitignore`, `.gitattributes`, `.github/CODEOWNERS`, and
+`.claude/settings.json`, each held to this release's bytes. No `package.json` or lockfile, no TypeScript, JavaScript,
+Python, or shell, no `tests/` code, and no binaries; the finding names each path. A `tests/` folder may hold Markdown
+notes, but anything worth checking about a template or seed is a gate rule in the CLI instead. `AGENTS.md` is the only
+portable contract file and `.agents/skills/` the only skill catalog. The narrow `.claude/` exception is root
+`.claude/settings.json`. It denies Claude Code Gmail send, reply and forward tools while preserving draft creation. The
+rules match the tool name under any MCP server prefix — `claude_ai_Gmail` in the CLI, a connector UUID in the desktop
+app — plus the Codex Gmail tool families, and hold in bypass-permissions mode. The gate requires it byte-for-byte. The
+gate names retired mirrors and gives a remedy instead of anonymous root-layout wording. It also refuses an
+`apps/<app>/CLAUDE.md`. `navigator project gate` requires the canonical CODEOWNERS file and that `AGENTS.md` exist and
+name the Lawyers team as where a Navigator CLI gap is filed rather than recorded as a workaround in the matter
 repository. The same `validate` walk extracts every *navigator …* invocation from the repository's Markdown and checks
 each against this binary's clap command tree, so a documented verb that does not exist fails the gate at the commit that
 introduced the rename.
@@ -1136,7 +1137,7 @@ navigator project scaffold --dir <directory> --resume <code> [--no-repository]
 The interactive scaffold gathers the Project code, client contact, Entity or jurisdiction, and conflict attestation
 before it opens the Project. It reuses existing contacts and Entities, creates a missing client contact, and creates a
 Human Entity only after validating the jurisdiction. A duplicate immutable code is refused. The CLI release emits the
-canonical manifest, agent contract, workflows, license, CODEOWNERS, synced skills, the root `.gitignore` that ignores
+canonical manifest, agent contract, workflows, CODEOWNERS, synced skills, the root `.gitignore` that ignores
 `/documents/` and `notes/`, and `drafts/onboarding__letter.md` as an unedited stub, initializes Git, and validates the
 generated repository. The gate accepts the exact generated stub without a jurisdiction. Once drafted, the letter
 requires an explicit jurisdiction, and `navigator project onboard` can open a notation from it. Add any other

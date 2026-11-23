@@ -428,7 +428,7 @@ jobs:
 /// first commit: [`canonical_files`], the synced Agent Skills, and the
 /// byte-exact [`FORGEJO_GATE_WORKFLOW`] and [`FORGEJO_CD_WORKFLOW`]. The CLI's scaffold emits these same
 /// bytes plus GitHub-specific files (`AGENTS.md`, `.claude/settings.json`,
-/// the thin `ci.yml`/`cd.yml` callers, `CODEOWNERS`, the licenses); a test
+/// the thin `ci.yml`/`cd.yml` callers, `CODEOWNERS`); a test
 /// in the CLI crate asserts the seed set is byte-identical to that output.
 #[must_use]
 pub fn forgejo_seed_files(source: &ScaffoldSource) -> Vec<(String, String)> {

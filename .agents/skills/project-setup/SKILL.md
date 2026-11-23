@@ -23,8 +23,8 @@ attesting. A code already in use is refused. For an individual client without an
 jurisdiction; Navigator validates it and creates a Human Entity there. Existing contacts and Entities are reused.
 
 The command opens the Project through the authenticated deployment API, creates a missing client contact when needed,
-and writes the canonical `navigator.yaml`, `AGENTS.md`, workflows, license, `CODEOWNERS`, and synced skills from this
-CLI release. It initializes Git and runs the generated-project gate. It does not create application or notation-template
+and writes the canonical `navigator.yaml`, `AGENTS.md`, workflows, `CODEOWNERS`, and synced skills from this CLI
+release. It initializes Git and runs the generated-project gate. It does not create application or notation-template
 content. Cancel before answering yes to the conflict attestation to leave the Project and destination unwritten.
 
 ## Set up the Project surfaces
