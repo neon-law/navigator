@@ -555,7 +555,8 @@ pub enum NotationAction {
     /// Render + park a notation's document for review (`POST
     /// …/approve-send`) — fills the bound packet (a formation's official
     /// Secretary-of-State form, or a retainer PDF). Idempotent once
-    /// rendered.
+    /// rendered. Approve sends no signing link, even with `emailed`
+    /// delivery: `notation envelope send` sends it.
     Approve {
         /// Notation UUID.
         notation_id: uuid::Uuid,

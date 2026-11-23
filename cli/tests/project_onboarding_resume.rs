@@ -123,6 +123,14 @@ async fn onboarding_fills_the_existing_notation_without_opening_another() {
         .expect(1)
         .mount(&server)
         .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/app/lawyer/notations/{notation_id}/review")))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"state": "lawyer_review"})),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
     Mock::given(method("POST"))
         .and(path("/app/projects/example/notations/new"))
         .respond_with(ResponseTemplate::new(500))
