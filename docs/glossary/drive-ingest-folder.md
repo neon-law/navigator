@@ -13,15 +13,14 @@ Drive is import-only: membership lets people drop files in, and Navigator pulls 
 folder as a live store of client assets.
 
 `navigator project setup` creates the folder when none is recorded, or adopts an unrecorded one named for the code that
-a person made by hand before the matter was opened, recording the id before sharing anything and sharing it as a writer
-with every project participant who has an email. A reconcile reports the difference — `created` for a folder it made,
-`adopted` for one it only found and recorded, `present` for one already recorded, which it adopts as it stands and says
-so. `navigator project set --drive-folder <link-or-id>` and the matter edit form's Drive card record an existing folder
-by hand, from its `drive.google.com` link or its id (`--dry-run` previews the write). The deployment confirms the folder
-is live in the Projects shared drive with its Drive credential before recording it; without one, only the id's shape is
-checked and the CLI says Drive validation was skipped. A setup or set that names a folder another matter already records
-is refused: the folder link, not its display name, is what scopes an import.
+a person made by hand before the matter was opened. Firm-side participants receive access to the working folder. Client
+participants receive a separate [Client Submissions](client-submissions.md) folder. The lawyer toolbar links to the
+working folder after Navigator verifies its access. Until then, the icon opens the Project's folder settings.
+
+To record an existing folder, enter its Google Drive link or ID in those settings or run `navigator project set
+--drive-folder <link-or-id>`. Use `--dry-run` to preview the CLI change. With Drive configured, Navigator checks the
+folder against the Shared Drive. Each folder ID belongs to one Project.
 
 - Provider: [`cloud::drive`](../../cloud/src/drive.rs) · provisioning:
-  [`store::project_surfaces`](../../store/src/project_surfaces.rs) · import:
+  [`store::project_folder_reconcile`](../../store/src/project_folder_reconcile.rs) · import:
   [`store::drive_import`](../../store/src/drive_import.rs)

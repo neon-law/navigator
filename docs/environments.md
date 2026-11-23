@@ -212,6 +212,10 @@ that as a warning. Setting some but not all is a misconfiguration the doctor rep
 local Drive mount is read. Workspace Admin domain-wide delegation is global rather than regional and remains a one-time
 administrative prerequisite; the regional GCP provisioner cannot grant it.
 
+When a deployment uses a dedicated Shared Drive, set its Projects root ID to the Shared Drive ID. When the root is a
+folder inside a Shared Drive, use that folder's ID for the root. Project setup and nightly reconciliation use the same
+parent.
+
 ## Project ownership
 
 `ghcr` is the shared image hub and must never receive GKE or workload buckets. The two runtime projects are:

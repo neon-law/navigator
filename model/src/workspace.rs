@@ -335,6 +335,12 @@ impl DeploymentWorkspace {
         Self::from_lookup(|key| std::env::var(key).ok())
     }
 
+    /// The coordinate for this deployment's Projects folder within its shared drive.
+    #[must_use]
+    pub const fn projects_root_folder_key(self) -> &'static str {
+        self.facts().projects_root_folder_id_key
+    }
+
     const fn facts(self) -> DeploymentFacts {
         match self {
             Self::NeonLawProduction => DeploymentFacts {

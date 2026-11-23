@@ -1410,6 +1410,21 @@ where
     F: Fn(&str) -> Option<String>,
 {
     vec![
+        optional_env_entry_substitution(
+            "            # NAVIGATOR_OPTIONAL_ENV NAVIGATOR_DRIVE_NEON_LAW_PROJECTS_DRIVE_ID\n",
+            "NAVIGATOR_DRIVE_NEON_LAW_PROJECTS_DRIVE_ID",
+            get,
+        ),
+        optional_env_entry_substitution(
+            "            # NAVIGATOR_OPTIONAL_ENV NAVIGATOR_DRIVE_NEON_LAW_STAGING_PROJECTS_ROOT_FOLDER_ID\n",
+            "NAVIGATOR_DRIVE_NEON_LAW_STAGING_PROJECTS_ROOT_FOLDER_ID",
+            get,
+        ),
+        optional_env_entry_substitution(
+            "            # NAVIGATOR_OPTIONAL_ENV NAVIGATOR_DRIVE_NEON_LAW_PRODUCTION_PROJECTS_ROOT_FOLDER_ID\n",
+            "NAVIGATOR_DRIVE_NEON_LAW_PRODUCTION_PROJECTS_ROOT_FOLDER_ID",
+            get,
+        ),
         // Microsoft is a second provider next to Google. Its tenant allowlist
         // is optional here because the provider's boot check owns that
         // dependency once the client id is non-empty.
@@ -8069,6 +8084,29 @@ mod tests {
             .and_then(serde_yaml::Value::as_sequence)
             .expect("web container has an env list")
             .clone()
+    }
+
+    #[test]
+    fn project_drive_coordinates_reach_both_folder_reconcilers_when_configured() {
+        const DRIVE: &str = "NAVIGATOR_DRIVE_NEON_LAW_PROJECTS_DRIVE_ID";
+        const ROOT: &str = "NAVIGATOR_DRIVE_NEON_LAW_PRODUCTION_PROJECTS_ROOT_FOLDER_ID";
+        let manifests = rendered_manifests(|key| match key {
+            DRIVE => Some("shared-drive".into()),
+            ROOT => Some("working-root".into()),
+            _ => env_getter(FULL_ENV)(key),
+        });
+        for (name, container) in [(WEB_DEPLOYMENT, "web"), (WORKFLOWS_DEPLOYMENT, "worker")] {
+            let spec = rendered_container(&manifests, name, container);
+            let env = spec["env"].as_array().expect("workload environment");
+            for (key, value) in [(DRIVE, "shared-drive"), (ROOT, "working-root")] {
+                assert!(
+                    env.iter()
+                        .any(|entry| entry["name"] == key && entry["value"] == value),
+                    "{name} lacks {key}"
+                );
+            }
+        }
+        assert!(web_env_value(&rendered_web_deployment(env_getter(FULL_ENV)), DRIVE).is_none());
     }
 
     #[test]

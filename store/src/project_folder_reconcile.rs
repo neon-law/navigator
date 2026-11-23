@@ -817,7 +817,7 @@ pub async fn reconcile_from_env(
     let config =
         cloud::drive::DriveWorkspaceConfig::from_env(cloud::drive::DriveWorkspace::NeonLaw)?;
     let policy = FolderProvisioningPolicy {
-        projects_parent_id: config.projects_drive_id.clone(),
+        projects_parent_id: config.projects_root_folder_id.clone(),
         trusted_organizers: BTreeSet::from([email(&config.delegated_user)]),
     };
     let drive = cloud::drive::GoogleDrive::new(config).await?;

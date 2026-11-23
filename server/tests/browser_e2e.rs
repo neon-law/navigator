@@ -1048,6 +1048,34 @@ async fn stock_local_personas_reach_the_litigation_matter_through_their_own_lens
 }
 
 #[tokio::test]
+async fn unverified_drive_shortcut_opens_the_working_folder_settings() {
+    let Some(browser) = new_client_or_skip().await else {
+        return;
+    };
+    login_as_lawyer(&browser).await;
+    let project = "/app/projects/sample-litigation";
+    browser
+        .goto(&format!("{}{project}", base_url()))
+        .await
+        .unwrap();
+    click_and_reach(
+        &browser,
+        "nav[aria-label='Project actions'] a[aria-label='Configure private Google Drive folder']",
+        &format!("{project}/edit#private-drive-folder"),
+        Duration::from_secs(20),
+    )
+    .await;
+    assert!(browser
+        .find(Locator::Css(":target input[name='drive_folder_id']"))
+        .await
+        .unwrap()
+        .is_displayed()
+        .await
+        .unwrap());
+    browser.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn project_show_opens_and_exits_the_client_preview() {
     let Some(browser) = new_client_or_skip().await else {
         return;
