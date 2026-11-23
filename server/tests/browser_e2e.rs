@@ -1098,6 +1098,105 @@ async fn project_show_opens_and_exits_the_client_preview() {
     browser.close().await.unwrap();
 }
 
+#[tokio::test]
+async fn daily_billing_groups_interleaved_project_entries_after_saving() {
+    let Some(c) = new_client_or_skip().await else {
+        return;
+    };
+    login_as_lawyer(&c).await;
+    let db = postgres_browser_store().await.unwrap();
+    let pg = store::postgres::PostgresDb::application().await.unwrap();
+    let lawyer = store::persons::find_by_email_ci(&db, "lawyer@neonlaw.com")
+        .await
+        .unwrap()
+        .unwrap();
+    let first = seed_browser_project_on_firm(&db, None, "Billing review").await;
+    let second = seed_browser_project_on_firm(&db, None, "Billing drafting").await;
+    let other_host = store::projects::create(
+        &db,
+        &store::projects::NewProject {
+            code: store::projects::code_from_name("other-host-billing", Uuid::now_v7()),
+            name: "Other host billing".into(),
+            status: "open".into(),
+            brand: "delete-your-data".into(),
+            entity_id: first.entity_id,
+            firm_id: first.firm_id,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    store::projects::add_participation(&db, other_host.id, lawyer.id, "lawyer")
+        .await
+        .unwrap();
+    let day = chrono::Utc::now().date_naive();
+    for (project, rate) in [(&first, 30000), (&second, 25000)] {
+        store::projects::add_participation(&db, project.id, lawyer.id, "lawyer")
+            .await
+            .unwrap();
+        store::attorney_rates::set_hourly_rate(
+            &pg,
+            store::attorney_rates::NewAttorneyRate {
+                person_id: lawyer.id,
+                project_id: Some(project.id),
+                hourly_rate_cents: rate,
+                effective_on: day,
+            },
+        )
+        .await
+        .unwrap();
+    }
+    c.goto(&format!("{}/app/lawyer", base_url())).await.unwrap();
+    scroll_and_js_click(&c, "a[href='/app/lawyer/billing']").await;
+    c.wait()
+        .at_most(Duration::from_secs(15))
+        .for_element(Locator::Css(".daily-billing__entry"))
+        .await
+        .unwrap();
+    assert_form_csrf(&c, ".daily-billing__entry").await;
+    let other_option = format!("select[name=project] option[value='{}']", other_host.code);
+    assert!(c
+        .find_all(Locator::Css(&other_option))
+        .await
+        .unwrap()
+        .is_empty());
+    for (project, description, hours) in [
+        (&first, "Reviewed the correspondence", "0.5"),
+        (&second, "Prepared the first draft", "0.6"),
+        (&first, "Revised the response", "0.1"),
+    ] {
+        c.find(Locator::Css("select[name=project]"))
+            .await
+            .unwrap()
+            .select_by_value(&project.code)
+            .await
+            .unwrap();
+        fill_text_field(&c, "textarea[name=description]", description).await;
+        fill_text_field(&c, "input[name=hours]", hours).await;
+        scroll_and_js_click(&c, ".daily-billing__entry button").await;
+        let saved = format!(
+            "tbody:has(a[href='/app/projects/{}/billing'])",
+            project.code
+        );
+        c.wait()
+            .at_most(Duration::from_secs(10))
+            .for_element(Locator::Css(&saved))
+            .await
+            .unwrap();
+        wait_for_text(&c, description, Duration::from_secs(10)).await;
+    }
+    for (project, subtotal) in [(first, "$180.00"), (second, "$150.00")] {
+        let selector = format!(
+            "tbody:has(a[href='/app/projects/{}/billing']) .daily-billing__subtotal",
+            project.code
+        );
+        let rows = c.find_all(Locator::Css(&selector)).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].text().await.unwrap().contains(subtotal));
+    }
+    c.close().await.unwrap();
+}
+
 /// The Billing tab on the stock KIND deployment (which carries no app-side
 /// PostgreSQL): the tab opens from its path segment and its empty sections
 /// explain themselves instead of rendering blank regions. Captured time,

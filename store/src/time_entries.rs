@@ -568,6 +568,44 @@ pub async fn list_for_project(
     .collect()
 }
 
+/// The reviewer and attorneys with recorded work on their visible Projects.
+pub async fn project_timekeepers(
+    pg: &PostgresDb,
+    projects: &[Uuid],
+    reviewer: Uuid,
+) -> Result<Vec<(Uuid, String)>, TimeEntryError> {
+    Ok(sqlx::query_as(
+        "SELECT id, name FROM person WHERE id=$1 OR id IN
+         (SELECT attorney_id FROM time_entry WHERE project_id = ANY($2))
+         ORDER BY name, id",
+    )
+    .bind(reviewer)
+    .bind(projects)
+    .fetch_all(&pg.0)
+    .await?)
+}
+
+/// A day's ledger across the Projects already scoped to the reviewing lawyer.
+pub async fn for_project_day(
+    pg: &PostgresDb,
+    projects: &[Uuid],
+    day: NaiveDate,
+) -> Result<Vec<TimeEntry>, TimeEntryError> {
+    sqlx::query(
+        "SELECT id,project_id,attorney_id,performed_on,minutes,description,billable,\
+         rate_cents_per_hour,source,billing_status,xero_invoice_id,written_off_reason,stage,\
+         inserted_at,updated_at FROM time_entry WHERE project_id = ANY($1) AND performed_on=$2 \
+         ORDER BY inserted_at, id",
+    )
+    .bind(projects)
+    .bind(day)
+    .fetch_all(&pg.0)
+    .await?
+    .iter()
+    .map(from_row)
+    .collect()
+}
+
 pub(crate) async fn for_billing(
     connection: &mut sqlx::PgConnection,
     project_id: Uuid,
@@ -898,6 +936,46 @@ mod tests {
                 rate_cents_per_hour: 25_000,
                 source: TimeEntrySource::Manual,
             }
+        }
+
+        #[tokio::test]
+        async fn daily_billing_limits_entries_and_timekeepers_to_the_scoped_projects() {
+            use super::super::{for_project_day, project_timekeepers};
+            let Some((options, database)) = fresh_schema().await else {
+                return;
+            };
+            let pg = connect(&options, &database).await;
+            let seed = seed(&pg).await;
+            let input = entry(seed.attorney, 36, true);
+            let saved = create(&pg, seed.project_id, seed.attorney, &input)
+                .await
+                .unwrap();
+            let projects = [seed.project_id];
+            assert_eq!(
+                for_project_day(&pg, &projects, input.performed_on)
+                    .await
+                    .unwrap(),
+                [saved]
+            );
+            assert!(for_project_day(&pg, &[], input.performed_on)
+                .await
+                .unwrap()
+                .is_empty());
+            assert!(
+                for_project_day(&pg, &projects, input.performed_on.succ_opt().unwrap())
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+            let visible = project_timekeepers(&pg, &projects, seed.outsider)
+                .await
+                .unwrap();
+            assert!(visible.iter().any(|(id, _)| *id == seed.attorney));
+            let hidden = project_timekeepers(&pg, &[], seed.outsider).await.unwrap();
+            assert_eq!(
+                hidden.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+                [seed.outsider]
+            );
         }
 
         #[tokio::test]
