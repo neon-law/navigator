@@ -239,12 +239,12 @@ summary and, outside simulated-matters deployments, posts the same open-matters 
 workflow and CronJob remain the rollback path until deployment configuration switches engines together.
 
 Switch engines the same way as `GeneralNag`, with `NAVIGATOR_DBOS_DRI_DIGEST_ENABLED = "true"`; ship drops and deletes
-the `dri-digest-trigger` CronJob and renders `SLACK_GENERAL_CHANNEL_ID` into `web`. Ship refuses the switch unless
-the row's `secrets.enc.yaml` carries `SLACK_BOT_TOKEN`.
+the `dri-digest-trigger` CronJob and renders `SLACK_GENERAL_CHANNEL_ID` into `web`. Ship refuses the switch unless the
+row's `secrets.enc.yaml` carries `SLACK_BOT_TOKEN`.
 
 The `query`, `notify`, `counts`, and `notify_counts` steps checkpoint separately. Its posts carry no receipt
-correlation: a crash after Slack accepts either notice and before its DBOS checkpoint can post that notice again.
-The daily workflow id deduplicates ordinary duplicate starts; it cannot make Slack delivery exactly once.
+correlation: a crash after Slack accepts either notice and before its DBOS checkpoint can post that notice again. The
+daily workflow id deduplicates ordinary duplicate starts; it cannot make Slack delivery exactly once.
 
 ## Late starts
 
