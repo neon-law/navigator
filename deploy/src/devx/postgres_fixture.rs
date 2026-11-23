@@ -225,6 +225,10 @@ impl Credentials {
 /// A missing receipt is never permission to import an existing source automatically.
 pub(super) fn require_fresh_source(counts: &BTreeMap<String, i64>) -> Result<()> {
     ensure!(
+        store::schema::table_names().iter().all(|table| counts.contains_key(table)),
+        "captured KIND enrollment requires a prepared source schema; use a fresh native KIND worktree for an empty environment or recover the compatibility fixture"
+    );
+    ensure!(
         counts.iter().all(|(table, count)| {
             *count == 0 || (*count > 0 && matches!(table.as_str(), "schema_version" | "migrations"))
         }),
@@ -694,7 +698,17 @@ mod tests {
 
     #[test]
     fn first_enrollment_refuses_existing_or_invalid_source_history() {
-        let mut counts = BTreeMap::from([("schema_version".into(), 1), ("citation".into(), 0)]);
+        let mut counts = BTreeMap::new();
+        assert!(require_fresh_source(&counts).is_err());
+        counts.extend(
+            store::schema::table_names()
+                .into_iter()
+                .map(|name| (name, 0)),
+        );
+        counts.insert("schema_version".into(), 1);
+        counts.remove("citation");
+        assert!(require_fresh_source(&counts).is_err());
+        counts.insert("citation".into(), 0);
         require_fresh_source(&counts).unwrap();
         counts.insert("citation".into(), 1);
         assert!(require_fresh_source(&counts).is_err());

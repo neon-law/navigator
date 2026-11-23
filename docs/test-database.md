@@ -52,8 +52,9 @@ successful fixture or local startup is not retained-work handover or recovery ac
 
 Existing legacy KIND descriptors retain captured-source enrollment. Explicit `--runtime native` selects the separate
 host-process compatibility topology, not fresh PostgreSQL authority. Compatibility bootstrap holds web and worker
-writers, captures the actual Source export, and enrolls required scopes before sample seeding. Valid enrollment is
-reused; unactivated nonempty or partial history requires explicit recovery rather than invented receipts.
+writers, captures the existing Source export, and enrolls required scopes before sample seeding. First enrollment
+requires the source tables to exist with only fixture metadata populated. Startup leaves source definitions and rows
+untouched. A valid PostgreSQL enrollment can be reused after the source fixture loses its in-memory schema.
 
 ## Native deploy browser gate
 
