@@ -1,6 +1,7 @@
 ---
 kind: agreement
 title: Master Services Agreement
+description: "Set the recurring terms for services delivered under individual statements of work."
 jurisdiction: US
 respondent_type: person_and_entity
 confidential: false

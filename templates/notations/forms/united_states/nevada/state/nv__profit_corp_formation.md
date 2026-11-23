@@ -1,6 +1,7 @@
 ---
 kind: filing
 title: Nevada Profit Corporation Formation
+description: "Prepare Articles of Incorporation for a new Nevada for-profit corporation."
 respondent_type: person_and_entity
 jurisdiction: NV
 origin_url: https://www.nvsos.gov/businesses/commercial-recordings/forms-fees/all-business-forms

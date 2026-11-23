@@ -1,7 +1,8 @@
 # Use Neon Law Navigator in ChatGPT
 
-Use the public catalog to find an LLC or business agreement template. You can browse it without a Neon Law account. You
-enter private details and start the paperwork on Neon Law’s website.
+Use the public catalog to find and preview a business agreement or start a Nevada LLC questionnaire on Neon Law’s
+website. You can browse the catalog without a Neon Law account. Enter questionnaire answers after signing in to
+Navigator.
 
 ## Connect the public catalog
 
@@ -31,10 +32,10 @@ on Navigator. You file the paperwork with the state. Nevada forms the LLC when t
 effect. Check the filing confirmation for the effective date. [Nevada Revised Statutes, Chapter
 86](https://www.leg.state.nv.us/NRS/NRS-086.html)
 
-An operating agreement governs how the company runs. Ask “I’m the only owner of a member-managed Nevada LLC and own it
-personally. Is there an operating agreement I can start?” Use the matching agreement if Navigator lists it. For other
-ownership or management arrangements, [contact Neon Law](https://www.neonlaw.com/contact) about the appropriate draft.
-To resume an existing matter, open [My Projects](https://www.neonlaw.com/app/projects) and sign in there.
+Ask “Show me a mutual NDA template” for a public agreement preview. When you ask for an operating agreement, Navigator
+checks the requested ownership and management structure against the catalog. If there is no match, the plugin says the
+template is unavailable. To resume an existing matter, open [My Projects](https://www.neonlaw.com/app/projects) and sign
+in.
 
 ## Verify the connection
 
@@ -53,7 +54,11 @@ browser window. It should take you to Navigator sign-in with a return path to in
 ## Publish in the ChatGPT directory
 
 The [Navigator plugin package](../plugins/neon-law-navigator/) includes the public MCP connection, onboarding
-instructions, and review prompts. Install it in a test workspace and exercise the prompts against the hosted catalog.
-For public distribution, the publisher signs in to the OpenAI developer platform, verifies the domain, uploads the
-package, provides a walkthrough for reviewers, and submits it for review. Follow the [OpenAI submission
-guide](https://developers.openai.com/plugins/deploy/submission).
+instructions, and review prompts. In a test workspace, run the prompts against the hosted catalog. Open the agreement
+previews and verify the Nevada LLC sign-in and questionnaire handoff with a synthetic account.
+
+Zip the contents of the package directory with `plugin.json` and `mcp.json` at the archive root. In the [OpenAI
+publisher dashboard](https://platform.openai.com/plugins), select the verified publishing organization and upload the
+ZIP. Complete the exact domain challenge shown in the dashboard. Connect and scan the MCP server, provide an accessible
+walkthrough recording, and submit for review. Publish from the dashboard after approval. [OpenAI submission
+guide](https://developers.openai.com/plugins/deploy/submission)

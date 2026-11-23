@@ -37,8 +37,8 @@ pub fn descriptor() -> Value {
         "description": "List public Templates from Navigator's bundled shared catalog. For a short \
                         request such as “Create a work in progress”, pass that phrase as intent. Omit personal and matter details. \
                         Ask any returned clarification before suggesting a Template or taking action. \
-                        For a matching template with an intake_url, show that clickable link immediately to start or resume in Navigator. \
-                        Send the person there for Navigator’s pinned questionnaire instead of collecting its answers in chat. \
+                        Show intake_url to start or resume Nevada LLC formation. Use preview_url to browse agreements. \
+                        Keep questionnaire answers in Navigator. \
                         Use the titles and descriptions to match clear requests, and ask when several fit.",
         "annotations": { "readOnlyHint": true, "destructiveHint": false, "openWorldHint": false },
         "inputSchema": {
@@ -55,6 +55,8 @@ struct CatalogEntry {
     template: store::seed::PublicTemplate,
     #[serde(skip_serializing_if = "Option::is_none")]
     intake_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    preview_url: Option<String>,
 }
 
 pub fn call(arguments: &Value) -> Result<Value, ToolError> {
@@ -72,12 +74,26 @@ pub fn call(arguments: &Value) -> Result<Value, ToolError> {
     let templates: Vec<_> = store::seed::public_seeded_templates()
         .map_err(|error| ToolError::Internal(error.to_string()))?
         .into_iter()
-        .map(|template| CatalogEntry {
-            intake_url: template
+        .map(|mut template| {
+            let preview_url = template
                 .start_path
-                .as_ref()
-                .map(|path| format!("{site}{path}")),
-            template,
+                .as_deref()
+                .and_then(|path| path.strip_suffix("/start"))
+                .map(|path| format!("{site}{path}"));
+            let intake_url = if template.code == store::personal_projects::FORMATION {
+                template
+                    .start_path
+                    .as_ref()
+                    .map(|path| format!("{site}{path}"))
+            } else {
+                template.start_path = None;
+                None
+            };
+            CatalogEntry {
+                template,
+                intake_url,
+                preview_url,
+            }
         })
         .collect();
     let text = templates
@@ -91,6 +107,8 @@ pub fn call(arguments: &Value) -> Result<Value, ToolError> {
             }
             if let Some(url) = &entry.intake_url {
                 let _ = write!(line, " — Start or resume intake: {url}");
+            } else if let Some(url) = &entry.preview_url {
+                let _ = write!(line, " — Preview: {url}");
             }
             line
         })
@@ -114,7 +132,27 @@ mod tests {
 
         let result = call(&json!({})).unwrap();
         let templates = result["structuredContent"]["templates"].as_array().unwrap();
-        assert!(templates.iter().any(|row| row["code"] == "mutual_nda"));
+        assert!(templates.iter().all(|row| {
+            row["description"]
+                .as_str()
+                .is_some_and(|description| !description.trim().is_empty())
+        }));
+        let text = result["content"][0]["text"].as_str().unwrap();
+        for (code, slug) in [
+            ("advisor_agreement", "advisor-agreement"),
+            ("master_services_agreement", "master-services-agreement"),
+            ("mutual_nda", "mutual-nda"),
+            ("one_way_nda", "one-way-nda"),
+        ] {
+            let agreement = templates.iter().find(|row| row["code"] == code).unwrap();
+            let preview = agreement["preview_url"].as_str().unwrap();
+            assert!(preview.starts_with("https://"));
+            assert!(preview.ends_with(&format!("/notations/{slug}")));
+            assert!(agreement.get("intake_url").is_none());
+            assert!(agreement.get("start_path").is_none());
+            assert!(text.contains(preview));
+            assert!(!text.contains(&format!("{preview}/start")));
+        }
         assert!(templates
             .iter()
             .all(|row| row["code"] != "onboarding__letter"));
@@ -130,10 +168,7 @@ mod tests {
         assert!(
             link.starts_with("https://") && link.ends_with("/notations/nevada-llc-formation/start")
         );
-        assert!(result["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains(link));
+        assert!(text.contains(link));
         assert!(templates
             .iter()
             .all(|row| row.get("body").is_none() && row.get("questionnaire").is_none()));

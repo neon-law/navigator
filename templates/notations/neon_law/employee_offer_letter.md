@@ -2,6 +2,7 @@
 kind: letter
 output: contract
 title: Employee Offer Letter
+description: "State a job offer’s role, start date, compensation, and conditions of employment."
 jurisdiction: US
 respondent_type: person_and_entity
 confidential: false

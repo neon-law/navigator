@@ -1,6 +1,7 @@
 ---
 kind: filing
 title: Nevada LLC Formation
+description: "Prepare Nevada Articles of Organization for a new limited liability company."
 respondent_type: person_and_entity
 jurisdiction: NV
 origin_url: https://www.nvsos.gov/businesses/commercial-recordings/forms-fees/all-business-forms

@@ -1,6 +1,7 @@
 ---
 kind: filing
 title: IRS Form 990 — Return of Organization Exempt From Income Tax
+description: "Prepare the federal annual information return for a tax-exempt organization."
 respondent_type: entity
 jurisdiction: US
 origin_url: https://www.irs.gov/forms-pubs/about-form-990

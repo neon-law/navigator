@@ -1,6 +1,7 @@
 ---
 kind: agreement
 title: Mutual Non-Disclosure Agreement
+description: "Protect confidential information when both parties expect to disclose it."
 jurisdiction: US
 respondent_type: person_and_entity
 confidential: false
