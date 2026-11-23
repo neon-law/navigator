@@ -283,10 +283,12 @@ ship` then:
 4. Drops the Restate `archives-trigger` CronJob from the render and deletes the live one after the roll.
 
 `ops ship` refuses the switch without `NAVIGATOR_DBOS_ENABLED`, and refuses to apply without
-`NAVIGATOR_POSTGRES_ARCHIVE_PASSWORD` in the PostgreSQL service file and its Secret in the namespace. `web` refuses to
-boot with the switch on and any coverage setting or the Slack bot missing. The run keeps the Restate workflow's slots,
-`Archives:<UTC slot>` workflow ids, and step names (`snapshot`, `cost`, `iceberg_telemetry`, `email`). Each successful
-slot publishes `postgres/_paired/<generation>.json` last.
+`NAVIGATOR_POSTGRES_ARCHIVE_PASSWORD` in the row's PostgreSQL key inventory and its `navigator-postgres-archive` Secret
+in the namespace. [PostgreSQL on Kubernetes](postgres-kubernetes.md#archives-opt-in) has the commands that provision
+both, for a row with a private tree and for one rolled from its published record. `web` refuses to boot with the switch
+on and any coverage setting or the Slack bot missing. The run keeps the Restate workflow's slots, `Archives:<UTC slot>`
+workflow ids, and step names (`snapshot`, `cost`, `iceberg_telemetry`, `email`). Each successful slot publishes
+`postgres/_paired/<generation>.json` last.
 
 With the switch off, the `archives-trigger` CronJob starts the retained Restate workflow on `workflows-service`. It uses
 the same PostgreSQL default and requires its connection and coverage settings. An operator can explicitly select `all`
