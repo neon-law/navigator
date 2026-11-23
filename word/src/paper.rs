@@ -358,6 +358,32 @@ pub fn sign_counsel_signatures(body: &str, name: &str) -> String {
     out
 }
 
+/// `body` with `line` inserted as its own paragraph above each counsel
+/// signature block. The marker is authored alone on its line, so the line
+/// start — not the comment itself — is where the date goes.
+#[must_use]
+pub fn insert_before_counsel_signatures(body: &str, line: &str) -> String {
+    let mut out = String::with_capacity(body.len() + line.len() + 2);
+    let mut rest = body;
+    while let Some(start) = rest.find("<!--") {
+        let Some(length) = rest[start..].find("-->").map(|end| end + "-->".len()) else {
+            break;
+        };
+        if counsel_signature(&rest[start..start + length]).is_some() {
+            let line_start = rest[..start].rfind('\n').map_or(0, |at| at + 1);
+            out.push_str(&rest[..line_start]);
+            out.push_str(line);
+            out.push_str("\n\n");
+            out.push_str(&rest[line_start..start + length]);
+        } else {
+            out.push_str(&rest[..start + length]);
+        }
+        rest = &rest[start + length..];
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Whether `body` still carries a draft counsel signature.
 #[must_use]
 pub fn has_draft_counsel_signature(body: &str) -> bool {

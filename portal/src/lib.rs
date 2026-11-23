@@ -200,6 +200,7 @@ pub(crate) mod plan_assignment_lane;
 pub mod plan_intake;
 mod plan_retainers;
 pub mod plausible;
+mod pleading;
 pub mod policy;
 pub mod portal_only;
 pub mod project_documents;

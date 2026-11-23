@@ -117,6 +117,12 @@ pub async fn create_project_notation(
     } else {
         None
     };
+    let pleading = checkout
+        .as_ref()
+        .and_then(|draft| rules::frontmatter::extract(&draft.contents))
+        .and_then(|fm| rules::frontmatter::field(fm, "kind"))
+        .as_deref()
+        == Some("pleading");
     let started_at = chrono::Utc::now();
     let outcome = async {
         if let Some(draft) = checkout {
@@ -168,6 +174,10 @@ pub async fn create_project_notation(
             )
             .await
         }
+        Err(CreateProjectNotationError::Session(NotationSessionError::TemplateNotFound(_))) => {
+            Ok(())
+        }
+        Err(_) if pleading => Ok(()),
         Err(_) => attempts::record_failure(&database, project_id, code, person_id).await,
     };
     if let Err(error) = recorded {

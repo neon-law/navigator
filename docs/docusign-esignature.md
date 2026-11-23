@@ -139,6 +139,17 @@ printed by creation for the final commands. After approval, check `navigator sit
 true`. Use `navigator site notation document` to download the PDF for review. Preparation creates the unsent provider
 draft. The CLI opens the sender view only with `--open`.
 
+## Prepare a pleading for consent signatures
+
+Run `navigator site notation create <draft-code> --client-email <email> --project <code>` from the Project checkout.
+Publish the Draft and sync its Matter Caption first. Declare each consenting signer in the Draft's ordered `signers:`
+list. Place a Signature Block such as `{{client.signature}}` or `{{prior_counsel.signature}}` at each signing line. Bind
+the prior counsel role to its name and email answers. Include a Firm signer when counsel must also sign through
+DocuSign. The workflow proceeds from lawyer review through PDF generation to the signature wait state.
+
+Approve the Notation, review its court-paper PDF, then prepare the envelope and review its fields in the sender view.
+Use the same Notation ID to send the approved envelope.
+
 ## Adopt an envelope sent from DocuSign
 
 In the Firm's DocuSign account, open the sent envelope and copy its Envelope ID from the envelope details. Run the

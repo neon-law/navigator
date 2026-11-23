@@ -7550,6 +7550,7 @@ dependencies = [
  "url",
  "uuid",
  "wiremock",
+ "word",
 ]
 
 [[package]]

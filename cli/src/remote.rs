@@ -4799,6 +4799,9 @@ pub async fn notation_create(
 ) -> ExitCode {
     run(async {
         let (base, token) = resolve(host)?;
+        let saved = answers_from
+            .map(crate::answers_file::load_answers_file)
+            .transpose()?;
         // No-redirect client so we read the 303 `Location` (the step URL)
         // rather than following it into the walker's HTML.
         let client = reqwest::Client::builder()
@@ -4846,8 +4849,7 @@ pub async fn notation_create(
             palette::dim("created notation; questionnaire ready — notation"),
             palette::highlight(notation_id.to_string()),
         );
-        if let Some(path) = answers_from {
-            let saved = crate::answers_file::load_answers_file(path)?;
+        if let Some(saved) = saved {
             prefill_from_saved_answers(&client, &base, &token, notation_id, &saved).await?;
         }
         println!(
@@ -4874,6 +4876,25 @@ pub async fn notation_create_on_project(
     project_code: &str,
     answers_from: Option<&Path>,
 ) -> ExitCode {
+    match crate::projects::lifecycle::checkout_draft(Path::new("."), project_code, template_code) {
+        Ok(Some(published)) => {
+            return notation_create(
+                host,
+                template_code,
+                client_email,
+                project_code,
+                answers_from,
+                None,
+                Some(&published),
+            )
+            .await;
+        }
+        Ok(None) => {}
+        Err(error) => {
+            eprintln!("navigator site notation create: {error:#}");
+            return ExitCode::FAILURE;
+        }
+    }
     run(async {
         let saved = answers_from.map(crate::answers_file::load_answers_file).transpose()?;
         let (base, token) = resolve(host)?;

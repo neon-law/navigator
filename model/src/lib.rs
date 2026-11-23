@@ -23,6 +23,7 @@ pub mod matter_record_links;
 pub mod nef;
 pub mod person_phones;
 pub mod persons;
+pub mod pleading;
 pub mod project_deadlines;
 pub mod project_references;
 pub mod project_service;
