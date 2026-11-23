@@ -33,10 +33,10 @@ component add rust-src`) before a local helper; never invent a std API. Read onl
 [Book](https://doc.rust-lang.org/book/) and [Rust by Example](https://doc.rust-lang.org/rust-by-example/) chapters the
 file uses (Foundation [learn catalog](https://www.rust-lang.org/learn); Klabnik/Nichols). When tests are the finding,
 read [Writing Automated Tests](https://doc.rust-lang.org/book/ch11-00-testing.html). Cite the [API
-Guidelines](https://rust-lang.github.io/api-guidelines/checklist.html) (C-CONV, C-GETTER, C-CTOR), the [Clippy lint
-index](https://rust-lang.github.io/rust-clippy/master/), or Microsoft's [Pragmatic Rust
-Guidelines](https://microsoft.github.io/rust-guidelines/) (`M-UPSTREAM-GUIDELINES`, `M-REGULAR-FN`, `M-LOG-STRUCTURED`)
-only for the finding that rests on them. A public item with no caller is unused.
+Guidelines](https://rust-lang.github.io/api-guidelines/checklist.html) (C-CONV, C-GETTER, C-CTOR, C-GOOD-ERR), the
+[Clippy lint index](https://rust-lang.github.io/rust-clippy/master/), or Microsoft's [Pragmatic Rust
+Guidelines](https://microsoft.github.io/rust-guidelines/) (`M-UPSTREAM-GUIDELINES`, `M-REGULAR-FN`, `M-AVOID-WRAPPERS`,
+`M-LOG-STRUCTURED`) only for the finding that rests on them. A public item with no caller is unused.
 
 ## 3. Compare similar patterns
 
@@ -72,9 +72,9 @@ take exactly one action and keep the covering test green.
   present tense. Run `cargo fmt`, the focused test, `rtk cargo clippy -p <crate> --all-targets -- -D warnings`, and
   `cargo run -p cli --quiet -- project gate`. A deletion lands only with coverage re-verified; the floor never drops.
   The only number that may *raise* the floor is the latest CI `coverage floor` TOTAL print ([rustc
-  instrument-coverage](https://doc.rust-lang.org/rustc/instrument-coverage.html)): move `FLOOR`, `AGENTS.md`,
-  `docs/agent-workflows.md`, and `docs/oss-install.md` together when that print leaves at least 0.3pt of headroom after
-  the new floor. Never from a local `llvm-cov`.
+  instrument-coverage](https://doc.rust-lang.org/rustc/instrument-coverage.html)): move `--fail-under-lines`,
+  `AGENTS.md`, `docs/agent-workflows.md`, and `docs/oss-install.md` together when that print leaves at least 0.3pt of
+  headroom after the new floor. Never from a local `llvm-cov`.
 - **Teaching-surface drift only:** fix the doc, comment, or test. Do not rewrite workshop spoken words.
 
 Open the change through [`create-pr`](../create-pr/SKILL.md): the report, minus anything private, is the PR body.
