@@ -1351,6 +1351,7 @@
         "kms_key_version": "string",
         "provider": "string",
         "status": "string",
+        "stripe_mode": "option<string>",
         "updated_at": "string",
         "version": "int",
         "wrapped_dek": "string"
@@ -3733,6 +3734,7 @@
           "kms_key_version": "TEXT",
           "provider": "TEXT",
           "status": "TEXT",
+          "stripe_mode": "TEXT",
           "updated_at": "TIMESTAMPTZ",
           "version": "BIGINT",
           "wrapped_dek": "TEXT"

@@ -72,6 +72,7 @@ async fn exercise(
         "customer",
         &[
             ("test_clock", clock),
+            ("email", "billing@example.invalid"),
             ("metadata[navigator_batch_id]", &tag),
         ],
     )
@@ -81,7 +82,7 @@ async fn exercise(
     let request = InvoiceRequest {
         contact_id: None,
         contact_name: "Sandbox customer".into(),
-        contact_email: String::new(),
+        contact_email: "billing@example.invalid".into(),
         reference: "Sandbox invoice".into(),
         issued_date: None,
         due_date: Some(due.date_naive()),
