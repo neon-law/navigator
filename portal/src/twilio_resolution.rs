@@ -310,6 +310,8 @@ mod tests {
     #[tokio::test]
     async fn two_numbers_in_one_firm_keep_independent_credentials() {
         store::test_support::with_required_postgres(async {
+            let first_token = store::test_support::twilio::auth_token();
+            let second_token = store::test_support::twilio::auth_token();
             let pg = store::postgres::PostgresDb::application().await.unwrap();
             let db = store::surreal::SurrealDb::uninitialized();
             let firm = store::test_support::seed_firm_with_new_brand(&db, "neon")
@@ -321,7 +323,7 @@ mod tests {
                 firm,
                 "neon",
                 "+15551230011",
-                "token-one",
+                &first_token,
             )
             .await;
             let second = store::test_support::twilio::register_number(
@@ -330,7 +332,7 @@ mod tests {
                 firm,
                 "neon",
                 "+15551230012",
-                "token-two",
+                &second_token,
             )
             .await;
             assert_ne!(first, second);
@@ -340,7 +342,10 @@ mod tests {
                 surreal: &db,
                 kms: &kms,
             };
-            for (number, token) in [("+15551230011", "token-one"), ("+15551230012", "token-two")] {
+            for (number, token) in [
+                ("+15551230011", &first_token),
+                ("+15551230012", &second_token),
+            ] {
                 let fields = vec![
                     ("From".into(), "+15555550100".into()),
                     ("MessageSid".into(), "synthetic-independent-number".into()),
@@ -375,6 +380,8 @@ mod tests {
     #[tokio::test]
     async fn a_cross_signed_request_is_rejected_and_the_own_token_verifies() {
         store::test_support::with_required_postgres(async {
+            let neon_token = store::test_support::twilio::auth_token();
+            let vesta_token = store::test_support::twilio::auth_token();
             let pg = store::postgres::PostgresDb::application().await.unwrap();
             let db = store::surreal::SurrealDb::uninitialized();
             // The same key version the harness sealed the tokens under.
@@ -394,7 +401,7 @@ mod tests {
                 neon_firm,
                 "neon",
                 neon_number,
-                "token-neon",
+                &neon_token,
             )
             .await;
             let vesta_ref = store::test_support::twilio::register_number(
@@ -403,7 +410,7 @@ mod tests {
                 vesta_firm,
                 "vesta",
                 vesta_number,
-                "token-vesta",
+                &vesta_token,
             )
             .await;
             assert_ne!(neon_ref, vesta_ref, "each number resolves its own secret");
@@ -437,7 +444,7 @@ mod tests {
                     host_lookup(&[("NAVIGATOR_PUBLIC_HOST", "www.example.com")]),
                     vesta_number,
                     &fields,
-                    Some(&signed("token-neon", vesta_number)),
+                    Some(&signed(&neon_token, vesta_number)),
                 )
                 .await
                 .unwrap_err();
@@ -453,7 +460,7 @@ mod tests {
                     host_lookup(&[("NAVIGATOR_PUBLIC_HOST", "www.example.com")]),
                     vesta_number,
                     &fields,
-                    Some(&signed("token-vesta", vesta_number)),
+                    Some(&signed(&vesta_token, vesta_number)),
                 )
                 .await
                 .expect("the number's own token verifies");
@@ -467,7 +474,7 @@ mod tests {
                     host_lookup(&[("NAVIGATOR_PUBLIC_HOST", "www.example.com")]),
                     "+15551239999",
                     &fields,
-                    Some(&signed("token-vesta", vesta_number)),
+                    Some(&signed(&vesta_token, vesta_number)),
                 )
                 .await
                 .unwrap_err();

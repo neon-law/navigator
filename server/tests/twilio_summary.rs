@@ -88,12 +88,13 @@ async fn exercise() {
     let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
     let (firm, _) = store::test_support::seed_firm_with_new_brand(&db, "neon").await;
     seed_sms_summary_mailroom(&db).await;
-    configure(&mut state, &pg, firm, origin).await;
+    let token = store::test_support::twilio::auth_token();
+    configure(&mut state, &pg, firm, origin, &token).await;
     let app = server::neon_router(
         state.clone(),
         std::path::Path::new(portal::DEFAULT_PUBLIC_DIR),
     );
-    post_sms(&app).await;
+    post_sms(&app, &token).await;
     let receipt_id: Uuid = sqlx::query_scalar("SELECT id FROM email_receipt")
         .fetch_one(pg.pool())
         .await
@@ -109,7 +110,7 @@ async fn exercise() {
     assert_eq!(report.delivery_state, "confirmed");
     let posted = slack.posted_messages();
     assert!(!posted.is_empty());
-    post_sms(&app).await;
+    post_sms(&app, &token).await;
     assert_eq!(slack.posted_messages(), posted);
     let runs: Vec<String> = sqlx::query_scalar(
         "SELECT workflow_uuid FROM dbos.workflow_status WHERE name = 'EmailSummary'",
@@ -133,7 +134,13 @@ async fn exercise() {
     let _ = server.await;
 }
 
-async fn configure(state: &mut portal::AppState, pg: &PostgresDb, firm: Uuid, origin: String) {
+async fn configure(
+    state: &mut portal::AppState,
+    pg: &PostgresDb,
+    firm: Uuid,
+    origin: String,
+    token: &str,
+) {
     let project =
         store::test_support::seed_project_on_firm(&state.surreal, Some(firm), "Synthetic SMS")
             .await;
@@ -152,20 +159,13 @@ async fn configure(state: &mut portal::AppState, pg: &PostgresDb, firm: Uuid, or
         max_input_chars: workflows::DEFAULT_MAX_INPUT_CHARS,
         max_output_tokens: workflows::DEFAULT_MAX_OUTPUT_TOKENS,
     });
-    store::test_support::twilio::register_number(
-        &state.surreal,
-        pg,
-        firm,
-        "neon",
-        NUMBER,
-        "synthetic-token",
-    )
-    .await;
+    store::test_support::twilio::register_number(&state.surreal, pg, firm, "neon", NUMBER, token)
+        .await;
     state.runtime_kms = Arc::new(cloud::FakeKms::new("spine-test"));
     state.canonical_host = portal::CanonicalHost::new(Some("sms.example.test".into()));
     state.twilio_registry = Some(Arc::new(pg.clone()));
 }
-async fn post_sms(app: &axum::Router) {
+async fn post_sms(app: &axum::Router, token: &str) {
     let fields = [
         ("MessageSid".to_owned(), "synthetic-message".to_owned()),
         ("From".to_owned(), SENDER.to_owned()),
@@ -178,7 +178,7 @@ async fn post_sms(app: &axum::Router) {
         .finish();
     let path = portal::twilio_sms::SMS_WEBHOOK_PATH;
     let signature = portal::twilio_sms::twilio_signature(
-        "synthetic-token",
+        token,
         &format!("https://sms.example.test{path}"),
         &fields,
     );

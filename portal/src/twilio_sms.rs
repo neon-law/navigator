@@ -694,18 +694,12 @@ mod tests {
     #[tokio::test]
     async fn signed_sms_is_saved_without_a_summary_service_and_unsigned_callbacks_are_denied() {
         store::test_support::with_required_postgres(async {
+            let token = store::test_support::twilio::auth_token();
             let pg = store::postgres::PostgresDb::application().await.unwrap();
             let db = store::surreal::SurrealDb::uninitialized();
             let number = "+15551234444";
-            let (mut state, _) = registry_state(
-                &db,
-                &pg,
-                "neon",
-                number,
-                "registry-token",
-                "www.neonlaw.com",
-            )
-            .await;
+            let (mut state, _) =
+                registry_state(&db, &pg, "neon", number, &token, "www.neonlaw.com").await;
             state.summary_intake = None;
             let fields = params(&[
                 ("MessageSid", "synthetic-sid"),
@@ -717,7 +711,7 @@ mod tests {
             headers.insert(
                 SIGNATURE_HEADER,
                 twilio_signature(
-                    "registry-token",
+                    &token,
                     &format!("https://www.neonlaw.com{SMS_WEBHOOK_PATH}"),
                     &fields,
                 )
@@ -755,18 +749,12 @@ mod tests {
     #[tokio::test]
     async fn signed_delivery_callback_updates_the_original_outbound_message() {
         store::test_support::with_required_postgres(async {
+            let token = store::test_support::twilio::auth_token();
             let pg = store::postgres::PostgresDb::application().await.unwrap();
             let db = store::surreal::SurrealDb::uninitialized();
             let number = "+15551234444";
-            let (state, firm) = registry_state(
-                &db,
-                &pg,
-                "neon",
-                number,
-                "registry-token",
-                "www.neonlaw.com",
-            )
-            .await;
+            let (state, firm) =
+                registry_state(&db, &pg, "neon", number, &token, "www.neonlaw.com").await;
             let resolved = crate::twilio_resolution::ResolvedTwilioWebhook {
                 registration: store::brand_phone_numbers::find_by_number(&pg, number)
                     .await
@@ -802,7 +790,7 @@ mod tests {
             let mut headers = HeaderMap::new();
             headers.insert(
                 SIGNATURE_HEADER,
-                twilio_signature("registry-token", &callback, &fields)
+                twilio_signature(&token, &callback, &fields)
                     .parse()
                     .unwrap(),
             );
@@ -830,21 +818,15 @@ mod tests {
     #[tokio::test]
     async fn a_picture_only_message_keeps_a_transcript_receipt() {
         store::test_support::with_required_postgres(async {
+            let token = store::test_support::twilio::auth_token();
             let pg = store::postgres::PostgresDb::application().await.unwrap();
             let db = store::surreal::SurrealDb::uninitialized();
             let number = "+15551234444";
             let firm = store::test_support::seed_firm_with_new_brand(&db, "neon")
                 .await
                 .0;
-            store::test_support::twilio::register_number(
-                &db,
-                &pg,
-                firm,
-                "neon",
-                number,
-                "registry-token",
-            )
-            .await;
+            store::test_support::twilio::register_number(&db, &pg, firm, "neon", number, &token)
+                .await;
             let resolved = crate::twilio_resolution::ResolvedTwilioWebhook {
                 registration: store::brand_phone_numbers::find_by_number(&pg, number)
                     .await
@@ -888,17 +870,11 @@ mod tests {
     #[tokio::test]
     async fn an_unsigned_text_is_refused() {
         store::test_support::with_required_postgres(async {
+            let token = store::test_support::twilio::auth_token();
             let pg = store::postgres::PostgresDb::application().await.unwrap();
             let db = store::surreal::SurrealDb::uninitialized();
-            let (state, _) = registry_state(
-                &db,
-                &pg,
-                "neon",
-                "+15551234444",
-                "registry-token",
-                "www.neonlaw.com",
-            )
-            .await;
+            let (state, _) =
+                registry_state(&db, &pg, "neon", "+15551234444", &token, "www.neonlaw.com").await;
             let body = Bytes::from_static(b"MessageSid=SM1&From=%2B15555550100&To=%2B15551234444");
             let response = webhook(State(state.clone()), HeaderMap::new(), body.clone()).await;
             assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
@@ -916,17 +892,11 @@ mod tests {
     #[tokio::test]
     async fn a_signed_text_to_another_number_is_not_ours() {
         store::test_support::with_required_postgres(async {
+            let token = store::test_support::twilio::auth_token();
             let pg = store::postgres::PostgresDb::application().await.unwrap();
             let db = store::surreal::SurrealDb::uninitialized();
-            let (state, _) = registry_state(
-                &db,
-                &pg,
-                "neon",
-                "+15551234444",
-                "registry-token",
-                "www.neonlaw.com",
-            )
-            .await;
+            let (state, _) =
+                registry_state(&db, &pg, "neon", "+15551234444", &token, "www.neonlaw.com").await;
             let signed = params(&[
                 ("MessageSid", "SM1"),
                 ("From", "+15555550100"),
@@ -936,7 +906,7 @@ mod tests {
             headers.insert(
                 SIGNATURE_HEADER,
                 twilio_signature(
-                    "registry-token",
+                    &token,
                     "https://www.neonlaw.com/webhook/twilio/sms",
                     &signed,
                 )
@@ -961,21 +931,15 @@ mod tests {
     #[tokio::test]
     async fn twilio_intake_saves_one_shared_message_even_without_summaries() {
         store::test_support::with_required_postgres(async {
+            let token = store::test_support::twilio::auth_token();
             let pg = store::postgres::PostgresDb::application().await.unwrap();
             let db = store::surreal::SurrealDb::uninitialized();
             let firm = store::test_support::seed_firm_with_new_brand(&db, "neon")
                 .await
                 .0;
             let number = "+15551234444";
-            store::test_support::twilio::register_number(
-                &db,
-                &pg,
-                firm,
-                "neon",
-                number,
-                "registry-token",
-            )
-            .await;
+            store::test_support::twilio::register_number(&db, &pg, firm, "neon", number, &token)
+                .await;
             let resolved = crate::twilio_resolution::ResolvedTwilioWebhook {
                 registration: store::brand_phone_numbers::find_by_number(&pg, number)
                     .await

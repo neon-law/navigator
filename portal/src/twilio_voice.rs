@@ -455,18 +455,12 @@ mod tests {
     #[tokio::test]
     async fn a_signed_call_lands_once_and_replays_to_the_same_row() {
         store::test_support::with_required_postgres(async {
+            let token = store::test_support::twilio::auth_token();
             let pg = store::postgres::PostgresDb::application().await.unwrap();
             let db = store::surreal::SurrealDb::uninitialized();
             let number = "+15551234444";
-            let (state, firm) = registry_state(
-                &db,
-                &pg,
-                "neon",
-                number,
-                "registry-token",
-                "www.neonlaw.com",
-            )
-            .await;
+            let (state, firm) =
+                registry_state(&db, &pg, "neon", number, &token, "www.neonlaw.com").await;
             let owner = store::persons::create(
                 &db,
                 &store::persons::NewPerson::with_role(
@@ -486,11 +480,11 @@ mod tests {
                 ("CallDuration", "42"),
                 ("StartTime", "Fri, 30 Oct 2026 18:00:00 +0000"),
             ]);
-            let (headers, body) = signed_body("registry-token", "www.neonlaw.com", &fields);
+            let (headers, body) = signed_body(&token, "www.neonlaw.com", &fields);
 
             let first = status(State(state.clone()), headers, body).await;
             assert_eq!(first.status(), StatusCode::OK);
-            let (headers, body) = signed_body("registry-token", "www.neonlaw.com", &fields);
+            let (headers, body) = signed_body(&token, "www.neonlaw.com", &fields);
             let replay = status(State(state.clone()), headers, body).await;
             assert_eq!(replay.status(), StatusCode::OK);
 
@@ -548,18 +542,12 @@ mod tests {
     #[tokio::test]
     async fn an_out_of_order_mid_call_event_is_absorbed_by_the_call_sid_idempotency() {
         store::test_support::with_required_postgres(async {
+            let token = store::test_support::twilio::auth_token();
             let pg = store::postgres::PostgresDb::application().await.unwrap();
             let db = store::surreal::SurrealDb::uninitialized();
             let number = "+15551234444";
-            let (state, _) = registry_state(
-                &db,
-                &pg,
-                "neon",
-                number,
-                "registry-token",
-                "www.neonlaw.com",
-            )
-            .await;
+            let (state, _) =
+                registry_state(&db, &pg, "neon", number, &token, "www.neonlaw.com").await;
             let owner = store::persons::create(
                 &db,
                 &store::persons::NewPerson::with_role(
@@ -579,7 +567,7 @@ mod tests {
                 ("CallDuration", "42"),
                 ("StartTime", "Fri, 30 Oct 2026 18:00:00 +0000"),
             ]);
-            let (headers, body) = signed_body("registry-token", "www.neonlaw.com", &completed);
+            let (headers, body) = signed_body(&token, "www.neonlaw.com", &completed);
             assert_eq!(
                 status(State(state.clone()), headers, body).await.status(),
                 StatusCode::OK
@@ -592,7 +580,7 @@ mod tests {
                 ("To", number),
                 ("CallStatus", "ringing"),
             ]);
-            let (headers, body) = signed_body("registry-token", "www.neonlaw.com", &ringing);
+            let (headers, body) = signed_body(&token, "www.neonlaw.com", &ringing);
             assert_eq!(
                 status(State(state.clone()), headers, body).await.status(),
                 StatusCode::NO_CONTENT,
@@ -606,7 +594,7 @@ mod tests {
                 ("To", number),
                 ("CallStatus", "in-progress"),
             ]);
-            let (headers, body) = signed_body("registry-token", "www.neonlaw.com", &fresh_ringing);
+            let (headers, body) = signed_body(&token, "www.neonlaw.com", &fresh_ringing);
             assert_eq!(
                 status(State(state.clone()), headers, body).await.status(),
                 StatusCode::NO_CONTENT
@@ -650,18 +638,12 @@ mod tests {
     #[tokio::test]
     async fn a_zero_duration_call_bills_zero_and_a_missed_call_never_bills() {
         store::test_support::with_required_postgres(async {
+            let token = store::test_support::twilio::auth_token();
             let pg = store::postgres::PostgresDb::application().await.unwrap();
             let db = store::surreal::SurrealDb::uninitialized();
             let number = "+15551234444";
-            let (state, firm) = registry_state(
-                &db,
-                &pg,
-                "neon",
-                number,
-                "registry-token",
-                "www.neonlaw.com",
-            )
-            .await;
+            let (state, firm) =
+                registry_state(&db, &pg, "neon", number, &token, "www.neonlaw.com").await;
             let owner = store::persons::create(
                 &db,
                 &store::persons::NewPerson::with_role(
@@ -682,7 +664,7 @@ mod tests {
                 ("CallDuration", "0"),
                 ("StartTime", "Fri, 30 Oct 2026 18:00:00 +0000"),
             ]);
-            let (headers, body) = signed_body("registry-token", "www.neonlaw.com", &zero);
+            let (headers, body) = signed_body(&token, "www.neonlaw.com", &zero);
             assert_eq!(
                 status(State(state.clone()), headers, body).await.status(),
                 StatusCode::OK
@@ -702,7 +684,7 @@ mod tests {
                 ("CallStatus", "no-answer"),
                 ("StartTime", "Fri, 30 Oct 2026 18:05:00 +0000"),
             ]);
-            let (headers, body) = signed_body("registry-token", "www.neonlaw.com", &missed);
+            let (headers, body) = signed_body(&token, "www.neonlaw.com", &missed);
             assert_eq!(
                 status(State(state.clone()), headers, body).await.status(),
                 StatusCode::OK
@@ -733,17 +715,11 @@ mod tests {
     #[tokio::test]
     async fn a_call_to_an_unregistered_number_is_refused_without_ingesting() {
         store::test_support::with_required_postgres(async {
+            let token = store::test_support::twilio::auth_token();
             let pg = store::postgres::PostgresDb::application().await.unwrap();
             let db = store::surreal::SurrealDb::uninitialized();
-            let (state, _) = registry_state(
-                &db,
-                &pg,
-                "neon",
-                "+15551234444",
-                "registry-token",
-                "www.neonlaw.com",
-            )
-            .await;
+            let (state, _) =
+                registry_state(&db, &pg, "neon", "+15551234444", &token, "www.neonlaw.com").await;
             let owner = store::persons::create(
                 &db,
                 &store::persons::NewPerson::with_role(
@@ -763,7 +739,7 @@ mod tests {
                 ("CallDuration", "42"),
                 ("StartTime", "Fri, 30 Oct 2026 18:00:00 +0000"),
             ]);
-            let (headers, body) = signed_body("registry-token", "www.neonlaw.com", &fields);
+            let (headers, body) = signed_body(&token, "www.neonlaw.com", &fields);
             let response = status(State(state.clone()), headers, body).await;
             assert_eq!(response.status(), StatusCode::NOT_FOUND);
             assert!(
@@ -782,6 +758,7 @@ mod tests {
     #[tokio::test]
     async fn an_unconfigured_lane_is_off_and_an_unsigned_callback_is_denied() {
         store::test_support::with_required_postgres(async {
+            let token = store::test_support::twilio::auth_token();
             let db = store::surreal::SurrealDb::uninitialized();
             let unconfigured = crate::test_support::app_state(db.clone()).await;
             let fields = params(&[
@@ -791,7 +768,7 @@ mod tests {
                 ("CallStatus", "completed"),
                 ("StartTime", "Fri, 30 Oct 2026 18:00:00 +0000"),
             ]);
-            let (headers, body) = signed_body("registry-token", "www.neonlaw.com", &fields);
+            let (headers, body) = signed_body(&token, "www.neonlaw.com", &fields);
             assert_eq!(
                 status(State(unconfigured.clone()), headers, body)
                     .await
@@ -800,15 +777,8 @@ mod tests {
             );
 
             let pg = store::postgres::PostgresDb::application().await.unwrap();
-            let (state, _) = registry_state(
-                &db,
-                &pg,
-                "neon",
-                "+15551234444",
-                "registry-token",
-                "www.neonlaw.com",
-            )
-            .await;
+            let (state, _) =
+                registry_state(&db, &pg, "neon", "+15551234444", &token, "www.neonlaw.com").await;
             let body = url::form_urlencoded::Serializer::new(String::new())
                 .extend_pairs(&fields)
                 .finish();

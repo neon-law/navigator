@@ -5,6 +5,12 @@ use crate::postgres::PostgresDb;
 use crate::surreal::SurrealDb;
 use uuid::Uuid;
 
+/// An independent signing credential for a synthetic receiving number.
+#[must_use]
+pub fn auth_token() -> String {
+    Uuid::new_v4().simple().to_string()
+}
+
 /// Seal `token` as `firm_id`'s Twilio auth token, register `number` for
 /// `brand_key` over it, and return the secret ref the registration pins.
 ///
