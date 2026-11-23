@@ -889,21 +889,35 @@ pub fn tokens_stylesheet(face: &Typeface, display: Option<&Typeface>, palette: &
 }
 
 fn webfont_css(face: &Typeface) -> Option<String> {
+    webfont_css_at(face, "")
+}
+
+/// Render the catalogued webfont with absolute URLs for email or relative URLs for a page.
+#[must_use]
+pub fn webfont_css_at(face: &Typeface, origin: &str) -> Option<String> {
+    let asset = |key: &str| crate::assets::absolute_url_at(origin, &crate::assets::asset_url(key));
+    let bucket_face = |family: &str, dir: &str, stem: &str| {
+        font_face_css(
+            family,
+            &asset(&format!("fonts/{dir}/{stem}-Regular.woff2")),
+            &asset(&format!("fonts/{dir}/{stem}-Bold.woff2")),
+        )
+    };
     match face.id {
         "gorp-serif" => Some(font_face_css(
             "GORP Serif",
-            &crate::assets::asset_url("fonts/gorp-serif/GORPSerif-Regular.woff2"),
-            &crate::assets::asset_url("fonts/gorp-serif/GORPSerif-Bold.woff2"),
+            &asset("fonts/gorp-serif/GORPSerif-Regular.woff2"),
+            &asset("fonts/gorp-serif/GORPSerif-Bold.woff2"),
         )),
         "plus-jakarta-sans" => Some(font_face_css(
             "Plus Jakarta Sans",
-            &crate::assets::asset_url("fonts/plus-jakarta-sans/PlusJakartaSans-Regular.woff2"),
-            &crate::assets::asset_url("fonts/plus-jakarta-sans/PlusJakartaSans-Bold.woff2"),
+            &asset("fonts/plus-jakarta-sans/PlusJakartaSans-Regular.woff2"),
+            &asset("fonts/plus-jakarta-sans/PlusJakartaSans-Bold.woff2"),
         )),
         "tinos" => Some(font_face_css(
             "Tinos",
-            "/public/fonts/tinos/Tinos-Regular.woff2",
-            "/public/fonts/tinos/Tinos-Bold.woff2",
+            &crate::assets::absolute_url_at(origin, "/public/fonts/tinos/Tinos-Regular.woff2"),
+            &crate::assets::absolute_url_at(origin, "/public/fonts/tinos/Tinos-Bold.woff2"),
         )),
         "eb-garamond" => Some(bucket_face("EB Garamond", "eb-garamond", "EBGaramond")),
         "source-sans-3" => Some(bucket_face("Source Sans 3", "source-sans-3", "SourceSans3")),
@@ -917,7 +931,7 @@ fn webfont_css(face: &Typeface) -> Option<String> {
             bucket_face("Barlow Condensed", "barlow-condensed", "BarlowCondensed"),
             crate::assets::weighted_font_face_css(
                 "Barlow Condensed",
-                &crate::assets::asset_url("fonts/barlow-condensed/BarlowCondensed-ExtraBold.woff2"),
+                &asset("fonts/barlow-condensed/BarlowCondensed-ExtraBold.woff2"),
                 "800"
             ),
         )),
@@ -925,12 +939,12 @@ fn webfont_css(face: &Typeface) -> Option<String> {
             "{}\n{}",
             crate::assets::weighted_font_face_css(
                 "DM Sans",
-                &crate::assets::asset_url("fonts/dm-sans/DMSans-Regular.woff2"),
+                &asset("fonts/dm-sans/DMSans-Regular.woff2"),
                 "100 699"
             ),
             crate::assets::weighted_font_face_css(
                 "DM Sans",
-                &crate::assets::asset_url("fonts/dm-sans/DMSans-Bold.woff2"),
+                &asset("fonts/dm-sans/DMSans-Bold.woff2"),
                 "700 1000"
             ),
         )),
@@ -945,24 +959,6 @@ fn webfont_css(face: &Typeface) -> Option<String> {
         )),
         _ => None,
     }
-}
-
-/// `@font-face` for an OFL family served from the deployment's asset bucket,
-/// under the `fonts/<dir>/<Stem>-{Regular,Bold}.woff2` layout every web font
-/// in this repository already uses.
-///
-/// Self-hosting is the requirement these faces exist to satisfy: the families
-/// are all available from Google Fonts, and linking them there would leak a
-/// request — carrying the visitor's IP and the referring page — to a third
-/// party on every pageview. On an immigration or debt-collection-defence
-/// site that is a disclosure about the reader, so the bytes come from our
-/// own origin and no brand stylesheet ever names a font CDN.
-fn bucket_face(family: &str, dir: &str, stem: &str) -> String {
-    font_face_css(
-        family,
-        &crate::assets::asset_url(&format!("fonts/{dir}/{stem}-Regular.woff2")),
-        &crate::assets::asset_url(&format!("fonts/{dir}/{stem}-Bold.woff2")),
-    )
 }
 
 fn emit_scheme(

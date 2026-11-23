@@ -47,9 +47,8 @@ pub fn render_password_reset_body(name: &str, email: &str, reset_url: &str) -> S
         .replace("{{site_url}}", &site_url)
 }
 
-/// Render the HTML alternative: the same substituted markdown wrapped in
-/// the inline-styled firm email layout with the firm logo. `base_url` is
-/// the public origin serving `/public/logo.png`.
+/// Render the HTML alternative with the active brand's catalog theme.
+/// Relative assets resolve against `base_url`.
 #[must_use]
 pub fn render_password_reset_html(
     name: &str,

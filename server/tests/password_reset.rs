@@ -301,21 +301,23 @@ async fn full_reset_flow_sets_a_new_password_and_signs_in() {
 /// visitor asked from — `neonlaw.com` for Lex Tecnica's `neonlaw.com`
 /// subdomain, never its unauthenticated `lextecnica.com`.
 #[tokio::test]
-async fn reset_mail_sends_from_the_requesting_hosts_naked_domain() {
+async fn reset_mail_uses_the_requesting_brands_sender_theme_and_links() {
     let meta = mount_metadata().await;
     let idp = mount_idp(password_user("libra@example.com"), None).await;
     let (state, surreal, email) = state_with_reset(&idp, &meta, true).await;
     let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
-    for (host, person, sender) in [
+    for (host, person, sender, brand) in [
         (
             "staging-lex-tecnica.neonlaw.com",
             "libra@example.com",
             "staging@neonlaw.com",
+            views::brand::BrandKey::LexTecnica,
         ),
         (
             "www.vestaestateplanning.com",
             "leo@example.com",
             "support@vestaestateplanning.com",
+            views::brand::BrandKey::Vesta,
         ),
     ] {
         seed_person(&surreal, person).await;
@@ -348,8 +350,34 @@ async fn reset_mail_sends_from_the_requesting_hosts_naked_domain() {
             .unwrap();
         assert_eq!(submit.status(), StatusCode::OK, "{host}");
         let sent = email.captured();
-        assert_eq!(sent.last().unwrap().to, person, "{host}");
-        assert_eq!(sent.last().unwrap().from.as_deref(), Some(sender), "{host}");
+        let message = sent.last().unwrap();
+        let branding = brand.resolve_branding(&views::brand::DEFAULT_BRANDING);
+        assert_eq!(message.to, person);
+        assert_eq!(message.from.as_deref(), Some(sender));
+        assert_eq!(message.from_name.as_deref(), Some(branding.firm.site_name));
+        assert_eq!(
+            message.subject,
+            format!("Reset your {} password", branding.firm.site_name)
+        );
+        assert!(message.body.contains(branding.firm_email));
+        let url = format!(
+            "https://{host}/auth/password/reset/new?token={}",
+            token_from_email(&email, "/auth/password/reset/new?token=")
+        );
+        assert!(message.body.contains(&url));
+        let html = message.html_body.as_deref().unwrap();
+        assert!(html.contains(&format!(r#"href="{url}""#)));
+        assert!(html.contains(brand.default_typeface().label));
+        assert!(html.contains(brand.default_palette().light.link));
+        if branding.firm.social_image.is_empty() {
+            assert!(!html.contains("<img"));
+            assert!(html.contains(branding.firm.site_name));
+        } else {
+            assert!(html.contains(&format!(
+                r#"src="https://{host}{}""#,
+                branding.firm.social_image
+            )));
+        }
     }
 }
 
@@ -382,21 +410,36 @@ async fn request_for_a_google_user_mails_the_sign_in_with_google_notice() {
     // Platform holds no password to reset. The flow must not stay silent —
     // it mails a "you sign in with Google" notice instead of a reset link.
     let meta = mount_metadata().await;
-    let idp = mount_idp(google_user("nick@neonlaw.com"), None).await;
+    let idp = mount_idp(google_user("libra@example.com"), None).await;
     let (state, surreal, email) = state_with_reset(&idp, &meta, true).await;
-    seed_person(&surreal, "nick@neonlaw.com").await;
+    seed_person(&surreal, "libra@example.com").await;
+    surreal
+        .query(
+            "UPDATE brand SET typeface = 'system-sans', logo_content_type = 'image/png', \
+             logo_object_key = 'brand/vesta/custom.png' WHERE brand_key = 'vesta'",
+        )
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
     let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
 
     let form = get(&app, "/auth/password/reset").await;
     let cookie = account_csrf_cookie(&form);
     let (_, token) = csrf_pair(&cookie, &body_string(form).await);
-    let submit = post_form(
-        &app,
-        "/auth/password/reset",
-        &cookie,
-        format!("email=nick%40neonlaw.com&csrf_token={token}"),
-    )
-    .await;
+    let submit = app
+        .oneshot(
+            Request::post("/auth/password/reset")
+                .header("host", "www.vestaestateplanning.com")
+                .header("cookie", &cookie)
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(format!(
+                    "email=libra%40example.com&csrf_token={token}"
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
     // Same neutral page as every other request — no enumeration.
     assert_eq!(submit.status(), StatusCode::OK);
     assert!(&body_string(submit).await.contains("Check your inbox"));
@@ -405,7 +448,15 @@ async fn request_for_a_google_user_mails_the_sign_in_with_google_notice() {
     let captured = email.captured();
     assert_eq!(captured.len(), 1, "one notice is mailed");
     let msg = &captured[0];
-    assert_eq!(msg.to, "nick@neonlaw.com");
+    assert_eq!(msg.to, "libra@example.com");
+    assert_eq!(msg.subject, "Sign in to Vesta Estate Planning with Google");
+    assert!(msg
+        .body
+        .contains("https://www.vestaestateplanning.com/auth/login"));
+    let html = msg.html_body.as_deref().unwrap();
+    assert!(html.contains("font-family:ui-sans-serif, system-ui, sans-serif"));
+    assert!(html.contains(r#"brand/vesta/custom.png" alt="Vesta Estate Planning""#));
+
     assert!(
         msg.body.contains("Google"),
         "body names Google as the sign-in method: {}",

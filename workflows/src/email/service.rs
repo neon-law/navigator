@@ -63,6 +63,8 @@ pub struct OutboundEmail {
     /// it to `views::brand::request_sender_email`; the audit decorator
     /// reads the effective value off the backend it wraps and records that.
     pub from: Option<String>,
+    /// Display name accompanying the sender address in the recipient's inbox.
+    pub from_name: Option<String>,
     /// `Reply-To:` address override. When `Some`, the SendGrid backend
     /// adds a `reply_to` so replies route somewhere other than the
     /// `From:` — the email-thread layer (`portal::email_threads`) points it
@@ -133,6 +135,7 @@ impl OutboundEmail {
             html_body: None,
             template_slug: None,
             from: None,
+            from_name: None,
             reply_to: None,
             person_id: None,
             in_reply_to: None,
@@ -545,11 +548,14 @@ mod tests {
     #[test]
     fn build_request_body_honors_from_override() {
         let svc = SendGridEmail::new("KEY", "support@neonlaw.com");
-        let body = svc.build_request_body(
-            &OutboundEmail::new("a@example.com", "Hi", "Body").with_from("support@neonlaw.org"),
+        let mut message =
+            OutboundEmail::new("a@example.com", "Hi", "Body").with_from("support@example.com");
+        message.from_name = Some("Example Law".into());
+        let body = svc.build_request_body(&message);
+        assert_eq!(
+            body["from"],
+            serde_json::json!({"email": "support@example.com", "name": "Example Law"})
         );
-        // The explicit `.with_from(...)` wins over the backend default.
-        assert_eq!(body["from"]["email"], "support@neonlaw.org");
     }
 
     #[test]

@@ -15,7 +15,7 @@ const EXPECTED_SHA256: &str = "4ba24d0feb8a6b347f60528161d1cf0e7591987d2b3a64a65
 const ADAPTER_PATH: &str = "workflows/src/email/sendgrid_openapi.rs";
 const TEMPLATE_PATH: &str = "vendor/sendgrid/sendgrid_openapi.rs.template";
 const EXPECTED_ADAPTER_SHA256: &str =
-    "b1eabe037dc320e2f41b9cde3b357f89c31e20712a37c4a915a9f453ba295d98";
+    "eebb45c7df552f00015f9e35632e14caf814516362080e0d7d037f519d08a170";
 const GENERATOR_VERSION: &str = "navigator-openapi-rust-1";
 
 struct SendMailContract {

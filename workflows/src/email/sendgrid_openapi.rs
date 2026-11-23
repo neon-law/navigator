@@ -44,6 +44,8 @@ struct Personalization {
 #[derive(Debug, Serialize)]
 struct Mailbox {
     email: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -111,16 +113,19 @@ impl SendMailRequest {
             personalizations: vec![Personalization {
                 to: vec![Mailbox {
                     email: email.to.clone(),
+                    name: None,
                 }],
                 headers: (!headers.is_empty()).then_some(headers),
             }],
             from: Mailbox {
                 email: email.from.as_deref().unwrap_or(backend_from).into(),
+                name: email.from_name.clone(),
             },
             subject: email.subject.clone(),
             content,
             reply_to: email.reply_to.as_ref().map(|email| Mailbox {
                 email: email.clone(),
+                name: None,
             }),
             custom_args: (!custom_args.is_empty()).then_some(custom_args),
             attachments,

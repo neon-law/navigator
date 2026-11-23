@@ -372,12 +372,12 @@ static SITE_BASE_URL: LazyLock<String> = LazyLock::new(|| {
 /// when no base URL is configured.
 #[must_use]
 pub fn absolute_url(rel: &str) -> String {
-    join_site(&SITE_BASE_URL, rel)
+    absolute_url_at(&SITE_BASE_URL, rel)
 }
 
-/// Pure join used by [`absolute_url`]; split out so tests can cover
-/// every base/`rel` shape without touching the process-wide env var.
-fn join_site(base: &str, rel: &str) -> String {
+/// Resolve an asset against an explicit site origin, preserving absolute asset URLs.
+#[must_use]
+pub fn absolute_url_at(base: &str, rel: &str) -> String {
     if base.is_empty() || rel.starts_with("http://") || rel.starts_with("https://") {
         return rel.to_string();
     }
@@ -642,8 +642,8 @@ pub fn responsive_picture(slug: &str, sizes: &str) -> Option<ResponsivePicture> 
 #[cfg(test)]
 mod tests {
     use super::{
-        asset_url, bucket_asset_url, bucket_origin_from, find, font_face_css, join_base, join_site,
-        validate_asset_base_url, Aspect, Theme, GALLERY, SAME_ORIGIN_BUCKET_ROUTE,
+        absolute_url_at, asset_url, bucket_asset_url, bucket_origin_from, find, font_face_css,
+        join_base, validate_asset_base_url, Aspect, Theme, GALLERY, SAME_ORIGIN_BUCKET_ROUTE,
     };
 
     /// `font_face_css` emits both weights under the given family name, so a
@@ -799,29 +799,29 @@ mod tests {
     }
 
     #[test]
-    fn join_site_makes_relative_paths_absolute_against_the_origin() {
+    fn absolute_url_at_makes_relative_paths_absolute_against_the_origin() {
         // With a configured origin, a `/public/...` logo path becomes
         // the absolute URL a social scraper can fetch.
         assert_eq!(
-            join_site("https://www.neonlaw.com", "/public/logo.png"),
+            absolute_url_at("https://www.neonlaw.com", "/public/logo.png"),
             "https://www.neonlaw.com/public/logo.png"
         );
         // Trailing slash on base, no leading slash on rel — still one
         // separator.
         assert_eq!(
-            join_site("https://www.neonlaw.com/", "public/logo.png"),
+            absolute_url_at("https://www.neonlaw.com/", "public/logo.png"),
             "https://www.neonlaw.com/public/logo.png"
         );
     }
 
     #[test]
-    fn join_site_passes_through_when_unconfigured_or_already_absolute() {
+    fn absolute_url_at_passes_through_when_unconfigured_or_already_absolute() {
         // No NAV_BASE_URL (dev/KIND/tests): keep the relative path.
-        assert_eq!(join_site("", "/public/logo.png"), "/public/logo.png");
+        assert_eq!(absolute_url_at("", "/public/logo.png"), "/public/logo.png");
         // Already-absolute image (e.g. a CDN URL): leave it untouched
         // rather than double-prefixing.
         assert_eq!(
-            join_site(
+            absolute_url_at(
                 "https://www.neonlaw.com",
                 "https://cdn.example.com/logo.png"
             ),

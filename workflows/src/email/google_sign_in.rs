@@ -46,8 +46,8 @@ pub fn render_google_sign_in_body(name: &str, email: &str, login_url: &str) -> S
         .replace("{{site_url}}", &site_url)
 }
 
-/// Render the HTML alternative wrapped in the inline-styled firm email
-/// layout. `base_url` is the public origin serving `/public/logo.png`.
+/// Render the HTML alternative with the active brand's catalog theme.
+/// Relative assets resolve against `base_url`.
 #[must_use]
 pub fn render_google_sign_in_html(
     name: &str,

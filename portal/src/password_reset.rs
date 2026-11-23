@@ -18,7 +18,7 @@
 //! - `POST /auth/password/reset/new` — set the new password, then sign in
 
 use axum::extract::{Form, Query, State};
-use axum::http::StatusCode;
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::get;
 use axum::Router;
@@ -151,6 +151,7 @@ struct RequestForm {
 async fn request_submit(
     State(s): State<AuthState>,
     cookies: Cookies,
+    headers: HeaderMap,
     Form(form): Form<RequestForm>,
 ) -> Response {
     if !verify_csrf(&s, &cookies, &form.csrf_token) {
@@ -160,7 +161,8 @@ async fn request_submit(
 
     // Best-effort side effect; the reply is always the same neutral page so
     // a caller can't tell a registered address from an unknown one.
-    match try_send_reset(&s, form.email.trim()).await {
+    let base_url = recovery_base_url(&headers);
+    match try_send_reset(&s, form.email.trim(), &base_url).await {
         // The outcome is logged server-side only — the address is not — so
         // an operator can tell why no email went out while the reply stays
         // neutral.
@@ -174,6 +176,26 @@ async fn request_submit(
         Err(e) => tracing::warn!(error = %e, "password-reset: request side effect failed"),
     }
     webapp::auth_pages::password_reset_sent().into_response()
+}
+
+/// Use a registered hostname of the resolved brand for links carrying a reset token.
+fn recovery_base_url(headers: &HeaderMap) -> String {
+    let registered_host = headers
+        .get(header::HOST)
+        .and_then(|host| host.to_str().ok())
+        .and_then(|host| host.parse::<axum::http::uri::Authority>().ok())
+        .and_then(|authority| {
+            views::brand::brand_key()
+                .hosts()
+                .iter()
+                .find(|host| host.eq_ignore_ascii_case(authority.host()))
+        });
+    if let Some(host) = registered_host.filter(|_| views::brand::base_url().is_empty()) {
+        return format!("https://{host}");
+    }
+    workflows::email::base_url_from_env()
+        .trim_end_matches('/')
+        .to_string()
 }
 
 /// What a reset request did. Every variant but [`Self::Sent`] and
@@ -213,6 +235,7 @@ impl ResetOutcome {
 async fn try_send_reset(
     s: &AuthState,
     email: &str,
+    base_url: &str,
 ) -> anyhow::Result<(ResetOutcome, Option<uuid::Uuid>)> {
     if email.is_empty() {
         return Ok((ResetOutcome::EmptyEmail, None));
@@ -237,7 +260,7 @@ async fn try_send_reset(
     let outcome = match admin.lookup_by_email(&person.email).await {
         Ok(Some(info)) if info.has_password => ResetOutcome::Sent,
         Ok(Some(info)) if info.is_google => {
-            send_google_sign_in_email(s, &person).await;
+            send_recovery_email(s, &person, base_url, None).await;
             return Ok((ResetOutcome::GoogleNotice, person_id));
         }
         Ok(Some(_)) => return Ok((ResetOutcome::NoPasswordProvider, person_id)),
@@ -271,70 +294,49 @@ async fn try_send_reset(
     )
     .await?;
 
-    send_reset_email(s, &person, &plaintext).await;
+    send_recovery_email(s, &person, base_url, Some(&plaintext)).await;
     Ok((outcome, person_id))
 }
 
-async fn send_reset_email(s: &AuthState, person: &store::persons::Person, plaintext: &str) {
-    let base_url = workflows::email::base_url_from_env();
-    let reset_url = format!(
-        "{}/auth/password/reset/new?token={}",
-        base_url.trim_end_matches('/'),
-        plaintext,
-    );
-    let body = workflows::email::password_reset::render_password_reset_body(
-        &person.name,
-        &person.email,
-        &reset_url,
-    );
-    let html = workflows::email::password_reset::render_password_reset_html(
-        &person.name,
-        &person.email,
-        &reset_url,
-        &base_url,
-    );
-    let mut msg = crate::email::OutboundEmail::new(
-        person.email.clone(),
-        workflows::email::password_reset::password_reset_subject(),
-        body,
-    );
-    msg.html_body = Some(html);
-    msg.template_slug = Some(PURPOSE_PASSWORD_RESET.to_string());
+async fn send_recovery_email(
+    s: &AuthState,
+    person: &store::persons::Person,
+    base_url: &str,
+    reset_token: Option<&str>,
+) {
+    use workflows::email::{google_sign_in, layout, password_reset};
+
+    let (slug, subject, body) = if let Some(token) = reset_token {
+        let url = format!("{base_url}/auth/password/reset/new?token={token}");
+        (
+            PURPOSE_PASSWORD_RESET,
+            password_reset::password_reset_subject(),
+            password_reset::render_password_reset_body(&person.name, &person.email, &url),
+        )
+    } else {
+        let url = format!("{base_url}/auth/login");
+        (
+            "google_sign_in",
+            google_sign_in::google_sign_in_subject(),
+            google_sign_in::render_google_sign_in_body(&person.name, &person.email, &url),
+        )
+    };
+
+    let brand = store::brands::find_by_key(&s.surreal, views::brand::brand_key().as_str())
+        .await
+        .unwrap_or_else(|error| {
+            tracing::warn!(%error, "using compiled brand for account recovery email");
+            None
+        });
+    let html = layout::render_branded_email_html(&body, base_url, brand.as_ref());
+    let mut msg = crate::email::OutboundEmail::new(person.email.clone(), subject, body)
+        .with_html(html)
+        .with_template(slug)
+        .with_person(person.id.to_string());
     msg.from = views::brand::request_sender_email();
-    msg.person_id = Some(person.id.to_string());
+    msg.from_name = Some(layout::brand_name().to_string());
     if let Err(e) = s.email.send(msg).await {
         tracing::warn!(error = %e, person_id = %person.id, "password-reset: email send failed");
-    }
-}
-
-/// Mail the "you sign in with Google" notice: the address has no password
-/// in Identity Platform, so there's nothing to reset. Carries no token —
-/// only a link back to the sign-in page where the Google button lives.
-async fn send_google_sign_in_email(s: &AuthState, person: &store::persons::Person) {
-    let base_url = workflows::email::base_url_from_env();
-    let login_url = format!("{}/auth/login", base_url.trim_end_matches('/'));
-    let body = workflows::email::google_sign_in::render_google_sign_in_body(
-        &person.name,
-        &person.email,
-        &login_url,
-    );
-    let html = workflows::email::google_sign_in::render_google_sign_in_html(
-        &person.name,
-        &person.email,
-        &login_url,
-        &base_url,
-    );
-    let mut msg = crate::email::OutboundEmail::new(
-        person.email.clone(),
-        workflows::email::google_sign_in::google_sign_in_subject(),
-        body,
-    );
-    msg.html_body = Some(html);
-    msg.template_slug = Some("google_sign_in".to_string());
-    msg.from = views::brand::request_sender_email();
-    msg.person_id = Some(person.id.to_string());
-    if let Err(e) = s.email.send(msg).await {
-        tracing::warn!(error = %e, person_id = %person.id, "password-reset: google-notice send failed");
     }
 }
 
@@ -525,6 +527,19 @@ pub(crate) async fn find_person_by_email(
 #[cfg(test)]
 mod tests {
     use super::{password_policy_error, ResetOutcome, MIN_PASSWORD_LEN};
+
+    #[test]
+    fn unregistered_host_keeps_the_configured_recovery_origin() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::HOST,
+            "unregistered.example".parse().unwrap(),
+        );
+        assert_eq!(
+            super::recovery_base_url(&headers),
+            workflows::email::base_url_from_env().trim_end_matches('/')
+        );
+    }
 
     #[test]
     fn every_reset_outcome_logs_a_distinct_label() {

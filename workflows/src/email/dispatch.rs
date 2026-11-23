@@ -123,25 +123,10 @@ pub async fn dispatch_state(
 ) -> Result<OutboundEmail, DispatchError> {
     let slug = parse_slug(state_name)?;
     let (subject, body, html) = render_for_slug(slug, payload)?;
-    let mut email = OutboundEmail {
-        to: payload.email.clone(),
-        subject,
-        body,
-        html_body: Some(html),
-        template_slug: Some(slug.to_string()),
-        from: payload.from.clone(),
-        reply_to: None,
-        // `EmailPayload` carries no `persons.id` yet, so workflow-driven
-        // sends can't stamp `person_id` for the delivery-side join.
-        // Threading it through the payload is a follow-up; the join
-        // still works on `template_slug` in the meantime.
-        person_id: None,
-        // Workflow-driven sends aren't part of a support thread.
-        in_reply_to: None,
-        references: None,
-        auto_submitted: false,
-        attachments: Vec::new(),
-    };
+    let mut email = OutboundEmail::new(payload.email.clone(), subject, body)
+        .with_html(html)
+        .with_template(slug);
+    email.from.clone_from(&payload.from);
     // The workshop completion certificate rides a generated PDF. Every other
     // slug keeps the previous shape.
     if slug == "certificate" {
