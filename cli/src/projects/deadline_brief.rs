@@ -104,13 +104,12 @@ fn local_zone(explicit: Option<&str>) -> Result<Tz> {
             ["/etc/localtime", "/var/db/timezone/localtime"]
                 .iter()
                 .filter_map(|path| std::fs::read_link(path).ok())
-                .filter_map(|path| {
+                .find_map(|path| {
                     path.to_string_lossy()
                         .split("zoneinfo/")
                         .nth(1)
                         .map(str::to_owned)
                 })
-                .next()
         })
         .unwrap_or_else(|| "UTC".into());
     Tz::from_str(&name).with_context(|| format!("unknown IANA time zone `{name}`"))
@@ -231,44 +230,43 @@ async fn gather(
     partition_reads(reads)
 }
 
-fn render(
-    base: &str,
+struct ReportRows {
+    rows: Vec<(Project, Deadline)>,
+    next_by_project: Vec<(Project, Deadline)>,
+    empty_reads: usize,
+    no_filter_matches: usize,
+    selected_projects: usize,
+    matched_project_codes: Vec<String>,
+}
+
+fn project_is_selected(project: &Project, filters: &Filters) -> bool {
+    filters
+        .project
+        .as_deref()
+        .is_none_or(|code| code == project.code)
+}
+
+fn collect_rows(
     successful: &[(Project, Vec<Deadline>)],
     failures: &[ReadFailure],
     filters: &Filters,
     now: DateTime<Utc>,
     zone: Tz,
-    as_json: bool,
-) {
-    let total = successful.len() + failures.len();
+) -> ReportRows {
     let selected_projects = successful
         .iter()
-        .filter(|(project, _)| {
-            filters
-                .project
-                .as_deref()
-                .is_none_or(|code| code == project.code)
-        })
+        .filter(|(project, _)| project_is_selected(project, filters))
         .count()
         + failures
             .iter()
-            .filter(|failure| {
-                filters
-                    .project
-                    .as_deref()
-                    .is_none_or(|code| code == failure.project.code)
-            })
+            .filter(|failure| project_is_selected(&failure.project, filters))
             .count();
     let mut rows = Vec::<(Project, Deadline)>::new();
     let mut empty_reads = 0usize;
     let mut no_filter_matches = 0usize;
     let mut next_by_project = Vec::<(Project, Deadline)>::new();
     for (project, deadlines) in successful {
-        if filters
-            .project
-            .as_deref()
-            .is_some_and(|code| code != project.code)
-        {
+        if !project_is_selected(project, filters) {
             continue;
         }
         let mut open = deadlines
@@ -305,27 +303,37 @@ fn render(
             .map(|d| d.with_timezone(&Utc));
         left.cmp(&right).then_with(|| a.1.id.cmp(&b.1.id))
     });
-    let failure_json = failures
-        .iter()
-        .filter(|failure| {
-            filters
-                .project
-                .as_deref()
-                .is_none_or(|code| code == failure.project.code)
-        })
-        .map(|failure| json!({"project_code": failure.project.code, "error": failure.message}))
-        .collect::<Vec<_>>();
     let matched_project_codes = successful
         .iter()
-        .filter(|(project, _)| {
-            filters
-                .project
-                .as_deref()
-                .is_none_or(|code| code == project.code)
-        })
+        .filter(|(project, _)| project_is_selected(project, filters))
         .map(|(project, _)| project.code.clone())
         .collect::<Vec<_>>();
+    ReportRows {
+        rows,
+        next_by_project,
+        empty_reads,
+        no_filter_matches,
+        selected_projects,
+        matched_project_codes,
+    }
+}
+
+fn make_report(
+    base: &str,
+    rows: &ReportRows,
+    failures: &[ReadFailure],
+    filters: &Filters,
+    now: DateTime<Utc>,
+    zone: Tz,
+    inventory_projects: usize,
+) -> Value {
+    let failure_json = failures
+        .iter()
+        .filter(|failure| project_is_selected(&failure.project, filters))
+        .map(|failure| json!({"project_code": failure.project.code, "error": failure.message}))
+        .collect::<Vec<_>>();
     let row_values = rows
+        .rows
         .iter()
         .map(|(project, row)| deadline_value(base, project, row, zone))
         .collect::<Vec<_>>();
@@ -333,6 +341,7 @@ fn render(
         .into_iter()
         .map(|label| {
             let items = rows
+                .rows
                 .iter()
                 .filter(|(_, row)| row.status == "open" && band(row, now, zone) == Some(label))
                 .map(|(project, row)| deadline_value(base, project, row, zone))
@@ -340,23 +349,24 @@ fn render(
             (label.to_owned(), json!(items))
         })
         .collect::<serde_json::Map<_, _>>();
-    let next_values = next_by_project
+    let next_values = rows
+        .next_by_project
         .iter()
         .map(|(project, row)| deadline_value(base, project, row, zone))
         .collect::<Vec<_>>();
-    let report = json!({
+    json!({
         "as_of": now.to_rfc3339(),
         "timezone": zone.name(),
-        "complete": failure_json.is_empty() && selected_projects == matched_project_codes.len(),
+        "complete": failure_json.is_empty() && rows.selected_projects == rows.matched_project_codes.len(),
         "coverage": {
-            "projects_expected": selected_projects,
-            "projects_read": matched_project_codes.len(),
-            "successful_empty_reads": empty_reads,
-            "successful_reads_with_no_filter_matches": no_filter_matches,
+            "projects_expected": rows.selected_projects,
+            "projects_read": rows.matched_project_codes.len(),
+            "successful_empty_reads": rows.empty_reads,
+            "successful_reads_with_no_filter_matches": rows.no_filter_matches,
             "failed_reads": failure_json.len(),
             "failed_projects": failure_json,
-            "project_codes_read": matched_project_codes,
-            "inventory_projects": total
+            "project_codes_read": rows.matched_project_codes,
+            "inventory_projects": inventory_projects
         },
         "filters": {
             "project": filters.project,
@@ -368,33 +378,95 @@ fn render(
         "views": views,
         "next_recorded_deadline_per_project": next_values,
         "deadlines": row_values
-    });
+    })
+}
+
+fn render(
+    base: &str,
+    successful: &[(Project, Vec<Deadline>)],
+    failures: &[ReadFailure],
+    filters: &Filters,
+    now: DateTime<Utc>,
+    zone: Tz,
+    as_json: bool,
+) {
+    let inventory_projects = successful.len() + failures.len();
+    let rows = collect_rows(successful, failures, filters, now, zone);
+    let report = make_report(
+        base,
+        &rows,
+        failures,
+        filters,
+        now,
+        zone,
+        inventory_projects,
+    );
     if as_json {
         println!("{report}");
         return;
     }
+    render_console(base, &rows, failures, filters, now, zone, &report);
+}
+
+fn render_console(
+    base: &str,
+    data: &ReportRows,
+    failures: &[ReadFailure],
+    filters: &Filters,
+    now: DateTime<Utc>,
+    zone: Tz,
+    report: &Value,
+) {
     println!(
         "Deadline brief · {} · as of {}",
         zone.name(),
         now.with_timezone(&zone).format("%Y-%m-%d %H:%M %:z")
     );
     println!(
-        "Coverage: {}/{} Projects read; {empty_reads} empty source reads; {no_filter_matches} reads with no filter matches; {} failed reads.",
-        matched_project_codes.len(),
-        selected_projects,
+        "Coverage: {}/{} Projects read; {} empty source reads; {} reads with no filter matches; {} failed reads.",
+        data.matched_project_codes.len(),
+        data.selected_projects,
+        data.empty_reads,
+        data.no_filter_matches,
         failures.len()
     );
-    for failure in failures.iter().filter(|failure| {
-        filters
-            .project
-            .as_deref()
-            .is_none_or(|code| code == failure.project.code)
-    }) {
+    for failure in failures
+        .iter()
+        .filter(|failure| project_is_selected(&failure.project, filters))
+    {
         println!("  FAILED {}: {}", failure.project.code, failure.message);
     }
-    if failures.is_empty() && rows.is_empty() {
+    if failures.is_empty() && data.rows.is_empty() {
         println!("No deadlines match the selected filters.");
     }
+    render_table(base, &data.rows, zone);
+    render_bands(&data.rows, now, zone);
+    render_next(data, zone);
+    println!(
+        "Views: overdue {}, today {}, next 7 days {}, next 30 days {}.",
+        report["views"]["Overdue"].as_array().map_or(0, Vec::len),
+        report["views"]["Today"].as_array().map_or(0, Vec::len),
+        report["views"]["Next 7 days"]
+            .as_array()
+            .map_or(0, Vec::len),
+        report["views"]["Next 30 days"]
+            .as_array()
+            .map_or(0, Vec::len)
+    );
+}
+
+fn format_due(due_at: &str, zone: Tz) -> String {
+    DateTime::parse_from_rfc3339(due_at).map_or_else(
+        |_| due_at.to_owned(),
+        |date| {
+            date.with_timezone(&zone)
+                .format("%Y-%m-%d %H:%M %:z")
+                .to_string()
+        },
+    )
+}
+
+fn render_table(base: &str, rows: &[(Project, Deadline)], zone: Tz) {
     let mut table = Table::new();
     table
         .load_style(UTF8_FULL)
@@ -406,14 +478,8 @@ fn render(
         "Title",
         "Source context",
     ]);
-    for (project, row) in &rows {
-        let due = DateTime::parse_from_rfc3339(&row.due_at)
-            .map(|date| {
-                date.with_timezone(&zone)
-                    .format("%Y-%m-%d %H:%M %:z")
-                    .to_string()
-            })
-            .unwrap_or_else(|_| row.due_at.clone());
+    for (project, row) in rows {
+        let due = format_due(&row.due_at, zone);
         let title = row
             .title
             .as_deref()
@@ -452,6 +518,9 @@ fn render(
         ]);
     }
     println!("{table}");
+}
+
+fn render_bands(rows: &[(Project, Deadline)], now: DateTime<Utc>, zone: Tz) {
     for label in ["Overdue", "Today", "Next 7 days", "Next 30 days"] {
         println!("{label}:");
         let mut found = false;
@@ -460,13 +529,7 @@ fn render(
             .filter(|(_, row)| row.status == "open" && band(row, now, zone) == Some(label))
         {
             found = true;
-            let due = DateTime::parse_from_rfc3339(&row.due_at)
-                .map(|date| {
-                    date.with_timezone(&zone)
-                        .format("%Y-%m-%d %H:%M %:z")
-                        .to_string()
-                })
-                .unwrap_or_else(|_| row.due_at.clone());
+            let due = format_due(&row.due_at, zone);
             println!(
                 "  {} · {} · {} · {}",
                 project.code,
@@ -482,15 +545,12 @@ fn render(
             println!("  none");
         }
     }
+}
+
+fn render_next(data: &ReportRows, zone: Tz) {
     println!("Next recorded operative deadline per Project:");
-    for (project, row) in &next_by_project {
-        let due = DateTime::parse_from_rfc3339(&row.due_at)
-            .map(|date| {
-                date.with_timezone(&zone)
-                    .format("%Y-%m-%d %H:%M %:z")
-                    .to_string()
-            })
-            .unwrap_or_else(|_| row.due_at.clone());
+    for (project, row) in &data.next_by_project {
+        let due = format_due(&row.due_at, zone);
         println!(
             "  {} · {} · {}",
             project.code,
@@ -498,34 +558,21 @@ fn render(
             row.title.as_deref().unwrap_or("Deadline")
         );
     }
-    println!(
-        "Views: overdue {}, today {}, next 7 days {}, next 30 days {}.",
-        report["views"]["Overdue"].as_array().map_or(0, Vec::len),
-        report["views"]["Today"].as_array().map_or(0, Vec::len),
-        report["views"]["Next 7 days"]
-            .as_array()
-            .map_or(0, Vec::len),
-        report["views"]["Next 30 days"]
-            .as_array()
-            .map_or(0, Vec::len)
-    );
 }
 
-pub async fn brief(
-    host: Option<&str>,
-    project: Option<&str>,
-    due_by: Option<&str>,
-    today: bool,
-    overdue: bool,
-    status: &str,
-    timezone: Option<&str>,
-    as_json: bool,
-) -> std::process::ExitCode {
-    match run(
-        host, project, due_by, today, overdue, status, timezone, as_json,
-    )
-    .await
-    {
+pub struct BriefOptions {
+    pub host: Option<String>,
+    pub project: Option<String>,
+    pub due_by: Option<String>,
+    pub today: bool,
+    pub overdue: bool,
+    pub status: String,
+    pub timezone: Option<String>,
+    pub as_json: bool,
+}
+
+pub async fn brief(options: BriefOptions) -> std::process::ExitCode {
+    match run(options).await {
         Ok(complete) if complete => std::process::ExitCode::SUCCESS,
         Ok(_) => std::process::ExitCode::from(1),
         Err(error) => {
@@ -535,37 +582,38 @@ pub async fn brief(
     }
 }
 
-async fn run(
-    host: Option<&str>,
-    project: Option<&str>,
-    due_by: Option<&str>,
-    today: bool,
-    overdue: bool,
-    status: &str,
-    timezone: Option<&str>,
-    as_json: bool,
-) -> Result<bool> {
+async fn run(options: BriefOptions) -> Result<bool> {
+    let BriefOptions {
+        host,
+        project,
+        due_by,
+        today,
+        overdue,
+        status,
+        timezone,
+        as_json,
+    } = options;
     let due_by = due_by
         .map(|value| {
-            NaiveDate::parse_from_str(value, "%Y-%m-%d")
+            NaiveDate::parse_from_str(&value, "%Y-%m-%d")
                 .with_context(|| format!("--due-by must be YYYY-MM-DD, got `{value}`"))
         })
         .transpose()?;
-    let zone = local_zone(timezone)?;
+    let zone = local_zone(timezone.as_deref())?;
     let now = Utc::now();
     let filters = Filters {
         due_by,
         today,
         overdue,
-        status: status.to_owned(),
-        project: project.map(str::to_owned),
+        status,
+        project: project.clone(),
     };
-    let (base, token) = remote::resolve(host)?;
+    let (base, token) = remote::resolve(host.as_deref())?;
     let client = reqwest::Client::new();
     let mut projects: Vec<Project> = list(&client, format!("{base}{INVENTORY_PATH}"), &token)
         .await
         .context("read the dashboard-scoped open Project inventory")?;
-    if let Some(code) = project {
+    if let Some(code) = project.as_deref() {
         projects.retain(|row| row.code == code);
         anyhow::ensure!(
             !projects.is_empty(),

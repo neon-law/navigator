@@ -2854,16 +2854,16 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
                 timezone,
                 json,
             } => {
-                projects::deadline_brief::brief(
-                    host.host.as_deref(),
-                    project.as_deref(),
-                    due_by.as_deref(),
+                projects::deadline_brief::brief(projects::deadline_brief::BriefOptions {
+                    host: host.host,
+                    project,
+                    due_by,
                     today,
                     overdue,
-                    &status,
-                    timezone.as_deref(),
-                    json,
-                )
+                    status,
+                    timezone,
+                    as_json: json,
+                })
                 .await
             }
             DeadlineCmd::Create {
