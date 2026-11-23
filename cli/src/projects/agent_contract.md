@@ -105,6 +105,7 @@ the gap in the private matter handoff.
   * `Client Production/` holds what the client supplied, such as exhibits (`kind: exhibit`). Its two fixed subfolders
     nest below it: `Agreements/` and `Screenshots/` — a pointer's `folder:` names them, or `navigator project
     migrate-folders` files a pointer there; no `kind` defaults to either.
+  * `Mail (Correspondence)/` holds original filed messages.
   * `Correspondence (Served)/` holds letters served or received (`kind: letter`).
   * `Discovery (Served)/` holds discovery actually served or received.
   * `Docket Filings/` holds court paper: pleadings, filings, and docket ingest (`kind: pleading`, `filing`).
@@ -137,7 +138,7 @@ the gap in the private matter handoff.
 * `notes/` is git-ignored. Write call notes there for `navigator project communication create --body-file`.
 * `mail/` is git-ignored. Saved mail lives there: `navigator mail save <message-url>` writes a message's
   `YYYY.MM.DD_<subject>.eml` copy, and email bodies kept on disk for `navigator mail draft --body-file` belong there
-  too. Saved mail is a matter fact, never Git; the gate refuses anything under `mail/`.
+  too. The gate requires a matching pointer for each saved .eml and refuses tracked files under `mail/`.
 * Handoff note: work that may outlast the session keeps its state in `notes/HANDOFF-<topic>.md.local`. The gate does
   not read it, and no matter fact leaves the repository. Follow `.agents/skills/working-notes/SKILL.md`.
   * Write it before a session ends with work in flight, near compaction, or when the lawyer asks. Rewrite it when the
@@ -206,7 +207,10 @@ For a client email:
   URL copied from the browser), `navigator mail parse <message.eml>`, or `navigator mail parse <document.pdf>` — the
   last uploads through the document lane. Filing is a record write only; it never sends or archives in Gmail.
 * To keep a Gmail message's .eml copy in this checkout, run `navigator mail save <gmail-web-url>`; it writes
-  `mail/YYYY.MM.DD_<subject>.eml` and refuses a filename that drops the send-date prefix.
+  `mail/YYYY.MM.DD_<subject>.eml`. File it with `navigator mail parse <path>` in the Project checkout, then include the
+  dated pointer under `blobs/` in the Project pull request. The pointer records the Gmail thread when known. The
+  original is internal by default. Use `--visibility client` only when the lawyer intends to share the entire original
+  message, including embedded attachments.
 
 ## Feedback
 

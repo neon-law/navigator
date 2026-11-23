@@ -140,6 +140,9 @@ pub enum MatterFolder {
     /// Letters served on, or received from, another party.
     #[serde(rename = "Correspondence (Served)")]
     CorrespondenceServed,
+    /// Original messages filed as correspondence.
+    #[serde(rename = "Mail (Correspondence)")]
+    MailCorrespondence,
     /// Receipts and other evidence of costs incurred on the Project.
     #[serde(rename = "Costs")]
     Costs,
@@ -190,12 +193,13 @@ pub enum MatterFolder {
 impl MatterFolder {
     /// Every matter folder, in the order a Finder window lists them,
     /// including the bare `Discovery` folder older checkouts hold.
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 19] = [
         Self::ClientProduction,
         Self::ClientProductionAgreements,
         Self::ClientProductionScreenshots,
         Self::CorrespondenceServed,
         Self::Costs,
+        Self::MailCorrespondence,
         Self::Discovery,
         Self::DiscoveryServed,
         Self::DocketFilings,
@@ -213,12 +217,13 @@ impl MatterFolder {
 
     /// The tree a fresh checkout creates (LAW-215): [`Self::ALL`] without
     /// the bare `Discovery` folder, which only a migration refiles.
-    pub const TREE: [Self; 17] = [
+    pub const TREE: [Self; 18] = [
         Self::ClientProduction,
         Self::ClientProductionAgreements,
         Self::ClientProductionScreenshots,
         Self::CorrespondenceServed,
         Self::Costs,
+        Self::MailCorrespondence,
         Self::DiscoveryServed,
         Self::DocketFilings,
         Self::CourtRules,
@@ -250,6 +255,7 @@ impl MatterFolder {
             Self::ClientProductionAgreements => "Client Production/Agreements",
             Self::ClientProductionScreenshots => "Client Production/Screenshots",
             Self::CorrespondenceServed => "Correspondence (Served)",
+            Self::MailCorrespondence => "Mail (Correspondence)",
             Self::Costs => "Costs",
             Self::Discovery => "Discovery",
             Self::DiscoveryServed => "Discovery (Served)",
@@ -303,6 +309,7 @@ impl MatterFolder {
             Self::ClientProduction
             | Self::CorrespondenceServed
             | Self::Costs
+            | Self::MailCorrespondence
             | Self::Discovery
             | Self::DiscoveryServed
             | Self::DocketFilings
@@ -363,7 +370,7 @@ impl MatterFolder {
     pub const fn default_kind(self) -> &'static str {
         match self {
             Self::ClientProduction => "exhibit",
-            Self::CorrespondenceServed => "letter",
+            Self::CorrespondenceServed | Self::MailCorrespondence => "letter",
             Self::Costs => "receipt",
             Self::DocketFilings => "pleading",
             Self::ClientCallsWorkProduct => "transcript",
@@ -773,6 +780,13 @@ mod tests {
         for folder in MatterFolder::ALL {
             assert_eq!(MatterFolder::parse(folder.as_str()), Some(folder));
         }
+    }
+
+    #[test]
+    fn sync_provisions_a_folder_for_original_mail() {
+        let folder = MatterFolder::parse_checked("Mail (Correspondence)").unwrap();
+        assert!(MatterFolder::TREE.contains(&folder));
+        assert_eq!(folder.default_kind(), "letter");
     }
 
     #[test]
