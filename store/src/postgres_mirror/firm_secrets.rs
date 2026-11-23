@@ -18,6 +18,7 @@ struct Image {
     firm_id: Uuid,
     provider: String,
     kind: String,
+    stripe_mode: Option<String>,
     version: i64,
     ciphertext: String,
     wrapped_dek: String,
@@ -61,6 +62,7 @@ struct Source {
     firm_id: RecordId,
     provider: String,
     kind: String,
+    stripe_mode: Option<String>,
     version: i64,
     ciphertext: String,
     wrapped_dek: String,
@@ -85,6 +87,7 @@ fn image(row: Source) -> Result<Image, MirrorError> {
         firm_id: uuid(&row.firm_id, "firm")?,
         provider: row.provider,
         kind: row.kind,
+        stripe_mode: row.stripe_mode,
         version: row.version,
         ciphertext: row.ciphertext,
         wrapped_dek: row.wrapped_dek,
@@ -98,7 +101,7 @@ fn image(row: Source) -> Result<Image, MirrorError> {
 }
 
 async fn source(surreal: &SurrealDb, firm_id: Uuid) -> Result<BTreeMap<Uuid, Image>, MirrorError> {
-    let rows: Vec<Source> = surreal.query("SELECT id, firm_id, provider, kind, version, ciphertext, wrapped_dek, kms_key_version, kms_context, status, actor_id, created_at, updated_at FROM firm_integration_secret WHERE firm_id = $firm_id")
+    let rows: Vec<Source> = surreal.query("SELECT id, firm_id, provider, kind, stripe_mode, version, ciphertext, wrapped_dek, kms_key_version, kms_context, status, actor_id, created_at, updated_at FROM firm_integration_secret WHERE firm_id = $firm_id")
         .bind(("firm_id", crate::surreal::record_id("firm", firm_id))).await
         .and_then(surrealdb::IndexedResults::check).map_err(|_| MirrorError::Source)?
         .take(0).map_err(|_| MirrorError::Source)?;
@@ -111,15 +114,15 @@ async fn source(surreal: &SurrealDb, firm_id: Uuid) -> Result<BTreeMap<Uuid, Ima
 }
 
 async fn target(pg: &PostgresDb, firm_id: Uuid) -> Result<BTreeMap<Uuid, Image>, MirrorError> {
-    sqlx::query("SELECT id, firm_id, provider, kind, version, ciphertext, wrapped_dek, kms_key_version, kms_context, status, actor_id, created_at, updated_at FROM firm_integration_secret WHERE firm_id=$1")
+    sqlx::query("SELECT id, firm_id, provider, kind, stripe_mode, version, ciphertext, wrapped_dek, kms_key_version, kms_context, status, actor_id, created_at, updated_at FROM firm_integration_secret WHERE firm_id=$1")
         .bind(firm_id).fetch_all(&pg.0).await?.into_iter().map(|r| Ok((r.try_get("id")?, Image {
-            id: r.try_get("id")?, firm_id: r.try_get("firm_id")?, provider: r.try_get("provider")?, kind: r.try_get("kind")?, version: r.try_get("version")?, ciphertext: r.try_get("ciphertext")?, wrapped_dek: r.try_get("wrapped_dek")?, kms_key_version: r.try_get("kms_key_version")?, kms_context: r.try_get("kms_context")?, status: r.try_get("status")?, actor_id: r.try_get("actor_id")?, created_at: r.try_get("created_at")?, updated_at: r.try_get("updated_at")?,
+            id: r.try_get("id")?, firm_id: r.try_get("firm_id")?, provider: r.try_get("provider")?, kind: r.try_get("kind")?, stripe_mode: r.try_get("stripe_mode")?, version: r.try_get("version")?, ciphertext: r.try_get("ciphertext")?, wrapped_dek: r.try_get("wrapped_dek")?, kms_key_version: r.try_get("kms_key_version")?, kms_context: r.try_get("kms_context")?, status: r.try_get("status")?, actor_id: r.try_get("actor_id")?, created_at: r.try_get("created_at")?, updated_at: r.try_get("updated_at")?,
         }))).collect()
 }
 
 async fn insert_missing(pg: &PostgresDb, r: &Image) -> Result<bool, MirrorError> {
-    let result = sqlx::query("INSERT INTO firm_integration_secret (id,firm_id,provider,kind,version,ciphertext,wrapped_dek,kms_key_version,kms_context,status,actor_id,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT DO NOTHING")
-        .bind(r.id).bind(r.firm_id).bind(&r.provider).bind(&r.kind).bind(r.version).bind(&r.ciphertext).bind(&r.wrapped_dek).bind(&r.kms_key_version).bind(&r.kms_context).bind(&r.status).bind(r.actor_id).bind(r.created_at).bind(r.updated_at).execute(&pg.0).await?;
+    let result = sqlx::query("INSERT INTO firm_integration_secret (id,firm_id,provider,kind,version,ciphertext,wrapped_dek,kms_key_version,kms_context,status,actor_id,created_at,updated_at,stripe_mode) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT DO NOTHING")
+        .bind(r.id).bind(r.firm_id).bind(&r.provider).bind(&r.kind).bind(r.version).bind(&r.ciphertext).bind(&r.wrapped_dek).bind(&r.kms_key_version).bind(&r.kms_context).bind(&r.status).bind(r.actor_id).bind(r.created_at).bind(r.updated_at).bind(&r.stripe_mode).execute(&pg.0).await?;
     Ok(result.rows_affected() != 0)
 }
 

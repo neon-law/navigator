@@ -1478,6 +1478,7 @@ the distinction visible when debugging: changing an admin role cannot repair a m
 | Operator-local DNSimple CLI | See the operator-shell list below; never store it in a deployment config |
 | GitHub release authentication | `GITHUB_TOKEN` |
 | Xero sandbox OAuth | `XERO_SANDBOX_CLIENT_ID`, `XERO_SANDBOX_CLIENT_SECRET` |
+| Stripe sandbox invoices | `STRIPE_SANDBOX_NEVADA_SECRET_KEY`, `STRIPE_SANDBOX_OPERATING_SECRET_KEY` |
 | Engineering Slack routing | `SLACK_OPS_MENTION` |
 | Browser-driver override | `WEBDRIVER_URL`, `WEBDRIVER_HEADED` |
 | Deterministic GCP test token | `DEVX_GCP_FAKE_TOKEN`, `ARCHIVES_FAKE_TOKEN` |

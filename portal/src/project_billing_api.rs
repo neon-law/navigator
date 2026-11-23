@@ -326,14 +326,9 @@ pub(crate) async fn generate_invoice(
     let stripe_key = stripe_credential(surreal, project.firm_id, kind).await?;
     let stripe = match &stripe_key {
         Some(key) => {
-            use store::config::{sample_matters, staging_from, DeploymentEnvironment};
-            let mode = DeploymentEnvironment::from_env()
-                .map_err(|_| InvoiceGenerationError::StripeUnavailable)?;
-            let simulated =
-                sample_matters(mode).map_err(|_| InvoiceGenerationError::StripeUnavailable)?;
-            let staging = staging_from(|key| std::env::var(key).ok())
-                .map_err(|_| InvoiceGenerationError::StripeUnavailable)?;
-            let live = mode == DeploymentEnvironment::Production && !simulated && !staging;
+            let live = store::firm_secrets::stripe_mode()
+                .map_err(|_| InvoiceGenerationError::StripeUnavailable)?
+                == store::firm_secrets::Mode::Live;
             let client =
                 billing::stripe::StripeInvoiceClient::new(key.expose_for_provider_call(), live)?;
             Some(match &route {

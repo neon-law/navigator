@@ -44,6 +44,25 @@ spec:
             - $patch: replace
             - name: PORT
               value: "3001"
+            # Firm credentials stay encrypted in Navigator. Only routing configuration comes from this ConfigMap.
+            - name: STRIPE_DEFAULT
+              valueFrom:
+                configMapKeyRef:
+                  name: navigator-stripe-routing
+                  key: operating
+                  optional: true
+            - name: STRIPE_NEVADA
+              valueFrom:
+                configMapKeyRef:
+                  name: navigator-stripe-routing
+                  key: nevada
+                  optional: true
+            - name: NAVIGATOR_STRIPE_TRUST_ROUTES
+              valueFrom:
+                configMapKeyRef:
+                  name: navigator-stripe-routing
+                  key: trust-routes
+                  optional: true
             # Optional deployment-owned trust for the separate Forgejo
             # document-only CI exchange. No values are committed here.
             - name: NAVIGATOR_FORGEJO_ACTIONS_OIDC_ISSUER

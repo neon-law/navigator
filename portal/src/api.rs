@@ -219,6 +219,9 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             post(firm_journal_api::xero),
         ),
         ("GET", "/app/api/entities", get(list_entities)),
+        ("GET", "/app/api/firms/{id}/secrets", get(crate::firm_secret_api::list)),
+        ("PUT", "/app/api/firms/{id}/secrets/stripe/{account}/{kind}/{mode}", put(crate::firm_secret_api::set).layer(DefaultBodyLimit::max(4096))),
+        ("DELETE", "/app/api/firms/{id}/secrets/stripe/{account}/{kind}/{mode}", delete(crate::firm_secret_api::delete)),
         ("GET", "/app/api/firms", get(list_firms)),
         (
             "PATCH",

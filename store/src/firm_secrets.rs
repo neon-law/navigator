@@ -6,6 +6,7 @@
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use cloud::{KmsContext, KmsError, RuntimeKms, WrappedDataKey};
+pub use model::stripe_keys::{Account, KeyKind, Mode};
 use serde::Serialize;
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
@@ -57,7 +58,7 @@ impl IntegrationProvider {
 /// view builds its "create a secret" choices from this rather than a
 /// hand-kept second list, so a new kind cannot be added to the enum without
 /// also appearing there.
-pub const ALL_KINDS: [IntegrationSecretKind; 15] = [
+pub const ALL_KINDS: [IntegrationSecretKind; 17] = [
     IntegrationSecretKind::MercuryReadToken,
     IntegrationSecretKind::XeroTenantId,
     IntegrationSecretKind::XeroWebhookKey,
@@ -73,6 +74,8 @@ pub const ALL_KINDS: [IntegrationSecretKind; 15] = [
     IntegrationSecretKind::DocuSignConnection,
     IntegrationSecretKind::StripeNevadaAppKey,
     IntegrationSecretKind::StripeOperatingAppKey,
+    IntegrationSecretKind::StripeNevadaPublishableKey,
+    IntegrationSecretKind::StripeOperatingPublishableKey,
 ];
 
 /// Typed Firm API credentials and provider webhook verification keys.
@@ -100,9 +103,66 @@ pub enum IntegrationSecretKind {
     DocuSignConnection,
     StripeNevadaAppKey,
     StripeOperatingAppKey,
+    StripeNevadaPublishableKey,
+    StripeOperatingPublishableKey,
+}
+
+pub fn stripe_mode() -> Result<Mode, SecretStoreError> {
+    stripe_mode_from(|name| std::env::var(name).ok())
+}
+
+fn stripe_mode_from(get: impl Fn(&str) -> Option<String>) -> Result<Mode, SecretStoreError> {
+    use crate::config::{sample_matters_from, staging_from, DeploymentEnvironment};
+    let environment =
+        DeploymentEnvironment::from_lookup(&get).map_err(|_| SecretStoreError::InvalidStripeKey)?;
+    let simulated =
+        sample_matters_from(environment, &get).map_err(|_| SecretStoreError::InvalidStripeKey)?;
+    let staging = staging_from(get).map_err(|_| SecretStoreError::InvalidStripeKey)?;
+    Ok(
+        if environment == DeploymentEnvironment::Production && !simulated && !staging {
+            Mode::Live
+        } else {
+            Mode::Sandbox
+        },
+    )
 }
 
 impl IntegrationSecretKind {
+    #[must_use]
+    pub const fn stripe(account: Account, kind: KeyKind) -> Self {
+        match (account, kind) {
+            (Account::Nevada, KeyKind::Publishable) => Self::StripeNevadaPublishableKey,
+            (Account::Nevada, KeyKind::Secret) => Self::StripeNevadaAppKey,
+            (Account::Operating, KeyKind::Publishable) => Self::StripeOperatingPublishableKey,
+            (Account::Operating, KeyKind::Secret) => Self::StripeOperatingAppKey,
+        }
+    }
+
+    #[must_use]
+    pub fn stripe_slot(self) -> Option<(Account, KeyKind)> {
+        [Account::Nevada, Account::Operating]
+            .into_iter()
+            .flat_map(|account| [KeyKind::Publishable, KeyKind::Secret].map(|kind| (account, kind)))
+            .find(|&(account, kind)| Self::stripe(account, kind) == self)
+    }
+
+    fn validated_stripe_mode(self, value: &str) -> Result<Option<Mode>, SecretStoreError> {
+        let Some((_, kind)) = self.stripe_slot() else {
+            return Ok(None);
+        };
+        let mode = stripe_mode()?;
+        // Existing billing integrations also accept restricted server keys.
+        let restricted = kind == KeyKind::Secret
+            && value
+                .strip_prefix("rk_")
+                .is_some_and(|suffix| mode.accepts(kind, &format!("sk_{suffix}")));
+        if mode.accepts(kind, value) || restricted {
+            Ok(Some(mode))
+        } else {
+            Err(SecretStoreError::InvalidStripeKey)
+        }
+    }
+
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -121,6 +181,8 @@ impl IntegrationSecretKind {
             Self::DocuSignConnection => "docusign_connection",
             Self::StripeNevadaAppKey => "stripe_nevada_app_key",
             Self::StripeOperatingAppKey => "stripe_operating_app_key",
+            Self::StripeNevadaPublishableKey => "stripe_nevada_publishable_key",
+            Self::StripeOperatingPublishableKey => "stripe_operating_publishable_key",
         }
     }
 
@@ -140,7 +202,10 @@ impl IntegrationSecretKind {
             Self::PortalLogin => IntegrationProvider::CourtPortal,
             Self::TwilioAuthToken => IntegrationProvider::Twilio,
             Self::DocuSignConnection => IntegrationProvider::DocuSign,
-            Self::StripeNevadaAppKey | Self::StripeOperatingAppKey => IntegrationProvider::Stripe,
+            Self::StripeNevadaAppKey
+            | Self::StripeOperatingAppKey
+            | Self::StripeNevadaPublishableKey
+            | Self::StripeOperatingPublishableKey => IntegrationProvider::Stripe,
         }
     }
 }
@@ -152,6 +217,7 @@ pub struct SecretMetadata {
     pub firm_id: Uuid,
     pub provider: IntegrationProvider,
     pub kind: IntegrationSecretKind,
+    pub stripe_mode: Option<String>,
     pub version: i64,
     pub status: String,
     pub kms_key_version: String,
@@ -221,6 +287,8 @@ pub enum SecretStoreError {
     },
     #[error("the provider and typed secret kind do not match")]
     InvalidKind,
+    #[error("Stripe key type or mode does not match this deployment")]
+    InvalidStripeKey,
     #[error("the submitted credential is empty")]
     EmptyValue,
     #[error("no project {0}")]
@@ -255,6 +323,7 @@ struct SecretRow {
 
 #[derive(SurrealValue)]
 struct MetadataRow {
+    stripe_mode: Option<String>,
     firm_id: surrealdb::types::RecordId,
     provider: String,
     kind: String,
@@ -288,24 +357,7 @@ pub fn parse_provider(value: &str) -> Option<IntegrationProvider> {
 /// as [`parse_provider`].
 #[must_use]
 pub fn parse_kind(value: &str) -> Option<IntegrationSecretKind> {
-    match value {
-        "xero_client_id" => Some(IntegrationSecretKind::XeroClientId),
-        "xero_client_secret" => Some(IntegrationSecretKind::XeroClientSecret),
-        "xero_refresh_token" => Some(IntegrationSecretKind::XeroRefreshToken),
-        "slack_bot_token" => Some(IntegrationSecretKind::SlackBotToken),
-        "notion_token" => Some(IntegrationSecretKind::NotionToken),
-        "github_app_private_key" => Some(IntegrationSecretKind::GitHubAppPrivateKey),
-        "mercury_read_token" => Some(IntegrationSecretKind::MercuryReadToken),
-        "xero_tenant_id" => Some(IntegrationSecretKind::XeroTenantId),
-        "xero_webhook_key" => Some(IntegrationSecretKind::XeroWebhookKey),
-        "forgejo_access_token" => Some(IntegrationSecretKind::ForgejoAccessToken),
-        "portal_login" => Some(IntegrationSecretKind::PortalLogin),
-        "twilio_auth_token" => Some(IntegrationSecretKind::TwilioAuthToken),
-        "docusign_connection" => Some(IntegrationSecretKind::DocuSignConnection),
-        "stripe_nevada_app_key" => Some(IntegrationSecretKind::StripeNevadaAppKey),
-        "stripe_operating_app_key" => Some(IntegrationSecretKind::StripeOperatingAppKey),
-        _ => None,
-    }
+    ALL_KINDS.into_iter().find(|kind| kind.as_str() == value)
 }
 
 fn metadata(row: MetadataRow) -> Result<SecretMetadata, SecretStoreError> {
@@ -313,6 +365,7 @@ fn metadata(row: MetadataRow) -> Result<SecretMetadata, SecretStoreError> {
         firm_id: record_uuid(&row.firm_id).ok_or(SecretStoreError::WriteReturnedNothing)?,
         provider: parse_provider(&row.provider).ok_or(SecretStoreError::InvalidKind)?,
         kind: parse_kind(&row.kind).ok_or(SecretStoreError::InvalidKind)?,
+        stripe_mode: row.stripe_mode,
         version: row.version,
         status: row.status,
         kms_key_version: row.kms_key_version,
@@ -456,6 +509,7 @@ async fn write_secret(
     if value.trim().is_empty() {
         return Err(SecretStoreError::EmptyValue);
     }
+    let stripe_mode = kind.validated_stripe_mode(value)?;
     let actor_id = actor_person_id.ok_or(SecretStoreError::NotAuthorized)?;
     if crate::firms::find_by_id(surreal, firm_id)
         .await
@@ -469,7 +523,11 @@ async fn write_secret(
         .map_err(|_| SecretStoreError::Postgres)?
     {
         return crate::postgres::firm_secrets::write_secret(
-            &pg, firm_id, provider, kind, actor_id, value, kms,
+            &pg,
+            request,
+            actor_id,
+            stripe_mode,
+            kms,
         )
         .await;
     }
@@ -500,12 +558,13 @@ async fn write_secret(
             "BEGIN; \
              UPDATE {TABLE} SET status = 'revoked', updated_at = $now WHERE \
              firm_id = $firm_id AND provider = $provider AND kind = $kind AND status = 'active' AND $replace_current; \
-             CREATE $id SET firm_id = $firm_id, provider = $provider, kind = $kind, version = $version, \
+             CREATE $id SET firm_id = $firm_id, provider = $provider, kind = $kind, stripe_mode = $stripe_mode, version = $version, \
              ciphertext = $ciphertext, wrapped_dek = $wrapped_dek, kms_key_version = $kms_key_version, \
              kms_context = $kms_context, status = 'active', actor_id = $actor_id, created_at = $now, updated_at = $now; \
              COMMIT;"
         ))
         .bind(("id", record_id(TABLE, secret_ref)))
+        .bind(("stripe_mode", stripe_mode.map(|mode| mode.to_string())))
         .bind(("replace_current", kind != IntegrationSecretKind::TwilioAuthToken))
         .bind(("firm_id", record_id(FIRM_TABLE, firm_id)))
         .bind(("provider", provider.as_str().to_string()))
@@ -549,7 +608,7 @@ pub async fn metadata_for_firm(
         .await
         .map_err(|_| SecretStoreError::Postgres)?
     {
-        let row = sqlx::query("SELECT firm_id,provider,kind,version,kms_key_version,status,actor_id,created_at,updated_at FROM firm_integration_secret WHERE firm_id=$1 AND provider=$2 AND kind=$3 AND status='active' ORDER BY version DESC LIMIT 1")
+        let row = sqlx::query("SELECT firm_id,provider,kind,stripe_mode,version,kms_key_version,status,actor_id,created_at,updated_at FROM firm_integration_secret WHERE firm_id=$1 AND provider=$2 AND kind=$3 AND status='active' ORDER BY version DESC LIMIT 1")
             .bind(firm_id).bind(provider.as_str()).bind(kind.as_str()).fetch_optional(pg.pool()).await.map_err(|_| SecretStoreError::Postgres)?;
         return row
             .as_ref()
@@ -559,7 +618,7 @@ pub async fn metadata_for_firm(
     }
     let mut response = surreal
         .query(format!(
-            "SELECT firm_id, provider, kind, version, kms_key_version, status, actor_id, \
+            "SELECT firm_id, provider, kind, stripe_mode, version, kms_key_version, status, actor_id, \
              created_at, updated_at FROM {TABLE} WHERE firm_id = $firm_id AND provider = $provider \
              AND kind = $kind AND status = 'active' ORDER BY version DESC LIMIT 1"
         ))
@@ -599,13 +658,13 @@ pub async fn list_metadata_for_firm(
         .await
         .map_err(|_| SecretStoreError::Postgres)?
     {
-        let rows = sqlx::query("SELECT firm_id,provider,kind,version,kms_key_version,status,actor_id,created_at,updated_at FROM firm_integration_secret WHERE firm_id=$1 AND status='active' ORDER BY provider,kind,version DESC")
+        let rows = sqlx::query("SELECT firm_id,provider,kind,stripe_mode,version,kms_key_version,status,actor_id,created_at,updated_at FROM firm_integration_secret WHERE firm_id=$1 AND status='active' ORDER BY provider,kind,version DESC")
             .bind(firm_id).fetch_all(pg.pool()).await.map_err(|_| SecretStoreError::Postgres)?;
         return rows.iter().map(metadata_from_pg).collect();
     }
     let mut response = surreal
         .query(format!(
-            "SELECT firm_id, provider, kind, version, kms_key_version, status, actor_id, \
+            "SELECT firm_id, provider, kind, stripe_mode, version, kms_key_version, status, actor_id, \
              created_at, updated_at FROM {TABLE} WHERE firm_id = $firm_id AND status = 'active' \
              ORDER BY provider, kind"
         ))
@@ -627,6 +686,48 @@ pub async fn revoke(
     provider: IntegrationProvider,
     kind: IntegrationSecretKind,
 ) -> Result<(), SecretStoreError> {
+    revoke_matching(
+        surreal,
+        actor_role,
+        actor_person_id,
+        firm_id,
+        provider,
+        kind,
+        None,
+    )
+    .await
+}
+
+pub async fn revoke_stripe(
+    surreal: &SurrealDb,
+    actor_role: Role,
+    actor_person_id: Option<Uuid>,
+    firm_id: Uuid,
+    account: Account,
+    kind: KeyKind,
+    mode: Mode,
+) -> Result<(), SecretStoreError> {
+    revoke_matching(
+        surreal,
+        actor_role,
+        actor_person_id,
+        firm_id,
+        IntegrationProvider::Stripe,
+        IntegrationSecretKind::stripe(account, kind),
+        Some(mode),
+    )
+    .await
+}
+
+async fn revoke_matching(
+    surreal: &SurrealDb,
+    actor_role: Role,
+    actor_person_id: Option<Uuid>,
+    firm_id: Uuid,
+    provider: IntegrationProvider,
+    kind: IntegrationSecretKind,
+    mode: Option<Mode>,
+) -> Result<(), SecretStoreError> {
     authorize(
         surreal,
         actor_role,
@@ -640,8 +741,8 @@ pub async fn revoke(
         .await
         .map_err(|_| SecretStoreError::Postgres)?
     {
-        let changed = sqlx::query("UPDATE firm_integration_secret SET status='revoked',updated_at=now() WHERE firm_id=$1 AND provider=$2 AND kind=$3 AND status='active'")
-            .bind(firm_id).bind(provider.as_str()).bind(kind.as_str()).execute(pg.pool()).await.map_err(|_| SecretStoreError::Postgres)?.rows_affected();
+        let changed = sqlx::query("UPDATE firm_integration_secret SET status='revoked',updated_at=now() WHERE firm_id=$1 AND provider=$2 AND kind=$3 AND status='active' AND ($4::text IS NULL OR stripe_mode=$4)")
+            .bind(firm_id).bind(provider.as_str()).bind(kind.as_str()).bind(mode.map(|m| m.to_string())).execute(pg.pool()).await.map_err(|_| SecretStoreError::Postgres)?.rows_affected();
         return if changed == 0 {
             Err(not_configured(provider, kind))
         } else {
@@ -652,12 +753,13 @@ pub async fn revoke(
     let mut response = surreal
         .query(format!(
             "UPDATE {TABLE} SET status = 'revoked', updated_at = $now WHERE firm_id = $firm_id \
-             AND provider = $provider AND kind = $kind AND status = 'active' RETURN VALUE id"
+             AND provider = $provider AND kind = $kind AND status = 'active' AND ($mode = NONE OR stripe_mode = $mode) RETURN VALUE id"
         ))
         .bind(("firm_id", record_id(FIRM_TABLE, firm_id)))
         .bind(("provider", provider.as_str().to_string()))
         .bind(("kind", kind.as_str().to_string()))
         .bind(("now", now))
+        .bind(("mode", mode.map(|m| m.to_string())))
         .await
         .and_then(surrealdb::IndexedResults::check)?;
     let ids: Vec<surrealdb::types::RecordId> = response.take(0)?;
@@ -1132,6 +1234,9 @@ fn metadata_from_pg(row: &sqlx::postgres::PgRow) -> Result<SecretMetadata, Secre
             .map_err(|_| SecretStoreError::Postgres)?,
         provider: parse_provider(&provider).ok_or(SecretStoreError::InvalidKind)?,
         kind: parse_kind(&kind).ok_or(SecretStoreError::InvalidKind)?,
+        stripe_mode: row
+            .try_get("stripe_mode")
+            .map_err(|_| SecretStoreError::Postgres)?,
         version: row
             .try_get("version")
             .map_err(|_| SecretStoreError::Postgres)?,
@@ -1183,6 +1288,29 @@ fn secret_from_pg(row: &sqlx::postgres::PgRow) -> Result<SecretRow, SecretStoreE
 #[cfg(test)]
 mod tests {
     use super::{zeroize, IntegrationProvider, IntegrationSecretKind, ResolvedCredential};
+
+    #[test]
+    fn staging_and_simulated_production_only_accept_sandbox_keys() {
+        use super::{stripe_mode_from, Mode};
+        for (profile, staging, simulated, expected) in [
+            ("production", "false", "false", Some(Mode::Live)),
+            ("production", "true", "false", Some(Mode::Sandbox)),
+            ("production", "false", "true", Some(Mode::Sandbox)),
+            ("dev", "false", "false", Some(Mode::Sandbox)),
+            ("production", "unknown", "false", None),
+        ] {
+            assert_eq!(
+                stripe_mode_from(|name| match name {
+                    "NAVIGATOR_ENVIRONMENT" => Some(profile.into()),
+                    "NAVIGATOR_STAGING" => Some(staging.into()),
+                    "NAVIGATOR_SIMULATED_MATTERS" => Some(simulated.into()),
+                    _ => None,
+                })
+                .ok(),
+                expected
+            );
+        }
+    }
 
     #[test]
     fn stripe_billing_checks_only_the_gate_for_that_route() {

@@ -104,7 +104,7 @@ impl<'a> StripeInvoiceClient<'a> {
             .and_utc()
             .timestamp()
             .to_string();
-        let live = self.key.starts_with("sk_live_") || self.key.starts_with("rk_live_");
+        let live = self.live_mode();
         let customer: StripeObject = self
             .call(
                 Method::POST,
@@ -119,23 +119,34 @@ impl<'a> StripeInvoiceClient<'a> {
         if customer.livemode != live || !customer.id.starts_with("cus_") {
             return Err(provider_error("Stripe returned an invalid customer"));
         }
+        self.create_draft_for_customer(batch, request, &customer.id, &due)
+            .await
+    }
+
+    async fn create_draft_for_customer(
+        &self,
+        batch: Uuid,
+        request: &InvoiceRequest,
+        customer: &str,
+        due: &str,
+    ) -> Result<InvoiceId, BillingError> {
         let invoice: StripeObject = self
             .call(
                 Method::POST,
                 "invoices",
                 Some(&format!("{batch}/invoice")),
                 &[
-                    ("customer", &customer.id),
+                    ("customer", customer),
                     ("auto_advance", "false"),
                     ("collection_method", "send_invoice"),
-                    ("due_date", &due),
+                    ("due_date", due),
                     ("description", &request.reference),
                     ("pending_invoice_items_behavior", "exclude"),
                     ("metadata[navigator_batch_id]", &batch.to_string()),
                 ],
             )
             .await?;
-        if invoice.livemode != live || !invoice.id.starts_with("in_") {
+        if invoice.livemode != self.live_mode() || !invoice.id.starts_with("in_") {
             return Err(provider_error("Stripe returned an invalid invoice"));
         }
         let mut total = 0i64;
@@ -153,7 +164,7 @@ impl<'a> StripeInvoiceClient<'a> {
                     "invoiceitems",
                     Some(&format!("{batch}/item/{index}")),
                     &[
-                        ("customer", &customer.id),
+                        ("customer", customer),
                         ("invoice", &invoice.id),
                         ("currency", "usd"),
                         ("amount", &amount.to_string()),
@@ -165,7 +176,7 @@ impl<'a> StripeInvoiceClient<'a> {
         let draft: Invoice = self
             .call(Method::GET, &format!("invoices/{}", invoice.id), None, &[])
             .await?;
-        if draft.livemode != live
+        if draft.livemode != self.live_mode()
             || draft.id != invoice.id
             || draft.status != "draft"
             || draft.auto_advance
@@ -717,3 +728,7 @@ mod subscription_tests {
             .is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "stripe_sandbox.rs"]
+mod sandbox;

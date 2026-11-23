@@ -9,6 +9,8 @@
 //! the deployment refuses to delete a Firm that still owns a Project or a
 //! Brand.
 
+mod secret;
+
 use std::process::ExitCode;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -382,6 +384,9 @@ use crate::{firm_forgejo, HostOpt};
 use clap::Subcommand;
 #[derive(Subcommand)]
 pub enum SiteFirmCmd {
+    /// Manage Firm integration credentials.
+    #[command(subcommand)]
+    Secret(secret::Command),
     /// Create or reconcile the Firm's Forgejo organization.
     ///
     /// The deployment's provisioning identity creates the private
@@ -472,6 +477,7 @@ pub enum SiteBrandCmd {
 
 pub async fn run_firm(action: SiteFirmCmd) -> ExitCode {
     match action {
+        SiteFirmCmd::Secret(command) => command.run().await,
         SiteFirmCmd::ProvisionForgejo { slug, host } => {
             firm_forgejo::provision(host.host.as_deref(), &slug).await
         }

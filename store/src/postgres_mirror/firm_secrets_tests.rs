@@ -10,6 +10,7 @@ fn debug_keeps_secret_values_out_of_operator_output() {
         firm_id: Uuid::nil(),
         provider: "xero".into(),
         kind: "xero_client_secret".into(),
+        stripe_mode: None,
         version: 1,
         ciphertext: "synthetic-ciphertext-canary".into(),
         wrapped_dek: "synthetic-wrapped-key-canary".into(),
