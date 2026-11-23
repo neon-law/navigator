@@ -699,8 +699,7 @@ async fn project_brand_chrome(
         .flatten();
     let brand_name = brand
         .as_ref()
-        .map(|brand| brand.name.clone())
-        .unwrap_or(fallback_name);
+        .map_or(fallback_name, |brand| brand.name.clone());
     let legal_entity = brand
         .as_ref()
         .and_then(|brand| brand.legal_entity.clone())
