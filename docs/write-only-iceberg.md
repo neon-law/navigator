@@ -81,7 +81,9 @@ atomic.
 
 ## Capture and recover an exact generation
 
-Give a CLI capture an explicit stable identity. The DBOS schedule uses its existing workflow identity:
+Give a CLI capture an explicit stable identity. The DBOS schedule uses its existing workflow identity. GKE metadata
+capture runs in the deployed executor or an approved GKE operator runtime. An operator machine uses explicit-file source
+authentication and separate writer ADC; setting writer ADC does not provide a GKE metadata endpoint:
 
 ```bash
 GOOGLE_APPLICATION_CREDENTIALS="$WRITER_ADC" hudson ops archives capture \
