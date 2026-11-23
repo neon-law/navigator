@@ -280,7 +280,7 @@ pub async fn visible_projects_as_client(
     let Some(pid) = person_id else {
         return Ok(Vec::new());
     };
-    visible_projects_matching(surreal, pid, is_client_participation).await
+    visible_projects_matching(surreal, pid, ProjectLens::Client, None).await
 }
 
 /// All projects visible through the lawyer workbench lens.
@@ -301,7 +301,7 @@ pub async fn visible_projects_as_lawyer(
     let Some(pid) = person_id else {
         return Ok(Vec::new());
     };
-    visible_projects_matching(surreal, pid, is_firm_participation).await
+    visible_projects_matching(surreal, pid, ProjectLens::Lawyer, None).await
 }
 
 /// All projects visible through the supervised Clerk lens.
@@ -353,7 +353,7 @@ pub async fn supervised_projects(
     surreal: &SurrealDb,
     person_id: Uuid,
 ) -> Result<Vec<(Project, Person)>, String> {
-    let projects = visible_projects_matching(surreal, person_id, is_firm_participation).await?;
+    let projects = visible_projects_matching(surreal, person_id, ProjectLens::Lawyer, None).await?;
     let mut dri_ids_by_project: std::collections::HashMap<Uuid, Vec<Uuid>> =
         std::collections::HashMap::new();
     for project in &projects {
@@ -519,11 +519,37 @@ pub(crate) fn is_firm_participation(row: &projects::PersonProjectRole) -> bool {
     !projects::PARTICIPATION_CLIENT_SIDE.contains(&row.participation.as_str()) && !row.is_client_dri
 }
 
+/// Resolve one exact Project code within the person's firm-side memberships.
+pub async fn visible_firm_project_by_code(
+    surreal: &SurrealDb,
+    person_id: Uuid,
+    code: &str,
+) -> Result<Option<Project>, String> {
+    Ok(
+        visible_projects_matching(surreal, person_id, ProjectLens::Lawyer, Some(code))
+            .await?
+            .pop(),
+    )
+}
+
 async fn visible_projects_matching(
     surreal: &SurrealDb,
     person_id: Uuid,
-    predicate: fn(&projects::PersonProjectRole) -> bool,
+    lens: ProjectLens,
+    code: Option<&str>,
 ) -> Result<Vec<Project>, String> {
+    if crate::postgres::tenancy::enabled() {
+        let pg = crate::postgres::tenancy::db()
+            .await
+            .map_err(|err| project_lookup_failed(&err.into()))?;
+        return crate::postgres::projects::participating_projects_on(&pg, person_id, lens, code)
+            .await
+            .map_err(|err| project_lookup_failed(&err.into()));
+    }
+    let predicate = match lens {
+        ProjectLens::Client => is_client_participation,
+        ProjectLens::Lawyer => is_firm_participation,
+    };
     let rows = projects::participations_for_person(surreal, person_id)
         .await
         .map_err(|error| project_lookup_failed(&error))?;
@@ -532,6 +558,7 @@ async fn visible_projects_matching(
         if let Some(project) = projects::find_by_id(surreal, row.project_id)
             .await
             .map_err(|error| project_lookup_failed(&error))?
+            .filter(|project| code.is_none_or(|code| code == project.code))
         {
             results.push(project);
         }

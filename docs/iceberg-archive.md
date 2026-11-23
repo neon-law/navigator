@@ -317,9 +317,9 @@ change that adds one updates this file in the same pull request:
   closed and posts the failure to Slack.
 
 A draft gives every view an empty reconstruction reason, and the archive refuses an empty reason. A reviewer must write
-how each view is rebuilt before it can ship. `person_directory` and `firm_visible_person` are derived this way: each is
-a plain view over exported tables, rebuilt by its migration. PostGIS's `geometry_columns` and `geography_columns` are
-derived from the system catalogs and recreated by `CREATE EXTENSION postgis`; its `spatial_ref_sys` table is exported.
+how each view is rebuilt before it can ship. Migrations rebuild `person_directory`, `firm_visible_person`, and
+`project_list` from exported tables. `CREATE EXTENSION postgis` recreates `geometry_columns` and `geography_columns`
+from the system catalogs. The archive exports the PostGIS `spatial_ref_sys` table.
 
 PostGIS geometry exports as HEXEWKB text, which preserves coordinates, dimensions, and the spatial reference identifier.
 The column schema records the PostgreSQL geometry type and modifier for restoring into a PostGIS-enabled database.

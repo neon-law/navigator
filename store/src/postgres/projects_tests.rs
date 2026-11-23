@@ -56,6 +56,85 @@ pub(super) async fn fixture() -> Option<Fixture> {
 }
 
 #[tokio::test]
+async fn visible_project_lists_and_code_lookups_respect_participation_side() {
+    use crate::access::{visible_firm_project_by_code, visible_projects};
+    use crate::persons::Role;
+    let Some(Fixture { pg, input }) = fixture().await else {
+        return;
+    };
+    let viewer = insert_person(&pg, "admin").await;
+    let other = insert_person(&pg, "lawyer").await;
+    for (code, name, membership) in [
+        ("visible-b", "Zebra", Some(("lawyer", false))),
+        ("visible-a", "Alpha", Some(("custom", false))),
+        ("client-only", "Client", Some(("counterparty", false))),
+        ("client-dri", "Dri", Some(("lawyer", true))),
+        ("unrelated", "Other", None),
+    ] {
+        let project = super::projects::create_on(
+            &pg,
+            &NewProject {
+                code: code.into(),
+                name: name.into(),
+                ..input.clone()
+            },
+        )
+        .await
+        .unwrap();
+        super::participation::add_on(&pg, project.id, other)
+            .await
+            .unwrap();
+        if let Some((side, dri)) = membership {
+            sqlx::query("INSERT INTO person_project_role (person_id,project_id,participation,is_client_dri) VALUES ($1,$2,$3,$4)")
+                .bind(viewer).bind(project.id).bind(side).bind(dri).execute(pg.pool()).await.unwrap();
+        }
+    }
+
+    let db = crate::surreal::SurrealDb::uninitialized();
+    super::tenancy::with_test_authority(pg.clone(), true, async {
+        for (role, expected) in [
+            (Role::Admin, ["visible-a", "visible-b"]),
+            (Role::Client, ["client-only", "client-dri"]),
+        ] {
+            let list = visible_projects(&db, Some(viewer), role).await.unwrap();
+            assert_eq!(
+                list.iter().map(|p| p.code.as_str()).collect::<Vec<_>>(),
+                expected
+            );
+        }
+        for code in [
+            "visible-a",
+            "client-only",
+            "client-dri",
+            "unrelated",
+            "absent",
+        ] {
+            let project = visible_firm_project_by_code(&db, viewer, code)
+                .await
+                .unwrap();
+            assert_eq!(
+                project.as_ref().map(|p| p.code.as_str()),
+                (code == "visible-a").then_some(code)
+            );
+        }
+        sqlx::query("DELETE FROM person_project_role WHERE person_id=$1")
+            .bind(viewer)
+            .execute(pg.pool())
+            .await
+            .unwrap();
+        assert!(visible_projects(&db, Some(viewer), Role::Admin)
+            .await
+            .unwrap()
+            .is_empty());
+        assert!(visible_firm_project_by_code(&db, viewer, "visible-a")
+            .await
+            .unwrap()
+            .is_none());
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn mailbox_preview_project_candidates_stay_in_the_brand_and_firm() {
     use super::projects as records;
     let Some(Fixture { pg, input }) = fixture().await else {

@@ -110,7 +110,7 @@ async fn manifest(pool: &PgPool) -> CoverageManifest {
         .map(|relation| {
             let reason = match (relation.schema.as_str(), relation.name.as_str()) {
                 ("public", "derived") => "rebuild from probe",
-                ("public", "person_directory" | "firm_visible_person") => {
+                ("public", "person_directory" | "firm_visible_person" | "project_list") => {
                     "recreated by the canonical Navigator schema"
                 }
                 ("public", "geography_columns" | "geometry_columns") => "recreated by PostGIS",
