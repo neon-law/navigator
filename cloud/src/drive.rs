@@ -64,6 +64,7 @@ impl DriveWorkspace {
 pub struct DriveWorkspaceConfig {
     pub workspace: DriveWorkspace,
     pub projects_drive_id: String,
+    pub projects_root_folder_id: String,
     pub delegated_user: String,
     pub service_account: String,
 }
@@ -87,12 +88,26 @@ impl DriveWorkspaceConfig {
         let (user_key, user) = value("DELEGATED_USER");
         let (account_key, account) = value("SERVICE_ACCOUNT");
         match (drive, user, account) {
-            (Some(projects_drive_id), Some(delegated_user), Some(service_account)) => Ok(Self {
-                workspace,
-                projects_drive_id,
-                delegated_user,
-                service_account,
-            }),
+            (Some(projects_drive_id), Some(delegated_user), Some(service_account)) => {
+                let projects_root_folder_id =
+                    match crate::workspace::DeploymentWorkspace::from_lookup(&get) {
+                        Ok(deployment) => {
+                            let key = deployment.projects_root_folder_key();
+                            get(key)
+                                .filter(|id| !id.trim().is_empty())
+                                .ok_or_else(|| DriveError::MissingConfig(key.into()))?
+                        }
+                        // Standalone configurations use a dedicated Projects shared drive.
+                        Err(_) => projects_drive_id.clone(),
+                    };
+                Ok(Self {
+                    workspace,
+                    projects_drive_id,
+                    projects_root_folder_id,
+                    delegated_user,
+                    service_account,
+                })
+            }
             (drive, user, account) => {
                 // Name every missing key at once, so one run shows the whole fix.
                 let missing: Vec<String> = [
@@ -115,6 +130,7 @@ impl std::fmt::Debug for DriveWorkspaceConfig {
             .debug_struct("DriveWorkspaceConfig")
             .field("workspace", &self.workspace)
             .field("projects_drive_id", &self.projects_drive_id)
+            .field("projects_root_folder_id", &self.projects_root_folder_id)
             .field("delegated_user", &"[redacted]")
             .field("service_account", &self.service_account)
             .finish()
@@ -125,7 +141,7 @@ impl std::fmt::Debug for DriveWorkspaceConfig {
 pub struct DriveFolder {
     pub id: String,
     /// A Project code. The implementation only lists folders directly under
-    /// the Projects shared-drive root, never working-file names.
+    /// the deployment's Projects root, never working-file names.
     pub name: String,
 }
 
@@ -348,6 +364,7 @@ pub trait DriveService: Send + Sync {
 /// with domain-wide delegation.
 pub struct GoogleDrive {
     projects_drive_id: String,
+    projects_root_folder_id: String,
     token_source: Arc<dyn google_cloud_token::TokenSource>,
     http: reqwest::Client,
     base_url: String,
@@ -364,11 +381,18 @@ impl GoogleDrive {
             .token_source(&[DRIVE_SCOPE])
             .await
             .map_err(|_| DriveError::Authentication)?;
-        Ok(Self::from_parts(
-            config.projects_drive_id,
-            token_source,
-            DRIVE_BASE_URL,
-        ))
+        let drive = Self {
+            projects_root_folder_id: config.projects_root_folder_id,
+            ..Self::from_parts(config.projects_drive_id, token_source, DRIVE_BASE_URL)
+        };
+        if drive.projects_root_folder_id != drive.projects_drive_id
+            && !drive
+                .is_ingest_folder(&drive.projects_root_folder_id)
+                .await?
+        {
+            return Err(DriveError::TreeBoundary);
+        }
+        Ok(drive)
     }
 
     /// Construct from `NAVIGATOR_DRIVE_NEON_LAW_*` when a deployment has
@@ -399,6 +423,7 @@ impl GoogleDrive {
         request_timeout: Duration,
     ) -> Self {
         Self {
+            projects_root_folder_id: projects_drive_id.clone(),
             projects_drive_id,
             token_source,
             http: reqwest::Client::new(),
@@ -603,7 +628,7 @@ impl DriveService for GoogleDrive {
                 .json(&CreateFolder {
                     name: project_code,
                     mime_type: FOLDER_MIME_TYPE,
-                    parents: [&self.projects_drive_id],
+                    parents: [&self.projects_root_folder_id],
                 })
                 .send()
                 .await,
@@ -640,7 +665,7 @@ impl DriveService for GoogleDrive {
         let escaped_name = project_code.replace('\\', "\\\\").replace('\'', "\\'");
         let query = format!(
             "'{}' in parents and name = '{}' and mimeType = '{}' and trashed = false",
-            self.projects_drive_id, escaped_name, FOLDER_MIME_TYPE
+            self.projects_root_folder_id, escaped_name, FOLDER_MIME_TYPE
         );
         let token = self.token().await?;
         let response = Self::checked(
@@ -706,7 +731,7 @@ impl DriveService for GoogleDrive {
     async fn list_folders(&self) -> Result<Vec<DriveFolder>, DriveError> {
         let query = format!(
             "'{}' in parents and mimeType = '{}' and trashed = false",
-            self.projects_drive_id, FOLDER_MIME_TYPE
+            self.projects_root_folder_id, FOLDER_MIME_TYPE
         );
         let token = self.token().await?;
         let response = Self::checked(
@@ -1050,7 +1075,8 @@ impl DriveService for GoogleDrive {
     }
 
     async fn restore_from_archive(&self, folder_id: &str) -> Result<(), DriveError> {
-        self.move_folder(folder_id, &self.projects_drive_id).await
+        self.move_folder(folder_id, &self.projects_root_folder_id)
+            .await
     }
 }
 
@@ -1934,6 +1960,30 @@ mod tests {
     }
 
     #[test]
+    fn deployed_folders_use_only_the_selected_projects_root() {
+        let config = |root: Option<&str>| {
+            DriveWorkspaceConfig::from_lookup(DriveWorkspace::NeonLaw, |key| {
+                match key {
+                    crate::workspace::NAVIGATOR_GCP_PROJECT_ID => Some("neon-law-stg"),
+                    "NAVIGATOR_DRIVE_NEON_LAW_STAGING_PROJECTS_ROOT_FOLDER_ID" => root,
+                    "NAVIGATOR_DRIVE_NEON_LAW_PRODUCTION_PROJECTS_ROOT_FOLDER_ID" => {
+                        Some("other-root")
+                    }
+                    _ => Some("synthetic"),
+                }
+                .map(str::to_owned)
+            })
+        };
+        assert_eq!(
+            config(Some("staging-root"))
+                .unwrap()
+                .projects_root_folder_id,
+            "staging-root"
+        );
+        assert!(matches!(config(None), Err(DriveError::MissingConfig(_))));
+    }
+
+    #[test]
     fn configuration_redacts_the_delegated_user() {
         let config = DriveWorkspaceConfig::from_lookup(DriveWorkspace::NeonLaw, |key| match key {
             "NAVIGATOR_DRIVE_NEON_LAW_PROJECTS_DRIVE_ID" => Some("drive-id".into()),
@@ -1983,11 +2033,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn google_drive_creates_a_folder_in_the_configured_shared_drive() {
+    async fn google_drive_creates_a_folder_under_the_deployment_root() {
         let server = MockServer::start().await;
-        let lookup = "'projects-drive' in parents and name = 'matter-42' and mimeType = 'application/vnd.google-apps.folder' and trashed = false";
+        let lookup = "'working-root' in parents and name = 'matter-42' and mimeType = 'application/vnd.google-apps.folder' and trashed = false";
         Mock::given(method("GET"))
             .and(path("/files"))
+            .and(query_param("driveId", "projects-drive"))
             .and(query_param("q", lookup))
             .respond_with(
                 ResponseTemplate::new(200).set_body_json(serde_json::json!({"files": []})),
@@ -2000,7 +2051,7 @@ mod tests {
             .and(body_json(serde_json::json!({
                 "name": "matter-42",
                 "mimeType": "application/vnd.google-apps.folder",
-                "parents": ["projects-drive"]
+                "parents": ["working-root"]
             })))
             .respond_with(
                 ResponseTemplate::new(200)
@@ -2010,11 +2061,12 @@ mod tests {
             .mount(&server)
             .await;
 
-        let drive = GoogleDrive::from_parts(
+        let mut drive = GoogleDrive::from_parts(
             "projects-drive".into(),
             Arc::new(StaticToken),
             &server.uri(),
         );
+        drive.projects_root_folder_id = "working-root".into();
         assert_eq!(
             drive.create_folder("matter-42").await.unwrap().id,
             "folder-42"
