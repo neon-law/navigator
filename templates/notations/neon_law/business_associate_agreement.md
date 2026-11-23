@@ -1,6 +1,7 @@
 ---
 kind: agreement
 title: Business Associate Agreement
+description: "Set how a HIPAA business associate may use and safeguard protected health information."
 jurisdiction: US
 respondent_type: person_and_entity
 confidential: false

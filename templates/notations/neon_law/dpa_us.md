@@ -1,6 +1,7 @@
 ---
 kind: agreement
 title: U.S. Data Processing Addendum
+description: "Set terms for service providers processing personal data under U.S. privacy laws."
 jurisdiction: US
 respondent_type: person_and_entity
 confidential: false

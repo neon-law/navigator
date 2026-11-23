@@ -1,6 +1,7 @@
 ---
 kind: filing
 title: Nevada Nonprofit Articles of Incorporation (501(c)(3))
+description: "Prepare Nevada articles for a nonprofit corporation organized for purposes under Section 501(c)(3)."
 respondent_type: entity
 jurisdiction: NV
 origin_url: https://www.nvsos.gov/businesses/commercial-recordings/forms-fees/all-business-forms

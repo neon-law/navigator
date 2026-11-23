@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "neon-law-navigator",
-  "version": "0.1.0",
-  "description": "Find a public template for a Nevada LLC or business agreement. Open the matching intake on Neon Law’s website to sign in and begin. You can also open your existing Navigator Projects.",
+  "version": "0.1.1",
+  "description": "Find and preview public legal templates. Start or resume a Nevada LLC questionnaire on Neon Law’s website.",
   "author": {
     "name": "Neon Law",
     "url": "https://www.neonlaw.com"
@@ -12,8 +12,8 @@
     "com.openai": {
       "interface": {
         "displayName": "Neon Law Navigator",
-        "shortDescription": "Start an LLC or agreement",
-        "longDescription": "Find a public template for a Nevada LLC or business agreement. Open the matching intake on Neon Law’s website to sign in and begin. You can also open your existing Navigator Projects.",
+        "shortDescription": "Find public legal templates",
+        "longDescription": "Find and preview public legal templates. Start or resume a Nevada LLC questionnaire on Neon Law’s website.",
         "developerName": "Neon Law",
         "category": "Productivity",
         "websiteURL": "https://www.neonlaw.com",
@@ -23,7 +23,7 @@
         "defaultPrompt": [
           "Help me form a Nevada LLC.",
           "Find an operating agreement for my LLC.",
-          "Open my Navigator Projects."
+          "Show me a mutual NDA template."
         ],
         "composerIcon": "./assets/neon-law.png",
         "logo": "./assets/neon-law.png"
@@ -42,25 +42,25 @@
               "description": "Match an operating agreement",
               "prompt": "My Nevada LLC is member-managed and I am its only member. I own it personally. Help me start an operating agreement.",
               "tools_triggered": "list_templates",
-              "expected_behavior": "Check the current catalog. If no matching operating agreement is listed, say so and offer the Neon Law contact link."
+              "expected_behavior": "Check the catalog and say when the requested operating agreement is unavailable."
             },
             {
-              "description": "Find a mutual NDA",
+              "description": "Find the Mutual Non-Disclosure Agreement preview",
               "prompt": "Help two companies start a mutual NDA.",
               "tools_triggered": "list_templates",
-              "expected_behavior": "Show the mutual NDA and link to its intake."
+              "expected_behavior": "Show the Mutual Non-Disclosure Agreement with its public preview link on Neon Law’s website."
             },
             {
-              "description": "Find an advisor agreement",
+              "description": "Find the Advisor Agreement preview",
               "prompt": "I need an advisor agreement.",
               "tools_triggered": "list_templates",
-              "expected_behavior": "Show the Advisor Agreement and link to its intake."
+              "expected_behavior": "Show the Advisor Agreement with its public preview link on Neon Law’s website."
             },
             {
-              "description": "Find a services agreement",
+              "description": "Find the Master Services Agreement preview",
               "prompt": "Help me start a master services agreement.",
               "tools_triggered": "list_templates",
-              "expected_behavior": "Show the Master Services Agreement and link to its intake."
+              "expected_behavior": "Show the Master Services Agreement with its public preview link on Neon Law’s website."
             }
           ],
           "negative": [
@@ -80,7 +80,7 @@
         }
       },
       "publication": {
-        "release_notes": "Initial release. Browse public legal templates, start Nevada LLC and business agreement questionnaires, and open Projects on Neon Law’s website."
+        "release_notes": "Find a template by its description, preview public agreements, and start or resume a Nevada LLC questionnaire."
       }
     }
   }

@@ -1,6 +1,7 @@
 ---
 kind: filing
 title: Nevada Business Trust Formation
+description: "Prepare a certificate of trust to form a Nevada business trust."
 respondent_type: person_and_entity
 jurisdiction: NV
 origin_url: https://www.nvsos.gov/businesses/commercial-recordings/forms-fees/all-business-forms

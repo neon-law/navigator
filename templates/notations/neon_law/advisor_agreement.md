@@ -1,6 +1,7 @@
 ---
 kind: agreement
 title: Advisor Agreement
+description: "Set the scope, compensation, confidentiality, and intellectual property terms for a business advisor."
 jurisdiction: US
 respondent_type: person_and_entity
 confidential: false

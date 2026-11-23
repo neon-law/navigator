@@ -1,6 +1,7 @@
 ---
 kind: agreement
 title: Global Data Processing Addendum
+description: "Set terms for processing personal data across jurisdictions, including international transfers."
 jurisdiction: GLOBAL
 respondent_type: person_and_entity
 confidential: false

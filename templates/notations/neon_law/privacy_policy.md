@@ -1,6 +1,7 @@
 ---
 kind: agreement
 title: Privacy Policy
+description: "Describe how a website or service collects, uses, and shares personal information."
 jurisdiction: US
 respondent_type: person_and_entity
 confidential: false

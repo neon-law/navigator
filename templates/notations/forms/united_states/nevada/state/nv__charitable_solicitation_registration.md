@@ -1,6 +1,7 @@
 ---
 kind: filing
 title: Nevada Charitable Solicitation Registration
+description: "Prepare a registration for a charitable organization soliciting contributions in Nevada."
 respondent_type: entity
 jurisdiction: NV
 origin_url: https://www.nvsos.gov/businesses/commercial-recordings/forms-fees/all-business-forms

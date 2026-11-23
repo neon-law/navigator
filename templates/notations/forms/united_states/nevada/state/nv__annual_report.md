@@ -1,6 +1,7 @@
 ---
 kind: filing
 title: Nevada Annual List of Managers, Members, and Registered Agent
+description: "Prepare the Nevada annual list for an LLC’s managers or managing members and registered agent."
 respondent_type: entity
 jurisdiction: NV
 origin_url: https://www.nvsos.gov/businesses/commercial-recordings/forms-fees/all-business-forms

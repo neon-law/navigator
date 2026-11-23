@@ -1,6 +1,7 @@
 ---
 kind: agreement
 title: One-Way Non-Disclosure Agreement
+description: "Protect confidential information when only one party expects to disclose it."
 jurisdiction: US
 respondent_type: person_and_entity
 confidential: false

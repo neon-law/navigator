@@ -1,6 +1,7 @@
 ---
 kind: filing
 title: Nevada LLC Articles of Dissolution
+description: "Prepare Articles of Dissolution for an existing Nevada LLC."
 respondent_type: entity
 jurisdiction: NV
 origin_url: https://www.nvsos.gov/businesses/commercial-recordings/forms-fees/all-business-forms
