@@ -1,5 +1,5 @@
 # Immutable GCS generations and DBOS receipts need no persistent filesystem.
-# The source reader identity is distinct from offsite writer ADC.
+# GKE metadata authenticates a separate, source-bucket-bound client.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -8,9 +8,6 @@ metadata:
 spec:
   template:
     spec:
-      securityContext:
-        fsGroup: 65532
-        fsGroupChangePolicy: OnRootMismatch
       containers:
         - name: web
           env:
@@ -20,9 +17,6 @@ spec:
             - name: archive-write-only-config
               mountPath: /var/lib/navigator/iceberg/config
               readOnly: true
-            - name: archive-source-credentials
-              mountPath: /var/run/navigator-archive-source
-              readOnly: true
       volumes:
         - name: archive-write-only-config
           configMap:
@@ -30,10 +24,3 @@ spec:
             items:
               - key: archive-config.json
                 path: archive-config.json
-        - name: archive-source-credentials
-          secret:
-            secretName: navigator-archive-source-credentials
-            defaultMode: 0440
-            items:
-              - key: credentials.json
-                path: credentials.json

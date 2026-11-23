@@ -19,6 +19,8 @@ use tokio::io::AsyncReadExt as _;
 
 use crate::{ImmutableObject, StorageError, StorageService, StoredObject, VersionedObject};
 
+mod archive_identity;
+
 /// Configuration for the GCS backend. The bucket name is resolved from
 /// `NAVIGATOR_DOCUMENTS_BUCKET` (preferred) falling back to
 /// `NAVIGATOR_STORAGE_BUCKET`; the endpoint override is
@@ -305,6 +307,15 @@ impl GcsStorage {
         })?;
         Ok(Self {
             client: Arc::new(GcsClient::new(client_config)),
+            bucket: Arc::new(bucket),
+            emulator: false,
+        })
+    }
+
+    /// GKE source identity uses only the metadata server; ADC files and CLI fallback are excluded.
+    pub async fn archive_from_gke_metadata(bucket: String) -> Result<Self, StorageError> {
+        Ok(Self {
+            client: Arc::new(GcsClient::new(archive_identity::configuration().await?)),
             bucket: Arc::new(bucket),
             emulator: false,
         })
@@ -1584,6 +1595,51 @@ mod tests {
             .await
             .is_err());
     }
+    #[tokio::test]
+    async fn archive_source_accepts_projected_token_federation_without_a_private_key() {
+        use wiremock::matchers::{body_string_contains, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/synthetic-sts"))
+            .and(body_string_contains("subject_token=synthetic-projected-jwt"))
+            .and(body_string_contains("grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token":"synthetic-source-access-token","token_type":"Bearer","expires_in":3600
+            })))
+            .expect(1)
+            .mount(&server).await;
+        let storage = tempfile::tempdir().unwrap();
+        let token = storage.path().join("projected-token");
+        tokio::fs::write(&token, b"synthetic-projected-jwt")
+            .await
+            .unwrap();
+        let credentials = storage.path().join("external-account.json");
+        let configuration = serde_json::json!({
+            "type":"external_account",
+            "audience":"identitynamespace:synthetic-pool:synthetic-provider",
+            "subject_token_type":"urn:ietf:params:oauth:token-type:jwt",
+            "token_url":format!("{}/synthetic-sts",server.uri()),
+            "credential_source":{"file":token,"format":{"type":"text"}}
+        });
+        tokio::fs::write(&credentials, serde_json::to_vec(&configuration).unwrap())
+            .await
+            .unwrap();
+        assert!(
+            GcsStorage::archive_from_credentials("example-sealed-source".into(), &credentials)
+                .await
+                .is_ok()
+        );
+        // A missing projected token must not become an ambient ADC identity.
+        tokio::fs::remove_file(token).await.unwrap();
+        let error =
+            GcsStorage::archive_from_credentials("example-sealed-source".into(), &credentials)
+                .await
+                .err()
+                .unwrap();
+        assert_eq!(error.to_string(),"operation not supported on this storage backend: sealed source credentials unavailable");
+    }
+
     #[tokio::test]
     async fn archive_source_credentials_are_explicit_bounded_and_never_fall_back() {
         let storage = tempfile::tempdir().unwrap();

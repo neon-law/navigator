@@ -5,8 +5,8 @@ title: Write-only Iceberg archives
 # Write-only Iceberg archives
 
 DBOS Archives seals one generation in Google Cloud Storage and creates independent offsite attempts. Its source-store
-reader uses explicitly configured credentials. Offsite handles use separate Application Default Credentials (ADC) and
-send conditional object creates only. The verifier runs separately with read/control-plane access.
+reader explicitly selects GKE metadata or a credential file. Offsite handles use Application Default Credentials (ADC)
+and send conditional object creates only. The verifier runs separately with read/control-plane access.
 
 The cloud deployment needs no persistent filesystem, Filestore, PVC, or additional always-on service. Extraction and
 encoding use bounded memory. Object storage holds the sealed rows, immutable metadata, attempt fences and transport
@@ -19,13 +19,17 @@ creates in that prefix, without destination read access. Keep the source bucket 
 Review the prefix's retention and referenced-generation policy before activation; a telemetry or expiring PITR prefix is
 not an interchangeable archive source. These operations apply no lifecycle, deletion or retention changes.
 
+The source project number identifies the original PostgreSQL project, not the working-store bucket's project. The
+working bucket can share an archive project with an offsite destination when their buckets are distinct and the source
+and destination permissions are independently reviewed.
+
 Prepare a private source-store JSON file. The identifiers below are synthetic:
 
 ```json
 {
   "bucket": "example-sealed-archive-source",
   "prefix": "sealed-generations",
-  "credentials_file": "/var/run/navigator-archive-source/credentials.json",
+  "authentication": "gke_metadata",
   "max_generation_bytes": 67108864,
   "max_object_bytes": 16777216,
   "max_objects": 4096,
@@ -33,9 +37,21 @@ Prepare a private source-store JSON file. The identifiers below are synthetic:
 }
 ```
 
-The credential file contains the independently approved source identity configuration. Its client never changes process
-ADC or falls back to an ambient `gcloud` identity. The source and destination credential files must differ. Keep actual
-buckets, project numbers, credential configuration and receipts in the private operator store.
+GKE metadata mode obtains a short-lived token directly from the pod's metadata server. It ignores ADC credential files
+and never invokes `gcloud`; it requires no service-account key, projected-token file or source credential Secret. Grant
+the configured KSA/GSA source-prefix read/create permission. The same principal may have offsite create-only permission
+without destination reads; separate clients enforce their operation capabilities.
+
+For an operator's explicit credential file, use `"authentication": "credentials_file"` and an absolute
+`"credentials_file"` path. Supported federation JSON exchanges a separately provisioned subject token through STS;
+configure its audience/provider and token source explicitly. Enabling federation support does not provision a GKE
+projected token or prove that its audience is accepted. File mode never changes process ADC or falls back to `gcloud`,
+and its file must differ from explicit writer ADC. Keep actual identifiers, tokens and receipts private.
+
+Cloud rendering defaults to `gke_metadata`. Set deployment coordinate `NAVIGATOR_ARCHIVE_SOURCE_AUTHENTICATION` to
+`credentials_file` only for the reviewed file mode; its separate patch mounts the required
+`navigator-archive-source-credentials` Secret at `/var/run/navigator-archive-source/credentials.json`. Ship refuses a
+private source configuration whose mode differs from the rendered selection. Metadata mode mounts configuration only.
 
 Prepare a destinations JSON array with independently owned projects and distinct buckets:
 
@@ -108,11 +124,12 @@ NAVIGATOR_DBOS_ARCHIVES_ENABLED = "true"
 NAVIGATOR_ARCHIVE_WRITE_ONLY_CONFIG = "/var/lib/navigator/iceberg/config/archive-config.json"
 ```
 
-Provision `navigator-archive-write-only` as a ConfigMap with the non-secret `archive-config.json` key. Provision the
-approved source credential configuration as `navigator-archive-source-credentials`, key `credentials.json`. The renderer
-mounts configuration and credentials read-only; group 65532 can read the source credential file. Keep verifier
-credentials out of `web`. The cloud preflight requires version 2, the mounted credential path and an independent
-configured destination. Local configuration is an operator CLI mode, not a cloud volume requirement.
+Provision `navigator-archive-write-only` as a ConfigMap with the non-secret `archive-config.json` key. Metadata mode
+mounts configuration only and uses the existing KSA/GSA identity. For explicit-file mode, select
+`NAVIGATOR_ARCHIVE_SOURCE_AUTHENTICATION = "credentials_file"` and provision `navigator-archive-source-credentials`, key
+`credentials.json`; its separate read-only patch lets group 65532 read the credential file. Keep verifier credentials
+out of `web`. Cloud preflight requires version 2, matching identity modes and an independent destination; only file mode
+requires the mounted credential path and Secret. Local backups remain an operator CLI mode.
 
 `NAVIGATOR_ARCHIVE_SOURCE` must be absent or `postgres`. Source admission, archive database readers, reviewed coverage,
 source-store IAM, offsite writer ADC and the native worker configuration must be ready before enabling the schedule. The

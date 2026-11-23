@@ -49,6 +49,7 @@ binary(/^(mail_signatures|project_drive_folder_id|project_repository_url|project
 | test(=workflow::tests::two_daily_snapshots_and_a_retry_do_not_mix_full_table_generations)
 | test(=workflow::tests::promotion_authors_iceberg_metadata_for_a_store_table_and_chains_a_second_run)
 | (package(archives) & test(/^(postgres::tests|sent_email_export::tests|source::tests)::/))
+| (package(archives) & test(/^write_only::operations::object_store::tests::/))
 | (package(archives) & test(=write_only::operations::tests::closed_source_reuses_only_sealed_local_rows_and_never_recaptures_missing_or_changed_copy))
 | (package(archives) & test(=write_only::tests::real_pg_snapshot_is_readable_as_raw_local_iceberg_and_hashes_detect_corruption))
 | (package(archives) & test(=write_only::tests::structured_copy_records_real_asset_reference_without_claiming_missing_blob_recovery))

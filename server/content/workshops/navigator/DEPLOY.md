@@ -863,9 +863,10 @@ Only then switch the selected Project and prove gate, merge, publication and not
 
 ### Configure the source and the independent destination
 
-Keep one private archive configuration per environment. Use the reviewed Navigator and Forgejo coverage inventory, a
-sealed-generation prefix in object storage, and destination buckets in a different Google Cloud project from the source.
-Set the source project number and the writer and verifier service account emails from private operator configuration.
+Keep one private archive configuration per environment. Use the reviewed Navigator and Forgejo coverage inventory and a
+sealed-generation prefix in object storage. Destination projects must differ from the original PostgreSQL source
+project; the working-store bucket must differ from each destination bucket. Set the source project number and the writer
+and verifier service account emails from private operator configuration.
 
 ```bash
 hudson ops archives config --object-store source-store.json \
@@ -888,7 +889,9 @@ source-reader requirements and the GCS-backed recovery contract. Cloud deploymen
 
 ### Seal the source and test the write-only copies
 
-Run capture with separate source-store credentials and writer ADC. Object storage retains the sealed generation:
+Use GKE metadata for the deployed source reader; no source key or projected-token Secret is required. The source
+principal needs prefix read/create permission, while the offsite writer remains create-only. Operator file credentials
+are an explicit alternative in the runbook. Object storage retains the sealed generation:
 
 ```bash
 GOOGLE_APPLICATION_CREDENTIALS="$WRITER_ADC" hudson ops archives capture \

@@ -3,16 +3,40 @@ use super::{Bundle, Capture, DestinationOutcome, Inventory, LocalReceipt};
 use anyhow::{ensure, Context, Result};
 use cloud::{ImmutableObject, StorageService, VersionedObject};
 use serde::{Deserialize, Serialize};
-use std::{future::Future, path::PathBuf, sync::Arc};
+use std::{
+    future::Future,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 const MAX_DESCRIPTOR: usize = 8 * 1024 * 1024;
 
-/// Explicit source-store credentials are independent of offsite writer ADC.
+/// Source identity selection is independent of offsite create-only handles.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Authentication {
+    #[default]
+    CredentialsFile,
+    GkeMetadata,
+}
+impl Authentication {
+    fn is_file(&self) -> bool {
+        matches!(self, Self::CredentialsFile)
+    }
+}
+fn empty_path(path: &Path) -> bool {
+    path.as_os_str().is_empty()
+}
+
+/// Source identity mode and location are bound independently of offsite handles.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub bucket: String,
     pub prefix: String,
+    #[serde(default, skip_serializing_if = "Authentication::is_file")]
+    pub authentication: Authentication,
+    #[serde(default, skip_serializing_if = "empty_path")]
     pub credentials_file: PathBuf,
     pub max_generation_bytes: usize,
     pub max_object_bytes: usize,
@@ -28,8 +52,11 @@ impl Config {
             "invalid sealed source location"
         );
         ensure!(
-            self.credentials_file.is_absolute(),
-            "explicit sealed-source credentials required"
+            match self.authentication {
+                Authentication::CredentialsFile => self.credentials_file.is_absolute(),
+                Authentication::GkeMetadata => self.credentials_file.as_os_str().is_empty(),
+            },
+            "sealed-source identity mode and credentials differ"
         );
         ensure!(
             (1..=128 * 1024 * 1024).contains(&self.max_generation_bytes),
@@ -81,7 +108,7 @@ pub struct Receipt {
     pub inventory_generation: u64,
 }
 
-/// The source may read its exact objects. No destination credential implements this seam.
+/// Only the source-bucket-bound client reads exact objects through this seam.
 #[async_trait::async_trait]
 pub trait Store: Send + Sync {
     async fn read(
@@ -116,11 +143,18 @@ impl Store for Gcs {
 }
 pub async fn connect(config: &Config) -> Result<Arc<dyn Store>> {
     config.validate()?;
-    let storage = cloud::GcsStorage::archive_from_credentials(
-        config.bucket.clone(),
-        &config.credentials_file,
-    )
-    .await?;
+    let storage = match config.authentication {
+        Authentication::CredentialsFile => {
+            cloud::GcsStorage::archive_from_credentials(
+                config.bucket.clone(),
+                &config.credentials_file,
+            )
+            .await?
+        }
+        Authentication::GkeMetadata => {
+            cloud::GcsStorage::archive_from_gke_metadata(config.bucket.clone()).await?
+        }
+    };
     Ok(Arc::new(Gcs(storage)))
 }
 fn settings(config: &super::Config) -> Result<&Config> {

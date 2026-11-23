@@ -14,6 +14,7 @@ fn object_store_does_not_alias_an_offsite_bucket_or_accept_v1_config() {
     configured.object_store = Some(Config {
         bucket: "example-source-sealed".into(),
         prefix: "sealed".into(),
+        authentication: Authentication::CredentialsFile,
         credentials_file: "/synthetic-private/source-credential.json".into(),
         max_generation_bytes: 64 * 1024 * 1024,
         max_object_bytes: 16 * 1024 * 1024,
@@ -112,6 +113,7 @@ pub(crate) fn configured() -> crate::write_only::operations::Config {
         object_store: Some(Config {
             bucket: "example-sealed-source".into(),
             prefix: "sealed".into(),
+            authentication: Authentication::CredentialsFile,
             credentials_file: "/private/synthetic-source-credentials.json".into(),
             max_generation_bytes: 64 * 1024 * 1024,
             max_object_bytes: 16 * 1024 * 1024,
@@ -394,4 +396,42 @@ fn v1_request_roundtrip_preserves_its_config_digest_and_local_backing() {
     );
     assert_eq!(restored.config_sha256, old_digest);
     assert!(restored.config.object_store.is_none());
+}
+
+#[test]
+fn explicit_file_v2_digest_survives_metadata_mode_and_ambiguous_modes_refuse() {
+    let source = r#"{"bucket":"example-sealed-source","prefix":"sealed","credentials_file":"/private/synthetic-source-credentials.json","max_generation_bytes":67108864,"max_object_bytes":16777216,"max_objects":4096,"max_rows_per_table":100000}"#;
+    let original = format!(
+        r#"{{"format_version":2,"object_store":{source},"local_root":"","source_project_number":null,"source_identity_sha256":"{}","capture":{{"scope":"registered_navigator"}},"destinations":[]}}"#,
+        "ab".repeat(32)
+    );
+    let mut config: crate::write_only::operations::Config =
+        serde_json::from_str(&original).unwrap();
+    config.validate().unwrap();
+    assert_eq!(serde_json::to_vec(&config).unwrap(), original.as_bytes());
+    assert_eq!(
+        config.digest().unwrap(),
+        crate::postgres::sha256_hex(original.as_bytes())
+    );
+    let before = config.digest().unwrap();
+    config.object_store.as_mut().unwrap().authentication = Authentication::GkeMetadata;
+    assert!(
+        config.validate().is_err(),
+        "metadata mode must reject an ambiguous file credential"
+    );
+    config
+        .object_store
+        .as_mut()
+        .unwrap()
+        .credentials_file
+        .clear();
+    config.validate().unwrap();
+    assert_ne!(
+        config.digest().unwrap(),
+        before,
+        "source identity mode is bound by the request digest"
+    );
+    let serialized = serde_json::to_value(&config).unwrap();
+    assert_eq!(serialized["object_store"]["authentication"], "gke_metadata");
+    assert!(serialized["object_store"].get("credentials_file").is_none());
 }
