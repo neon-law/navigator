@@ -23,7 +23,8 @@ use thiserror::Error;
 use uuid::Uuid;
 
 const NONCE_LEN: usize = 12;
-const RUNTIME_KMS_KEY_ENV: &str = "NAVIGATOR_RUNTIME_KMS_KEY";
+/// The runtime KMS key that seals Firm Integration Secrets.
+pub const RUNTIME_KMS_KEY_ENV: &str = "NAVIGATOR_RUNTIME_KMS_KEY";
 const KMS_ENDPOINT: &str = "https://cloudkms.googleapis.com/v1";
 
 /// The authenticated-data context attached to one Firm secret version.

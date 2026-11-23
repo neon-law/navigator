@@ -2690,12 +2690,6 @@ enum AssetsAction {
         /// Bucket to inspect. Defaults to `NAVIGATOR_ASSETS_BUCKET`.
         #[arg(long, env = "NAVIGATOR_ASSETS_BUCKET")]
         bucket: Option<String>,
-        /// Also post the report to the ops Slack channel via the
-        /// `SLACK_WEBHOOK_URL` incoming webhook — the same seam the
-        /// durable workflows' heartbeat uses. The report names bucket
-        /// object keys only, which are already public URLs.
-        #[arg(long)]
-        slack: bool,
     },
     /// Check that every `![](img/…)` image referenced by the content
     /// tree is actually published at the public origin. `server/public/img/`
@@ -3483,11 +3477,7 @@ fn run() -> ExitCode {
                 AssetsAction::Build { src, out, only } => assets::run_build(&src, &out, &only),
                 AssetsAction::Upload { dir, bucket } => assets::run_upload(&dir, bucket),
                 AssetsAction::Pull { out, bucket } => assets::run_pull(&out, bucket),
-                AssetsAction::Orphans {
-                    content,
-                    bucket,
-                    slack,
-                } => assets::run_orphans(&content, bucket, slack),
+                AssetsAction::Orphans { content, bucket } => assets::run_orphans(&content, bucket),
                 AssetsAction::Verify { content, base_url } => {
                     assets::run_verify(&content, base_url)
                 }

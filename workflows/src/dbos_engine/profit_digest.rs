@@ -165,42 +165,25 @@ pub struct Context {
 }
 
 impl Context {
-    /// Resolve the live bot, this deployment's messages channel, and the base
-    /// URL. A simulated-matters deployment posts to
-    /// `SLACK_STAGING_MESSAGES_CHANNEL_ID`, any other to
-    /// `SLACK_MESSAGES_CHANNEL_ID`.
+    /// Post with the deployment's bot to its [`super::messages_channel`],
+    /// linking [`BASE_URL_ENV`].
     ///
     /// # Errors
     ///
-    /// Fails when the channel, `SLACK_BOT_TOKEN`, or [`BASE_URL_ENV`] is
-    /// unset or blank, or a Slack API override is set outside the CI harness.
+    /// Fails when that channel or [`BASE_URL_ENV`] is unset or blank.
     pub fn from_lookup<F>(
         source: Arc<dyn ProfitSource>,
+        slack: Arc<dyn SlackBot>,
         simulated: bool,
         lookup: F,
     ) -> Result<Self, super::SettingsError>
     where
         F: Fn(&str) -> Option<String>,
     {
-        let required = |key: &'static str| {
-            lookup(key)
-                .map(|value| value.trim().to_owned())
-                .filter(|value| !value.is_empty())
-                .ok_or(super::SettingsError::Missing(key))
-        };
-        let channel_id = required(if simulated {
-            "SLACK_STAGING_MESSAGES_CHANNEL_ID"
-        } else {
-            "SLACK_MESSAGES_CHANNEL_ID"
-        })?;
-        let token = required("SLACK_BOT_TOKEN")?;
-        let base_url = required(BASE_URL_ENV)?.trim_end_matches('/').to_owned();
-        let api = crate::harness_override(&lookup, "SLACK_API_BASE_URL")
-            .map_err(|_| super::SettingsError::Invalid("SLACK_API_BASE_URL"))?;
-        let slack: Arc<dyn SlackBot> = match api {
-            Some(api) => Arc::new(crate::SlackBotClient::with_base_url(token, api)),
-            None => Arc::new(crate::SlackBotClient::new(token)),
-        };
+        let channel_id = super::messages_channel(&lookup, simulated)?;
+        let base_url = super::required_channel(&lookup, BASE_URL_ENV)?
+            .trim_end_matches('/')
+            .to_owned();
         Ok(Self {
             source,
             slack,
@@ -679,16 +662,20 @@ mod tests {
         const BOTH: &[(&str, &str)] = &[
             ("SLACK_MESSAGES_CHANNEL_ID", "C-MESSAGES"),
             ("SLACK_STAGING_MESSAGES_CHANNEL_ID", "C-STAGING"),
-            ("SLACK_BOT_TOKEN", "xoxb-test"),
             ("NAV_BASE_URL", "https://navigator.example.invalid/"),
         ];
         let configured = |simulated: bool, pairs: &'static [(&'static str, &'static str)]| {
-            Context::from_lookup(Arc::new(NoFirms), simulated, move |key| {
-                pairs
-                    .iter()
-                    .find(|(name, _)| *name == key)
-                    .map(|(_, value)| (*value).to_owned())
-            })
+            Context::from_lookup(
+                Arc::new(NoFirms),
+                Arc::new(crate::CapturingSlackBot::new()),
+                simulated,
+                move |key| {
+                    pairs
+                        .iter()
+                        .find(|(name, _)| *name == key)
+                        .map(|(_, value)| (*value).to_owned())
+                },
+            )
         };
         assert_eq!(configured(false, BOTH).unwrap().channel_id, "C-MESSAGES");
         let staging = configured(true, BOTH).unwrap();
@@ -703,13 +690,7 @@ mod tests {
             Err(SettingsError::Missing("SLACK_STAGING_MESSAGES_CHANNEL_ID"))
         ));
         assert!(matches!(
-            configured(
-                false,
-                &[
-                    ("SLACK_MESSAGES_CHANNEL_ID", "C-MESSAGES"),
-                    ("SLACK_BOT_TOKEN", "xoxb-test")
-                ]
-            ),
+            configured(false, &[("SLACK_MESSAGES_CHANNEL_ID", "C-MESSAGES")]),
             Err(SettingsError::Missing("NAV_BASE_URL"))
         ));
     }

@@ -114,18 +114,19 @@ impl Context {
     }
 
     /// Construct a host context from the same Project accessors used by the
-    /// Restate service. The digest posts with the Slack bot to
+    /// Restate service. The digest posts with the deployment's bot to
     /// `SLACK_GENERAL_CHANNEL_ID`, beside `GeneralNag`'s open-matters notice;
-    /// both are required whenever this schedule is enabled.
+    /// an enabled schedule requires the channel.
     pub fn from_lookup<F>(
         surreal: store::surreal::SurrealDb,
+        bot: Arc<dyn crate::SlackBot>,
         simulated: bool,
         lookup: F,
     ) -> Result<Self, super::SettingsError>
     where
         F: Fn(&str) -> Option<String>,
     {
-        let (bot, channel) = super::general_channel_bot(lookup)?;
+        let channel = super::required_channel(lookup, "SLACK_GENERAL_CHANNEL_ID")?;
         Ok(Self {
             source: Arc::new(SurrealDriDigestSource(surreal)),
             notifier: Arc::new(crate::notify::ChannelNotifier::new(bot, channel)),
@@ -316,33 +317,20 @@ mod tests {
     }
 
     #[test]
-    fn enabled_schedule_posts_with_the_bot_to_the_general_channel() {
-        use super::super::SettingsError::Missing;
-        let lookup = |token: &'static str, channel: &'static str| {
-            move |key: &str| match key {
-                "SLACK_BOT_TOKEN" => Some(token.to_owned()),
-                "SLACK_GENERAL_CHANNEL_ID" => Some(channel.to_owned()),
-                _ => None,
-            }
+    fn enabled_schedule_posts_to_the_general_channel() {
+        let context = |channel: &'static str| {
+            super::Context::from_lookup(
+                store::surreal::SurrealDb::uninitialized(),
+                std::sync::Arc::new(crate::CapturingSlackBot::new()),
+                false,
+                move |key| (key == "SLACK_GENERAL_CHANNEL_ID").then(|| channel.to_owned()),
+            )
         };
-        let surreal = store::surreal::SurrealDb::uninitialized;
-        for (token, channel, missing) in [
-            (" ", "C0GENERAL", "SLACK_BOT_TOKEN"),
-            ("xoxb-synthetic", " ", "SLACK_GENERAL_CHANNEL_ID"),
-        ] {
-            assert_eq!(
-                super::Context::from_lookup(surreal(), false, lookup(token, channel))
-                    .err()
-                    .unwrap(),
-                Missing(missing)
-            );
-        }
-        assert!(super::Context::from_lookup(
-            surreal(),
-            false,
-            lookup("xoxb-synthetic", "C0GENERAL")
-        )
-        .is_ok());
+        assert_eq!(
+            context(" ").err().unwrap(),
+            super::super::SettingsError::Missing("SLACK_GENERAL_CHANNEL_ID")
+        );
+        assert!(context("C0GENERAL").is_ok());
     }
 
     #[tokio::test]

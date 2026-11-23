@@ -38,8 +38,12 @@ pub struct Context {
 }
 
 impl Context {
-    /// Build the live Xero and Slack-backed adapters only when this workflow is enabled.
-    pub fn from_lookup<F: Fn(&str) -> Option<String>>(lookup: F) -> Result<Self, SettingsError> {
+    /// Build the live Xero adapter and post its confirmation with the
+    /// deployment's bot to [`crate::notify::OPS_CHANNEL_ENV`].
+    pub fn from_lookup<F: Fn(&str) -> Option<String>>(
+        slack: Arc<dyn crate::SlackBot>,
+        lookup: F,
+    ) -> Result<Self, SettingsError> {
         use crate::billing_canary::{notify_recipient, BillingProviderAdapter};
         use billing::BillingProvider;
 
@@ -48,17 +52,8 @@ impl Context {
         let provider: Arc<dyn BillingProvider> = Arc::new(provider);
         let provider: Arc<dyn crate::billing_canary::BillingCanaryProvider> =
             Arc::new(BillingProviderAdapter(provider));
-        let webhook = lookup("SLACK_WEBHOOK_URL")
-            .map(|value| value.trim().to_owned())
-            .filter(|value| !value.is_empty())
-            .ok_or(SettingsError::Missing("SLACK_WEBHOOK_URL"))?;
-        let notifier = crate::notify::notifier_from_lookup(|key| {
-            if key == "SLACK_WEBHOOK_URL" {
-                Some(webhook.clone())
-            } else {
-                lookup(key)
-            }
-        });
+        let channel = super::required_channel(&lookup, crate::notify::OPS_CHANNEL_ENV)?;
+        let notifier = Arc::new(crate::notify::ChannelNotifier::new(slack, channel));
         Ok(Self {
             provider,
             email: Arc::new(SlackOpsDelivery::new(notifier)),

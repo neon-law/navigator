@@ -1353,9 +1353,8 @@ protected alongside it.
 | Summary output limit | `NAVIGATOR_SUMMARY_MAX_OUTPUT_TOKENS` | Optional output limit |
 | DKIM fence | `NAVIGATOR_DKIM_REQUIRE_DOMAIN` | Optional domain pin |
 | Lawyer-sender DKIM check | none (always on) | Must pass for sender's own domain on every lawyer command/relay |
-| Internal ops notices | `SLACK_WEBHOOK_URL` | Optional; otherwise captured in memory |
-| Per-Project client-view notices | `SLACK_BOT_TOKEN` | Required outside the harness; creates private Project channels |
-| Inbox notice Firm | `SLACK_MESSAGES_FIRM_ID` | Optional; unset uses the Firm wearing Neon |
+| Internal ops notices | `SLACK_OPS_CHANNEL_ID` | Optional; otherwise captured in memory |
+| Deployment Slack Firm | `SLACK_FIRM_ID` | Optional; unset uses the Firm wearing Neon; its bot posts notices |
 | Dash0 endpoint | `DASH0_ENDPOINT` | Optional staging-only integration declaration |
 | Dash0 dataset | `DASH0_DATASET` | Required with `DASH0_ENDPOINT` |
 | Dash0 token | `DASH0_TOKEN` | Encrypted Secret Manager input; required with `DASH0_ENDPOINT` |
@@ -1416,7 +1415,6 @@ an explicit capability choice, not evidence that an invoice reached the ledger.
 | GitHub concurrency cap | `NAVIGATOR_GITHUB_MAX_CONCURRENT` |
 | GitHub revision cap | `NAVIGATOR_GITHUB_MAX_REVISE_ROUNDS` |
 | GitHub daily token cap | `NAVIGATOR_GITHUB_MAX_DAILY_TOKENS` |
-| DevX Slack worker (in `workflows-service`) | `SLACK_WEBHOOK_URL` |
 | Content roots | `NAVIGATOR_PUBLIC_DIR`, `NAVIGATOR_WORKSHOPS_DIR` |
 | CLI login file | `NAVIGATOR_CREDENTIALS_FILE`, `NAVIGATOR_CONFIG_DIR` |
 | Harness worktree/cache | `NAVIGATOR_WORKTREE_PATH`, `NAVIGATOR_CHROME_CACHE_DIR` |

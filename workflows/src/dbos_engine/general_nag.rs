@@ -106,18 +106,18 @@ impl Context {
         }
     }
 
-    /// Resolve the live bot and target only when the GeneralNag schedule is
-    /// enabled. A capture-only backend must never count as a successful
-    /// production delivery.
+    /// Post with the deployment's bot to `SLACK_GENERAL_CHANNEL_ID`, which an
+    /// enabled schedule requires.
     pub fn from_lookup<F>(
         surreal: store::surreal::SurrealDb,
+        slack: Arc<dyn SlackBot>,
         simulated: bool,
         lookup: F,
     ) -> Result<Self, super::SettingsError>
     where
         F: Fn(&str) -> Option<String>,
     {
-        let (slack, channel_id) = super::general_channel_bot(lookup)?;
+        let channel_id = super::required_channel(lookup, "SLACK_GENERAL_CHANNEL_ID")?;
         Ok(Self {
             slack,
             channel_id,
@@ -322,61 +322,24 @@ mod tests {
     }
 
     #[test]
-    fn enabled_schedule_rejects_capture_only_configuration() {
-        let result =
-            super::Context::from_lookup(store::surreal::test_support::unreachable(), true, |_| {
-                None
-            });
-        assert!(matches!(
-            result,
-            Err(super::super::SettingsError::Missing(
-                "SLACK_GENERAL_CHANNEL_ID"
-            ))
-        ));
-
-        let result =
-            super::Context::from_lookup(store::surreal::test_support::unreachable(), true, |key| {
-                (key == "SLACK_GENERAL_CHANNEL_ID").then(|| "C_GENERAL".to_owned())
-            });
-        assert!(matches!(
-            result,
-            Err(super::super::SettingsError::Missing("SLACK_BOT_TOKEN"))
-        ));
-
-        let result =
-            super::Context::from_lookup(store::surreal::test_support::unreachable(), true, |key| {
-                match key {
-                    "SLACK_GENERAL_CHANNEL_ID" => Some("  ".to_owned()),
-                    "SLACK_BOT_TOKEN" => Some("xoxb-test".to_owned()),
-                    _ => None,
-                }
-            });
-        assert!(matches!(
-            result,
-            Err(super::super::SettingsError::Missing(
-                "SLACK_GENERAL_CHANNEL_ID"
-            ))
-        ));
-    }
-
-    #[test]
-    fn api_endpoint_override_requires_the_ci_harness() {
-        let configured = |harness: bool| {
-            super::Context::from_lookup(store::surreal::test_support::unreachable(), true, |key| {
-                match key {
-                    "SLACK_GENERAL_CHANNEL_ID" => Some("C_GENERAL".to_owned()),
-                    "SLACK_BOT_TOKEN" => Some("xoxb-test".to_owned()),
-                    "SLACK_API_BASE_URL" => Some("http://127.0.0.1:3000".to_owned()),
-                    "NAVIGATOR_CI_HARNESS" if harness => Some("1".to_owned()),
-                    _ => None,
-                }
-            })
+    fn enabled_schedule_requires_its_general_channel() {
+        let context = |channel: Option<&'static str>| {
+            super::Context::from_lookup(
+                store::surreal::test_support::unreachable(),
+                Arc::new(crate::CapturingSlackBot::new()),
+                true,
+                move |key| (key == "SLACK_GENERAL_CHANNEL_ID").then_some(channel?.to_owned()),
+            )
         };
-        assert!(configured(true).is_ok());
-        assert!(matches!(
-            configured(false),
-            Err(super::super::SettingsError::Invalid("SLACK_API_BASE_URL"))
-        ));
+        for blank in [None, Some("  ")] {
+            assert!(matches!(
+                context(blank),
+                Err(super::super::SettingsError::Missing(
+                    "SLACK_GENERAL_CHANNEL_ID"
+                ))
+            ));
+        }
+        assert!(context(Some("C_GENERAL")).is_ok());
     }
 
     #[tokio::test]

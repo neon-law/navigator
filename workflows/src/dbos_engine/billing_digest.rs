@@ -1,7 +1,7 @@
 //! Daily DBOS port of the GCP BillingDigest.
 //!
 //! The stable UTC-date workflow id joins executor replicas and restart recovery.
-//! Slack webhooks have no delivery idempotency key, so the email step is at least once.
+//! Its Slack post carries no receipt correlation, so the email step is at least once.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -66,26 +66,22 @@ pub struct Context {
 }
 
 impl Context {
-    /// Resolve the production adapters only when this independent schedule is enabled.
-    pub fn from_lookup<F: Fn(&str) -> Option<String>>(lookup: F) -> Result<Self, SettingsError> {
+    /// Resolve the production adapters only when this independent schedule is
+    /// enabled; a configured query posts with the deployment's bot to
+    /// [`crate::notify::OPS_CHANNEL_ENV`].
+    pub fn from_lookup<F: Fn(&str) -> Option<String>>(
+        slack: Arc<dyn crate::SlackBot>,
+        lookup: F,
+    ) -> Result<Self, SettingsError> {
         let config = DigestConfig::from_env(&lookup);
-        let webhook = if config.query.is_some() {
-            Some(
-                lookup("SLACK_WEBHOOK_URL")
-                    .map(|value| value.trim().to_owned())
-                    .filter(|value| !value.is_empty())
-                    .ok_or(SettingsError::Missing("SLACK_WEBHOOK_URL"))?,
-            )
+        let notifier: Arc<dyn crate::Notifier> = if config.query.is_some() {
+            Arc::new(crate::notify::ChannelNotifier::new(
+                slack,
+                super::required_channel(&lookup, crate::notify::OPS_CHANNEL_ENV)?,
+            ))
         } else {
-            None
+            Arc::new(crate::CapturingNotifier::new())
         };
-        let notifier = crate::notify::notifier_from_lookup(|key| {
-            if key == "SLACK_WEBHOOK_URL" {
-                webhook.clone()
-            } else {
-                lookup(key)
-            }
-        });
         Ok(Self {
             source: Arc::new(BigQuerySource),
             email: Arc::new(SlackOpsDelivery::new(notifier)),
@@ -255,15 +251,16 @@ mod tests {
         assert!(!enabled(|_| None).unwrap());
         assert!(!enabled(|_| Some("true".into())).unwrap());
         assert!(!enabled(|_| Some("yes".into())).unwrap());
-        assert!(Context::from_lookup(|_| None).is_ok());
+        let bot = || std::sync::Arc::new(crate::CapturingSlackBot::new());
+        assert!(Context::from_lookup(bot(), |_| None).is_ok());
         let configured = |key: &str| match key {
             "BILLING_EXPORT_TABLE" => Some("project.dataset.export".to_owned()),
             "BIGQUERY_PROJECT" => Some("synthetic-project".to_owned()),
             _ => None,
         };
         assert!(matches!(
-            Context::from_lookup(configured),
-            Err(SettingsError::Missing("SLACK_WEBHOOK_URL"))
+            Context::from_lookup(bot(), configured),
+            Err(SettingsError::Missing("SLACK_OPS_CHANNEL_ID"))
         ));
     }
 }

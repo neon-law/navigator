@@ -234,9 +234,10 @@ impl DbosContext {
     ///
     /// # Errors
     ///
-    /// Missing Slack or source credentials, an invalid coverage manifest,
-    /// or an invalid explicit write-only configuration.
+    /// A missing messages channel or source credentials, an invalid coverage
+    /// manifest, or an invalid explicit write-only configuration.
     pub fn from_lookup(
+        slack: Arc<dyn SlackBot>,
         simulated: bool,
         lookup: impl Fn(&str) -> Option<String>,
     ) -> anyhow::Result<Self> {
@@ -286,13 +287,6 @@ impl DbosContext {
         } else {
             "SLACK_MESSAGES_CHANNEL_ID"
         })?;
-        let token = required("SLACK_BOT_TOKEN")?;
-        let base_url = workflows::harness_override(&lookup, "SLACK_API_BASE_URL")
-            .map_err(|_| anyhow::anyhow!("SLACK_API_BASE_URL is invalid"))?;
-        let slack: Arc<dyn SlackBot> = match base_url {
-            Some(base_url) => Arc::new(workflows::SlackBotClient::with_base_url(token, base_url)),
-            None => Arc::new(workflows::SlackBotClient::new(token)),
-        };
         Ok(Self { slack, channel_id })
     }
 }
@@ -767,7 +761,7 @@ async fn post_digest(
 ) -> anyhow::Result<()> {
     if !enabled || channel_id.trim().is_empty() {
         return Err(anyhow::anyhow!(
-            "Archives requires SLACK_BOT_TOKEN and its messages channel"
+            "Archives requires the deployment's Slack bot and its messages channel"
         ));
     }
     slack
@@ -788,7 +782,7 @@ async fn post_digest_idempotent(
 ) -> anyhow::Result<()> {
     if !enabled || channel_id.trim().is_empty() {
         return Err(anyhow::anyhow!(
-            "Archives requires SLACK_BOT_TOKEN and its messages channel"
+            "Archives requires the deployment's Slack bot and its messages channel"
         ));
     }
     if slack
@@ -1074,37 +1068,41 @@ mod tests {
     /// simulated-matters deployment.
     #[test]
     fn the_dbos_host_needs_complete_coverage_settings() {
+        let bot = || std::sync::Arc::new(workflows::CapturingSlackBot::new());
         let coverage = r#"{"navigator":{"relations":[]},"forgejo":{"relations":[]}}"#;
         let complete = |key: &str| {
             Some(match key {
                 "NAVIGATOR_ARCHIVE_COVERAGE" => coverage.to_owned(),
                 "SLACK_MESSAGES_CHANNEL_ID" => "C-LIVE".to_owned(),
                 "SLACK_STAGING_MESSAGES_CHANNEL_ID" => "C-STAGING".to_owned(),
-                key if key == "SLACK_BOT_TOKEN" || DBOS_HOST_REQUIRED.contains(&key) => {
-                    "synthetic".to_owned()
-                }
+                key if DBOS_HOST_REQUIRED.contains(&key) => "synthetic".to_owned(),
                 _ => return None,
             })
         };
         assert_eq!(
-            DbosContext::from_lookup(false, complete)
+            DbosContext::from_lookup(bot(), false, complete)
                 .unwrap()
                 .channel_id,
             "C-LIVE"
         );
         assert_eq!(
-            DbosContext::from_lookup(true, complete).unwrap().channel_id,
+            DbosContext::from_lookup(bot(), true, complete)
+                .unwrap()
+                .channel_id,
             "C-STAGING"
         );
-        for missing in DBOS_HOST_REQUIRED.into_iter().chain(["SLACK_BOT_TOKEN"]) {
-            let error = DbosContext::from_lookup(false, |key| {
+        for missing in DBOS_HOST_REQUIRED
+            .into_iter()
+            .chain(["SLACK_MESSAGES_CHANNEL_ID"])
+        {
+            let error = DbosContext::from_lookup(bot(), false, |key| {
                 (key != missing).then(|| complete(key)).flatten()
             })
             .err()
             .unwrap_or_else(|| panic!("{missing} must be required"));
             assert!(error.to_string().contains(missing), "{error}");
         }
-        let malformed = DbosContext::from_lookup(false, |key| match key {
+        let malformed = DbosContext::from_lookup(bot(), false, |key| match key {
             "NAVIGATOR_ARCHIVE_COVERAGE" => Some("{}".to_owned()),
             _ => complete(key),
         });
@@ -1113,6 +1111,7 @@ mod tests {
 
     #[test]
     fn write_only_host_admits_its_explicit_registered_configuration() {
+        let bot = || std::sync::Arc::new(workflows::CapturingSlackBot::new());
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("archive-config.json");
         let mut config = crate::write_only::operations::Config {
@@ -1127,12 +1126,12 @@ mod tests {
         let configured = |key: &str| match key {
             DBOS_ENABLED_ENV => Some("true".to_owned()),
             "NAVIGATOR_ARCHIVE_WRITE_ONLY_CONFIG" => Some(path.display().to_string()),
-            "NAVIGATOR_POSTGRES_HOST" | "SLACK_BOT_TOKEN" => Some("synthetic".to_owned()),
+            "NAVIGATOR_POSTGRES_HOST" => Some("synthetic".to_owned()),
             "SLACK_MESSAGES_CHANNEL_ID" => Some("C-SYNTHETIC".to_owned()),
             _ => None,
         };
         assert_eq!(
-            DbosContext::from_lookup(false, configured)
+            DbosContext::from_lookup(bot(), false, configured)
                 .unwrap()
                 .channel_id,
             "C-SYNTHETIC"
@@ -1141,7 +1140,7 @@ mod tests {
             (DBOS_ENABLED_ENV, "false"),
             ("NAVIGATOR_ARCHIVE_SOURCE", "surreal"),
         ] {
-            assert!(DbosContext::from_lookup(false, |candidate| {
+            assert!(DbosContext::from_lookup(bot(), false, |candidate| {
                 if candidate == key {
                     Some(value.to_owned())
                 } else {
@@ -1171,9 +1170,9 @@ mod tests {
                 configured(key)
             }
         };
-        assert!(DbosContext::from_lookup(false, paired).is_ok());
+        assert!(DbosContext::from_lookup(bot(), false, paired).is_ok());
         for missing in readers {
-            assert!(DbosContext::from_lookup(false, |key| {
+            assert!(DbosContext::from_lookup(bot(), false, |key| {
                 if key == missing {
                     None
                 } else {
@@ -1183,7 +1182,7 @@ mod tests {
             .is_err());
         }
         std::fs::write(&path, b"{}").unwrap();
-        assert!(DbosContext::from_lookup(false, configured).is_err());
+        assert!(DbosContext::from_lookup(bot(), false, configured).is_err());
     }
 
     #[test]

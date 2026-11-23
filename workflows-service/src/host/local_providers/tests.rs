@@ -110,7 +110,7 @@ fn partial_hosts_keep_strict_provider_selection_even_with_explicit_delivery() {
             let get = |name: &str| {
                 if name == key {
                     replacement.map(str::to_owned)
-                } else if name == "SLACK_BOT_TOKEN" {
+                } else if name == "SLACK_FIRM_ID" {
                     Some("explicit-configuration".into())
                 } else {
                     native(name)
@@ -170,9 +170,12 @@ fn explicit_delivery_configuration_is_never_silently_replaced() {
         }
     }
     let source = SurrealDb::uninitialized();
-    assert!(general_nag::Context::from_lookup(source.clone(), true, |_| None).is_err());
-    assert!(dri_digest::Context::from_lookup(source.clone(), true, |_| None).is_err());
-    assert!(notation_reset::Context::from_lookup(source, "Development", true, |_| None).is_err());
+    let bot = || Arc::new(CapturingSlackBot::new()) as Arc<dyn workflows::SlackBot>;
+    assert!(general_nag::Context::from_lookup(source.clone(), bot(), true, |_| None).is_err());
+    assert!(dri_digest::Context::from_lookup(source.clone(), bot(), true, |_| None).is_err());
+    assert!(
+        notation_reset::Context::from_lookup(source, bot(), "Development", true, |_| None).is_err()
+    );
 }
 
 async fn seed_invoice(source: &SurrealDb, providers: &LocalProviders) -> String {
@@ -364,7 +367,9 @@ async fn native_billing_digest_without_exports_registers_without_provider_effect
 
     store::test_support::with_postgres(async {
         let pg = PostgresDb::application().await.unwrap();
-        let context = billing_digest::Context::from_lookup(native).unwrap();
+        let context =
+            billing_digest::Context::from_lookup(Arc::new(CapturingSlackBot::new()), native)
+                .unwrap();
         let runtime = Arc::new(dbos::DBOS::new(dbos_engine::config(
             &database_url(&pg),
             "native-billing-digest",

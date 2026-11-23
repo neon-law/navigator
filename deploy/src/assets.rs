@@ -23,7 +23,6 @@ use image::{ExtendedColorType, ImageEncoder};
 use include_dir::{include_dir, Dir};
 use rgb::FromSlice;
 use views::assets::{GALLERY, WIDTHS};
-use workflows::notify::{Notifier, SlackNotifier};
 
 /// `Cache-Control` stamped on every uploaded variant: cacheable by any
 /// shared cache for ~1 week. Crucially **not** `immutable` — the
@@ -596,7 +595,7 @@ pub fn run_pull(out: &Path, bucket: Option<String>) -> ExitCode {
 /// union across two crates, and if it is ever wrong the failure mode of a
 /// pruning tool is deleting live production photographs. A human reads
 /// this and removes what they recognize.
-pub fn run_orphans(content_root: &Path, bucket: Option<String>, slack: bool) -> ExitCode {
+pub fn run_orphans(content_root: &Path, bucket: Option<String>) -> ExitCode {
     let Some(bucket) = bucket
         .or_else(|| std::env::var("NAVIGATOR_ASSETS_BUCKET").ok())
         .filter(|b| !b.trim().is_empty())
@@ -647,23 +646,6 @@ pub fn run_orphans(content_root: &Path, bucket: Option<String>, slack: bool) -> 
         let report = orphan_report(&bucket, &orphans, held);
         println!("{report}");
 
-        if slack {
-            let Some(url) = std::env::var("SLACK_WEBHOOK_URL")
-                .ok()
-                .filter(|u| !u.trim().is_empty())
-            else {
-                eprintln!(
-                    "navigator: assets orphans: --slack given but SLACK_WEBHOOK_URL is unset"
-                );
-                return ExitCode::from(2);
-            };
-            let notifier = SlackNotifier::new(url);
-            if let Err(e) = notifier.notify(report).await {
-                eprintln!("navigator: assets orphans: Slack delivery failed: {e}");
-                return ExitCode::from(2);
-            }
-            println!("navigator: posted the report to Slack");
-        }
         // Orphans are a finding to act on, never a build failure: the tree
         // is legitimately dirty between a deck edit and its cleanup.
         ExitCode::SUCCESS
@@ -2681,7 +2663,7 @@ Inline raw-HTML tile: <div>![Team](img/thanks-apple/team-lunch.jpg)</div>\n";
             ExitCode::from(2)
         );
         assert_eq!(
-            run_orphans(dir.path(), Some("   ".to_string()), false),
+            run_orphans(dir.path(), Some("   ".to_string())),
             ExitCode::from(2)
         );
     }

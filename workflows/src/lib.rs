@@ -30,6 +30,7 @@ pub mod email;
 pub mod email_summary;
 pub mod email_summary_config;
 pub mod email_summary_delivery;
+pub mod firm_slack;
 pub mod flags;
 pub mod guardrail;
 pub mod heartbeat;
@@ -108,7 +109,7 @@ pub use notation_session::{
 pub use notify::{
     ops_slack_messages, project_channel_name, upsert_channel_canvas, CanvasWrite,
     CapturingNotifier, CapturingSlackBot, Notifier, NotifyError, SlackBot, SlackBotClient,
-    SlackBotError, SlackChannel, SlackMessageReceipt, SlackNotifier, SlackOpsDelivery,
+    SlackBotError, SlackChannel, SlackMessageReceipt, SlackOpsDelivery,
 };
 pub use post_questionnaire::{PostQuestionnaireDrive, PostQuestionnaireError};
 pub use runtime::{

@@ -28,21 +28,20 @@ common:
   NAVIGATOR_GIT_WRITER_TOKEN: internal Git writer bearer token
   NAVIGATOR_SURREAL_USER: SurrealDB administrator user
   NAVIGATOR_SURREAL_PASSWORD: SurrealDB administrator password
-  SLACK_BOT_TOKEN: Slack bot token for the app's Slack integration
   DASH0_TOKEN: Dash0 ingest-only auth token scoped to each row's dataset
   TWILIO_ACCOUNT_SID: Twilio account SID the admin inbox sends texts as
   TWILIO_AUTH_TOKEN: Twilio auth token verifying inbound SMS webhook signatures
 
 # Each row keeps its own value: a key here may appear in either row, both,
 # or neither, with no parity rule, because each row names a resource in its
-# own project. The runtime KMS key seals Firm integration secrets and Brand
-# social account tokens, and stands alone from the Notion lane.
+# own project. The runtime KMS key seals Firm integration secrets, including
+# the Slack bot token every Slack call uses, and Brand social account tokens,
+# and stands alone from the Notion lane.
 independent:
   NAVIGATOR_RUNTIME_KMS_KEY: the row's own dedicated runtime KMS key resource name
   NAVIGATOR_IDENTITY_PLATFORM_API_KEY: the row's own Identity Platform browser key; turns on email/password sign-in
   NAVIGATOR_FORGEJO_PROVISIONER_TOKEN: the row's own Forgejo provisioning account token; turns on Firm organization provisioning
   PLAUSIBLE_STATS_API_KEY: read-only Plausible Stats API key; turns on the social dashboard's leads by platform
-  SLACK_WEBHOOK_URL: the row's own Slack incoming webhook DriDigest posts to when the DBOS executor hosts it
 
 # Brand social app credentials belong to production alone. Staging never
 # receives a copy: a row without them declines social account connection and
@@ -62,8 +61,7 @@ production_only:
 # though it only identifies a database: the Navigator manifest projects it
 # from Secret Manager into the web pod, and it does not belong in production
 # until that row independently enables the Notion lane. Firm Slack and Notion
-# tokens live in the staging Firm's admin Integration secrets, not in this
-# file or the per-Project SLACK_BOT_TOKEN above.
+# tokens live in each Firm's admin Integration secrets, not in this file.
 staging_only:
   NAVIGATOR_GITHUB_WEBHOOK_SECRET: GitHub webhook HMAC secret
   NAVIGATOR_NOTION_DATABASE_ID: parent database in the staging Notion workspace

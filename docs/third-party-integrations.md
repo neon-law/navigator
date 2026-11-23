@@ -68,14 +68,20 @@ and the Nightly Project Update repeats it as the backstop. Each change is logged
 named from the Project code by environment — `navigator-<code>` in production, `staging-<code>` on a simulated-matters
 deployment — and a channel found under its recorded id but another name is renamed back. Opening a Project in a Firm
 that has connected Slack needs no further Slack step; a Project whose Firm has not stored the token reports
-`credential_missing`, and the worker refuses to post rather than borrowing another token. The deployment-wide
-`SLACK_BOT_TOKEN` serves only the deployment's own channels (`#general`, `#finance`, the messages channels).
+`credential_missing`, and the worker refuses to post rather than borrowing another token.
 
 ### Deployment Slack app
 
+Every Slack call goes through one port, `workflows::SlackBot`, whose only live adapter is a Firm's own bot: its
+`slack_bot_token` [Firm Integration Secret](glossary/firm-integration-secret.md), unsealed with
+`NAVIGATOR_RUNTIME_KMS_KEY` when a call needs it. There is no deployment-wide token or incoming webhook. Work with no
+Firm in context — `#general`, `#finance`, the messages and ops channels — posts as the deployment's Slack Firm:
+`SLACK_FIRM_ID`, or the Firm wearing Neon when unset. A deployment without a runtime KMS key captures those notices
+instead of posting them. Internal ops notices (Heartbeat, BillingCanary, BillingDigest) post to `SLACK_OPS_CHANNEL_ID`.
+
 In [Slack Your Apps](https://api.slack.com/apps), open the workspace app used by the deployment. Under **OAuth &
 Permissions**, add scopes to **Bot Token Scopes**. Reinstall the app in its workspace to grant the updated scopes. If
-Slack issues a different bot token, update `SLACK_BOT_TOKEN` through the deployment secret workflow.
+Slack issues a different bot token, store it as the Slack Firm's `slack_bot_token` integration secret.
 
 Invite the bot only to the channels its jobs use. The [Linear backlog digest](dbos-durability.md#linear-backlog) uses
 `chat:write` to post and `groups:history` to look up delivery receipts in its private channel. Slack grants that history
@@ -169,7 +175,7 @@ will not turn a participation row or an email address into an invite, so the Fir
 joins. The setup command retries each resource independently and exits nonzero for any required failure.
 
 The persistent staging deployment (`NAVIGATOR_ENVIRONMENT=production` and `NAVIGATOR_SIMULATED_MATTERS=true`) appends a
-final `from Staging` line to every outbound Slack body: the ops incoming webhook, the per-Project bot, and Firm-private
+final `from Staging` line to every outbound Slack body: ops notices, the per-Project bot, and Firm-private
 `chat.postMessage` calls. Restate jobs do not add a second staging parenthetical to those bodies. Production holding
 real matters does not. Local KIND is `dev` and does not. GitHub Actions deploy narration is a workflow secret, not this
 runtime path.
@@ -221,10 +227,10 @@ The command prints `UNCHANGED` when the published Flow already runs the script a
 be forwarded; silence or any other entry hears the fallback. The number must already point at a Studio Flow: the command
 edits that Flow and never repoints a number.
 
-Inbound Slack notices retain their state and receipt on Message. The configured messages channel belongs to
-`SLACK_MESSAGES_FIRM_ID`, or the Firm wearing Neon when unset. The scheduled reconciler recovers pending notices and
-checks ambiguous sends against a bounded `conversations.history` read. This requires the channel's history scope; an
-absent correlation or missing scope leaves the notice unknown without posting again.
+Inbound Slack notices retain their state and receipt on Message. The configured messages channel belongs to the
+deployment's Slack Firm (`SLACK_FIRM_ID`, or the Firm wearing Neon when unset). The scheduled reconciler recovers
+pending notices and checks ambiguous sends against a bounded `conversations.history` read. This requires the channel's
+history scope; an absent correlation or missing scope leaves the notice unknown without posting again.
 
 Normal staging requires real non-production SendGrid and DocuSign demo configuration. Each cloud deployment uses the
 matching attachment row described in [`provider-environment-parity.md`](provider-environment-parity.md). Only the

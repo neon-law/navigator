@@ -787,26 +787,35 @@ pub fn effect_key() -> Option<String> {
     Some(format!("{workflow_id}/{step_id}"))
 }
 
-/// The live bot and `SLACK_GENERAL_CHANNEL_ID` that the daily `#general`
-/// notices post with. A capture-only backend never counts as delivery.
-pub(crate) fn general_channel_bot(
+/// The messages channel a deployment's own notices post to:
+/// `SLACK_STAGING_MESSAGES_CHANNEL_ID` on a simulated-matters deployment,
+/// `SLACK_MESSAGES_CHANNEL_ID` on any other.
+///
+/// # Errors
+/// The selected channel is unset or blank.
+pub fn messages_channel(
     lookup: impl Fn(&str) -> Option<String>,
-) -> Result<(Arc<dyn crate::SlackBot>, String), SettingsError> {
-    let required = |key: &'static str| {
-        lookup(key)
-            .map(|value| value.trim().to_owned())
-            .filter(|value| !value.is_empty())
-            .ok_or(SettingsError::Missing(key))
-    };
-    let channel_id = required("SLACK_GENERAL_CHANNEL_ID")?;
-    let token = required("SLACK_BOT_TOKEN")?;
-    let base_url = crate::harness_override(&lookup, "SLACK_API_BASE_URL")
-        .map_err(|_| SettingsError::Invalid("SLACK_API_BASE_URL"))?;
-    let slack: Arc<dyn crate::SlackBot> = match base_url {
-        Some(base_url) => Arc::new(crate::SlackBotClient::with_base_url(token, base_url)),
-        None => Arc::new(crate::SlackBotClient::new(token)),
-    };
-    Ok((slack, channel_id))
+    simulated: bool,
+) -> Result<String, SettingsError> {
+    required_channel(
+        lookup,
+        if simulated {
+            "SLACK_STAGING_MESSAGES_CHANNEL_ID"
+        } else {
+            "SLACK_MESSAGES_CHANNEL_ID"
+        },
+    )
+}
+
+/// A required, non-blank Slack channel coordinate.
+pub(crate) fn required_channel(
+    lookup: impl Fn(&str) -> Option<String>,
+    key: &'static str,
+) -> Result<String, SettingsError> {
+    lookup(key)
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .ok_or(SettingsError::Missing(key))
 }
 
 /// Post `text` to `channel` at most once per [`effect_key`]: reuse a receipt
@@ -1118,11 +1127,14 @@ mod schedule_ownership_tests {
         worker.recipient = "worker@example.test".into();
         let mut application_canary = worker.clone().with_schedule_enabled(true);
         application_canary.recipient = "application@example.test".into();
-        let linear = linear_backlog::Context::from_lookup(|key| match key {
-            "SLACK_LINEAR_BACKLOG_CHANNEL_ID" => Some("C123".into()),
-            "LINEAR_BACKLOG_READ_KEY" | "SLACK_BOT_TOKEN" => Some("synthetic".into()),
-            _ => None,
-        })
+        let linear = linear_backlog::Context::from_lookup(
+            Arc::new(crate::CapturingSlackBot::new()),
+            |key| match key {
+                "SLACK_LINEAR_BACKLOG_CHANNEL_ID" => Some("C123".into()),
+                "LINEAR_BACKLOG_READ_KEY" => Some("synthetic".into()),
+                _ => None,
+            },
+        )
         .unwrap()
         .unwrap();
         let combined = Schedules {

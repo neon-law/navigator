@@ -40,7 +40,6 @@ use crate::request_identity::install_crypto_provider;
 use crate::social_publisher::SocialPublishReconcilerService;
 use crate::social_publisher::SocialPublisherService;
 use crate::youtube_comments::YoutubeCommentsPollerService;
-use crate::{notifier_from_env, slack_bot_from_env};
 #[cfg(feature = "restate-compatibility")]
 use crate::{project_slack::ProjectSlackService, NotationService};
 use anyhow::Context;
@@ -298,6 +297,17 @@ async fn run_host(
     );
     #[cfg(not(feature = "restate-compatibility"))]
     require_native_routes(engine, lookup)?;
+    // Runtime KMS unseals Firm integration secrets, including the Slack Firm's
+    // bot token every deployment notice posts with.
+    let kms = social_runtime_kms_from_env().await;
+    let (slack_bot, slack_bot_enabled) = workflows::firm_slack::deployment_bot_or_capture(
+        store::surreal::SurrealDb::uninitialized(),
+        kms.clone(),
+        lookup,
+    )
+    .map_err(anyhow::Error::msg)
+    .context("configure the deployment's Slack bot")?;
+    let ops_notifier = workflows::notify::ops_notifier(slack_bot.clone(), lookup);
     let dbos_hosting = if engine == Engine::Dbos {
         let local_providers = local_providers::LocalProviders::from_lookup(
             mode,
@@ -334,7 +344,7 @@ async fn run_host(
             .map_err(anyhow::Error::msg)
             .context("read NAVIGATOR_DBOS_INBOUND_MESSAGE_ALERT_ENABLED")?;
         // The Project Slack lane posts with each Project's owning Firm's bot
-        // (ENG-392), so it needs no deployment-wide SLACK_BOT_TOKEN.
+        // (ENG-392) rather than the deployment's Slack Firm bot.
         let project_slack_enabled = crate::dbos_project_slack::enabled(lookup)
             .map_err(anyhow::Error::msg)
             .context("read NAVIGATOR_DBOS_PROJECT_SLACK_ENABLED")?;
@@ -418,6 +428,7 @@ async fn run_host(
             } else {
                 workflows::dbos_engine::general_nag::Context::from_lookup(
                     source,
+                    slack_bot.clone(),
                     simulated_matters,
                     lookup,
                 )
@@ -437,6 +448,7 @@ async fn run_host(
             } else {
                 workflows::dbos_engine::notation_reset::Context::from_lookup(
                     source,
+                    slack_bot.clone(),
                     label,
                     simulated_matters,
                     lookup,
@@ -457,6 +469,7 @@ async fn run_host(
             Some(
                 profit_digest::Context::from_lookup(
                     Arc::new(profit_digest::StoreProfitSource::new(surreal, pg)),
+                    slack_bot.clone(),
                     simulated_matters,
                     lookup,
                 )
@@ -472,9 +485,13 @@ async fn run_host(
             Some(if let Some(local) = &local_providers {
                 local.reconcile(source, postgres.clone(), &lookup)?
             } else {
+                anyhow::ensure!(
+                    slack_bot_enabled,
+                    "DBOS ReconcileInvoices requires the deployment's Slack bot"
+                );
                 crate::dbos_reconcile::Context::from_env(
                     source,
-                    slack_bot_from_env().map_err(anyhow::Error::msg)?,
+                    slack_bot.clone(),
                     simulated_matters,
                     lookup,
                 )
@@ -498,8 +515,13 @@ async fn run_host(
                 None
             }
         } else {
-            crate::dri_digest::dbos_context(surreal.clone(), simulated_matters, lookup)
-                .context("configure DBOS DriDigest")?
+            crate::dri_digest::dbos_context(
+                surreal.clone(),
+                slack_bot.clone(),
+                simulated_matters,
+                lookup,
+            )
+            .context("configure DBOS DriDigest")?
         };
         let billing_canary = if workflows::dbos_engine::billing_canary::enabled(lookup)
             .context("read NAVIGATOR_DBOS_BILLING_CANARY_ENABLED")?
@@ -507,8 +529,11 @@ async fn run_host(
             Some(if let Some(local) = &local_providers {
                 local.canary(&lookup)?
             } else {
-                workflows::dbos_engine::billing_canary::Context::from_lookup(lookup)
-                    .context("configure DBOS BillingCanary")?
+                workflows::dbos_engine::billing_canary::Context::from_lookup(
+                    slack_bot.clone(),
+                    lookup,
+                )
+                .context("configure DBOS BillingCanary")?
             })
         } else {
             None
@@ -517,8 +542,11 @@ async fn run_host(
             .context("read NAVIGATOR_DBOS_BILLING_DIGEST_ENABLED")?
         {
             Some(
-                workflows::dbos_engine::billing_digest::Context::from_lookup(lookup)
-                    .context("configure DBOS BillingDigest")?,
+                workflows::dbos_engine::billing_digest::Context::from_lookup(
+                    slack_bot.clone(),
+                    lookup,
+                )
+                .context("configure DBOS BillingDigest")?,
             )
         } else {
             None
@@ -527,19 +555,13 @@ async fn run_host(
             Some(if let Some(local) = &local_providers {
                 local.archives()
             } else {
-                let slack = slack_bot_from_env().map_err(anyhow::Error::msg)?;
-                let channel_id = lookup(if simulated_matters {
-                    "SLACK_STAGING_MESSAGES_CHANNEL_ID"
-                } else {
-                    "SLACK_MESSAGES_CHANNEL_ID"
-                })
-                .unwrap_or_default();
-                let slack_enabled = crate::notify_config::bot_enabled(lookup);
+                let channel_id = dbos_engine::messages_channel(lookup, simulated_matters)
+                    .context("DBOS Archives requires its messages channel")?;
                 anyhow::ensure!(
-                    slack_enabled && !channel_id.trim().is_empty(),
-                    "DBOS Archives requires SLACK_BOT_TOKEN and its messages channel"
+                    slack_bot_enabled,
+                    "DBOS Archives requires the deployment's Slack bot"
                 );
-                (slack, channel_id, slack_enabled)
+                (slack_bot.clone(), channel_id, slack_bot_enabled)
             })
         } else {
             None
@@ -636,13 +658,10 @@ async fn run_host(
         "workflows-service email backend"
     );
 
-    // Operations notifications use the Slack notifier; client mail uses the
-    // separately configured email backend.
+    // Operations notifications post with the deployment's Slack bot; client
+    // mail uses the separately configured email backend.
     #[cfg(feature = "restate-compatibility")]
-    let notifier = notifier_from_env();
-    let slack_bot = slack_bot_from_env()
-        .map_err(anyhow::Error::msg)
-        .context("configure Slack bot")?;
+    let notifier = ops_notifier.clone();
     // The public origin the internal Project canvas links the Portal
     // under; unset, the canvas links the portal by its path.
     let portal_origin = std::env::var("NAVIGATOR_PUBLIC_HOST")
@@ -667,7 +686,6 @@ async fn run_host(
     let messages_channel = std::env::var("SLACK_MESSAGES_CHANNEL_ID").unwrap_or_default();
     let staging_messages_channel =
         std::env::var("SLACK_STAGING_MESSAGES_CHANNEL_ID").unwrap_or_default();
-    let slack_bot_enabled = crate::notify_config::bot_enabled(|k| std::env::var(k).ok());
     // How `NotationReset` names this deployment in its daily post.
     #[cfg(feature = "restate-compatibility")]
     let environment_label =
@@ -679,7 +697,7 @@ async fn run_host(
             .context("configure GitHub forge")?
             .map(|forge| Arc::new(forge) as Arc<dyn cloud::forge::ForgeService>);
     tracing::info!(
-        backend = if crate::notify_config::slack_enabled(|k| std::env::var(k).ok()) {
+        backend = if slack_bot_enabled {
             "Slack"
         } else {
             "Capturing"
@@ -699,7 +717,6 @@ async fn run_host(
     let assets_storage = cloud::assets_from_env()
         .await
         .context("configure public assets storage")?;
-    let kms = social_runtime_kms_from_env().await;
     let dbos_social_kms = kms.clone();
     let youtube_dbos = youtube_dbos_enabled
         .then(|| YoutubeCommentsPollerService::new(surreal.clone(), kms.clone()));
@@ -926,7 +943,7 @@ async fn run_host(
         Some(
             dbos_engine::Executor::launch_hosting_with(
                 &settings,
-                notifier_from_env(),
+                ops_notifier,
                 match app_schedules {
                     Some(application) => schedules.with_application_schedules(application),
                     None => schedules,

@@ -87,9 +87,6 @@ impl Context {
         if XeroBillingProvider::from_env().is_none() {
             return Err("DBOS ReconcileInvoices requires XERO_* configuration");
         }
-        if !crate::notify_config::bot_enabled(&get) {
-            return Err("DBOS ReconcileInvoices requires SLACK_BOT_TOKEN");
-        }
         let finance_channel = get("SLACK_FINANCE_CHANNEL_ID").unwrap_or_default();
         if finance_channel.trim().is_empty() {
             return Err("DBOS ReconcileInvoices requires SLACK_FINANCE_CHANNEL_ID");
