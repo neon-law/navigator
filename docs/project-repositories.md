@@ -1228,11 +1228,14 @@ lawyer lens, read from the same skeletons the gate checks.
 
 ## Local checkouts
 
-`navigator sync --host <host>` keeps the signed-in person's participating open and pitch Projects under `~/Work/<code>`,
-wherever the command runs. Each clone includes the Project's committed Agent Skills under `.agents/skills/`. `--dry-run`
-reports missing, present, unavailable, and occupied paths without contacting a forge or changing files. `project create`
-finishes by creating that matter's checkout through the same sync operation. A failed checkout leaves the opened Project
-available for a sync retry.
+`navigator sync --host <host>` keeps the signed-in person's participating open and pitch Projects under the selected
+workspace root, wherever the command runs. A fresh installation uses `~/Projects`; one with only `~/Work` keeps using
+it. When both exist, choose the root with `--dir <path>`. `navigator project create` and `navigator project scaffold
+--resume` sync new checkouts through this resolver; scaffold's `--dir` still selects its repository destination.
+`navigator sync`, `project create`, and `project watch` accept `--dir` for the root, and watch defaults to it. Each
+clone includes the Project's committed Agent Skills under `.agents/skills/`. `sync --dry-run` reports checkout presence
+separately from whether a source repository is configured. It does not contact a forge, create the root, or change
+files. A failed checkout leaves the opened Project available for a sync retry.
 
 Missing repositories are cloned with `jj git clone --colocate`. Clean existing Git directories are colocated with jj; a
 directory with local edits is left in place. Sync checks the Project and host in the manifest, configures the secondary
@@ -1243,6 +1246,11 @@ watch`; one-shot sync handles source checkouts only.
 
 These are **source** roots. Git never stores legal files. Drive is an optional ingest dropbox read through its API, not
 the working-file store, and no workstation mount of it is read.
+
+Choosing a new root does not move an existing workspace. Before manually moving checkouts, account for linked Git
+worktrees and their shared `.git` metadata, colocated Jujutsu `.jj` metadata, absolute paths in scripts and editor
+settings, and private operator notes that may refer to the old location. Verify the moved checkouts and their remotes
+before removing the old root.
 
 ## Verifying a machine
 

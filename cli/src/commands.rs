@@ -123,11 +123,14 @@ enum Command {
         #[arg(long, hide = true)]
         ci: bool,
     },
-    /// Synchronize your participating open and pitch Projects in ~/Work.
+    /// Synchronize your participating open and pitch Project checkouts.
     Sync {
         /// Target Navigator host.
         #[arg(long)]
         host: String,
+        /// Select the directory holding Project checkouts. Defaults to the shared workspace root.
+        #[arg(long)]
+        dir: Option<PathBuf>,
         /// Report checkout state without changing files or contacting the forge.
         #[arg(long)]
         dry_run: bool,
@@ -575,8 +578,8 @@ fn run() -> ExitCode {
             errors_only,
             ci: _,
         } => run_validate(&dir, fix, errors_only),
-        Command::Sync { host, dry_run } => {
-            runtime().block_on(projects::watch::run_sync(&host, dry_run))
+        Command::Sync { host, dir, dry_run } => {
+            runtime().block_on(projects::watch::run_sync(&host, dir.as_deref(), dry_run))
         }
         Command::Projects { action } => runtime().block_on(run_projects(action)),
         Command::Notation {
@@ -1078,9 +1081,9 @@ pub enum ProjectsCmd {
     },
     /// Watch participating open and pitch Projects, fetch bookmarks, and download document revisions.
     Watch {
-        /// Directory holding one checkout per Project.
+        /// Directory holding one checkout per Project. Defaults to the shared workspace root.
         #[arg(long)]
-        dir: PathBuf,
+        dir: Option<PathBuf>,
         #[command(flatten)]
         host: HostOpt,
     },
@@ -1174,6 +1177,9 @@ pub enum ProjectsCmd {
         /// Brand key worn by the Firm. Requires --firm.
         #[arg(long, requires = "firm")]
         brand: Option<String>,
+        /// Select the local Project checkout root. Defaults to the shared workspace root.
+        #[arg(long)]
+        dir: Option<PathBuf>,
         #[command(flatten)]
         host: HostOpt,
     },
@@ -3128,7 +3134,9 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
             })
             .await
         }
-        ProjectsCmd::Watch { dir, host } => projects::watch::run(&dir, host.host.as_deref()).await,
+        ProjectsCmd::Watch { dir, host } => {
+            projects::watch::run(dir.as_deref(), host.host.as_deref()).await
+        }
         ProjectsCmd::Sync {
             dry_run,
             yes,
@@ -3156,6 +3164,7 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
             closed_at,
             firm,
             brand,
+            dir,
             host,
         } => {
             let result = remote::projects_create_named(
@@ -3173,7 +3182,8 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
             )
             .await;
             if result == ExitCode::SUCCESS && !closed {
-                if let Err(error) = projects::watch::sync_project(host.host.as_deref(), &code).await
+                if let Err(error) =
+                    projects::watch::sync_project(host.host.as_deref(), &code, dir.as_deref()).await
                 {
                     eprintln!("navigator: {error:#}");
                     return ExitCode::FAILURE;
@@ -5440,9 +5450,48 @@ mod gate_helpers_tests {
             "sync",
             "--host",
             "site.example.test",
+            "--dir",
+            "/tmp/project-roots"
+        ])
+        .is_ok());
+        assert!(Cli::try_parse_from([
+            "navigator",
+            "sync",
+            "--host",
+            "site.example.test",
+            "--dir",
+            "/tmp/project-roots",
             "--dry-run"
         ])
         .is_ok());
+        assert!(Cli::try_parse_from([
+            "navigator",
+            "project",
+            "create",
+            "--name",
+            "Synthetic matter",
+            "--code",
+            "synthetic-matter",
+            "--client-email",
+            "client@example.test",
+            "--entity-name",
+            "Synthetic LLC",
+            "--attest",
+            "--dir",
+            "/tmp/project-roots"
+        ])
+        .is_ok());
+        assert!(Cli::try_parse_from([
+            "navigator",
+            "project",
+            "scaffold",
+            "--resume",
+            "synthetic-matter",
+            "--dir",
+            "/tmp/synthetic-checkout"
+        ])
+        .is_ok());
+        assert!(Cli::try_parse_from(["navigator", "project", "watch"]).is_ok());
     }
 
     #[test]

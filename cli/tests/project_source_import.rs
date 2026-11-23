@@ -141,7 +141,7 @@ fn import(credentials: &Path, host: &str, dir: &Path, extra: &[&str]) -> Run {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn sync_uses_only_the_work_folder_under_home_from_any_directory() {
+async fn sync_uses_the_new_projects_folder_under_home_from_any_directory() {
     let server = MockServer::start().await;
     let host = server.uri();
     let home = TempDir::new().unwrap();
@@ -163,9 +163,9 @@ async fn sync_uses_only_the_work_folder_under_home_from_any_directory() {
         cmd
     };
     sync().arg("--dry-run").assert().success();
-    assert!(!home.path().join("Work").exists());
+    assert!(!home.path().join("Projects").exists());
     sync().assert().success();
-    assert!(home.path().join("Work").is_dir());
+    assert!(home.path().join("Projects").is_dir());
     assert_eq!(fs::read_dir(cwd.path()).unwrap().count(), 0);
 }
 
