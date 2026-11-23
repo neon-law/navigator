@@ -26,14 +26,9 @@ impl MirrorSource for ScheduledMirror {
         &self,
         _now: DateTime<Utc>,
     ) -> Result<Vec<(Uuid, String)>, MirrorQueueError> {
-        let all = store::projects::all(&self.surreal)
+        store::deadline_calendar::open_projects()
             .await
-            .map_err(|_| MirrorQueueError::Queue)?;
-        Ok(all
-            .into_iter()
-            .filter(|project| project.status == "open")
-            .map(|project| (project.id, project.code))
-            .collect())
+            .map_err(|_| MirrorQueueError::Queue)
     }
 
     async fn reconcile(

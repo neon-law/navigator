@@ -101,6 +101,17 @@ pub enum MirrorError {
     InvalidDeadline(Uuid, String),
 }
 
+/// IDs and codes of open Projects in stable directory order for the scheduled mirror.
+pub async fn open_projects() -> Result<Vec<(Uuid, String)>, MirrorError> {
+    let pg = crate::postgres::PostgresDb::application()
+        .await
+        .map_err(|error| MirrorError::Db(error.to_string()))?;
+    sqlx::query_as("SELECT id, code FROM project WHERE status = 'open' ORDER BY name, id")
+        .fetch_all(pg.pool())
+        .await
+        .map_err(|error| MirrorError::Db(error.to_string()))
+}
+
 /// Reconcile the Project's mirrored events to its Deadline rows.
 ///
 /// The applied pass ensures the Project's calendar exists and is shared
@@ -552,6 +563,36 @@ mod tests {
             let db = SurrealDb::uninitialized();
             let (project_id, _) = crate::test_support::seed_calendar_project().await;
             test(&db, project_id).await;
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn mirror_roster_returns_only_open_projects_in_directory_order() {
+        crate::test_support::with_postgres(async {
+            let (seed, _) = crate::test_support::seed_calendar_project().await;
+            let pg = crate::postgres::PostgresDb::application().await.unwrap();
+            for (code, name, status) in [
+                ("second-project", "Aardvark", "open"),
+                ("closed-project", "Closed project", "closed"),
+                ("archived-project", "Archived project", "archived"),
+            ] {
+                sqlx::query(
+                    "INSERT INTO project (code, name, status, entity_id)
+                     SELECT $1, $2, $3, entity_id FROM project WHERE id = $4",
+                )
+                .bind(code)
+                .bind(name)
+                .bind(status)
+                .bind(seed)
+                .execute(pg.pool())
+                .await
+                .unwrap();
+            }
+            let rows = super::open_projects().await.unwrap();
+            let codes: Vec<_> = rows.iter().map(|(_, code)| code.as_str()).collect();
+            assert_eq!(codes, ["second-project", "calendar-test"]);
+            assert_eq!(rows[1].0, seed);
         })
         .await;
     }
