@@ -155,7 +155,7 @@ pub(super) async fn finish(base: &str, token: &str, id: Uuid, code: &str) -> Res
             .context("Forgejo primary review protection or Actions is incomplete")?;
         forgejo_run = Some((forge, main));
     }
-    watch::sync_project(Some(base), code)
+    watch::sync_project(Some(base), code, None)
         .await
         .context("local Jujutsu checkout is incomplete")?;
     verified_manifest
@@ -184,9 +184,10 @@ pub(super) async fn inspect(status: &serde_json::Value) -> serde_json::Value {
     let code = status["code"]
         .as_str()
         .filter(|code| model::projects::is_valid_code(code));
-    let checkout = std::env::home_dir()
+    let checkout = super::workspace_root::selected(None)
+        .ok()
         .zip(code)
-        .map(|(home, code)| home.join("Work").join(code));
+        .map(|(root, code)| root.join(code));
     let cwd = Path::new(".");
     let (source, mirror) = if let Some(origin) = remotes["origin"].as_str() {
         let refs = tokio::time::timeout(Duration::from_secs(10), async {

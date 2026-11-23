@@ -141,7 +141,7 @@ fn import(credentials: &Path, host: &str, dir: &Path, extra: &[&str]) -> Run {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn sync_uses_only_the_work_folder_under_home_from_any_directory() {
+async fn sync_uses_the_new_projects_folder_under_home_from_any_directory() {
     let server = MockServer::start().await;
     let host = server.uri();
     let home = TempDir::new().unwrap();
@@ -163,9 +163,9 @@ async fn sync_uses_only_the_work_folder_under_home_from_any_directory() {
         cmd
     };
     sync().arg("--dry-run").assert().success();
-    assert!(!home.path().join("Work").exists());
+    assert!(!home.path().join("Projects").exists());
     sync().assert().success();
-    assert!(home.path().join("Work").is_dir());
+    assert!(home.path().join("Projects").is_dir());
     assert_eq!(fs::read_dir(cwd.path()).unwrap().count(), 0);
 }
 
@@ -530,6 +530,9 @@ exit 7
     .unwrap();
     fs::set_permissions(&jj, fs::Permissions::from_mode(0o700)).unwrap();
     let attempted = login.path().join("checkout-attempt.txt");
+    // The selected checkout root already exists, as it would on a new home
+    // after the first sync has created ~/Projects.
+    fs::create_dir(login.path().join("Projects")).unwrap();
     let provisioned = run(command(&credentials)
         .args(["project", "scaffold", "--host", &host, "--dir"])
         .arg(&dir)
@@ -551,7 +554,12 @@ exit 7
         "{}",
         provisioned.stderr
     );
-    let attempted = fs::read_to_string(attempted).unwrap();
+    let attempted = fs::read_to_string(&attempted).unwrap_or_else(|error| {
+        panic!(
+            "jj clone was not attempted ({error}); stdout: {}; stderr: {}",
+            provisioned.stdout, provisioned.stderr
+        )
+    });
     assert!(attempted.contains(repository), "{attempted}");
     assert!(
         attempted.contains("git\nclone\n--colocate\n--branch\nmain\n--\n"),
@@ -560,13 +568,13 @@ exit 7
     assert!(attempted.starts_with(
         login
             .path()
-            .join("Work")
+            .join("Projects")
             .canonicalize()
             .unwrap()
             .to_str()
             .unwrap()
     ));
-    assert!(!login.path().join("Work").join(CODE).exists());
+    assert!(!login.path().join("Projects").join(CODE).exists());
     for expected in [
         "repository: Created (https://forge.example.test/firm/sample-import)",
         "repository detail: created on the firm forge",

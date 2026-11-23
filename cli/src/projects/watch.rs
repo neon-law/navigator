@@ -32,18 +32,18 @@ enum CheckoutState {
     Present,
     Missing,
     NeedsAttention,
-    RepositoryUnavailable,
 }
 
 #[derive(Serialize)]
 struct CheckoutPreview {
     code: String,
     checkout: CheckoutState,
+    source_repository_configured: bool,
 }
 
 /// Report the checkout state of the signed-in person's active Projects.
-async fn run_preview(host: &str) -> ExitCode {
-    match preview(host).await {
+async fn run_preview(host: &str, dir: &Path) -> ExitCode {
+    match preview(host, dir).await {
         Ok(report) => {
             println!("{report}");
             ExitCode::SUCCESS
@@ -55,38 +55,24 @@ async fn run_preview(host: &str) -> ExitCode {
     }
 }
 
-fn work_dir() -> Result<PathBuf> {
-    let home = std::env::home_dir().context("cannot locate the home directory for ~/Work")?;
-    ensure!(
-        home.is_absolute(),
-        "home directory must be an absolute path"
-    );
-    Ok(home.join("Work"))
-}
-
-async fn preview(host: &str) -> Result<String> {
-    let dir = work_dir()?;
+async fn preview(host: &str, dir: &Path) -> Result<String> {
     let (base, token) = remote::resolve(Some(host))?;
     let projects = visible_projects(&base, &token).await?;
-    serde_json::to_string(&checkout_preview(&dir, projects)?).context("serialize Work sync preview")
+    serde_json::to_string(&checkout_preview(dir, projects)?).context("serialize checkout preview")
 }
 
 fn checkout_preview(dir: &Path, projects: Vec<Project>) -> Result<Vec<CheckoutPreview>> {
     match std::fs::symlink_metadata(dir) {
-        Ok(metadata) => ensure!(metadata.is_dir(), "Work path is not a directory"),
+        Ok(metadata) => ensure!(metadata.is_dir(), "checkout root is not a directory"),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error).context("inspect Work directory"),
+        Err(error) => return Err(error).context("inspect checkout root"),
     }
     let mut report = Vec::new();
     for project in projects
         .into_iter()
         .filter(|p| matches!(p.status.as_str(), "open" | "pitch"))
     {
-        let checkout = if !model::workspace::is_valid_slug(&project.code) {
-            CheckoutState::NeedsAttention
-        } else if project.repository_url.as_deref().is_none_or(str::is_empty) {
-            CheckoutState::RepositoryUnavailable
-        } else {
+        let checkout = if model::workspace::is_valid_slug(&project.code) {
             let root = dir.join(&project.code);
             match std::fs::symlink_metadata(&root) {
                 Ok(metadata) if metadata.is_dir() && root.join(".jj").is_dir() => {
@@ -97,10 +83,16 @@ fn checkout_preview(dir: &Path, projects: Vec<Project>) -> Result<Vec<CheckoutPr
                 }
                 _ => CheckoutState::NeedsAttention,
             }
+        } else {
+            CheckoutState::NeedsAttention
         };
         report.push(CheckoutPreview {
             code: project.code,
             checkout,
+            source_repository_configured: project
+                .repository_url
+                .as_deref()
+                .is_some_and(|url| !url.is_empty()),
         });
     }
     report.sort_by(|a, b| a.code.cmp(&b.code));
@@ -108,11 +100,18 @@ fn checkout_preview(dir: &Path, projects: Vec<Project>) -> Result<Vec<CheckoutPr
 }
 
 /// Synchronize participating active Projects once, keeping document hydration separate.
-pub async fn run_sync(host: &str, dry_run: bool) -> ExitCode {
+pub async fn run_sync(host: &str, dir: Option<&Path>, dry_run: bool) -> ExitCode {
+    let dir = match super::workspace_root::selected(dir) {
+        Ok(dir) => dir,
+        Err(error) => {
+            eprintln!("navigator: {error:#}");
+            return ExitCode::from(2);
+        }
+    };
     if dry_run {
-        return run_preview(host).await;
+        return run_preview(host, &dir).await;
     }
-    match sync_once(host, None).await {
+    match sync_once(host, None, &dir).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("navigator sync: {error:#}");
@@ -122,21 +121,21 @@ pub async fn run_sync(host: &str, dry_run: bool) -> ExitCode {
 }
 
 /// Finish opening a matter with its local checkout; retries use `navigator sync`.
-pub async fn sync_project(host: Option<&str>, code: &str) -> Result<()> {
+pub async fn sync_project(host: Option<&str>, code: &str, root: Option<&Path>) -> Result<()> {
     let (base, _) = remote::resolve(host)?;
-    sync_once(&base, Some(code)).await.context(
+    let dir = super::workspace_root::selected(root)?;
+    sync_once(&base, Some(code), &dir).await.context(
         "Project is open, but checkout setup is incomplete; retry navigator sync --host <host>",
     )
 }
 
-async fn sync_once(host: &str, code: Option<&str>) -> Result<()> {
-    let dir = work_dir()?;
-    std::fs::create_dir_all(&dir)?;
+async fn sync_once(host: &str, code: Option<&str>, root: &Path) -> Result<()> {
+    std::fs::create_dir_all(root)?;
     ensure!(
-        !std::fs::symlink_metadata(&dir)?.is_symlink(),
-        "Work path is a symlink"
+        !std::fs::symlink_metadata(root)?.is_symlink(),
+        "checkout root is a symlink"
     );
-    let dir = dir.canonicalize()?;
+    let dir = root.canonicalize()?;
     let (base, token) = remote::resolve(Some(host))?;
     let projects = visible_projects(&base, &token).await?;
     let mut failed = false;
@@ -178,8 +177,15 @@ pub(super) async fn active_codes(base: &str, token: &str) -> Result<Vec<String>>
 }
 
 /// Keep polling until Ctrl-C. An unavailable Project does not stop the others.
-pub async fn run(dir: &Path, host: Option<&str>) -> ExitCode {
-    match watch(dir, host).await {
+pub async fn run(dir: Option<&Path>, host: Option<&str>) -> ExitCode {
+    let dir = match super::workspace_root::selected(dir) {
+        Ok(dir) => dir,
+        Err(error) => {
+            eprintln!("navigator: {error:#}");
+            return ExitCode::from(2);
+        }
+    };
+    match watch(&dir, host).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("navigator: {error:#}");
@@ -855,13 +861,17 @@ mod tests {
         assert_eq!(
             report
                 .iter()
-                .map(|item| (item.code.as_str(), &item.checkout))
+                .map(|item| (
+                    item.code.as_str(),
+                    &item.checkout,
+                    item.source_repository_configured
+                ))
                 .collect::<Vec<_>>(),
             vec![
-                ("existing", &CheckoutState::Present),
-                ("missing", &CheckoutState::Missing),
-                ("occupied", &CheckoutState::NeedsAttention),
-                ("unprovisioned", &CheckoutState::RepositoryUnavailable),
+                ("existing", &CheckoutState::Present, true),
+                ("missing", &CheckoutState::Missing, true),
+                ("occupied", &CheckoutState::NeedsAttention, true),
+                ("unprovisioned", &CheckoutState::Missing, false),
             ]
         );
         assert!(!root.join("missing").exists());

@@ -61,6 +61,7 @@ pub mod surfaces;
 pub mod surfaces_reconcile;
 pub mod watch;
 mod workspace;
+pub mod workspace_root;
 
 /// Resolve the explicit matter scope or the enclosing Project checkout.
 pub(crate) fn project_target(

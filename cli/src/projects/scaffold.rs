@@ -297,7 +297,7 @@ async fn run_inner(
     if imported != ExitCode::SUCCESS {
         return Ok(imported);
     }
-    super::watch::sync_project(host, &code).await?;
+    super::watch::sync_project(host, &code, None).await?;
     Ok(ExitCode::SUCCESS)
 }
 
