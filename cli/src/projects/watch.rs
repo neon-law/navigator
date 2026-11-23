@@ -42,8 +42,8 @@ struct CheckoutPreview {
 }
 
 /// Report the checkout state of the signed-in person's active Projects.
-pub async fn run_preview(dir: Option<PathBuf>, host: &str) -> ExitCode {
-    match preview(dir, host).await {
+async fn run_preview(host: &str) -> ExitCode {
+    match preview(host).await {
         Ok(report) => {
             println!("{report}");
             ExitCode::SUCCESS
@@ -55,10 +55,17 @@ pub async fn run_preview(dir: Option<PathBuf>, host: &str) -> ExitCode {
     }
 }
 
-async fn preview(dir: Option<PathBuf>, host: &str) -> Result<String> {
-    let dir = dir
-        .or_else(|| std::env::home_dir().map(|home| home.join("Work")))
-        .context("no home directory; pass --dir")?;
+fn work_dir() -> Result<PathBuf> {
+    let home = std::env::home_dir().context("cannot locate the home directory for ~/Work")?;
+    ensure!(
+        home.is_absolute(),
+        "home directory must be an absolute path"
+    );
+    Ok(home.join("Work"))
+}
+
+async fn preview(host: &str) -> Result<String> {
+    let dir = work_dir()?;
     let (base, token) = remote::resolve(Some(host))?;
     let projects = visible_projects(&base, &token).await?;
     serde_json::to_string(&checkout_preview(&dir, projects)?).context("serialize Work sync preview")
@@ -101,11 +108,11 @@ fn checkout_preview(dir: &Path, projects: Vec<Project>) -> Result<Vec<CheckoutPr
 }
 
 /// Synchronize participating active Projects once, keeping document hydration separate.
-pub async fn run_sync(dir: Option<PathBuf>, host: &str, dry_run: bool) -> ExitCode {
+pub async fn run_sync(host: &str, dry_run: bool) -> ExitCode {
     if dry_run {
-        return run_preview(dir, host).await;
+        return run_preview(host).await;
     }
-    match sync_once(dir, host, None).await {
+    match sync_once(host, None).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("navigator sync: {error:#}");
@@ -117,15 +124,13 @@ pub async fn run_sync(dir: Option<PathBuf>, host: &str, dry_run: bool) -> ExitCo
 /// Finish opening a matter with its local checkout; retries use `navigator sync`.
 pub async fn sync_project(host: Option<&str>, code: &str) -> Result<()> {
     let (base, _) = remote::resolve(host)?;
-    sync_once(None, &base, Some(code)).await.context(
+    sync_once(&base, Some(code)).await.context(
         "Project is open, but checkout setup is incomplete; retry navigator sync --host <host>",
     )
 }
 
-async fn sync_once(dir: Option<PathBuf>, host: &str, code: Option<&str>) -> Result<()> {
-    let dir = dir
-        .or_else(|| std::env::home_dir().map(|home| home.join("Work")))
-        .context("no home directory; pass --dir")?;
+async fn sync_once(host: &str, code: Option<&str>) -> Result<()> {
+    let dir = work_dir()?;
     std::fs::create_dir_all(&dir)?;
     ensure!(
         !std::fs::symlink_metadata(&dir)?.is_symlink(),
@@ -668,6 +673,7 @@ mod tests {
         let checkout = dir.join("matter");
         assert!(checkout.join(".jj").is_dir());
         assert!(checkout.join(".git").is_dir());
+        assert_eq!(std::fs::read(checkout.join(SKILL_PATH))?, SKILL_BYTES);
         let urls = command(
             &checkout,
             "git",
@@ -736,6 +742,9 @@ mod tests {
         .await
     }
 
+    const SKILL_PATH: &str = ".agents/skills/fixture/SKILL.md";
+    const SKILL_BYTES: &[u8] = b"# Fixture skill\n";
+
     async fn seed_checkout_forges(dir: &Path) -> Result<(Project, PathBuf, PathBuf)> {
         let origin = dir.join("origin.git");
         let mirror = dir.join("mirror.git");
@@ -767,7 +776,9 @@ mod tests {
             seed.join("navigator.yaml"),
             "project:\n  name: matter\n  host: site.example.test\n",
         )?;
-        command(&seed, "git", &["add", "navigator.yaml"]).await?;
+        std::fs::create_dir_all(seed.join(".agents/skills/fixture"))?;
+        std::fs::write(seed.join(SKILL_PATH), SKILL_BYTES)?;
+        command(&seed, "git", &["add", "navigator.yaml", SKILL_PATH]).await?;
         command(&seed, "git", &["commit", "-m", "fixture"]).await?;
         for bare in [&origin, &mirror] {
             command(&seed, "git", &["push", bare.to_str().unwrap(), "main"]).await?;

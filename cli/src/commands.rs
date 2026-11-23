@@ -123,14 +123,11 @@ enum Command {
         #[arg(long, hide = true)]
         ci: bool,
     },
-    /// Synchronize Jujutsu checkouts for participating open and pitch Projects.
+    /// Synchronize your participating open and pitch Projects in ~/Work.
     Sync {
         /// Target Navigator host.
         #[arg(long)]
         host: String,
-        /// Directory containing Project checkouts. Defaults to ~/Work.
-        #[arg(long)]
-        dir: Option<PathBuf>,
         /// Report checkout state without changing files or contacting the forge.
         #[arg(long)]
         dry_run: bool,
@@ -563,8 +560,8 @@ fn run() -> ExitCode {
             errors_only,
             ci: _,
         } => run_validate(&dir, fix, errors_only),
-        Command::Sync { host, dir, dry_run } => {
-            runtime().block_on(projects::watch::run_sync(dir, &host, dry_run))
+        Command::Sync { host, dry_run } => {
+            runtime().block_on(projects::watch::run_sync(&host, dry_run))
         }
         Command::Projects { action } => runtime().block_on(run_projects(action)),
         Command::Notation {
