@@ -65,31 +65,6 @@ fn transport_is_unknown(error: &EmailError) -> bool {
     }
 }
 
-/// SMS adapter with no live carrier. Callers inject the outcome.
-pub struct SmsTransport<T> {
-    inner: T,
-}
-
-impl<T> SmsTransport<T> {
-    #[must_use]
-    pub fn new(inner: T) -> Self {
-        Self { inner }
-    }
-}
-
-#[async_trait]
-impl<T> OutboundTransport for SmsTransport<T>
-where
-    T: OutboundTransport + Sync,
-{
-    async fn deliver(&self, envelope: &OutboundEnvelope) -> Result<TransportOutcome, String> {
-        if envelope.channel != channel::SMS {
-            return Err("sms transport received another channel".into());
-        }
-        self.inner.deliver(envelope).await
-    }
-}
-
 /// Routes each envelope to the adapter for its channel.
 pub struct ChannelTransport {
     email: EmailTransport,
@@ -582,31 +557,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sms_fixture_submits_with_the_provider_ref() {
-        let calls = Arc::new(Mutex::new(Vec::new()));
-        let sms = FixtureSms {
-            outcome: TransportOutcome::Submitted {
-                provider_ref: "sms-fixture-1".into(),
-            },
-            calls: calls.clone(),
-        };
-        let outcome = SmsTransport::new(sms)
-            .deliver(&envelope(channel::SMS, "We received your message."))
-            .await
-            .unwrap();
-        assert_eq!(
-            outcome,
-            TransportOutcome::Submitted {
-                provider_ref: "sms-fixture-1".into(),
-            }
-        );
-        let calls = calls.lock().unwrap();
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].to, "sms:fixture-sender");
-        assert!(!calls[0].body.contains("Private strategy"));
-    }
-
-    #[tokio::test]
     async fn channel_transport_keeps_email_and_sms_apart() {
         let email = Arc::new(ScriptedEmail {
             result: ScriptedSend::Submitted(SendReceipt {
@@ -643,7 +593,9 @@ mod tests {
             }
         );
         assert_eq!(email.sent.lock().unwrap()[0].to, "sender@example.com");
-        assert_eq!(sms_calls.lock().unwrap()[0].channel, channel::SMS);
+        let sms_sent = sms_calls.lock().unwrap();
+        assert_eq!(sms_sent[0].channel, channel::SMS);
+        assert_eq!(sms_sent[0].to, "sms:fixture-sender");
     }
 
     fn social_envelope(

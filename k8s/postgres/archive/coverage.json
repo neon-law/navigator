@@ -1407,6 +1407,16 @@
         "accessible": true
       },
       {
+        "action": "derived",
+        "relation": {
+          "schema": "public",
+          "name": "project_list",
+          "kind": "view",
+          "accessible": true
+        },
+        "reason": "The project_list migration rebuilds this view from the exported person_project_role and project tables."
+      },
+      {
         "action": "export",
         "schema": "public",
         "name": "project_module",

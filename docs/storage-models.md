@@ -51,6 +51,9 @@ Identity and tenancy require their exact scoped handoffs; application writes cre
 Attorney Calendar (`person_calendar`) is PostgreSQL-native. A lawyer-tier sign-in records the Workspace address as
 primary when the Person exists and has no primary calendar.
 
+The Project list and single-code integration lookup read the live `project_list` view. It joins each Person’s
+participation to the Project. The caller filters by Person and participation side before returning Project rows.
+
 ## Relationship graph
 
 PostgreSQL holds `entity_role`, `relationship`, `project_reference`, `disclosure`, and the append-only

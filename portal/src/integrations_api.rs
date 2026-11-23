@@ -174,13 +174,13 @@ async fn targets(
     authed: &AdminSession,
     selector: &ProjectSelector,
 ) -> Result<Vec<store::projects::Project>, ApiError> {
-    let visible =
-        store::access::visible_projects(&state.surreal, authed.0.person_id, authed.0.role)
-            .await
-            .map_err(ApiError::Db)?;
     match (&selector.project_code, selector.all) {
-        (Some(code), false) => Ok(vec![one_target(state, authed, visible, code).await?]),
+        (Some(code), false) => Ok(vec![one_target(state, authed, code).await?]),
         (None, true) => {
+            let visible =
+                store::access::visible_projects(&state.surreal, authed.0.person_id, authed.0.role)
+                    .await
+                    .map_err(ApiError::Db)?;
             let admitted_firm_ids = store::firm_capability::allowed_firm_ids(
                 &state.surreal,
                 authed.0.role,
@@ -217,12 +217,12 @@ async fn targets(
 async fn one_target(
     state: &ApiState,
     authed: &AdminSession,
-    visible: Vec<store::projects::Project>,
     code: &str,
 ) -> Result<store::projects::Project, ApiError> {
-    let project = visible
-        .into_iter()
-        .find(|project| project.code == code)
+    let person = authed.0.person_id.ok_or(ApiError::NotFound)?;
+    let project = store::access::visible_firm_project_by_code(&state.surreal, person, code)
+        .await
+        .map_err(ApiError::Db)?
         .ok_or(ApiError::NotFound)?;
     authorize_project(state, authed, project).await
 }
@@ -256,15 +256,6 @@ async fn authorize_project(
     } else {
         Err(ApiError::NotFound)
     }
-}
-
-async fn visible_for(
-    state: &ApiState,
-    authed: &AdminSession,
-) -> Result<Vec<store::projects::Project>, ApiError> {
-    store::access::visible_projects(&state.surreal, authed.0.person_id, authed.0.role)
-        .await
-        .map_err(ApiError::Db)
 }
 
 /// `POST /app/api/integrations/notion/ensure` — create or adopt each
@@ -509,8 +500,7 @@ pub(crate) async fn slack_ensure_door(
     authed: AdminSession,
     Json(request): Json<SlackRequest>,
 ) -> Result<Response, ApiError> {
-    let visible = visible_for(&state, &authed).await?;
-    let project = one_target(&state, &authed, visible, &request.project_code).await?;
+    let project = one_target(&state, &authed, &request.project_code).await?;
     Ok(report_one(ensure_one_channel(&state, &project).await))
 }
 
@@ -664,8 +654,7 @@ pub(crate) async fn slack_notify_door(
                     .join(", ")
             ))
         })?;
-    let visible = visible_for(&state, &authed).await?;
-    let project = one_target(&state, &authed, visible, &request.project_code).await?;
+    let project = one_target(&state, &authed, &request.project_code).await?;
     let slack = match state
         .integration_providers
         .slack(&state.surreal, project.id)
@@ -937,11 +926,7 @@ pub(crate) async fn calendar_events_door(
             "provide a positive calendar window of at most 31 days".to_owned(),
         ));
     }
-    let visible =
-        store::access::visible_projects(&state.surreal, authed.0.person_id, authed.0.role)
-            .await
-            .map_err(ApiError::Db)?;
-    let project = one_target(&state, &authed, visible, &request.project_code).await?;
+    let project = one_target(&state, &authed, &request.project_code).await?;
     let stored_id = project.calendar_id.as_deref().ok_or(ApiError::NotFound)?;
     let unavailable = || (StatusCode::BAD_GATEWAY, "Project Calendar unavailable").into_response();
     let Ok(calendar) = state
