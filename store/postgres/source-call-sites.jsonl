@@ -895,8 +895,8 @@
 {"file":"portal/src/admin.rs","line":1836,"function":"persist_person_avatar","operation":"delete","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/admin.rs","line":1877,"function":"stream_avatar","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/admin.rs","line":1881,"function":"stream_avatar","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"portal/src/admin.rs","line":6198,"function":"admin_avatar_download_redirects_urls_streams_keys_and_hides_the_missing","operation":"delete","sql_operations":[],"tables":[],"transaction":false}
-{"file":"portal/src/admin.rs","line":6386,"function":"avatar_clears_reset_the_row_for_admin_and_self_service_doors","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"portal/src/admin.rs","line":6220,"function":"admin_avatar_download_redirects_urls_streams_keys_and_hides_the_missing","operation":"delete","sql_operations":[],"tables":[],"transaction":false}
+{"file":"portal/src/admin.rs","line":6408,"function":"avatar_clears_reset_the_row_for_admin_and_self_service_doors","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/admin_csv.rs","line":40,"function":"into_response","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/admin_csv.rs","line":51,"function":"into_response","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/api.rs","line":2402,"function":"is_verified_forgejo_repository_url","operation":"query","sql_operations":[],"tables":[],"transaction":false}
@@ -956,7 +956,7 @@
 {"file":"portal/src/canonical_host.rs","line":325,"function":"resolve_brand_and_enforce_host","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/canonical_host.rs","line":329,"function":"resolve_brand_and_enforce_host","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/ci_auth.rs","line":545,"function":"github_mint_selects_only_a_live_host_in_the_configured_deployment","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"portal/src/client_portal.rs","line":49,"function":"apply_host_mark","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"portal/src/client_portal.rs","line":30,"function":"apply_host_mark","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/csrf.rs","line":95,"function":"require_csrf","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/deployment_keys.rs","line":18,"function":"redirect","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/deployment_keys.rs","line":46,"function":"save","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
