@@ -15,9 +15,9 @@ use store::{
 use uuid::Uuid;
 
 use crate::{
+    AppState,
     esignature_webhook::ConnectPayload,
     signature::{DocuSignSignatureProvider, SignatureProvider},
-    AppState,
 };
 
 pub(crate) async fn webhook(
@@ -286,10 +286,11 @@ async fn reconcile(state: &AppState, receipt: &Receipt) -> anyhow::Result<Outcom
             },
         );
     };
-    let Some(project) = projects
-        .iter()
-        .find(|p| p.id == project_id && p.firm_id == Some(receipt.firm_id) && p.status == "open")
-    else {
+    let Some(project) = projects.iter().find(|p| {
+        p.id == project_id
+            && p.firm_id == Some(receipt.firm_id)
+            && matches!(p.status.as_str(), "pitch" | "open")
+    }) else {
         return Ok(Outcome::Review("assigned_project_unavailable"));
     };
     let Some(client) = project
@@ -367,7 +368,7 @@ fn match_project<'a>(
     }
     let mut matches = projects.iter().filter(|project| {
         project.firm_id == Some(firm)
-            && project.status == "open"
+            && matches!(project.status.as_str(), "pitch" | "open")
             && match hints.first() {
                 Some(code) => project.code.eq_ignore_ascii_case(code),
                 None => project
@@ -522,6 +523,16 @@ mod tests {
             "updated_at": "2026-01-01T00:00:00Z"
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn a_pitch_can_receive_its_first_completed_envelope() {
+        let firm = Uuid::new_v4();
+        let client = Uuid::new_v4();
+        let mut project = open_project(firm, client, "new-pitch");
+        project.status = "pitch".into();
+        let matched = match_project(firm, std::slice::from_ref(&project), &[client], &[], &[]);
+        assert_eq!(matched.unwrap().id, project.id);
     }
 
     #[test]

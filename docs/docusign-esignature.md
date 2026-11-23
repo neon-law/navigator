@@ -340,7 +340,7 @@ expired, and recipient completed. The endpoint verifies the raw signature and ac
 envelopes in PostgreSQL before acknowledging them. The Firm connection's DocuSign user needs permission to read
 completed envelopes sent by the other users in that account. Connect can omit document bytes.
 
-The worker verifies completion with DocuSign, then assigns the envelope to an open Project in that Firm. It uses the
+The worker verifies completion with DocuSign, then matches the envelope to a pitch or open Project in that Firm. It uses the
 `project_code` envelope custom field, then a recognizable `<project-code>__` filename prefix, then the signing client
 DRI's email. A known client DRI must be a signer even when a code selects the Project. Missing and ambiguous assignments
 appear under **DocuSign completion review** on the Firm's admin page for manual verification and adoption.
