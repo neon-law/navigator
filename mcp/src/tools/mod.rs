@@ -816,9 +816,8 @@ mod tests {
         ));
     }
 
-    use store::test_support::mem_surreal;
-    async fn state() -> McpState {
-        let surreal = mem_surreal().await;
+    fn state() -> McpState {
+        let surreal = crate::test_fixtures::handle();
         let runtime: Arc<dyn workflows::StateMachineRuntime> = Arc::new(InMemoryRuntime::new());
         McpState::new(surreal, runtime)
     }
@@ -1095,104 +1094,119 @@ mod tests {
 
     #[tokio::test]
     async fn call_tool_with_unknown_name_returns_unknown_error() {
-        let s = state().await;
-        let err = call_tool(&s, None, "does_not_exist", &json!({}))
-            .await
-            .unwrap_err();
-        assert!(matches!(err, ToolError::Unknown(name) if name == "does_not_exist"));
+        store::test_support::with_postgres(async {
+            let s = state();
+            let err = call_tool(&s, None, "does_not_exist", &json!({}))
+                .await
+                .unwrap_err();
+            assert!(matches!(err, ToolError::Unknown(name) if name == "does_not_exist"));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn require_tool_authz_blocks_non_lawyer_yet_allows_anonymous_and_read_only() {
-        let s = state().await;
-        store::persons::create(
-            &s.surreal,
-            &store::persons::NewPerson::with_role(
-                "Client",
-                "client@example.com",
-                store::persons::Role::Client,
-            ),
-        )
-        .await
-        .unwrap();
-        let client = Principal::new("client@example.com");
-
-        // Anonymous (dev / no auth layer) is allowed even for writes.
-        assert!(authz(&s.surreal, None, "create_project").await.is_ok());
-        // A read-only tool is never gated on tier.
-        assert!(authz(&s.surreal, Some(&client), "show_person")
+        store::test_support::with_postgres(async {
+            let s = state();
+            store::persons::create(
+                &s.surreal,
+                &store::persons::NewPerson::with_role(
+                    "Client",
+                    "client@example.com",
+                    store::persons::Role::Client,
+                ),
+            )
             .await
-            .is_ok());
-        // A side-effecting tool by an authenticated client-tier caller is
-        // refused — the core of the fix.
-        assert!(matches!(
-            authz(&s.surreal, Some(&client), "create_project").await,
-            Err(ToolError::Forbidden(_))
-        ));
-        // An authenticated caller with no `persons` row is also refused.
-        let ghost = Principal::new("ghost@example.com");
-        assert!(matches!(
-            authz(&s.surreal, Some(&ghost), "create_project").await,
-            Err(ToolError::Forbidden(_))
-        ));
+            .unwrap();
+            let client = Principal::new("client@example.com");
+
+            // Anonymous (dev / no auth layer) is allowed even for writes.
+            assert!(authz(&s.surreal, None, "create_project").await.is_ok());
+            // A read-only tool is never gated on tier.
+            assert!(authz(&s.surreal, Some(&client), "show_person")
+                .await
+                .is_ok());
+            // A side-effecting tool by an authenticated client-tier caller is
+            // refused — the core of the fix.
+            assert!(matches!(
+                authz(&s.surreal, Some(&client), "create_project").await,
+                Err(ToolError::Forbidden(_))
+            ));
+            // An authenticated caller with no `persons` row is also refused.
+            let ghost = Principal::new("ghost@example.com");
+            assert!(matches!(
+                authz(&s.surreal, Some(&ghost), "create_project").await,
+                Err(ToolError::Forbidden(_))
+            ));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn answer_notation_requires_a_resolved_person() {
-        let s = state().await;
-        let anonymous = resolve_caller(&s.surreal, None).await.unwrap();
-        assert!(matches!(
-            anonymous.answer_identity(),
-            Err(ToolError::Forbidden(_))
-        ));
+        store::test_support::with_postgres(async {
+            let s = state();
+            let anonymous = resolve_caller(&s.surreal, None).await.unwrap();
+            assert!(matches!(
+                anonymous.answer_identity(),
+                Err(ToolError::Forbidden(_))
+            ));
 
-        let unlinked = Principal::new("unlinked@example.com");
-        let unlinked = resolve_caller(&s.surreal, Some(&unlinked)).await.unwrap();
-        assert!(matches!(
-            unlinked.answer_identity(),
-            Err(ToolError::Forbidden(_))
-        ));
+            let unlinked = Principal::new("unlinked@example.com");
+            let unlinked = resolve_caller(&s.surreal, Some(&unlinked)).await.unwrap();
+            assert!(matches!(
+                unlinked.answer_identity(),
+                Err(ToolError::Forbidden(_))
+            ));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn require_tool_authz_matches_lawyer_email_case_insensitively() {
-        // A lawyer row stored with mixed-case email. The gate matches the
-        // stored `email_lower` field, so a differently-cased principal is
-        // authorized instead of being rejected before the tool's own
-        // resolver runs.
-        let s = state().await;
-        store::persons::create(
-            &s.surreal,
-            &store::persons::NewPerson::with_role(
-                "Attorney",
-                "Attorney@Example.com",
-                store::persons::Role::Lawyer,
-            ),
-        )
-        .await
-        .unwrap();
+        store::test_support::with_postgres(async {
+            // A lawyer row stored with mixed-case email. The gate matches the
+            // stored `email_lower` field, so a differently-cased principal is
+            // authorized instead of being rejected before the tool's own
+            // resolver runs.
+            let s = state();
+            store::persons::create(
+                &s.surreal,
+                &store::persons::NewPerson::with_role(
+                    "Attorney",
+                    "Attorney@Example.com",
+                    store::persons::Role::Lawyer,
+                ),
+            )
+            .await
+            .unwrap();
 
-        let caller = Principal::new("attorney@example.com");
-        assert!(
+            let caller = Principal::new("attorney@example.com");
+            assert!(
             authz(&s.surreal, Some(&caller), "create_project")
                 .await
                 .is_ok(),
             "a mixed-case lawyer row must authorize a lower-case caller through the dispatched gate"
         );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn call_tool_dispatches_validate_notation() {
-        let s = state().await;
-        let result = call_tool(
-            &s,
-            None,
-            "validate_notation",
-            &json!({ "contents": "# H\n", "markdown_only": true }),
-        )
-        .await
-        .unwrap();
-        assert_eq!(result["structuredContent"]["clean"], true);
+        store::test_support::with_postgres(async {
+            let s = state();
+            let result = call_tool(
+                &s,
+                None,
+                "validate_notation",
+                &json!({ "contents": "# H\n", "markdown_only": true }),
+            )
+            .await
+            .unwrap();
+            assert_eq!(result["structuredContent"]["clean"], true);
+        })
+        .await;
     }
 
     // -----------------------------------------------------------------
@@ -1225,71 +1239,88 @@ mod tests {
 
     #[tokio::test]
     async fn no_principal_resolves_to_the_deployment_scope() {
-        // The KIND / local-dev path and the browser harness: no auth
-        // layer ran, so reads stay deployment-wide as they always were.
-        let surreal = mem_surreal().await;
-        assert_eq!(scope_for(&surreal, None).await, ReadScope::Deployment);
-        // An empty or whitespace email is not an identity either.
-        let blank = Principal::new("   ");
-        assert_eq!(
-            scope_for(&surreal, Some(&blank)).await,
-            ReadScope::Deployment
-        );
+        store::test_support::with_postgres(async {
+            // The KIND / local-dev path and the browser harness: no auth
+            // layer ran, so reads stay deployment-wide as they always were.
+            let surreal = crate::test_fixtures::handle();
+            assert_eq!(scope_for(&surreal, None).await, ReadScope::Deployment);
+            // An empty or whitespace email is not an identity either.
+            let blank = Principal::new("   ");
+            assert_eq!(
+                scope_for(&surreal, Some(&blank)).await,
+                ReadScope::Deployment
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn owner_and_admin_resolve_to_the_directory_lens() {
-        for role in [Role::Owner, Role::Admin] {
-            let surreal = mem_surreal().await;
-            seed_at(&surreal, "boss@example.com", role).await;
-            assert_eq!(
-                scope_for(&surreal, Some(&Principal::new("boss@example.com"))).await,
-                ReadScope::Directory { role },
-                "{role:?} is oversight, not membership"
-            );
-        }
+        store::test_support::with_postgres(async {
+            for role in [Role::Owner, Role::Admin] {
+                let surreal = crate::test_fixtures::handle();
+                let email = crate::test_fixtures::email();
+                seed_at(&surreal, &email, role).await;
+                assert_eq!(
+                    scope_for(&surreal, Some(&Principal::new(&email))).await,
+                    ReadScope::Directory { role },
+                    "{role:?} is oversight, not membership"
+                );
+            }
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn the_membership_tiers_resolve_to_their_own_person_and_role() {
-        for role in [Role::Lawyer, Role::Clerk, Role::Client] {
-            let surreal = mem_surreal().await;
-            let person = seed_at(&surreal, "member@example.com", role).await;
-            assert_eq!(
-                scope_for(&surreal, Some(&Principal::new("member@example.com"))).await,
-                ReadScope::Membership {
-                    person_id: person.id,
-                    role
-                },
-                "{role:?} reads through the participation ledger"
-            );
-        }
+        store::test_support::with_postgres(async {
+            for role in [Role::Lawyer, Role::Clerk, Role::Client] {
+                let surreal = crate::test_fixtures::handle();
+                let email = crate::test_fixtures::email();
+                let person = seed_at(&surreal, &email, role).await;
+                assert_eq!(
+                    scope_for(&surreal, Some(&Principal::new(&email))).await,
+                    ReadScope::Membership {
+                        person_id: person.id,
+                        role
+                    },
+                    "{role:?} reads through the participation ledger"
+                );
+            }
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn the_lookup_is_case_insensitive_like_every_other_email_lookup() {
-        // A row stored mixed-case must still scope a caller whose IdP
-        // presents the address lowercased.
-        let surreal = mem_surreal().await;
-        let person = seed_at(&surreal, "Attorney@Example.com", Role::Lawyer).await;
-        assert_eq!(
-            scope_for(&surreal, Some(&Principal::new("attorney@example.com"))).await,
-            ReadScope::Membership {
-                person_id: person.id,
-                role: Role::Lawyer
-            }
-        );
+        store::test_support::with_postgres(async {
+            // A row stored mixed-case must still scope a caller whose IdP
+            // presents the address lowercased.
+            let surreal = crate::test_fixtures::handle();
+            let person = seed_at(&surreal, "Attorney@Example.com", Role::Lawyer).await;
+            assert_eq!(
+                scope_for(&surreal, Some(&Principal::new("attorney@example.com"))).await,
+                ReadScope::Membership {
+                    person_id: person.id,
+                    role: Role::Lawyer
+                }
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn an_authenticated_email_with_no_persons_row_is_unlinked() {
-        // Sign-in does not create a Person, so an IdP-authenticated
-        // stranger is exactly the caller who must reach nothing.
-        let surreal = mem_surreal().await;
-        assert_eq!(
-            scope_for(&surreal, Some(&Principal::new("stranger@example.com"))).await,
-            ReadScope::Unlinked
-        );
+        store::test_support::with_postgres(async {
+            // Sign-in does not create a Person, so an IdP-authenticated
+            // stranger is exactly the caller who must reach nothing.
+            let surreal = crate::test_fixtures::handle();
+            assert_eq!(
+                scope_for(&surreal, Some(&Principal::new("stranger@example.com"))).await,
+                ReadScope::Unlinked
+            );
+        })
+        .await;
     }
 
     #[test]
@@ -1323,34 +1354,37 @@ mod tests {
     /// through did not change that. What changed is the answer.
     #[tokio::test]
     async fn a_read_tool_is_not_gated_by_the_write_tier_check() {
-        let state = state().await;
-        store::persons::create(
-            &state.surreal,
-            &store::persons::NewPerson::with_role(
-                "client@example.com",
-                "client@example.com",
-                Role::Client,
-            ),
-        )
-        .await
-        .unwrap();
-        let principal = Principal::new("client@example.com");
-        // A client cannot run a write tool...
-        let write = call_tool(
-            &state,
-            Some(&principal),
-            "create_project",
-            &json!({ "name": "Nope" }),
-        )
-        .await;
-        assert!(matches!(write, Err(ToolError::Forbidden(_))));
-        // ...but the read runs, and answers with their own empty list
-        // rather than a refusal.
-        let read = call_tool(&state, Some(&principal), "list_projects", &json!({}))
+        store::test_support::with_postgres(async {
+            let state = state();
+            store::persons::create(
+                &state.surreal,
+                &store::persons::NewPerson::with_role(
+                    "client@example.com",
+                    "client@example.com",
+                    Role::Client,
+                ),
+            )
             .await
             .unwrap();
-        assert_eq!(read["structuredContent"]["count"], 0);
-        assert_eq!(read["structuredContent"]["lens"], "membership");
+            let principal = Principal::new("client@example.com");
+            // A client cannot run a write tool...
+            let write = call_tool(
+                &state,
+                Some(&principal),
+                "create_project",
+                &json!({ "name": "Nope" }),
+            )
+            .await;
+            assert!(matches!(write, Err(ToolError::Forbidden(_))));
+            // ...but the read runs, and answers with their own empty list
+            // rather than a refusal.
+            let read = call_tool(&state, Some(&principal), "list_projects", &json!({}))
+                .await
+                .unwrap();
+            assert_eq!(read["structuredContent"]["count"], 0);
+            assert_eq!(read["structuredContent"]["lens"], "membership");
+        })
+        .await;
     }
 
     // -----------------------------------------------------------------
@@ -1360,24 +1394,27 @@ mod tests {
 
     #[tokio::test]
     async fn project_skill_show_returns_the_embedded_cli_body() {
-        let s = state().await;
-        let result = call_tool(
-            &s,
-            None,
-            "project_skill_show",
-            &json!({
-                "jurisdiction": "nv", "practice_area": "estates"
-            }),
-        )
-        .await
-        .unwrap();
-        let source = include_str!("../../../skills/nv/estates.md");
-        let expected = rules::project_skill::parse(source).unwrap();
-        assert_eq!(result["structuredContent"]["body"], expected.body);
-        assert_eq!(
-            result["structuredContent"]["notations"],
-            json!(expected.notations)
-        );
+        store::test_support::with_postgres(async {
+            let s = state();
+            let result = call_tool(
+                &s,
+                None,
+                "project_skill_show",
+                &json!({
+                    "jurisdiction": "nv", "practice_area": "estates"
+                }),
+            )
+            .await
+            .unwrap();
+            let source = include_str!("../../../skills/nv/estates.md");
+            let expected = rules::project_skill::parse(source).unwrap();
+            assert_eq!(result["structuredContent"]["body"], expected.body);
+            assert_eq!(
+                result["structuredContent"]["notations"],
+                json!(expected.notations)
+            );
+        })
+        .await;
     }
 
     /// The Assistant Chat is never offered a tool that writes.
@@ -1412,75 +1449,87 @@ mod tests {
 
     #[tokio::test]
     async fn glossary_list_returns_every_term_sorted_by_title() {
-        let s = state().await;
-        let result = call_tool(&s, None, "glossary_list", &json!({}))
-            .await
-            .unwrap();
-        let terms = result["structuredContent"]["terms"].as_array().unwrap();
-        assert_eq!(terms.len(), store::glossary::terms().len());
-        let titles: Vec<&str> = terms.iter().map(|t| t["title"].as_str().unwrap()).collect();
-        let mut sorted = titles.clone();
-        sorted.sort_unstable();
-        assert_eq!(titles, sorted);
-        assert!(terms
-            .iter()
-            .all(|t| !t["description"].as_str().unwrap().is_empty()));
+        store::test_support::with_postgres(async {
+            let s = state();
+            let result = call_tool(&s, None, "glossary_list", &json!({}))
+                .await
+                .unwrap();
+            let terms = result["structuredContent"]["terms"].as_array().unwrap();
+            assert_eq!(terms.len(), store::glossary::terms().len());
+            let titles: Vec<&str> = terms.iter().map(|t| t["title"].as_str().unwrap()).collect();
+            let mut sorted = titles.clone();
+            sorted.sort_unstable();
+            assert_eq!(titles, sorted);
+            assert!(terms
+                .iter()
+                .all(|t| !t["description"].as_str().unwrap().is_empty()));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn glossary_show_returns_the_cli_definition_for_a_client() {
-        let state = state().await;
-        store::persons::create(
-            &state.surreal,
-            &store::persons::NewPerson::with_role(
-                "client@example.com",
-                "client@example.com",
-                Role::Client,
-            ),
-        )
-        .await
-        .unwrap();
-        let principal = Principal::new("client@example.com");
-        let result = call_tool(
-            &state,
-            Some(&principal),
-            "glossary_show",
-            &json!({ "term": "matter" }),
-        )
-        .await
-        .unwrap();
-        let matter = store::glossary::find("Matter").unwrap();
-        assert_eq!(result["structuredContent"]["title"], "Matter");
-        assert_eq!(result["structuredContent"]["body"], matter.body.trim());
-        assert_eq!(
-            result["structuredContent"]["description"],
-            matter.description
-        );
+        store::test_support::with_postgres(async {
+            let state = state();
+            store::persons::create(
+                &state.surreal,
+                &store::persons::NewPerson::with_role(
+                    "client@example.com",
+                    "client@example.com",
+                    Role::Client,
+                ),
+            )
+            .await
+            .unwrap();
+            let principal = Principal::new("client@example.com");
+            let result = call_tool(
+                &state,
+                Some(&principal),
+                "glossary_show",
+                &json!({ "term": "matter" }),
+            )
+            .await
+            .unwrap();
+            let matter = store::glossary::find("Matter").unwrap();
+            assert_eq!(result["structuredContent"]["title"], "Matter");
+            assert_eq!(result["structuredContent"]["body"], matter.body.trim());
+            assert_eq!(
+                result["structuredContent"]["description"],
+                matter.description
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn glossary_show_refuses_an_unknown_term_without_echoing_it() {
-        let s = state().await;
-        let error = call_tool(
-            &s,
-            None,
-            "glossary_show",
-            &json!({ "term": "zz-private-input" }),
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(error, ToolError::NotFound(_)), "{error}");
-        let text = error.to_string();
-        assert!(!text.contains("zz-private-input"), "{text}");
-        assert!(text.contains("glossary_list"), "{text}");
+        store::test_support::with_postgres(async {
+            let s = state();
+            let error = call_tool(
+                &s,
+                None,
+                "glossary_show",
+                &json!({ "term": "zz-private-input" }),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(error, ToolError::NotFound(_)), "{error}");
+            let text = error.to_string();
+            assert!(!text.contains("zz-private-input"), "{text}");
+            assert!(text.contains("glossary_list"), "{text}");
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn glossary_show_requires_a_term() {
-        let s = state().await;
-        let error = call_tool(&s, None, "glossary_show", &json!({}))
-            .await
-            .unwrap_err();
-        assert!(matches!(error, ToolError::InvalidArguments(_)), "{error}");
+        store::test_support::with_postgres(async {
+            let s = state();
+            let error = call_tool(&s, None, "glossary_show", &json!({}))
+                .await
+                .unwrap_err();
+            assert!(matches!(error, ToolError::InvalidArguments(_)), "{error}");
+        })
+        .await;
     }
 }

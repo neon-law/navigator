@@ -31,11 +31,11 @@ pub fn descriptor() -> Value {
             "properties": {
                 "name": {
                     "type": "string",
-                    "description": "Human-readable matter name (e.g. \"Sison — mutual release\", \"ShookEstate\")."
+                    "description": "Human-readable matter name (e.g. \"Cruller — mutual release\", \"SampleEstate\")."
                 },
                 "code": {
                     "type": "string",
-                    "description": "The matter's code (e.g. `sison-mutual-release`), stored exactly as \
+                    "description": "The matter's code (e.g. `cruller-mutual-release`), stored exactly as \
                                     given. Required. Lowercase letters, digits, and single hyphens; \
                                     must start and end with a letter or digit; at most 80 characters. \
                                     This is the permanent, stored code — Navigator does not generate or \
@@ -287,11 +287,6 @@ mod tests {
     use serde_json::json;
     use uuid::Uuid;
 
-    use store::test_support::mem_surreal;
-    async fn db() -> store::surreal::SurrealDb {
-        mem_surreal().await
-    }
-
     /// Seed a `Role::Client` person and return its id — the matter's
     /// client of record, required as `client_dri_person_id`.
     async fn seed_client(surreal: &store::surreal::SurrealDb) -> Uuid {
@@ -326,10 +321,23 @@ mod tests {
         let firm = store::firms::create(
             surreal,
             &store::firms::NewFirm {
-                name: format!("Test Firm {}", Uuid::now_v7()),
+                name: crate::test_fixtures::organization_name(),
                 status: "active".to_string(),
                 entity_id: store::test_support::seed_entity(surreal).await,
                 admin_dri_person_id: admin,
+            },
+        )
+        .await
+        .unwrap();
+        store::brands::create(
+            surreal,
+            store::persons::Role::Admin,
+            Some(admin),
+            &store::brands::NewBrand {
+                name: "neon".into(),
+                key: "neon".into(),
+                firm_id: Some(firm.id),
+                ..Default::default()
             },
         )
         .await
@@ -354,24 +362,8 @@ mod tests {
     }
 
     async fn seed_entity(surreal: &store::surreal::SurrealDb) -> Uuid {
-        // The engine does not validate a `record<>` link and nothing in
-        // this tool resolves either reference, so the fixture points them
-        // at rows it never writes.
-        store::entities::create(
-            surreal,
-            &store::entities::NewEntity {
-                name: "shook.family".into(),
-                entity_type_id: Uuid::now_v7(),
-                jurisdiction_id: Uuid::now_v7(),
-                phone: None,
-                url: None,
-                xero_id: None,
-                firm_anchor_key: None,
-            },
-        )
-        .await
-        .unwrap()
-        .id
+        crate::test_fixtures::seed_entity_named(surreal, &crate::test_fixtures::organization_name())
+            .await
     }
 
     #[test]
@@ -398,7 +390,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_missing_code_is_refused_rather_than_derived() {
-        let surreal = db().await;
+        store::test_support::with_postgres(async {
+        let surreal = crate::test_fixtures::handle();
         let eid = seed_entity(&surreal).await;
         let cid = seed_client(&surreal).await;
         seed_firm_principal(&surreal).await;
@@ -413,26 +406,29 @@ mod tests {
             matches!(err, ToolError::InvalidArguments(ref m) if m.contains("code is required")),
             "{err:?}"
         );
+    }).await;
     }
 
     #[tokio::test]
     async fn happy_path_inserts_with_defaults() {
-        let surreal = db().await;
+        store::test_support::with_postgres(async {
+        let surreal = crate::test_fixtures::handle();
         let eid = seed_entity(&surreal).await;
         let cid = seed_client(&surreal).await;
         seed_firm_principal(&surreal).await;
         let r = call(
             &surreal,
             None,
-            &json!({ "name": "Sison", "code": "sison", "entity_id": eid, "client_dri_person_id": cid, "attestation": true }),
+            &json!({ "name": crate::test_fixtures::MATTER.as_str(), "code": "synthetic-matter", "entity_id": eid, "client_dri_person_id": cid, "attestation": true }),
         )
         .await
         .unwrap();
-        assert_eq!(r["structuredContent"]["name"], "Sison");
+        assert_eq!(r["structuredContent"]["name"], crate::test_fixtures::MATTER.as_str());
         assert_eq!(r["structuredContent"]["status"], "open");
         assert_eq!(r["structuredContent"]["entity_id"], eid.to_string());
         let all = store::projects::all(&surreal).await.unwrap();
         assert_eq!(all.len(), 1);
+    }).await;
     }
 
     // A second matter on a code already in use is caller-correctable (the
@@ -442,35 +438,38 @@ mod tests {
     // live.
     #[tokio::test]
     async fn a_duplicate_code_is_a_conflict_not_invalid_arguments() {
-        let surreal = db().await;
+        store::test_support::with_postgres(async {
+        let surreal = crate::test_fixtures::handle();
         let eid = seed_entity(&surreal).await;
         let cid = seed_client(&surreal).await;
         seed_firm_principal(&surreal).await;
         call(
             &surreal,
             None,
-            &json!({ "name": "Sison", "code": "sison", "entity_id": eid, "client_dri_person_id": cid, "attestation": true }),
+            &json!({ "name": crate::test_fixtures::MATTER.as_str(), "code": "synthetic-matter", "entity_id": eid, "client_dri_person_id": cid, "attestation": true }),
         )
         .await
         .unwrap();
         let err = call(
             &surreal,
             None,
-            &json!({ "name": "Sison II", "code": "sison", "entity_id": eid, "client_dri_person_id": cid, "attestation": true }),
+            &json!({ "name": format!("{} II", *crate::test_fixtures::MATTER), "code": "synthetic-matter", "entity_id": eid, "client_dri_person_id": cid, "attestation": true }),
         )
         .await
         .unwrap_err();
         assert!(matches!(err, ToolError::Conflict(_)), "{err:?}");
+    }).await;
     }
 
     #[tokio::test]
     async fn authenticated_lawyer_becomes_the_lawyer_dri() {
+        store::test_support::with_postgres(async {
         // The bug: a matter opened through Navigator MCP was assigned to
         // `default_firm_dri` (the first admin), so it never appeared in the
         // workbench of the attorney who opened it. Seed an admin *and* the
         // acting lawyer attorney; the caller — not the admin — must be the
         // recorded lawyer DRI.
-        let surreal = db().await;
+        let surreal = crate::test_fixtures::handle();
         let eid = seed_entity(&surreal).await;
         let cid = seed_client(&surreal).await;
         let admin = seed_firm_principal(&surreal).await;
@@ -478,7 +477,7 @@ mod tests {
         let r = call(
             &surreal,
             Some(&Principal::new("attorney@example.com")),
-            &json!({ "name": "Sison", "code": "sison", "entity_id": eid, "client_dri_person_id": cid, "attestation": true }),
+            &json!({ "name": crate::test_fixtures::MATTER.as_str(), "code": "synthetic-matter", "entity_id": eid, "client_dri_person_id": cid, "attestation": true }),
         )
         .await
         .unwrap();
@@ -507,13 +506,15 @@ mod tests {
             Some(admin),
             "the firm default must not win over the caller"
         );
+    }).await;
     }
 
     #[tokio::test]
     async fn caller_email_resolves_case_insensitively() {
+        store::test_support::with_postgres(async {
         // The verified principal email may differ in case from the stored
         // row; resolution matches on lowercase, like `create_notation`.
-        let surreal = db().await;
+        let surreal = crate::test_fixtures::handle();
         let eid = seed_entity(&surreal).await;
         let cid = seed_client(&surreal).await;
         seed_firm_principal(&surreal).await;
@@ -521,7 +522,7 @@ mod tests {
         let r = call(
             &surreal,
             Some(&Principal::new("Attorney@Example.com")),
-            &json!({ "name": "Sison", "code": "sison", "entity_id": eid, "client_dri_person_id": cid, "attestation": true }),
+            &json!({ "name": crate::test_fixtures::MATTER.as_str(), "code": "synthetic-matter", "entity_id": eid, "client_dri_person_id": cid, "attestation": true }),
         )
         .await
         .unwrap();
@@ -539,19 +540,21 @@ mod tests {
                 .map(|p| p.person_id),
             Some(lawyer)
         );
+    }).await;
     }
 
     #[tokio::test]
     async fn no_principal_falls_back_to_default_firm_dri() {
+        store::test_support::with_postgres(async {
         // The dev/local path with no auth layer keeps the firm default.
-        let surreal = db().await;
+        let surreal = crate::test_fixtures::handle();
         let eid = seed_entity(&surreal).await;
         let cid = seed_client(&surreal).await;
         let admin = seed_firm_principal(&surreal).await;
         let r = call(
             &surreal,
             None,
-            &json!({ "name": "Sison", "code": "sison", "entity_id": eid, "client_dri_person_id": cid, "attestation": true }),
+            &json!({ "name": crate::test_fixtures::MATTER.as_str(), "code": "synthetic-matter", "entity_id": eid, "client_dri_person_id": cid, "attestation": true }),
         )
         .await
         .unwrap();
@@ -569,20 +572,22 @@ mod tests {
                 .map(|p| p.person_id),
             Some(admin)
         );
+    }).await;
     }
 
     #[tokio::test]
     async fn client_role_principal_cannot_be_lawyer_dri() {
+        store::test_support::with_postgres(async {
         // A `client`-role principal must never own a matter from the firm
         // side, even if it somehow reaches this door.
-        let surreal = db().await;
+        let surreal = crate::test_fixtures::handle();
         let eid = seed_entity(&surreal).await;
         let cid = seed_client(&surreal).await;
         seed_firm_principal(&surreal).await;
         let err = call(
             &surreal,
             Some(&Principal::new("libra@example.com")),
-            &json!({ "name": "Sison", "code": "sison", "entity_id": eid, "client_dri_person_id": cid, "attestation": true }),
+            &json!({ "name": crate::test_fixtures::MATTER.as_str(), "code": "synthetic-matter", "entity_id": eid, "client_dri_person_id": cid, "attestation": true }),
         )
         .await
         .unwrap_err();
@@ -591,38 +596,43 @@ mod tests {
             store::projects::all(&surreal).await.unwrap().is_empty(),
             "no matter is opened for a non-lawyer caller"
         );
+    }).await;
     }
 
     #[tokio::test]
     async fn unknown_principal_email_is_not_found() {
-        let surreal = db().await;
+        store::test_support::with_postgres(async {
+        let surreal = crate::test_fixtures::handle();
         let eid = seed_entity(&surreal).await;
         let cid = seed_client(&surreal).await;
         seed_firm_principal(&surreal).await;
         let err = call(
             &surreal,
             Some(&Principal::new("ghost@example.com")),
-            &json!({ "name": "Sison", "code": "sison", "entity_id": eid, "client_dri_person_id": cid, "attestation": true }),
+            &json!({ "name": crate::test_fixtures::MATTER.as_str(), "code": "synthetic-matter", "entity_id": eid, "client_dri_person_id": cid, "attestation": true }),
         )
         .await
         .unwrap_err();
         assert!(matches!(err, ToolError::NotFound(_)), "got {err:?}");
+    }).await;
     }
 
     #[tokio::test]
     async fn binds_entity_when_provided_and_exists() {
-        let surreal = db().await;
+        store::test_support::with_postgres(async {
+        let surreal = crate::test_fixtures::handle();
         let eid = seed_entity(&surreal).await;
         let cid = seed_client(&surreal).await;
         seed_firm_principal(&surreal).await;
         let r = call(
             &surreal,
             None,
-            &json!({ "name": "ShookEstate", "code": "shookestate", "entity_id": eid, "client_dri_person_id": cid, "attestation": true }),
+            &json!({ "name": crate::test_fixtures::ESTATE.as_str(), "code": "synthetic-estate", "entity_id": eid, "client_dri_person_id": cid, "attestation": true }),
         )
         .await
         .unwrap();
         assert_eq!(r["structuredContent"]["entity_id"], eid.to_string());
+    }).await;
     }
 
     // Repo-provisioning failure and its rollback are now owned by the shared
@@ -634,10 +644,11 @@ mod tests {
 
     #[tokio::test]
     async fn missing_attestation_is_refused() {
+        store::test_support::with_postgres(async {
         // Every matter open requires the attorney's conflict attestation. Omit
         // it and the shared command refuses the open, opening nothing — the
         // Navigator MCP door onto the same gate the web form and CLI enforce (#355).
-        let surreal = db().await;
+        let surreal = crate::test_fixtures::handle();
         let eid = seed_entity(&surreal).await;
         let cid = seed_client(&surreal).await;
         seed_firm_principal(&surreal).await;
@@ -654,60 +665,70 @@ mod tests {
             store::projects::all(&surreal).await.unwrap().is_empty(),
             "a refused open writes no matter",
         );
+    }).await;
     }
 
     #[tokio::test]
     async fn unknown_entity_id_returns_not_found() {
-        let surreal = db().await;
-        let missing = Uuid::now_v7();
-        let err = call(
-            &surreal,
-            None,
-            &json!({ "name": "X", "code": "x", "entity_id": missing }),
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(err, ToolError::NotFound(_)));
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let missing = Uuid::now_v7();
+            let err = call(
+                &surreal,
+                None,
+                &json!({ "name": "X", "code": "x", "entity_id": missing }),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(err, ToolError::NotFound(_)));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn empty_name_is_invalid() {
-        let surreal = db().await;
-        let err = call(&surreal, None, &json!({ "name": "   ", "code": "matter" }))
-            .await
-            .unwrap_err();
-        assert!(matches!(err, ToolError::InvalidArguments(_)));
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let err = call(&surreal, None, &json!({ "name": "   ", "code": "matter" }))
+                .await
+                .unwrap_err();
+            assert!(matches!(err, ToolError::InvalidArguments(_)));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn obsolete_status_argument_is_rejected() {
-        // `status` was removed when the tool started routing through the
-        // matter-open command (a matter always opens `open`). A caller still
-        // sending it must be told — `deny_unknown_fields` rejects it rather
-        // than silently opening the matter `open` while the caller believes it
-        // set `closed`.
-        let surreal = db().await;
-        let eid = seed_entity(&surreal).await;
-        let cid = seed_client(&surreal).await;
-        seed_firm_principal(&surreal).await;
-        let err = call(
-            &surreal,
-            None,
-            &json!({
-                "name": "Stale", "code": "stale",
-                "entity_id": eid,
-                "client_dri_person_id": cid,
-                "attestation": true,
-                "status": "closed"
-            }),
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(err, ToolError::InvalidArguments(_)), "got {err:?}");
-        assert!(
-            store::projects::all(&surreal).await.unwrap().is_empty(),
-            "a rejected request opens no matter",
-        );
+        store::test_support::with_postgres(async {
+            // `status` was removed when the tool started routing through the
+            // matter-open command (a matter always opens `open`). A caller still
+            // sending it must be told — `deny_unknown_fields` rejects it rather
+            // than silently opening the matter `open` while the caller believes it
+            // set `closed`.
+            let surreal = crate::test_fixtures::handle();
+            let eid = seed_entity(&surreal).await;
+            let cid = seed_client(&surreal).await;
+            seed_firm_principal(&surreal).await;
+            let err = call(
+                &surreal,
+                None,
+                &json!({
+                    "name": "Stale", "code": "stale",
+                    "entity_id": eid,
+                    "client_dri_person_id": cid,
+                    "attestation": true,
+                    "status": "closed"
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(err, ToolError::InvalidArguments(_)), "got {err:?}");
+            assert!(
+                store::projects::all(&surreal).await.unwrap().is_empty(),
+                "a rejected request opens no matter",
+            );
+        })
+        .await;
     }
 
     /// An Navigator MCP-opened matter must be reachable by its own accountable
@@ -716,7 +737,8 @@ mod tests {
     /// naming a lawyer who is not on it.
     #[tokio::test]
     async fn open_writes_the_dri_participation_rows() {
-        let surreal = db().await;
+        store::test_support::with_postgres(async {
+        let surreal = crate::test_fixtures::handle();
         let eid = seed_entity(&surreal).await;
         let cid = seed_client(&surreal).await;
         seed_firm_principal(&surreal).await;
@@ -764,6 +786,7 @@ mod tests {
             .unwrap(),
             "the accountable lawyer must reach the matter they were assigned"
         );
+    }).await;
     }
 
     /// The door collects no product code. A caller sending one is told so by
@@ -771,27 +794,30 @@ mod tests {
     /// they believe the matter was correlated.
     #[tokio::test]
     async fn a_posted_product_code_is_rejected() {
-        let surreal = db().await;
-        let eid = seed_entity(&surreal).await;
-        let cid = seed_client(&surreal).await;
-        seed_firm_principal(&surreal).await;
-        let err = call(
-            &surreal,
-            None,
-            &json!({
-                "name": "Bad Product", "code": "bad-product",
-                "entity_id": eid,
-                "client_dri_person_id": cid,
-                "attestation": true,
-                "product_code": "retired-product"
-            }),
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(err, ToolError::InvalidArguments(_)), "got {err:?}");
-        assert!(
-            store::projects::all(&surreal).await.unwrap().is_empty(),
-            "a rejected request opens no matter",
-        );
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let eid = seed_entity(&surreal).await;
+            let cid = seed_client(&surreal).await;
+            seed_firm_principal(&surreal).await;
+            let err = call(
+                &surreal,
+                None,
+                &json!({
+                    "name": "Bad Product", "code": "bad-product",
+                    "entity_id": eid,
+                    "client_dri_person_id": cid,
+                    "attestation": true,
+                    "product_code": "retired-product"
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(err, ToolError::InvalidArguments(_)), "got {err:?}");
+            assert!(
+                store::projects::all(&surreal).await.unwrap().is_empty(),
+                "a rejected request opens no matter",
+            );
+        })
+        .await;
     }
 }

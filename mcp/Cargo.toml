@@ -29,6 +29,7 @@ views.workspace = true
 workflows.workspace = true
 
 [dev-dependencies]
+fake.workspace = true
 http-body-util.workspace = true
 sqlx.workspace = true
 store = { workspace = true, features = ["test-support"] }

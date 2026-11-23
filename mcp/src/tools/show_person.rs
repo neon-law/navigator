@@ -152,12 +152,6 @@ mod tests {
     use crate::tools::{ReadScope, ToolError};
     use serde_json::json;
 
-    /// `show_person` reads only `persons`, so its tests need only
-    /// the engine that owns the table.
-    async fn surreal() -> store::surreal::SurrealDb {
-        store::test_support::mem_surreal().await
-    }
-
     async fn seed(
         surreal: &store::surreal::SurrealDb,
         name: &str,
@@ -182,178 +176,208 @@ mod tests {
 
     #[tokio::test]
     async fn fuzzy_name_match_is_case_insensitive_and_substring() {
-        let surreal = surreal().await;
-        seed(&surreal, "Libra", "libra@example.com").await;
-        // Lowercased fragment of the *middle* of the name.
-        let result = call(&surreal, &ReadScope::Deployment, &json!({ "name": "ibr" }))
-            .await
-            .unwrap();
-        assert_eq!(result["structuredContent"]["count"], 1);
-        assert_eq!(result["structuredContent"]["persons"][0]["name"], "Libra");
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            seed(&surreal, "Libra", "libra@example.com").await;
+            // Lowercased fragment of the *middle* of the name.
+            let result = call(&surreal, &ReadScope::Deployment, &json!({ "name": "ibr" }))
+                .await
+                .unwrap();
+            assert_eq!(result["structuredContent"]["count"], 1);
+            assert_eq!(result["structuredContent"]["persons"][0]["name"], "Libra");
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn fuzzy_email_match_works_on_domain_fragment() {
-        let surreal = surreal().await;
-        seed(&surreal, "Libra", "libra@neonlaw.com").await;
-        seed(&surreal, "Taurus", "taurus@example.com").await;
-        let result = call(
-            &surreal,
-            &ReadScope::Deployment,
-            &json!({ "email": "neonlaw" }),
-        )
-        .await
-        .unwrap();
-        assert_eq!(result["structuredContent"]["count"], 1);
-        assert_eq!(
-            result["structuredContent"]["persons"][0]["email"],
-            "libra@neonlaw.com"
-        );
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            seed(&surreal, "Libra", "libra@neonlaw.com").await;
+            seed(&surreal, "Taurus", "taurus@example.com").await;
+            let result = call(
+                &surreal,
+                &ReadScope::Deployment,
+                &json!({ "email": "neonlaw" }),
+            )
+            .await
+            .unwrap();
+            assert_eq!(result["structuredContent"]["count"], 1);
+            assert_eq!(
+                result["structuredContent"]["persons"][0]["email"],
+                "libra@neonlaw.com"
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn name_match_returns_multiple_rows_sorted_by_name() {
-        let surreal = surreal().await;
-        // Insert out of alphabetical order so we can prove the sort.
-        // All three signs share the substring "ari".
-        seed(&surreal, "Sagittarius", "sagittarius@example.com").await;
-        seed(&surreal, "Aquarius", "aquarius@example.com").await;
-        seed(&surreal, "Aries", "aries@example.com").await;
-        let result = call(&surreal, &ReadScope::Deployment, &json!({ "name": "ari" }))
-            .await
-            .unwrap();
-        assert_eq!(result["structuredContent"]["count"], 3);
-        let names: Vec<&str> = result["structuredContent"]["persons"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|p| p["name"].as_str().unwrap())
-            .collect();
-        assert_eq!(names, vec!["Aquarius", "Aries", "Sagittarius"]);
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            // Insert out of alphabetical order so we can prove the sort.
+            // All three signs share the substring "ari".
+            seed(&surreal, "Sagittarius", "sagittarius@example.com").await;
+            seed(&surreal, "Aquarius", "aquarius@example.com").await;
+            seed(&surreal, "Aries", "aries@example.com").await;
+            let result = call(&surreal, &ReadScope::Deployment, &json!({ "name": "ari" }))
+                .await
+                .unwrap();
+            assert_eq!(result["structuredContent"]["count"], 3);
+            let names: Vec<&str> = result["structuredContent"]["persons"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|p| p["name"].as_str().unwrap())
+                .collect();
+            assert_eq!(names, vec!["Aquarius", "Aries", "Sagittarius"]);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn both_name_and_email_are_anded() {
-        let surreal = surreal().await;
-        seed(&surreal, "Aquarius", "aquarius@neonlaw.com").await;
-        seed(&surreal, "Aries", "aries@example.com").await;
-        seed(&surreal, "Sagittarius", "sagittarius@neonlaw.com").await;
-        let result = call(
-            &surreal,
-            &ReadScope::Deployment,
-            &json!({ "name": "ari", "email": "neonlaw" }),
-        )
-        .await
-        .unwrap();
-        assert_eq!(result["structuredContent"]["count"], 2);
-        let names: Vec<&str> = result["structuredContent"]["persons"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|p| p["name"].as_str().unwrap())
-            .collect();
-        assert_eq!(names, vec!["Aquarius", "Sagittarius"]);
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            seed(&surreal, "Aquarius", "aquarius@neonlaw.com").await;
+            seed(&surreal, "Aries", "aries@example.com").await;
+            seed(&surreal, "Sagittarius", "sagittarius@neonlaw.com").await;
+            let result = call(
+                &surreal,
+                &ReadScope::Deployment,
+                &json!({ "name": "ari", "email": "neonlaw" }),
+            )
+            .await
+            .unwrap();
+            assert_eq!(result["structuredContent"]["count"], 2);
+            let names: Vec<&str> = result["structuredContent"]["persons"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|p| p["name"].as_str().unwrap())
+                .collect();
+            assert_eq!(names, vec!["Aquarius", "Sagittarius"]);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn missing_both_keys_is_invalid_arguments() {
-        let surreal = surreal().await;
-        let err = call(&surreal, &ReadScope::Deployment, &json!({}))
-            .await
-            .unwrap_err();
-        match err {
-            ToolError::InvalidArguments(m) => {
-                assert!(m.contains("name") && m.contains("email"));
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let err = call(&surreal, &ReadScope::Deployment, &json!({}))
+                .await
+                .unwrap_err();
+            match err {
+                ToolError::InvalidArguments(m) => {
+                    assert!(m.contains("name") && m.contains("email"));
+                }
+                other => panic!("expected InvalidArguments, got {other:?}"),
             }
-            other => panic!("expected InvalidArguments, got {other:?}"),
-        }
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn whitespace_only_keys_are_treated_as_missing() {
-        let surreal = surreal().await;
-        let err = call(
-            &surreal,
-            &ReadScope::Deployment,
-            &json!({ "name": "   ", "email": "" }),
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(err, ToolError::InvalidArguments(_)));
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let err = call(
+                &surreal,
+                &ReadScope::Deployment,
+                &json!({ "name": "   ", "email": "" }),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(err, ToolError::InvalidArguments(_)));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn whitespace_around_needle_is_trimmed_before_matching() {
-        let surreal = surreal().await;
-        seed(&surreal, "Libra", "libra@example.com").await;
-        let result = call(
-            &surreal,
-            &ReadScope::Deployment,
-            &json!({ "name": "  libra\n" }),
-        )
-        .await
-        .unwrap();
-        assert_eq!(result["structuredContent"]["count"], 1);
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            seed(&surreal, "Libra", "libra@example.com").await;
+            let result = call(
+                &surreal,
+                &ReadScope::Deployment,
+                &json!({ "name": "  libra\n" }),
+            )
+            .await
+            .unwrap();
+            assert_eq!(result["structuredContent"]["count"], 1);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn no_match_returns_empty_result_not_an_error() {
-        let surreal = surreal().await;
-        seed(&surreal, "Libra", "libra@example.com").await;
-        let result = call(
-            &surreal,
-            &ReadScope::Deployment,
-            &json!({ "name": "ghost" }),
-        )
-        .await
-        .unwrap();
-        assert_eq!(result["structuredContent"]["count"], 0);
-        assert_eq!(
-            result["structuredContent"]["persons"]
-                .as_array()
-                .unwrap()
-                .len(),
-            0
-        );
-        let text = result["content"][0]["text"].as_str().unwrap();
-        assert!(text.starts_with("No people matched"), "got: {text}");
-        assert!(text.contains("name~=ghost"), "got: {text}");
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            seed(&surreal, "Libra", "libra@example.com").await;
+            let result = call(
+                &surreal,
+                &ReadScope::Deployment,
+                &json!({ "name": "ghost" }),
+            )
+            .await
+            .unwrap();
+            assert_eq!(result["structuredContent"]["count"], 0);
+            assert_eq!(
+                result["structuredContent"]["persons"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                0
+            );
+            let text = result["content"][0]["text"].as_str().unwrap();
+            assert!(text.starts_with("No people matched"), "got: {text}");
+            assert!(text.contains("name~=ghost"), "got: {text}");
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn no_match_with_both_keys_describes_both_in_summary() {
-        let surreal = surreal().await;
-        let result = call(
-            &surreal,
-            &ReadScope::Deployment,
-            &json!({ "name": "ghost", "email": "void" }),
-        )
-        .await
-        .unwrap();
-        assert_eq!(result["structuredContent"]["count"], 0);
-        let text = result["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("name~=ghost"), "got: {text}");
-        assert!(text.contains("email~=void"), "got: {text}");
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let result = call(
+                &surreal,
+                &ReadScope::Deployment,
+                &json!({ "name": "ghost", "email": "void" }),
+            )
+            .await
+            .unwrap();
+            assert_eq!(result["structuredContent"]["count"], 0);
+            let text = result["content"][0]["text"].as_str().unwrap();
+            assert!(text.contains("name~=ghost"), "got: {text}");
+            assert!(text.contains("email~=void"), "got: {text}");
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn results_are_capped_at_max_results() {
-        let surreal = surreal().await;
-        let total = MAX_RESULTS + 5;
-        for i in 0..total {
-            seed(&surreal, "Aries", &format!("user{i:03}@example.com")).await;
-        }
-        let result = call(
-            &surreal,
-            &ReadScope::Deployment,
-            &json!({ "name": "aries" }),
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            result["structuredContent"]["count"].as_u64().unwrap(),
-            MAX_RESULTS
-        );
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let total = MAX_RESULTS + 5;
+            for i in 0..total {
+                seed(&surreal, "Aries", &format!("user{i:03}@example.com")).await;
+            }
+            let result = call(
+                &surreal,
+                &ReadScope::Deployment,
+                &json!({ "name": "aries" }),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                result["structuredContent"]["count"].as_u64().unwrap(),
+                MAX_RESULTS
+            );
+        })
+        .await;
     }
 
     /// The people directory is the firm's own, so a client or clerk
@@ -362,36 +386,42 @@ mod tests {
     /// matches" would teach the model the directory is empty.
     #[tokio::test]
     async fn the_client_and_clerk_tiers_are_refused_the_firm_directory() {
-        let surreal = surreal().await;
-        seed(&surreal, "Libra", "libra@neonlaw.com").await;
-        for role in [store::persons::Role::Client, store::persons::Role::Clerk] {
-            let scope = ReadScope::Membership {
-                person_id: uuid::Uuid::now_v7(),
-                role,
-            };
-            let err = call(&surreal, &scope, &json!({ "email": "neonlaw" }))
-                .await
-                .unwrap_err();
-            match err {
-                ToolError::Forbidden(m) => assert!(m.contains("firm-side"), "{role:?}: {m}"),
-                other => panic!("expected Forbidden for {role:?}, got {other:?}"),
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            seed(&surreal, "Libra", "libra@neonlaw.com").await;
+            for role in [store::persons::Role::Client, store::persons::Role::Clerk] {
+                let scope = ReadScope::Membership {
+                    person_id: uuid::Uuid::now_v7(),
+                    role,
+                };
+                let err = call(&surreal, &scope, &json!({ "email": "neonlaw" }))
+                    .await
+                    .unwrap_err();
+                match err {
+                    ToolError::Forbidden(m) => assert!(m.contains("firm-side"), "{role:?}: {m}"),
+                    other => panic!("expected Forbidden for {role:?}, got {other:?}"),
+                }
             }
-        }
+        })
+        .await;
     }
 
     /// An authenticated email with no `persons` row reaches nothing.
     #[tokio::test]
     async fn an_unlinked_caller_is_refused_the_firm_directory() {
-        let surreal = surreal().await;
-        seed(&surreal, "Libra", "libra@neonlaw.com").await;
-        let err = call(
-            &surreal,
-            &ReadScope::Unlinked,
-            &json!({ "email": "neonlaw" }),
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(err, ToolError::Forbidden(_)));
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            seed(&surreal, "Libra", "libra@neonlaw.com").await;
+            let err = call(
+                &surreal,
+                &ReadScope::Unlinked,
+                &json!({ "email": "neonlaw" }),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(err, ToolError::Forbidden(_)));
+        })
+        .await;
     }
 
     /// The firm tiers do read it: a lawyer needs a `person_id` before
@@ -399,53 +429,62 @@ mod tests {
     /// person up.
     #[tokio::test]
     async fn the_firm_tiers_read_the_directory() {
-        let surreal = surreal().await;
-        seed(&surreal, "Libra", "libra@neonlaw.com").await;
-        let scopes = [
-            ReadScope::Membership {
-                person_id: uuid::Uuid::now_v7(),
-                role: store::persons::Role::Lawyer,
-            },
-            ReadScope::Directory {
-                role: store::persons::Role::Owner,
-            },
-            ReadScope::Directory {
-                role: store::persons::Role::Admin,
-            },
-        ];
-        for scope in &scopes {
-            let r = call(&surreal, scope, &json!({ "email": "neonlaw" }))
-                .await
-                .unwrap();
-            assert_eq!(r["structuredContent"]["count"], 1, "{scope:?}");
-        }
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            seed(&surreal, "Libra", "libra@neonlaw.com").await;
+            let scopes = [
+                ReadScope::Membership {
+                    person_id: uuid::Uuid::now_v7(),
+                    role: store::persons::Role::Lawyer,
+                },
+                ReadScope::Directory {
+                    role: store::persons::Role::Owner,
+                },
+                ReadScope::Directory {
+                    role: store::persons::Role::Admin,
+                },
+            ];
+            for scope in &scopes {
+                let r = call(&surreal, scope, &json!({ "email": "neonlaw" }))
+                    .await
+                    .unwrap();
+                assert_eq!(r["structuredContent"]["count"], 1, "{scope:?}");
+            }
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn summary_text_uses_singular_for_one_match() {
-        let surreal = surreal().await;
-        seed(&surreal, "Libra", "libra@example.com").await;
-        let result = call(
-            &surreal,
-            &ReadScope::Deployment,
-            &json!({ "name": "libra" }),
-        )
-        .await
-        .unwrap();
-        let text = result["content"][0]["text"].as_str().unwrap();
-        assert!(text.starts_with("Found 1 person:"), "got: {text}");
-        assert!(text.contains("Libra"));
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            seed(&surreal, "Libra", "libra@example.com").await;
+            let result = call(
+                &surreal,
+                &ReadScope::Deployment,
+                &json!({ "name": "libra" }),
+            )
+            .await
+            .unwrap();
+            let text = result["content"][0]["text"].as_str().unwrap();
+            assert!(text.starts_with("Found 1 person:"), "got: {text}");
+            assert!(text.contains("Libra"));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn summary_text_uses_plural_for_multiple_matches() {
-        let surreal = surreal().await;
-        seed(&surreal, "Aquarius", "aquarius@example.com").await;
-        seed(&surreal, "Aries", "aries@example.com").await;
-        let result = call(&surreal, &ReadScope::Deployment, &json!({ "name": "ari" }))
-            .await
-            .unwrap();
-        let text = result["content"][0]["text"].as_str().unwrap();
-        assert!(text.starts_with("Found 2 people:"), "got: {text}");
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            seed(&surreal, "Aquarius", "aquarius@example.com").await;
+            seed(&surreal, "Aries", "aries@example.com").await;
+            let result = call(&surreal, &ReadScope::Deployment, &json!({ "name": "ari" }))
+                .await
+                .unwrap();
+            let text = result["content"][0]["text"].as_str().unwrap();
+            assert!(text.starts_with("Found 2 people:"), "got: {text}");
+        })
+        .await;
     }
 }

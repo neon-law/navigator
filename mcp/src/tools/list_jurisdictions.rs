@@ -71,10 +71,6 @@ mod tests {
     use super::{call, descriptor};
     use serde_json::json;
 
-    async fn db() -> store::surreal::SurrealDb {
-        store::test_support::mem_surreal().await
-    }
-
     async fn seed(surreal: &store::surreal::SurrealDb, name: &str, code: &str) {
         store::jurisdictions::create(
             surreal,
@@ -96,69 +92,84 @@ mod tests {
 
     #[tokio::test]
     async fn empty_database_returns_zero_count_not_an_error() {
-        let surreal = db().await;
-        let result = call(&surreal, &json!({})).await.unwrap();
-        assert_eq!(result["structuredContent"]["count"], 0);
-        assert_eq!(
-            result["structuredContent"]["jurisdictions"]
-                .as_array()
-                .unwrap()
-                .len(),
-            0
-        );
-        let text = result["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("No jurisdictions"), "got: {text}");
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let result = call(&surreal, &json!({})).await.unwrap();
+            assert_eq!(result["structuredContent"]["count"], 0);
+            assert_eq!(
+                result["structuredContent"]["jurisdictions"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                0
+            );
+            let text = result["content"][0]["text"].as_str().unwrap();
+            assert!(text.contains("No jurisdictions"), "got: {text}");
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn returns_every_seeded_jurisdiction_sorted_by_name() {
-        let surreal = db().await;
-        // Insert out of alphabetical order so we can prove the sort.
-        seed(&surreal, "Nevada", "NV").await;
-        seed(&surreal, "California", "CA").await;
-        seed(&surreal, "Alabama", "AL").await;
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            // Insert out of alphabetical order so we can prove the sort.
+            seed(&surreal, "Nevada", "NV").await;
+            seed(&surreal, "California", "CA").await;
+            seed(&surreal, "Alabama", "AL").await;
 
-        let result = call(&surreal, &json!({})).await.unwrap();
-        assert_eq!(result["structuredContent"]["count"], 3);
-        let names: Vec<&str> = result["structuredContent"]["jurisdictions"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|j| j["name"].as_str().unwrap())
-            .collect();
-        assert_eq!(names, vec!["Alabama", "California", "Nevada"]);
+            let result = call(&surreal, &json!({})).await.unwrap();
+            assert_eq!(result["structuredContent"]["count"], 3);
+            let names: Vec<&str> = result["structuredContent"]["jurisdictions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|j| j["name"].as_str().unwrap())
+                .collect();
+            assert_eq!(names, vec!["Alabama", "California", "Nevada"]);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn each_row_carries_id_name_and_code() {
-        let surreal = db().await;
-        seed(&surreal, "Nevada", "NV").await;
-        let result = call(&surreal, &json!({})).await.unwrap();
-        let row = &result["structuredContent"]["jurisdictions"][0];
-        assert_eq!(row["name"], "Nevada");
-        assert_eq!(row["code"], "NV");
-        // `id` is a UUID hex string.
-        let id = row["id"].as_str().expect("id present");
-        uuid::Uuid::parse_str(id).expect("valid UUID");
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            seed(&surreal, "Nevada", "NV").await;
+            let result = call(&surreal, &json!({})).await.unwrap();
+            let row = &result["structuredContent"]["jurisdictions"][0];
+            assert_eq!(row["name"], "Nevada");
+            assert_eq!(row["code"], "NV");
+            // `id` is a UUID hex string.
+            let id = row["id"].as_str().expect("id present");
+            uuid::Uuid::parse_str(id).expect("valid UUID");
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn ignores_arguments_silently() {
-        let surreal = db().await;
-        seed(&surreal, "Nevada", "NV").await;
-        let result = call(&surreal, &json!({ "garbage": 42 })).await.unwrap();
-        assert_eq!(result["structuredContent"]["count"], 1);
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            seed(&surreal, "Nevada", "NV").await;
+            let result = call(&surreal, &json!({ "garbage": 42 })).await.unwrap();
+            assert_eq!(result["structuredContent"]["count"], 1);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn summary_lists_name_and_code_pairs() {
-        let surreal = db().await;
-        seed(&surreal, "Nevada", "NV").await;
-        seed(&surreal, "California", "CA").await;
-        let result = call(&surreal, &json!({})).await.unwrap();
-        let text = result["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("2 jurisdictions:"), "got: {text}");
-        assert!(text.contains("Nevada (NV)"));
-        assert!(text.contains("California (CA)"));
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            seed(&surreal, "Nevada", "NV").await;
+            seed(&surreal, "California", "CA").await;
+            let result = call(&surreal, &json!({})).await.unwrap();
+            let text = result["content"][0]["text"].as_str().unwrap();
+            assert!(text.contains("2 jurisdictions:"), "got: {text}");
+            assert!(text.contains("Nevada (NV)"));
+            assert!(text.contains("California (CA)"));
+        })
+        .await;
     }
 }
