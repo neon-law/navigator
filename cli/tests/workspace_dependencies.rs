@@ -111,6 +111,7 @@ const WORKSPACE_DEPENDENCIES: &[&str] = &[
     "restate-jwt",
     "restate-sdk",
     "rgb",
+    "roxmltree",
     "model",
     "rules",
     "rust_decimal",
