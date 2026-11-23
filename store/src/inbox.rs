@@ -3250,29 +3250,9 @@ impl MailboxPreviewScope {
             brand_key: &self.brand_key,
             provider_account: &self.provider_account,
             includes_unbranded_intake: self.includes_unbranded_intake,
-            after,
-            limit,
+            page: crate::postgres::inbox::AssignmentPreviewPage { after, limit },
         };
-        crate::postgres::inbox::unprocessed_inbox_scoped_on(&pg, None, Some(page)).await
-    }
-
-    /// Return the resolved Person's open Project IDs within this Firm and Brand.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when PostgreSQL is unavailable or the query fails.
-    pub async fn candidate_projects(&self, person_id: Uuid) -> Result<Vec<Uuid>, InboxError> {
-        let pg = inbox_authority()
-            .await?
-            .ok_or(InboxError::PostgresAuthorityRequired)?;
-        crate::postgres::projects::open_participating_projects_in_brand_on(
-            &pg,
-            person_id,
-            self.firm_id,
-            &self.brand_key,
-        )
-        .await
-        .map_err(|error| InboxError::Db(error.to_string()))
+        crate::postgres::inbox::unprocessed_inbox_scoped_on(&pg, None, Some(page), None).await
     }
 }
 
@@ -3287,6 +3267,29 @@ impl MailboxPreviewScope {
 pub async fn unprocessed_inbox(
     db: &SurrealDb,
     actor_id: Uuid,
+) -> Result<Vec<UnprocessedRow>, InboxError> {
+    read_unprocessed_inbox(db, actor_id, None).await
+}
+
+type AssignmentCursor = (DateTime<Utc>, Uuid);
+
+/// Read one interactive assignment-preview page of unassigned inbound email.
+///
+/// # Errors
+/// A store failure or a denial for a client-tier actor.
+pub async fn unprocessed_assignment_page(
+    db: &SurrealDb,
+    actor_id: Uuid,
+    after: Option<AssignmentCursor>,
+    limit: u16,
+) -> Result<Vec<UnprocessedRow>, InboxError> {
+    read_unprocessed_inbox(db, actor_id, Some((after, limit))).await
+}
+
+async fn read_unprocessed_inbox(
+    db: &SurrealDb,
+    actor_id: Uuid,
+    preview: Option<(Option<AssignmentCursor>, u16)>,
 ) -> Result<Vec<UnprocessedRow>, InboxError> {
     let actor = load_person(db, actor_id).await?;
     let visible_firms = if actor.role == Role::Owner {
@@ -3305,7 +3308,21 @@ pub async fn unprocessed_inbox(
     };
 
     if let Some(pg) = inbox_authority().await? {
-        return crate::postgres::inbox::unprocessed_inbox_on(&pg, visible_firms.as_deref()).await;
+        let Some((after, limit)) = preview else {
+            return crate::postgres::inbox::unprocessed_inbox_on(&pg, visible_firms.as_deref())
+                .await;
+        };
+        let page = crate::postgres::inbox::AssignmentPreviewPage {
+            after,
+            limit: i64::from(limit),
+        };
+        return crate::postgres::inbox::unprocessed_inbox_scoped_on(
+            &pg,
+            visible_firms.as_deref(),
+            None,
+            Some(page),
+        )
+        .await;
     }
     let mut response = db
         .query(format!(
@@ -3351,7 +3368,78 @@ pub async fn unprocessed_inbox(
             inserted_at: row.inserted_at.into(),
         });
     }
+    if let Some((after, limit)) = preview {
+        unprocessed.retain(|row| {
+            row.project_id.is_none()
+                && row.channel == channel::EMAIL
+                && after.is_none_or(|cursor| (row.inserted_at, row.id) > cursor)
+        });
+        unprocessed.sort_unstable_by_key(|row| (row.inserted_at, row.id));
+        unprocessed.truncate(usize::from(limit));
+    }
     Ok(unprocessed)
+}
+
+/// Resolve the distinct addresses on an admitted assignment preview page.
+/// Interactive previews match open Projects in the receiving Firm. Scheduled
+/// previews also require the configured Brand.
+///
+/// # Errors
+/// Returns a store error, or a denial when a scheduled input crosses its Firm.
+pub async fn assignment_candidates(
+    db: &SurrealDb,
+    addresses: Vec<(Uuid, String)>,
+    scope: Option<&MailboxPreviewScope>,
+) -> Result<HashMap<(Uuid, String), assign_match::ResolvedAddress>, InboxError> {
+    let addresses: BTreeSet<_> = addresses.into_iter().collect();
+    if addresses.is_empty() {
+        return Ok(HashMap::new());
+    }
+    if scope.is_some_and(|scope| {
+        addresses
+            .iter()
+            .any(|(firm_id, _)| *firm_id != scope.firm_id)
+    }) {
+        return Err(InboxError::Denied);
+    }
+    if let Some(pg) = inbox_authority().await? {
+        let addresses: Vec<_> = addresses.into_iter().collect();
+        let brand = scope.map(|scope| scope.brand_key.as_str());
+        return Ok(
+            crate::postgres::inbox::assignment_candidates_on(&pg, &addresses, brand)
+                .await?
+                .into_iter()
+                .map(|(firm_id, resolved)| ((firm_id, resolved.address.clone()), resolved))
+                .collect(),
+        );
+    }
+    if scope.is_some() {
+        return Err(InboxError::PostgresAuthorityRequired);
+    }
+    let mut resolved = HashMap::new();
+    for (firm_id, address) in addresses {
+        let person = persons::find_by_any_email(db, &address).await?;
+        let mut open_projects = Vec::new();
+        if let Some(person) = &person {
+            for participation in crate::projects::participations_for_person(db, person.id).await? {
+                let project = crate::projects::find_by_id(db, participation.project_id).await?;
+                if project.is_some_and(|project| {
+                    project.firm_id == Some(firm_id) && project.status == "open"
+                }) {
+                    open_projects.push(participation.project_id);
+                }
+            }
+        }
+        resolved.insert(
+            (firm_id, address.clone()),
+            assign_match::ResolvedAddress {
+                address,
+                person_id: person.map(|person| person.id),
+                open_projects,
+            },
+        );
+    }
+    Ok(resolved)
 }
 
 /// The recorded process state of one message. `Ok(None)` means the message

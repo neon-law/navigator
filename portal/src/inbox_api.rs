@@ -11,8 +11,10 @@ use axum::extract::State;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use chrono::Utc;
+use futures::{stream, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::time::Instant;
 use uuid::Uuid;
 
 use crate::api::{ApiError, ApiState, LawyerSession};
@@ -531,20 +533,12 @@ pub(crate) struct AssignMatchView {
     pub applied: bool,
 }
 
-/// Decide one thread by LAW-347's address-match: the From/To/Cc candidate
-/// set comes from the archived raw `.eml` when the message carries one,
-/// falling back to the stored From; each candidate resolves against the
-/// Person CRM, and its open-Project participations — same Firm as the
-/// thread, `status = 'open'` — feed the pure matcher. Entities carry no
-/// email field in the schema, so the candidate set is Persons today; when
-/// Entities gain email storage they join `ResolvedAddress` unchanged.
-/// Returns the candidate set too: it is the Jev question's header state
-/// when the model method takes the thread.
-async fn decide_assign_match(
+/// Use the archived envelope when available, keeping the stored From in the
+/// candidate set so the matcher can always identify the sender.
+async fn assignment_addresses(
     state: &ApiState,
     row: &store::inbox::UnprocessedRow,
-    scope: Option<&store::inbox::MailboxPreviewScope>,
-) -> Result<(Vec<String>, store::inbox::assign_match::MatchOutcome), ApiError> {
+) -> Result<Vec<String>, ApiError> {
     let stored_from = row.external_address.trim().to_owned();
     let mut candidates = vec![stored_from.clone()];
     if let Some(raw) = crate::nef_pipeline::raw_source(state, row).await? {
@@ -562,48 +556,7 @@ async fn decide_assign_match(
             }
         }
     }
-    let mut resolved = Vec::with_capacity(candidates.len());
-    for address in &candidates {
-        let person = store::persons::find_by_any_email(&state.surreal, address)
-            .await
-            .map_err(ApiError::Person)?;
-        let open_projects = match (&person, scope) {
-            (Some(person), Some(scope)) => scope
-                .candidate_projects(person.id)
-                .await
-                .map_err(map_inbox)?,
-            (Some(person), None) => {
-                let mut projects = Vec::new();
-                for participation in
-                    store::projects::participations_for_person(&state.surreal, person.id)
-                        .await
-                        .map_err(|error| ApiError::Db(error.to_string()))?
-                {
-                    let Some(project) =
-                        store::projects::find_by_id(&state.surreal, participation.project_id)
-                            .await
-                            .map_err(|error| ApiError::Db(error.to_string()))?
-                    else {
-                        continue;
-                    };
-                    if project.status == "open" && project.firm_id == Some(row.firm_id) {
-                        projects.push(participation.project_id);
-                    }
-                }
-                projects
-            }
-            (None, _) => Vec::new(),
-        };
-        resolved.push(store::inbox::assign_match::ResolvedAddress {
-            address: address.clone(),
-            person_id: person.map(|person| person.id),
-            open_projects,
-        });
-    }
-    Ok((
-        candidates,
-        store::inbox::assign_match::decide(&stored_from, &resolved),
-    ))
+    Ok(candidates)
 }
 
 /// What the Jev method recorded for one thread — filled into the decision
@@ -819,18 +772,58 @@ fn log_assign_decision(
 
 const MAX_ASSIGN_MATCH_THREADS: u16 = 50;
 
-fn assignment_page(
-    mut rows: Vec<store::inbox::UnprocessedRow>,
-    after: Option<(chrono::DateTime<Utc>, Uuid)>,
-) -> Vec<store::inbox::UnprocessedRow> {
-    rows.retain(|row| {
-        row.project_id.is_none()
-            && row.channel == store::inbox::channel::EMAIL
-            && after.is_none_or(|cursor| (row.inserted_at, row.id) > cursor)
-    });
-    rows.sort_unstable_by_key(|row| (row.inserted_at, row.id));
-    rows.truncate(usize::from(MAX_ASSIGN_MATCH_THREADS) + 1);
-    rows
+// Fetch archived envelopes in parallel without opening a request per row at once.
+const ASSIGNMENT_SOURCE_READS: usize = 8;
+
+type AssignmentMatch = (Vec<String>, store::inbox::assign_match::MatchOutcome);
+
+async fn assignment_matches_for_page(
+    state: &ApiState,
+    rows: &[store::inbox::UnprocessedRow],
+    scope: Option<&store::inbox::MailboxPreviewScope>,
+) -> Result<(Vec<AssignmentMatch>, f64, f64), ApiError> {
+    let source_started = Instant::now();
+    let mut source_reads = Vec::with_capacity(rows.len());
+    for row in rows {
+        source_reads.push(assignment_addresses(state, row));
+    }
+    let candidates_by_row: Vec<Vec<String>> = stream::iter(source_reads)
+        .buffered(ASSIGNMENT_SOURCE_READS)
+        .try_collect()
+        .await?;
+    let source_ms = source_started.elapsed().as_secs_f64() * 1000.0;
+    let match_started = Instant::now();
+    let addresses = rows
+        .iter()
+        .zip(&candidates_by_row)
+        .flat_map(|(row, candidates)| {
+            candidates
+                .iter()
+                .map(|address| (row.firm_id, address.trim().to_owned()))
+        })
+        .collect();
+    let resolved = store::inbox::assignment_candidates(&state.surreal, addresses, scope)
+        .await
+        .map_err(map_inbox)?;
+
+    let matches = rows
+        .iter()
+        .zip(candidates_by_row)
+        .map(|(row, candidates)| {
+            let matched: Vec<_> = candidates
+                .iter()
+                .filter_map(|address| {
+                    resolved
+                        .get(&(row.firm_id, address.trim().to_owned()))
+                        .cloned()
+                })
+                .collect();
+            let outcome = store::inbox::assign_match::decide(&row.external_address, &matched);
+            (candidates, outcome)
+        })
+        .collect();
+    let lookup_ms = match_started.elapsed().as_secs_f64() * 1000.0;
+    Ok((matches, source_ms, lookup_ms))
 }
 
 /// `POST /app/api/inbox/assign-matches` — the LAW-347 address-match door
@@ -849,6 +842,7 @@ pub(crate) async fn assign_matches(
             "Review and confirm each proposed filing individually.",
         ));
     }
+    let started = Instant::now();
     let scope = request
         .scheduled
         .then(|| scheduled_preview_scope(actor_id, |key| std::env::var(key).ok()))
@@ -863,22 +857,25 @@ pub(crate) async fn assign_matches(
             .await
             .map_err(map_inbox)?
     } else {
-        assignment_page(
-            store::inbox::unprocessed_inbox(&state.surreal, actor_id)
-                .await
-                .map_err(map_inbox)?,
+        store::inbox::unprocessed_assignment_page(
+            &state.surreal,
+            actor_id,
             request.after,
+            MAX_ASSIGN_MATCH_THREADS + 1,
         )
+        .await
+        .map_err(map_inbox)?
     };
-    let next = if rows.len() > usize::from(MAX_ASSIGN_MATCH_THREADS) {
-        rows.pop();
-        rows.last().map(|row| (row.inserted_at, row.id))
-    } else {
-        None
-    };
-    let mut views = Vec::new();
-    for row in rows {
-        let (candidates, mut outcome) = decide_assign_match(&state, &row, scope.as_ref()).await?;
+    let next = assignment_next_cursor(&mut rows);
+    let page_ms = started.elapsed().as_secs_f64() * 1000.0;
+    let (matches, source_ms, lookup_ms) =
+        assignment_matches_for_page(&state, &rows, scope.as_ref()).await?;
+
+    let mut first_suggestion_ms = None;
+    let mut jev_ms = 0.0;
+    let mut choices_by_firm = HashMap::new();
+    let mut views = Vec::with_capacity(rows.len());
+    for (row, (candidates, mut outcome)) in rows.into_iter().zip(matches) {
         let jev_fill = if request.scheduled {
             if let store::inbox::assign_match::MatchOutcome::Assigned { project_id } = outcome {
                 outcome = store::inbox::assign_match::MatchOutcome::Proposed { project_id };
@@ -886,33 +883,85 @@ pub(crate) async fn assign_matches(
             None
         } else {
             let projects = async {
-                store::inbox::projects_in_firm(&state.surreal, row.firm_id)
-                    .await
-                    .map_err(map_inbox)
+                let choices = match choices_by_firm.entry(row.firm_id) {
+                    std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                    std::collections::hash_map::Entry::Vacant(entry) => entry.insert(
+                        store::inbox::projects_in_firm(&state.surreal, row.firm_id)
+                            .await
+                            .map_err(map_inbox)?,
+                    ),
+                };
+                Ok(choices.clone())
             };
-            jev_step(
+            let jev_started = Instant::now();
+            let fill = jev_step(
                 state.jev.as_ref(),
                 projects,
                 &row,
                 &candidates,
                 &mut outcome,
             )
-            .await?
+            .await?;
+            jev_ms += jev_started.elapsed().as_secs_f64() * 1000.0;
+            fill
         };
+        if matches!(
+            outcome,
+            store::inbox::assign_match::MatchOutcome::Assigned { .. }
+                | store::inbox::assign_match::MatchOutcome::Proposed { .. }
+        ) {
+            first_suggestion_ms.get_or_insert_with(|| started.elapsed().as_secs_f64() * 1000.0);
+        }
         log_assign_decision(row.id, &outcome, jev_fill.as_ref());
-        views.push(AssignMatchView {
-            message: row.id,
-            conversation_id: row.conversation_id,
-            from: if request.scheduled {
-                String::new()
-            } else {
-                row.external_address
-            },
-            subject: row.subject.filter(|_| !request.scheduled),
-            decision: outcome,
-            applied: false,
-        });
+        views.push(assignment_view(row, outcome, request.scheduled));
     }
+    tracing::info!(
+        scheduled = request.scheduled,
+        message_count = views.len(),
+        page_ms,
+        source_ms,
+        lookup_ms,
+        jev_ms,
+        first_suggestion_ms,
+        duration_ms = started.elapsed().as_secs_f64() * 1000.0,
+        "Inbox assignment preview completed"
+    );
+    assignment_response(views, next)
+}
+
+fn assignment_next_cursor(
+    rows: &mut Vec<store::inbox::UnprocessedRow>,
+) -> Option<(chrono::DateTime<Utc>, Uuid)> {
+    if rows.len() <= usize::from(MAX_ASSIGN_MATCH_THREADS) {
+        return None;
+    }
+    rows.pop();
+    rows.last().map(|row| (row.inserted_at, row.id))
+}
+
+fn assignment_view(
+    row: store::inbox::UnprocessedRow,
+    decision: store::inbox::assign_match::MatchOutcome,
+    scheduled: bool,
+) -> AssignMatchView {
+    AssignMatchView {
+        message: row.id,
+        conversation_id: row.conversation_id,
+        from: if scheduled {
+            String::new()
+        } else {
+            row.external_address
+        },
+        subject: row.subject.filter(|_| !scheduled),
+        decision,
+        applied: false,
+    }
+}
+
+fn assignment_response(
+    views: Vec<AssignMatchView>,
+    next: Option<(chrono::DateTime<Utc>, Uuid)>,
+) -> Result<Response, ApiError> {
     let mut response = Json(views).into_response();
     if let Some(cursor) = next {
         let encoded =
@@ -1135,43 +1184,6 @@ mod tests {
         assert_eq!(outcome, left(LeftReason::JevTooManyProjects));
         assert!(fill.is_none());
         assert!(server.received_requests().await.unwrap().is_empty());
-    }
-
-    #[test]
-    fn assignment_page_advances_past_unmatched_rows_at_the_same_time() {
-        let inserted_at = chrono::Utc::now();
-        let rows = || -> Vec<store::inbox::UnprocessedRow> {
-            (1..=51)
-                .rev()
-                .map(|id| store::inbox::UnprocessedRow {
-                    id: Uuid::from_u128(id),
-                    conversation_id: Uuid::from_u128(id),
-                    firm_id: Uuid::nil(),
-                    project_id: None,
-                    channel: store::inbox::channel::EMAIL.into(),
-                    provider_message_id: None,
-                    external_address: String::new(),
-                    external_name: None,
-                    subject: None,
-                    body: String::new(),
-                    occurred_at: String::new(),
-                    inserted_at,
-                })
-                .collect()
-        };
-        let mut candidates = rows();
-        candidates.push(store::inbox::UnprocessedRow {
-            project_id: Some(Uuid::nil()),
-            ..rows().pop().unwrap()
-        });
-        let first = super::assignment_page(candidates, None);
-        assert_eq!(first.len(), 51);
-        let boundary = &first[49];
-        assert_eq!(boundary.id, Uuid::from_u128(50));
-
-        let second = super::assignment_page(rows(), Some((boundary.inserted_at, boundary.id)));
-        assert_eq!(second.len(), 1);
-        assert_eq!(second[0].id, Uuid::from_u128(51));
     }
 
     #[test]

@@ -2653,7 +2653,12 @@ pub(crate) async fn unprocessed_inbox_on(
     pg: &PostgresDb,
     visible_firms: Option<&[Uuid]>,
 ) -> Result<Vec<inbox::UnprocessedRow>, InboxError> {
-    unprocessed_inbox_scoped_on(pg, visible_firms, None).await
+    unprocessed_inbox_scoped_on(pg, visible_firms, None, None).await
+}
+
+pub(crate) struct AssignmentPreviewPage {
+    pub after: Option<(chrono::DateTime<Utc>, Uuid)>,
+    pub limit: i64,
 }
 
 /// A single page of an admitted mailbox's preview, using the same cursor as
@@ -2664,8 +2669,7 @@ pub(crate) struct MailboxPreviewPage<'a> {
     pub brand_key: &'a str,
     pub provider_account: &'a str,
     pub includes_unbranded_intake: bool,
-    pub after: Option<(chrono::DateTime<chrono::Utc>, Uuid)>,
-    pub limit: i64,
+    pub page: AssignmentPreviewPage,
 }
 
 /// Read the admitted Inbox scope. PostgreSQL filters the mailbox before any
@@ -2674,9 +2678,14 @@ pub(crate) async fn unprocessed_inbox_scoped_on(
     pg: &PostgresDb,
     visible_firms: Option<&[Uuid]>,
     mailbox: Option<MailboxPreviewPage<'_>>,
+    interactive: Option<AssignmentPreviewPage>,
 ) -> Result<Vec<inbox::UnprocessedRow>, InboxError> {
     use sqlx::Row;
-    let (after_time, after_id) = mailbox.as_ref().and_then(|page| page.after).unzip();
+    let page = mailbox
+        .as_ref()
+        .map(|scope| &scope.page)
+        .or(interactive.as_ref());
+    let (after_time, after_id) = page.and_then(|page| page.after).unzip();
     let rows = sqlx::query(
         "SELECT m.id, m.conversation_id, c.firm_id, c.project_id, c.channel, \
          m.provider_message_id, c.external_address, c.external_name, c.subject, m.body, \
@@ -2684,9 +2693,10 @@ pub(crate) async fn unprocessed_inbox_scoped_on(
          ON c.id = m.conversation_id WHERE m.direction = 'inbound' \
          AND (m.processed_at IS NULL OR m.nef_outcome IN ('no_project', 'not_a_notice', 'no_case_number')) \
          AND ($1::uuid[] IS NULL OR c.firm_id = ANY($1)) \
-         AND ($2::uuid IS NULL OR (c.firm_id = $2 AND c.channel = 'email'
+         AND ($7::bigint IS NULL OR (c.channel = 'email' AND c.project_id IS NULL)) \
+         AND ($2::uuid IS NULL OR (c.firm_id = $2
              AND (c.brand_key = $3 OR ($9 AND c.brand_key IS NULL AND c.source_channel = 'email'))
-             AND c.provider_account = $4 AND c.project_id IS NULL AND c.trashed_at IS NULL
+             AND c.provider_account = $4 AND c.trashed_at IS NULL
              AND EXISTS (SELECT 1 FROM firm_brand fb WHERE fb.firm_id = $2 AND fb.brand_key = $3)
              AND EXISTS (SELECT 1 FROM person actor WHERE actor.id = $8 AND
                  (actor.role = 'owner' OR (actor.role IN ('admin', 'lawyer', 'clerk')
@@ -2701,7 +2711,7 @@ pub(crate) async fn unprocessed_inbox_scoped_on(
     .bind(mailbox.as_ref().map(|page| page.provider_account))
     .bind(after_time)
     .bind(after_id)
-    .bind(mailbox.as_ref().map(|page| page.limit))
+    .bind(page.map(|page| page.limit))
     .bind(mailbox.as_ref().map(|page| page.actor_id))
     .bind(mailbox.is_some_and(|page| page.includes_unbranded_intake))
     .fetch_all(&pg.0)
@@ -2726,6 +2736,58 @@ pub(crate) async fn unprocessed_inbox_scoped_on(
         })
         .collect::<Result<Vec<_>, sqlx::Error>>()
         .map_err(db_error)
+}
+
+/// Resolve a page's mailboxes and read live Project participation once per
+/// resolved Person and receiving Firm. Keep the primary address precedence
+/// of the People directory when a mailbox claim also exists.
+pub(crate) async fn assignment_candidates_on(
+    pg: &PostgresDb,
+    addresses: &[(Uuid, String)],
+    brand: Option<&str>,
+) -> Result<Vec<(Uuid, inbox::assign_match::ResolvedAddress)>, InboxError> {
+    let (firms, addresses): (Vec<_>, Vec<_>) = addresses.iter().cloned().unzip();
+    let alias_keys: Vec<_> = addresses
+        .iter()
+        .map(|address| address.to_lowercase())
+        .collect();
+    let rows: Vec<(Uuid, String, Option<Uuid>, Vec<Uuid>)> = sqlx::query_as(
+        "WITH resolved AS (
+             SELECT input.firm_id, input.address, coalesce(p.id, pm.person_id) AS person_id
+             FROM unnest($1::uuid[], $2::text[], $3::text[]) AS input(firm_id, address, alias_key)
+             LEFT JOIN person p ON p.email = input.address::citext
+             LEFT JOIN person_mailbox pm ON pm.id = lower(input.alias_key)
+         ), open_projects AS (
+             SELECT contact.firm_id, contact.person_id, array_agg(p.id ORDER BY p.id) AS ids
+             FROM (SELECT DISTINCT firm_id, person_id FROM resolved WHERE person_id IS NOT NULL) contact
+             JOIN person_project_role participation ON participation.person_id = contact.person_id
+             JOIN project p ON p.id = participation.project_id AND p.firm_id = contact.firm_id
+             WHERE p.status = 'open' AND ($4::text IS NULL OR p.brand = $4)
+             GROUP BY contact.firm_id, contact.person_id
+         )
+         SELECT r.firm_id, r.address, r.person_id, coalesce(projects.ids, ARRAY[]::uuid[])
+         FROM resolved r LEFT JOIN open_projects projects USING (firm_id, person_id)",
+    )
+    .bind(firms)
+    .bind(addresses)
+    .bind(alias_keys)
+    .bind(brand)
+    .fetch_all(pg.pool())
+    .await
+    .map_err(db_error)?;
+    Ok(rows
+        .into_iter()
+        .map(|(firm_id, address, person_id, open_projects)| {
+            (
+                firm_id,
+                inbox::assign_match::ResolvedAddress {
+                    address,
+                    person_id,
+                    open_projects,
+                },
+            )
+        })
+        .collect())
 }
 
 /// Internal receipt projection. Only actual-byte ingestion or Source-authoritative

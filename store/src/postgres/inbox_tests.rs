@@ -1369,7 +1369,10 @@ async fn seed_mailbox_preview(f: &Fixture) -> (Vec<Uuid>, Option<Uuid>) {
 
 #[tokio::test]
 async fn mailbox_preview_reads_only_its_configured_firm_brand_and_account() {
-    let Some(f) = fixture().await else { return };
+    with_native_fi_fixture(assert_mailbox_preview_scope).await;
+}
+
+async fn assert_mailbox_preview_scope(f: Fixture) {
     let (selected, unbranded) = seed_mailbox_preview(&f).await;
     let page = |actor_id, firm_id, after| {
         pg_inbox::unprocessed_inbox_scoped_on(
@@ -1381,9 +1384,9 @@ async fn mailbox_preview_reads_only_its_configured_firm_brand_and_account() {
                 brand_key: "preview-brand",
                 provider_account: "bound-mailbox",
                 includes_unbranded_intake: false,
-                after,
-                limit: 1,
+                page: pg_inbox::AssignmentPreviewPage { after, limit: 1 },
             }),
+            None,
         )
     };
     let first = page(f.owner, f.firm, None).await.unwrap();
@@ -1445,9 +1448,12 @@ async fn mailbox_preview_reads_only_its_configured_firm_brand_and_account() {
             brand_key: &mailbox_scope.brand_key,
             provider_account: &mailbox_scope.provider_account,
             includes_unbranded_intake: mailbox_scope.includes_unbranded_intake,
-            after: None,
-            limit: 10,
+            page: pg_inbox::AssignmentPreviewPage {
+                after: None,
+                limit: 10,
+            },
         }),
+        None,
     )
     .await
     .unwrap();
@@ -1458,6 +1464,63 @@ async fn mailbox_preview_reads_only_its_configured_firm_brand_and_account() {
         .await
         .unwrap();
     assert_eq!(regular_queue.len(), 8);
+}
+
+#[tokio::test]
+async fn interactive_assignment_preview_pages_unassigned_email_in_visible_firms() {
+    with_native_fi_fixture(assert_interactive_preview_page).await;
+}
+
+async fn assert_interactive_preview_page(f: Fixture) {
+    let (selected, _) = seed_mailbox_preview(&f).await;
+    let time = chrono::Utc::now();
+    // Put excluded rows before the cursor boundary so applying LIMIT before
+    // the channel and assignment predicates would give a different page.
+    sqlx::query("UPDATE message SET inserted_at = $1::timestamptz - interval '1 second'")
+        .bind(time)
+        .execute(f.pg.pool())
+        .await
+        .unwrap();
+    sqlx::query("UPDATE message SET inserted_at = $1 WHERE id = ANY($2)")
+        .bind(time)
+        .bind(&selected)
+        .execute(f.pg.pool())
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE inbox_conversation SET project_id = $1
+         WHERE id IN (SELECT conversation_id FROM message WHERE id <> ALL($2))
+           AND channel = 'email'",
+    )
+    .bind(f.project)
+    .bind(&selected)
+    .execute(f.pg.pool())
+    .await
+    .unwrap();
+    let page = |actor, after| crate::inbox::unprocessed_assignment_page(&f.db, actor, after, 1);
+    let first = page(f.owner, None).await.unwrap();
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].id, selected[0]);
+    let second = page(f.owner, Some((first[0].inserted_at, first[0].id)))
+        .await
+        .unwrap();
+    assert_eq!(second.len(), 1);
+    assert_eq!(second[0].id, selected[1]);
+    assert_eq!(second[0].inserted_at, first[0].inserted_at);
+    assert!(page(f.owner, Some((second[0].inserted_at, second[0].id)))
+        .await
+        .unwrap()
+        .is_empty());
+    assert!(page(f.lawyer, None).await.unwrap().is_empty());
+    sqlx::query(
+        "INSERT INTO person_firm_role (person_id,firm_id,membership) VALUES ($1,$2,'lawyer')",
+    )
+    .bind(f.lawyer)
+    .bind(f.firm)
+    .execute(f.pg.pool())
+    .await
+    .unwrap();
+    assert_eq!(page(f.lawyer, None).await.unwrap()[0].id, selected[0]);
 }
 
 fn inbound_with<'a>(

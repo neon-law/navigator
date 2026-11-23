@@ -135,7 +135,7 @@ async fn visible_project_lists_and_code_lookups_respect_participation_side() {
 }
 
 #[tokio::test]
-async fn mailbox_preview_project_candidates_stay_in_the_brand_and_firm() {
+async fn preview_candidates_resolve_primary_and_alias_within_the_review_scope() {
     use super::projects as records;
     let Some(Fixture { pg, input }) = fixture().await else {
         return;
@@ -155,7 +155,12 @@ async fn mailbox_preview_project_candidates_stay_in_the_brand_and_firm() {
     sqlx::query("INSERT INTO person (id, name, email, role) VALUES ($1,'Inbox Contact','contact@example.test','client')")
         .bind(contact).execute(pg.pool()).await.unwrap();
 
-    let mut within_scope = None;
+    sqlx::query("INSERT INTO person_mailbox (id, person_id) VALUES ('alias@example.test', $1)")
+        .bind(contact)
+        .execute(pg.pool())
+        .await
+        .unwrap();
+    let mut ids = std::collections::HashMap::new();
     for (code, firm, brand, status) in [
         ("candidate-match", firm_id, input.brand.as_str(), "open"),
         ("other-brand", firm_id, "other-brand", "open"),
@@ -177,16 +182,37 @@ async fn mailbox_preview_project_candidates_stay_in_the_brand_and_firm() {
         super::participation::add_on(&pg, project.id, contact)
             .await
             .unwrap();
-        if code == "candidate-match" {
-            within_scope = Some(project.id);
-        }
+        ids.insert(code, project.id);
     }
 
-    let candidates =
-        records::open_participating_projects_in_brand_on(&pg, contact, firm_id, &input.brand)
+    let addresses = [
+        (firm_id, "CONTACT@example.test".to_owned()),
+        (firm_id, "ALIAS@example.test".to_owned()),
+        (firm_id, "unknown@example.test".to_owned()),
+        (other_firm, "alias@example.test".to_owned()),
+    ];
+    for (brand, interactive) in [(Some(input.brand.as_str()), false), (None, true)] {
+        let candidates = super::inbox::assignment_candidates_on(&pg, &addresses, brand)
             .await
             .unwrap();
-    assert_eq!(candidates, [within_scope.unwrap()]);
+        assert_eq!(candidates.len(), addresses.len());
+        for (firm, candidate) in candidates {
+            let expected = match (firm == firm_id, candidate.address.as_str()) {
+                (_, "unknown@example.test") => {
+                    assert_eq!(candidate.person_id, None);
+                    assert!(candidate.open_projects.is_empty());
+                    continue;
+                }
+                (false, _) => vec![ids["other-firm"]],
+                (true, _) if interactive => vec![ids["candidate-match"], ids["other-brand"]],
+                (true, _) => vec![ids["candidate-match"]],
+            };
+            assert_eq!(candidate.person_id, Some(contact));
+            let mut expected = expected;
+            expected.sort_unstable();
+            assert_eq!(candidate.open_projects, expected);
+        }
+    }
 }
 
 #[tokio::test]
