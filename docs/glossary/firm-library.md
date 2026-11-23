@@ -10,6 +10,8 @@ retainer by committing to this repository, without a change to Navigator.
 
 The repository holds:
 
+- `AGENTS.md` — the Firm's rules for agents working in its Projects: its name, vendors, accounts, and voice.
+- `skills/<skill>/SKILL.md` — the Firm's own Agent Skills. Nothing here ships in a public `navigator` release.
 - `drafts/*.md` — [Drafts](draft.md) in exactly the Project repository format, validated by the same rules.
 - `library.yaml` — a closed manifest. `retainer: <code>` names the [Template](template.md) every new matter of the Firm
   opens on: a Draft in the library, or a shared-catalog code. Its `kind` must open a matter. An unknown key is refused.
@@ -25,8 +27,13 @@ catalog. The lawyer retainer form (`/app/lawyer/retainers/new`) offers the Firm'
 `retainer`; the client start door opens on that `retainer` instead of the service's mapped template. A Firm with no
 library repository, or one with no commits, behaves exactly as before.
 
+`navigator sync` checks the library out at `<workspace root>/.firm/<firm-slug>/` for each Firm behind a checkout's host,
+and links its skills into that Firm's checkouts only. A Firm skill replaces a generic workspace skill of the same name
+there. The host names the repository from the Firm's own Forgejo organization (`GET /app/api/firm-libraries`).
+
 **Not a [Project Skill](project-skill.md).** A Project Skill is a jurisdiction and practice-area playbook one matter
 chooses and pins in its own `navigator.yaml`. The Firm Library is not chosen per matter: it is what every matter of that
 Firm starts from, and a Project's own `drafts/` still overrides it code by code.
 
-- Code: [`store::firm_library`](../../store/src/firm_library.rs) · [`store::templates`](../../store/src/templates.rs)
+- Code: [`store::firm_library`](../../store/src/firm_library.rs) · [`store::templates`](../../store/src/templates.rs) ·
+  [`cli::projects::workspace_skills`](../../cli/src/projects/workspace_skills.rs)

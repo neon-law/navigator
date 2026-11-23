@@ -56,6 +56,11 @@ async fn run_preview(host: &str, dir: &Path) -> ExitCode {
 }
 
 async fn preview(host: &str, dir: &Path) -> Result<String> {
+    if dir.is_dir() {
+        Box::pin(super::workspace_skills::sync(dir, host, true))
+            .await?
+            .print(true);
+    }
     let (base, token) = remote::resolve(Some(host))?;
     let projects = visible_projects(&base, &token).await?;
     serde_json::to_string(&checkout_preview(dir, projects)?).context("serialize checkout preview")
@@ -160,6 +165,8 @@ async fn sync_once(host: &str, code: Option<&str>, root: &Path) -> Result<()> {
         code.is_none() || matched,
         "opened Project is absent from the active participation inventory"
     );
+    let workspace = Box::pin(super::workspace_skills::sync(&dir, host, false)).await?;
+    workspace.print(false);
     ensure!(
         !failed,
         "some checkouts need attention; other Projects were still processed"
