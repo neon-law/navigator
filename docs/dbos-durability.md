@@ -133,10 +133,11 @@ PostgreSQL physical backups, WAL archives, and Iceberg exports retain their inde
 
 ### Manual schedule controls
 
-The manual Archives and NotationReset controls follow their respective DBOS switches. An enabled DBOS control requires
-the authenticated ingress; failure never falls back to Restate. They use `POST /internal/dbos/schedules`, with an
-allowlisted service and `manual-<UUID>` run key. A retry joins the same workflow. Billing controls reject starts on both
-engines without submitting a request.
+The manual Archives and NotationReset controls follow their respective DBOS switches. The lightweight web host starts
+Archives through its locally registered handle; the combined host uses authenticated ingress. NotationReset requires
+that ingress. HTTP admission uses `POST /internal/dbos/schedules`, with an allowlisted service and `manual-<UUID>` run
+key. Failures never fall back to Restate, and a retry with the same key joins the same workflow. Billing controls reject
+starts on both engines without submitting a request.
 
 ### Several replicas
 

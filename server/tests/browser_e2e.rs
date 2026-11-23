@@ -1047,6 +1047,29 @@ async fn stock_local_personas_reach_the_litigation_matter_through_their_own_lens
     client_browser.close().await.unwrap();
 }
 
+#[tokio::test]
+async fn project_show_opens_and_exits_the_client_preview() {
+    let Some(browser) = new_client_or_skip().await else {
+        return;
+    };
+    login_as_lawyer(&browser).await;
+    browser
+        .goto(&format!("{}/app/projects/sample-litigation", base_url()))
+        .await
+        .unwrap();
+    scroll_and_js_click(&browser, "button[aria-label='View as Client']").await;
+    wait_for_text(&browser, "Stop viewing as client", Duration::from_secs(20)).await;
+    assert!(browser.find(Locator::Css("#portal-project")).await.is_ok());
+    click_and_reach(
+        &browser,
+        "button[aria-label='Stop viewing as client']",
+        "/app/team",
+        Duration::from_secs(20),
+    )
+    .await;
+    browser.close().await.unwrap();
+}
+
 /// The Billing tab on the stock KIND deployment (which carries no app-side
 /// PostgreSQL): the tab opens from its path segment and its empty sections
 /// explain themselves instead of rendering blank regions. Captured time,

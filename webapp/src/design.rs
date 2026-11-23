@@ -1412,13 +1412,20 @@ fn PublicShellShowcase(chrome: PublicChrome) -> Element {
 fn ClientDriViewShowcase() -> Element {
     rsx! {
         section {
-            h2 { "Client DRI view banner" }
+            id: "client-preview",
+            h2 { "Client DRI preview" }
             p {
                 "When a firm member views a matter as its client DRI, every page says so \
                  and offers the way out. The view is strictly read-only — every mutation \
                  is refused while it is active. It is a "
                 code { "role=\"status\"" }
                 " region — ambient state, announced without interrupting."
+            }
+            crate::components::dri_view::ViewAsClient {
+                code: "sample-transactional",
+                csrf: "",
+                portal_link: "/design#client-preview",
+                icon: true,
             }
             ClientDriViewBanner {
                 view: ClientDriView {

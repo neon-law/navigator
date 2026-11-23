@@ -890,13 +890,15 @@ source-reader requirements and the GCS-backed recovery contract. Cloud deploymen
 ### Seal the source and test the write-only copies
 
 Use GKE metadata for the deployed source reader; no source key or projected-token Secret is required. The source
-principal needs prefix read/create permission, while the offsite writer remains create-only. Operator file credentials
-are an explicit alternative in the runbook. Object storage retains the sealed generation:
+principal needs prefix read/create permission, while the offsite writer remains create-only. The deployed Archives **Run
+now** control starts the registered DBOS workflow; a queued notice is admission only. Operator CLI capture uses an
+explicit-file source configuration and separate writer ADC. Source verification uses a reader configuration with the
+same source and receipt bindings. Object storage retains the sealed generation:
 
 ```bash
 GOOGLE_APPLICATION_CREDENTIALS="$WRITER_ADC" hudson ops archives capture \
-  --config archive-config.json --capture-id "$CAPTURE_ID" --out capture-report.json
-hudson ops archives verify-sealed --config archive-config.json \
+  --config operator-capture-config.json --capture-id "$CAPTURE_ID" --out capture-report.json
+hudson ops archives verify-sealed --config source-reader-config.json \
   --receipt capture-report.json --out local-verification.json
 ```
 

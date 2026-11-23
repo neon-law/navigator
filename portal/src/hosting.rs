@@ -953,6 +953,7 @@ async fn boot(brand: Site, host_dbos: bool) -> anyhow::Result<()> {
     let (slack, _) = deployment_slack(&rt, lookup)?;
     let ops_notifier = workflows::notify::ops_notifier(slack.clone(), lookup);
     let archives = archives_context(host_dbos && !combined, rt.config.environment, slack, lookup)?;
+    let local_archives = (!combined).then(crate::cron_schedules::LocalArchives::default);
     let router = crate::bootstrap(
         rt.state,
         &rt.public_dir,
@@ -960,6 +961,11 @@ async fn boot(brand: Site, host_dbos: bool) -> anyhow::Result<()> {
         brand.public_paths,
         host_dioxus,
     )?;
+
+    let router = match &local_archives {
+        Some(local) => router.layer(axum::Extension(local.clone())),
+        None => router,
+    };
 
     #[cfg(debug_assertions)]
     let reload = crate::dev_reload::enabled();
@@ -1016,6 +1022,7 @@ async fn boot(brand: Site, host_dbos: bool) -> anyhow::Result<()> {
         dbos_schedules,
         sent_email_export,
         archives,
+        local_archives,
         stop,
         serve,
     ))
@@ -1030,6 +1037,7 @@ fn register_archive_schedules(
     dbos: &dbos::DBOS,
     sent_email_export: Option<Arc<dyn archives::sent_email_export::ExportSource>>,
     archives: Option<archives::workflow::DbosContext>,
+    local: Option<crate::cron_schedules::LocalArchives>,
 ) -> dbos::Result<Vec<dbos_engine::ScheduleStarter>> {
     let mut starters: Vec<dbos_engine::ScheduleStarter> = Vec::new();
     if let Some(source) = sent_email_export {
@@ -1041,6 +1049,9 @@ fn register_archive_schedules(
     if let Some(context) = archives {
         let workflow =
             archives::workflow::register_dbos(dbos, context.slack, context.channel_id, true)?;
+        if let Some(local) = local {
+            local.register(workflow.clone())?;
+        }
         starters.push(Box::new(move |stop| {
             tokio::spawn(archives::workflow::schedule_dbos(workflow, stop))
         }));

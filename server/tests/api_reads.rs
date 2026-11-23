@@ -415,7 +415,7 @@ async fn seed_sibling_brand(fx: &Fixture) -> (store::projects::Project, store::p
         None,
         firm,
         &store::firms::FirmEdit {
-            portal_theme_brand_key: Some(Some("delete-your-data".into())),
+            portal_theme_brand_key: Some(Some("neon".into())),
             ..Default::default()
         },
     )
@@ -587,29 +587,112 @@ async fn check_two_brand_portal() {
     assert_eq!(url.host_str(), Some("www.deleteyourdata.com"));
     assert_eq!(url.path(), format!("/app/projects/{}", sibling.code));
     let invited_host = url.host_str().unwrap();
-    let signed_out = fx
+    // Follow the toolbar link as a browser. The destination supplies the CSRF
+    // token for its own session and starts the read-only view on its own host.
+    let preview_path = format!("{}/view-as-client", url.path());
+    let source = request("www.neonlaw.com", url.path(), &lawyer)
+        .await
+        .unwrap();
+    assert_eq!(source.status(), StatusCode::OK);
+    let source = scraper::Html::parse_document(&response_text(source).await);
+    let link = scraper::Selector::parse("a[aria-label='View as Client']").unwrap();
+    let link = source.select(&link).next().expect("branded preview link");
+    assert_eq!(link.attr("target"), Some("_blank"));
+    let href = link.attr("href").unwrap();
+    assert_eq!(href, format!("https://{invited_host}{preview_path}"));
+    let missing_dri = format!("/app/projects/{}/view-as-client", project.code);
+    assert_eq!(
+        request("www.neonlaw.com", &missing_dri, &lawyer)
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        request(invited_host, &preview_path, &login(&fx.outsider))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    let brand_session = login(&bearer(lawyer.person_id.unwrap(), Role::Lawyer));
+    let landing = request(invited_host, &preview_path, &brand_session)
+        .await
+        .unwrap();
+    assert_eq!(landing.status(), StatusCode::OK);
+    assert!(!landing.headers().contains_key("set-cookie"));
+    let page = scraper::Html::parse_document(&response_text(landing).await);
+    let form = page
+        .select(&scraper::Selector::parse("form[method=post]").unwrap())
+        .next()
+        .unwrap();
+    assert_eq!(form.attr("action"), Some(preview_path.as_str()));
+    let token = form
+        .select(&scraper::Selector::parse("input[name=_csrf]").unwrap())
+        .next()
+        .unwrap()
+        .attr("value")
+        .unwrap();
+    assert_eq!(token, brand_session.csrf_token);
+    let cookie_name = portal::session::SESSION_COOKIE_NAME;
+    let started = fx
         .app
         .clone()
         .oneshot(
-            Request::builder()
-                .uri(url.path())
+            Request::post(&preview_path)
                 .header("host", invited_host)
-                .body(Body::empty())
+                .header(
+                    "cookie",
+                    format!("{cookie_name}={}", sessions.encode(&brand_session)),
+                )
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(format!("_csrf={token}")))
                 .unwrap(),
         )
         .await
         .unwrap();
-    assert_eq!(signed_out.status(), StatusCode::SEE_OTHER);
-    let login_location = signed_out.headers()["location"].to_str().unwrap();
-    assert_eq!(
-        login_location,
-        format!("/auth/login?return_to={}", url.path())
-    );
+    assert_eq!(started.status(), StatusCode::SEE_OTHER);
+    assert_eq!(started.headers()["location"], url.path());
+    let cookie = started.headers()["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
+    let preview = sessions.decode(cookie.split_once('=').unwrap().1).unwrap();
+    assert_eq!(preview.person_id, client.person_id);
+    assert!(preview.viewing_as_dri.is_some());
+    let detail = request(invited_host, url.path(), &preview).await.unwrap();
+    assert_eq!(detail.status(), StatusCode::OK);
+    let detail = response_text(detail).await;
+    assert!(detail.contains("Stop viewing as client") && detail.contains("released-welcome.pdf"));
+    assert!(detail.contains("brand-delete-your-data-tokens.css"));
+    for path in [url.path(), &preview_path] {
+        let signed_out = fx
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(path)
+                    .header("host", invited_host)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(signed_out.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            signed_out.headers()["location"],
+            format!("/auth/login?return_to={path}")
+        );
+    }
     let landing = portal::oauth::post_login_landing(Role::Client, url.path());
     assert_eq!(landing, url.path());
     let page = request(invited_host, &landing, &client).await.unwrap();
     assert_eq!(page.status(), StatusCode::OK);
     let html = response_text(page).await;
+    assert!(html.contains("brand-delete-your-data-tokens.css"));
+    assert!(html.contains("/public/brand/delete-your-data/logo.svg"));
     assert!(html.contains("released-welcome.pdf"));
     assert!(!html.contains("internal-review.pdf") && !html.contains("forge.example"));
     assert_eq!(
@@ -687,12 +770,12 @@ async fn check_two_brand_portal() {
         );
     }
     for team_member in [&clerk, &lawyer] {
-        let response = request("www.neonlaw.com", "/app/projects", team_member)
+        let response = request(invited_host, "/app/projects", team_member)
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let body = response_text(response).await;
-        assert!(body.contains("brand-delete-your-data-tokens.css"));
+        assert!(body.contains("brand-neon-tokens.css"));
         assert!(body.contains(&project.code) && body.contains(&sibling.code));
     }
 }
