@@ -441,7 +441,12 @@ fn notation_start_offers() -> Vec<portal::start_door::NotationOffer> {
 /// filings, and every government form — the content
 /// [`portal::dioxus_app::notation_preview_router`] serves at
 /// `/notations/{slug}`.
-#[allow(clippy::too_many_lines)] // The literal source-to-preview inventory is reviewed as one catalog.
+#[allow(clippy::too_many_lines)]
+// The literal source-to-preview inventory is reviewed as one catalog.
+// large_stack_arrays: each PreviewDoc entry carries several strings, so the one
+// catalog literal exceeds the stack-array threshold; keeping it a single reviewed
+// literal is worth more than heap-lifting it.
+#[allow(clippy::large_stack_arrays)]
 fn notation_preview_docs() -> Vec<webapp::notation_preview::PreviewDoc> {
     let mut docs: Vec<_> = BUSINESS_NOTATIONS
         .iter()
