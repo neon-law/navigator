@@ -222,18 +222,18 @@ pub const SEED_ENTITY_TYPE_ID: Uuid = Uuid::from_u128(0x0199_0000_0000_7000_8000
 /// required, so every test that opens a matter needs a pre-existing
 /// entity; this is the one-liner that supplies it.
 ///
-/// Its references are the
-/// synthetic [`SEED_ENTITY_JURISDICTION_ID`] and [`SEED_ENTITY_TYPE_ID`],
-/// and it never carries a firm-anchor key — a fixture that minted one
+/// Its Entity Type and Jurisdiction are shared synthetic rows it creates on
+/// first use, so the PostgreSQL foreign keys hold. It never carries a firm-anchor key — a fixture that minted one
 /// would make the *second* fixture in the same database fail on the
 /// `entity_firm_anchor` index.
 pub async fn seed_entity(surreal: &crate::surreal::SurrealDb) -> Uuid {
+    let (entity_type_id, jurisdiction_id) = seed_entity_parents(surreal).await;
     crate::entities::create(
         surreal,
         &crate::entities::NewEntity {
             name: format!("Test Entity {}", Uuid::now_v7()),
-            entity_type_id: SEED_ENTITY_TYPE_ID,
-            jurisdiction_id: SEED_ENTITY_JURISDICTION_ID,
+            entity_type_id,
+            jurisdiction_id,
             phone: None,
             url: None,
             xero_id: None,
@@ -243,6 +243,81 @@ pub async fn seed_entity(surreal: &crate::surreal::SurrealDb) -> Uuid {
     .await
     .expect("seed entity")
     .id
+}
+
+/// The shared synthetic Entity Type and Jurisdiction ids [`seed_entity`]
+/// uses, created on first use.
+pub async fn seed_entity_parents(surreal: &crate::surreal::SurrealDb) -> (Uuid, Uuid) {
+    let kind = crate::entity_types::find_or_create(surreal, "Synthetic fixture kind")
+        .await
+        .expect("seed entity type");
+    let jurisdiction = match crate::jurisdictions::find_by_code(surreal, "ZZ")
+        .await
+        .expect("find fixture jurisdiction")
+    {
+        Some(found) => found,
+        None => crate::jurisdictions::create(
+            surreal,
+            &crate::jurisdictions::NewJurisdiction::new("Synthetic fixture", "ZZ", "state"),
+        )
+        .await
+        .expect("seed jurisdiction"),
+    };
+    (kind.id, jurisdiction.id)
+}
+
+/// Register a `brand` row for every `CLOSED_BRAND_KEYS` entry under one
+/// synthetic Firm, the state a deployment reaches once the seed has run, so a
+/// test that opens a Project or a social handle can name a Brand. Idempotent.
+pub async fn seed_compiled_brands_postgres(db: &crate::surreal::SurrealDb) {
+    let first = crate::firms::CLOSED_BRAND_KEYS[0];
+    if crate::brands::find_by_key(db, first)
+        .await
+        .expect("look up the fixture brand")
+        .is_some()
+    {
+        return;
+    }
+    let unique = Uuid::new_v4();
+    let admin = crate::persons::create(
+        db,
+        &crate::persons::NewPerson::with_role(
+            "Synthetic brand administrator",
+            format!("brands-{unique}@example.test"),
+            crate::persons::Role::Admin,
+        ),
+    )
+    .await
+    .expect("fixture admin");
+    let firm = crate::firms::create(
+        db,
+        &crate::firms::NewFirm {
+            name: format!("Synthetic brand firm {unique}"),
+            status: "active".into(),
+            entity_id: seed_entity(db).await,
+            admin_dri_person_id: admin.id,
+        },
+    )
+    .await
+    .expect("fixture firm");
+    for key in crate::firms::CLOSED_BRAND_KEYS {
+        crate::brands::create(
+            db,
+            crate::persons::Role::Admin,
+            Some(admin.id),
+            &crate::brands::NewBrand {
+                name: (*key).to_string(),
+                key: (*key).to_string(),
+                firm_id: Some(firm.id),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("fixture brand");
+        crate::firms::attach_brand(db, crate::persons::Role::Owner, None, firm.id, key)
+            .await
+            .expect("attach fixture brand");
+    }
 }
 
 /// Create a synthetic Entity and its lookup parents through the active accessors.
@@ -455,6 +530,7 @@ pub async fn seed_project_on_firm(
     firm_id: Option<Uuid>,
     name: &str,
 ) -> crate::projects::Project {
+    seed_compiled_brands_postgres(surreal).await;
     let entity_id = seed_entity(surreal).await;
     let code_id = Uuid::now_v7();
     crate::projects::create(
@@ -670,6 +746,7 @@ async fn seed_notation_with_kind_surreal(
     use crate::persons::{self, NewPerson};
     use crate::projects::{designate_dri_in_surreal, DriSide, NewProject};
 
+    seed_compiled_brands_postgres(surreal).await;
     let entity_id = seed_entity(surreal).await;
 
     // A fixed mailbox on an engine that outlives one test, so this seeds
