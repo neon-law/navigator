@@ -15,13 +15,14 @@ missing or mismatched calendar returns `recorded_resource_missing`. Verify the i
 project set --calendar <id>` to correct the link. A rerun reuses the verified calendar.
 
 When the Firm has a [Workspace calendar owner](firm-calendar-settings.md), DBOS checks assignments on its recorded
-calendars every five minutes. It also provisions missing calendars for open Projects. A participant needs the matching
-Firm role, a confirmed address in the owner's domain, and successful Workspace delegation. Clerks also require a
-supervising Lawyer DRI. Eligible participants receive reader access. The job adds the calendar to each participant's
-Google Calendar list with its events selected and preserves existing display preferences. Eligible Clerks, Lawyers, and
-Admins are invited to events organized by the Project Calendar, including recurring series. Google controls invitations
-on events organized elsewhere. The job preserves manual grants and guests and removes the access and guests it added
-when an assignment ends. It refuses automatic sharing on calendars with public or domain-wide access. An hourly [event
+calendars every six hours on the [DBOS schedule](../dbos-durability.md#project-calendar-membership). It also provisions
+missing calendars for open Projects. A participant needs the matching Firm role, a confirmed address in the owner's
+domain, and successful Workspace delegation. Clerks also require a supervising Lawyer DRI. Eligible participants receive
+reader access. The job adds the calendar to each participant's Google Calendar list with its events selected, verifies
+the entry, and preserves existing display preferences. Eligible Clerks, Lawyers, and Admins are invited to events
+organized by the Project Calendar, including recurring series. Google controls invitations on events organized
+elsewhere. The job preserves manual grants and guests and removes the access and guests it added when an assignment
+ends. It refuses automatic sharing on calendars with public or domain-wide access. An hourly [event
 backup](project-calendar-event-backup.md) preserves event revisions for the Firm.
 
 Closing the Project makes writers readers and clears the [Booking Link](booking-link.md). The firm-side matter page

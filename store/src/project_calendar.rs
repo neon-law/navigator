@@ -22,7 +22,7 @@ use uuid::Uuid;
 
 use cloud::calendar::{CalendarError, CalendarRole, CalendarService};
 
-use crate::persons::{self, Role};
+use crate::persons::Role;
 use crate::projects::{self, Project, ProjectCommandError};
 use crate::surreal::SurrealDb;
 
@@ -163,29 +163,20 @@ pub async fn ensure(
 }
 
 /// Open Projects and recorded calendars whose Firm has a Workspace calendar owner.
-pub async fn membership_candidates(surreal: &SurrealDb) -> Result<Vec<Uuid>, ProjectCalendarError> {
+pub async fn membership_candidates() -> Result<Vec<Uuid>, ProjectCalendarError> {
     let db = crate::postgres::PostgresDb::application()
         .await
         .map_err(sync_db)?;
-    let groups = sqlx::query_as::<_, (Uuid, Vec<Uuid>)>(
-        "SELECT firm_id, array_agg(id ORDER BY id) FROM project
-         WHERE firm_id IS NOT NULL AND (status = 'open' OR calendar_id ~ '[^[:space:]]')
-         GROUP BY firm_id ORDER BY firm_id",
-    )
-    .fetch_all(db.pool())
-    .await
-    .map_err(sync_db)?;
-    let mut candidates = Vec::new();
-    for (firm, projects) in groups {
-        if crate::firms::calendar_owner(surreal, firm)
-            .await
-            .map_err(sync_db)?
-            .is_some()
-        {
-            candidates.extend(projects);
-        }
-    }
-    Ok(candidates)
+    crate::firms::calendar_owners_query()
+        .push(
+            "SELECT p.id FROM project p JOIN calendar_owners c ON c.firm_id = p.firm_id
+               WHERE c.owner IS NOT NULL AND (p.status = 'open' OR p.calendar_id ~ '[^[:space:]]')
+               ORDER BY p.firm_id, p.id",
+        )
+        .build_query_scalar()
+        .fetch_all(db.pool())
+        .await
+        .map_err(sync_db)
 }
 
 async fn verify_private_calendar(
@@ -223,7 +214,7 @@ pub async fn backup_events(
     let db = crate::postgres::PostgresDb::application()
         .await
         .map_err(sync_db)?;
-    let Some(owner) = crate::firms::calendar_owner(surreal, firm_id)
+    let Some(owner) = crate::firms::calendar_owner(firm_id)
         .await
         .map_err(sync_db)?
     else {
@@ -302,7 +293,7 @@ pub async fn sync_membership(
     let firm_id = project
         .firm_id
         .ok_or_else(|| ProjectCalendarError::Db("Project Firm is missing".into()))?;
-    let Some(owner) = crate::firms::calendar_owner(surreal, firm_id)
+    let Some(owner) = crate::firms::calendar_owner(firm_id)
         .await
         .map_err(sync_db)?
     else {
@@ -321,7 +312,7 @@ pub async fn sync_membership(
     // A recorded id is an operator input. Verify it still identifies this
     // Project's calendar in the owning Firm's Workspace before ACL or event writes.
     verify_private_calendar(calendar, &project.code, &calendar_id).await?;
-    let (desired, guests, mut report) = current_roster(surreal, &project, firm_id, &owner).await?;
+    let (desired, guests, mut report) = current_roster(&db, &project, firm_id, &owner).await?;
 
     reconcile_reader_grants(
         &db,
@@ -447,67 +438,65 @@ type Roster = (
 );
 
 async fn current_roster(
-    surreal: &SurrealDb,
+    db: &crate::postgres::PostgresDb,
     project: &Project,
     firm_id: Uuid,
     owner: &str,
 ) -> Result<Roster, ProjectCalendarError> {
+    if project.status != "open" {
+        return Ok(Roster::default());
+    }
     let owner_domain = owner.rsplit_once('@').map(|(_, domain)| domain);
-    let rows = projects::participations_for_project(surreal, project.id)
-        .await
-        .map_err(sync_db)?;
+    let rows = sqlx::query_as::<_, (Uuid, String, bool, String, String, bool, Option<String>)>(
+        "SELECT p.id, r.participation, r.is_lawyer_dri, p.role, p.email, p.email_confirmed, f.membership
+         FROM person_project_role r JOIN person p ON p.id = r.person_id
+         LEFT JOIN person_firm_role f ON f.person_id = p.id AND f.firm_id = $2
+         WHERE r.project_id = $1 AND NOT r.is_client_dri AND r.participation <> ALL($3::text[])
+         ORDER BY r.inserted_at, r.id",
+    )
+    .bind(project.id)
+    .bind(firm_id)
+    .bind(projects::PARTICIPATION_CLIENT_SIDE)
+    .fetch_all(db.pool())
+    .await
+    .map_err(sync_db)?;
     let mut desired = BTreeMap::new();
     let mut guests = BTreeMap::new();
     let mut report = Vec::new();
     let mut has_lawyer_dri = false;
     let mut clerks = Vec::new();
-    if project.status == "open" {
-        for row in rows {
-            if row.is_client_dri
-                || projects::PARTICIPATION_CLIENT_SIDE.contains(&row.participation.as_str())
-            {
-                continue;
-            }
-            let Some(person) = persons::find_by_id(surreal, row.person_id)
-                .await
-                .map_err(sync_db)?
-            else {
-                continue;
-            };
-            let expected = match person.role {
-                Role::Clerk => crate::firms::FirmMembership::Clerk,
-                Role::Lawyer => crate::firms::FirmMembership::Lawyer,
-                Role::Owner | Role::Admin => crate::firms::FirmMembership::Admin,
-                Role::Client => continue,
-            };
-            let membership = crate::firms::membership_for_person(surreal, row.person_id, firm_id)
-                .await
-                .map_err(sync_db)?;
-            let address = person.email.trim().to_ascii_lowercase();
-            let gap = if row.participation != projects::participation_for_role(person.role) {
-                Some("project_role_mismatch")
-            } else if membership.is_none_or(|membership| membership.membership != expected) {
-                Some("not_a_firm_member")
+    for (person_id, participation, is_lawyer_dri, role, email, confirmed, membership) in rows {
+        let role = Role::parse(&role).ok_or_else(|| sync_db("unknown persisted Person role"))?;
+        let expected = match role {
+            Role::Clerk => crate::firms::FirmMembership::Clerk,
+            Role::Lawyer => crate::firms::FirmMembership::Lawyer,
+            Role::Owner | Role::Admin => crate::firms::FirmMembership::Admin,
+            Role::Client => continue,
+        };
+        let address = email.trim().to_ascii_lowercase();
+        let gap = if participation != projects::participation_for_role(role) {
+            Some("project_role_mismatch")
+        } else if membership.as_deref() != Some(expected.as_str()) {
+            Some("not_a_firm_member")
+        } else {
+            delivery_gap(&address, confirmed, owner_domain)
+        };
+        report.push(ParticipantSync {
+            person_id,
+            access: gap.unwrap_or("pending").into(),
+            calendar_invitation: "not_requested".into(),
+            event_responses: BTreeMap::new(),
+        });
+        if gap.is_none() {
+            if role == Role::Clerk {
+                clerks.push(person_id);
             } else {
-                delivery_gap(&address, person.email_confirmed, owner_domain)
-            };
-            report.push(ParticipantSync {
-                person_id: person.id,
-                access: gap.unwrap_or("pending").into(),
-                calendar_invitation: "not_requested".into(),
-                event_responses: BTreeMap::new(),
-            });
-            if gap.is_none() {
-                if person.role == Role::Clerk {
-                    clerks.push(person.id);
-                } else {
-                    has_lawyer_dri |= row.is_lawyer_dri;
-                }
-                if receives_event_invitation(person.role) {
-                    guests.insert(person.id.simple().to_string(), address.clone());
-                }
-                desired.insert(person.id, address);
+                has_lawyer_dri |= is_lawyer_dri;
             }
+            if receives_event_invitation(role) {
+                guests.insert(person_id.simple().to_string(), address.clone());
+            }
+            desired.insert(person_id, address);
         }
     }
 
@@ -644,45 +633,8 @@ mod tests {
 
     use super::{close, ensure, CalendarOutcome};
     use crate::persons::{self, NewPerson, Role};
-    use crate::projects::{self, OpenMatterCommand, UpdateProjectCommand};
-    use crate::test_support::{
-        mem_surreal, seed_calendar_project, seed_entity, seed_firm_with_brand,
-    };
-
-    async fn open_matter(surreal: &crate::surreal::SurrealDb) -> projects::Project {
-        seed_firm_with_brand(surreal, "neon").await;
-        let entity_id = seed_entity(surreal).await;
-        let lawyer = persons::create(
-            surreal,
-            &NewPerson::with_role("Lawyer", "Lawyer@Example.com", Role::Lawyer),
-        )
-        .await
-        .expect("lawyer");
-        let client = persons::create(
-            surreal,
-            &NewPerson::with_role("Client", "client@example.com", Role::Client),
-        )
-        .await
-        .expect("client");
-        projects::open_matter(
-            surreal,
-            &OpenMatterCommand {
-                firm_id: None,
-                name: "Synthetic matter".into(),
-                code: "matter-one".into(),
-                client_id: client.id,
-                entity_id,
-                jurisdiction_id: None,
-                description: None,
-                brand: "neon".to_string(),
-                attestation: true,
-                acting_person_id: lawyer.id,
-                closed_at: None,
-            },
-        )
-        .await
-        .expect("open")
-    }
+    use crate::projects::{self, UpdateProjectCommand};
+    use crate::test_support::seed_calendar_project;
 
     #[test]
     fn assigned_lawyers_join_event_guests_without_inviting_clients_or_owners() {
@@ -772,7 +724,7 @@ mod tests {
             set_calendar_owner(&db, Role::Owner, None, firm, FAKE_CALENDAR_OWNER)
                 .await
                 .unwrap();
-            assert_eq!(super::membership_candidates(&db).await.unwrap(), [project]);
+            assert_eq!(super::membership_candidates().await.unwrap(), [project]);
             let calendar = FakeCalendar::default();
             for _ in 0..2 {
                 super::sync_membership(&db, project, &calendar)
@@ -785,12 +737,12 @@ mod tests {
                 saved.calendar_id.as_deref(),
                 Some(calendar.calendars()[0].id.as_str())
             );
-            assert_eq!(super::membership_candidates(&db).await.unwrap(), [project]);
+            assert_eq!(super::membership_candidates().await.unwrap(), [project]);
 
             set_calendar_owner(&db, Role::Owner, None, firm, "")
                 .await
                 .unwrap();
-            assert!(super::membership_candidates(&db).await.unwrap().is_empty());
+            assert!(super::membership_candidates().await.unwrap().is_empty());
         })
         .await;
     }
@@ -913,6 +865,25 @@ mod tests {
                 if row.is_lawyer_dri {
                     continue;
                 }
+                if name == "lawyer" {
+                    let pg = crate::postgres::PostgresDb::application().await.unwrap();
+                    sqlx::query(
+                        "WITH other AS (
+                             INSERT INTO firm (name, slug, status)
+                             VALUES ('Other Calendar Firm', 'other-calendar-firm', 'active') RETURNING id)
+                         UPDATE person_firm_role SET firm_id = other.id FROM other
+                         WHERE person_id = $1 AND firm_id = $2",
+                    )
+                    .bind(person.id)
+                    .bind(firm_id)
+                    .execute(pg.pool())
+                    .await
+                    .unwrap();
+                    let report = super::sync_membership(&db, project_id, &calendar).await.unwrap();
+                    assert!(report.iter().any(|r| r.person_id == person.id && r.access == "not_a_firm_member"));
+                    assert!(!calendar.assigned_guests(&calendar_id).contains_key(&key));
+                    assert!(!calendar.sharing(&calendar_id).contains_key(&email));
+                }
                 remove_participant(&db, project_id, row.id, DriActor::System)
                     .await
                     .unwrap();
@@ -949,174 +920,195 @@ mod tests {
 
     #[tokio::test]
     async fn setup_creates_and_records_a_private_calendar() {
-        let surreal = mem_surreal().await;
-        let project = open_matter(&surreal).await;
-        let calendar = FakeCalendar::default();
-        let clerk = persons::create(
-            &surreal,
-            &NewPerson::with_role("Clerk", "Clerk@Example.com", Role::Clerk),
-        )
-        .await
-        .unwrap();
-        projects::add_participation(&surreal, project.id, clerk.id, "clerk")
-            .await
-            .unwrap();
+        crate::test_support::with_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            let (project, _) = seed_calendar_project().await;
+            let calendar = FakeCalendar::default();
+            for (email, role) in [
+                ("lawyer@example.com", Role::Lawyer),
+                ("clerk@example.com", Role::Clerk),
+                ("client@example.com", Role::Client),
+            ] {
+                let person =
+                    persons::create(&db, &NewPerson::with_role("Participant", email, role))
+                        .await
+                        .unwrap();
+                projects::add_participation(
+                    &db,
+                    project,
+                    person.id,
+                    projects::participation_for_role(role),
+                )
+                .await
+                .unwrap();
+            }
 
-        let report = ensure(&surreal, project.id, &calendar).await.unwrap();
+            let report = ensure(&db, project, &calendar).await.unwrap();
 
-        assert_eq!(report.outcome, CalendarOutcome::Created);
-        assert_eq!(report.changed, 0);
-        let created = calendar.calendars();
-        assert_eq!(created.len(), 1);
-        assert_eq!(created[0].summary, "matter-one");
-        let stored = projects::find_by_id(&surreal, project.id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(stored.calendar_id.as_deref(), Some(created[0].id.as_str()));
-        let sharing = calendar.sharing(&created[0].id);
-        for email in ["lawyer@example.com", "clerk@example.com"] {
-            assert!(!sharing.contains_key(email));
-        }
-        assert_eq!(sharing.get(FAKE_CALENDAR_OWNER), Some(&CalendarRole::Owner));
-        assert!(
-            !sharing.contains_key("client@example.com"),
-            "a client is never shared the calendar: {sharing:?}"
-        );
+            assert_eq!(report.outcome, CalendarOutcome::Created);
+            assert_eq!(report.changed, 0);
+            let created = calendar.calendars();
+            assert_eq!(created.len(), 1);
+            assert_eq!(created[0].summary, "calendar-test");
+            let stored = projects::find_by_id(&db, project).await.unwrap().unwrap();
+            assert_eq!(stored.calendar_id.as_deref(), Some(created[0].id.as_str()));
+            let sharing = calendar.sharing(&created[0].id);
+            for email in ["lawyer@example.com", "clerk@example.com"] {
+                assert!(!sharing.contains_key(email));
+            }
+            assert_eq!(sharing.get(FAKE_CALENDAR_OWNER), Some(&CalendarRole::Owner));
+            assert!(
+                !sharing.contains_key("client@example.com"),
+                "a client is never shared the calendar: {sharing:?}"
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn setup_is_idempotent() {
-        let surreal = mem_surreal().await;
-        let project = open_matter(&surreal).await;
-        let calendar = FakeCalendar::default();
+        crate::test_support::with_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            let (project, _) = seed_calendar_project().await;
+            let calendar = FakeCalendar::default();
 
-        ensure(&surreal, project.id, &calendar).await.unwrap();
-        let again = ensure(&surreal, project.id, &calendar).await.unwrap();
+            ensure(&db, project, &calendar).await.unwrap();
+            let again = ensure(&db, project, &calendar).await.unwrap();
 
-        assert_eq!(again.outcome, CalendarOutcome::Present);
-        assert_eq!(again.changed, 0, "nobody is re-shared");
-        assert_eq!(calendar.created(), 1, "no second calendar");
+            assert_eq!(again.outcome, CalendarOutcome::Present);
+            assert_eq!(again.changed, 0, "nobody is re-shared");
+            assert_eq!(calendar.created(), 1, "no second calendar");
 
-        let id = calendar.calendars()[0].id.clone();
-        calendar
-            .set_member_role(&id, "lawyer@example.com", CalendarRole::Writer)
-            .await
-            .unwrap();
-        calendar
-            .set_member_role(&id, "manual@example.com", CalendarRole::Writer)
-            .await
-            .unwrap();
+            let id = calendar.calendars()[0].id.clone();
+            calendar
+                .set_member_role(&id, "lawyer@example.com", CalendarRole::Writer)
+                .await
+                .unwrap();
+            calendar
+                .set_member_role(&id, "manual@example.com", CalendarRole::Writer)
+                .await
+                .unwrap();
 
-        let report = ensure(&surreal, project.id, &calendar).await.unwrap();
+            let report = ensure(&db, project, &calendar).await.unwrap();
 
-        assert_eq!(report.changed, 0);
-        let sharing = calendar.sharing(&id);
-        assert_eq!(
-            sharing.get("lawyer@example.com"),
-            Some(&CalendarRole::Writer)
-        );
-        assert_eq!(sharing.get(FAKE_CALENDAR_OWNER), Some(&CalendarRole::Owner));
-        assert_eq!(
-            sharing.get("manual@example.com"),
-            Some(&CalendarRole::Writer)
-        );
+            assert_eq!(report.changed, 0);
+            let sharing = calendar.sharing(&id);
+            assert_eq!(
+                sharing.get("lawyer@example.com"),
+                Some(&CalendarRole::Writer)
+            );
+            assert_eq!(sharing.get(FAKE_CALENDAR_OWNER), Some(&CalendarRole::Owner));
+            assert_eq!(
+                sharing.get("manual@example.com"),
+                Some(&CalendarRole::Writer)
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn an_unrecorded_calendar_named_for_the_project_is_adopted() {
-        let surreal = mem_surreal().await;
-        let project = open_matter(&surreal).await;
-        let calendar = FakeCalendar::default();
-        let existing = calendar.create_calendar("matter-one").await.unwrap();
+        crate::test_support::with_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            let (project, _) = seed_calendar_project().await;
+            let calendar = FakeCalendar::default();
+            let existing = calendar.create_calendar("calendar-test").await.unwrap();
 
-        let report = ensure(&surreal, project.id, &calendar).await.unwrap();
+            let report = ensure(&db, project, &calendar).await.unwrap();
 
-        assert_eq!(report.outcome, CalendarOutcome::Adopted);
-        assert_eq!(calendar.created(), 1);
-        let stored = projects::find_by_id(&surreal, project.id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(stored.calendar_id.as_deref(), Some(existing.id.as_str()));
+            assert_eq!(report.outcome, CalendarOutcome::Adopted);
+            assert_eq!(calendar.created(), 1);
+            let stored = projects::find_by_id(&db, project).await.unwrap().unwrap();
+            assert_eq!(stored.calendar_id.as_deref(), Some(existing.id.as_str()));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_deleted_recorded_calendar_is_reported_not_replaced() {
-        let surreal = mem_surreal().await;
-        let project = open_matter(&surreal).await;
-        let calendar = FakeCalendar::default();
-        ensure(&surreal, project.id, &calendar).await.unwrap();
-        let id = calendar.calendars()[0].id.clone();
-        calendar.delete(&id);
+        crate::test_support::with_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            let (project, _) = seed_calendar_project().await;
+            let calendar = FakeCalendar::default();
+            ensure(&db, project, &calendar).await.unwrap();
+            let id = calendar.calendars()[0].id.clone();
+            calendar.delete(&id);
 
-        let report = ensure(&surreal, project.id, &calendar).await.unwrap();
+            let report = ensure(&db, project, &calendar).await.unwrap();
 
-        assert_eq!(report.outcome, CalendarOutcome::RecordedResourceMissing);
-        assert_eq!(calendar.created(), 1, "nothing is created in its place");
+            assert_eq!(report.outcome, CalendarOutcome::RecordedResourceMissing);
+            assert_eq!(calendar.created(), 1, "nothing is created in its place");
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn close_makes_writers_readers_keeps_the_owner_and_clears_the_booking_link() {
-        let surreal = mem_surreal().await;
-        let project = open_matter(&surreal).await;
-        let calendar = FakeCalendar::default();
-        ensure(&surreal, project.id, &calendar).await.unwrap();
-        let id = calendar.calendars()[0].id.clone();
-        calendar
-            .set_member_role(&id, "lawyer@example.com", CalendarRole::Writer)
+        crate::test_support::with_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            let (project, _) = seed_calendar_project().await;
+            let calendar = FakeCalendar::default();
+            ensure(&db, project, &calendar).await.unwrap();
+            let id = calendar.calendars()[0].id.clone();
+            calendar
+                .set_member_role(&id, "lawyer@example.com", CalendarRole::Writer)
+                .await
+                .unwrap();
+            projects::update_project(
+                &db,
+                project,
+                &UpdateProjectCommand {
+                    booking_url: Some("https://calendar.app.google/synthetic".into()),
+                    ..UpdateProjectCommand::default()
+                },
+            )
             .await
             .unwrap();
-        projects::update_project(
-            &surreal,
-            project.id,
-            &UpdateProjectCommand {
-                booking_url: Some("https://calendar.app.google/synthetic".into()),
-                ..UpdateProjectCommand::default()
-            },
-        )
-        .await
-        .unwrap();
 
-        let report = close(&surreal, project.id, &calendar).await.unwrap();
+            let report = close(&db, project, &calendar).await.unwrap();
 
-        assert_eq!(report.outcome, CalendarOutcome::ReadOnly);
-        assert_eq!(report.changed, 1);
-        let sharing = calendar.sharing(&id);
-        assert_eq!(
-            sharing.get("lawyer@example.com"),
-            Some(&CalendarRole::Reader)
-        );
-        assert_eq!(sharing.get(FAKE_CALENDAR_OWNER), Some(&CalendarRole::Owner));
-        let stored = projects::find_by_id(&surreal, project.id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(stored.booking_url, None);
-        assert_eq!(stored.calendar_id.as_deref(), Some(id.as_str()));
+            assert_eq!(report.outcome, CalendarOutcome::ReadOnly);
+            assert_eq!(report.changed, 1);
+            let sharing = calendar.sharing(&id);
+            assert_eq!(
+                sharing.get("lawyer@example.com"),
+                Some(&CalendarRole::Reader)
+            );
+            assert_eq!(sharing.get(FAKE_CALENDAR_OWNER), Some(&CalendarRole::Owner));
+            let stored = projects::find_by_id(&db, project).await.unwrap().unwrap();
+            assert_eq!(stored.booking_url, None);
+            assert_eq!(stored.calendar_id.as_deref(), Some(id.as_str()));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn setup_on_a_closed_matter_stays_read_only() {
-        let surreal = mem_surreal().await;
-        let project = open_matter(&surreal).await;
-        let calendar = FakeCalendar::default();
-        ensure(&surreal, project.id, &calendar).await.unwrap();
-        // Closed directly: the lifecycle's close needs an offboarding letter.
-        surreal
-            .query("UPDATE $id SET status = 'closed'")
-            .bind(("id", crate::surreal::record_id("project", project.id)))
-            .await
-            .and_then(surrealdb::IndexedResults::check)
-            .unwrap();
+        crate::test_support::with_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            let (project, _) = seed_calendar_project().await;
+            let calendar = FakeCalendar::default();
+            ensure(&db, project, &calendar).await.unwrap();
+            // Closed directly: the lifecycle's close needs an offboarding letter.
+            let pg = crate::postgres::PostgresDb::application().await.unwrap();
+            sqlx::query("UPDATE project SET status = 'closed' WHERE id = $1")
+                .bind(project)
+                .execute(pg.pool())
+                .await
+                .unwrap();
 
-        let report = ensure(&surreal, project.id, &calendar).await.unwrap();
+            let report = ensure(&db, project, &calendar).await.unwrap();
 
-        assert_eq!(report.outcome, CalendarOutcome::ReadOnly);
-        let id = calendar.calendars()[0].id.clone();
-        assert_eq!(
-            calendar.sharing(&id),
-            std::collections::BTreeMap::from([(FAKE_CALENDAR_OWNER.into(), CalendarRole::Owner)])
-        );
+            assert_eq!(report.outcome, CalendarOutcome::ReadOnly);
+            let id = calendar.calendars()[0].id.clone();
+            assert_eq!(
+                calendar.sharing(&id),
+                std::collections::BTreeMap::from([(
+                    FAKE_CALENDAR_OWNER.into(),
+                    CalendarRole::Owner
+                )])
+            );
+        })
+        .await;
     }
 }

@@ -1,5 +1,5 @@
 //! Reconcile one open Project under the same PostgreSQL write lock as the
-//! on-demand mirror and five-minute membership repair.
+//! on-demand mirror and scheduled membership repair.
 
 use cloud::CalendarService;
 use store::{deadline_calendar, project_calendar, surreal::SurrealDb};
@@ -28,7 +28,7 @@ pub(crate) async fn reconcile(
     let firm_id = project
         .firm_id
         .ok_or_else(|| failed("resolving the owning Firm"))?;
-    let Some(owner) = store::firms::calendar_owner(surreal, firm_id)
+    let Some(owner) = store::firms::calendar_owner(firm_id)
         .await
         .map_err(|_| failed("resolving the Firm calendar owner"))?
     else {

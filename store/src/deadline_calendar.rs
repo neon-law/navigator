@@ -523,9 +523,7 @@ mod tests {
         report_line, BODY_SHA_KEY, DEADLINE_ID_KEY, MARKER_KEY, MARKER_VALUE,
     };
     use crate::project_deadlines::{self, NewDeadline};
-    use crate::projects::{create as create_project, NewProject};
     use crate::surreal::SurrealDb;
-    use crate::test_support::mem_surreal;
     use chrono::TimeZone;
     use cloud::calendar::{CalendarService, FakeCalendar};
     use uuid::Uuid;
@@ -549,36 +547,13 @@ mod tests {
         }
     }
 
-    async fn project(surreal: &SurrealDb) -> Uuid {
-        create_project(
-            surreal,
-            &NewProject {
-                code: format!("mirror-{}", Uuid::now_v7()),
-                name: "Mirror matter".into(),
-                status: "open".into(),
-                entity_id: Uuid::now_v7(),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap()
-        .id
-    }
-
-    async fn closed_project(surreal: &SurrealDb) -> Uuid {
-        create_project(
-            surreal,
-            &NewProject {
-                code: format!("mirror-{}", Uuid::now_v7()),
-                name: "Closed matter".into(),
-                status: "closed".into(),
-                entity_id: Uuid::now_v7(),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap()
-        .id
+    async fn with_project(test: impl AsyncFnOnce(&SurrealDb, Uuid)) {
+        crate::test_support::with_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let (project_id, _) = crate::test_support::seed_calendar_project().await;
+            test(&db, project_id).await;
+        })
+        .await;
     }
 
     #[test]
@@ -593,265 +568,321 @@ mod tests {
 
     #[tokio::test]
     async fn a_mirrored_event_carries_its_category_color() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal).await;
-        let created = project_deadlines::create(&surreal, &sample(project_id))
+        with_project(async |db, project_id| {
+            let created = project_deadlines::create(db, &sample(project_id))
+                .await
+                .unwrap();
+            let event = deadline_event(&created, "mirror-code", None).unwrap();
+            assert_eq!(event.color_id.as_deref(), Some("11"));
+
+            // A row whose category is cleared mirrors without a color, leaving
+            // the calendar's default.
+            let cleared = project_deadlines::update(
+                db,
+                project_id,
+                created.id,
+                &project_deadlines::DeadlinePatch {
+                    category: Some(None),
+                    ..project_deadlines::DeadlinePatch::default()
+                },
+            )
             .await
             .unwrap();
-        let event = deadline_event(&created, "mirror-code", None).unwrap();
-        assert_eq!(event.color_id.as_deref(), Some("11"));
-
-        // A row whose category is cleared mirrors without a color, leaving
-        // the calendar's default.
-        let cleared = project_deadlines::update(
-            &surreal,
-            project_id,
-            created.id,
-            &project_deadlines::DeadlinePatch {
-                category: Some(None),
-                ..project_deadlines::DeadlinePatch::default()
-            },
-        )
-        .await
-        .unwrap();
-        let event = deadline_event(&cleared, "mirror-code", None).unwrap();
-        assert_eq!(event.color_id, None);
+            let event = deadline_event(&cleared, "mirror-code", None).unwrap();
+            assert_eq!(event.color_id, None);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_fresh_project_inserts_one_event_per_deadline() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal).await;
-        let first = project_deadlines::create(&surreal, &sample(project_id))
-            .await
-            .unwrap();
-        let mut hearing = sample(project_id);
-        hearing.title = None;
-        hearing.calendar_role = "hearing".into();
-        hearing.internal_lead_days = None;
-        let second = project_deadlines::create(&surreal, &hearing).await.unwrap();
-        let calendar = FakeCalendar::default();
-        let report = reconcile(
-            &surreal,
-            &calendar,
-            project_id,
-            Some("https://law.test"),
-            false,
-        )
-        .await
-        .unwrap();
-        assert_eq!(report.outcome.slug(), "mirrored");
-        assert!(!report.dry_run);
-        assert_eq!(report.upserted, vec![first.id, second.id]);
-        assert!(report.deleted.is_empty());
-        assert_eq!(report.in_sync, 0);
-        assert!(report.failures.is_empty());
-        let project = crate::projects::find_by_id(&surreal, project_id)
-            .await
-            .unwrap()
-            .unwrap();
-        let calendar_id = project.calendar_id.unwrap();
-        let events = calendar.events(&calendar_id);
-        assert_eq!(events.len(), 2);
-        assert!(events.iter().all(
-            |event| event.private_properties.get(MARKER_KEY) == Some(&MARKER_VALUE.to_string())
-        ));
+        with_project(async |db, project_id| {
+            let first = project_deadlines::create(db, &sample(project_id))
+                .await
+                .unwrap();
+            let mut hearing = sample(project_id);
+            hearing.title = None;
+            hearing.calendar_role = "hearing".into();
+            hearing.internal_lead_days = None;
+            let second = project_deadlines::create(db, &hearing).await.unwrap();
+            let calendar = FakeCalendar::default();
+            let report = reconcile(db, &calendar, project_id, Some("https://law.test"), false)
+                .await
+                .unwrap();
+            assert_eq!(report.outcome.slug(), "mirrored");
+            assert!(!report.dry_run);
+            assert_eq!(report.upserted, vec![first.id, second.id]);
+            assert!(report.deleted.is_empty());
+            assert_eq!(report.in_sync, 0);
+            assert!(report.failures.is_empty());
+            let project = crate::projects::find_by_id(db, project_id)
+                .await
+                .unwrap()
+                .unwrap();
+            let calendar_id = project.calendar_id.unwrap();
+            let events = calendar.events(&calendar_id);
+            assert_eq!(events.len(), 2);
+            assert!(events
+                .iter()
+                .all(|event| event.private_properties.get(MARKER_KEY)
+                    == Some(&MARKER_VALUE.to_string())));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_second_pass_finds_everything_in_sync() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal).await;
-        project_deadlines::create(&surreal, &sample(project_id))
-            .await
-            .unwrap();
-        let calendar = FakeCalendar::default();
-        let first = reconcile(&surreal, &calendar, project_id, None, false)
-            .await
-            .unwrap();
-        assert_eq!(first.upserted.len(), 1);
-        let second = reconcile(&surreal, &calendar, project_id, None, false)
-            .await
-            .unwrap();
-        assert_eq!(second.outcome.slug(), "mirrored");
-        assert!(second.upserted.is_empty());
-        assert_eq!(second.in_sync, 1);
-        assert!(second.deleted.is_empty());
+        with_project(async |db, project_id| {
+            project_deadlines::create(db, &sample(project_id))
+                .await
+                .unwrap();
+            let calendar = FakeCalendar::default();
+            let first = reconcile(db, &calendar, project_id, None, false)
+                .await
+                .unwrap();
+            assert_eq!(first.upserted.len(), 1);
+            let second = reconcile(db, &calendar, project_id, None, false)
+                .await
+                .unwrap();
+            assert_eq!(second.outcome.slug(), "mirrored");
+            assert!(second.upserted.is_empty());
+            assert_eq!(second.in_sync, 1);
+            assert!(second.deleted.is_empty());
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn an_edited_row_updates_its_event() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal).await;
-        let created = project_deadlines::create(&surreal, &sample(project_id))
+        with_project(async |db, project_id| {
+            let created = project_deadlines::create(db, &sample(project_id))
+                .await
+                .unwrap();
+            let calendar = FakeCalendar::default();
+            reconcile(db, &calendar, project_id, None, false)
+                .await
+                .unwrap();
+            project_deadlines::update(
+                db,
+                project_id,
+                created.id,
+                &project_deadlines::DeadlinePatch {
+                    due_at: Some("2026-12-01T09:00:00-08:00".into()),
+                    ..project_deadlines::DeadlinePatch::default()
+                },
+            )
             .await
             .unwrap();
-        let calendar = FakeCalendar::default();
-        reconcile(&surreal, &calendar, project_id, None, false)
-            .await
-            .unwrap();
-        project_deadlines::update(
-            &surreal,
-            project_id,
-            created.id,
-            &project_deadlines::DeadlinePatch {
-                due_at: Some("2026-12-01T09:00:00-08:00".into()),
-                ..project_deadlines::DeadlinePatch::default()
-            },
-        )
-        .await
-        .unwrap();
-        let report = reconcile(&surreal, &calendar, project_id, None, false)
-            .await
-            .unwrap();
-        assert_eq!(report.upserted, vec![created.id]);
-        assert_eq!(report.in_sync, 0);
+            let report = reconcile(db, &calendar, project_id, None, false)
+                .await
+                .unwrap();
+            assert_eq!(report.upserted, vec![created.id]);
+            assert_eq!(report.in_sync, 0);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_row_deleted_from_the_store_deletes_its_event() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal).await;
-        let created = project_deadlines::create(&surreal, &sample(project_id))
-            .await
-            .unwrap();
-        let calendar = FakeCalendar::default();
-        reconcile(&surreal, &calendar, project_id, None, false)
-            .await
-            .unwrap();
-        surreal
-            .query("DELETE FROM project_deadlines WHERE id = $id".to_string())
-            .bind((
-                "id",
-                crate::surreal::record_id("project_deadlines", created.id),
-            ))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-        let report = reconcile(&surreal, &calendar, project_id, None, false)
-            .await
-            .unwrap();
-        assert_eq!(report.deleted.len(), 1);
-        let project = crate::projects::find_by_id(&surreal, project_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(calendar.events(&project.calendar_id.unwrap()).is_empty());
+        with_project(async |db, project_id| {
+            let created = project_deadlines::create(db, &sample(project_id))
+                .await
+                .unwrap();
+            let calendar = FakeCalendar::default();
+            reconcile(db, &calendar, project_id, None, false)
+                .await
+                .unwrap();
+            let pg = crate::postgres::PostgresDb::application().await.unwrap();
+            sqlx::query("DELETE FROM project_deadlines WHERE id = $1")
+                .bind(created.id)
+                .execute(pg.pool())
+                .await
+                .unwrap();
+            let report = reconcile(db, &calendar, project_id, None, false)
+                .await
+                .unwrap();
+            assert_eq!(report.deleted.len(), 1);
+            let project = crate::projects::find_by_id(db, project_id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(calendar.events(&project.calendar_id.unwrap()).is_empty());
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_dry_run_plans_writes_and_writes_nothing() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal).await;
-        let created = project_deadlines::create(&surreal, &sample(project_id))
-            .await
-            .unwrap();
-        let calendar = FakeCalendar::default();
-        let report = reconcile(&surreal, &calendar, project_id, None, true)
-            .await
-            .unwrap();
-        assert!(report.dry_run);
-        assert!(report.creates_calendar);
-        assert_eq!(report.upserted, vec![created.id]);
-        assert!(
-            calendar.events("").is_empty(),
-            "no calendar was created, so no events exist anywhere"
-        );
+        with_project(async |db, project_id| {
+            let created = project_deadlines::create(db, &sample(project_id))
+                .await
+                .unwrap();
+            let calendar = FakeCalendar::default();
+            let report = reconcile(db, &calendar, project_id, None, true)
+                .await
+                .unwrap();
+            assert!(report.dry_run);
+            assert!(report.creates_calendar);
+            assert_eq!(report.upserted, vec![created.id]);
+            assert!(
+                calendar.events("").is_empty(),
+                "no calendar was created, so no events exist anywhere"
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_dry_run_over_an_existing_mirror_plans_the_same_diff() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal).await;
-        let created = project_deadlines::create(&surreal, &sample(project_id))
+        with_project(async |db, project_id| {
+            let created = project_deadlines::create(db, &sample(project_id))
+                .await
+                .unwrap();
+            let calendar = FakeCalendar::default();
+            reconcile(db, &calendar, project_id, None, false)
+                .await
+                .unwrap();
+            project_deadlines::update(
+                db,
+                project_id,
+                created.id,
+                &project_deadlines::DeadlinePatch {
+                    due_at: Some("2026-12-15T09:00:00-08:00".into()),
+                    ..project_deadlines::DeadlinePatch::default()
+                },
+            )
             .await
             .unwrap();
-        let calendar = FakeCalendar::default();
-        reconcile(&surreal, &calendar, project_id, None, false)
-            .await
-            .unwrap();
-        project_deadlines::update(
-            &surreal,
-            project_id,
-            created.id,
-            &project_deadlines::DeadlinePatch {
-                due_at: Some("2026-12-15T09:00:00-08:00".into()),
-                ..project_deadlines::DeadlinePatch::default()
-            },
-        )
-        .await
-        .unwrap();
-        let report = reconcile(&surreal, &calendar, project_id, None, true)
-            .await
-            .unwrap();
-        assert!(report.dry_run);
-        assert!(!report.creates_calendar);
-        assert_eq!(report.upserted, vec![created.id]);
-        let project = crate::projects::find_by_id(&surreal, project_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            calendar.events(&project.calendar_id.unwrap()).len(),
-            1,
-            "the dry run wrote nothing"
-        );
+            let report = reconcile(db, &calendar, project_id, None, true)
+                .await
+                .unwrap();
+            assert!(report.dry_run);
+            assert!(!report.creates_calendar);
+            assert_eq!(report.upserted, vec![created.id]);
+            let project = crate::projects::find_by_id(db, project_id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                calendar.events(&project.calendar_id.unwrap()).len(),
+                1,
+                "the dry run wrote nothing"
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_closed_matter_is_skipped_without_writing() {
-        let surreal = mem_surreal().await;
-        let project_id = closed_project(&surreal).await;
-        let calendar = FakeCalendar::default();
-        let report = reconcile(&surreal, &calendar, project_id, None, false)
-            .await
-            .unwrap();
-        assert_eq!(report.outcome.slug(), "skipped_closed");
-        let project = crate::projects::find_by_id(&surreal, project_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(project.calendar_id.is_none());
+        with_project(async |db, project_id| {
+            let pg = crate::postgres::PostgresDb::application().await.unwrap();
+            sqlx::query("UPDATE project SET status = 'closed' WHERE id = $1")
+                .bind(project_id)
+                .execute(pg.pool())
+                .await
+                .unwrap();
+            let calendar = FakeCalendar::default();
+            let report = reconcile(db, &calendar, project_id, None, false)
+                .await
+                .unwrap();
+            assert_eq!(report.outcome.slug(), "skipped_closed");
+            let project = crate::projects::find_by_id(db, project_id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(project.calendar_id.is_none());
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_recorded_but_gone_calendar_is_reported_not_replaced() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal).await;
-        project_deadlines::create(&surreal, &sample(project_id))
-            .await
-            .unwrap();
-        let calendar = FakeCalendar::default();
-        let created = calendar.create_calendar("mirror-dead").await.unwrap();
-        crate::projects::set_calendar_id(&surreal, project_id, &created.id)
-            .await
-            .unwrap();
-        calendar.delete(&created.id);
-        let report = reconcile(&surreal, &calendar, project_id, None, false)
-            .await
-            .unwrap();
-        assert_eq!(report.outcome.slug(), "recorded_resource_missing");
-        assert!(report.upserted.is_empty());
+        with_project(async |db, project_id| {
+            project_deadlines::create(db, &sample(project_id))
+                .await
+                .unwrap();
+            let calendar = FakeCalendar::default();
+            let created = calendar.create_calendar("mirror-dead").await.unwrap();
+            crate::projects::set_calendar_id(db, project_id, &created.id)
+                .await
+                .unwrap();
+            calendar.delete(&created.id);
+            let report = reconcile(db, &calendar, project_id, None, false)
+                .await
+                .unwrap();
+            assert_eq!(report.outcome.slug(), "recorded_resource_missing");
+            assert!(report.upserted.is_empty());
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn calendar_sequence_increments_on_rapid_updates_and_cancellation() {
+        with_project(async |db, project_id| {
+            let row = project_deadlines::create(db, &sample(project_id))
+                .await
+                .unwrap();
+            assert_eq!(row.calendar_sequence, Some(0));
+            for sequence in 1..=3 {
+                let patch = project_deadlines::DeadlinePatch {
+                    title: Some(Some(format!("Updated deadline {sequence}"))),
+                    ..Default::default()
+                };
+                let updated = project_deadlines::update(db, project_id, row.id, &patch)
+                    .await
+                    .unwrap();
+                assert_eq!(updated.id, row.id);
+                assert_eq!(updated.calendar_sequence, Some(sequence));
+                let replay = project_deadlines::update(db, project_id, row.id, &patch)
+                    .await
+                    .unwrap();
+                assert_eq!(replay.calendar_sequence, Some(sequence));
+            }
+            let cancelled = project_deadlines::cancel(db, project_id, row.id)
+                .await
+                .unwrap();
+            assert_eq!(cancelled.id, row.id);
+            assert_eq!(cancelled.calendar_sequence, Some(4));
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn historical_calendar_versions_never_regress_and_overflow_is_refused() {
+        with_project(async |db, project_id| {
+            let pg = crate::postgres::PostgresDb::application().await.unwrap();
+            let row = project_deadlines::create(db, &sample(project_id)).await.unwrap();
+            sqlx::query("UPDATE project_deadlines SET calendar_sequence = NULL, updated_at = '2026-10-26T00:00:00Z' WHERE id = $1")
+                .bind(row.id).execute(pg.pool()).await.unwrap();
+            let patch = project_deadlines::DeadlinePatch {
+                title: Some(Some("Updated historical deadline".into())),
+                ..Default::default()
+            };
+            let updated = project_deadlines::update(db, project_id, row.id, &patch).await.unwrap();
+            assert_eq!(updated.calendar_sequence, Some(1_792_972_801));
+            sqlx::query("UPDATE project_deadlines SET calendar_sequence = 2147483647 WHERE id = $1")
+                .bind(row.id).execute(pg.pool()).await.unwrap();
+            assert!(project_deadlines::cancel(db, project_id, row.id).await.is_err());
+            assert_eq!(project_deadlines::find(db, project_id, row.id).await.unwrap().unwrap().calendar_sequence, Some(2_147_483_647));
+        }).await;
     }
 
     #[tokio::test]
     async fn the_schema_refuses_sequence_values_beyond_the_i32_range() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal).await;
-        let created = project_deadlines::create(&surreal, &sample(project_id))
-            .await
-            .unwrap();
-        let rejected = surreal
-            .query("UPDATE $id SET calendar_sequence = 3000000000")
-            .bind((
-                "id",
-                crate::surreal::record_id("project_deadlines", created.id),
-            ))
-            .await
-            .unwrap()
-            .check();
-        assert!(rejected.is_err(), "the schema must cap calendar_sequence");
+        with_project(async |db, project_id| {
+            let created = project_deadlines::create(db, &sample(project_id))
+                .await
+                .unwrap();
+            let pg = crate::postgres::PostgresDb::application().await.unwrap();
+            let rejected = sqlx::query(
+                "UPDATE project_deadlines SET calendar_sequence = 3000000000 WHERE id = $1",
+            )
+            .bind(created.id)
+            .execute(pg.pool())
+            .await;
+            assert!(rejected.is_err(), "the schema must cap calendar_sequence");
+        })
+        .await;
     }
 
     #[test]
@@ -867,82 +898,82 @@ mod tests {
 
     #[tokio::test]
     async fn the_summary_fallback_matches_the_ics_feed() {
-        let surreal = mem_surreal().await;
-        let project = crate::projects::find_by_id(&surreal, project(&surreal).await)
-            .await
-            .unwrap()
-            .unwrap();
-        let titled = project_deadlines::create(&surreal, &sample(project.id))
-            .await
-            .unwrap();
-        assert_eq!(
-            event_summary(&titled, &project.code),
-            format!("Answering brief due - {}", project.code)
-        );
-        let mut hearing = sample(project.id);
-        hearing.title = None;
-        hearing.calendar_role = "hearing".into();
-        let hearing = project_deadlines::create(&surreal, &hearing).await.unwrap();
-        assert_eq!(
-            event_summary(&hearing, &project.code),
-            format!("Hearing - {}", project.code)
-        );
-        let mut opponent = sample(project.id);
-        opponent.title = None;
-        opponent.calendar_role = "opponent".into();
-        opponent.authority_kind = "statute".into();
-        let opponent = project_deadlines::create(&surreal, &opponent)
-            .await
-            .unwrap();
-        assert_eq!(
-            event_summary(&opponent, &project.code),
-            format!("Statutory deadline (opponent) - {}", project.code)
-        );
+        with_project(async |db, project_id| {
+            let project = crate::projects::find_by_id(db, project_id)
+                .await
+                .unwrap()
+                .unwrap();
+            let titled = project_deadlines::create(db, &sample(project.id))
+                .await
+                .unwrap();
+            assert_eq!(
+                event_summary(&titled, &project.code),
+                format!("Answering brief due - {}", project.code)
+            );
+            let mut hearing = sample(project.id);
+            hearing.title = None;
+            hearing.calendar_role = "hearing".into();
+            let hearing = project_deadlines::create(db, &hearing).await.unwrap();
+            assert_eq!(
+                event_summary(&hearing, &project.code),
+                format!("Hearing - {}", project.code)
+            );
+            let mut opponent = sample(project.id);
+            opponent.title = None;
+            opponent.calendar_role = "opponent".into();
+            opponent.authority_kind = "statute".into();
+            let opponent = project_deadlines::create(db, &opponent).await.unwrap();
+            assert_eq!(
+                event_summary(&opponent, &project.code),
+                format!("Statutory deadline (opponent) - {}", project.code)
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn the_event_carries_the_ics_basis_and_its_identity() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal).await;
-        let created = project_deadlines::create(&surreal, &sample(project_id))
-            .await
-            .unwrap();
-        let event = deadline_event(&created, "mirror-code", Some("https://law.test/")).unwrap();
-        assert_eq!(event.summary, "Answering brief due - mirror-code");
-        assert_eq!(
-            event.start,
-            chrono::FixedOffset::east_opt(-8 * 3600)
-                .unwrap()
-                .with_ymd_and_hms(2026, 11, 2, 17, 0, 0)
-                .unwrap()
-        );
-        assert_eq!(event.sequence, 0);
-        assert!(!event.cancelled);
-        assert_eq!(event.reminder_minutes, Some(7 * 24 * 60));
-        assert_eq!(
-            event.description.as_deref(),
-            Some(format!(
-                "Authority: Order setting briefing\nDeadline: {}\nMatter page: https://law.test/app/projects/mirror-code",
-                created.id
-            ))
-            .as_deref()
-        );
-        assert_eq!(
-            event.private_properties.get(MARKER_KEY),
-            Some(&MARKER_VALUE.to_string())
-        );
-        assert_eq!(
-            event.private_properties.get(DEADLINE_ID_KEY),
-            Some(&created.id.to_string())
-        );
-        assert_eq!(
-            event.private_properties.get(BODY_SHA_KEY),
-            Some(&body_sha(
-                &created,
-                "mirror-code",
-                Some("https://law.test/")
-            ))
-        );
+        with_project(async |db, project_id| {
+            let created = project_deadlines::create(db, &sample(project_id))
+                .await
+                .unwrap();
+            let event = deadline_event(&created, "mirror-code", Some("https://law.test/")).unwrap();
+            assert_eq!(event.summary, "Answering brief due - mirror-code");
+            assert_eq!(
+                event.start,
+                chrono::FixedOffset::east_opt(-8 * 3600)
+                    .unwrap()
+                    .with_ymd_and_hms(2026, 11, 2, 17, 0, 0)
+                    .unwrap()
+            );
+            assert_eq!(event.sequence, 0);
+            assert!(!event.cancelled);
+            assert_eq!(event.reminder_minutes, Some(7 * 24 * 60));
+            assert_eq!(
+                event.description.as_deref(),
+                Some(format!(
+                    "Authority: Order setting briefing\nDeadline: {}\nMatter page: https://law.test/app/projects/mirror-code",
+                    created.id
+                ))
+                .as_deref()
+            );
+            assert_eq!(
+                event.private_properties.get(MARKER_KEY),
+                Some(&MARKER_VALUE.to_string())
+            );
+            assert_eq!(
+                event.private_properties.get(DEADLINE_ID_KEY),
+                Some(&created.id.to_string())
+            );
+            assert_eq!(
+                event.private_properties.get(BODY_SHA_KEY),
+                Some(&body_sha(
+                    &created,
+                    "mirror-code",
+                    Some("https://law.test/")
+                ))
+            );
+        }).await;
     }
 
     #[test]

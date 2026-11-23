@@ -7,6 +7,8 @@ use std::sync::Arc;
 use store::project_calendar::ParticipantSync;
 use uuid::Uuid;
 use workflows::dbos_engine::project_calendar::{register, Source, SyncError};
+use workflows::dbos_engine::{Executor, Schedules, Settings};
+use workflows::CapturingNotifier;
 
 use crate::support::{database, APP_VERSION, DEADLINE};
 
@@ -78,4 +80,83 @@ async fn duplicate_calendar_jobs_share_the_retry_and_read_back_current_assignmen
     assert_eq!(two.result().await.unwrap().attempts, 2);
     assert_eq!(source.calls.load(Ordering::SeqCst), 2);
     runtime.shutdown().await;
+    db.close().await;
+}
+
+struct TwoProjects {
+    denied: Uuid,
+    allowed: Uuid,
+}
+
+#[async_trait::async_trait]
+impl Source for TwoProjects {
+    async fn candidates(&self) -> Result<Vec<Uuid>, SyncError> {
+        Ok(vec![self.denied, self.allowed])
+    }
+
+    async fn backup(&self, _: Uuid) -> Result<u64, SyncError> {
+        Ok(0)
+    }
+
+    async fn sync(&self, project: Uuid) -> Result<Vec<ParticipantSync>, SyncError> {
+        if project == self.denied {
+            return Err(SyncError {
+                phase: "provider_denied".into(),
+                status: Some(403),
+                person_id: None,
+                attempts: 0,
+            });
+        }
+        Ok(Vec::new())
+    }
+}
+
+#[tokio::test]
+async fn calendar_host_catches_up_both_schedules_and_isolates_a_denied_project() {
+    let Some(db) = database().await else {
+        return;
+    };
+    let source = Arc::new(TwoProjects {
+        denied: Uuid::now_v7(),
+        allowed: Uuid::now_v7(),
+    });
+    let executor = Executor::launch_hosting(
+        &Settings::from_lookup(db.lookup()).unwrap(),
+        Arc::new(CapturingNotifier::new()),
+        Schedules {
+            project_calendar: Some(source.clone()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let store = db.store();
+    for (name, project, status) in [
+        ("ProjectCalendarMembership", source.denied, "ERROR"),
+        ("ProjectCalendarMembership", source.allowed, "SUCCESS"),
+        ("ProjectCalendarEventBackup", source.denied, "SUCCESS"),
+        ("ProjectCalendarEventBackup", source.allowed, "SUCCESS"),
+    ] {
+        let prefix = format!("{name}:{project}:%");
+        tokio::time::timeout(DEADLINE, async {
+            loop {
+                let recorded: bool = sqlx::query_scalar(
+                    "SELECT EXISTS (SELECT 1 FROM dbos.workflow_status WHERE workflow_uuid LIKE $1 AND status = $2)",
+                )
+                .bind(&prefix)
+                .bind(status)
+                .fetch_one(store.pool())
+                .await
+                .unwrap();
+                if recorded {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("{prefix} did not reach {status}"));
+    }
+    executor.shutdown().await;
+    db.close().await;
 }

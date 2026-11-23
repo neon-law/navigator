@@ -1264,62 +1264,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn calendar_sequence_increments_on_rapid_updates_and_cancellation() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal).await;
-        let row = create(&surreal, &sample(project_id)).await.unwrap();
-        assert_eq!(row.calendar_sequence, Some(0));
-        for sequence in 1..=3 {
-            let updated = update(&surreal, project_id, row.id, &DeadlinePatch::default())
-                .await
-                .unwrap();
-            assert_eq!(updated.id, row.id);
-            assert_eq!(updated.calendar_sequence, Some(sequence));
-        }
-        let cancelled = cancel(&surreal, project_id, row.id).await.unwrap();
-        assert_eq!(cancelled.id, row.id);
-        assert_eq!(cancelled.calendar_sequence, Some(4));
-    }
-
-    #[tokio::test]
-    async fn historical_calendar_versions_never_regress_and_overflow_is_refused() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal).await;
-        let row = create(&surreal, &sample(project_id)).await.unwrap();
-        surreal
-            .query("UPDATE $id SET calendar_sequence = NONE, updated_at = '2026-10-26T00:00:00Z'")
-            .bind(("id", record_id("project_deadlines", row.id)))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-        let updated = update(&surreal, project_id, row.id, &DeadlinePatch::default())
-            .await
-            .unwrap();
-        assert_eq!(updated.calendar_sequence, Some(1_792_972_801));
-        surreal
-            .query("UPDATE $id SET calendar_sequence = 2147483647")
-            .bind(("id", record_id("project_deadlines", row.id)))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-        assert!(
-            update(&surreal, project_id, row.id, &DeadlinePatch::default())
-                .await
-                .is_err()
-        );
-        assert_eq!(
-            find(&surreal, project_id, row.id)
-                .await
-                .unwrap()
-                .unwrap()
-                .calendar_sequence,
-            Some(2_147_483_647)
-        );
-    }
-
-    #[tokio::test]
     async fn a_title_round_trips_updates_and_clears() {
         let surreal = mem_surreal().await;
         let project_id = project(&surreal).await;

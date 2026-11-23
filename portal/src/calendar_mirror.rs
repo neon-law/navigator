@@ -72,7 +72,7 @@ pub(crate) struct MembershipSource {
 #[async_trait::async_trait]
 impl Source for MembershipSource {
     async fn candidates(&self) -> Result<Vec<Uuid>, SyncError> {
-        store::project_calendar::membership_candidates(&self.surreal)
+        store::project_calendar::membership_candidates()
             .await
             .map_err(|_| sync_error("reading Project Calendar candidates"))
     }

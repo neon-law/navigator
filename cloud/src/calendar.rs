@@ -169,6 +169,8 @@ pub enum CalendarError {
     InvalidEventBackup,
     #[error("Calendar API response while creating a calendar did not include an id")]
     MissingCalendarId,
+    #[error("the participant's calendar list did not confirm the recorded Project Calendar ID")]
+    UnverifiedCalendarListEntry,
     #[error("Calendar API response while writing an event did not include an id")]
     MissingEventId,
     #[error("Calendar found {count} calendars for one project code; refusing to guess")]
@@ -382,30 +384,49 @@ impl GoogleCalendar {
         Ok(calendar)
     }
 
-    async fn ensure_listed(&self, id: &str) -> Result<(), CalendarError> {
+    async fn is_listed(&self, id: &str, token: &str) -> Result<bool, CalendarError> {
         let action = "checking the participant's calendar list";
-        let token = self.token().await?;
         let response = self
             .http
             .get(self.url(&["users", "me", "calendarList", id]))
-            .bearer_auth(&token)
+            .bearer_auth(token)
             .query(&[("fields", "id")])
             .send()
             .await
             .map_err(|source| CalendarError::Request { action, source })?;
-        if response.status() != reqwest::StatusCode::NOT_FOUND {
-            Self::checked(Ok(response), action)?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(false);
+        }
+        let entry = Self::checked(Ok(response), action)?
+            .json::<serde_json::Value>()
+            .await
+            .map_err(|source| CalendarError::Response { action, source })?;
+        if entry["id"].as_str() != Some(id) {
+            return Err(CalendarError::UnverifiedCalendarListEntry);
+        }
+        Ok(true)
+    }
+
+    async fn ensure_listed(&self, id: &str) -> Result<(), CalendarError> {
+        let token = self.token().await?;
+        if self.is_listed(id, &token).await? {
             return Ok(());
         }
-        Self::checked(
-            self.http
-                .post(self.url(&["users", "me", "calendarList"]))
-                .bearer_auth(token)
-                .json(&serde_json::json!({"id": id, "selected": true}))
-                .send()
-                .await,
-            "adding the Project Calendar to the participant's list",
-        )?;
+        let action = "adding the Project Calendar to the participant's list";
+        let response = self
+            .http
+            .post(self.url(&["users", "me", "calendarList"]))
+            .bearer_auth(&token)
+            .json(&serde_json::json!({"id": id, "selected": true}))
+            .send()
+            .await
+            .map_err(|source| CalendarError::Request { action, source })?;
+        if response.status() != reqwest::StatusCode::CONFLICT {
+            Self::checked(Ok(response), action)?;
+        }
+        if !self.is_listed(id, &token).await? {
+            return Err(CalendarError::UnverifiedCalendarListEntry);
+        }
         Ok(())
     }
 
@@ -2332,18 +2353,26 @@ mod tests {
         for (id, response) in [
             (
                 "existing",
-                ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({"selected":false,"hidden":true})),
+                ResponseTemplate::new(200).set_body_json(
+                    serde_json::json!({"id":"existing","selected":false,"hidden":true}),
+                ),
             ),
             ("new", ResponseTemplate::new(404)),
         ] {
             Mock::given(method("GET"))
                 .and(path(format!("/users/me/calendarList/{id}")))
                 .respond_with(response)
+                .up_to_n_times(1)
                 .expect(1)
                 .mount(&server)
                 .await;
         }
+        Mock::given(method("GET"))
+            .and(path("/users/me/calendarList/new"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"id":"new"})))
+            .expect(1)
+            .mount(&server)
+            .await;
         Mock::given(method("POST"))
             .and(path("/users/me/calendarList"))
             .and(body_json(serde_json::json!({"id":"new","selected":true})))
@@ -2354,6 +2383,53 @@ mod tests {
         let participant = google(&server);
         participant.ensure_listed("existing").await.unwrap();
         participant.ensure_listed("new").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn subscription_requires_exact_readback_after_success_or_conflict() {
+        let server = MockServer::start().await;
+        let calendar = google(&server);
+        for (id, insert_status, returned_id) in [
+            ("raced", 409, Some("raced")),
+            ("wrong", 409, Some("other")),
+            ("missing", 200, None),
+        ] {
+            let entry = format!("/users/me/calendarList/{id}");
+            Mock::given(method("GET"))
+                .and(path(&entry))
+                .respond_with(ResponseTemplate::new(404))
+                .up_to_n_times(1)
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(&entry))
+                .respond_with(match returned_id {
+                    Some(id) => {
+                        ResponseTemplate::new(200).set_body_json(serde_json::json!({"id": id}))
+                    }
+                    None => ResponseTemplate::new(404),
+                })
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(path("/users/me/calendarList"))
+                .and(body_json(serde_json::json!({"id":id,"selected":true})))
+                .respond_with(ResponseTemplate::new(insert_status))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let result = calendar.ensure_listed(id).await;
+            if returned_id == Some(id) {
+                result.unwrap();
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(CalendarError::UnverifiedCalendarListEntry)
+                ));
+            }
+        }
     }
 
     #[tokio::test]
