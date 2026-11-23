@@ -304,6 +304,23 @@ pub async fn visible_projects_as_lawyer(
     visible_projects_matching(surreal, pid, ProjectLens::Lawyer, None).await
 }
 
+/// Participating Projects billed on the current host's Brand and Firm.
+pub async fn visible_lawyer_projects_for_brand(
+    db: &SurrealDb,
+    person_id: Option<Uuid>,
+    role: Role,
+    host_brand: &str,
+) -> Result<Vec<Project>, String> {
+    let mut projects = visible_projects_as_lawyer(db, person_id, role).await?;
+    let firm = crate::firms::firm_id_for_brand_key(db, host_brand)
+        .await
+        .map_err(|error| error.to_string())?;
+    projects.retain(|project| {
+        project.brand == host_brand && (project.firm_id.is_none() || project.firm_id == firm)
+    });
+    Ok(projects)
+}
+
 /// All projects visible through the supervised Clerk lens.
 ///
 /// Clerk is a non-lawyer role, so its route does not inherit either the

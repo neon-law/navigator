@@ -6922,3 +6922,35 @@ a.nav-steps__step:focus-visible {
 .private-chart__fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr)); gap: var(--nav-space-4, 1rem); }
 .private-chart__fields > legend, .private-chart__fields > p, .private-chart__bodies, .private-chart__fields > .chart-toggle { grid-column: 1 / -1; }
 .private-chart__bodies { display: flex; flex-wrap: wrap; gap: var(--nav-space-3, .75rem); }
+
+/* Daily time entry and the corresponding Project ledger. */
+.daily-billing {
+  max-inline-size: 64rem;
+  margin-inline: auto;
+  padding: clamp(1rem, 3vw, 2.5rem);
+}
+.daily-billing h1 { margin-block: .5rem 1rem; }
+.daily-billing__filters, .daily-billing__entry {
+  display: grid;
+  align-items: end;
+  gap: .75rem;
+  padding-block: 1rem;
+  border-block-start: 1px solid var(--nav-color-border);
+}
+.daily-billing__filters { grid-template-columns: minmax(10rem, 1fr) auto auto; }
+.daily-billing__entry { grid-template-columns: minmax(0, 1fr) 6rem auto; }
+.daily-billing__project { grid-column: 1 / -1; }
+.daily-billing .nav-label { margin: 0; }
+.daily-billing textarea { resize: vertical; }
+.daily-billing__ledger { width: 100%; font-variant-numeric: tabular-nums; }
+.daily-billing__ledger :is(th, td):first-child { text-align: start; overflow-wrap: anywhere; }
+.daily-billing__ledger :is(th, td):not(:first-child) { text-align: end; white-space: nowrap; }
+.daily-billing__group th { border-block-start: 1px solid var(--nav-color-border); }
+.daily-billing__ledger tfoot { font-weight: 700; border-block-start: 2px solid currentColor; }
+@media (max-width: 40rem) {
+  .daily-billing__filters, .daily-billing__entry { grid-template-columns: minmax(0, 1fr) auto; }
+  .daily-billing__filters label:first-child, .daily-billing__entry label:has(textarea) { grid-column: 1 / -1; }
+  .daily-billing__ledger { font-size: .875rem; }
+  .daily-billing__ledger :is(th, td) { padding: .5rem .25rem; }
+  .daily-billing__ledger thead th:first-child { white-space: normal; }
+}

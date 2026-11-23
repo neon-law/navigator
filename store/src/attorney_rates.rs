@@ -109,36 +109,32 @@ pub async fn resolve_hourly_rate_cents(
     project_id: Uuid,
     on: NaiveDate,
 ) -> Result<Option<i32>, FeeStructureError> {
-    for scope in [Some(project_id), firm_default()] {
-        if let Some(rate) = latest_effective(pg, person_id, scope, on).await? {
-            return Ok(Some(rate));
-        }
-    }
-    Ok(None)
+    Ok(resolve_hourly_rates_cents(pg, person_id, &[project_id], on)
+        .await?
+        .remove(&project_id))
 }
 
-const fn firm_default() -> Option<Uuid> {
-    None
-}
-
-async fn latest_effective(
+/// Resolve the same effective fee schedule for all Projects in a billing session.
+pub async fn resolve_hourly_rates_cents(
     pg: &PostgresDb,
     person_id: Uuid,
-    project_id: Option<Uuid>,
+    projects: &[Uuid],
     on: NaiveDate,
-) -> Result<Option<i32>, FeeStructureError> {
-    sqlx::query(
-        "SELECT hourly_rate_cents FROM attorney_rate WHERE person_id=$1 \
-         AND project_id IS NOT DISTINCT FROM $2 AND effective_on<=$3 \
-         ORDER BY effective_on DESC, inserted_at DESC LIMIT 1",
+) -> Result<std::collections::HashMap<Uuid, i32>, FeeStructureError> {
+    let rows = sqlx::query_as::<_, (Uuid, i32)>(
+        "SELECT p.id, r.hourly_rate_cents FROM unnest($2::uuid[]) AS p(id)
+         CROSS JOIN LATERAL (
+             SELECT hourly_rate_cents FROM attorney_rate
+             WHERE person_id=$1 AND (project_id=p.id OR project_id IS NULL) AND effective_on<=$3
+             ORDER BY project_id NULLS LAST, effective_on DESC, inserted_at DESC LIMIT 1
+         ) AS r",
     )
     .bind(person_id)
-    .bind(project_id)
+    .bind(projects)
     .bind(on)
-    .fetch_optional(&pg.0)
-    .await?
-    .map(|row| Ok(row.get(0)))
-    .transpose()
+    .fetch_all(&pg.0)
+    .await?;
+    Ok(rows.into_iter().collect())
 }
 
 /// Set the matter's flat fee, replacing any prior figure — the current

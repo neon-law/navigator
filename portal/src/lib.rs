@@ -1728,6 +1728,14 @@ pub fn bootstrap_with_forgejo_oidc(
         state.policy.clone(),
         state.auth.clone(),
     );
+    let daily_billing = dioxus_app::csrf_page_router(
+        webapp::lawyer_dashboard::billing::PATH,
+        webapp::lawyer_dashboard::billing::DailyBilling,
+        state.surreal.clone(),
+        state.sessions.clone(),
+        state.policy.clone(),
+        state.auth.clone(),
+    );
     let dioxus_notation_outline = dioxus_app::notation_outline_router(
         state.surreal.clone(),
         state.storage.clone(),
@@ -2137,6 +2145,7 @@ pub fn bootstrap_with_forgejo_oidc(
         // The lawyer workbench (#956 Phase 4) renders through Dioxus at `/app/lawyer`,
         // replacing the dashboard.
         dioxus_lawyer_dashboard,
+        daily_billing,
         dioxus_notation_outline,
         dioxus_playbooks,
         dioxus_playbook_new,

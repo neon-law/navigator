@@ -337,6 +337,7 @@ pub fn routes(
             "/app/projects/{project_code}/inbox/{conversation_id}/replies",
             post(crate::inbox::reply_post),
         )
+        .route(webapp::lawyer_dashboard::billing::PATH, post(crate::project_billing_forms::daily_billing))
         .route("/app/owner/firms", post(firms_create))
         .route("/app/owner/firms/new/entity", post(firms_new_entity_inline))
         .route("/app/owner/firms/new/admin", post(firms_new_admin_inline))

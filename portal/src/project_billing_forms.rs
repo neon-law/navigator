@@ -140,6 +140,90 @@ pub(crate) struct LogTimeForm {
     pub(crate) billable: Option<String>,
 }
 
+#[derive(Deserialize)]
+pub(crate) struct DailyBillingForm {
+    project: String,
+    description: String,
+    hours: String,
+    performed_on: chrono::NaiveDate,
+}
+
+/// Manual billing accepts exact tenths and stores the corresponding whole minutes.
+fn daily_billing_minutes(hours: &str) -> Option<i32> {
+    let hours = hours.trim();
+    let (whole, fraction) = hours.split_once('.').unwrap_or((hours, ""));
+    let fraction = fraction.trim_end_matches('0');
+    if !whole.bytes().all(|b| b.is_ascii_digit()) || fraction.len() > 1 {
+        return None;
+    }
+    let whole = if whole.is_empty() {
+        0
+    } else {
+        whole.parse::<i32>().ok()?
+    };
+    let tenth = match fraction.as_bytes() {
+        [] => 0,
+        [digit] if digit.is_ascii_digit() => i32::from(digit - b'0'),
+        _ => return None,
+    };
+    let tenths = whole.checked_mul(10)?.checked_add(tenth)?;
+    (1..=240).contains(&tenths).then(|| tenths * 6)
+}
+
+pub(crate) async fn daily_billing(
+    State(db): State<store::surreal::SurrealDb>,
+    session: Option<Extension<SessionData>>,
+    brand: Option<Extension<views::brand::BrandKey>>,
+    Form(form): Form<DailyBillingForm>,
+) -> Response {
+    let Some(Extension(actor)) = session.filter(|s| s.viewing_as_dri.is_none()) else {
+        return not_found_response();
+    };
+    let brand = brand.map(|Extension(b)| b).unwrap_or_default();
+    let projects = match store::access::visible_lawyer_projects_for_brand(
+        &db,
+        actor.person_id,
+        actor.role,
+        brand.as_str(),
+    )
+    .await
+    {
+        Ok(projects) => projects,
+        Err(_) => return axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    let Some(project) = projects.into_iter().find(|p| p.code == form.project) else {
+        return not_found_response();
+    };
+    let path = format!(
+        "{}?day={}",
+        webapp::lawyer_dashboard::billing::PATH,
+        form.performed_on
+    );
+    let Some(person_id) = actor.person_id else {
+        return not_found_response();
+    };
+    let result = match daily_billing_minutes(&form.hours) {
+        Some(minutes) => {
+            record_manual_time(
+                &db,
+                project.id,
+                person_id,
+                form.performed_on,
+                minutes,
+                form.description,
+                true,
+            )
+            .await
+        }
+        None => Err("Enter hours in 0.1 increments, from 0.1 to 24.".into()),
+    };
+    let (key, message) = match &result {
+        Ok(()) => ("flash", "Time logged."),
+        Err(error) => ("error", error.as_str()),
+    };
+    Redirect::to(&format!("{path}&{key}={}", encode_query_value(message))).into_response()
+}
+
 /// `POST /app/projects/{code}/time-entries` — log time by hand. The rate is
 /// never taken from the wire: it is resolved from the reader's fee structure
 /// for the performed date and frozen onto the row, exactly as the JSON door
@@ -170,7 +254,6 @@ pub(crate) async fn log_time(
         return not_found_response();
     }
 
-    let description = input.description.trim().to_string();
     let Ok(minutes) = input.minutes.trim().parse::<i32>() else {
         return back_to_billing(
             &code,
@@ -182,27 +265,40 @@ pub(crate) async fn log_time(
     else {
         return back_to_billing(&code, None, Some("Give the date the work was performed."));
     };
-    let billable = input.billable.as_deref() == Some("on");
+    match record_manual_time(
+        &surreal,
+        project.id,
+        person_id,
+        performed_on,
+        minutes,
+        input.description,
+        input.billable.as_deref() == Some("on"),
+    )
+    .await
+    {
+        Ok(()) => back_to_billing(&code, Some("Time logged."), None),
+        Err(error) => back_to_billing(&code, None, Some(&error)),
+    }
+}
 
-    let Ok(pg) =
-        crate::time_tracking_api::prepared_store(&surreal, "create_entry", project.id).await
-    else {
-        return back_to_billing(
-            &code,
-            None,
-            Some("The time record is unavailable right now — try again shortly."),
-        );
-    };
-    let Ok(rate_cents_per_hour) =
-        crate::time_tracking_api::snapshot_rate(&pg, person_id, project.id, performed_on, billable)
+async fn record_manual_time(
+    db: &store::surreal::SurrealDb,
+    project_id: Uuid,
+    person_id: Uuid,
+    performed_on: chrono::NaiveDate,
+    minutes: i32,
+    description: String,
+    billable: bool,
+) -> Result<(), String> {
+    let pg = crate::time_tracking_api::prepared_store(db, "create_entry", project_id)
+        .await
+        .map_err(|_| "The time record is unavailable right now — try again shortly.")?;
+    let rate_cents_per_hour =
+        crate::time_tracking_api::snapshot_rate(&pg, person_id, project_id, performed_on, billable)
             .await
-    else {
-        return back_to_billing(
-            &code,
-            None,
-            Some("Billable time needs a rate for this matter — set your hourly rate first."),
-        );
-    };
+            .map_err(|_| {
+                "Billable time needs a rate for this matter — set your hourly rate first."
+            })?;
     let entry = store::time_entries::NewTimeEntry {
         attorney_id: person_id,
         performed_on,
@@ -212,10 +308,10 @@ pub(crate) async fn log_time(
         rate_cents_per_hour,
         source: store::time_entries::TimeEntrySource::Manual,
     };
-    match store::time_entries::create(&pg, project.id, person_id, &entry).await {
-        Ok(_) => back_to_billing(&code, Some("Time logged."), None),
-        Err(e) => back_to_billing(&code, None, Some(&flash_for_entry(&e))),
-    }
+    store::time_entries::create(&pg, project_id, person_id, &entry)
+        .await
+        .map(|_| ())
+        .map_err(|e| flash_for_entry(&e))
 }
 
 /// The start-timer control in the matter header: an optional note. The
@@ -925,6 +1021,32 @@ mod tests {
             rendered(InvoiceGenerationError::NoMatter),
             "The billing record is unavailable right now — try again shortly."
         );
+    }
+
+    #[test]
+    fn daily_billing_converts_exact_tenths_to_minutes() {
+        for (hours, minutes) in [
+            (".1", 6),
+            ("0.50", 30),
+            ("0.6", 36),
+            ("1", 60),
+            ("24.0", 1440),
+        ] {
+            assert_eq!(super::daily_billing_minutes(hours), Some(minutes));
+        }
+        for hours in [
+            "",
+            "0",
+            "-0.1",
+            "0.11",
+            "0.01",
+            "24.1",
+            "1e2",
+            "1..2",
+            "9999999999",
+        ] {
+            assert_eq!(super::daily_billing_minutes(hours), None);
+        }
     }
 
     #[tokio::test]

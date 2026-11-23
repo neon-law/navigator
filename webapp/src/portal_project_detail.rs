@@ -358,7 +358,6 @@ fn notation_status_label(
 /// Format integer cents as a US dollar amount with thousands separators, e.g.
 /// `333_300` → `"$3,333.00"`. Mirrors the `format_usd`; money never flows
 /// through a float.
-#[cfg(feature = "server")]
 pub(crate) fn format_usd(cents: i64) -> String {
     let sign = if cents < 0 { "-" } else { "" };
     let abs = cents.unsigned_abs();

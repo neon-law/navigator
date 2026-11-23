@@ -33,6 +33,7 @@
 //! docket — a hearing or trial's `scheduled_on`, following a continuance chain.
 //! Documents and project rows are not events.
 
+pub mod billing;
 mod deadlines;
 
 use dioxus::prelude::*;
@@ -215,25 +216,9 @@ pub async fn get_lawyer_dashboard() -> Result<DashboardView, ServerFnError> {
         _,
     >()
     .await?;
-    let person_id = dioxus_fullstack_core::FullstackContext::extract::<
-        axum::Extension<crate::portal_project_list::PersonId>,
-        _,
-    >()
-    .await
-    .ok()
-    .and_then(|axum::Extension(pid)| pid.0)
-    .and_then(|raw| raw.parse::<uuid::Uuid>().ok());
-
-    let store_role = match role {
-        ViewerRole::Owner => store::persons::Role::Owner,
-        ViewerRole::Admin => store::persons::Role::Admin,
-        ViewerRole::Lawyer => store::persons::Role::Lawyer,
-        ViewerRole::Clerk => store::persons::Role::Clerk,
-        ViewerRole::Client => store::persons::Role::Client,
-    };
-
+    let person_id = crate::admin_listing::injected_person_id().await;
     let surreal = consume_context::<store::surreal::SurrealDb>();
-    let projects = firm_overview_projects(&surreal, person_id, store_role).await?;
+    let projects = firm_overview_projects(&surreal, person_id, store_role(role)).await?;
 
     let status = match query.status.as_deref() {
         Some("closed") => "closed",
@@ -368,6 +353,17 @@ pub async fn get_lawyer_dashboard() -> Result<DashboardView, ServerFnError> {
         conflict_findings,
         pipeline,
     })
+}
+
+#[cfg(feature = "server")]
+fn store_role(role: ViewerRole) -> store::persons::Role {
+    match role {
+        ViewerRole::Owner => store::persons::Role::Owner,
+        ViewerRole::Admin => store::persons::Role::Admin,
+        ViewerRole::Lawyer => store::persons::Role::Lawyer,
+        ViewerRole::Clerk => store::persons::Role::Clerk,
+        ViewerRole::Client => store::persons::Role::Client,
+    }
 }
 
 #[cfg(feature = "server")]
@@ -688,7 +684,7 @@ fn lawyer_dashboard_body(view: &DashboardView) -> Element {
             logo: view.logo.clone(),
         }
         main { id: "lawyer-dashboard", class: "nav-theme",
-            header { class: "page-header", h1 { "Lawyer workbench" } }
+            header { class: "page-header", h1 { "Lawyer workbench" } a { class: "nav-link", href: billing::PATH, "Billing" } }
             section { id: "lawyer-inbox-card", class: "team-home__cards", aria_label: "Messages",
                 article { class: "team-home__card",
                     h2 { class: "team-home__card-title", "Inbox" }

@@ -1252,6 +1252,27 @@ worktrees and their shared `.git` metadata, colocated Jujutsu `.jj` metadata, ab
 settings, and private operator notes that may refer to the old location. Verify the moved checkouts and their remotes
 before removing the old root.
 
+### Daily manual billing
+
+For a ten-minute review, work through one host and Project at a time. Read `project.host` and `project.name` from the
+checkout's `navigator.yaml`. Two checkouts with the same pair represent one Project. Open that Project on its host to
+review its documents. If the Project uses Drive for intake, follow its verified folder link to review submissions.
+
+Use the day's changes to prompt the attorney's recollection. A letter seen in both Navigator and Drive calls for one
+question. The attorney supplies the description and time.
+
+| What changed | What to ask |
+| --- | --- |
+| A draft or redline was revised | “What did you draft or revise, and how long did it take?” |
+| A filing or order was added | “What did you review or prepare in response, and how long did that take?” |
+| A client uploaded documents | “Which documents did you review that day, and for how long?” |
+| No files changed | “Was there a call, meeting, or other work you want to enter for this Project?” |
+
+On that host, open `/app/lawyer/billing`, choose the Project, describe the work, and enter hours in tenths. The Project
+picker shows the attorney's effective rate. Review entries by attorney and work date. Each Project has one subtotal even
+when its entries were added between entries for other Projects. The last row totals the hours and amounts for that
+attorney and date.
+
 ## Verifying a machine
 
 `navigator project doctor` reports whether this machine and one Project workspace actually satisfy the map above, before
