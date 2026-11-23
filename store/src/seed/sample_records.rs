@@ -716,19 +716,24 @@ async fn sign(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{mem_surreal, seed_entity};
+    use crate::test_support::seed_entity;
 
     /// A Draft the default rules accept, under the sample engagement's code.
     const ENGAGEMENT: &str =
         include_str!("../../../templates/notations/neon_law/onboarding__letter.md");
 
     async fn project(surreal: &SurrealDb, code: &str) -> Project {
+        crate::test_support::seed_compiled_brands_postgres(surreal).await;
+        let firm_id = crate::firms::firm_id_for_brand_key(surreal, "neon")
+            .await
+            .expect("brand firm");
         crate::projects::create(
             surreal,
             &crate::projects::NewProject {
                 code: code.into(),
                 name: code.into(),
                 status: "open".into(),
+                firm_id,
                 entity_id: seed_entity(surreal).await,
                 ..Default::default()
             },
@@ -746,7 +751,7 @@ mod tests {
     /// The canonical seed, then two passes of [`seed`] over the litigation
     /// and estate matters with a litigation source staged.
     async fn seeded() -> (SurrealDb, Project, Project, tempfile::TempDir) {
-        let surreal = mem_surreal().await;
+        let surreal = SurrealDb::uninitialized();
         let blobs = tempfile::tempdir().expect("tempdir");
         let storage: Arc<dyn cloud::StorageService> = Arc::new(
             cloud::FsStorage::new(blobs.path().to_path_buf())
@@ -808,96 +813,99 @@ mod tests {
     /// staged source's page and signed engagement Notation are stored.
     #[tokio::test]
     async fn the_sample_records_seed_once_and_carry_the_staged_source() {
-        let (surreal, litigation, estate, _blobs) = seeded().await;
-        let docket = crate::cases::docket_for_project(&surreal, litigation.id)
-            .await
-            .expect("docket");
-        assert_eq!(docket.len(), DOCKET.len());
-        assert_eq!(
-            docket.len() + DEADLINES.len(),
-            19,
-            "the timeline's 19 entries"
-        );
-        let case = &crate::cases::for_project(&surreal, litigation.id)
-            .await
-            .expect("cases")[0];
-        let sets = crate::cases::discovery_requests(&surreal, case.id)
-            .await
-            .expect("sets");
-        assert_eq!(sets.len(), 2);
-        for set in &sets {
-            let items = crate::cases::items(&surreal, set.id).await.expect("items");
-            assert_eq!(items.len(), 8);
-        }
-        assert_eq!(
-            crate::project_deadlines::list(&surreal, litigation.id)
+        crate::test_support::with_postgres(async {
+            let (surreal, litigation, estate, _blobs) = seeded().await;
+            let docket = crate::cases::docket_for_project(&surreal, litigation.id)
                 .await
-                .expect("deadlines")
-                .len(),
-            DEADLINES.len()
-        );
-        assert_eq!(
-            crate::efiling_transactions::list(&surreal, litigation.id)
+                .expect("docket");
+            assert_eq!(docket.len(), DOCKET.len());
+            assert_eq!(
+                docket.len() + DEADLINES.len(),
+                19,
+                "the timeline's 19 entries"
+            );
+            let case = &crate::cases::for_project(&surreal, litigation.id)
                 .await
-                .expect("filings")
-                .len(),
-            FILINGS.len()
-        );
-        assert_eq!(
-            crate::authorities::uses_for_project(&surreal, litigation.id)
+                .expect("cases")[0];
+            let sets = crate::cases::discovery_requests(&surreal, case.id)
                 .await
-                .expect("uses")
-                .len(),
-            LITIGATION_AUTHORITIES.len() + 1
-        );
-        assert_eq!(
-            crate::authorities::uses_for_project(&surreal, estate.id)
-                .await
-                .expect("uses")
-                .len(),
-            ESTATE_AUTHORITIES.len()
-        );
-        assert_eq!(
-            crate::project_references::for_project(&surreal, litigation.id)
-                .await
-                .expect("references")
-                .len(),
-            1
-        );
+                .expect("sets");
+            assert_eq!(sets.len(), 2);
+            for set in &sets {
+                let items = crate::cases::items(&surreal, set.id).await.expect("items");
+                assert_eq!(items.len(), 8);
+            }
+            assert_eq!(
+                crate::project_deadlines::list(&surreal, litigation.id)
+                    .await
+                    .expect("deadlines")
+                    .len(),
+                DEADLINES.len()
+            );
+            assert_eq!(
+                crate::efiling_transactions::list(&surreal, litigation.id)
+                    .await
+                    .expect("filings")
+                    .len(),
+                FILINGS.len()
+            );
+            assert_eq!(
+                crate::authorities::uses_for_project(&surreal, litigation.id)
+                    .await
+                    .expect("uses")
+                    .len(),
+                LITIGATION_AUTHORITIES.len() + 1
+            );
+            assert_eq!(
+                crate::authorities::uses_for_project(&surreal, estate.id)
+                    .await
+                    .expect("uses")
+                    .len(),
+                ESTATE_AUTHORITIES.len()
+            );
+            assert_eq!(
+                crate::project_references::for_project(&surreal, litigation.id)
+                    .await
+                    .expect("references")
+                    .len(),
+                1
+            );
 
-        let pages = crate::matter_pages::list_for_project(&surreal, litigation.id)
-            .await
-            .expect("pages");
-        assert_eq!(pages.len(), 1);
-        assert_eq!(pages[0].entry.slug, "timeline");
-        let notations = crate::notations::list_by_project(&surreal, litigation.id)
-            .await
-            .expect("notations");
-        assert_eq!(notations.len(), 1, "the staged engagement is activated");
-        assert_eq!(notations[0].state, "END");
-        assert!(
-            crate::templates::resolve_exact(&surreal, Some(litigation.id), "unlisted_memo")
+            let pages = crate::matter_pages::list_for_project(&surreal, litigation.id)
                 .await
-                .expect("lookup")
-                .is_some(),
-            "every staged Draft is persisted, activated or not"
-        );
-        assert_eq!(
-            notations[0].template_source_commit_sha.as_deref(),
-            Some("abc123"),
-            "the Notation pins the staged commit"
-        );
-        let signature = crate::signatures::latest_for_notation(&surreal, notations[0].id)
-            .await
-            .expect("signature")
-            .expect("a signature");
-        assert_eq!(
-            signature.state,
-            crate::signatures::SignatureState::Completed
-        );
-        assert!(crate::matter_pages::list_for_project(&surreal, estate.id)
-            .await
-            .expect("pages")
-            .is_empty());
+                .expect("pages");
+            assert_eq!(pages.len(), 1);
+            assert_eq!(pages[0].entry.slug, "timeline");
+            let notations = crate::notations::list_by_project(&surreal, litigation.id)
+                .await
+                .expect("notations");
+            assert_eq!(notations.len(), 1, "the staged engagement is activated");
+            assert_eq!(notations[0].state, "END");
+            assert!(
+                crate::templates::resolve_exact(&surreal, Some(litigation.id), "unlisted_memo")
+                    .await
+                    .expect("lookup")
+                    .is_some(),
+                "every staged Draft is persisted, activated or not"
+            );
+            assert_eq!(
+                notations[0].template_source_commit_sha.as_deref(),
+                Some("abc123"),
+                "the Notation pins the staged commit"
+            );
+            let signature = crate::signatures::latest_for_notation(&surreal, notations[0].id)
+                .await
+                .expect("signature")
+                .expect("a signature");
+            assert_eq!(
+                signature.state,
+                crate::signatures::SignatureState::Completed
+            );
+            assert!(crate::matter_pages::list_for_project(&surreal, estate.id)
+                .await
+                .expect("pages")
+                .is_empty());
+        })
+        .await;
     }
 }

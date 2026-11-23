@@ -2123,7 +2123,6 @@ async fn plan_ca_trust(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::mem_surreal;
     use crate::DeploymentEnvironment::{Dev, Production};
 
     /// One row of [`apply_refuses_every_unsafe_target_before_any_write`]'s
@@ -2227,48 +2226,51 @@ mod tests {
 
     #[tokio::test]
     async fn dry_run_reports_a_full_create_plan_and_reaches_no_write() {
-        let surreal = mem_surreal().await;
-        let storage = fs_storage().await;
-        canonical(&surreal, &storage).await;
+        crate::test_support::with_postgres(async {
+            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let storage = fs_storage().await;
+            canonical(&surreal, &storage).await;
 
-        let plan = dry_run_with(
-            &surreal,
-            &storage,
-            Production,
-            Some(STAGING_TARGET),
-            discloses("true"),
-        )
-        .await
-        .expect("dry run");
-
-        assert!(!plan.items.is_empty());
-        assert_eq!(
-            plan.unchanged(),
-            0,
-            "a clean checkout has nothing to leave unchanged"
-        );
-        assert_eq!(plan.created(), plan.items.len());
-
-        assert!(crate::persons::find_by_email_ci(&surreal, LAWYER_EMAIL)
+            let plan = dry_run_with(
+                &surreal,
+                &storage,
+                Production,
+                Some(STAGING_TARGET),
+                discloses("true"),
+            )
             .await
-            .unwrap()
-            .is_none());
-        assert!(crate::projects::find_by_code(&surreal, PROJECT_CODE)
-            .await
-            .unwrap()
-            .is_none());
-        assert!(
-            crate::xero_invoices::find_for_allocation(&surreal, XERO_INVOICE_ID)
+            .expect("dry run");
+
+            assert!(!plan.items.is_empty());
+            assert_eq!(
+                plan.unchanged(),
+                0,
+                "a clean checkout has nothing to leave unchanged"
+            );
+            assert_eq!(plan.created(), plan.items.len());
+
+            assert!(crate::persons::find_by_email_ci(&surreal, LAWYER_EMAIL)
                 .await
                 .unwrap()
-                .is_none()
-        );
-        assert!(
-            crate::iolta_withdrawals::find(&surreal, IOLTA_XERO_TRANSACTION_ID)
+                .is_none());
+            assert!(crate::projects::find_by_code(&surreal, PROJECT_CODE)
                 .await
                 .unwrap()
-                .is_none()
-        );
+                .is_none());
+            assert!(
+                crate::xero_invoices::find_for_allocation(&surreal, XERO_INVOICE_ID)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                crate::iolta_withdrawals::find(&surreal, IOLTA_XERO_TRANSACTION_ID)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        })
+        .await;
     }
 
     /// Two independent clean checkouts plan the identical fixture: same
@@ -2277,138 +2279,144 @@ mod tests {
     /// criteria asks for, made concrete.
     #[tokio::test]
     async fn the_same_version_produces_the_same_plan_from_two_clean_checkouts() {
-        let first_surreal = mem_surreal().await;
-        let first_storage = fs_storage().await;
-        canonical(&first_surreal, &first_storage).await;
-        let first = dry_run_with(
-            &first_surreal,
-            &first_storage,
-            Production,
-            Some(STAGING_TARGET),
-            discloses("true"),
-        )
-        .await
-        .expect("first dry run");
+        crate::test_support::with_postgres(async {
+            let first_surreal = crate::surreal::SurrealDb::uninitialized();
+            let first_storage = fs_storage().await;
+            canonical(&first_surreal, &first_storage).await;
+            let first = dry_run_with(
+                &first_surreal,
+                &first_storage,
+                Production,
+                Some(STAGING_TARGET),
+                discloses("true"),
+            )
+            .await
+            .expect("first dry run");
 
-        let second_surreal = mem_surreal().await;
-        let second_storage = fs_storage().await;
-        canonical(&second_surreal, &second_storage).await;
-        let second = dry_run_with(
-            &second_surreal,
-            &second_storage,
-            Production,
-            Some(STAGING_TARGET),
-            discloses("true"),
-        )
-        .await
-        .expect("second dry run");
+            let second_surreal = crate::surreal::SurrealDb::uninitialized();
+            let second_storage = fs_storage().await;
+            canonical(&second_surreal, &second_storage).await;
+            let second = dry_run_with(
+                &second_surreal,
+                &second_storage,
+                Production,
+                Some(STAGING_TARGET),
+                discloses("true"),
+            )
+            .await
+            .expect("second dry run");
 
-        assert_eq!(first.version, second.version);
-        assert_eq!(first.items, second.items);
+            assert_eq!(first.version, second.version);
+            assert_eq!(first.items, second.items);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn apply_is_idempotent_across_every_domain_the_fixture_touches() {
-        let surreal = mem_surreal().await;
-        let storage = fs_storage().await;
-        canonical(&surreal, &storage).await;
+        crate::test_support::with_postgres(async {
+            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let storage = fs_storage().await;
+            canonical(&surreal, &storage).await;
 
-        let first = apply_with(
-            &surreal,
-            &storage,
-            Production,
-            Some(STAGING_TARGET),
-            discloses("true"),
-        )
-        .await
-        .expect("first apply");
-        assert!(first.created() > 0);
-        assert_eq!(first.unchanged(), 0);
-
-        let second = apply_with(
-            &surreal,
-            &storage,
-            Production,
-            Some(STAGING_TARGET),
-            discloses("true"),
-        )
-        .await
-        .expect("second apply");
-        assert_eq!(
-            second.created(),
-            0,
-            "a repeat apply must insert nothing new"
-        );
-        assert_eq!(second.unchanged(), first.items.len());
-        let mut expected = first.items.clone();
-        for item in &mut expected {
-            item.action = PlannedAction::Unchanged;
-        }
-        assert_eq!(
-            second.items, expected,
-            "same plan shape the second time, every item now Unchanged"
-        );
-
-        let project = crate::projects::find_by_code(&surreal, PROJECT_CODE)
+            let first = apply_with(
+                &surreal,
+                &storage,
+                Production,
+                Some(STAGING_TARGET),
+                discloses("true"),
+            )
             .await
-            .unwrap()
-            .expect("project exists after apply");
-        assert_eq!(
-            project.jurisdiction_id,
-            Some(
-                crate::jurisdictions::find_by_name(&surreal, JURISDICTION_NAME)
+            .expect("first apply");
+            assert!(first.created() > 0);
+            assert_eq!(first.unchanged(), 0);
+
+            let second = apply_with(
+                &surreal,
+                &storage,
+                Production,
+                Some(STAGING_TARGET),
+                discloses("true"),
+            )
+            .await
+            .expect("second apply");
+            assert_eq!(
+                second.created(),
+                0,
+                "a repeat apply must insert nothing new"
+            );
+            assert_eq!(second.unchanged(), first.items.len());
+            let mut expected = first.items.clone();
+            for item in &mut expected {
+                item.action = PlannedAction::Unchanged;
+            }
+            assert_eq!(
+                second.items, expected,
+                "same plan shape the second time, every item now Unchanged"
+            );
+
+            let project = crate::projects::find_by_code(&surreal, PROJECT_CODE)
+                .await
+                .unwrap()
+                .expect("project exists after apply");
+            assert_eq!(
+                project.jurisdiction_id,
+                Some(
+                    crate::jurisdictions::find_by_name(&surreal, JURISDICTION_NAME)
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .id
+                )
+            );
+
+            assert_eq!(
+                crate::projects::participations_for_project(&surreal, project.id)
                     .await
                     .unwrap()
+                    .len(),
+                2,
+                "lawyer and client, no duplicates on a repeat apply"
+            );
+            assert_eq!(
+                crate::assets::for_project(&surreal, project.id)
+                    .await
                     .unwrap()
-                    .id
-            )
-        );
+                    .len(),
+                1
+            );
+            assert_eq!(
+                crate::notations::list_by_project(&surreal, project.id)
+                    .await
+                    .unwrap()
+                    .len(),
+                1
+            );
+            assert_eq!(
+                crate::xero_invoices::for_projects(&surreal, &[project.id])
+                    .await
+                    .unwrap()
+                    .len(),
+                1
+            );
+            assert_eq!(
+                crate::iolta_withdrawals::lines_for(&surreal, IOLTA_XERO_TRANSACTION_ID)
+                    .await
+                    .unwrap()
+                    .len(),
+                1
+            );
 
-        assert_eq!(
-            crate::projects::participations_for_project(&surreal, project.id)
+            let position = crate::trust::position_for_project(&surreal, project.id)
                 .await
-                .unwrap()
-                .len(),
-            2,
-            "lawyer and client, no duplicates on a repeat apply"
-        );
-        assert_eq!(
-            crate::assets::for_project(&surreal, project.id)
-                .await
-                .unwrap()
-                .len(),
-            1
-        );
-        assert_eq!(
-            crate::notations::list_by_project(&surreal, project.id)
-                .await
-                .unwrap()
-                .len(),
-            1
-        );
-        assert_eq!(
-            crate::xero_invoices::for_projects(&surreal, &[project.id])
-                .await
-                .unwrap()
-                .len(),
-            1
-        );
-        assert_eq!(
-            crate::iolta_withdrawals::lines_for(&surreal, IOLTA_XERO_TRANSACTION_ID)
-                .await
-                .unwrap()
-                .len(),
-            1
-        );
-
-        let position = crate::trust::position_for_project(&surreal, project.id)
-            .await
-            .unwrap();
-        assert_eq!(
-            position.held_cents(),
-            0,
-            "the withdrawal drew exactly the deposit; a second apply must not draw again"
-        );
+                .unwrap();
+            assert_eq!(
+                position.held_cents(),
+                0,
+                "the withdrawal drew exactly the deposit; a second apply must not draw again"
+            );
+        })
+        .await;
     }
 
     /// One resolved lifecycle scenario, read back by its stable code.
@@ -2654,33 +2662,36 @@ mod tests {
     /// participate in.
     #[tokio::test]
     async fn apply_produces_every_lifecycle_and_participation_scenario() {
-        let surreal = mem_surreal().await;
-        let storage = fs_storage().await;
-        canonical(&surreal, &storage).await;
+        crate::test_support::with_postgres(async {
+            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let storage = fs_storage().await;
+            canonical(&surreal, &storage).await;
 
-        apply_with(
-            &surreal,
-            &storage,
-            Production,
-            Some(STAGING_TARGET),
-            discloses("true"),
-        )
-        .await
-        .expect("apply");
+            apply_with(
+                &surreal,
+                &storage,
+                Production,
+                Some(STAGING_TARGET),
+                discloses("true"),
+            )
+            .await
+            .expect("apply");
 
-        let scenarios = LifecycleScenarios {
-            pitch: resolve_scenario(&surreal, &LIFECYCLE_SCENARIOS[0]).await,
-            closed_active: resolve_scenario(&surreal, &LIFECYCLE_SCENARIOS[1]).await,
-            closed_pitch: resolve_scenario(&surreal, &LIFECYCLE_SCENARIOS[2]).await,
-            archived: resolve_scenario(&surreal, &LIFECYCLE_SCENARIOS[3]).await,
-            reopened: resolve_scenario(&surreal, &LIFECYCLE_SCENARIOS[4]).await,
-        };
+            let scenarios = LifecycleScenarios {
+                pitch: resolve_scenario(&surreal, &LIFECYCLE_SCENARIOS[0]).await,
+                closed_active: resolve_scenario(&surreal, &LIFECYCLE_SCENARIOS[1]).await,
+                closed_pitch: resolve_scenario(&surreal, &LIFECYCLE_SCENARIOS[2]).await,
+                archived: resolve_scenario(&surreal, &LIFECYCLE_SCENARIOS[3]).await,
+                reopened: resolve_scenario(&surreal, &LIFECYCLE_SCENARIOS[4]).await,
+            };
 
-        assert_lifecycle_status_and_closure(&surreal, &scenarios).await;
-        assert_lifecycle_pill_labels(&surreal, &scenarios).await;
-        assert_clients_fail_closed_across_matters(&surreal, &scenarios).await;
-        assert_supervised_clerk_fails_closed(&surreal, &scenarios).await;
-        assert_unassigned_admin_resolves_nowhere(&surreal, &scenarios).await;
+            assert_lifecycle_status_and_closure(&surreal, &scenarios).await;
+            assert_lifecycle_pill_labels(&surreal, &scenarios).await;
+            assert_clients_fail_closed_across_matters(&surreal, &scenarios).await;
+            assert_supervised_clerk_fails_closed(&surreal, &scenarios).await;
+            assert_unassigned_admin_resolves_nowhere(&surreal, &scenarios).await;
+        })
+        .await;
     }
 
     /// The persistent-staging distinction the acceptance criteria calls
@@ -2690,75 +2701,81 @@ mod tests {
     /// path does.
     #[tokio::test]
     async fn a_production_profile_boot_does_not_auto_apply_the_synthetic_portfolio() {
-        let surreal = mem_surreal().await;
-        let storage = fs_storage().await;
+        crate::test_support::with_postgres(async {
+            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let storage = fs_storage().await;
 
-        crate::seed::seed_environment_with(
-            &surreal,
-            &storage,
-            Production,
-            crate::seed::BrandSeed::Neon,
-        )
-        .await
-        .expect("ordinary boot seed");
-        assert!(
-            crate::projects::find_by_code(&surreal, PROJECT_CODE)
+            crate::seed::seed_environment_with(
+                &surreal,
+                &storage,
+                Production,
+                crate::seed::BrandSeed::Neon,
+            )
+            .await
+            .expect("ordinary boot seed");
+            assert!(
+                crate::projects::find_by_code(&surreal, PROJECT_CODE)
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "a boot must never auto-apply the synthetic portfolio"
+            );
+
+            let plan = apply_with(
+                &surreal,
+                &storage,
+                Production,
+                Some(STAGING_TARGET),
+                discloses("true"),
+            )
+            .await
+            .expect("explicit apply");
+            assert!(plan.created() > 0);
+            assert!(crate::projects::find_by_code(&surreal, PROJECT_CODE)
                 .await
                 .unwrap()
-                .is_none(),
-            "a boot must never auto-apply the synthetic portfolio"
-        );
-
-        let plan = apply_with(
-            &surreal,
-            &storage,
-            Production,
-            Some(STAGING_TARGET),
-            discloses("true"),
-        )
-        .await
-        .expect("explicit apply");
-        assert!(plan.created() > 0);
-        assert!(crate::projects::find_by_code(&surreal, PROJECT_CODE)
-            .await
-            .unwrap()
-            .is_some());
+                .is_some());
+        })
+        .await;
     }
 
     /// The write gate refuses a real-matter or ambiguous target before the
     /// first write, under every combination this module accepts as input.
     #[tokio::test]
     async fn apply_refuses_every_unsafe_target_before_any_write() {
-        let surreal = mem_surreal().await;
-        let storage = fs_storage().await;
-        canonical(&surreal, &storage).await;
+        crate::test_support::with_postgres(async {
+            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let storage = fs_storage().await;
+            canonical(&surreal, &storage).await;
 
-        let cases: [RefusalCase; 4] = [
-            (None, Production, undisclosed),
-            (Some("production"), Production, |_| Some("true".to_string())),
-            (Some(STAGING_TARGET), Production, undisclosed),
-            (Some(STAGING_TARGET), Dev, |_| Some("false".to_string())),
-        ];
-        for (target, environment, get) in cases {
+            let cases: [RefusalCase; 4] = [
+                (None, Production, undisclosed),
+                (Some("production"), Production, |_| Some("true".to_string())),
+                (Some(STAGING_TARGET), Production, undisclosed),
+                (Some(STAGING_TARGET), Dev, |_| Some("false".to_string())),
+            ];
+            for (target, environment, get) in cases {
+                assert!(
+                    apply_with(&surreal, &storage, environment, target, get)
+                        .await
+                        .is_err(),
+                    "{target:?} under {environment:?} must be refused"
+                );
+            }
+
             assert!(
-                apply_with(&surreal, &storage, environment, target, get)
+                crate::persons::find_by_email_ci(&surreal, LAWYER_EMAIL)
                     .await
-                    .is_err(),
-                "{target:?} under {environment:?} must be refused"
+                    .unwrap()
+                    .is_none(),
+                "no refused attempt may reach a write"
             );
-        }
-
-        assert!(
-            crate::persons::find_by_email_ci(&surreal, LAWYER_EMAIL)
+            assert!(crate::projects::find_by_code(&surreal, PROJECT_CODE)
                 .await
                 .unwrap()
-                .is_none(),
-            "no refused attempt may reach a write"
-        );
-        assert!(crate::projects::find_by_code(&surreal, PROJECT_CODE)
-            .await
-            .unwrap()
-            .is_none());
+                .is_none());
+        })
+        .await;
     }
 
     /// The USD invoice-status matrix and the EUR group it must never roll
@@ -2766,117 +2783,121 @@ mod tests {
     /// currency totals kept apart when both Projects are read together.
     #[tokio::test]
     async fn apply_produces_the_invoice_status_and_currency_matrix() {
-        let surreal = mem_surreal().await;
-        let storage = fs_storage().await;
-        canonical(&surreal, &storage).await;
-        apply_with(
-            &surreal,
-            &storage,
-            Production,
-            Some(STAGING_TARGET),
-            discloses("true"),
-        )
-        .await
-        .expect("apply");
-
-        let matrix_project = crate::projects::find_by_code(&surreal, INVOICE_MATRIX_PROJECT_CODE)
+        crate::test_support::with_postgres(async {
+            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let storage = fs_storage().await;
+            canonical(&surreal, &storage).await;
+            apply_with(
+                &surreal,
+                &storage,
+                Production,
+                Some(STAGING_TARGET),
+                discloses("true"),
+            )
             .await
-            .unwrap()
-            .expect("invoice matrix project exists");
-        let invoices = crate::xero_invoices::for_projects(&surreal, &[matrix_project.id])
-            .await
-            .unwrap();
-        assert_eq!(invoices.len(), 4, "unpaid, overdue, partial, and paid");
-        assert!(
-            invoices.iter().all(|invoice| invoice.currency == "USD"),
-            "the matrix project's own invoices are never EUR"
-        );
+            .expect("apply");
 
-        let unpaid = invoices
-            .iter()
-            .find(|invoice| invoice.xero_invoice_id == INVOICE_MATRIX_UNPAID_ID)
-            .expect("unpaid invoice");
-        assert_eq!(unpaid.status, "AUTHORISED");
-        assert_eq!(unpaid.amount_paid_cents, 0);
-        assert_eq!(unpaid.amount_cents, INVOICE_MATRIX_UNPAID_CENTS);
-        assert_eq!(unpaid.currency, "USD");
-        assert_eq!(unpaid.issued_at, fixed_date(PERIOD_TWO_ISSUED));
-        assert_eq!(unpaid.due_at, Some(fixed_date(PERIOD_TWO_DUE)));
-
-        let overdue = invoices
-            .iter()
-            .find(|invoice| invoice.xero_invoice_id == INVOICE_MATRIX_OVERDUE_ID)
-            .expect("overdue invoice");
-        assert_eq!(overdue.status, "AUTHORISED");
-        assert_eq!(overdue.amount_paid_cents, 0);
-        assert_eq!(overdue.currency, "USD");
-        assert_eq!(overdue.issued_at, fixed_date(PERIOD_ONE_ISSUED));
-        assert_eq!(overdue.due_at, Some(fixed_date(PERIOD_ONE_DUE)));
-        assert!(
-            overdue.due_at.unwrap() < unpaid.issued_at,
-            "the overdue invoice's due date falls in the earlier reporting period, the unpaid \
-             invoice's issue date in the later one"
-        );
-
-        let partial = invoices
-            .iter()
-            .find(|invoice| invoice.xero_invoice_id == INVOICE_MATRIX_PARTIAL_ID)
-            .expect("partial invoice");
-        assert_eq!(partial.status, "AUTHORISED");
-        assert_eq!(partial.amount_paid_cents, INVOICE_MATRIX_PARTIAL_PAID_CENTS);
-        assert!(partial.amount_paid_cents < partial.amount_cents);
-        assert_eq!(partial.currency, "USD");
-        assert_eq!(partial.issued_at, fixed_date(PERIOD_ONE_ISSUED));
-        assert_eq!(partial.due_at, Some(fixed_date(PERIOD_TWO_DUE)));
-
-        let paid = invoices
-            .iter()
-            .find(|invoice| invoice.xero_invoice_id == INVOICE_MATRIX_PAID_ID)
-            .expect("paid invoice");
-        assert_eq!(paid.status, "PAID");
-        assert_eq!(paid.amount_paid_cents, paid.amount_cents);
-        assert_eq!(paid.currency, "USD");
-
-        let eur_project = crate::projects::find_by_code(&surreal, EUR_GROUP_PROJECT_CODE)
-            .await
-            .unwrap()
-            .expect("eur group project exists");
-        let eur_invoices = crate::xero_invoices::for_projects(&surreal, &[eur_project.id])
-            .await
-            .unwrap();
-        assert_eq!(eur_invoices.len(), 2);
-        assert!(eur_invoices.iter().all(|invoice| invoice.currency == "EUR"));
-
-        // Reading both Projects together must never mix the two currencies
-        // into one total.
-        let combined =
-            crate::xero_invoices::for_projects(&surreal, &[matrix_project.id, eur_project.id])
+            let matrix_project =
+                crate::projects::find_by_code(&surreal, INVOICE_MATRIX_PROJECT_CODE)
+                    .await
+                    .unwrap()
+                    .expect("invoice matrix project exists");
+            let invoices = crate::xero_invoices::for_projects(&surreal, &[matrix_project.id])
                 .await
                 .unwrap();
-        assert_eq!(combined.len(), 6);
-        let usd_total: i64 = combined
-            .iter()
-            .filter(|invoice| invoice.currency == "USD")
-            .map(|invoice| invoice.amount_cents)
-            .sum();
-        let eur_total: i64 = combined
-            .iter()
-            .filter(|invoice| invoice.currency == "EUR")
-            .map(|invoice| invoice.amount_cents)
-            .sum();
-        // Prove `for_projects` is consistent whether the two Projects are
-        // read together or apart, rather than re-deriving the expected
-        // totals from the matrix's own constants: the USD slice of the
-        // combined read must equal the matrix project's invoices read
-        // alone, and the EUR slice must equal the EUR project's invoices
-        // read alone.
-        let invoices_total: i64 = invoices.iter().map(|invoice| invoice.amount_cents).sum();
-        let eur_invoices_total: i64 = eur_invoices
-            .iter()
-            .map(|invoice| invoice.amount_cents)
-            .sum();
-        assert_eq!(usd_total, invoices_total);
-        assert_eq!(eur_total, eur_invoices_total);
+            assert_eq!(invoices.len(), 4, "unpaid, overdue, partial, and paid");
+            assert!(
+                invoices.iter().all(|invoice| invoice.currency == "USD"),
+                "the matrix project's own invoices are never EUR"
+            );
+
+            let unpaid = invoices
+                .iter()
+                .find(|invoice| invoice.xero_invoice_id == INVOICE_MATRIX_UNPAID_ID)
+                .expect("unpaid invoice");
+            assert_eq!(unpaid.status, "AUTHORISED");
+            assert_eq!(unpaid.amount_paid_cents, 0);
+            assert_eq!(unpaid.amount_cents, INVOICE_MATRIX_UNPAID_CENTS);
+            assert_eq!(unpaid.currency, "USD");
+            assert_eq!(unpaid.issued_at, fixed_date(PERIOD_TWO_ISSUED));
+            assert_eq!(unpaid.due_at, Some(fixed_date(PERIOD_TWO_DUE)));
+
+            let overdue = invoices
+                .iter()
+                .find(|invoice| invoice.xero_invoice_id == INVOICE_MATRIX_OVERDUE_ID)
+                .expect("overdue invoice");
+            assert_eq!(overdue.status, "AUTHORISED");
+            assert_eq!(overdue.amount_paid_cents, 0);
+            assert_eq!(overdue.currency, "USD");
+            assert_eq!(overdue.issued_at, fixed_date(PERIOD_ONE_ISSUED));
+            assert_eq!(overdue.due_at, Some(fixed_date(PERIOD_ONE_DUE)));
+            assert!(
+                overdue.due_at.unwrap() < unpaid.issued_at,
+                "the overdue invoice's due date falls in the earlier reporting period, the unpaid \
+             invoice's issue date in the later one"
+            );
+
+            let partial = invoices
+                .iter()
+                .find(|invoice| invoice.xero_invoice_id == INVOICE_MATRIX_PARTIAL_ID)
+                .expect("partial invoice");
+            assert_eq!(partial.status, "AUTHORISED");
+            assert_eq!(partial.amount_paid_cents, INVOICE_MATRIX_PARTIAL_PAID_CENTS);
+            assert!(partial.amount_paid_cents < partial.amount_cents);
+            assert_eq!(partial.currency, "USD");
+            assert_eq!(partial.issued_at, fixed_date(PERIOD_ONE_ISSUED));
+            assert_eq!(partial.due_at, Some(fixed_date(PERIOD_TWO_DUE)));
+
+            let paid = invoices
+                .iter()
+                .find(|invoice| invoice.xero_invoice_id == INVOICE_MATRIX_PAID_ID)
+                .expect("paid invoice");
+            assert_eq!(paid.status, "PAID");
+            assert_eq!(paid.amount_paid_cents, paid.amount_cents);
+            assert_eq!(paid.currency, "USD");
+
+            let eur_project = crate::projects::find_by_code(&surreal, EUR_GROUP_PROJECT_CODE)
+                .await
+                .unwrap()
+                .expect("eur group project exists");
+            let eur_invoices = crate::xero_invoices::for_projects(&surreal, &[eur_project.id])
+                .await
+                .unwrap();
+            assert_eq!(eur_invoices.len(), 2);
+            assert!(eur_invoices.iter().all(|invoice| invoice.currency == "EUR"));
+
+            // Reading both Projects together must never mix the two currencies
+            // into one total.
+            let combined =
+                crate::xero_invoices::for_projects(&surreal, &[matrix_project.id, eur_project.id])
+                    .await
+                    .unwrap();
+            assert_eq!(combined.len(), 6);
+            let usd_total: i64 = combined
+                .iter()
+                .filter(|invoice| invoice.currency == "USD")
+                .map(|invoice| invoice.amount_cents)
+                .sum();
+            let eur_total: i64 = combined
+                .iter()
+                .filter(|invoice| invoice.currency == "EUR")
+                .map(|invoice| invoice.amount_cents)
+                .sum();
+            // Prove `for_projects` is consistent whether the two Projects are
+            // read together or apart, rather than re-deriving the expected
+            // totals from the matrix's own constants: the USD slice of the
+            // combined read must equal the matrix project's invoices read
+            // alone, and the EUR slice must equal the EUR project's invoices
+            // read alone.
+            let invoices_total: i64 = invoices.iter().map(|invoice| invoice.amount_cents).sum();
+            let eur_invoices_total: i64 = eur_invoices
+                .iter()
+                .map(|invoice| invoice.amount_cents)
+                .sum();
+            assert_eq!(usd_total, invoices_total);
+            assert_eq!(eur_total, eur_invoices_total);
+        })
+        .await;
     }
 
     /// One pooled Nevada withdrawal settles two different matters' invoices
@@ -2885,82 +2906,86 @@ mod tests {
     /// carries the other's amount or the pooled total.
     #[tokio::test]
     async fn apply_produces_one_pooled_withdrawal_across_two_matters_with_protected_balances() {
-        let surreal = mem_surreal().await;
-        let storage = fs_storage().await;
-        canonical(&surreal, &storage).await;
-        apply_with(
-            &surreal,
-            &storage,
-            Production,
-            Some(STAGING_TARGET),
-            discloses("true"),
-        )
-        .await
-        .expect("apply");
-
-        let a = crate::projects::find_by_code(&surreal, POOL_CLIENT_A_PROJECT_CODE)
+        crate::test_support::with_postgres(async {
+            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let storage = fs_storage().await;
+            canonical(&surreal, &storage).await;
+            apply_with(
+                &surreal,
+                &storage,
+                Production,
+                Some(STAGING_TARGET),
+                discloses("true"),
+            )
             .await
-            .unwrap()
-            .expect("pool matter A exists");
-        let b = crate::projects::find_by_code(&surreal, POOL_CLIENT_B_PROJECT_CODE)
-            .await
-            .unwrap()
-            .expect("pool matter B exists");
+            .expect("apply");
 
-        let position_a = crate::trust::position_for_project(&surreal, a.id)
-            .await
-            .unwrap();
-        assert_eq!(position_a.deposited_cents, POOL_CLIENT_A_DEPOSIT_CENTS);
-        assert_eq!(position_a.earned_cents, POOL_CLIENT_A_DRAW_CENTS);
-        assert_eq!(
-            position_a.held_cents(),
-            POOL_CLIENT_A_DEPOSIT_CENTS - POOL_CLIENT_A_DRAW_CENTS,
-            "matter A's held balance is drawn down by exactly its own line"
-        );
-
-        let position_b = crate::trust::position_for_project(&surreal, b.id)
-            .await
-            .unwrap();
-        assert_eq!(position_b.deposited_cents, POOL_CLIENT_B_DEPOSIT_CENTS);
-        assert_eq!(position_b.earned_cents, POOL_CLIENT_B_DRAW_CENTS);
-        assert_eq!(
-            position_b.held_cents(),
-            POOL_CLIENT_B_DEPOSIT_CENTS - POOL_CLIENT_B_DRAW_CENTS,
-            "matter B's held balance is drawn down by exactly its own line"
-        );
-
-        let withdrawal = crate::iolta_withdrawals::find(&surreal, POOLED_WITHDRAWAL_TRANSACTION_ID)
-            .await
-            .unwrap()
-            .expect("pooled withdrawal is mirrored");
-        assert_eq!(
-            withdrawal.total_cents,
-            POOL_CLIENT_A_DRAW_CENTS + POOL_CLIENT_B_DRAW_CENTS,
-            "the transfer's lines sum exactly to its total"
-        );
-
-        // Client isolation: each matter's own read carries exactly one line,
-        // for its own amount, never the other's.
-        let a_lines = crate::iolta_withdrawals::for_project(&surreal, a.id)
-            .await
-            .unwrap();
-        assert_eq!(a_lines.len(), 1);
-        assert_eq!(a_lines[0].amount_cents, POOL_CLIENT_A_DRAW_CENTS);
-
-        let b_lines = crate::iolta_withdrawals::for_project(&surreal, b.id)
-            .await
-            .unwrap();
-        assert_eq!(b_lines.len(), 1);
-        assert_eq!(b_lines[0].amount_cents, POOL_CLIENT_B_DRAW_CENTS);
-
-        // The firm-side read alone sees the whole two-line split.
-        assert_eq!(
-            crate::iolta_withdrawals::lines_for(&surreal, POOLED_WITHDRAWAL_TRANSACTION_ID)
+            let a = crate::projects::find_by_code(&surreal, POOL_CLIENT_A_PROJECT_CODE)
                 .await
                 .unwrap()
-                .len(),
-            2
-        );
+                .expect("pool matter A exists");
+            let b = crate::projects::find_by_code(&surreal, POOL_CLIENT_B_PROJECT_CODE)
+                .await
+                .unwrap()
+                .expect("pool matter B exists");
+
+            let position_a = crate::trust::position_for_project(&surreal, a.id)
+                .await
+                .unwrap();
+            assert_eq!(position_a.deposited_cents, POOL_CLIENT_A_DEPOSIT_CENTS);
+            assert_eq!(position_a.earned_cents, POOL_CLIENT_A_DRAW_CENTS);
+            assert_eq!(
+                position_a.held_cents(),
+                POOL_CLIENT_A_DEPOSIT_CENTS - POOL_CLIENT_A_DRAW_CENTS,
+                "matter A's held balance is drawn down by exactly its own line"
+            );
+
+            let position_b = crate::trust::position_for_project(&surreal, b.id)
+                .await
+                .unwrap();
+            assert_eq!(position_b.deposited_cents, POOL_CLIENT_B_DEPOSIT_CENTS);
+            assert_eq!(position_b.earned_cents, POOL_CLIENT_B_DRAW_CENTS);
+            assert_eq!(
+                position_b.held_cents(),
+                POOL_CLIENT_B_DEPOSIT_CENTS - POOL_CLIENT_B_DRAW_CENTS,
+                "matter B's held balance is drawn down by exactly its own line"
+            );
+
+            let withdrawal =
+                crate::iolta_withdrawals::find(&surreal, POOLED_WITHDRAWAL_TRANSACTION_ID)
+                    .await
+                    .unwrap()
+                    .expect("pooled withdrawal is mirrored");
+            assert_eq!(
+                withdrawal.total_cents,
+                POOL_CLIENT_A_DRAW_CENTS + POOL_CLIENT_B_DRAW_CENTS,
+                "the transfer's lines sum exactly to its total"
+            );
+
+            // Client isolation: each matter's own read carries exactly one line,
+            // for its own amount, never the other's.
+            let a_lines = crate::iolta_withdrawals::for_project(&surreal, a.id)
+                .await
+                .unwrap();
+            assert_eq!(a_lines.len(), 1);
+            assert_eq!(a_lines[0].amount_cents, POOL_CLIENT_A_DRAW_CENTS);
+
+            let b_lines = crate::iolta_withdrawals::for_project(&surreal, b.id)
+                .await
+                .unwrap();
+            assert_eq!(b_lines.len(), 1);
+            assert_eq!(b_lines[0].amount_cents, POOL_CLIENT_B_DRAW_CENTS);
+
+            // The firm-side read alone sees the whole two-line split.
+            assert_eq!(
+                crate::iolta_withdrawals::lines_for(&surreal, POOLED_WITHDRAWAL_TRANSACTION_ID)
+                    .await
+                    .unwrap()
+                    .len(),
+                2
+            );
+        })
+        .await;
     }
 
     /// The California pool exists beside Nevada's, with its own deposit and
@@ -2969,79 +2994,83 @@ mod tests {
     /// claiming a state that already mirrors one.
     #[tokio::test]
     async fn california_pool_is_independent_of_nevada_and_rejects_a_second_account() {
-        let surreal = mem_surreal().await;
-        let storage = fs_storage().await;
-        canonical(&surreal, &storage).await;
-        apply_with(
-            &surreal,
-            &storage,
-            Production,
-            Some(STAGING_TARGET),
-            discloses("true"),
-        )
-        .await
-        .expect("apply");
-
-        let nevada = crate::jurisdictions::find_by_name(&surreal, JURISDICTION_NAME)
+        crate::test_support::with_postgres(async {
+            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let storage = fs_storage().await;
+            canonical(&surreal, &storage).await;
+            apply_with(
+                &surreal,
+                &storage,
+                Production,
+                Some(STAGING_TARGET),
+                discloses("true"),
+            )
             .await
-            .unwrap()
-            .expect("nevada seeded");
-        let california = crate::jurisdictions::find_by_name(&surreal, CALIFORNIA_JURISDICTION_NAME)
-            .await
-            .unwrap()
-            .expect("california seeded");
+            .expect("apply");
 
-        let nv_account = crate::iolta_accounts::for_jurisdiction(&surreal, nevada.id)
-            .await
-            .unwrap()
-            .expect("nevada pool exists");
-        assert_eq!(nv_account.xero_account_id, IOLTA_XERO_ACCOUNT_ID);
+            let nevada = crate::jurisdictions::find_by_name(&surreal, JURISDICTION_NAME)
+                .await
+                .unwrap()
+                .expect("nevada seeded");
+            let california =
+                crate::jurisdictions::find_by_name(&surreal, CALIFORNIA_JURISDICTION_NAME)
+                    .await
+                    .unwrap()
+                    .expect("california seeded");
 
-        let ca_account = crate::iolta_accounts::for_jurisdiction(&surreal, california.id)
-            .await
-            .unwrap()
-            .expect("california pool exists");
-        assert_eq!(ca_account.xero_account_id, IOLTA_CA_XERO_ACCOUNT_ID);
-        assert_ne!(
-            nv_account.xero_account_id, ca_account.xero_account_id,
-            "each state mirrors its own, distinct provider account"
-        );
+            let nv_account = crate::iolta_accounts::for_jurisdiction(&surreal, nevada.id)
+                .await
+                .unwrap()
+                .expect("nevada pool exists");
+            assert_eq!(nv_account.xero_account_id, IOLTA_XERO_ACCOUNT_ID);
 
-        let refused = crate::iolta_accounts::upsert(
-            &surreal,
-            &crate::iolta_accounts::UpsertIoltaAccount {
-                jurisdiction_id: california.id,
-                xero_account_id: "synthetic-portfolio-iolta-account-ca-second".to_string(),
-                xero_account_code: None,
-                name: "IOLTA Trust — California (Second)".to_string(),
-                currency: "USD".to_string(),
-                balance_cents: 0,
-                mirrored_at: chrono::Utc::now(),
-            },
-        )
+            let ca_account = crate::iolta_accounts::for_jurisdiction(&surreal, california.id)
+                .await
+                .unwrap()
+                .expect("california pool exists");
+            assert_eq!(ca_account.xero_account_id, IOLTA_CA_XERO_ACCOUNT_ID);
+            assert_ne!(
+                nv_account.xero_account_id, ca_account.xero_account_id,
+                "each state mirrors its own, distinct provider account"
+            );
+
+            let refused = crate::iolta_accounts::upsert(
+                &surreal,
+                &crate::iolta_accounts::UpsertIoltaAccount {
+                    jurisdiction_id: california.id,
+                    xero_account_id: "synthetic-portfolio-iolta-account-ca-second".to_string(),
+                    xero_account_code: None,
+                    name: "IOLTA Trust — California (Second)".to_string(),
+                    currency: "USD".to_string(),
+                    balance_cents: 0,
+                    mirrored_at: chrono::Utc::now(),
+                },
+            )
+            .await;
+            assert!(
+                matches!(
+                    refused,
+                    Err(crate::iolta_accounts::IoltaAccountError::JurisdictionTaken { .. })
+                ),
+                "a second account for a state that already mirrors one must be refused"
+            );
+
+            let ca_trust_project = crate::projects::find_by_code(&surreal, CA_TRUST_PROJECT_CODE)
+                .await
+                .unwrap()
+                .expect("california trust project exists");
+            let position = crate::trust::position_for_project(&surreal, ca_trust_project.id)
+                .await
+                .unwrap();
+            assert_eq!(position.deposited_cents, CA_TRUST_DEPOSIT_CENTS);
+            assert_eq!(position.refunded_cents, CA_TRUST_REFUND_CENTS);
+            assert_eq!(
+                position.held_cents(),
+                CA_TRUST_DEPOSIT_CENTS - CA_TRUST_REFUND_CENTS,
+                "the deposit and refund reconcile to the held position, independent of Nevada"
+            );
+        })
         .await;
-        assert!(
-            matches!(
-                refused,
-                Err(crate::iolta_accounts::IoltaAccountError::JurisdictionTaken { .. })
-            ),
-            "a second account for a state that already mirrors one must be refused"
-        );
-
-        let ca_trust_project = crate::projects::find_by_code(&surreal, CA_TRUST_PROJECT_CODE)
-            .await
-            .unwrap()
-            .expect("california trust project exists");
-        let position = crate::trust::position_for_project(&surreal, ca_trust_project.id)
-            .await
-            .unwrap();
-        assert_eq!(position.deposited_cents, CA_TRUST_DEPOSIT_CENTS);
-        assert_eq!(position.refunded_cents, CA_TRUST_REFUND_CENTS);
-        assert_eq!(
-            position.held_cents(),
-            CA_TRUST_DEPOSIT_CENTS - CA_TRUST_REFUND_CENTS,
-            "the deposit and refund reconcile to the held position, independent of Nevada"
-        );
     }
 
     /// A repeat apply of the whole ENG-820 finance/trust matrix inserts
@@ -3049,72 +3078,77 @@ mod tests {
     /// allocation lines, same trust positions.
     #[tokio::test]
     async fn apply_is_idempotent_for_the_finance_and_trust_scenarios() {
-        let surreal = mem_surreal().await;
-        let storage = fs_storage().await;
-        canonical(&surreal, &storage).await;
+        crate::test_support::with_postgres(async {
+            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let storage = fs_storage().await;
+            canonical(&surreal, &storage).await;
 
-        let first = apply_with(
-            &surreal,
-            &storage,
-            Production,
-            Some(STAGING_TARGET),
-            discloses("true"),
-        )
-        .await
-        .expect("first apply");
-        assert!(first.created() > 0);
+            let first = apply_with(
+                &surreal,
+                &storage,
+                Production,
+                Some(STAGING_TARGET),
+                discloses("true"),
+            )
+            .await
+            .expect("first apply");
+            assert!(first.created() > 0);
 
-        let matrix_project = crate::projects::find_by_code(&surreal, INVOICE_MATRIX_PROJECT_CODE)
-            .await
-            .unwrap()
-            .expect("invoice matrix project exists");
-        let pool_a = crate::projects::find_by_code(&surreal, POOL_CLIENT_A_PROJECT_CODE)
-            .await
-            .unwrap()
-            .expect("pool matter A exists");
-        let before_invoices = crate::xero_invoices::for_projects(&surreal, &[matrix_project.id])
-            .await
-            .unwrap();
-        let before_position = crate::trust::position_for_project(&surreal, pool_a.id)
-            .await
-            .unwrap();
-        let before_lines =
-            crate::iolta_withdrawals::lines_for(&surreal, POOLED_WITHDRAWAL_TRANSACTION_ID)
+            let matrix_project =
+                crate::projects::find_by_code(&surreal, INVOICE_MATRIX_PROJECT_CODE)
+                    .await
+                    .unwrap()
+                    .expect("invoice matrix project exists");
+            let pool_a = crate::projects::find_by_code(&surreal, POOL_CLIENT_A_PROJECT_CODE)
+                .await
+                .unwrap()
+                .expect("pool matter A exists");
+            let before_invoices =
+                crate::xero_invoices::for_projects(&surreal, &[matrix_project.id])
+                    .await
+                    .unwrap();
+            let before_position = crate::trust::position_for_project(&surreal, pool_a.id)
                 .await
                 .unwrap();
+            let before_lines =
+                crate::iolta_withdrawals::lines_for(&surreal, POOLED_WITHDRAWAL_TRANSACTION_ID)
+                    .await
+                    .unwrap();
 
-        let second = apply_with(
-            &surreal,
-            &storage,
-            Production,
-            Some(STAGING_TARGET),
-            discloses("true"),
-        )
-        .await
-        .expect("second apply");
-        assert_eq!(
-            second.created(),
-            0,
-            "a repeat apply of the whole fixture, finance/trust matrix included, inserts \
+            let second = apply_with(
+                &surreal,
+                &storage,
+                Production,
+                Some(STAGING_TARGET),
+                discloses("true"),
+            )
+            .await
+            .expect("second apply");
+            assert_eq!(
+                second.created(),
+                0,
+                "a repeat apply of the whole fixture, finance/trust matrix included, inserts \
              nothing new"
-        );
+            );
 
-        let after_invoices = crate::xero_invoices::for_projects(&surreal, &[matrix_project.id])
-            .await
-            .unwrap();
-        assert_eq!(before_invoices, after_invoices);
-
-        let after_position = crate::trust::position_for_project(&surreal, pool_a.id)
-            .await
-            .unwrap();
-        assert_eq!(before_position, after_position);
-
-        let after_lines =
-            crate::iolta_withdrawals::lines_for(&surreal, POOLED_WITHDRAWAL_TRANSACTION_ID)
+            let after_invoices = crate::xero_invoices::for_projects(&surreal, &[matrix_project.id])
                 .await
                 .unwrap();
-        assert_eq!(before_lines.len(), after_lines.len());
-        assert_eq!(before_lines, after_lines);
+            assert_eq!(before_invoices, after_invoices);
+
+            let after_position = crate::trust::position_for_project(&surreal, pool_a.id)
+                .await
+                .unwrap();
+            assert_eq!(before_position, after_position);
+
+            let after_lines =
+                crate::iolta_withdrawals::lines_for(&surreal, POOLED_WITHDRAWAL_TRANSACTION_ID)
+                    .await
+                    .unwrap();
+            assert_eq!(before_lines.len(), after_lines.len());
+            assert_eq!(before_lines, after_lines);
+        })
+        .await;
     }
 
     /// Every provider-shaped id this section introduces is a deterministic,

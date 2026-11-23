@@ -302,7 +302,7 @@ mod tests {
     use super::super::{reconcile_yaml, validate_yaml};
     use super::*;
     use crate::persons::{NewPerson, Role};
-    use crate::test_support::{mem_surreal, seed_entity};
+    use crate::test_support::seed_entity;
 
     fn actor(project_scope: Option<&str>) -> ReconcileActor<'_> {
         ReconcileActor {
@@ -320,6 +320,7 @@ mod tests {
     }
 
     async fn project(surreal: &SurrealDb, code: &str) -> Project {
+        crate::test_support::seed_compiled_brands_postgres(surreal).await;
         crate::projects::create(
             surreal,
             &crate::projects::NewProject {
@@ -345,12 +346,14 @@ mod tests {
     }
 
     async fn named_entity(surreal: &SurrealDb, name: &str) -> uuid::Uuid {
+        let (entity_type_id, jurisdiction_id) =
+            crate::test_support::seed_entity_parents(surreal).await;
         crate::entities::create(
             surreal,
             &crate::entities::NewEntity {
                 name: name.into(),
-                entity_type_id: crate::test_support::SEED_ENTITY_TYPE_ID,
-                jurisdiction_id: crate::test_support::SEED_ENTITY_JURISDICTION_ID,
+                entity_type_id,
+                jurisdiction_id,
                 phone: None,
                 url: None,
                 xero_id: None,
@@ -394,50 +397,54 @@ records:
 
     #[tokio::test]
     async fn fiduciary_roles_import_then_reimport_unchanged() {
-        let surreal = mem_surreal().await;
-        let estate = project(&surreal, "sample-estate").await;
-        let grantor = person(&surreal, "grantor@example.com").await;
-        let trust_company = named_entity(&surreal, "Sample Trust Company").await;
+        crate::test_support::with_postgres(async {
+            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let estate = project(&surreal, "sample-estate").await;
+            let grantor = person(&surreal, "grantor@example.com").await;
+            let trust_company = named_entity(&surreal, "Sample Trust Company").await;
 
-        let first = import(
-            &surreal,
-            SeedModel::FiduciaryRole,
-            FIDUCIARY_ROLES,
-            false,
-            None,
-        )
-        .await
-        .unwrap();
-        assert_eq!(counts(&first), (2, 0, 0));
-        let roster = crate::fiduciary_roles::list(&surreal, estate.id)
+            let first = import(
+                &surreal,
+                SeedModel::FiduciaryRole,
+                FIDUCIARY_ROLES,
+                false,
+                None,
+            )
             .await
             .unwrap();
-        assert_eq!(roster.len(), 2);
-        assert_eq!(roster[0].fiduciary, Party::person(grantor));
-        assert_eq!(roster[1].fiduciary, Party::entity(trust_company));
-
-        let again = import(
-            &surreal,
-            SeedModel::FiduciaryRole,
-            FIDUCIARY_ROLES,
-            false,
-            None,
-        )
-        .await
-        .unwrap();
-        assert_eq!(counts(&again), (0, 0, 2));
-        assert_eq!(
-            crate::fiduciary_roles::list(&surreal, estate.id)
+            assert_eq!(counts(&first), (2, 0, 0));
+            let roster = crate::fiduciary_roles::list(&surreal, estate.id)
                 .await
-                .unwrap()
-                .len(),
-            2
-        );
+                .unwrap();
+            assert_eq!(roster.len(), 2);
+            assert_eq!(roster[0].fiduciary, Party::person(grantor));
+            assert_eq!(roster[1].fiduciary, Party::entity(trust_company));
+
+            let again = import(
+                &surreal,
+                SeedModel::FiduciaryRole,
+                FIDUCIARY_ROLES,
+                false,
+                None,
+            )
+            .await
+            .unwrap();
+            assert_eq!(counts(&again), (0, 0, 2));
+            assert_eq!(
+                crate::fiduciary_roles::list(&surreal, estate.id)
+                    .await
+                    .unwrap()
+                    .len(),
+                2
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_fiduciary_role_moves_to_a_new_person_only_with_overwrite() {
-        let surreal = mem_surreal().await;
+        crate::test_support::with_postgres(async {
+        let surreal = crate::surreal::SurrealDb::uninitialized();
         let estate = project(&surreal, "sample-estate").await;
         person(&surreal, "first@example.com").await;
         let second = person(&surreal, "second@example.com").await;
@@ -474,6 +481,8 @@ records:
             .unwrap();
         assert_eq!(roster.len(), 1);
         assert_eq!(roster[0].fiduciary, Party::person(second));
+    })
+        .await;
     }
 
     const ESTATE_ASSETS: &str = "\
@@ -495,50 +504,55 @@ records:
 
     #[tokio::test]
     async fn estate_assets_import_under_scope_then_reimport_unchanged() {
-        let surreal = mem_surreal().await;
-        let estate = project(&surreal, "sample-estate").await;
-        let scope = Some("sample-estate");
-        let first = import(
-            &surreal,
-            SeedModel::EstateAsset,
-            ESTATE_ASSETS,
-            false,
-            scope,
-        )
-        .await
-        .unwrap();
-        assert_eq!(counts(&first), (2, 0, 0));
-        let schedule = crate::estate_assets::list(&surreal, estate.id)
+        crate::test_support::with_postgres(async {
+            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let estate = project(&surreal, "sample-estate").await;
+            let scope = Some("sample-estate");
+            let first = import(
+                &surreal,
+                SeedModel::EstateAsset,
+                ESTATE_ASSETS,
+                false,
+                scope,
+            )
             .await
             .unwrap();
-        assert_eq!(schedule.len(), 2);
-        assert_eq!(schedule[1].note.as_deref(), Some("Deed drafted"));
+            assert_eq!(counts(&first), (2, 0, 0));
+            let schedule = crate::estate_assets::list(&surreal, estate.id)
+                .await
+                .unwrap();
+            assert_eq!(schedule.len(), 2);
+            assert_eq!(schedule[1].note.as_deref(), Some("Deed drafted"));
 
-        let again = import(
-            &surreal,
-            SeedModel::EstateAsset,
-            ESTATE_ASSETS,
-            false,
-            scope,
-        )
-        .await
-        .unwrap();
-        assert_eq!(counts(&again), (0, 0, 2));
+            let again = import(
+                &surreal,
+                SeedModel::EstateAsset,
+                ESTATE_ASSETS,
+                false,
+                scope,
+            )
+            .await
+            .unwrap();
+            assert_eq!(counts(&again), (0, 0, 2));
 
-        let funded = ESTATE_ASSETS.replace("funding_state: in_progress", "funding_state: funded");
-        let changed = import(&surreal, SeedModel::EstateAsset, &funded, true, scope)
-            .await
-            .unwrap();
-        assert_eq!(counts(&changed), (0, 1, 1));
-        let schedule = crate::estate_assets::list(&surreal, estate.id)
-            .await
-            .unwrap();
-        assert_eq!(schedule[1].funding_state, "funded");
+            let funded =
+                ESTATE_ASSETS.replace("funding_state: in_progress", "funding_state: funded");
+            let changed = import(&surreal, SeedModel::EstateAsset, &funded, true, scope)
+                .await
+                .unwrap();
+            assert_eq!(counts(&changed), (0, 1, 1));
+            let schedule = crate::estate_assets::list(&surreal, estate.id)
+                .await
+                .unwrap();
+            assert_eq!(schedule[1].funding_state, "funded");
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_scoped_record_naming_another_project_is_refused() {
-        let surreal = mem_surreal().await;
+        crate::test_support::with_postgres(async {
+        let surreal = crate::surreal::SurrealDb::uninitialized();
         project(&surreal, "sample-estate").await;
         let other = project(&surreal, "sample-transactional").await;
         let yaml = "lookup_fields: [project_id, category, description]\nrecords:\n  - project: { code: sample-transactional }\n    category: account\n    description: Checking\n    passes_by: will\n    funding_state: not_funded\n";
@@ -559,6 +573,8 @@ records:
             .await
             .unwrap()
             .is_empty());
+    })
+        .await;
     }
 
     const CAP_TABLE: &str = "\
@@ -580,52 +596,58 @@ records:
 
     #[tokio::test]
     async fn cap_table_holdings_import_then_reimport_unchanged() {
-        let surreal = mem_surreal().await;
-        let company = project(&surreal, "sample-transactional").await;
-        let founder = person(&surreal, "founder@example.com").await;
-        person(&surreal, "employee@example.com").await;
+        crate::test_support::with_postgres(async {
+            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let company = project(&surreal, "sample-transactional").await;
+            let founder = person(&surreal, "founder@example.com").await;
+            person(&surreal, "employee@example.com").await;
 
-        let first = import(&surreal, SeedModel::CapTableHolding, CAP_TABLE, false, None)
-            .await
-            .unwrap();
-        assert_eq!(counts(&first), (2, 0, 0));
-        let table = crate::cap_table_holdings::list(&surreal, company.id)
-            .await
-            .unwrap();
-        assert_eq!(table.len(), 2);
-        assert_eq!(table[0].holder, Party::person(founder));
-        assert_eq!(table[0].shares, 6_000_000);
+            let first = import(&surreal, SeedModel::CapTableHolding, CAP_TABLE, false, None)
+                .await
+                .unwrap();
+            assert_eq!(counts(&first), (2, 0, 0));
+            let table = crate::cap_table_holdings::list(&surreal, company.id)
+                .await
+                .unwrap();
+            assert_eq!(table.len(), 2);
+            assert_eq!(table[0].holder, Party::person(founder));
+            assert_eq!(table[0].shares, 6_000_000);
 
-        let again = import(&surreal, SeedModel::CapTableHolding, CAP_TABLE, false, None)
-            .await
-            .unwrap();
-        assert_eq!(counts(&again), (0, 0, 2));
+            let again = import(&surreal, SeedModel::CapTableHolding, CAP_TABLE, false, None)
+                .await
+                .unwrap();
+            assert_eq!(counts(&again), (0, 0, 2));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_dry_run_plans_without_writing() {
-        let surreal = mem_surreal().await;
-        let company = project(&surreal, "sample-transactional").await;
-        person(&surreal, "founder@example.com").await;
-        person(&surreal, "employee@example.com").await;
-        let report = reconcile_yaml(
-            &surreal,
-            SeedModel::CapTableHolding,
-            CAP_TABLE,
-            "Firm",
-            false,
-            &ReconcileActor {
-                dry_run: true,
-                ..actor(None)
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(counts(&report), (2, 0, 0));
-        assert!(crate::cap_table_holdings::list(&surreal, company.id)
+        crate::test_support::with_postgres(async {
+            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let company = project(&surreal, "sample-transactional").await;
+            person(&surreal, "founder@example.com").await;
+            person(&surreal, "employee@example.com").await;
+            let report = reconcile_yaml(
+                &surreal,
+                SeedModel::CapTableHolding,
+                CAP_TABLE,
+                "Firm",
+                false,
+                &ReconcileActor {
+                    dry_run: true,
+                    ..actor(None)
+                },
+            )
             .await
-            .unwrap()
-            .is_empty());
+            .unwrap();
+            assert_eq!(counts(&report), (2, 0, 0));
+            assert!(crate::cap_table_holdings::list(&surreal, company.id)
+                .await
+                .unwrap()
+                .is_empty());
+        })
+        .await;
     }
 
     #[test]
