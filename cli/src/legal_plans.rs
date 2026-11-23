@@ -10,7 +10,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use chrono::NaiveDate;
 use clap::{Args, Subcommand, ValueEnum};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -29,6 +29,9 @@ pub enum LegalPlansCmd {
         /// Read Firm-wide totals without Project details (requires Firm plan-metrics access).
         #[arg(long)]
         totals_only: bool,
+        /// Show each carrier’s count and verified dollars awaiting filing review.
+        #[arg(long)]
+        filing_review: bool,
     },
     /// Add a plan to the Firm's vocabulary.
     Create {
@@ -138,12 +141,42 @@ fn finish(command: &str, result: Result<Value>) -> ExitCode {
 }
 
 pub async fn run(firm: String, host: Option<String>, action: LegalPlansCmd) -> ExitCode {
+    let filing_review = matches!(
+        action,
+        LegalPlansCmd::Collections {
+            filing_review: true,
+            ..
+        }
+    );
     let result = async {
         let (base, token) = remote::resolve(host.as_deref())?;
         firm_command(&base, &token, &firm, action).await
     }
     .await;
+    if filing_review {
+        return crate::billing::finish(
+            "legal-plans",
+            result.and_then(|value| render_filing_review(&value)),
+        );
+    }
     finish("legal-plans", result)
+}
+
+fn render_filing_review(report: &Value) -> Result<String> {
+    use std::fmt::Write;
+
+    let review = model::billing_report::FilingReview::deserialize(&report["filing_review"])
+        .context("the site did not return complete filing-review totals")?;
+    let mut text = String::from("Carrier   Claims awaiting filing review   Verified amount\n");
+    for (carrier, total) in [("ARAG", review.arag), ("LegalEASE", review.legal_ease)] {
+        writeln!(
+            text,
+            "{carrier:<9} {:>28}   {:>15}",
+            total.eligible_unsubmitted_count,
+            crate::billing::money(Some(total.eligible_unsubmitted_cents))
+        )?;
+    }
+    Ok(text)
 }
 
 async fn firm_command(base: &str, token: &str, firm: &str, action: LegalPlansCmd) -> Result<Value> {
@@ -157,7 +190,7 @@ async fn firm_command(base: &str, token: &str, firm: &str, action: LegalPlansCmd
     let client = reqwest::Client::new();
     match action {
         LegalPlansCmd::List => call(client.get(route).bearer_auth(token), "list").await,
-        LegalPlansCmd::Collections { totals_only } => {
+        LegalPlansCmd::Collections { totals_only, .. } => {
             let route = format!("{base}/app/api/firms/{firm}/legal-plan-collections");
             call(
                 client
@@ -783,7 +816,10 @@ mod collections_tests {
             &server.uri(),
             "token",
             &firm.to_string(),
-            LegalPlansCmd::Collections { totals_only: false },
+            LegalPlansCmd::Collections {
+                totals_only: false,
+                filing_review: false,
+            },
         )
         .await
         .unwrap();

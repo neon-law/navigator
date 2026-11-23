@@ -3,6 +3,22 @@ use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// Claims with verified fee terms awaiting a lawyer's filing review.
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct FilingReviewTotal {
+    pub eligible_unsubmitted_count: usize,
+    pub eligible_unsubmitted_cents: i64,
+}
+
+/// Reporting both carriers makes an empty queue visible in the requested scope.
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct FilingReview {
+    #[serde(rename = "ARAG")]
+    pub arag: FilingReviewTotal,
+    #[serde(rename = "LegalEASE")]
+    pub legal_ease: FilingReviewTotal,
+}
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct BillingReport {
     pub needs_my_action: Vec<BillingAction>,

@@ -96,6 +96,12 @@ across matters. Run `navigator project billing` from the checkout for the matter
 <code-or-uuid>`. The matter view shows the team's time and keeps review actions for staged time specific to the
 signed-in timekeeper. Add `--json` for structured output.
 
+Run `navigator legal-plans --firm <firm> collections --filing-review` to see the number of claims awaiting filing review
+and their verified dollar amount for ARAG and LegalEASE. The report includes the Projects you can access. Add
+`--totals-only` for the Firm-wide view with plan-metrics access. Completed and prepared claims enter the count once
+their fee terms establish an amount. Capped fees include only authorized minutes worked. A submitted claim leaves the
+filing-review queue. The lawyer checks the carrier’s filing conditions before submission.
+
 Projected fees use completed work and verified terms. For a plan claim, read the projected fee, amount filed, approved
 outstanding balance, and net cash received as stages of the same claim. A payment reduces the outstanding balance. A
 confirmed reversal reduces net cash. Work missing a verified fee stays visible for follow-up.
