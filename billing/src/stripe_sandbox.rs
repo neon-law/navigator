@@ -57,6 +57,37 @@ fn id(object: &Value) -> Result<&str> {
         .context("Stripe object missing its ID")
 }
 
+async fn verify_draft(
+    client: &StripeInvoiceClient<'_>,
+    other: &StripeInvoiceClient<'_>,
+    path: &str,
+    tag: &str,
+    customer: &str,
+) -> Result<String> {
+    let draft: Value = client.call(Method::GET, path, None, &[]).await?;
+    ensure!(
+        draft["status"] == "draft"
+            && draft["metadata"]["navigator_batch_id"] == tag
+            && draft["customer"] == customer,
+        "draft ownership or status mismatch"
+    );
+    let wrong = other
+        .client
+        .get(other.base.join(path)?)
+        .bearer_auth(other.key)
+        .send()
+        .await?;
+    ensure!(
+        wrong.status() == reqwest::StatusCode::NOT_FOUND,
+        "invoice must be absent from the other account"
+    );
+    let line = &draft["lines"]["data"][0];
+    line["parent"]["invoice_item_details"]["invoice_item"]
+        .as_str()
+        .map(str::to_owned)
+        .context("invoice item missing")
+}
+
 async fn exercise(
     client: &StripeInvoiceClient<'_>,
     other: &StripeInvoiceClient<'_>,
@@ -97,27 +128,7 @@ async fn exercise(
         .create_draft_for_customer(run, &request, customer, &due.timestamp().to_string())
         .await?;
     let path = format!("invoices/{}", invoice.0);
-    let draft: Value = client.call(Method::GET, &path, None, &[]).await?;
-    ensure!(
-        draft["status"] == "draft"
-            && draft["metadata"]["navigator_batch_id"] == tag
-            && draft["customer"] == customer,
-        "draft ownership or status mismatch"
-    );
-    let wrong = other
-        .client
-        .get(other.base.join(&path)?)
-        .bearer_auth(other.key)
-        .send()
-        .await?;
-    ensure!(
-        wrong.status() == reqwest::StatusCode::NOT_FOUND,
-        "invoice must be absent from the other account"
-    );
-    let line = &draft["lines"]["data"][0];
-    let item = line["parent"]["invoice_item_details"]["invoice_item"]
-        .as_str()
-        .context("invoice item missing")?;
+    let item = verify_draft(client, other, &path, &tag, customer).await?;
     let mut fields = vec![("metadata[navigator_batch_id]", tag.as_str())];
     if let Some(coupon) = coupon {
         fields.push(("discounts[0][coupon]", coupon));

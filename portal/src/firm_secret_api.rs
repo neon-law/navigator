@@ -15,15 +15,17 @@ use store::firm_secrets::{
 };
 use uuid::Uuid;
 
-fn refusal(error: SecretStoreError) -> ApiError {
-    match error {
-        SecretStoreError::NotAuthorized | SecretStoreError::NotConfigured { .. } => {
-            ApiError::NotFound
+impl From<SecretStoreError> for ApiError {
+    fn from(error: SecretStoreError) -> Self {
+        match error {
+            SecretStoreError::NotAuthorized | SecretStoreError::NotConfigured { .. } => {
+                ApiError::NotFound
+            }
+            SecretStoreError::InvalidStripeKey => ApiError::MalformedBody(
+                "Stripe key does not match its kind or deployment mode".into(),
+            ),
+            _ => ApiError::Db("Firm credential storage unavailable".into()),
         }
-        SecretStoreError::InvalidStripeKey => {
-            ApiError::MalformedBody("Stripe key does not match its kind or deployment mode".into())
-        }
-        _ => ApiError::Db("Firm credential storage unavailable".into()),
     }
 }
 
@@ -45,8 +47,7 @@ pub(crate) async fn list(
     }
     let rows =
         firm_secrets::list_metadata_for_firm(&state.surreal, session.role, session.person_id, id)
-            .await
-            .map_err(refusal)?;
+            .await?;
     let mut keys = Vec::new();
     for row in rows {
         if let Some((account, kind)) = row.kind.stripe_slot() {
@@ -65,13 +66,13 @@ pub(crate) async fn list(
         }
     }
     Ok(Json(Directory {
-        mode: firm_secrets::stripe_mode().map_err(refusal)?,
+        mode: firm_secrets::stripe_mode()?,
         keys,
     }))
 }
 
 fn check_mode(mode: Mode) -> Result<(), ApiError> {
-    if firm_secrets::stripe_mode().map_err(refusal)? != mode {
+    if firm_secrets::stripe_mode()? != mode {
         return Err(ApiError::MalformedBody(
             "Stripe mode does not match the deployment".into(),
         ));
@@ -93,7 +94,7 @@ pub(crate) async fn set(
     let value = std::str::from_utf8(&body)
         .ok()
         .filter(|value| mode.accepts(kind, value))
-        .ok_or_else(|| refusal(SecretStoreError::InvalidStripeKey))?;
+        .ok_or_else(|| ApiError::from(SecretStoreError::InvalidStripeKey))?;
     firm_secrets::put(
         &state.surreal,
         SecretPutRequest {
@@ -106,8 +107,7 @@ pub(crate) async fn set(
         },
         kms.as_ref(),
     )
-    .await
-    .map_err(refusal)?;
+    .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -129,7 +129,6 @@ pub(crate) async fn delete(
         kind,
         mode,
     )
-    .await
-    .map_err(refusal)?;
+    .await?;
     Ok(StatusCode::NO_CONTENT)
 }
