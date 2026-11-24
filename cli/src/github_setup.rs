@@ -1903,6 +1903,100 @@ pub(crate) async fn protect_project(target: &RepositoryTarget) -> Result<()> {
     .await
 }
 
+/// Install a separate, non-bypassable review rule. The ordinary integrity
+/// reconciler and its App-owned auto-merge lane continue to govern checks.
+pub(crate) async fn require_review_team(
+    target: &RepositoryTarget,
+    team: &str,
+    dry_run: bool,
+) -> Result<()> {
+    let client = GitHubClient::with_token(target, &crate::projects::lifecycle::github_token()?)?;
+    let repository: Repository = client.get_json(&client.repo_path("")).await?;
+    ensure!(
+        repository.private == Some(true),
+        "Project repository must be private"
+    );
+    ensure!(
+        client.team_can_write(team).await?,
+        "the review team needs write access to this repository"
+    );
+    let (org, _) = target
+        .slug
+        .split_once('/')
+        .context("missing repository organization")?;
+    let team_id = client.team_id(org, team).await?;
+    install_review_rule(&client, team_id, dry_run).await
+}
+
+async fn install_review_rule(client: &GitHubClient, team_id: u64, dry_run: bool) -> Result<()> {
+    let path = client.repo_path("/rulesets");
+    let wanted = serde_json::json!({
+        "name": "project-supervision", "target": "branch", "enforcement": "active",
+        "bypass_actors": [],
+        "conditions": {"ref_name": {"include": ["refs/heads/main"], "exclude": []}},
+        "rules": [{"type": "pull_request", "parameters": {
+            "required_approving_review_count": 1,
+            "required_reviewers": [{"reviewer": {"type": "Team", "id": team_id},
+                "minimum_approvals": 1, "file_patterns": ["**"]}],
+            "dismiss_stale_reviews_on_push": true, "require_last_push_approval": true,
+            "require_code_owner_review": false, "required_review_thread_resolution": true,
+            "allowed_merge_methods": ["squash"]
+        }}]
+    });
+    let mut page = 1;
+    let existing = loop {
+        let batch: Vec<RulesetSummary> = client
+            .get_json(&format!(
+                "{path}?includes_parents=false&per_page=100&page={page}"
+            ))
+            .await?;
+        if let Some(rule) = batch.iter().find(|rule| rule.name == "project-supervision") {
+            break Some(rule.id);
+        }
+        if batch.len() < 100 {
+            break None;
+        }
+        page += 1;
+    };
+    let id = if let Some(id) = existing {
+        id
+    } else {
+        if dry_run {
+            println!("Would require review from the selected team on main.");
+            return Ok(());
+        }
+        let url = client.url(&path);
+        let created: RulesetSummary =
+            parse_json(client.http.post(&url).json(&wanted).send().await?, &url).await?;
+        created.id
+    };
+    let live: serde_json::Value = client.get_json(&format!("{path}/{id}")).await?;
+    ensure!(
+        review_rule_matches(&wanted, &live),
+        "inspect the project-supervision ruleset: the selected team's approval is not verified"
+    );
+    println!("Verified the required review team on main.");
+    Ok(())
+}
+
+fn review_rule_matches(wanted: &serde_json::Value, live: &serde_json::Value) -> bool {
+    // GitHub returns additional default parameters and read-only fields.
+    match wanted {
+        serde_json::Value::Object(fields) => fields.iter().all(|(key, value)| {
+            live.get(key)
+                .is_some_and(|field| review_rule_matches(value, field))
+        }),
+        serde_json::Value::Array(items) => live.as_array().is_some_and(|fields| {
+            items.len() == fields.len()
+                && items
+                    .iter()
+                    .zip(fields)
+                    .all(|(a, b)| review_rule_matches(a, b))
+        }),
+        _ => wanted == live,
+    }
+}
+
 /// The read-only half of the workflow-content reconciliation: classify the
 /// repository, and — only for a confirmed [`WorkflowTemplateScope::Project`]
 /// — diff its live `ci.yml` and `cd.yml` against the desired templates and its
@@ -4990,6 +5084,53 @@ mod tests {
                     || request.url.path().contains("workflows/")),
             "a tap reconcile must not read a CODEOWNERS or a CI workflow it has no reason to have"
         );
+    }
+
+    #[tokio::test]
+    async fn supervision_installs_a_team_rule_and_refuses_a_bypass_on_readback() {
+        let server = MockServer::start().await;
+        let client = test_client(&server);
+        let rules = "/repos/acme/navigator/rulesets";
+        Mock::given(method("GET"))
+            .and(path(rules))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&server)
+            .await;
+        install_review_rule(&client, 8, true).await.unwrap();
+        Mock::given(method("POST"))
+            .and(path(rules))
+            .respond_with(
+                ResponseTemplate::new(201)
+                    .set_body_json(serde_json::json!({"name":"project-supervision","id":18})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("{rules}/18")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&server)
+            .await;
+        assert!(install_review_rule(&client, 8, false).await.is_err());
+        let requests = server.received_requests().await.unwrap();
+        let request = requests
+            .iter()
+            .find(|req| req.method.as_str() == "POST")
+            .unwrap();
+        let wanted: serde_json::Value = request.body_json().unwrap();
+        let mut live = wanted.clone();
+        let params = &live["rules"][0]["parameters"];
+        assert_eq!(params["required_reviewers"][0]["reviewer"]["id"], 8);
+        assert_eq!(params["required_reviewers"][0]["minimum_approvals"], 1);
+        assert_eq!(
+            params["required_reviewers"][0]["file_patterns"],
+            serde_json::json!(["**"])
+        );
+        assert_eq!(params["dismiss_stale_reviews_on_push"], true);
+        live["rules"][0]["parameters"]["extra_default"] = false.into();
+        assert!(review_rule_matches(&wanted, &live));
+        live["bypass_actors"] = serde_json::json!([{"actor_type":"RepositoryRole"}]);
+        assert!(!review_rule_matches(&wanted, &live));
     }
 
     fn test_client(server: &MockServer) -> GitHubClient {

@@ -49,6 +49,7 @@ pub mod pinned_gate;
 pub mod push;
 pub mod reference;
 pub mod repository;
+mod reviews;
 pub mod scaffold;
 pub mod search;
 pub mod service;
