@@ -900,6 +900,10 @@ impl GitHubForge {
         project_code: &str,
         recorded_url: &str,
     ) -> Result<Option<String>, ForgeError> {
+        #[derive(Deserialize)]
+        struct Reference {
+            object: CommitBody,
+        }
         let path = format!("{}/{project_code}", self.organization);
         let canonical = format!("https://github.com/{path}");
         let recorded = recorded_url.trim_end_matches('/').trim_end_matches(".git");
@@ -944,10 +948,6 @@ impl GitHubForge {
             .await;
         if matches!(&response, Ok(r) if r.status().as_u16() == 404) {
             return Ok(None);
-        }
-        #[derive(Deserialize)]
-        struct Reference {
-            object: CommitBody,
         }
         let reference = Self::checked(response, action)?
             .json::<Reference>()
