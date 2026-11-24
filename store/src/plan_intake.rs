@@ -327,18 +327,22 @@ pub fn matter_type_from_notice(text: &str) -> Option<PlanMatterType> {
         .filter(|word| !word.is_empty())
         .collect();
     if words.contains(&"divorce") {
+        if words.contains(&"contested") {
+            return Some(PlanMatterType::ContestedDivorce);
+        }
         return (words
             .windows(2)
             .any(|pair| pair == ["uncontested", "divorce"])
-            && !words
-                .iter()
-                .any(|word| matches!(*word, "contested" | "custody")))
+            && !words.contains(&"custody"))
         .then_some(PlanMatterType::UncontestedDivorce);
     }
-    if words
-        .iter()
-        .any(|word| matches!(*word, "contested" | "custody" | "probate"))
-    {
+    if words.contains(&"probate") {
+        return Some(PlanMatterType::Probate);
+    }
+    if words.contains(&"custody") {
+        return Some(PlanMatterType::Custody);
+    }
+    if words.contains(&"contested") {
         return None;
     }
     if words == ["letter"]
@@ -370,6 +374,9 @@ pub fn matter_label(matter_type: PlanMatterType) -> &'static str {
         PlanMatterType::Letter => "letter",
         PlanMatterType::UncontestedDivorce => "uncontested divorce",
         PlanMatterType::CourtAppearance => "court appearance",
+        PlanMatterType::ContestedDivorce => "contested divorce",
+        PlanMatterType::Custody => "custody",
+        PlanMatterType::Probate => "probate",
     }
 }
 
@@ -1713,10 +1720,7 @@ mod tests {
     fn classification_only_suggests_a_supported_type_with_explicit_evidence() {
         for notice in [
             "Divorce",
-            "Contested Divorce/Separation/Annulment - with custody",
-            "Probate",
-            "Custody hearing",
-            "Probate court appearance",
+            "Uncontested Divorce - with custody",
             "Estate Planning - Will Preparation",
             "",
         ] {
@@ -1730,6 +1734,13 @@ mod tests {
             ("Demand Letter review", "letter"),
             ("Court appearance coverage", "court_appearance"),
             ("Consumer Contract Review", "document_review"),
+            (
+                "Contested Divorce/Separation/Annulment - with custody",
+                "contested_divorce",
+            ),
+            ("Custody hearing", "custody"),
+            ("Probate", "probate"),
+            ("Probate court appearance", "probate"),
         ] {
             assert_eq!(
                 matter_type_from_notice(notice).map(PlanMatterType::as_str),

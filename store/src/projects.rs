@@ -3046,7 +3046,7 @@ impl PlanColumns {
 }
 
 const PLAN_MATTER_TYPE_INVALID: &str =
-    "plan_matter_type is not one of document_review, letter, uncontested_divorce, court_appearance";
+    "plan_matter_type is not one of document_review, letter, uncontested_divorce, court_appearance, contested_divorce, custody, probate";
 const PLAN_STATE_INVALID: &str = "plan_state is not a lowercase jurisdiction code";
 const PLAN_DATE_INVALID: &str = "plan date is not an ISO YYYY-MM-DD date";
 const PLAN_CASE_NUMBER_INVALID: &str =
