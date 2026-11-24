@@ -7,8 +7,10 @@ description: >-
 
 The settings a [Project](project.md)'s Forgejo repository holds so that every change reaches `main` by pull request. It
 allows squash merge only and deletes the branch after a merge. It protects `main`: no direct push, no exemption for
-administrators, signed commits required, and the [Gate](gate.md) check `gate / gate (pull_request)` required to pass. No
-approving review is required, but a rejected review or an unresolved conversation blocks the merge.
+administrators, signed commits required, and the [Gate](gate.md) check `gate / gate (pull_request)` required to pass. A
+rejected review or an unresolved conversation blocks the merge. Projects with supervised contributors require a current
+approval from the named review team. The ordinary reconciliation preserves the team's approval settings. See [supervised
+contributions](../project-repositories.md#supervised-contributions).
 
 `cloud::forgejo_governance` holds the one copy, in [`forgejo_governance.rs`](../../cloud/src/forgejo_governance.rs).
 `reconcile` converges a repository and reads it back. `schedule` checks the governance again before it asks Forgejo to
