@@ -26,14 +26,9 @@ impl MirrorSource for ScheduledMirror {
         &self,
         _now: DateTime<Utc>,
     ) -> Result<Vec<(Uuid, String)>, MirrorQueueError> {
-        let all = store::projects::all(&self.surreal)
+        store::deadline_calendar::open_projects()
             .await
-            .map_err(|_| MirrorQueueError::Queue)?;
-        Ok(all
-            .into_iter()
-            .filter(|project| project.status == "open")
-            .map(|project| (project.id, project.code))
-            .collect())
+            .map_err(|_| MirrorQueueError::Queue)
     }
 
     async fn reconcile(
@@ -72,7 +67,7 @@ pub(crate) struct MembershipSource {
 #[async_trait::async_trait]
 impl Source for MembershipSource {
     async fn candidates(&self) -> Result<Vec<Uuid>, SyncError> {
-        store::project_calendar::membership_candidates(&self.surreal)
+        store::project_calendar::membership_candidates()
             .await
             .map_err(|_| sync_error("reading Project Calendar candidates"))
     }

@@ -198,7 +198,7 @@ pub trait IntegrationProviders: Send + Sync {
                 "The Project has no owning Firm".into(),
             ));
         };
-        let owner = store::firms::calendar_owner(surreal, firm_id)
+        let owner = store::firms::calendar_owner(firm_id)
             .await
             .map_err(|_| IntegrationError::CredentialUnusable)?;
         let Some(owner) = owner else {

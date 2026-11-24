@@ -711,7 +711,7 @@ async fn google_firms(
     )
     .await
     .map_err(|error| ApiError::Db(error.to_string()))?;
-    store::firms::with_google_calendar(&state.surreal, firms)
+    store::firms::with_google_calendar(firms)
         .await
         .map_err(|error| ApiError::Db(error.to_string()))
 }
@@ -742,10 +742,10 @@ async fn authorized_project(
     .await
     .map_err(|error| ApiError::Db(error.to_string()))?;
     if !allowed.is_allowed()
-        || store::firms::with_google_calendar(&state.surreal, vec![firm_id])
+        || store::firms::calendar_owner(firm_id)
             .await
             .map_err(|error| ApiError::Db(error.to_string()))?
-            .is_empty()
+            .is_none()
     {
         return Err(ApiError::NotFound);
     }

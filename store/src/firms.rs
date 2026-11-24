@@ -15,6 +15,10 @@
 //! A Firm's [`slug`] is derived from its name once, at creation, and never
 //! changes; it names the Firm's Forgejo organization ([`forgejo`]).
 
+mod calendar;
+pub(crate) use calendar::calendar_owners_query;
+pub use calendar::{calendar_owner, with_google_calendar};
+
 pub mod forgejo;
 pub mod forgejo_organization;
 pub mod slug;
@@ -618,45 +622,6 @@ async fn authorize_manage_firm(
     }
 }
 
-/// Resolve the Firm's Google Workspace Calendar owner, including the deployment bootstrap
-/// for Guieb & Shook until an Owner saves a Firm-level choice.
-pub async fn calendar_owner(
-    surreal: &SurrealDb,
-    firm_id: Uuid,
-) -> Result<Option<String>, FirmError> {
-    if let Some(db) = crate::postgres::PostgresDb::configured()
-        .await
-        .map_err(|_| FirmError::CalendarSettingsUnavailable)?
-    {
-        let stored = sqlx::query_scalar::<_, Option<String>>(
-            "SELECT google_workspace_owner FROM firm_calendar_settings WHERE firm_id = $1",
-        )
-        .bind(firm_id)
-        .fetch_optional(db.pool())
-        .await?;
-        if let Some(owner) = stored {
-            return Ok(owner);
-        }
-    }
-    let bootstrap = std::env::var(cloud::calendar::CALENDAR_OWNER_ENV)
-        .ok()
-        .filter(|owner| !owner.trim().is_empty());
-    let Some(owner) = bootstrap else {
-        return Ok(None);
-    };
-    let name = crate::seed::FIRM_ENTITY_NAME;
-    let Some(anchor) = crate::entity_commands::firm_anchor_key(name, name) else {
-        return Ok(None);
-    };
-    let Some(entity) = crate::entities::firm_anchor_holder(surreal, &anchor).await? else {
-        return Ok(None);
-    };
-    Ok(find_by_entity_id(surreal, entity)
-        .await?
-        .filter(|firm| firm.id == firm_id)
-        .map(|_| owner))
-}
-
 /// Whether `address` is a consumer Gmail address. Calendar runs on Google
 /// Workspace delegation, which a consumer account cannot grant.
 #[must_use]
@@ -665,25 +630,6 @@ pub fn is_consumer_gmail(address: &str) -> bool {
         let domain = domain.trim();
         domain.eq_ignore_ascii_case("gmail.com") || domain.eq_ignore_ascii_case("googlemail.com")
     })
-}
-
-/// The Firms among `firm_ids` whose Owner chose Google Workspace as the main
-/// email by saving a Calendar owner mailbox. Calendar surfaces exist only for
-/// these Firms.
-///
-/// # Errors
-/// [`FirmError`] when a Firm's Calendar settings cannot be read.
-pub async fn with_google_calendar(
-    surreal: &SurrealDb,
-    firm_ids: Vec<Uuid>,
-) -> Result<Vec<Uuid>, FirmError> {
-    let mut chosen = Vec::new();
-    for firm_id in firm_ids {
-        if calendar_owner(surreal, firm_id).await?.is_some() {
-            chosen.push(firm_id);
-        }
-    }
-    Ok(chosen)
 }
 
 /// Save the Owner's Google Workspace mailbox choice. A blank choice disables Calendar
@@ -2066,6 +2012,9 @@ pub async fn anchor_firm(surreal: &SurrealDb) -> Result<Option<Firm>, FirmError>
     };
     find_by_entity_id(surreal, entity_id).await
 }
+
+#[cfg(test)]
+mod calendar_tests;
 
 #[cfg(test)]
 #[path = "firms/compatibility_tests.rs"]

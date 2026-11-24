@@ -275,7 +275,7 @@ pub async fn get_lawyer_dashboard() -> Result<DashboardView, ServerFnError> {
     let last = first.saturating_add(PROJECTS_PER_PAGE).min(filtered.len());
     let page_of_projects = &filtered[first..last];
     let current_state_by_project = current_states_for_projects(&surreal, page_of_projects).await?;
-    let deadlines = deadlines::load(&surreal, &projects).await?;
+    let deadlines = deadlines::load(&projects).await?;
     let rows = page_of_projects
         .iter()
         .map(|p| {

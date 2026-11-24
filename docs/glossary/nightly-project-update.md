@@ -86,7 +86,7 @@ whose governance was repaired. Participation is never copied onto the forge.
 
 `calendar` — create or adopt the owning Firm's private Project Calendar and mirror its stored [Deadlines](deadline.md).
 Reconcile calendar access and event guests against current Firm-side assignments. Each DBOS child uses the same Project
-write lock as the on-demand mirror and the five-minute membership job. A failed child is counted and the Project's Slack
+write lock as the on-demand mirror and the periodic membership job. A failed child is counted and the Project's Slack
 notice can still run.
 
 ```mermaid

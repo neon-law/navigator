@@ -372,12 +372,18 @@ carries — and the door and the CLI verb accept `dry-run` to rehearse without t
 
 ## Project Calendar membership
 
-The DBOS web host checks Projects every five minutes for Firms with a Google Workspace owner in [Firm Calendar
-Settings](glossary/firm-calendar-settings.md). For an open Project without a calendar ID, the job creates or adopts its
-private calendar and records the ID. It checks manually linked calendars too. Clearing the Firm owner stops new jobs for
-that Firm. Each Project shares a write lock with setup and the Deadline mirror. The workflow retries a failed pass, and
-the next slot repairs drift. The workflow output reports Person IDs, access readback, calendar notification requests,
-and event response counts.
+At 02:22, 08:22, 14:22, and 20:22 UTC, the DBOS web host checks Projects for Firms with a Google Workspace owner in
+[Firm Calendar Settings](glossary/firm-calendar-settings.md). For an open Project without a calendar ID, the job creates
+or adopts its private calendar and records the ID. It checks manually linked calendars too. Clearing the Firm owner
+stops new jobs for that Firm. Each Project shares a write lock with setup and the Deadline mirror. Each retry reads
+Project participation, Person details, and the owning Firm's membership in one PostgreSQL query. The job verifies the
+recorded calendar ID in each eligible participant's own Google Calendar list. A removed participant's managed grant can
+persist until reconciliation succeeds. The nightly Project update also reconciles membership after mirroring Deadlines.
+
+On startup, each replica submits the most recent due slot. DBOS deduplicates by workflow, Project, and slot. If Project
+discovery or submission fails, the host retries within a minute. An accepted membership workflow makes up to three
+attempts for transient failures. Its output reports Person IDs, access readback, calendar notification requests, and
+event response counts.
 
 An independent hourly DBOS job reads iCalendar event resources through Google's CalDAV API with the delegated owner's
 credentials. Enable the CalDAV API on the Workspace integration's Google Cloud project. Each new resource revision is
@@ -389,9 +395,11 @@ event requires a new archive. The delegated owner must have exclusive write acce
 
 [Google's CalDAV guide](https://developers.google.com/workspace/calendar/caldav/v2/guide).
 
-On staging, run setup twice on a synthetic Project, assign a verified Workspace Clerk or Admin, and check the recorded
-ID, access readback, and event response status. Change the assignment and verify that the job removes only its own
-direct grants and guests. Confirm that an external address cannot receive access during the staging check.
+On staging, run setup twice on a synthetic Project and assign a verified Workspace Clerk or Admin. For a full UTC day,
+check the four `ProjectCalendarMembership` workflow IDs for the Project and their terminal states in
+`dbos.workflow_status`. In the participant's account, read the recorded ID from the Google Calendar list and check event
+access. Remove the assignment and verify that reconciliation removes only its managed grants and guests. Confirm that an
+external address cannot receive access.
 
 ## Notation worker opt-in
 
