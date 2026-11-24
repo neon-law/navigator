@@ -2447,12 +2447,19 @@ async fn onboarding_agreements(
     Ok(Json(rows).into_response())
 }
 
-/// The dashboard's open matter inventory for the read-only deadline brief.
+#[derive(Deserialize)]
+struct DeadlineProjectQuery {
+    #[serde(default)]
+    include_pitch: bool,
+}
+
+/// The dashboard inventory for deadline and readiness reporting.
 /// Keep its Firm boundary identical to `webapp::lawyer_dashboard` so an
 /// Owner/Admin with participation at another Firm does not broaden this view.
 async fn lawyer_deadline_projects(
     State(state): State<ApiState>,
     lawyer: LawyerSession,
+    Query(query): Query<DeadlineProjectQuery>,
 ) -> Result<Response, ApiError> {
     let mut projects = store::access::visible_projects_as_lawyer(
         &state.surreal,
@@ -2471,7 +2478,11 @@ async fn lawyer_deadline_projects(
         .map_err(|error| ApiError::Db(error.to_string()))?;
     projects.retain(|project| {
         deadline_project_in_dashboard_scope(
-            &project.status,
+            if query.include_pitch && project.status == "pitch" {
+                "open"
+            } else {
+                &project.status
+            },
             project.firm_id,
             &project.brand,
             Some(firm_id),
@@ -2481,14 +2492,24 @@ async fn lawyer_deadline_projects(
     let rows = projects
         .into_iter()
         .map(|project| {
-            serde_json::json!({
+            let mut row = serde_json::json!({
                 "id": project.id,
                 "code": project.code,
                 "name": project.name,
                 "status": project.status
-            })
+            });
+            if query.include_pitch {
+                row["practice_area"] = serde_json::json!(project
+                    .kit_version
+                    .as_deref()
+                    .and_then(|version| version.split('/').nth(1)));
+            }
+            row
         })
         .collect::<Vec<_>>();
+    if query.include_pitch {
+        return Ok(Json(serde_json::json!({"projects": rows})).into_response());
+    }
     Ok(Json(rows).into_response())
 }
 

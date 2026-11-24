@@ -939,7 +939,7 @@ pub enum ProjectsCmd {
         #[command(subcommand)]
         action: CommunicationCmd,
     },
-    /// Read the shared calendar for one Project.
+    /// List events on the shared Project calendar.
     Calendar(projects::calendar::ProjectCalendarArgs),
     /// Review matter billing and record claim activity.
     Billing {
@@ -965,6 +965,9 @@ pub enum ProjectsCmd {
     Status {
         /// Project code. Defaults to project.name in navigator.yaml.
         project_code: Option<String>,
+        /// Report readiness across participating open and pitch Projects on this host.
+        #[arg(long, conflicts_with = "project_code")]
+        all: bool,
         /// Emit the complete live status as JSON.
         #[arg(long)]
         json: bool,
@@ -1568,6 +1571,7 @@ pub enum ProjectRepositoryCmd {
     /// The forge still sees plain Git. `jj git push --change @` names its
     /// bookmark `push/<change-id>`, the namespace `push` already uses.
     /// Idempotent: a re-run rewrites the same settings.
+    #[command(hide = true)]
     Jj {
         /// Project repository root. Defaults to the current directory.
         #[arg(long, default_value = ".")]
@@ -2055,6 +2059,9 @@ pub enum DeadlineCmd {
     },
     /// Brief the signed-in lawyer on deadlines across visible open matters.
     Brief {
+        /// Include every host with a stored Navigator session.
+        #[arg(long, conflicts_with = "host")]
+        all_hosts: bool,
         /// Restrict the report to one visible Project code.
         #[arg(long)]
         project: Option<String>,
@@ -2848,6 +2855,7 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
             }
             DeadlineCmd::Brief {
                 host,
+                all_hosts,
                 project,
                 due_by,
                 today,
@@ -2857,7 +2865,11 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
                 json,
             } => {
                 projects::deadline_brief::brief(projects::deadline_brief::BriefOptions {
-                    host: host.host,
+                    hosts: if all_hosts {
+                        projects::deadline_brief::BriefHosts::AllStored
+                    } else {
+                        projects::deadline_brief::BriefHosts::Selected(host.host)
+                    },
                     project,
                     due_by,
                     today,
@@ -3101,7 +3113,8 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
             host,
             project_code,
             json,
-        } => projects::status::run(host.host.as_deref(), project_code.as_deref(), json).await,
+            all,
+        } => projects::status::run(host.host.as_deref(), project_code.as_deref(), json, all).await,
         ProjectsCmd::Lifecycle {
             host,
             project_code,

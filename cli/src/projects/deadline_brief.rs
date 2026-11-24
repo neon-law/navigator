@@ -5,6 +5,7 @@
 //! so coverage and partial failures remain visible.
 
 use std::str::FromStr;
+use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, NaiveDate, Utc};
@@ -17,8 +18,8 @@ use uuid::Uuid;
 
 use crate::remote;
 
-const INVENTORY_PATH: &str = "/app/api/lawyer/deadline-projects";
-const READ_CONCURRENCY: usize = 8;
+pub(super) const INVENTORY_PATH: &str = "/app/api/lawyer/deadline-projects";
+pub(super) const READ_CONCURRENCY: usize = 8;
 const LOCAL_FORMAT: &str = "%Y-%m-%d %H:%M %:z";
 const BANDS: [&str; 4] = ["Overdue", "Today", "Next 7 days", "Next 30 days"];
 
@@ -98,7 +99,7 @@ struct Filters {
     project: Option<String>,
 }
 
-fn local_zone(explicit: Option<&str>) -> Result<Tz> {
+pub(super) fn local_zone(explicit: Option<&str>) -> Result<Tz> {
     let name = explicit
         .map(str::to_owned)
         .or_else(|| std::env::var("TZ").ok())
@@ -204,12 +205,17 @@ fn deadline_value(base: &str, project: &Project, row: &Deadline, zone: Tz) -> Va
     })
 }
 
-async fn list<T: for<'de> Deserialize<'de>>(
+pub(super) async fn list<T: for<'de> Deserialize<'de>>(
     client: &reqwest::Client,
     url: String,
     token: &str,
 ) -> Result<T> {
-    let response = client.get(url).bearer_auth(token).send().await?;
+    let response = client
+        .get(url)
+        .timeout(Duration::from_secs(30))
+        .bearer_auth(token)
+        .send()
+        .await?;
     let status = response.status();
     let body = response.text().await?;
     if !status.is_success() {
@@ -230,11 +236,8 @@ async fn gather(
     let reads = stream::iter(projects.into_iter().map(|project| {
         let client = client.clone();
         let token = token.to_owned();
-        let url = format!("{base}/app/api/projects/{}/deadlines", project.id);
         async move {
-            let result = list::<Vec<Deadline>>(&client, url, &token)
-                .await
-                .and_then(validate_deadlines);
+            let result = project_deadlines(&client, base, &token, project.id).await;
             (project, result)
         }
     }))
@@ -242,6 +245,49 @@ async fn gather(
     .collect::<Vec<_>>()
     .await;
     partition_reads(reads)
+}
+
+async fn project_deadlines(
+    client: &reqwest::Client,
+    base: &str,
+    token: &str,
+    id: Uuid,
+) -> Result<Vec<Deadline>> {
+    list(
+        client,
+        format!("{base}/app/api/projects/{id}/deadlines"),
+        token,
+    )
+    .await
+    .and_then(validate_deadlines)
+}
+
+pub(super) async fn open_for_project(
+    client: &reqwest::Client,
+    base: &str,
+    token: &str,
+    id: Uuid,
+    code: &str,
+    name: &str,
+    now: DateTime<Utc>,
+) -> Result<Vec<Value>> {
+    let mut rows = project_deadlines(client, base, token, id).await?;
+    rows.retain(|row| row.status == "open");
+    rows.sort_by_key(|row| (due_utc(row), row.id));
+    let project = Project {
+        id,
+        code: code.into(),
+        name: name.into(),
+        status: "open".into(),
+    };
+    Ok(rows
+        .iter()
+        .map(|row| {
+            let mut value = deadline_value(base, &project, row, chrono_tz::UTC);
+            value["overdue"] = json!(due_utc(row).is_some_and(|due| due < now));
+            value
+        })
+        .collect())
 }
 
 struct ReportRows {
@@ -539,8 +585,13 @@ fn render_table(base: &str, rows: &[(Project, Deadline)], zone: Tz) -> String {
     table.to_string()
 }
 
+pub enum BriefHosts {
+    Selected(Option<String>),
+    AllStored,
+}
+
 pub struct BriefOptions {
-    pub host: Option<String>,
+    pub hosts: BriefHosts,
     pub project: Option<String>,
     pub due_by: Option<String>,
     pub today: bool,
@@ -548,6 +599,18 @@ pub struct BriefOptions {
     pub status: String,
     pub timezone: Option<String>,
     pub as_json: bool,
+}
+
+fn host_report(reports: Vec<(String, Result<Value>)>) -> Value {
+    let hosts: Vec<_> = reports
+        .into_iter()
+        .map(|(host, result)| match result {
+            Ok(report) => json!({"host": host, "report": report}),
+            Err(error) => json!({"host": host, "error": format!("{error:#}")}),
+        })
+        .collect();
+    let complete = hosts.iter().all(|host| host["report"]["complete"] == true);
+    json!({"complete": complete, "hosts": hosts})
 }
 
 pub async fn brief(options: BriefOptions) -> std::process::ExitCode {
@@ -563,7 +626,7 @@ pub async fn brief(options: BriefOptions) -> std::process::ExitCode {
 
 async fn run(options: BriefOptions) -> Result<bool> {
     let BriefOptions {
-        host,
+        hosts,
         project,
         due_by,
         today,
@@ -587,29 +650,129 @@ async fn run(options: BriefOptions) -> Result<bool> {
         status,
         project: project.clone(),
     };
+    let BriefHosts::Selected(host) = hosts else {
+        let credentials =
+            crate::credentials::load(&crate::credentials::default_credentials_path())?;
+        anyhow::ensure!(
+            !credentials.hosts.is_empty(),
+            "no stored Navigator sessions"
+        );
+        let mut reports = Vec::new();
+        for host in credentials.hosts.into_keys() {
+            let result = async {
+                let (base, token) = remote::resolve(Some(&host))?;
+                let (rendered, complete) =
+                    render_host(&base, &token, &filters, now, zone, as_json).await?;
+                if as_json {
+                    return serde_json::from_str(&rendered).context("decode deadline report");
+                }
+                Ok(json!({"text": rendered, "complete": complete}))
+            }
+            .await;
+            reports.push((host, result));
+        }
+        let report = host_report(reports);
+        if as_json {
+            println!("{report}");
+        } else if let Some(hosts) = report["hosts"].as_array() {
+            for host in hosts {
+                println!("{}", host["host"].as_str().unwrap_or_default());
+                if let Some(body) = host["report"]["text"]
+                    .as_str()
+                    .or_else(|| host["error"].as_str())
+                {
+                    println!("{body}");
+                }
+            }
+        }
+        return Ok(report["complete"] == true);
+    };
     let (base, token) = remote::resolve(host.as_deref())?;
+    let (rendered, complete) = render_host(&base, &token, &filters, now, zone, as_json).await?;
+    println!("{rendered}");
+    Ok(complete)
+}
+
+async fn render_host(
+    base: &str,
+    token: &str,
+    filters: &Filters,
+    now: DateTime<Utc>,
+    zone: Tz,
+    as_json: bool,
+) -> Result<(String, bool)> {
+    let (successful, failures) = read_host(base, token, filters.project.as_deref()).await?;
+    Ok((
+        render(base, &successful, &failures, filters, now, zone, as_json),
+        failures.is_empty(),
+    ))
+}
+
+async fn read_host(
+    base: &str,
+    token: &str,
+    project: Option<&str>,
+) -> Result<(Vec<(Project, Vec<Deadline>)>, Vec<ReadFailure>)> {
     let client = reqwest::Client::new();
-    let mut projects: Vec<Project> = list(&client, format!("{base}{INVENTORY_PATH}"), &token)
+    let mut projects: Vec<Project> = list(&client, format!("{base}{INVENTORY_PATH}"), token)
         .await
         .context("read the dashboard-scoped open Project inventory")?;
-    if let Some(code) = project.as_deref() {
+    if let Some(code) = project {
         projects.retain(|row| row.code == code);
         anyhow::ensure!(
             !projects.is_empty(),
             "no visible open Project has code `{code}`"
         );
     }
-    let (successful, failures) = gather(&base, &token, projects).await;
-    println!(
-        "{}",
-        render(&base, &successful, &failures, &filters, now, zone, as_json)
-    );
-    Ok(failures.is_empty())
+    Ok(gather(base, token, projects).await)
+}
+
+pub(super) async fn agenda_rows(
+    base: &str,
+    token: &str,
+    day: NaiveDate,
+    now: DateTime<Utc>,
+    zone: Tz,
+) -> Result<Value> {
+    let filters = Filters {
+        status: "open".to_owned(),
+        due_by: Some(day),
+        ..Filters::default()
+    };
+    let (successful, failures) = read_host(base, token, None).await?;
+    let rows = collect_rows(&successful, &failures, &filters, now, zone);
+    Ok(make_report(
+        base,
+        &rows,
+        &failures,
+        &filters,
+        now,
+        zone,
+        successful.len() + failures.len(),
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_failed_host_keeps_successful_host_coverage_in_the_report() {
+        let reports = vec![
+            (
+                "https://one.example".to_owned(),
+                Ok(json!({"complete": true})),
+            ),
+            (
+                "https://two.example".to_owned(),
+                Err(anyhow!("session expired")),
+            ),
+        ];
+        let report = host_report(reports);
+        assert_eq!(report["complete"], false);
+        assert_eq!(report["hosts"][0]["report"]["complete"], true);
+        assert_eq!(report["hosts"][1]["error"], "session expired");
+    }
 
     fn project(code: &str) -> Project {
         Project {
@@ -748,7 +911,7 @@ mod tests {
 
     fn options(host: &str) -> BriefOptions {
         BriefOptions {
-            host: Some(host.into()),
+            hosts: BriefHosts::Selected(Some(host.into())),
             project: None,
             due_by: None,
             today: false,
@@ -953,6 +1116,33 @@ mod tests {
         };
         assert!(run(only_good()).await.unwrap());
         assert_eq!(brief(only_good()).await, std::process::ExitCode::SUCCESS);
+    }
+
+    #[tokio::test]
+    async fn all_hosts_reports_expired_sessions_and_still_reads_the_active_host() {
+        let server = site(json!([])).await;
+        let _login = crate::projects::test_login::signed_in(&server.uri()).await;
+        let path = crate::credentials::default_credentials_path();
+        let mut credentials = crate::credentials::load(&path).unwrap();
+        credentials.set(
+            "https://expired.example",
+            crate::credentials::HostCredential {
+                token: "synthetic".to_owned(),
+                person_email: None,
+                role: None,
+                expires_at: 1,
+            },
+        );
+        crate::credentials::save(&path, &credentials).unwrap();
+        for as_json in [false, true] {
+            let options = BriefOptions {
+                hosts: BriefHosts::AllStored,
+                as_json,
+                ..options(&server.uri())
+            };
+            assert!(!run(options).await.unwrap());
+        }
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
     }
 
     #[tokio::test]

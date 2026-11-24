@@ -12,11 +12,22 @@ use crate::remote;
 
 type Instant = DateTime<FixedOffset>;
 
+mod dated;
+
 #[derive(Args)]
 pub struct PersonalCalendarArgs {
     /// Navigator host.
     #[arg(long, global = true)]
     host: Option<String>,
+    /// Combine calendar events and Deadlines for this local date (YYYY-MM-DD or today).
+    #[arg(long, conflicts_with_all = ["start", "end"])]
+    date: Option<String>,
+    /// IANA time zone for the dated agenda.
+    #[arg(long, requires = "date")]
+    timezone: Option<String>,
+    /// Print the dated agenda as JSON.
+    #[arg(long, requires = "date")]
+    json: bool,
     #[command(flatten)]
     agenda: Agenda,
     #[command(subcommand)]
@@ -115,6 +126,7 @@ enum PersonalAction {
 #[derive(Subcommand)]
 enum ProjectAction {
     /// List events on the Project Calendar.
+    #[command(hide = true)]
     Events(Agenda),
     /// List busy blocks for the Project and its attorneys.
     Freebusy(Availability),
@@ -127,6 +139,13 @@ enum ProjectAction {
 impl PersonalCalendarArgs {
     pub async fn run(self) -> ExitCode {
         let host = self.host.as_deref();
+        if let Some(date) = self.date.as_deref() {
+            if self.action.is_some() {
+                eprintln!("navigator calendar: use --date without a subcommand");
+                return ExitCode::FAILURE;
+            }
+            return dated::run(host, date, self.timezone.as_deref(), self.json).await;
+        }
         match self.action {
             None => events(host, None, self.agenda, false).await,
             Some(PersonalAction::Events { agenda, project }) => {
@@ -155,14 +174,11 @@ impl ProjectCalendarArgs {
         };
         let host = host.as_deref();
         let project = Some(project.as_str());
-        match self.action {
-            None => events(host, project, self.agenda, false).await,
-            Some(ProjectAction::Events(agenda)) => events(host, project, agenda, false).await,
-            Some(ProjectAction::Freebusy(window)) => {
-                availability(host, project, window, false).await
-            }
-            Some(ProjectAction::Check(window)) => availability(host, project, window, true).await,
-            Some(ProjectAction::Access) => access(host, project).await,
+        match self.action.unwrap_or(ProjectAction::Events(self.agenda)) {
+            ProjectAction::Events(agenda) => events(host, project, agenda, false).await,
+            ProjectAction::Freebusy(window) => availability(host, project, window, false).await,
+            ProjectAction::Check(window) => availability(host, project, window, true).await,
+            ProjectAction::Access => access(host, project).await,
         }
     }
 }
@@ -283,7 +299,7 @@ async fn register(host: Option<&str>, calendar_id: Option<&str>, freebusy: bool)
     finish("navigator calendar register", result, false)
 }
 
-async fn post(base: &str, token: &str, path: &str, body: Value) -> Result<Value> {
+pub(super) async fn post(base: &str, token: &str, path: &str, body: Value) -> Result<Value> {
     let response = remote::authenticated_client_builder(base)?
         .build()?
         .post(format!("{base}{path}"))

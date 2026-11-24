@@ -5,16 +5,8 @@
 //! must hold the onboarding envelope UUID and verify completion in the Firm account.
 //! Envelopes can originate in Navigator or be adopted from the Firm's `DocuSign` app.
 
-use std::path::Path;
+use anyhow::{anyhow, Result};
 use std::process::ExitCode;
-use std::time::Duration;
-
-use anyhow::{anyhow, Context, Result};
-
-use crate::{
-    projects::{manifest, surfaces},
-    remote,
-};
 
 pub async fn run(host: Option<&str>, project: Option<&str>, json: bool) -> ExitCode {
     match read(host, project).await {
@@ -36,25 +28,7 @@ pub async fn run(host: Option<&str>, project: Option<&str>, json: bool) -> ExitC
 }
 
 async fn read(host: Option<&str>, project: Option<&str>) -> Result<serde_json::Value> {
-    let local = manifest::read(Path::new("."));
-    let project = project
-        .or_else(|| local.as_ref().and_then(|m| m.project.as_deref()))
-        .ok_or_else(|| anyhow!("pass a Project code or run from a Project checkout"))?;
-    let host = host.or_else(|| local.as_ref().and_then(|m| m.host.as_deref()));
-    let (base, token) = remote::resolve(host)?;
-    let id = surfaces::resolve_project_id(&base, &token, project).await?;
-    let response = reqwest::Client::new()
-        .get(format!("{base}/app/api/projects/{id}/status"))
-        .timeout(Duration::from_secs(30))
-        .bearer_auth(token)
-        .send()
-        .await
-        .context("read Project lifecycle")?;
-    let status = response.status();
-    if !status.is_success() {
-        return Err(anyhow!("Project lifecycle read failed: {status}"));
-    }
-    let status: serde_json::Value = response.json().await.context("parse Project status")?;
+    let status = super::status::read(host, project).await?;
     let onboarding_status = status["onboarding"]["status"]
         .as_str()
         .ok_or_else(|| anyhow!("the Project status read carried no onboarding status"))?;

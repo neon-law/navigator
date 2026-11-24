@@ -33,6 +33,15 @@ your time. Both use your signed-in account, including inside a Project checkout.
 the matter's shared calendar or `navigator project billing` for its timekeepers, fees and claims. Outside the checkout,
 use `--project <code>` on either Project command.
 
+Run `navigator calendar --date today` for a dated agenda with calendar events, court priorities and overdue Deadlines.
+Use an ISO date to review a different day. Add `--timezone` to choose an IANA time zone and `--json` for structured
+output. The agenda reports calendar and Deadline coverage independently.
+
+Run `navigator project deadline brief --all-hosts` to read the visible open Projects on every host with a stored
+session. The report names expired sessions and failed reads. Use `navigator project status --all` for readiness across
+participating open and pitch Projects on one host, including recorded onboarding evidence, billing, calendar access and
+open Deadlines. Add `--json` to either report for structured output.
+
 ## Set up a Project checkout with Jujutsu
 
 On macOS, get the repository URL from the Project’s Navigator page. Replace the example URL and code in these commands

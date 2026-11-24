@@ -244,21 +244,74 @@ async fn project_calendar_events_resolve_the_checkout_and_explicit_project() {
     }
     let child = root.path().join("documents");
     std::fs::create_dir(&child).unwrap();
-    for extra in [vec![], vec!["--project", "explicit-matter"]] {
+    for extra in [vec![], vec!["events", "--project", "explicit-matter"]] {
         Command::cargo_bin("navigator")
             .unwrap()
             .current_dir(&child)
             .env("NAVIGATOR_CREDENTIALS_FILE", &credentials)
-            .args([
-                "project",
-                "calendar",
-                "events",
-                "--start",
-                "2026-11-01T15:00:00Z",
-            ])
+            .args(["project", "calendar"])
             .args(extra)
+            .args(["--start", "2026-11-01T15:00:00Z"])
             .assert()
             .success();
     }
     server.verify().await;
+}
+
+#[tokio::test]
+async fn dated_agenda_keeps_deadlines_when_calendar_access_is_missing() {
+    let server = MockServer::start().await;
+    let root = TempDir::new().unwrap();
+    let host = server.uri();
+    let credentials = credentials(root.path(), &host);
+    let project = uuid::Uuid::new_v4();
+    Mock::given(method("GET"))
+        .and(path("/app/api/lawyer/deadline-projects"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {"id": project, "code": "sample-matter", "name": "Sample Matter", "status": "open"}
+        ])))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/app/api/projects/{project}/deadlines")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {"id": uuid::Uuid::new_v4(), "project_id": project, "title": "Synthetic hearing",
+             "due_at": "2099-03-08T15:00:00Z", "status": "open", "category": "hearing"}
+        ])))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/app/api/calendars/events"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "unreadable": [{"missing": "scope"}]
+        })))
+        .mount(&server)
+        .await;
+    let agenda = || {
+        let mut command = Command::cargo_bin("navigator").unwrap();
+        command
+            .current_dir(root.path())
+            .env("NAVIGATOR_CREDENTIALS_FILE", &credentials)
+            .args([
+                "calendar",
+                "--host",
+                &host,
+                "--date",
+                "2099-03-08",
+                "--timezone",
+                "UTC",
+            ]);
+        command
+    };
+    let output = agenda().arg("--json").output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["entries"][0]["title"], "Synthetic hearing");
+    assert_eq!(
+        report["coverage"]["calendar"]["detail"]["unreadable"][0]["missing"],
+        "scope"
+    );
+    let text = String::from_utf8(agenda().output().unwrap().stdout).unwrap();
+    assert!(text.contains("Court • Synthetic hearing"));
+    assert!(text.contains("Incomplete coverage"));
 }
