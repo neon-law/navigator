@@ -191,14 +191,11 @@ service.
   `navigator.forgejo.runner.orphan_cleaned` counts recovered leftovers.
 - **Logs.** `forgejo.job.queued`, `forgejo.job.started`, `forgejo.job.finished` and `forgejo.runner.orphan_cleaned`
   records add `forgejo.run_number`.
-- **Job logs.** After each job, the controller re-emits the runner pod's stdout, one record per line, under target
-  `forgejo.job.log`. The runner's `log.job_level` puts every step's output there. The same stdout reaches Cloud Logging
-  directly from the pod.
+- **Job logs.** Forgejo retains workflow step output under the repository's access controls.
+  `hudson ops forgejo logs <owner>/<repository> --run <n>` reads a run's log through the operator's cluster access.
 
-The repository is `<firm>/<project code>`, opaque by construction. No PR title, branch name or commit message is
-emitted. Job output passes the same source-side content screen as every record, so a line that looks like client content
-is dropped from telemetry. `hudson ops forgejo logs <owner>/<repository> --run <n>` still prints the whole log from
-Forgejo.
+Shared telemetry identifies the repository by `<firm>/<project code>` and the run by its number. Workflow step output
+can contain source content and stays in Forgejo.
 
 The collector also scrapes Forgejo's `/metrics` (`prometheus/forgejo`) with the bearer token in
 `navigator-forgejo-metrics`. These are installation-wide gauges only: per-repository and per-label series are off in
