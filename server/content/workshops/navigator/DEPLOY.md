@@ -1263,7 +1263,13 @@ service-account keys, so the web pod's runtime identity signs each delegation as
 `NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT`, the account's email, which `ops ship` derives from
 `NAVIGATOR_DRIVE_GCP_SERVICE_ACCOUNT_ID`. Each deployment names its own Projects folder in
 `NAVIGATOR_DRIVE_PROJECTS_ROOT_FOLDER_ID`, and that folder's name in `NAVIGATOR_DRIVE_PROJECTS_ROOT_NAME` when it is not
-`Projects`.
+`Projects`. The per-tier keys `NAVIGATOR_DRIVE_NEON_LAW_PRODUCTION_PROJECTS_ROOT_FOLDER_ID` and
+`NAVIGATOR_DRIVE_NEON_LAW_STAGING_PROJECTS_ROOT_FOLDER_ID` are deprecated; only a deployment that has not set the folder
+variable reads one.
+
+`hudson ops gcp setup` reads two installation-wide settings. `NAVIGATOR_ENVIRONMENT_PROJECT_IDS` lists the runtime
+projects, comma-separated, so the setup guard refuses to provision the image hub into one.
+`NAVIGATOR_ARCHIVES_BUCKET_PREFIX` is the prefix of the long-term archive buckets, `<prefix><deployment>`.
 
 `NAVIGATOR_CALENDAR_NEON_LAW_OWNER` supplies the bootstrap Google Workspace mailbox. An Owner can save a separate
 mailbox for the Firm in Firm Settings.
