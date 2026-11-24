@@ -22,7 +22,7 @@ pub struct ExecutionArgs {
     /// A YAML file with the expense amount, currency, payee, category, and source ID.
     #[arg(long, value_parser = read_receipt_metadata, requires = "file")]
     receipt: Option<model::documents::ReceiptMetadata>,
-    /// How the executed document was signed: `wet_ink` or `docusign`.
+    /// How the executed document was signed: `wet_ink`, `docusign`, or `dropbox_sign`.
     /// Optional; given together with `--signed-on`.
     #[arg(long, value_parser = parse_signing_method, requires = "signed_on")]
     signing_method: Option<model::documents::SigningMethod>,

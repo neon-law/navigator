@@ -6227,7 +6227,7 @@ fn canonical_document(base: &str) -> Value {
             "required": ["method", "signed_on"],
             "additionalProperties": false,
             "properties": {
-              "method": { "type": "string", "enum": ["wet_ink", "docusign"] },
+              "method": { "type": "string", "enum": ["wet_ink", "docusign", "dropbox_sign"] },
               "signed_on": { "type": "string", "format": "date" }
             }
           },

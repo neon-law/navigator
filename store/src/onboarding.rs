@@ -1,12 +1,15 @@
 //! PostgreSQL execution evidence and document filing for onboarding.
-use std::{collections::HashSet, sync::Arc};
+use std::{
+    collections::{BTreeSet, HashMap, HashSet},
+    sync::Arc,
+};
 
 use cloud::StorageService;
 use uuid::Uuid;
 
 use crate::{
     assets::{Asset, AssetError, ExpectedHead, Filed, RevisionError},
-    documents::{DocumentIdentity, IngestArgs},
+    documents::{DocumentIdentity, IngestArgs, Signing, SigningMethod},
     postgres::PostgresDb,
 };
 
@@ -20,6 +23,17 @@ pub async fn official_projects(
     pg: &PostgresDb,
     projects: &[Uuid],
 ) -> Result<HashSet<Uuid>, sqlx::Error> {
+    Ok(verified_providers(pg, projects)
+        .await?
+        .into_keys()
+        .collect())
+}
+
+/// Signing methods backed by completed provider evidence, keyed by Project.
+pub async fn verified_providers(
+    pg: &PostgresDb,
+    projects: &[Uuid],
+) -> Result<HashMap<Uuid, BTreeSet<SigningMethod>>, sqlx::Error> {
     crate::postgres_backfill::family::require_scope(
         pg,
         crate::postgres_backfill::family::Family::Notation,
@@ -44,12 +58,54 @@ pub async fn official_projects(
     .bind(&providers)
     .fetch_all(pg.pool())
     .await?;
-    Ok(rows
-        .into_iter()
-        .filter_map(|(project, provider, id)| {
-            evidence_id_is_valid(&provider, &id).then_some(project)
-        })
-        .collect())
+    let mut methods = HashMap::<_, BTreeSet<_>>::new();
+    for (project, provider, id) in rows {
+        if let Some(method) =
+            SigningMethod::parse(&provider).filter(|_| evidence_id_is_valid(&provider, &id))
+        {
+            methods.entry(project).or_default().insert(method);
+        }
+    }
+    Ok(methods)
+}
+
+/// Methods recorded on current, signed onboarding filings. These are document
+/// declarations and do not change the Project's verified lifecycle.
+pub async fn filed_signing_methods(
+    pg: &PostgresDb,
+    projects: &[Uuid],
+) -> Result<HashMap<Uuid, BTreeSet<SigningMethod>>, sqlx::Error> {
+    crate::postgres_backfill::family::require_scope(
+        pg,
+        crate::postgres_backfill::family::Family::Notation,
+    )
+    .await
+    .map_err(|error| sqlx::Error::Configuration(Box::new(error)))?;
+    let rows: Vec<(Uuid, serde_json::Value)> = sqlx::query_as(
+        "SELECT DISTINCT h.project_id,h.signing FROM asset h
+         WHERE h.project_id=ANY($1) AND h.deleted_at IS NULL AND h.signing IS NOT NULL
+           AND NOT EXISTS (
+               SELECT 1 FROM asset newer
+               WHERE newer.project_id=h.project_id AND newer.slug=h.slug AND newer.id>h.id
+           ) AND (h.kind='onboarding' OR EXISTS (
+                 SELECT 1 FROM notation n JOIN template t ON t.id=n.template_id
+                 LEFT JOIN notation_document d ON d.notation_id=n.id
+                 WHERE n.project_id=h.project_id AND t.kind='onboarding' AND
+                     (d.original_asset_id=h.id OR
+                      'notations/'||n.id||'/signed-document.pdf' IN (h.storage_key,h.secondary_storage_key) OR
+                      'notations/'||n.id||'/document.pdf' IN (h.storage_key,h.secondary_storage_key))
+             ))"
+    )
+    .bind(projects)
+    .fetch_all(pg.pool())
+    .await?;
+    let mut methods = HashMap::<_, BTreeSet<_>>::new();
+    for (project, record) in rows {
+        if let Ok(signing) = serde_json::from_value::<Signing>(record) {
+            methods.entry(project).or_default().insert(signing.method);
+        }
+    }
+    Ok(methods)
 }
 
 /// Whether a provider's request id can stand as execution evidence. DocuSign envelope ids are

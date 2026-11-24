@@ -433,6 +433,25 @@ pub(crate) async fn ingest_document(
     Ok(document)
 }
 
+fn filing_matches_head(
+    args: &crate::documents::IngestArgs<'_>,
+    identity: &crate::documents::DocumentIdentity<'_>,
+    head: &Asset,
+    sha: &str,
+) -> bool {
+    use crate::assets::verified_onboarding_envelope;
+    let evidence = verified_onboarding_envelope(identity.metadata.as_ref());
+    head.deleted_at.is_none()
+        && head.sha256_hex == sha
+        && identity
+            .signing
+            .is_none_or(|signing| head.signing == Some(signing))
+        && crate::documents::matches_provider_filing(args, identity, head)
+        && (args.kind != "onboarding"
+            || evidence.is_none()
+            || verified_onboarding_envelope(head.metadata.as_ref()) == evidence)
+}
+
 pub(crate) async fn file_revision(
     pg: &PostgresDb,
     storage: &Arc<dyn StorageService>,
@@ -496,14 +515,7 @@ pub(crate) async fn file_revision(
             });
         }
         crate::assets::preserve_drive_metadata(&mut identity, head)?;
-        let evidence = crate::assets::verified_onboarding_envelope(identity.metadata.as_ref());
-        if head.deleted_at.is_none()
-            && head.sha256_hex == sha
-            && crate::documents::matches_provider_filing(args, &identity, head)
-            && (args.kind != "onboarding"
-                || evidence.is_none()
-                || crate::assets::verified_onboarding_envelope(head.metadata.as_ref()) == evidence)
-        {
+        if filing_matches_head(args, &identity, head, &sha) {
             return Ok(Filed::Unchanged { asset_id: head.id });
         }
     }

@@ -128,13 +128,10 @@ pub fn onboarding_summary(
                     return None;
                 }
                 asset.signing.map(|signing| {
-                    let method = match signing.method {
-                        store::documents::SigningMethod::WetInk => "wet ink",
-                        store::documents::SigningMethod::Docusign => "DocuSign",
-                    };
                     format!(
-                        "{} · Signed in {method} on {}",
+                        "{} · {} on {}",
                         asset.filename.as_deref().unwrap_or("Onboarding document"),
+                        signing.method.signed_how(),
                         signing.signed_on.format("%Y-%m-%d")
                     )
                 })
@@ -327,11 +324,7 @@ fn is_letter(asset: &store::assets::Asset, run: Option<&OnboardingRun>) -> bool 
 #[cfg(feature = "server")]
 fn letter_status(asset: &store::assets::Asset, run: Option<&OnboardingRun>) -> String {
     if let Some(signing) = asset.signing {
-        let how = match signing.method {
-            store::documents::SigningMethod::WetInk => "in wet ink",
-            store::documents::SigningMethod::Docusign => "through DocuSign",
-        };
-        return format!("Signed {how} on {}", signing.signed_on.format("%Y-%m-%d"));
+        return format!("{} on {}", signing.method.signed_how(), signing.signed_on);
     }
     run.map_or_else(
         || "On file".to_string(),

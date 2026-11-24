@@ -93,9 +93,10 @@ After preparing a draft, open the sender-view URL printed by the CLI to review t
 `navigator notation envelope prepare <notation-id>` to launch the browser. Continue back to Navigator, then run
 `navigator notation envelope send <notation-id>` to dispatch.
 
-On the lawyer workbench, expand **Onboarding agreements** to open a Notation for review or read a filed agreement. The
-CLI lists the same kinds of agreements across your participating Projects. Use a Notation ID to prepare a
-signature-enabled Notation for review.
+On the lawyer workbench, **Onboarding retainers** groups your participating Projects by whether a signed retainer is
+recorded. Expand a group to see the signing methods, review a Notation, or read a filed agreement. The CLI lists
+existing agreements across your participating Projects. Use a Notation ID to prepare a signature-enabled Notation for
+review.
 
 ```bash
 navigator notation onboarding --host "$SITE"

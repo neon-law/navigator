@@ -226,13 +226,15 @@ pub fn validate_document_slug(filename: &str, slug: &str) -> Result<(), Document
     }
 }
 
-/// How an executed document was signed: in wet ink on paper, or through
-/// `DocuSign`. See the glossary's Signing Method.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+/// The recorded Signing Method for a filed, executed document.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum SigningMethod {
     WetInk,
     Docusign,
+    DropboxSign,
 }
 
 /// Require an envelope UUID for onboarding uploads declared as signed through `DocuSign`.
@@ -261,7 +263,7 @@ pub fn validate_onboarding_envelope(
 
 impl SigningMethod {
     /// Every method, in the order help and errors name them.
-    pub const ALL: [Self; 2] = [Self::WetInk, Self::Docusign];
+    pub const ALL: [Self; 3] = [Self::WetInk, Self::Docusign, Self::DropboxSign];
 
     /// The stored and committed spelling.
     #[must_use]
@@ -269,6 +271,17 @@ impl SigningMethod {
         match self {
             Self::WetInk => "wet_ink",
             Self::Docusign => "docusign",
+            Self::DropboxSign => "dropbox_sign",
+        }
+    }
+
+    /// How the signed document describes its execution.
+    #[must_use]
+    pub const fn signed_how(self) -> &'static str {
+        match self {
+            Self::WetInk => "Signed in wet ink",
+            Self::Docusign => "Signed through DocuSign",
+            Self::DropboxSign => "Signed through Dropbox Sign",
         }
     }
 
