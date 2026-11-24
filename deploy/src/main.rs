@@ -2298,9 +2298,12 @@ struct FirmNamespaceMove {
     /// Firm UUID from the deployment's Project directory.
     #[arg(long)]
     firm: uuid::Uuid,
-    /// Canonical current Forgejo organization and Firm slug.
+    /// Current Navigator Firm slug.
     #[arg(long)]
     from: String,
+    /// Current Forgejo organization when it differs from the Firm slug.
+    #[arg(long)]
+    forgejo_from: Option<String>,
     /// Requested organization name.
     #[arg(long)]
     to: String,

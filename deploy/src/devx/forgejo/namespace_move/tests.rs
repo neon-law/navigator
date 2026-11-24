@@ -42,10 +42,15 @@ async fn provider(
 
 #[tokio::test]
 async fn interrupted_rename_resumes_with_original_project_and_repository_ids() {
-    store::test_support::with_postgres(rehearse()).await;
+    store::test_support::with_postgres(rehearse("old-firm")).await;
 }
 
-async fn rehearse() {
+#[tokio::test]
+async fn different_firm_and_provider_names_resume_to_one_verified_namespace() {
+    store::test_support::with_postgres(rehearse("original-practice")).await;
+}
+
+async fn rehearse(firm_slug: &str) {
     let pg = PostgresDb::application().await.unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let origin = format!("http://{}", listener.local_addr().unwrap());
@@ -60,8 +65,9 @@ async fn rehearse() {
         token: "synthetic".into(),
     };
     let firm: Uuid = sqlx::query_scalar(
-        "INSERT INTO firm (name,slug,status) VALUES ('Synthetic','old-firm','active') RETURNING id",
+        "INSERT INTO firm (name,slug,status) VALUES ('Synthetic',$1,'active') RETURNING id",
     )
+    .bind(firm_slug)
     .fetch_one(pg.pool())
     .await
     .unwrap();
@@ -72,7 +78,8 @@ async fn rehearse() {
     sqlx::query("INSERT INTO project (code,name,status,firm_id,entity_id,repository_url) VALUES ('other','Synthetic','open',$1,$2,$3)").bind(firm).bind(entity).bind(external).execute(pg.pool()).await.unwrap();
     let mut args = FirmNamespaceMove {
         firm,
-        from: "old-firm".into(),
+        from: firm_slug.into(),
+        forgejo_from: (firm_slug != "old-firm").then(|| "old-firm".into()),
         to: "new-firm".into(),
         organization_id: 20,
         apply: true,
@@ -92,7 +99,7 @@ async fn rehearse() {
             .fetch_one(pg.pool())
             .await
             .unwrap(),
-        "old-firm"
+        firm_slug
     );
     assert!(sqlx::query("UPDATE firm SET slug='new-firm' WHERE id=$1")
         .bind(firm)
@@ -108,6 +115,11 @@ async fn rehearse() {
             .is_err()
     );
     assert_runtime_cannot_complete(&pg).await;
+    if args.forgejo_from.is_some() {
+        let previous = args.forgejo_from.replace("unrelated".into());
+        assert!(coordinate(&pg, &forge, &args).await.is_err());
+        args.forgejo_from = previous;
+    }
     coordinate(&pg, &forge, &args).await.unwrap();
     coordinate(&pg, &forge, &args).await.unwrap();
     let (url,other,count):(String,String,i64)=sqlx::query_as("SELECT repository_url, (SELECT repository_url FROM project WHERE code='other'), (SELECT count(*) FROM firm_namespace_move WHERE completed_at IS NOT NULL) FROM project WHERE id=$1").bind(project).fetch_one(pg.pool()).await.unwrap();
@@ -119,14 +131,23 @@ async fn rehearse() {
             1
         )
     );
-    assert!(
-        sqlx::query("UPDATE project SET repository_url=$1 WHERE id=$2")
-            .bind(old_url)
+    let retired_names = std::collections::BTreeSet::from([firm_slug, args.source_organization()]);
+    for name in retired_names {
+        let retired_url = format!("{origin}/{name}/sample.git");
+        let error = sqlx::query("UPDATE project SET repository_url=$1 WHERE id=$2")
+            .bind(retired_url)
             .bind(project)
             .execute(pg.pool())
             .await
-            .is_err()
-    );
+            .unwrap_err();
+        assert_eq!(
+            error
+                .as_database_error()
+                .and_then(sqlx::error::DatabaseError::code)
+                .as_deref(),
+            Some("23514")
+        );
+    }
     assert_removable_after_completion(&pg, firm).await;
     server.abort();
 }

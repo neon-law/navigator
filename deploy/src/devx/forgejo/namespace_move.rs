@@ -14,6 +14,12 @@ use uuid::Uuid;
 use crate::FirmNamespaceMove;
 use store::postgres::PostgresDb;
 
+impl FirmNamespaceMove {
+    fn source_organization(&self) -> &str {
+        self.forgejo_from.as_deref().unwrap_or(&self.from)
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize, PartialEq)]
 struct Binding {
     suffix: String,
@@ -101,7 +107,7 @@ impl Forge {
     }
 
     async fn verify_old_path(&self, args: &FirmNamespaceMove) -> Result<()> {
-        let source = format!("{}/api/v1/orgs/{}", self.origin, args.from);
+        let source = format!("{}/api/v1/orgs/{}", self.origin, args.source_organization());
         let response = self
             .client
             .get(&source)
@@ -139,7 +145,11 @@ impl Forge {
     async fn rename(&self, args: &FirmNamespaceMove) -> Result<()> {
         let response = self
             .client
-            .post(format!("{}/api/v1/orgs/{}/rename", self.origin, args.from))
+            .post(format!(
+                "{}/api/v1/orgs/{}/rename",
+                self.origin,
+                args.source_organization()
+            ))
             .header("Authorization", format!("token {}", self.token))
             .json(&serde_json::json!({"new_name": args.to}))
             .send()
@@ -177,18 +187,34 @@ async fn paths(db: &mut PgConnection, firm: Uuid, prefix: &str) -> Result<BTreeM
     Ok(paths)
 }
 
+async fn reject_extra_bindings(
+    db: &mut PgConnection,
+    forge: &Forge,
+    args: &FirmNamespaceMove,
+) -> Result<()> {
+    if args.source_organization() != args.from {
+        let prefix = format!("{}/{}/", forge.origin, args.from);
+        ensure!(
+            paths(db, args.firm, &prefix).await?.is_empty(),
+            "Project bindings also reference the old Firm slug"
+        );
+    }
+    Ok(())
+}
+
 async fn validate_database(
     db: &mut PgConnection,
     args: &FirmNamespaceMove,
-    slug: &str,
+    organization: &str,
 ) -> Result<()> {
     let (owner, conflict): (bool, bool) = sqlx::query_as(
         "SELECT pg_has_role(current_user, (SELECT relowner FROM pg_class WHERE oid='firm'::regclass), 'USAGE'),
-                EXISTS (SELECT FROM firm WHERE slug=$1 AND id<>$2)
+                EXISTS (SELECT FROM firm WHERE slug IN ($1,$5) AND id<>$2)
                 OR EXISTS (SELECT FROM firm_forgejo_organization
                            WHERE (firm_id=$2 AND (organization<>$3 OR forgejo_id<>$4))
-                              OR (firm_id<>$2 AND (organization IN ($1,$3) OR forgejo_id=$4)))")
-        .bind(&args.to).bind(args.firm).bind(slug).bind(args.organization_id).fetch_one(db).await?;
+                              OR (firm_id<>$2 AND (organization IN ($1,$3,$5,$6) OR forgejo_id=$4)))")
+        .bind(&args.to).bind(args.firm).bind(organization).bind(args.organization_id)
+        .bind(args.source_organization()).bind(&args.from).fetch_one(db).await?;
     ensure!(owner, "use the installation's PostgreSQL migration role");
     ensure!(!conflict, "conflicting Firm or provisioning record");
     Ok(())
@@ -199,6 +225,12 @@ async fn verify_provider(
     args: &FirmNamespaceMove,
     has_receipt: bool,
 ) -> Result<bool> {
+    if args.source_organization() != args.from {
+        ensure!(
+            forge.get(&format!("users/{}", args.from)).await?.is_none(),
+            "the old Firm slug also names a Forgejo account"
+        );
+    }
     let target = forge.organization(&args.to).await?;
     let at_target = target == Some(args.organization_id);
     ensure!(
@@ -209,7 +241,7 @@ async fn verify_provider(
         forge.verify_old_path(args).await?;
     } else {
         ensure!(
-            forge.organization(&args.from).await? == Some(args.organization_id),
+            forge.organization(args.source_organization()).await? == Some(args.organization_id),
             "source organization ID differs"
         );
         ensure!(
@@ -217,7 +249,11 @@ async fn verify_provider(
             "destination account exists"
         );
     }
-    let actual = if at_target { &args.to } else { &args.from };
+    let actual = if at_target {
+        &args.to
+    } else {
+        args.source_organization()
+    };
     let user = forge
         .get("user")
         .await?
@@ -237,12 +273,30 @@ struct PendingMove {
     at_target: bool,
 }
 
+fn verify_receipt(
+    receipt: Option<&sqlx::postgres::PgRow>,
+    forge: &Forge,
+    args: &FirmNamespaceMove,
+) -> Result<()> {
+    if let Some(row) = receipt {
+        ensure!(
+            row.try_get::<String, _>("old_slug")? == args.from
+                && row.try_get::<String, _>("source_org")? == args.source_organization()
+                && row.try_get::<String, _>("new_slug")? == args.to
+                && row.try_get::<String, _>("forge_origin")? == forge.origin
+                && row.try_get::<i64, _>("forgejo_id")? == args.organization_id,
+            "existing move is bound to different coordinates"
+        );
+    }
+    Ok(())
+}
+
 async fn prepare(
     pg: &PostgresDb,
     forge: &Forge,
     args: &FirmNamespaceMove,
 ) -> Result<Option<PendingMove>> {
-    let old = format!("{}/{}/", forge.origin, args.from);
+    let old = format!("{}/{}/", forge.origin, args.source_organization());
     let new = format!("{}/{}/", forge.origin, args.to);
     let mut tx = pg.pool().begin().await?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
@@ -252,18 +306,10 @@ async fn prepare(
         .bind(args.firm)
         .fetch_one(&mut *tx)
         .await?;
-    let receipt = sqlx::query("SELECT id, old_slug,new_slug,forgejo_id,forge_origin,repositories,completed_at IS NOT NULL AS complete FROM firm_namespace_move WHERE firm_id=$1 ORDER BY inserted_at DESC LIMIT 1")
+    let receipt = sqlx::query("SELECT id, old_slug,COALESCE(old_organization,old_slug) AS source_org,new_slug,forgejo_id,forge_origin,repositories,completed_at IS NOT NULL AS complete FROM firm_namespace_move WHERE firm_id=$1 ORDER BY inserted_at DESC LIMIT 1")
         .bind(args.firm).fetch_optional(&mut *tx).await?;
     let receipt = receipt.filter(|row| !row.get::<bool, _>("complete") || slug == args.to);
-    if let Some(row) = &receipt {
-        ensure!(
-            row.try_get::<String, _>("old_slug")? == args.from
-                && row.try_get::<String, _>("new_slug")? == args.to
-                && row.try_get::<String, _>("forge_origin")? == forge.origin
-                && row.try_get::<i64, _>("forgejo_id")? == args.organization_id,
-            "existing move is bound to different coordinates"
-        );
-    }
+    verify_receipt(receipt.as_ref(), forge, args)?;
     let complete = receipt
         .as_ref()
         .is_some_and(|r| r.get::<bool, _>("complete"));
@@ -271,17 +317,31 @@ async fn prepare(
         slug == if complete { &args.to } else { &args.from }.as_str(),
         "Firm slug differs from move"
     );
-    validate_database(&mut tx, args, &slug).await?;
+    validate_database(
+        &mut tx,
+        args,
+        if complete {
+            &args.to
+        } else {
+            args.source_organization()
+        },
+    )
+    .await?;
+    reject_extra_bindings(&mut tx, forge, args).await?;
     let old_paths = paths(&mut tx, args.firm, &old).await?;
     let new_paths = paths(&mut tx, args.firm, &new).await?;
     if receipt.is_none() && old_paths.is_empty() {
         let recorded: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT FROM firm_forgejo_organization WHERE firm_id=$1 AND forgejo_id=$2 AND organization=$3)")
-            .bind(args.firm).bind(args.organization_id).bind(&args.from).fetch_one(&mut *tx).await?;
+            .bind(args.firm).bind(args.organization_id).bind(args.source_organization()).fetch_one(&mut *tx).await?;
         ensure!(recorded, "Firm has no binding to this Forgejo organization");
     }
     let at_target = verify_provider(forge, args, receipt.is_some()).await?;
-    let actual = if at_target { &args.to } else { &args.from };
+    let actual = if at_target {
+        &args.to
+    } else {
+        args.source_organization()
+    };
     if complete {
         ensure!(
             at_target && old_paths.is_empty(),
@@ -306,9 +366,9 @@ async fn prepare(
         );
         row.try_get::<Uuid, _>("id")?
     } else if args.apply {
-        sqlx::query_scalar("INSERT INTO firm_namespace_move (firm_id,forge_origin,forgejo_id,old_slug,new_slug,repositories) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id")
+        sqlx::query_scalar("INSERT INTO firm_namespace_move (firm_id,forge_origin,forgejo_id,old_slug,new_slug,repositories,old_organization) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id")
             .bind(args.firm).bind(&forge.origin).bind(args.organization_id).bind(&args.from).bind(&args.to)
-            .bind(sqlx::types::Json(&bindings)).fetch_one(&mut *tx).await?
+            .bind(sqlx::types::Json(&bindings)).bind(args.source_organization()).fetch_one(&mut *tx).await?
     } else {
         Uuid::nil()
     };
@@ -353,7 +413,7 @@ async fn coordinate(pg: &PostgresDb, forge: &Forge, args: &FirmNamespaceMove) ->
     );
     if !at_target {
         ensure!(
-            forge.organization(&args.from).await? == Some(args.organization_id),
+            forge.organization(args.source_organization()).await? == Some(args.organization_id),
             "source changed before rename"
         );
         forge.rename(args).await?;
@@ -391,7 +451,7 @@ async fn finish(
     id: Uuid,
     bindings: &Bindings,
 ) -> Result<()> {
-    let old = format!("{}/{}/", forge.origin, args.from);
+    let old = format!("{}/{}/", forge.origin, args.source_organization());
     let new = format!("{}/{}/", forge.origin, args.to);
     sqlx::query("LOCK TABLE firm, firm_forgejo_organization, project IN SHARE ROW EXCLUSIVE MODE")
         .execute(&mut *db)
@@ -403,7 +463,8 @@ async fn finish(
             .fetch_one(&mut *db)
             .await?;
     ensure!(source_current, "Firm changed before commit");
-    validate_database(db, args, &args.from).await?;
+    validate_database(db, args, args.source_organization()).await?;
+    reject_extra_bindings(db, forge, args).await?;
     let original = paths(db, args.firm, &old).await?;
     ensure!(
         original.len() == bindings.len()
@@ -430,7 +491,7 @@ async fn finish(
     )
     .bind(&args.to)
     .bind(args.firm)
-    .bind(&args.from)
+    .bind(args.source_organization())
     .bind(args.organization_id)
     .execute(&mut *db)
     .await?;
@@ -451,6 +512,8 @@ pub(in crate::devx) fn run(args: &FirmNamespaceMove) -> Result<()> {
     ensure!(
         store::firms::slug::is_valid(&args.from)
             && store::firms::slug::is_valid(&args.to)
+            && store::firms::slug::is_valid(args.source_organization())
+            && args.source_organization() != args.to
             && args.from != args.to
             && args.organization_id > 0,
         "invalid namespace coordinates"

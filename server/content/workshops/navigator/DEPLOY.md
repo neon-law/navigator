@@ -806,6 +806,22 @@ An SSH certificate authenticates a Git connection. It does not grant repository 
 Navigator upload by itself. A service identity's repository scope and its credential lifetime are separate controls.
 Test both. Keep private signing keys and decrypted service configuration out of repositories, slides and logs.
 
+### Move an existing Firm namespace
+
+Record the Firm UUID and slug, the Forgejo origin and numeric organization ID, and the destination's availability.
+Inventory all repositories by provider ID and main revision, including archived repositories. Count active jobs, capture
+checkout fetch and push URLs, and check runners, webhooks, workflow references and OIDC trust conditions. Keep the
+inventory in the private operator record. Arrange a maintenance window and drain work before changing names.
+
+---
+
+Preview the [coordinated organization move](../../../../docs/forgejo-deployment.md). Supply `--forgejo-from` when the
+current organization and Firm slug differ. Use a separate operator identity for the move and retain the
+repository-scoped token for daily maintenance. Reuse the same coordinates to resume an interrupted move. Verify the Firm
+and organization IDs, private visibility, archived state, refs, Project URLs and integration access. Update each
+affected checkout remote, verify its fetch and push destinations, and test a synthetic signed review and deployment
+before reopening writes.
+
 ### Require the gate and protected-main policy
 
 Read the actual gate's check context from a run on the installation. Review policy drift without writing:
