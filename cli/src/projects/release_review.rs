@@ -32,11 +32,11 @@ impl Source {
             self.full_name.eq_ignore_ascii_case(expected),
             "forge repository identity differs"
         );
-        ensure!(self.private, "Project source must be private");
         Ok(())
     }
 
     fn writable(&self) -> Result<()> {
+        ensure!(self.private, "Project source must be private");
         ensure!(
             !self.archived && self.permissions.as_ref().is_some_and(|p| p.push),
             "private repository write access is unconfirmed"
@@ -251,6 +251,16 @@ async fn proposal(dir: &Path, targets: &Targets, topic: &str) -> Result<Option<S
     Ok(head)
 }
 
+async fn verify_bases(dir: &Path, targets: &Targets, base: &str, base_sha: &str) -> Result<()> {
+    for url in &targets.destinations {
+        ensure!(
+            remote_ref(dir, url, base).await?.as_deref() == Some(base_sha),
+            "reference and mirror base revisions differ"
+        );
+    }
+    Ok(())
+}
+
 async fn publish(
     dir: &Path,
     targets: &Targets,
@@ -259,12 +269,7 @@ async fn publish(
     base: &str,
     base_sha: &str,
 ) -> Result<()> {
-    for url in &targets.destinations {
-        ensure!(
-            remote_ref(dir, url, base).await?.as_deref() == Some(base_sha),
-            "reference and mirror base revisions differ"
-        );
-    }
+    verify_bases(dir, targets, base, base_sha).await?;
     for url in &targets.destinations {
         if remote_ref(dir, url, topic).await?.is_none() {
             workspace::git(
@@ -354,9 +359,13 @@ async fn review(
 ) -> Result<Value> {
     let base = format!("refs/heads/{}", source.default_branch);
     let Some(base_sha) = remote_ref(dir, &targets.reference, &base).await? else {
-        let heads =
-            workspace::git(dir, &["ls-remote", "--heads", "--", &targets.reference]).await?;
-        ensure!(heads.trim().is_empty(), "default branch is missing");
+        for url in &targets.destinations {
+            let heads = workspace::git(dir, &["ls-remote", "--heads", "--", url]).await?;
+            ensure!(
+                heads.trim().is_empty(),
+                "reference default branch is missing while a destination has branches"
+            );
+        }
         return Ok(json!({"status":"empty"}));
     };
     let branch = format!("release/{tag}");
@@ -364,6 +373,7 @@ async fn review(
     ensure!(topic != base, "release topic is the default branch");
     fetch(dir, &targets.reference, &base).await?;
     let Some(head) = proposal(dir, targets, &topic).await? else {
+        verify_bases(dir, targets, &base, &base_sha).await?;
         ensure!(
             !land && pin_at(dir, &base_sha)? == tag,
             "prepare the signed change on {branch}"

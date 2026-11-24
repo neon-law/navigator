@@ -1152,18 +1152,22 @@ mod tests {
 
     #[tokio::test]
     async fn simultaneous_creates_address_one_project_row() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal).await;
-        let mut input = sample(project_id);
-        input.replay_key = Some("notice-1".into());
-        let (first, second) = tokio::join!(create(&surreal, &input), create(&surreal, &input));
-        let rows = list(&surreal, project_id).await.unwrap();
-        assert_eq!(rows.len(), 1);
-        // A transaction conflict may require one more read-back.
-        assert!(first.is_ok() || second.is_ok());
-        for row in [first, second].into_iter().flatten() {
-            assert_eq!(row.id, rows[0].id);
-        }
+        // Exercise the compatibility store against its own in-memory Project.
+        crate::postgres_mirror::from_source(async {
+            let surreal = mem_surreal().await;
+            let project_id = project(&surreal).await;
+            let mut input = sample(project_id);
+            input.replay_key = Some("notice-1".into());
+            let (first, second) = tokio::join!(create(&surreal, &input), create(&surreal, &input));
+            let rows = list(&surreal, project_id).await.unwrap();
+            assert_eq!(rows.len(), 1);
+            // A transaction conflict may require one more read-back.
+            assert!(first.is_ok() || second.is_ok());
+            for row in [first, second].into_iter().flatten() {
+                assert_eq!(row.id, rows[0].id);
+            }
+        })
+        .await;
     }
 
     #[tokio::test]
