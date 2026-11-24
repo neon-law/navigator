@@ -321,12 +321,7 @@ async fn run_lane(
                         .for_project_on(&postgres, &surreal, project_id)
                         .await
                         .map_err(dbos::Error::Application)?;
-                    slack
-                        .post_message(&channel_id, &message)
-                        .await
-                        .map_err(|error| {
-                            dbos::Error::Application(LaneError::Slack(error.to_string()))
-                        })
+                    post_correlated(slack.as_ref(), &channel_id, &message).await
                 }
             })
             .await?;
@@ -382,14 +377,26 @@ async fn post_client_view(
                 .for_project_on(&postgres, &surreal, project_id)
                 .await
                 .map_err(dbos::Error::Application)?;
-            slack
-                .post_message(&channel_id, CLIENT_PROJECT_VIEW_MESSAGE)
-                .await
-                .map_err(|error| dbos::Error::Application(LaneError::Slack(error.to_string())))
+            post_correlated(slack.as_ref(), &channel_id, CLIENT_PROJECT_VIEW_MESSAGE).await
         }
     })
     .await?;
     Ok(())
+}
+
+/// Post once per step: the step's effect key is the Slack correlation, so a
+/// re-run after an accepted post that never checkpointed does not repeat it.
+async fn post_correlated(
+    slack: &dyn workflows::SlackBot,
+    channel_id: &str,
+    text: &str,
+) -> dbos::Result<(), LaneError> {
+    let correlation = workflows::dbos_engine::effect_key().ok_or_else(|| {
+        dbos::Error::Application(LaneError::Store("posted outside a DBOS step".to_owned()))
+    })?;
+    crate::firm_slack::post_once(slack, channel_id, &correlation, text)
+        .await
+        .map_err(|error| dbos::Error::Application(LaneError::Slack(error.to_string())))
 }
 
 /// The canonical delivery identity shared with pre-start ingress admission.
