@@ -108,9 +108,12 @@ export NAVIGATOR_IMAGE_REGISTRY=ghcr.io/<owner>/navigator
 cargo run -p hudson -- dev deploy
 ```
 
-`dev deploy` and `dev worktree-env up --demo` run the in-cluster compatibility stack from published images. They require
-admitted PostgreSQL or a prepared, empty compatibility source for first enrollment. An uninitialized SurrealDB fixture
-cannot bootstrap that stack. Use `dev up` for a fresh PostgreSQL environment.
+`dev deploy` and `dev worktree-env up --demo` create an isolated KIND tier for a fresh checkout. Hudson applies the
+standard development seed to PostgreSQL, including the three sample projects, then starts the published web image with
+its cohosted DBOS worker. Open the localhost ingress URL printed after the rollout. Re-running the command reuses the
+worktree’s database. `dev undeploy` removes the disposable demo and its data.
+
+Worktrees with a recorded historical database use the compatibility deployment and its existing enrollment.
 
 ### PostgreSQL and Apache AGE image
 

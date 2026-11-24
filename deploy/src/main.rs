@@ -1384,15 +1384,10 @@ enum DevCmd {
     /// creates a sibling worktree when no checkout was supplied.
     #[command(subcommand)]
     WorktreeEnv(WorktreeEnvCmd),
-    /// Pull published Artifact Registry images, `kind load` them, then
-    /// `kubectl apply -k k8s/overlays/kind` — the full stack
-    /// including navigator-web. CI publishes the images; this never builds
-    /// them. Pin a release with `NAVIGATOR_IMAGE_TAG`, else the
-    /// latest published `YY.M.D` tag is pulled. Ends with the
-    /// navigator-web rollout settling.
+    /// Deploy the released web image in KIND. Fresh worktrees use seeded
+    /// PostgreSQL and the cohosted DBOS worker. NAVIGATOR_IMAGE_TAG pins the release.
     Deploy,
-    /// `kubectl delete namespace navigator`. Removes every Neon Law Navigator
-    /// resource without touching the cluster itself.
+    /// Remove the disposable demo and its data.
     Undeploy,
     /// Smoke-test the deployed stack: wait for every rollout, hit
     /// `/health` through the ingress, assert the embedded Rego policy decisions,

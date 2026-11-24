@@ -108,7 +108,10 @@ pub fn run_e2e(cfg: &KindConfig) -> Result<()> {
         // grants roles, creates history, or falls back to the legacy tier.
         super::orchestrate::verified_native_database(root, cfg)?;
         wait_for_clamd_ping(cfg.clamav_port)?;
-        check_health_at(&format!("localhost:{}", cfg.web_port))?;
+        check_health_at(&format!(
+            "localhost:{}",
+            super::worktree_env::web_port(root)?
+        ))?;
         check_seed()?;
         eprintln!("=== native checks passed ===");
         return Ok(());

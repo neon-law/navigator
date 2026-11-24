@@ -155,6 +155,17 @@ pub(super) fn up_native_in(root: &Path, cfg: &KindConfig, no_deps: bool) -> Resu
             // upgrade API, never replacement of an unknown database.
             anyhow::ensure!(
                 std::net::TcpStream::connect(("127.0.0.1", cfg.web_port)).is_err()
+                    && tier
+                        .kube
+                        .output(&[
+                            "get",
+                            "deployment/navigator-web",
+                            "--ignore-not-found",
+                            "-o",
+                            "name"
+                        ])?
+                        .trim()
+                        .is_empty()
                     && std::net::TcpStream::connect(("127.0.0.1", native_profile::dbos_port(cfg)?))
                         .is_err(),
                 "stop the owned app and durable worker before a native schema upgrade"
@@ -446,11 +457,14 @@ fn seed_native_application(
                 |key| values.get(key).cloned(),
             )?)?);
         store::postgres::PostgresDb::with_application_db(pg, async {
-            store::seed::seed_environment(
+            store::seed::seed_environment_with_stage(
                 &store::surreal::SurrealDb::uninitialized(),
                 &storage,
                 store::DeploymentEnvironment::Dev,
                 store::seed::BrandSeed::Neon,
+                values
+                    .get(store::sample_project::STAGE_ENV)
+                    .map(String::as_str),
             )
             .await
         })
@@ -609,7 +623,7 @@ pub(super) fn build_and_load_local_image(
         .arg("--tag")
         .arg(image)
         .arg(root))?;
-    kind_load_image_into_cluster(image, cfg)
+    kind_load_image_into_cluster(image, cfg, &format!("linux/{}", docker_daemon_arch()))
 }
 
 /// Point Rauthy's canonical public URL at this tier's browser-reachable origin.
@@ -761,6 +775,50 @@ pub(super) fn kind_down_only(cfg: &KindConfig) -> Result<()> {
     Ok(())
 }
 
+pub(super) fn resolve_demo_image(tag_override: Option<&str>) -> Result<String> {
+    let registry = super::registry::registry_from_env()?;
+    let tag = resolve_local_image_tag(&registry, "neon-server", tag_override)?;
+    let image = super::registry::image_ref(&registry, "neon-server", &tag);
+    run(Command::new("docker").args(["pull", "--platform", "linux/amd64", &image]))?;
+    Ok(image)
+}
+
+pub(super) fn deploy_native_image(root: &Path, cfg: &KindConfig, image: &str) -> Result<()> {
+    use super::forgejo::cluster::{kustomize, secret_manifest, Kube};
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    use sha2::{Digest, Sha256};
+
+    kind_load_image_into_cluster(image, cfg, "linux/amd64")?;
+    let values = dotenvy::from_path_iter(root.join(".devx/env"))?
+        .collect::<Result<std::collections::BTreeMap<_, _>, _>>()?;
+    let values = super::native_profile::demo_environment(values, cfg);
+    let secret = secret_manifest(
+        "navigator-demo-environment",
+        &cfg.namespace,
+        "Opaque",
+        &values,
+    )?;
+    let kube = Kube::new(cfg);
+    kube.apply(&secret)?;
+    kube.run(&[
+        "patch",
+        "configmap",
+        "rauthy-loopback-proxy",
+        "--type=merge",
+        "-p",
+        &super::rauthy_loopback_config_patch(cfg.rauthy_port),
+    ])?;
+    let rendered = kustomize(root, "k8s/overlays/kind-postgres-demo")?;
+    let manifest = super::native_profile::demo_manifest(
+        &rendered,
+        image,
+        &STANDARD.encode(Sha256::digest(secret.as_bytes())),
+    )?;
+    kube.apply(&manifest)?;
+    kube.wait_rollout("deployment/navigator-web", "600s")?;
+    Ok(())
+}
+
 /// `devx deploy`: full in-cluster stack from published Artifact Registry
 /// images. Pulls both images at a resolved immutable release tag, retags + loads them
 /// into KIND, applies every manifest under `k8s/`, waits for the
@@ -768,15 +826,18 @@ pub(super) fn kind_down_only(cfg: &KindConfig) -> Result<()> {
 /// this pulls them. `tag_override` (e.g. `worktree-env --demo --tag`)
 /// pins the release; else `NAVIGATOR_IMAGE_TAG`, else the latest
 /// published tag is pulled.
-pub(super) fn deploy(cfg: &KindConfig, tag_override: Option<&str>) -> Result<()> {
+pub(super) fn deploy_captured(
+    root: &Path,
+    cfg: &KindConfig,
+    tag_override: Option<&str>,
+) -> Result<()> {
     require_tools(&["kind", "kubectl", "docker", "helm"])?;
-    let root = workspace_root()?;
     // `kind_up_steps` is idempotent — safe to call when the cluster
     // is already up. Establishes the Operator + nginx-ingress
     // invariants `deploy` relies on.
-    kind_up_steps(&root, cfg)?;
+    kind_up_steps(root, cfg)?;
     let image_registry = super::registry::registry_from_env()?;
-    let tag = resolve_local_image_tag(&image_registry, tag_override)?;
+    let tag = resolve_local_image_tag(&image_registry, "navigator-web", tag_override)?;
     // Fail fast before any apply if either service image is missing the
     // resolved tag — a missing image would wedge the rollout in
     // ImagePullBackOff.
@@ -793,12 +854,12 @@ pub(super) fn deploy(cfg: &KindConfig, tag_override: Option<&str>) -> Result<()>
     seaweedfs::prepare(&cfg.namespace)?;
     retire_legacy_identity_provider(cfg)?;
     retire_legacy_object_store(cfg)?;
-    apply_kustomize(&root, &cfg.full_overlay)?;
+    apply_kustomize(root, &cfg.full_overlay)?;
     align_rauthy_public_url(cfg)?;
     align_rauthy_in_cluster_client(cfg)?;
     wait_rollout("statefulset", "seaweedfs", cfg)?;
     seaweedfs::provision(&cfg.namespace)?;
-    bootstrap_postgres_in(&root, cfg, "navigator")?;
+    bootstrap_postgres_in(root, cfg, "navigator")?;
     eprintln!("==> waiting for navigator-web rollout");
     run(Command::new("kubectl")
         .arg("--namespace")
@@ -1200,8 +1261,7 @@ fn ensure_namespace(namespace: &str) -> Result<()> {
 /// the same way, and on a multi-arch image the fallback would re-trigger the
 /// very `--all-platforms` digest bug this exists to avoid. That error
 /// propagates directly instead of hiding behind a "flatten failed" message.
-fn kind_load_image_into_cluster(tag: &str, cfg: &KindConfig) -> Result<()> {
-    let platform = format!("linux/{}", docker_daemon_arch());
+fn kind_load_image_into_cluster(tag: &str, cfg: &KindConfig, platform: &str) -> Result<()> {
     let archive = tempfile::Builder::new()
         .prefix("navigator-kind-load-")
         .suffix(".tar")
@@ -1211,7 +1271,7 @@ fn kind_load_image_into_cluster(tag: &str, cfg: &KindConfig) -> Result<()> {
     let saved = run(Command::new("docker")
         .arg("save")
         .arg("--platform")
-        .arg(&platform)
+        .arg(platform)
         .arg(tag)
         .arg("-o")
         .arg(archive.path()));
@@ -1286,7 +1346,11 @@ fn docker_daemon_arch() -> String {
 /// `worktree-env --demo --tag`), then `NAVIGATOR_IMAGE_TAG`, then the
 /// latest published tag from the registry. CI builds and publishes the
 /// images (`deploy.yml`); the local loop pulls them.
-fn resolve_local_image_tag(registry: &str, override_tag: Option<&str>) -> Result<String> {
+fn resolve_local_image_tag(
+    registry: &str,
+    image: &str,
+    override_tag: Option<&str>,
+) -> Result<String> {
     if let Some(tag) = override_tag
         .map(str::trim)
         .filter(|v| !v.is_empty())
@@ -1300,7 +1364,7 @@ fn resolve_local_image_tag(registry: &str, override_tag: Option<&str>) -> Result
         super::registry::validate_release_tag(&tag)?;
         return Ok(tag);
     }
-    super::registry::resolve_latest_tag(registry, "navigator-web")
+    super::registry::resolve_latest_tag(registry, image)
 }
 
 /// Pull a published Artifact Registry image, retag it to the local `:dev`
@@ -1324,7 +1388,7 @@ fn pull_retag_load(
     eprintln!("==> docker pull {remote}");
     run(Command::new("docker").arg("pull").arg(&remote))?;
     run(Command::new("docker").arg("tag").arg(&remote).arg(dev_tag))?;
-    kind_load_image_into_cluster(dev_tag, cfg)
+    kind_load_image_into_cluster(dev_tag, cfg, &format!("linux/{}", docker_daemon_arch()))
 }
 
 /// Path to the `kind create cluster --config` file. At default host ports this
