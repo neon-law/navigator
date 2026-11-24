@@ -55,7 +55,7 @@ pub fn CatalogSlideBody(
                 a {
                     class: "workshop-navigator-slide__repo",
                     href: crate::source_repository::NAVIGATOR_HREF,
-                    "neonlaw.com/navigator"
+                    "{crate::source_repository::NAVIGATOR_HOST_LABEL}"
                 }
             }
         };
@@ -189,10 +189,16 @@ mod tests {
         assert!(html.contains(r#"data-practice-mark="helm""#), "{html}");
         assert!(html.contains("NeonLawNavigator"), "{html}");
         assert!(
-            html.contains(r#"href="https://www.neonlaw.com/navigator""#),
+            html.contains(&format!(
+                r#"href="{}""#,
+                crate::source_repository::NAVIGATOR_HREF
+            )),
             "{html}"
         );
-        assert!(html.contains("neonlaw.com/navigator"), "{html}");
+        assert!(
+            html.contains(crate::source_repository::NAVIGATOR_HOST_LABEL),
+            "{html}"
+        );
         assert!(!html.contains(NAVIGATOR_PRODUCT_MARKER), "{html}");
     }
 }

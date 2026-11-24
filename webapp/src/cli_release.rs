@@ -1,7 +1,7 @@
 //! Where the public reads the `navigator` CLI from, and at which version.
 //!
 //! Every release attaches its archives to a **public GitHub Release on
-//! `neon-law/navigator`**, so `/navigator` links those bytes directly.
+//! `neon-law/navigator`**, so `/lawyers` links those bytes directly.
 //! MIT OR Apache-2.0 permits redistribution under either license.
 //!
 //! # The version is the deployment's own release tag
@@ -54,7 +54,7 @@ pub const HOMEBREW_FORMULA: &str = homebrew_formula!();
 /// The one command that installs the CLI, and upgrades it in place.
 ///
 /// Homebrew treats a tap-qualified `brew install` of an already-installed
-/// formula as an upgrade, so `/navigator` publishes this line once rather than
+/// formula as an upgrade, so `/lawyers` publishes this line once rather than
 /// a second `brew upgrade` copy of the same formula.
 pub const HOMEBREW_INSTALL_COMMAND: &str = concat!("brew install ", homebrew_formula!());
 

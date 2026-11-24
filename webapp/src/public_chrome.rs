@@ -148,7 +148,7 @@ pub struct PublicChrome {
     /// The firm's attorneys and the bar licenses each holds.
     pub attorneys: Vec<ChromeAttorney>,
     /// The published release this deployment runs (`YY.M.D`), resolved by
-    /// `crate::cli_release::release_version` — the same source `/navigator`'s
+    /// `crate::cli_release::release_version` — the same source `/lawyers`'s
     /// download links resolve from, so the footer and the downloads page
     /// cannot disagree about what is running. Empty only if that function
     /// ever changed to allow it; the footer renders no version in that case
@@ -466,7 +466,7 @@ fn chrome_for(brand: &views::brand::SiteBrand, utility: Vec<ChromeNavLink>) -> P
             })
             .collect(),
         // The release stamp this deployment runs, from the same function
-        // `/navigator`'s download links resolve from — see
+        // `/lawyers`'s download links resolve from — see
         // `crate::cli_release::release_version`'s own docs for why it prefers
         // the environment and falls back to the compiled manifest version
         // rather than ever rendering a bare, unstamped line.

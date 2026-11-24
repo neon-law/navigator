@@ -2847,7 +2847,7 @@ async fn sitemap_xml_lists_public_routes_from_loaded_indexes() {
     assert!(body.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"));
     for loc in [
         "https://www.neonlaw.com/",
-        "https://www.neonlaw.com/navigator",
+        "https://www.neonlaw.com/lawyers",
     ] {
         assert!(
             body.contains(&format!("<loc>{loc}</loc>")),
@@ -10806,7 +10806,7 @@ const LIVE_HOME_CONTRACTS: &[(views::brand::BrandKey, LiveHomeContract)] = &[
     (
         views::brand::BrandKey::Neon,
         LiveHomeContract {
-            title: "<title>Neon Law | Home</title>",
+            title: "<title>Neon Law | Navigator, Exacting Agentic Lawyering for Everyone</title>",
             copy: "Exacting Agentic Lawyering",
         },
     ),
@@ -11200,7 +11200,9 @@ async fn the_delete_your_data_host_renders_its_own_home_catalog() {
         "{neon_body}"
     );
     assert!(
-        neon_body.contains("<title>Neon Law | Home</title>"),
+        neon_body.contains(
+            "<title>Neon Law | Navigator, Exacting Agentic Lawyering for Everyone</title>"
+        ),
         "{neon_body}"
     );
 

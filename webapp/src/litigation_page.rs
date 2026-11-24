@@ -317,7 +317,7 @@ mod tests {
                 )],
                 vec![
                     plain("All litigation cases run on "),
-                    link("Neon Law Navigator", "/navigator"),
+                    link("Neon Law Navigator", "/"),
                     plain(", the firm\u{2019}s case system."),
                 ],
             ],
@@ -504,7 +504,7 @@ mod tests {
         // that flattens the runs back to plain text loses the link silently,
         // because the sentence still reads correctly without it.
         assert!(
-            out.contains(r#"href="/navigator""#),
+            out.contains(r#"href="/""#),
             "the Navigator mention links its page: {out}"
         );
     }

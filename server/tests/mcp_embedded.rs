@@ -64,6 +64,9 @@ async fn mcp_initialize_round_trips_when_auth_disabled() {
     assert_eq!(resp.status(), StatusCode::OK);
     let body = body_json(resp).await;
     assert_eq!(body["result"]["serverInfo"]["name"], "navigator-mcp");
+    let instructions = body["result"]["instructions"].as_str().unwrap();
+    assert!(instructions.contains("/lawyers"));
+    assert!(instructions.contains("representing themselves"));
 }
 
 #[tokio::test]

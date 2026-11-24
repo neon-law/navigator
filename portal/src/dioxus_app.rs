@@ -1128,7 +1128,9 @@ fn title_segment(segment: &str) -> String {
 /// Components still declare a title for isolated SSR tests and client-side
 /// navigation, but the HTTP response's document head is the canonical browser
 /// title. Keeping the normalization here makes every server-rendered route
-/// follow the same policy.
+/// follow the same policy. Neon's home is the exception: its catalog title
+/// carries the product keywords a share and a crawler should see, so the
+/// stamp keeps that title instead of `{firm} | Home`.
 fn stamp_document_title(html: &str, path: &str, firm_name: &str) -> String {
     let Some(start) = html.find("<title") else {
         return html.to_string();
@@ -1143,10 +1145,20 @@ fn stamp_document_title(html: &str, path: &str, firm_name: &str) -> String {
         return html.to_string();
     };
 
+    let catalog_title = html[open_end..close_start].trim();
+    let title = if path == "/"
+        && firm_name == views::brand::DEFAULT_BRANDING.firm.site_name
+        && !catalog_title.is_empty()
+    {
+        catalog_title.to_string()
+    } else {
+        title_for_path_with_firm(path, firm_name)
+    };
+
     format!(
         "{}{}{}{}",
         &html[..open_end],
-        title_for_path_with_firm(path, firm_name),
+        title,
         "</title>",
         &html[close_start + "</title>".len()..]
     )
@@ -3509,8 +3521,8 @@ pub fn template_card(
     }
 }
 
-/// One marketing page built from the shared band vocabulary — `/navigator`,
-/// `/personal`, and `/services`.
+/// One marketing page built from the shared band vocabulary — `/lawyers`,
+/// `/legal-aid`, `/personal`, and `/services`.
 ///
 /// One router serves them all: they differ only in the copy the caller
 /// resolves, which is what keeps a further page a data change.
@@ -6452,6 +6464,7 @@ mod tests {
         let cases = [
             ("/", "Neon Law | Home"),
             ("/navigator", "Neon Law | Navigator"),
+            ("/lawyers", "Neon Law | Lawyers"),
             ("/app", "Navigator"),
             ("/app/team", "Navigator | Team"),
             ("/app/projects", "Navigator | Projects"),
@@ -6519,6 +6532,18 @@ mod tests {
         assert!(
             holding.contains("<title>Guieb & Shook PC | Home</title>"),
             "{holding}"
+        );
+
+        let neon_home = stamp_document_title(
+            "<html><head><title>Neon Law | Navigator, Exacting Agentic Lawyering for Everyone</title></head><body></body></html>",
+            "/",
+            "Neon Law",
+        );
+        assert!(
+            neon_home.contains(
+                "<title>Neon Law | Navigator, Exacting Agentic Lawyering for Everyone</title>"
+            ),
+            "{neon_home}"
         );
     }
 

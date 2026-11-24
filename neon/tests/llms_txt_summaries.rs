@@ -124,6 +124,7 @@ fn the_firm_sitemap_expands_each_talk_into_its_readable_faces_only() {
     for redirect in ["/personal", "/business", "/navigator", "/workshops"] {
         assert!(!sitemap.contains(redirect), "{redirect}");
     }
+    assert!(sitemap.contains("/lawyers"), "/lawyers");
     // No other brand publishes the firm's catalog.
     assert!(BrandKey::ALL
         .iter()

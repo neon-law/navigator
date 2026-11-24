@@ -1581,11 +1581,17 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
     ));
     // The retired business-counsel page answers a 301 to the home.
     routers.push(moved_permanently(FIRM_RETIRED_BUSINESS_PATH, "/"));
-    // The retired platform page: its content lives on the home.
+    // Published product URL: the consumer homepage is canonical.
     routers.push(moved_permanently(dioxus_app::FIRM_NAVIGATOR_PATH, "/"));
     routers.push(dioxus_app::marketing_page_router(
         "/legal-aid",
         firm_copy::legal_aid(branding),
+        state.sessions.clone(),
+        portal::secure_cookies(state),
+    ));
+    routers.push(dioxus_app::marketing_page_router(
+        "/lawyers",
+        firm_copy::lawyers(branding),
         state.sessions.clone(),
         portal::secure_cookies(state),
     ));
@@ -2193,7 +2199,7 @@ mod guieb_shook_home_tests {
 ///
 /// The first of them is the only paragraph on the page that links, which is why
 /// the body is runs rather than plain strings: it names Navigator and points at
-/// `/navigator` instead of restating that page here, the same way the home
+/// `/` instead of restating that page here, the same way the home
 /// page's prose does.
 ///
 /// **Every mechanism named is one the workspace can be opened to prove.** The

@@ -305,7 +305,7 @@ pub(super) fn CompanyHome(
                 div {
                     h2 { id: "company-navigator-title", "{company.navigator_heading}" }
                     p { "{company.navigator_body}" }
-                    a { class: "company-text-link", href: "/navigator", "{company.navigator_link} ↗" }
+                    a { class: "company-text-link", href: "/", "{company.navigator_link} ↗" }
                 }
             }
             section { class: "company-community",

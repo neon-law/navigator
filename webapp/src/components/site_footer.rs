@@ -718,7 +718,7 @@ mod tests {
         ("Contact", "/contact"),
         ("Design", "/design"),
         ("Glossary", "/glossary"),
-        ("Navigator", "/navigator"),
+        ("Navigator", "/"),
         ("Notations", "/notations"),
         ("Presentations", "/presentations"),
         ("Privacy", "/privacy"),
