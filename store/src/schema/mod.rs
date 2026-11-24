@@ -21,8 +21,7 @@
 //! Bump [`SCHEMA_VERSION`] in the same change that edits the `.surql`
 //! file.
 
-/// Canonical export section selection for buffered capture and streaming verification.
-pub(crate) mod export_filter;
+pub(crate) use crate::export_filter;
 
 use std::collections::BTreeMap;
 

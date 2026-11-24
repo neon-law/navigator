@@ -2,20 +2,20 @@
 
 use std::collections::BTreeSet;
 
-pub(super) struct Sections {
+pub(crate) struct Sections {
     derived: BTreeSet<String>,
     skipping: bool,
 }
 
 impl Sections {
-    pub(super) fn new(derived: impl IntoIterator<Item = String>) -> Self {
+    pub(crate) fn new(derived: impl IntoIterator<Item = String>) -> Self {
         Self {
             derived: derived.into_iter().collect(),
             skipping: false,
         }
     }
 
-    pub(super) fn retain(&mut self, line: &str) -> bool {
+    pub(crate) fn retain(&mut self, line: &str) -> bool {
         let header = line
             .trim_end()
             .strip_prefix("-- ")

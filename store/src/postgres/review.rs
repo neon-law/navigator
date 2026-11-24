@@ -143,3 +143,7 @@ pub(crate) async fn with_test_db<T>(pg: PostgresDb, future: impl Future<Output =
 #[cfg(test)]
 #[path = "review_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "review_compatibility_tests.rs"]
+mod compatibility_tests;

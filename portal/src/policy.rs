@@ -571,3 +571,7 @@ mod tests {
         assert!(path_segments("/").is_empty());
     }
 }
+
+#[cfg(test)]
+#[path = "policy_tests.rs"]
+mod admission_tests;
