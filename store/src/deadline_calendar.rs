@@ -444,17 +444,25 @@ pub fn event_description(
         push_line(&mut description, &format!("Source document: {document}"));
     }
     push_line(&mut description, &format!("Deadline: {}", deadline.id));
-    if let Some(base_url) = base_url.map(str::trim).filter(|url| !url.is_empty()) {
+    if let Some(origin) = calendar_origin(base_url) {
         push_line(
             &mut description,
-            &format!(
-                "Matter page: {}/app/projects/{}",
-                base_url.trim_end_matches('/'),
-                project_code
-            ),
+            &format!("Matter page: {origin}/app/projects/{project_code}"),
         );
     }
     description
+}
+
+fn calendar_origin(base: Option<&str>) -> Option<String> {
+    let base = base?.trim();
+    let url = if base.contains("://") {
+        url::Url::parse(base)
+    } else {
+        url::Url::parse(&format!("https://{base}"))
+    }
+    .ok()?;
+    (matches!(url.scheme(), "https" | "http") && url.has_host())
+        .then(|| url.origin().ascii_serialization())
 }
 
 fn push_line(description: &mut String, line: &str) {
@@ -517,7 +525,7 @@ pub fn body_sha(deadline: &Deadline, project_code: &str, base_url: Option<&str>)
         "source_document_id": deadline.source_document_id.map(|id| id.to_string()),
         "internal_lead_days": deadline.internal_lead_days,
         "project_code": project_code,
-        "base_url": base_url.map(str::trim).filter(|url| !url.is_empty()),
+        "base_url": calendar_origin(base_url),
     });
     let digest = Sha256::digest(payload.to_string().as_bytes());
     let mut hex = String::with_capacity(digest.len() * 2);
@@ -1099,6 +1107,14 @@ mod tests {
         row.description = Some("Briefing schedule attached.".into());
         row.source_document_id = Some(Uuid::now_v7());
         let description = event_description(&row, "ACME", Some("https://www.example.com/"));
+        assert_eq!(
+            event_description(&row, "ACME", Some("www.example.com")),
+            description
+        );
+        assert_eq!(
+            body_sha(&row, "ACME", Some("www.example.com")),
+            body_sha(&row, "ACME", Some("https://www.example.com"))
+        );
         let lines: Vec<&str> = description.lines().collect();
         assert_eq!(lines[0], "Briefing schedule attached.");
         assert_eq!(lines[1], "Authority: Order setting briefing");
