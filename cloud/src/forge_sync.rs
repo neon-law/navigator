@@ -23,10 +23,15 @@ struct Access {
 impl Access {
     fn callbacks(&self) -> RemoteCallbacks<'_> {
         let mut cb = RemoteCallbacks::new();
-        cb.credentials(|url, _, allowed| {
-            if url != self.url || !allowed.contains(CredentialType::USER_PASS_PLAINTEXT) {
+        let mut attempted = false;
+        cb.credentials(move |url, _, allowed| {
+            if attempted
+                || url != self.url
+                || !allowed.contains(CredentialType::USER_PASS_PLAINTEXT)
+            {
                 return Err(git2::Error::from_str("unexpected credential destination"));
             }
+            attempted = true;
             Cred::userpass_plaintext(&self.user, &self.password)
         });
         cb

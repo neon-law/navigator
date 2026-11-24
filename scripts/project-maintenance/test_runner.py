@@ -106,3 +106,37 @@ class MaintenanceTest(unittest.TestCase):
         ]:
             with self.assertRaises(runner.Blocked):
                 runner.delivery_commit(json.dumps({**report, "deployment": deployment}))
+
+    def test_delivery_reconciles_a_verified_lagging_mirror_and_replays_cleanly(self):
+        for setting, value in [
+            ("user.name", "Fixture"),
+            ("user.email", "fixture@example.invalid"),
+            ("commit.gpgsign", "false"),
+        ]:
+            runner.run(["git", "config", setting, value], self.repo)
+        runner.run(["git", "switch", "-c", "fixture-main"], self.repo)
+        manifest = self.repo / "navigator.yaml"
+        manifest.write_text("version: 26.1.8\n")
+        runner.run(["git", "add", "navigator.yaml"], self.repo)
+        runner.run(["git", "commit", "-qm", "fixture base"], self.repo)
+        base = runner.run(["git", "rev-parse", "HEAD"], self.repo)
+        primary, mirror = [
+            str(Path(self.tmp.name) / name) for name in ("primary.git", "mirror.git")
+        ]
+        for remote in (primary, mirror):
+            runner.run(["git", "init", "--bare", remote])
+            runner.run(["git", "push", remote, "HEAD:refs/heads/main"], self.repo)
+        manifest.write_text("version: 26.1.9\n")
+        runner.run(["git", "commit", "-qam", "fixture update"], self.repo)
+        head = runner.run(["git", "rev-parse", "HEAD"], self.repo)
+        runner.run(["git", "push", primary, "HEAD:refs/heads/main"], self.repo)
+        with patch.object(runner, "verify_private_pair"):
+            for _attempt in range(2):
+                runner.finish_mirror(
+                    {"base": base, "release": "26.1.9"},
+                    self.repo,
+                    primary,
+                    mirror,
+                    head,
+                )
+                self.assertEqual(runner.main_ref(mirror), head)
