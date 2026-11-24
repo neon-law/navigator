@@ -83,7 +83,7 @@ pub use worktree_env::WorktreeEnvCmd;
 // entry points so `dispatch` below and the sibling devx modules reach them
 // as `super::<name>`, exactly as when they lived here.
 use orchestrate::{
-    align_rauthy_public_url, configure_worktree_kubeconfig, deploy, down, down_in,
+    align_rauthy_public_url, configure_worktree_kubeconfig, down, down_in,
     hydrate_seaweedfs_environment, kind_down_only, kind_up_only, kustomize_render, logs, print_env,
     rauthy_deployment_exists, reload_worker as reload_worker_in_kind, require_auth, require_tools,
     run, status, undeploy, up, up_in, use_kind_context, wait_for_condition, wait_for_tcp,
@@ -1020,8 +1020,12 @@ fn dispatch_with_dns_provider(
             receiver_config,
         })) => forgejo::smoke(&cfg, receiver_config.as_deref()),
         crate::Command::Dev(crate::DevCmd::WorktreeEnv(cmd)) => worktree_env::dispatch(cmd, &cfg),
-        crate::Command::Dev(crate::DevCmd::Deploy) => deploy(&cfg, None),
-        crate::Command::Dev(crate::DevCmd::Undeploy) => undeploy(&cfg),
+        crate::Command::Dev(crate::DevCmd::Deploy) => {
+            worktree_env::up_demo(&workspace_root()?, None, &cfg)
+        }
+        crate::Command::Dev(crate::DevCmd::Undeploy) => {
+            worktree_env::undeploy_demo(&workspace_root()?, &cfg)
+        }
         crate::Command::Dev(crate::DevCmd::E2e) => e2e::run_e2e(&cfg),
         crate::Command::Dev(crate::DevCmd::SeaweedfsBootstrap) => seaweedfs::bootstrap(&cfg),
         crate::Command::Dev(crate::DevCmd::PostgresBootstrap { path }) => {

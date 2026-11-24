@@ -24,15 +24,13 @@ Subcommands:
   `web` binary is left for the host to run.
 - `dev down` — kill port-forwards and delete the KIND cluster. `dev env`, `dev status` — print the env file / show
   whether port-forwards are alive. `dev kind up`, `dev kind down` — just the cluster + ingress + Operator (no
-  application manifests). `dev deploy` — full in-cluster stack including `navigator-web`. It idempotently sets the
-  cluster up, **pulls** the published service images (`NAVIGATOR_IMAGE_TAG` or the latest `YY.M.D`), retags them to
-  `:dev`, `kind load`s, applies every manifest, waits for the navigator-web rollout. CI builds the images; the local
-  loop does not.
-- `dev undeploy` — `kubectl delete namespace navigator`. `dev worktree-env up/down/status` stands up or tears down a
-  per-worktree KIND environment (its own dependencies, Restate journal, `navigator` database, and host ports; `--branch`
-  branches a supplied checkout in place or creates a sibling worktree; `--demo` runs the in-cluster stack). `dev e2e`
-  smoke-tests rollouts, `/health`, embedded Rego decisions, and local seed counts. `dev grant-lawyer` pre-seeds the
-  Lawyer demo user for browser e2e with the `lawyer` role. `ops ship` — one-shot production roll that pins service
-  deployments to a named `--tag` and re-registers. `dev logs` — tails navigator-web logs.
+  application manifests). On a fresh checkout, `dev deploy` seeds an isolated PostgreSQL database and runs the published
+  `neon-server` image with its DBOS worker behind the KIND ingress. Set `NAVIGATOR_IMAGE_TAG` to pin a release.
+- `dev undeploy` removes the disposable demo and its data. `dev worktree-env up/down/status` manages the worktree's
+  dependency tier and host ports (`--branch` branches a supplied checkout in place or creates a sibling worktree;
+  `--demo` runs the in-cluster stack). `dev e2e` smoke-tests rollouts, `/health`, embedded Rego decisions, and local
+  seed counts. `dev grant-lawyer` pre-seeds the Lawyer demo user for browser e2e with the `lawyer` role. `ops ship` —
+  one-shot production roll that pins service deployments to a named `--tag` and re-registers. `dev logs` — tails
+  navigator-web logs.
 
 The workspace has no Makefile — the `navigator` CLI is the only entry point.

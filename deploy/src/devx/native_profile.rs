@@ -342,6 +342,95 @@ fn storage_environment(
     }
 }
 
+/// Translate the verified host tier's application settings to pod coordinates.
+/// Staged sample files have already been seeded from the worktree into PostgreSQL.
+pub(super) fn demo_environment(
+    mut values: BTreeMap<String, String>,
+    cfg: &KindConfig,
+) -> BTreeMap<String, String> {
+    values.retain(|key, _| {
+        !key.starts_with("NAVIGATOR_KIND_")
+            && !matches!(
+                key.as_str(),
+                "KUBECONFIG"
+                    | "NAVIGATOR_K8S_NAMESPACE"
+                    | "NAVIGATOR_GKE_OVERLAY"
+                    | "NAVIGATOR_RELEASE_TAG"
+                    | store::sample_project::STAGE_ENV
+            )
+    });
+    for (key, value) in [
+        ("PORT", "3001"),
+        ("DIOXUS_PUBLIC_PATH", "/app/public/dioxus"),
+        ("NAVIGATOR_POSTGRES_HOST", "navigator-postgres"),
+        ("NAVIGATOR_POSTGRES_PORT", "5432"),
+        (
+            "NAVIGATOR_POSTGRES_ROOT_CERT",
+            "/etc/navigator/postgres/ca.crt",
+        ),
+        ("NAVIGATOR_DBOS_HOST", "navigator-postgres"),
+        ("NAVIGATOR_DBOS_PORT", "5432"),
+        ("NAVIGATOR_DBOS_ROOT_CERT", "/etc/navigator/postgres/ca.crt"),
+        (
+            "NAVIGATOR_STORAGE_ENDPOINT",
+            "http://navigator-seaweedfs:8333",
+        ),
+        ("NAVIGATOR_CLAMD_ADDR", "clamav:3310"),
+        ("NAVIGATOR_OPENOBSERVE_URL", "http://openobserve:5080"),
+        ("OTEL_EXPORTER_OTLP_ENDPOINT", "http://openobserve:5081"),
+        (
+            "NAVIGATOR_FORGEJO_ROOT_URL",
+            "http://navigator-forgejo:3000",
+        ),
+        ("NAVIGATOR_GIT_REPO_ROOT", "/var/lib/navigator/repos"),
+        (
+            "NAVIGATOR_FAKE_SIGNATURE_DIR",
+            "/var/lib/navigator/repos/.fake-signature",
+        ),
+        ("NAVIGATOR_FORBID_SURREAL", "1"),
+    ] {
+        values.insert(key.into(), value.into());
+    }
+    values.insert(
+        "OAUTH_REDIRECT_URI".into(),
+        format!("http://localhost:{}/auth/callback", cfg.ingress_http_port),
+    );
+    values
+}
+
+/// Inject the verified release into the initial pod template so Kubernetes
+/// never tries to start the placeholder tag. Rotate the pod on Secret changes.
+pub(super) fn demo_manifest(rendered: &str, image: &str, environment_hash: &str) -> Result<String> {
+    let mut output = String::new();
+    let mut matched = 0;
+    for doc in serde_yaml::Deserializer::from_str(rendered) {
+        let mut value = serde_yaml::Value::deserialize(doc)?;
+        if value["kind"].as_str() == Some("Deployment")
+            && value["metadata"]["name"].as_str() == Some("navigator-web")
+        {
+            let template = &mut value["spec"]["template"];
+            template["metadata"]["annotations"]["navigator.neonlaw.org/demo-environment"] =
+                environment_hash.into();
+            let containers = template["spec"]["containers"]
+                .as_sequence_mut()
+                .ok_or_else(|| anyhow!("missing demo containers"))?;
+            for container in containers {
+                if container["name"].as_str() == Some("web") {
+                    container["image"] = image.into();
+                    matched += 1;
+                }
+            }
+        }
+        output.push_str("---\n");
+        output.push_str(&serde_yaml::to_string(&value)?);
+    }
+    ensure!(
+        matched == 1,
+        "demo must contain one published web container"
+    );
+    Ok(output)
+}
+
 pub(super) fn select_database(
     root: &Path,
     cfg: &KindConfig,
@@ -463,6 +552,65 @@ pub(super) fn infrastructure(rendered: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn demo_reaches_the_seeded_database_and_retains_the_cohost_identity() {
+        let cfg = KindConfig::from_env();
+        let values = BTreeMap::from([
+            ("NAVIGATOR_POSTGRES_DATABASE".into(), "owned-db".into()),
+            ("NAVIGATOR_DBOS_DATABASE".into(), "owned-db".into()),
+            (
+                "NAVIGATOR_DBOS_INGRESS_TOKEN".into(),
+                "fixture-token".into(),
+            ),
+            ("KUBECONFIG".into(), "/host/config".into()),
+            ("NAVIGATOR_RELEASE_TAG".into(), "host-build".into()),
+            (
+                store::sample_project::STAGE_ENV.into(),
+                "/host/stage".into(),
+            ),
+        ]);
+        let pod = demo_environment(values, &cfg);
+        for prefix in ["NAVIGATOR_POSTGRES", "NAVIGATOR_DBOS"] {
+            assert_eq!(pod[&format!("{prefix}_HOST")], "navigator-postgres");
+            assert_eq!(pod[&format!("{prefix}_PORT")], "5432");
+            assert_eq!(pod[&format!("{prefix}_DATABASE")], "owned-db");
+            assert_eq!(
+                pod[&format!("{prefix}_ROOT_CERT")],
+                "/etc/navigator/postgres/ca.crt"
+            );
+        }
+        assert_eq!(pod["NAVIGATOR_DBOS_INGRESS_TOKEN"], "fixture-token");
+        assert_eq!(
+            pod["OAUTH_REDIRECT_URI"],
+            format!("http://localhost:{}/auth/callback", cfg.ingress_http_port)
+        );
+        for key in [
+            "KUBECONFIG",
+            "NAVIGATOR_RELEASE_TAG",
+            store::sample_project::STAGE_ENV,
+        ] {
+            assert!(!pod.contains_key(key));
+        }
+    }
+
+    #[test]
+    fn demo_pins_only_the_application_container_and_rotates_its_environment() {
+        let source = "kind: Deployment\nmetadata: {name: navigator-web}\nspec:\n  template:\n    spec:\n      containers: [{name: proxy, image: nginx}, {name: web, image: placeholder}]";
+        let result = demo_manifest(source, "registry/neon-server:26.11.24", "hash").unwrap();
+        let value: serde_yaml::Value = serde_yaml::from_str(&result).unwrap();
+        let template = &value["spec"]["template"];
+        assert_eq!(template["spec"]["containers"][0]["image"], "nginx");
+        assert_eq!(
+            template["spec"]["containers"][1]["image"],
+            "registry/neon-server:26.11.24"
+        );
+        assert_eq!(
+            template["metadata"]["annotations"]["navigator.neonlaw.org/demo-environment"],
+            "hash"
+        );
+        assert!(demo_manifest("kind: Service", "release", "hash").is_err());
+    }
 
     #[test]
     fn new_tier_reserves_one_private_operation_and_refuses_foreign_resume() {

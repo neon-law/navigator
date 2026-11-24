@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: navigator-web
+  namespace: navigator
+spec:
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        navigator.neonlaw.org/postgres-client: "true"
+    spec:
+      securityContext:
+        fsGroup: 65532
+      containers:
+        - name: web
+          imagePullPolicy: Never
+          env:
+            - $patch: replace
+          envFrom:
+            - secretRef:
+                name: navigator-demo-environment
+          volumeMounts:
+            - name: postgres-ca
+              mountPath: /etc/navigator/postgres
+              readOnly: true
+        - name: rauthy-loopback-proxy
+          image: nginx:1.29.4-alpine
+          volumeMounts:
+            - name: rauthy-loopback-proxy
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+              readOnly: true
+      volumes:
+        - name: postgres-ca
+          secret:
+            secretName: navigator-postgres-app
+            items:
+              - key: ca.crt
+                path: ca.crt
+        - name: rauthy-loopback-proxy
+          configMap:
+            name: rauthy-loopback-proxy

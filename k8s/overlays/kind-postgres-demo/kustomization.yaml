@@ -1,0 +1,16 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: navigator
+resources:
+  - ../../base/web
+patches:
+  - path: web.yaml
+  - target:
+      kind: Secret
+      name: navigator-web
+    patch: |-
+      $patch: delete
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: navigator-web
