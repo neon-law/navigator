@@ -161,11 +161,7 @@ const IMAGE_EXTENSIONS: &[&str] = &[
 /// first (filing one would leak a secret into a matter), then a receipt,
 /// then the unfiled pass-through every cascade ends on.
 fn classify(filename: &str) -> Verdict {
-    let extension = Path::new(filename)
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .map(str::to_ascii_lowercase)
-        .unwrap_or_default();
+    let extension = extension_of(filename);
     if CREDENTIAL_EXTENSIONS.contains(&extension.as_str()) {
         return Verdict::Credential {
             reason: format!("the `.{extension}` extension marks credentials"),
@@ -206,26 +202,25 @@ fn proposed_kind(verdict: &Verdict, filename: &str) -> &'static str {
     }
 }
 
-/// True when `filename` carries an image extension.
-fn is_image(filename: &str) -> bool {
-    let extension = Path::new(filename)
+/// The lowercased extension `filename` carries, empty when it has none.
+fn extension_of(filename: &str) -> String {
+    Path::new(filename)
         .extension()
         .and_then(|extension| extension.to_str())
         .map(str::to_ascii_lowercase)
-        .unwrap_or_default();
-    IMAGE_EXTENSIONS.contains(&extension.as_str())
+        .unwrap_or_default()
+}
+
+/// True when `filename` carries an image extension.
+fn is_image(filename: &str) -> bool {
+    IMAGE_EXTENSIONS.contains(&extension_of(filename).as_str())
 }
 
 /// The content type an extension names, as the upload door receives it.
 /// The map is the one the browser's own accept lists spell; an unknown
 /// extension stays `application/octet-stream`.
 fn content_type_of(filename: &str) -> &'static str {
-    let extension = Path::new(filename)
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .map(str::to_ascii_lowercase)
-        .unwrap_or_default();
-    match extension.as_str() {
+    match extension_of(filename).as_str() {
         "pdf" => "application/pdf",
         "doc" => "application/msword",
         "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -261,10 +256,14 @@ fn content_type_of(filename: &str) -> &'static str {
 /// The macOS provenance of one file, as Spotlight recorded it at download
 /// time. Runs `mdls` only on macOS; anywhere else the provenance is unknown,
 /// and the caller says so rather than inventing one.
+#[cfg(not(target_os = "macos"))]
+fn where_froms(_path: &Path) -> Option<Vec<String>> {
+    None
+}
+
+/// The macOS provenance of one file, read through `mdls`.
+#[cfg(target_os = "macos")]
 fn where_froms(path: &Path) -> Option<Vec<String>> {
-    if !cfg!(target_os = "macos") {
-        return None;
-    }
     let output = std::process::Command::new("mdls")
         .arg("-raw")
         .arg("-name")
@@ -846,20 +845,14 @@ async fn clean_already_filed(
                 continue;
             }
         }
-        let documents = match crate::remote::DocumentClient::with_credential(
-            base.clone(),
-            token.clone(),
-            &code,
-        )
-        .await
-        {
-            Ok(client) => match client.list_documents().await {
-                Ok(documents) => documents,
-                Err(error) => {
-                    failures.push((code.clone(), error.to_string()));
-                    continue;
-                }
-            },
+        let listed = async {
+            crate::remote::DocumentClient::with_credential(base.clone(), token.clone(), &code)
+                .await?
+                .list_documents()
+                .await
+        };
+        let documents = match listed.await {
+            Ok(documents) => documents,
             Err(error) => {
                 failures.push((code.clone(), error.to_string()));
                 continue;
@@ -895,7 +888,7 @@ async fn clean_already_filed(
 fn move_to_trash(path: &Path, trash_root: Option<&Path>) -> Result<PathBuf> {
     let root = match trash_root {
         Some(root) => root.to_path_buf(),
-        None => trash_root_from_env()?,
+        None => trash_root_for(std::env::var("HOME").ok().as_deref())?,
     };
     std::fs::create_dir_all(&root)
         .with_context(|| format!("prepare the Trash at {}", root.display()))?;
@@ -914,14 +907,10 @@ fn move_to_trash(path: &Path, trash_root: Option<&Path>) -> Result<PathBuf> {
     Ok(destination)
 }
 
-/// The Trash directory: `~/.Trash` on macOS, the `FreeDesktop` trash `files`
-/// directory everywhere else the CLI ships.
-fn trash_root_from_env() -> Result<PathBuf> {
-    trash_root_for(std::env::var("HOME").ok().as_deref())
-}
-
-/// The same root for a given `$HOME` value — pure, so the tests never
-/// mutate process-global env (which races under parallel tests).
+/// The Trash directory for a given `$HOME` value: `~/.Trash` on macOS, the
+/// `FreeDesktop` trash `files` directory everywhere else the CLI ships. Pure,
+/// so the tests never mutate process-global env (which races under parallel
+/// tests).
 fn trash_root_for(home: Option<&str>) -> Result<PathBuf> {
     let Some(home) = home.filter(|value| !value.is_empty()) else {
         bail!("cannot resolve a home directory ($HOME is unset) to move the original to the Trash");

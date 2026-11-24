@@ -319,21 +319,11 @@ impl ProcessApplyView {
 async fn list(host: Option<&str>) -> Result<()> {
     let (base, token) = crate::remote::resolve(host)?;
     let (method, url) = list_request(&base);
-    let response = reqwest::Client::new()
+    let request = reqwest::Client::new()
         .request(method, url)
-        .bearer_auth(token)
-        .timeout(std::time::Duration::from_secs(30))
-        .send()
-        .await
-        .context("read the inbox backlog")?;
-    let status = response.status();
-    let text = response
-        .text()
-        .await
-        .context("read the inbox backlog response")?;
-    if !status.is_success() {
-        return Err(anyhow!("inbox list refused: {status} {text}"));
-    }
+        .bearer_auth(token);
+    let contexts = ["read the inbox backlog", "read the inbox backlog response"];
+    let text = door_text(request, "list", contexts).await?;
     let views: Vec<ProcessView> = serde_json::from_str(&text).context("parse the inbox backlog")?;
     if views.is_empty() {
         println!("The inbox backlog is empty.");
@@ -511,18 +501,31 @@ async fn plan(base: &str, token: &str, message: Uuid) -> Result<ProcessView> {
 
 async fn call_process(base: &str, token: &str, body: &serde_json::Value) -> Result<String> {
     let (method, url) = process_request(base);
-    let response = reqwest::Client::new()
+    let request = reqwest::Client::new()
         .request(method, url)
         .bearer_auth(token)
-        .json(body)
+        .json(body);
+    let contexts = ["call the process door", "read the process response"];
+    door_text(request, "process", contexts).await
+}
+
+/// Send one inbox door request and return its success body. `contexts` name
+/// the send and the read when the transport fails; a refusal reads
+/// `inbox {verb} refused: {status} {body}`.
+async fn door_text(
+    request: reqwest::RequestBuilder,
+    verb: &str,
+    [send, read]: [&'static str; 2],
+) -> Result<String> {
+    let response = request
         .timeout(std::time::Duration::from_secs(30))
         .send()
         .await
-        .context("call the process door")?;
+        .context(send)?;
     let status = response.status();
-    let text = response.text().await.context("read the process response")?;
+    let text = response.text().await.context(read)?;
     if !status.is_success() {
-        return Err(anyhow!("inbox process refused: {status} {text}"));
+        return Err(anyhow!("inbox {verb} refused: {status} {text}"));
     }
     Ok(text)
 }

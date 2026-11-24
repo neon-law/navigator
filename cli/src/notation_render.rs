@@ -77,10 +77,8 @@ fn render_validation_gate(
     let blocking_violations: Vec<rules::Violation> =
         violations.iter().filter(blocking).cloned().collect();
     let (error_count, _) = severity_counts(&blocking_violations);
-    if !violations.is_empty() {
-        for v in &violations {
-            print_violation(&v.path.display().to_string(), v.line, v.code, &v.message);
-        }
+    for v in &violations {
+        print_violation(&v.path.display().to_string(), v.line, v.code, &v.message);
     }
     if error_count > 0 {
         eprintln!("navigator: {error_count} validation error(s); not rendering");
@@ -252,7 +250,11 @@ pub fn run_render(
     // A memo is the Firm's analysis for its client, so every page of it
     // says it is privileged, whatever its author typed (LAW-224).
     let privileged = field("kind").as_deref() == Some("memo");
-    let body = flag_open_markers_in_preview(body, preview);
+    let body = if preview {
+        flag_open_markers(&body)
+    } else {
+        body
+    };
     let format_debug = format!("{format:?}");
     let bytes = match render_notation_artifact(
         file,
@@ -566,27 +568,18 @@ fn resolve_firm_identity(
         }
         // No frame to wear, but the body still binds the name, from the
         // same one manifest read.
-        Some(manifest) => {
-            let legal_name =
-                letterhead::for_project(manifest.brand.as_deref(), manifest.host.as_deref())
-                    .ok()
-                    .and_then(|compiled| compiled_legal_name(&compiled));
+        nameless => {
+            let compiled = match nameless {
+                Some(manifest) => {
+                    letterhead::for_project(manifest.brand.as_deref(), manifest.host.as_deref())
+                }
+                None => letterhead::for_brand(views::brand::BrandKey::Neon),
+            };
             FirmIdentity {
                 letterhead: pdf::Letterhead::default(),
                 provenance: String::new(),
                 warnings: Vec::new(),
-                legal_name,
-            }
-        }
-        None => {
-            let legal_name = letterhead::for_brand(views::brand::BrandKey::Neon)
-                .ok()
-                .and_then(|compiled| compiled_legal_name(&compiled));
-            FirmIdentity {
-                letterhead: pdf::Letterhead::default(),
-                provenance: String::new(),
-                warnings: Vec::new(),
-                legal_name,
+                legal_name: compiled.ok().as_ref().and_then(compiled_legal_name),
             }
         }
     };
@@ -767,15 +760,6 @@ fn provenance_font(font: &str) -> &str {
 /// A preview's drafting markers, rewritten as visible flags (LAW-183): each
 /// bracketed marker such as `[CONFIRM: amount and purpose]` becomes
 /// `«OPEN: amount and purpose»`, which the PDF render washes yellow.
-fn flag_open_markers_in_preview(body: String, preview: bool) -> String {
-    if preview {
-        flag_open_markers(&body)
-    } else {
-        body
-    }
-}
-
-/// [`flag_open_markers_in_preview`]'s rewrite, applied unconditionally.
 fn flag_open_markers(body: &str) -> String {
     let mut flagged = body.to_string();
     for finding in rules::final_document::drafting_markers(body) {
@@ -972,59 +956,37 @@ fn render_notation_artifact(
     .map_err(|error| format!("render {}: {error}", file.display()))
 }
 
-fn notation_render_revision(file: &Path) -> Option<String> {
-    let parent = file.parent()?;
-    let name = file.file_name()?;
+/// One `git log --format` field of the latest commit that touched `file`,
+/// or `None` for a file with no Git history.
+fn latest_commit_field(file: &Path, format: &str) -> Option<String> {
     let output = std::process::Command::new("git")
         .arg("-C")
-        .arg(parent)
-        .args(["log", "-1", "--format=%H", "--"])
-        .arg(name)
+        .arg(file.parent()?)
+        .args(["log", "-1", &format!("--format={format}"), "--"])
+        .arg(file.file_name()?)
         .output()
         .ok()?;
     output
         .status
         .success()
         .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
-        .filter(|revision| !revision.is_empty())
+        .filter(|field| !field.is_empty())
 }
 
-/// The fixed timestamp for notation files that have no Git history.
-///
-/// A source file outside Git still needs a stable artifact, so the renderer uses
-/// the Unix epoch rather than the wall clock. Tracked files use their latest
-/// commit timestamp, which makes the artifact follow the source's own history.
-const NOTATION_RENDER_FALLBACK_EPOCH: i64 = 0;
+fn notation_render_revision(file: &Path) -> Option<String> {
+    latest_commit_field(file, "%H")
+}
 
+/// The creation timestamp a rendered artifact carries: the latest commit
+/// timestamp of a tracked file, so the artifact follows its source's own
+/// history, and the Unix epoch for a file outside Git, which still needs a
+/// stable artifact rather than the wall clock.
 #[must_use]
 fn notation_render_timestamp(file: &Path) -> chrono::DateTime<chrono::Utc> {
-    let timestamp = file
-        .parent()
-        .and_then(|parent| {
-            let name = file.file_name()?;
-            let output = std::process::Command::new("git")
-                .arg("-C")
-                .arg(parent)
-                .args(["log", "-1", "--format=%ct", "--"])
-                .arg(name)
-                .output()
-                .ok()?;
-            if !output.status.success() {
-                return None;
-            }
-            String::from_utf8(output.stdout)
-                .ok()?
-                .trim()
-                .parse::<i64>()
-                .ok()
-        })
-        .and_then(|seconds| chrono::Utc.timestamp_opt(seconds, 0).single());
-    timestamp.unwrap_or_else(|| {
-        chrono::Utc
-            .timestamp_opt(NOTATION_RENDER_FALLBACK_EPOCH, 0)
-            .single()
-            .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH)
-    })
+    latest_commit_field(file, "%ct")
+        .and_then(|seconds| seconds.parse::<i64>().ok())
+        .and_then(|seconds| chrono::Utc.timestamp_opt(seconds, 0).single())
+        .unwrap_or(chrono::DateTime::UNIX_EPOCH)
 }
 
 #[derive(clap::Subcommand)]
@@ -1297,8 +1259,13 @@ mod tests {
         let untracked = non_git.path().join("notation.md");
         std::fs::write(&untracked, "source").expect("write untracked source");
         assert_eq!(
-            notation_render_timestamp(&untracked).timestamp(),
-            NOTATION_RENDER_FALLBACK_EPOCH
+            notation_render_timestamp(&untracked),
+            chrono::DateTime::UNIX_EPOCH
+        );
+        assert_eq!(notation_render_revision(&untracked), None);
+        assert_eq!(
+            notation_render_revision(&source).as_deref().map(str::len),
+            Some(40)
         );
     }
 

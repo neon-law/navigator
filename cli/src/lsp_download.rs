@@ -19,7 +19,7 @@ use std::process::ExitCode;
 
 use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
-use views::lsp::{lsp_release_archive_for_host, lsp_release_asset_name, LspReleaseArchive};
+use views::lsp::{lsp_release_archive_for_host, lsp_release_asset_name};
 
 /// The repository release archives are attached to.
 ///
@@ -34,40 +34,14 @@ const GITHUB_API_BASE: &str = "https://api.github.com";
 /// Entry point for the top-level `hudson lsp` command. `tag` is the
 /// running binary's own version (`crate::cli_version()`); `dir` overrides
 /// the resolved Downloads directory.
+#[must_use]
 pub fn run_download(tag: &str, dir: Option<PathBuf>) -> ExitCode {
-    let Some(archive) = lsp_release_archive_for_host(std::env::consts::OS, std::env::consts::ARCH)
-    else {
-        eprintln!(
-            "navigator: lsp: no navigator-lsp release archive is built for this platform \
-             ({os}/{arch}) — see docs/lsp/README.md",
-            os = std::env::consts::OS,
-            arch = std::env::consts::ARCH,
-        );
-        return ExitCode::from(2);
-    };
-    let dest_dir = match dir.map_or_else(|| default_downloads_dir(std::env::var("HOME").ok()), Ok) {
-        Ok(dir) => dir,
-        Err(e) => {
-            eprintln!("navigator: lsp: {e:#}");
-            return ExitCode::from(2);
-        }
-    };
-    let runtime = match tokio::runtime::Runtime::new() {
-        Ok(rt) => rt,
-        Err(e) => {
-            eprintln!("navigator: lsp: tokio runtime: {e}");
-            return ExitCode::from(2);
-        }
-    };
-    let client = reqwest::Client::new();
-    match runtime.block_on(download(
-        &client,
-        GITHUB_API_BASE,
-        RELEASES_REPO,
-        tag,
-        archive,
-        &dest_dir,
-    )) {
+    let host = (std::env::consts::OS, std::env::consts::ARCH);
+    let home = std::env::var("HOME").ok();
+    let written = tokio::runtime::Runtime::new()
+        .context("tokio runtime")
+        .and_then(|runtime| runtime.block_on(download(GITHUB_API_BASE, host, tag, dir, home)));
+    match written {
         Ok(path) => {
             println!("navigator: lsp: wrote {}", path.display());
             ExitCode::SUCCESS
@@ -136,19 +110,27 @@ async fn find_asset_url(
         .ok_or_else(|| anyhow!("release `{tag}` in {repo} has no asset named `{asset_name}` — looked for {asset_name}"))
 }
 
-/// Download `tag`'s platform-matching archive, extract the `navigator-lsp`
-/// executable from it, and write it into `dest_dir`. Returns the written
-/// path.
+/// Download `tag`'s archive for the `(os, arch)` host from the release
+/// `api_base` serves, extract the `navigator-lsp` executable from it, and
+/// write it into `dir`, or into `home`'s Downloads directory when no `dir`
+/// is given. Returns the written path.
 async fn download(
-    client: &reqwest::Client,
     api_base: &str,
-    repo: &str,
+    (os, arch): (&str, &str),
     tag: &str,
-    archive: &LspReleaseArchive,
-    dest_dir: &Path,
+    dir: Option<PathBuf>,
+    home: Option<String>,
 ) -> Result<PathBuf> {
+    let archive = lsp_release_archive_for_host(os, arch).ok_or_else(|| {
+        anyhow!(
+            "no navigator-lsp release archive is built for this platform \
+             ({os}/{arch}) — see docs/lsp/README.md"
+        )
+    })?;
+    let dest_dir = dir.map_or_else(|| default_downloads_dir(home), Ok)?;
+    let client = reqwest::Client::new();
     let asset_name = lsp_release_asset_name(tag, archive);
-    let download_url = find_asset_url(client, api_base, repo, tag, &asset_name).await?;
+    let download_url = find_asset_url(&client, api_base, RELEASES_REPO, tag, &asset_name).await?;
     let bytes = client
         .get(&download_url)
         .header("User-Agent", "navigator-cli")
@@ -160,18 +142,14 @@ async fn download(
         .bytes()
         .await
         .with_context(|| format!("read body of {download_url}"))?;
-    std::fs::create_dir_all(dest_dir).with_context(|| format!("create {}", dest_dir.display()))?;
+    std::fs::create_dir_all(&dest_dir).with_context(|| format!("create {}", dest_dir.display()))?;
     let dest_path = dest_dir.join(archive.binary_name);
-    let executable = extract_binary(&bytes, archive)?;
+    let executable = extract_from_tar_gz(&bytes, archive.binary_name)?;
     write_executable(&dest_path, &executable)?;
     Ok(dest_path)
 }
 
-/// Extract `archive.binary_name`'s bytes out of the downloaded `.tar.gz`.
-fn extract_binary(bytes: &[u8], archive: &LspReleaseArchive) -> Result<Vec<u8>> {
-    extract_from_tar_gz(bytes, archive.binary_name)
-}
-
+/// Extract `member`'s bytes out of the downloaded `.tar.gz`.
 fn extract_from_tar_gz(bytes: &[u8], member: &str) -> Result<Vec<u8>> {
     let decoder = flate2::read::GzDecoder::new(bytes);
     let mut archive = tar::Archive::new(decoder);
@@ -344,49 +322,117 @@ mod tests {
         );
     }
 
-    #[test]
-    fn extracts_the_named_member_from_a_tar_gz_archive() {
-        let mut tar_bytes = Vec::new();
-        {
-            let mut builder = tar::Builder::new(&mut tar_bytes);
-            let data = b"fake unix binary";
-            let mut header = tar::Header::new_gnu();
-            header.set_size(data.len() as u64);
-            header.set_mode(0o755);
-            header.set_cksum();
-            builder
-                .append_data(&mut header, "navigator-lsp", &data[..])
-                .expect("append tar entry");
-            builder.finish().expect("finish tar");
-        }
+    /// A `.tar.gz` archive holding one `member` with `data` as its bytes.
+    fn tar_gz(member: &str, data: &[u8]) -> Vec<u8> {
+        let mut builder = tar::Builder::new(Vec::new());
+        let mut header = tar::Header::new_gnu();
+        header.set_size(data.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        builder
+            .append_data(&mut header, member, data)
+            .expect("append tar entry");
+        let tar_bytes = builder.into_inner().expect("finish tar");
         let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
         encoder.write_all(&tar_bytes).expect("gzip tar");
-        let gz_bytes = encoder.finish().expect("finish gzip");
+        encoder.finish().expect("finish gzip")
+    }
 
+    #[test]
+    fn extracts_the_named_member_from_a_tar_gz_archive() {
+        let gz_bytes = tar_gz("navigator-lsp", b"fake unix binary");
         let extracted = extract_from_tar_gz(&gz_bytes, "navigator-lsp").expect("extract");
         assert_eq!(extracted, b"fake unix binary");
     }
 
     #[test]
     fn tar_gz_extraction_names_the_missing_member() {
-        let mut tar_bytes = Vec::new();
-        {
-            let mut builder = tar::Builder::new(&mut tar_bytes);
-            let data = b"unrelated";
-            let mut header = tar::Header::new_gnu();
-            header.set_size(data.len() as u64);
-            header.set_mode(0o644);
-            header.set_cksum();
-            builder
-                .append_data(&mut header, "LICENSE", &data[..])
-                .expect("append tar entry");
-            builder.finish().expect("finish tar");
-        }
-        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-        encoder.write_all(&tar_bytes).expect("gzip tar");
-        let gz_bytes = encoder.finish().expect("finish gzip");
-
+        let gz_bytes = tar_gz("LICENSE", b"unrelated");
         let err = extract_from_tar_gz(&gz_bytes, "navigator-lsp").expect_err("member absent");
         assert!(err.to_string().contains("navigator-lsp"));
+        let err = extract_from_tar_gz(b"not an archive", "navigator-lsp").expect_err("not gzip");
+        assert!(format!("{err:#}").contains("tar.gz"), "{err:#}");
+    }
+
+    const LINUX: (&str, &str) = ("linux", "x86_64");
+
+    /// A release double: tag `26.9.23` carries the Linux archive, whose
+    /// download answers `archive` with `status`.
+    async fn release(status: u16, archive: Vec<u8>) -> MockServer {
+        let server = MockServer::start().await;
+        let asset = "navigator-lsp-26.9.23-linux.tar.gz";
+        Mock::given(method("GET"))
+            .and(path(format!(
+                "/repos/{RELEASES_REPO}/releases/tags/26.9.23"
+            )))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "assets": [{
+                    "name": asset,
+                    "browser_download_url": format!("{}/download/{asset}", server.uri()),
+                }],
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/download/{asset}")))
+            .respond_with(ResponseTemplate::new(status).set_body_bytes(archive))
+            .mount(&server)
+            .await;
+        server
+    }
+
+    #[tokio::test]
+    async fn the_running_tags_archive_lands_as_an_executable_in_downloads() {
+        use std::os::unix::fs::PermissionsExt;
+        let server = release(200, tar_gz("navigator-lsp", b"fake unix binary")).await;
+        let home = tempfile::tempdir().expect("temporary home");
+        let home_path = home.path().to_string_lossy().into_owned();
+
+        let written = download(&server.uri(), LINUX, "26.9.23", None, Some(home_path))
+            .await
+            .expect("the archive downloads");
+
+        assert_eq!(written, home.path().join("Downloads/navigator-lsp"));
+        assert_eq!(std::fs::read(&written).unwrap(), b"fake unix binary");
+        let mode = std::fs::metadata(&written).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o755);
+    }
+
+    #[tokio::test]
+    async fn a_download_that_cannot_finish_writes_nothing() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let into = || Some(dir.path().join("bin"));
+        let cases = [
+            (release(500, Vec::new()).await, LINUX, "26.9.23", "500"),
+            (
+                release(200, tar_gz("LICENSE", b"unrelated")).await,
+                LINUX,
+                "26.9.23",
+                "is not in the downloaded archive",
+            ),
+            (
+                release(200, Vec::new()).await,
+                LINUX,
+                "99.9.99",
+                "no GitHub Release found for tag `99.9.99`",
+            ),
+            (
+                release(200, Vec::new()).await,
+                ("macos", "x86_64"),
+                "26.9.23",
+                "this platform (macos/x86_64)",
+            ),
+        ];
+        for (server, host, tag, reason) in cases {
+            let err = download(&server.uri(), host, tag, into(), None)
+                .await
+                .expect_err("the download is refused");
+            assert!(format!("{err:#}").contains(reason), "{reason}: {err:#}");
+        }
+        assert!(!dir.path().join("bin/navigator-lsp").exists());
+        let err = download("http://127.0.0.1:1", LINUX, "26.9.23", None, None)
+            .await
+            .expect_err("no home, no directory");
+        assert!(err.to_string().contains("cannot resolve a home directory"));
     }
 }
