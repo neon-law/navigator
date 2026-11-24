@@ -538,7 +538,7 @@ async fn deadline_inventory_matches_dashboard_firm_scope_and_open_projects() {
         .await,
     )
     .await;
-    let mut codes = rows
+    let mut codes = rows["projects"]
         .as_array()
         .unwrap()
         .iter()

@@ -173,7 +173,7 @@ fn assemble(
                     .as_str()
                     .and_then(|value| value.parse::<NaiveDate>().ok())
                     .is_some();
-                if let Some(at) = instant.or_else(|| all_day.then_some(start)) {
+                if let Some(at) = instant.or(all_day.then_some(start)) {
                     entries.push((true, at.max(start), json!({
                         "kind": "calendar_event", "at": at, "all_day": all_day, "priority": false,
                         "title": event["summary"].as_str().unwrap_or("Calendar event"),

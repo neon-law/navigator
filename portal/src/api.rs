@@ -2447,15 +2447,15 @@ async fn onboarding_agreements(
     Ok(Json(rows).into_response())
 }
 
-/// The dashboard's open matter inventory for the read-only deadline brief.
-/// Keep its Firm boundary identical to `webapp::lawyer_dashboard` so an
-/// Owner/Admin with participation at another Firm does not broaden this view.
 #[derive(Deserialize)]
 struct DeadlineProjectQuery {
     #[serde(default)]
     include_pitch: bool,
 }
 
+/// The dashboard inventory for deadline and readiness reporting.
+/// Keep its Firm boundary identical to `webapp::lawyer_dashboard` so an
+/// Owner/Admin with participation at another Firm does not broaden this view.
 async fn lawyer_deadline_projects(
     State(state): State<ApiState>,
     lawyer: LawyerSession,
@@ -2507,6 +2507,9 @@ async fn lawyer_deadline_projects(
             row
         })
         .collect::<Vec<_>>();
+    if query.include_pitch {
+        return Ok(Json(serde_json::json!({"projects": rows})).into_response());
+    }
     Ok(Json(rows).into_response())
 }
 

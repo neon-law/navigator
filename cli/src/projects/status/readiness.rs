@@ -22,6 +22,11 @@ struct Project {
     practice_area: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct Inventory {
+    projects: Vec<Project>,
+}
+
 pub(super) async fn run(host: Option<&str>, json: bool) -> ExitCode {
     match report(host).await {
         Ok(report) => {
@@ -52,7 +57,7 @@ async fn read_report(base: &str, token: &str) -> Result<Value> {
     let client = reqwest::Client::new();
     let now = Utc::now();
     let (projects, agreements) = tokio::join!(
-        deadlines::list::<Vec<Project>>(
+        deadlines::list::<Inventory>(
             &client,
             format!("{base}{}?include_pitch=true", deadlines::INVENTORY_PATH),
             token,
@@ -63,7 +68,7 @@ async fn read_report(base: &str, token: &str) -> Result<Value> {
             token,
         ),
     );
-    let projects = projects?;
+    let projects = projects?.projects;
     let expected = projects.len();
     let mut rows = stream::iter(projects.into_iter().map(|project| {
         read_project(
@@ -272,6 +277,15 @@ fn print(report: &Value) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn the_open_only_inventory_cannot_look_like_an_empty_fleet() {
+        assert!(serde_json::from_value::<Inventory>(json!([])).is_err());
+        assert!(serde_json::from_value::<Inventory>(json!({"projects": []}))
+            .unwrap()
+            .projects
+            .is_empty());
+    }
+
     #[tokio::test]
     async fn readiness_keeps_other_projects_when_participation_is_revoked() {
         use wiremock::matchers::{method, path, query_param};
@@ -283,10 +297,10 @@ mod tests {
         Mock::given(method("GET"))
             .and(path(deadlines::INVENTORY_PATH))
             .and(query_param("include_pitch", "true"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"projects": [
                 {"id": open, "code": "sample-open", "name": "Sample Open", "status": "pitch", "practice_area": "estates"},
                 {"id": revoked, "code": "sample-revoked", "name": "Sample Revoked", "status": "open"}
-            ])))
+            ]})))
             .mount(&server).await;
         for (route, body) in [
             ("/app/api/onboarding-agreements".into(), json!([])),

@@ -2403,9 +2403,10 @@ fn canonical_document(base: &str) -> Value {
         "/app/api/lawyer/deadline-projects": {
           "get": {
             "summary": "List the signed-in lawyer dashboard's open Projects for deadline reporting",
-            "description": "Returns the open Projects visible to the signed-in lawyer, narrowed to the Firm worn by this deployment using the same scope as the lawyer dashboard. The deadline brief reads each Project's existing deadline endpoint independently and reports partial coverage. Read-only; no checkout is required.",
+            "description": "Returns Projects visible to the signed-in lawyer in the deployment Firm's dashboard scope. The default is an array of open Projects. The readiness inventory includes pitches and Project Skill practice area where known. Both reads work without a checkout.",
+            "parameters": [{ "name": "include_pitch", "in": "query", "schema": { "type": "boolean", "default": false } }],
             "responses": {
-              "200": { "description": "The dashboard-scoped open Project inventory", "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object", "required": ["id", "code", "name", "status"], "properties": { "id": { "type": "string", "format": "uuid" }, "code": { "type": "string" }, "name": { "type": "string" }, "status": { "type": "string", "const": "open" } } } } } } },
+              "200": { "description": "Dashboard-scoped Projects. With include_pitch, returns an object containing the projects array.", "content": { "application/json": { "schema": { "oneOf": [{ "type": "array", "items": { "type": "object", "required": ["id", "code", "name", "status"], "properties": { "id": { "type": "string", "format": "uuid" }, "code": { "type": "string" }, "name": { "type": "string" }, "status": { "type": "string", "const": "open" } } } }, { "type": "object", "required": ["projects"], "properties": { "projects": { "type": "array", "items": { "type": "object", "required": ["id", "code", "name", "status", "practice_area"], "properties": { "id": { "type": "string", "format": "uuid" }, "code": { "type": "string" }, "name": { "type": "string" }, "status": { "type": "string", "enum": ["open", "pitch"] }, "practice_area": { "type": ["string", "null"] } } } } } }] } } } },
               "401": { "description": "Authentication required" },
               "403": { "description": "Lawyer session required" },
               "500": { "description": "The Project inventory could not be read" }
