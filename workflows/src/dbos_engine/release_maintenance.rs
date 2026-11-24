@@ -18,12 +18,13 @@ pub struct Job {
     pub release: String,
 }
 impl Job {
+    #[must_use]
     pub fn key(&self, stage: &str) -> String {
         format!("{stage}:{}:{}:{}", self.project, self.release, self.base)
     }
 }
 
-pub fn stable_date(tag: &str) -> Option<NaiveDate> {
+pub(super) fn stable_date(tag: &str) -> Option<NaiveDate> {
     let mut parts = tag.split('.');
     let year = parts.next()?;
     if year.len() != 2 {

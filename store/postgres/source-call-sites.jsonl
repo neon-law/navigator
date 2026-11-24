@@ -8081,7 +8081,7 @@
 {"file":"workflows-service/src/youtube_comments.rs","line":908,"function":"polling_is_idempotent_and_owner_echo_is_ignored","operation":"query","sql_operations":["SELECT"],"tables":["message"],"transaction":false}
 {"file":"workflows/src/dbos_engine/billing_digest.rs","line":160,"function":"register","operation":"query","sql_operations":[],"tables":[],"transaction":false}
 {"file":"workflows/src/dbos_engine/linear_backlog.rs","line":127,"function":"pages","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"workflows/src/dbos_engine/release_maintenance.rs","line":65,"function":"releases_after","operation":"query","sql_operations":[],"tables":[],"transaction":false}
+{"file":"workflows/src/dbos_engine/release_maintenance.rs","line":66,"function":"releases_after","operation":"query","sql_operations":[],"tables":[],"transaction":false}
 {"file":"workflows/src/document.rs","line":314,"function":"acroform_dispatch_fills_flattens_and_persists_a_form","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"workflows/src/email/sendgrid_openapi.rs","line":80,"function":"from_email","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"workflows/src/email/sendgrid_openapi.rs","line":83,"function":"from_email","operation":"insert","sql_operations":[],"tables":[],"transaction":false}

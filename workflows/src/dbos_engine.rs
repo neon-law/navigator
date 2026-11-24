@@ -263,6 +263,20 @@ fn register_optional<C, W>(
     context.map(|context| register(dbos, context)).transpose()
 }
 
+/// Register the optional parity workflow before launch and install its schedule
+/// only after the host can accept work.
+async fn launch_with_parity(dbos: &dbos::DBOS, enabled: bool) -> dbos::Result<()> {
+    let schedule = enabled.then(|| forge_parity::register(dbos)).transpose()?;
+    dbos.launch().await?;
+    if let Some(schedule) = schedule {
+        if let Err(error) = dbos.apply_schedules(&[schedule]).await {
+            dbos.shutdown().await;
+            return Err(error);
+        }
+    }
+    Ok(())
+}
+
 /// A schedule loop registered by a crate outside `workflows`.
 ///
 /// Service crates that depend on `workflows` can register their DBOS
@@ -542,17 +556,7 @@ impl Executor {
                 .chain(retainers)
                 .chain(calendar)
                 .chain(register_external(&dbos)?);
-        let parity_schedule = schedules
-            .forge_parity
-            .then(|| forge_parity::register(&dbos))
-            .transpose()?;
-        dbos.launch().await?;
-        if let Some(schedule) = parity_schedule {
-            if let Err(error) = dbos.apply_schedules(&[schedule]).await {
-                dbos.shutdown().await;
-                return Err(error);
-            }
-        }
+        launch_with_parity(&dbos, schedules.forge_parity).await?;
         tracing::info!(app_name = APP_NAME, "DBOS launched");
         let stop = dbos::CancellationToken::new();
         let mut loops = vec![tokio::spawn(heartbeat::schedule(beat, clock, stop.clone()))];
