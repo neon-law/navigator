@@ -17,10 +17,9 @@
 //!   host `web` cohosts the DBOS handlers. Its private Database Origin intent
 //!   binds repeated starts to the same verified resource. Existing legacy
 //!   descriptors retain their explicit Source/Restate compatibility topology.
-//! - **demo (`--demo`)** — the full stack running *in* KIND from the
-//!   images CI published to Artifact Registry (no local build). Delegates to the
-//!   pull-based [`super::deploy`]; one full stack at a time (a demo is
-//!   shown, not parallelised).
+//! - **demo (`--demo`)** — the published web image runs inside the isolated
+//!   KIND tier and cohosts DBOS. Recorded historical deployments keep the
+//!   compatibility overlay.
 //!
 //! The per-worktree state (`.devx/worktree.json` + `.devx/env`) lives
 //! inside the worktree, which is itself gitignored (`/.devx/`), so

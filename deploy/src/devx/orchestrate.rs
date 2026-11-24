@@ -777,7 +777,38 @@ pub(super) fn kind_down_only(cfg: &KindConfig) -> Result<()> {
 
 pub(super) fn resolve_demo_image(tag_override: Option<&str>) -> Result<String> {
     let registry = super::registry::registry_from_env()?;
-    let tag = resolve_local_image_tag(&registry, "neon-server", tag_override)?;
+    let tag = match local_image_tag(tag_override)? {
+        Some(tag) => tag,
+        None => {
+            super::registry::resolve_latest_tag(&registry, "neon-server").or_else(|list_error| {
+                // Some registries permit an authenticated Docker pull but deny
+                // the anonymous tag listing. The release embeds its immutable tag.
+                let latest = super::registry::image_ref(&registry, "neon-server", "latest");
+                run(Command::new("docker").args(["pull", "--platform", "linux/amd64", &latest]))
+                    .with_context(|| format!("release tag lookup failed: {list_error}"))?;
+                let inspect = Command::new("docker")
+                    .args([
+                        "image",
+                        "inspect",
+                        "--format",
+                        "{{json .Config.Env}}",
+                        &latest,
+                    ])
+                    .output()?;
+                anyhow::ensure!(
+                    inspect.status.success(),
+                    "could not inspect the released Neon server image"
+                );
+                let fields: Vec<String> = serde_json::from_slice(&inspect.stdout)?;
+                let tag = fields
+                    .iter()
+                    .find_map(|field| field.strip_prefix("NAVIGATOR_RELEASE_TAG="))
+                    .context("published Neon server has no release tag")?;
+                super::registry::validate_release_tag(tag)?;
+                Ok::<_, anyhow::Error>(tag.to_owned())
+            })?
+        }
+    };
     let image = super::registry::image_ref(&registry, "neon-server", &tag);
     run(Command::new("docker").args(["pull", "--platform", "linux/amd64", &image]))?;
     Ok(image)
@@ -837,7 +868,10 @@ pub(super) fn deploy_captured(
     // invariants `deploy` relies on.
     kind_up_steps(root, cfg)?;
     let image_registry = super::registry::registry_from_env()?;
-    let tag = resolve_local_image_tag(&image_registry, "navigator-web", tag_override)?;
+    let tag = match local_image_tag(tag_override)? {
+        Some(tag) => tag,
+        None => super::registry::resolve_latest_tag(&image_registry, "navigator-web")?,
+    };
     // Fail fast before any apply if either service image is missing the
     // resolved tag — a missing image would wedge the rollout in
     // ImagePullBackOff.
@@ -1346,11 +1380,7 @@ fn docker_daemon_arch() -> String {
 /// `worktree-env --demo --tag`), then `NAVIGATOR_IMAGE_TAG`, then the
 /// latest published tag from the registry. CI builds and publishes the
 /// images (`deploy.yml`); the local loop pulls them.
-fn resolve_local_image_tag(
-    registry: &str,
-    image: &str,
-    override_tag: Option<&str>,
-) -> Result<String> {
+fn local_image_tag(override_tag: Option<&str>) -> Result<Option<String>> {
     if let Some(tag) = override_tag
         .map(str::trim)
         .filter(|v| !v.is_empty())
@@ -1362,9 +1392,9 @@ fn resolve_local_image_tag(
         })
     {
         super::registry::validate_release_tag(&tag)?;
-        return Ok(tag);
+        return Ok(Some(tag));
     }
-    super::registry::resolve_latest_tag(registry, image)
+    Ok(None)
 }
 
 /// Pull a published Artifact Registry image, retag it to the local `:dev`
