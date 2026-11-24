@@ -2056,6 +2056,9 @@ pub enum DeadlineCmd {
     },
     /// Brief the signed-in lawyer on deadlines across visible open matters.
     Brief {
+        /// Include every host with a stored Navigator session.
+        #[arg(long, conflicts_with = "host")]
+        all_hosts: bool,
         /// Restrict the report to one visible Project code.
         #[arg(long)]
         project: Option<String>,
@@ -2849,6 +2852,7 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
             }
             DeadlineCmd::Brief {
                 host,
+                all_hosts,
                 project,
                 due_by,
                 today,
@@ -2859,6 +2863,7 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
             } => {
                 projects::deadline_brief::brief(projects::deadline_brief::BriefOptions {
                     host: host.host,
+                    all_hosts,
                     project,
                     due_by,
                     today,

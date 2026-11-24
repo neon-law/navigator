@@ -5,6 +5,7 @@
 //! so coverage and partial failures remain visible.
 
 use std::str::FromStr;
+use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, NaiveDate, Utc};
@@ -18,7 +19,7 @@ use uuid::Uuid;
 use crate::remote;
 
 const INVENTORY_PATH: &str = "/app/api/lawyer/deadline-projects";
-const READ_CONCURRENCY: usize = 8;
+pub(super) const READ_CONCURRENCY: usize = 8;
 const LOCAL_FORMAT: &str = "%Y-%m-%d %H:%M %:z";
 const BANDS: [&str; 4] = ["Overdue", "Today", "Next 7 days", "Next 30 days"];
 
@@ -98,7 +99,7 @@ struct Filters {
     project: Option<String>,
 }
 
-fn local_zone(explicit: Option<&str>) -> Result<Tz> {
+pub(super) fn local_zone(explicit: Option<&str>) -> Result<Tz> {
     let name = explicit
         .map(str::to_owned)
         .or_else(|| std::env::var("TZ").ok())
@@ -209,7 +210,12 @@ async fn list<T: for<'de> Deserialize<'de>>(
     url: String,
     token: &str,
 ) -> Result<T> {
-    let response = client.get(url).bearer_auth(token).send().await?;
+    let response = client
+        .get(url)
+        .timeout(Duration::from_secs(30))
+        .bearer_auth(token)
+        .send()
+        .await?;
     let status = response.status();
     let body = response.text().await?;
     if !status.is_success() {
@@ -541,6 +547,7 @@ fn render_table(base: &str, rows: &[(Project, Deadline)], zone: Tz) -> String {
 
 pub struct BriefOptions {
     pub host: Option<String>,
+    pub all_hosts: bool,
     pub project: Option<String>,
     pub due_by: Option<String>,
     pub today: bool,
@@ -548,6 +555,18 @@ pub struct BriefOptions {
     pub status: String,
     pub timezone: Option<String>,
     pub as_json: bool,
+}
+
+fn host_report(reports: Vec<(String, Result<Value>)>) -> Value {
+    let hosts: Vec<_> = reports
+        .into_iter()
+        .map(|(host, result)| match result {
+            Ok(report) => json!({"host": host, "report": report}),
+            Err(error) => json!({"host": host, "error": format!("{error:#}")}),
+        })
+        .collect();
+    let complete = hosts.iter().all(|host| host["report"]["complete"] == true);
+    json!({"complete": complete, "hosts": hosts})
 }
 
 pub async fn brief(options: BriefOptions) -> std::process::ExitCode {
@@ -564,6 +583,7 @@ pub async fn brief(options: BriefOptions) -> std::process::ExitCode {
 async fn run(options: BriefOptions) -> Result<bool> {
     let BriefOptions {
         host,
+        all_hosts,
         project,
         due_by,
         today,
@@ -587,29 +607,104 @@ async fn run(options: BriefOptions) -> Result<bool> {
         status,
         project: project.clone(),
     };
+    if all_hosts {
+        let credentials =
+            crate::credentials::load(&crate::credentials::default_credentials_path())?;
+        anyhow::ensure!(
+            !credentials.hosts.is_empty(),
+            "no stored Navigator sessions"
+        );
+        let mut reports = Vec::new();
+        for host in credentials.hosts.into_keys() {
+            let result = async {
+                let (base, token) = remote::resolve(Some(&host))?;
+                let (rendered, complete) =
+                    render_host(&base, &token, &filters, now, zone, as_json).await?;
+                if as_json {
+                    return serde_json::from_str(&rendered).context("decode deadline report");
+                }
+                Ok(json!({"text": rendered, "complete": complete}))
+            }
+            .await;
+            reports.push((host, result));
+        }
+        let report = host_report(reports);
+        if as_json {
+            println!("{report}");
+        } else if let Some(hosts) = report["hosts"].as_array() {
+            for host in hosts {
+                println!("{}", host["host"].as_str().unwrap_or_default());
+                if let Some(body) = host["report"]["text"]
+                    .as_str()
+                    .or_else(|| host["error"].as_str())
+                {
+                    println!("{body}");
+                }
+            }
+        }
+        return Ok(report["complete"] == true);
+    }
     let (base, token) = remote::resolve(host.as_deref())?;
+    let (rendered, complete) = render_host(&base, &token, &filters, now, zone, as_json).await?;
+    println!("{rendered}");
+    Ok(complete)
+}
+
+async fn render_host(
+    base: &str,
+    token: &str,
+    filters: &Filters,
+    now: DateTime<Utc>,
+    zone: Tz,
+    as_json: bool,
+) -> Result<(String, bool)> {
+    let (successful, failures) = read_host(base, token, filters.project.as_deref()).await?;
+    Ok((
+        render(base, &successful, &failures, filters, now, zone, as_json),
+        failures.is_empty(),
+    ))
+}
+
+async fn read_host(
+    base: &str,
+    token: &str,
+    project: Option<&str>,
+) -> Result<(Vec<(Project, Vec<Deadline>)>, Vec<ReadFailure>)> {
     let client = reqwest::Client::new();
-    let mut projects: Vec<Project> = list(&client, format!("{base}{INVENTORY_PATH}"), &token)
+    let mut projects: Vec<Project> = list(&client, format!("{base}{INVENTORY_PATH}"), token)
         .await
         .context("read the dashboard-scoped open Project inventory")?;
-    if let Some(code) = project.as_deref() {
+    if let Some(code) = project {
         projects.retain(|row| row.code == code);
         anyhow::ensure!(
             !projects.is_empty(),
             "no visible open Project has code `{code}`"
         );
     }
-    let (successful, failures) = gather(&base, &token, projects).await;
-    println!(
-        "{}",
-        render(&base, &successful, &failures, &filters, now, zone, as_json)
-    );
-    Ok(failures.is_empty())
+    Ok(gather(base, token, projects).await)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_failed_host_keeps_successful_host_coverage_in_the_report() {
+        let reports = vec![
+            (
+                "https://one.example".to_owned(),
+                Ok(json!({"complete": true})),
+            ),
+            (
+                "https://two.example".to_owned(),
+                Err(anyhow!("session expired")),
+            ),
+        ];
+        let report = host_report(reports);
+        assert_eq!(report["complete"], false);
+        assert_eq!(report["hosts"][0]["report"]["complete"], true);
+        assert_eq!(report["hosts"][1]["error"], "session expired");
+    }
 
     fn project(code: &str) -> Project {
         Project {
@@ -748,6 +843,7 @@ mod tests {
 
     fn options(host: &str) -> BriefOptions {
         BriefOptions {
+            all_hosts: false,
             host: Some(host.into()),
             project: None,
             due_by: None,
