@@ -195,4 +195,53 @@ mod tests {
         assert!(html.contains("class=\"policy\""), "{html}");
         assert!(!html.contains("lawyer-nav"), "{html}");
     }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn a_sibling_brand_publishes_the_document_under_the_firm_name() {
+        const BODY: &str = "<p><strong>Neon Law</strong> (Guieb &amp; Shook PC) serves you. \
+            Every reference to \"Neon Law\" in these Terms means Guieb &amp; Shook PC.</p>\
+            <h2>Trademarks</h2><p>Neon Law is a mark.</p>\
+            <h2>Contact</h2><p>Neon Law answers contact@neonlaw.com and support@neonlaw.com.</p>";
+        let chrome = |brand_name: &str, legal_entity: &str| PublicChrome {
+            brand_name: brand_name.into(),
+            legal_entity: legal_entity.into(),
+            firm_email: "hello@sibling.example".into(),
+            ..PublicChrome::default()
+        };
+
+        let sibling = firm_named_body(BODY, &chrome("Sibling Practice", "Guieb & Shook PC"));
+        assert!(
+            sibling.starts_with("<p><strong>Guieb &amp; Shook PC</strong> serves you. </p>"),
+            "{sibling}"
+        );
+        assert!(!sibling.contains("Neon Law"), "{sibling}");
+        assert!(!sibling.contains("Trademarks"), "{sibling}");
+        assert!(!sibling.contains("neonlaw.com"), "{sibling}");
+        assert!(
+            sibling.ends_with(
+                "<h2>Contact</h2><p>Guieb &amp; Shook PC answers hello@sibling.example \
+                 and hello@sibling.example.</p>"
+            ),
+            "{sibling}"
+        );
+        // A closing trademark section drops with nothing after it.
+        assert_eq!(
+            firm_named_body(
+                "<p>Terms.</p><h2>Trademarks</h2><p>Neon Law is a mark.</p>",
+                &chrome("Sibling Practice", "Guieb & Shook PC"),
+            ),
+            "<p>Terms.</p>"
+        );
+
+        // The trade name's own host, and another legal entity, publish it as written.
+        assert_eq!(
+            firm_named_body(BODY, &chrome("Neon Law", "Guieb & Shook PC")),
+            BODY
+        );
+        assert_eq!(
+            firm_named_body(BODY, &chrome("Other Firm", "Example Counsel LLP")),
+            BODY
+        );
+    }
 }

@@ -93,23 +93,21 @@ pub fn AdminPeopleNew() -> Element {
     render_people_new(&resource)
 }
 
+fn render_people_new(resource: &Resource<Result<PeopleNewView, ServerFnError>>) -> Element {
+    match &*resource.read() {
+        Some(Ok(view)) => people_new_body(view),
+        Some(Err(_)) => rsx! {
+            main { id: "people-new", p { "Failed to load the form." } }
+        },
+        None => rsx! {
+            main { id: "people-new", p { "Loading…" } }
+        },
+    }
+}
+
 /// Render the resolved "add person" form: a native `POST /app/admin/people`
 /// carrying the CSRF token, with the name / email / role controls.
-fn render_people_new(resource: &Resource<Result<PeopleNewView, ServerFnError>>) -> Element {
-    let view = match &*resource.read() {
-        Some(Ok(view)) => view.clone(),
-        Some(Err(_)) => {
-            return rsx! {
-                main { id: "people-new", p { "Failed to load the form." } }
-            }
-        }
-        None => {
-            return rsx! {
-                main { id: "people-new", p { "Loading…" } }
-            }
-        }
-    };
-
+fn people_new_body(view: &PeopleNewView) -> Element {
     let role = view.role;
     let title = format!("{} | Admin | People | Add person", view.firm_name);
     let mut role_options = Vec::new();
@@ -161,5 +159,57 @@ fn render_people_new(resource: &Resource<Result<PeopleNewView, ServerFnError>>) 
             }
             p { a { href: "{CREATE_PATH}", "← Cancel" } }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{people_new_body, PeopleNewView};
+    use crate::people::ViewerRole;
+
+    fn render(role: ViewerRole, error: Option<&str>) -> String {
+        dioxus_ssr::render_element(people_new_body(&PeopleNewView {
+            csrf_token: "CSRF-TOKEN".into(),
+            error: error.map(str::to_owned),
+            role,
+            firm_name: "Example Firm".into(),
+            ..PeopleNewView::default()
+        }))
+    }
+
+    #[test]
+    fn the_form_is_a_native_csrf_post_to_the_people_collection() {
+        let html = render(ViewerRole::Admin, None);
+        assert!(html.contains(r#"action="/app/admin/people""#), "{html}");
+        assert!(html.contains(r#"method="post""#), "{html}");
+        assert!(
+            html.contains(r#"name="_csrf" value="CSRF-TOKEN""#),
+            "{html}"
+        );
+        for control in ["name", "email", "role", "notion_user_id"] {
+            assert!(html.contains(&format!(r#"name="{control}""#)), "{control}");
+        }
+        assert!(!html.contains(r#"role="alert""#), "{html}");
+    }
+
+    #[test]
+    fn only_an_owner_is_offered_the_admin_and_owner_roles() {
+        let owner = render(ViewerRole::Owner, None);
+        let admin = render(ViewerRole::Admin, None);
+        for elevated in [r#"value="owner""#, r#"value="admin""#] {
+            assert!(owner.contains(elevated), "{owner}");
+            assert!(!admin.contains(elevated), "{admin}");
+        }
+        for role in ["lawyer", "clerk", "client"] {
+            assert!(admin.contains(&format!(r#"value="{role}""#)), "{role}");
+        }
+    }
+
+    #[test]
+    fn a_rejected_create_is_announced_above_the_form() {
+        let html = render(ViewerRole::Admin, Some("That email is already in use."));
+        let alert = html.find(r#"role="alert""#).expect("an alert");
+        assert!(html.contains("That email is already in use."), "{html}");
+        assert!(alert < html.find("<form").expect("the form"), "{html}");
     }
 }
