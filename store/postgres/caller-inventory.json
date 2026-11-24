@@ -9711,6 +9711,7 @@
       "portal/src/integrations.rs",
       "portal/src/integrations_api.rs",
       "portal/src/lawyer_mailbox.rs",
+      "portal/src/lead_capture.rs",
       "portal/src/lead_confirm.rs",
       "portal/src/legal_sandbox.rs",
       "portal/src/lib.rs",

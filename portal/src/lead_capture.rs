@@ -133,57 +133,22 @@ async fn submit(
 
     let source_path = safe_source_path(brand, &form.source_path);
     let iep_intake = brand == BrandKey::IepDefenders && source_path == "/contact";
-    if !password_reset::verify_csrf_with(
-        &state.sessions,
+    if let Some(response) = reject_invalid_submission(
+        &state,
+        brand,
         &cookies,
-        &form.csrf_token,
-        LEAD_CSRF_COOKIE_NAME,
-    ) {
-        audit(brand, &source_path, "none", "rejected_csrf");
-        if iep_intake {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "Your intake form expired. Reopen the intake page and send it again.",
-            )
-                .into_response();
-        }
-        return neutral_redirect();
+        &headers,
+        &form,
+        &source_path,
+        iep_intake,
+    )
+    .await
+    {
+        return response;
     }
-    if !form.website.trim().is_empty() {
-        audit(brand, &source_path, "none", "rejected_honeypot");
-        return neutral_redirect();
-    }
-    if !captcha_passes(&state, &headers, &form.hcaptcha_response).await {
-        audit(brand, &source_path, "none", "rejected_captcha");
-        if iep_intake {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "Please go back, complete the verification, and send your intake again.",
-            )
-                .into_response();
-        }
-        return neutral_redirect();
-    }
-
     let email = form.email.trim();
     let phone = form.phone.trim();
     let sms_requested = form.sms_consent.as_deref() == Some("on");
-    if !valid_email(email)
-        || !valid_phone(phone)
-        || form.consent_version.trim().is_empty()
-        || source_path == "/leads"
-    {
-        audit(brand, &source_path, "none", "rejected_validation");
-        if iep_intake {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "Please go back and check your email address and phone number.",
-            )
-                .into_response();
-        }
-        return neutral_redirect();
-    }
-
     let phone = (!phone.is_empty()).then(|| phone.to_string());
     let sms_opt_in = sms_requested && phone.is_some();
     let call_opt_in = form.call_consent.as_deref() == Some("on") && phone.is_some();
@@ -263,6 +228,61 @@ async fn submit(
         return Redirect::to("/contact/sent#signup").into_response();
     }
     accepted_redirect(brand, &source_path)
+}
+
+async fn reject_invalid_submission(
+    state: &AppState,
+    brand: BrandKey,
+    cookies: &Cookies,
+    headers: &axum::http::HeaderMap,
+    form: &LeadForm,
+    source_path: &str,
+    iep_intake: bool,
+) -> Option<Response> {
+    let reject = |reason: &str, message: &'static str| {
+        audit(brand, source_path, "none", reason);
+        if iep_intake {
+            (StatusCode::UNPROCESSABLE_ENTITY, message).into_response()
+        } else {
+            neutral_redirect()
+        }
+    };
+    if !password_reset::verify_csrf_with(
+        &state.sessions,
+        cookies,
+        &form.csrf_token,
+        LEAD_CSRF_COOKIE_NAME,
+    ) {
+        return Some(reject(
+            "rejected_csrf",
+            "Your intake form expired. Reopen the intake page and send it again.",
+        ));
+    }
+    if !form.website.trim().is_empty() {
+        audit(brand, source_path, "none", "rejected_honeypot");
+        return Some(neutral_redirect());
+    }
+    if !captcha_passes(state, headers, &form.hcaptcha_response).await {
+        return Some(reject(
+            "rejected_captcha",
+            "Please go back, complete the verification, and send your intake again.",
+        ));
+    }
+
+    let email = form.email.trim();
+    let phone = form.phone.trim();
+    if !valid_email(email)
+        || !valid_phone(phone)
+        || form.consent_version.trim().is_empty()
+        || source_path == "/leads"
+    {
+        return Some(reject(
+            "rejected_validation",
+            "Please go back and check your email address and phone number.",
+        ));
+    }
+
+    None
 }
 
 fn accepted_redirect(brand: BrandKey, source_path: &str) -> Response {
