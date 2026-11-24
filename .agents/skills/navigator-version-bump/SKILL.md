@@ -33,5 +33,14 @@ installed CLI's help for each verb.
    and review policy. Verify deployment on the merge revision and reconcile configured mirrors. Report PR coverage,
    merges and deployments. Keep the per-repository ledger and follow-ups in the workspace's private operator records.
 
+For recurring releases, key the private ledger by the release and configured repository. Record the base, reviewed head,
+PR and checks. On a rerun, verify the recorded revisions and resume unfinished work. When a newer tag arrives while an
+earlier draft is open, record both versions and follow the operator's supersession decision.
+
+When the operator requests ongoing issue triage, capture reproducible automation gaps during each run. Search the
+configured issue tracker for the same behavior first. File a new gap in the designated intake queue with a synthetic
+example and a verifiable outcome. Record the issue ID in the private ledger. Keep matter identifiers and raw logs in the
+workspace.
+
 The Gmail MCP connector is the only way agents access the mailbox. Every composed email stays an unsent draft for the
 lawyer to send personally.
