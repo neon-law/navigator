@@ -281,3 +281,148 @@ async fn two_account_invoice_lifecycle() -> Result<()> {
         .await
         .context("operating sandbox")
 }
+
+/// A sandbox account that answers the lifecycle the way Stripe does, and
+/// settles the finalized invoice as `finalized` says.
+struct FakeAccount {
+    finalized: Value,
+    tag: std::sync::Mutex<String>,
+}
+
+impl wiremock::Respond for FakeAccount {
+    fn respond(&self, request: &wiremock::Request) -> wiremock::ResponseTemplate {
+        use serde_json::json;
+        let path = request.url.path().trim_start_matches("/v1/");
+        let body = match (request.method.as_str(), path) {
+            ("POST", "test_helpers/test_clocks") => json!({"id": "clock_1"}),
+            ("POST", "coupons") => json!({"id": "coupon_1"}),
+            ("POST", "customers") => json!({"id": "cus_1"}),
+            ("POST", "invoices") => {
+                let form = String::from_utf8_lossy(&request.body).into_owned();
+                let tag = form
+                    .split('&')
+                    .find_map(|pair| pair.strip_prefix("metadata%5Bnavigator_batch_id%5D="));
+                *self.tag.lock().unwrap() = tag.unwrap_or_default().to_owned();
+                json!({"id": "in_1", "livemode": false})
+            }
+            ("POST", "invoiceitems") => json!({"id": "ii_1", "livemode": false}),
+            ("GET", "invoices/in_1") => json!({
+                "id": "in_1", "livemode": false, "auto_advance": false,
+                "status": "draft", "currency": "usd", "total": 1000,
+                "customer": "cus_1",
+                "metadata": {"navigator_batch_id": *self.tag.lock().unwrap()},
+                "lines": {"data": [
+                    {"parent": {"invoice_item_details": {"invoice_item": "ii_1"}}}
+                ]},
+            }),
+            ("POST", "invoices/in_1/finalize") => self.finalized.clone(),
+            ("POST", "invoices/in_1/void") => json!({"status": "void"}),
+            ("DELETE", _) => json!({"deleted": true}),
+            _ => json!({}),
+        };
+        wiremock::ResponseTemplate::new(200).set_body_json(body)
+    }
+}
+
+async fn fake_account(finalized: Value) -> (wiremock::MockServer, StripeInvoiceClient<'static>) {
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::any())
+        .respond_with(FakeAccount {
+            finalized,
+            tag: std::sync::Mutex::default(),
+        })
+        .mount(&server)
+        .await;
+    let mut client = StripeInvoiceClient::new("sk_test_synthetic", false).unwrap();
+    client.base = Url::parse(&format!("{}/v1/", server.uri())).unwrap();
+    (server, client)
+}
+
+/// A second account that knows nothing of the first one's objects.
+async fn empty_account() -> (wiremock::MockServer, StripeInvoiceClient<'static>) {
+    let server = wiremock::MockServer::start().await;
+    let mut client = StripeInvoiceClient::new("sk_test_other", false).unwrap();
+    client.base = Url::parse(&format!("{}/v1/", server.uri())).unwrap();
+    (server, client)
+}
+
+async fn calls(server: &wiremock::MockServer, method: &str) -> Vec<String> {
+    let requests = server.received_requests().await.unwrap();
+    requests
+        .iter()
+        .filter(|request| request.method.as_str() == method)
+        .map(|request| request.url.path().trim_start_matches("/v1/").to_owned())
+        .collect()
+}
+
+fn open_with_credit() -> Value {
+    serde_json::json!({
+        "total": 1000, "starting_balance": -300, "amount_due": 700, "status": "open"
+    })
+}
+
+#[tokio::test]
+async fn a_prior_payment_reduces_the_balance_and_the_open_invoice_is_voided() {
+    let (server, account) = fake_account(open_with_credit()).await;
+    let (_other_server, other) = empty_account().await;
+    scenario(&account, &other, false).await.unwrap();
+    let posts = calls(&server, "POST").await;
+    assert!(posts.contains(&"customers/cus_1/balance_transactions".to_owned()));
+    assert!(posts.contains(&"invoices/in_1/void".to_owned()));
+    assert!(!posts.contains(&"coupons".to_owned()));
+    assert_eq!(
+        calls(&server, "DELETE").await,
+        ["test_helpers/test_clocks/clock_1"]
+    );
+}
+
+#[tokio::test]
+async fn a_full_coupon_settles_at_finalization_and_both_fixtures_are_removed() {
+    let (server, account) = fake_account(serde_json::json!({
+        "lines": {"data": [{"discount_amounts": [{"amount": 1000}]}]},
+        "total": 0, "amount_due": 0, "status": "paid"
+    }))
+    .await;
+    let (_other_server, other) = empty_account().await;
+    scenario(&account, &other, true).await.unwrap();
+    let posts = calls(&server, "POST").await;
+    assert!(!posts.contains(&"customers/cus_1/balance_transactions".to_owned()));
+    assert!(!posts.contains(&"invoices/in_1/void".to_owned()));
+    assert_eq!(
+        calls(&server, "DELETE").await,
+        ["test_helpers/test_clocks/clock_1", "coupons/coupon_1"]
+    );
+}
+
+#[tokio::test]
+async fn a_failed_contract_still_removes_the_clock_it_created() {
+    // The second account can read the first one's draft.
+    let (server, account) = fake_account(open_with_credit()).await;
+    let (_shared, shared) = fake_account(open_with_credit()).await;
+    let error = scenario(&account, &shared, false).await.unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "invoice must be absent from the other account"
+    );
+    assert_eq!(
+        calls(&server, "DELETE").await,
+        ["test_helpers/test_clocks/clock_1"]
+    );
+
+    // The credit never reached the invoice, or the coupon waived nothing.
+    for (use_coupon, message) in [
+        (false, "prior payment must reduce the balance due"),
+        (true, "coupon must waive the full line"),
+    ] {
+        let (server, account) = fake_account(serde_json::json!({
+            "total": 1000, "starting_balance": 0, "amount_due": 1000, "status": "open"
+        }))
+        .await;
+        let (_other_server, other) = empty_account().await;
+        let error = scenario(&account, &other, use_coupon).await.unwrap_err();
+        assert_eq!(error.to_string(), message);
+        assert!(calls(&server, "DELETE")
+            .await
+            .contains(&"test_helpers/test_clocks/clock_1".to_owned()));
+    }
+}
