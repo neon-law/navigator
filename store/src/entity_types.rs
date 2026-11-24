@@ -317,71 +317,83 @@ pub async fn find_or_create(db: &SurrealDb, name: &str) -> Result<EntityType, En
 #[cfg(test)]
 mod tests {
     use super::{create, find_by_id, find_by_name, find_or_create, list, EntityTypeError};
-    use crate::surreal::test_support::mem;
+    use crate::test_support::with_postgres;
 
     #[tokio::test]
     async fn a_created_entity_type_reads_back_by_id_and_name() {
-        let db = mem().await;
-        let created = create(&db, "LLC").await.unwrap();
-        assert_eq!(created.name, "LLC");
+        with_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            let created = create(&db, "LLC").await.unwrap();
+            assert_eq!(created.name, "LLC");
 
-        assert_eq!(
-            find_by_id(&db, created.id).await.unwrap(),
-            Some(created.clone())
-        );
-        assert_eq!(
-            find_by_name(&db, "LLC").await.unwrap(),
-            Some(created.clone())
-        );
-        assert_eq!(find_by_name(&db, "Trust").await.unwrap(), None);
+            assert_eq!(
+                find_by_id(&db, created.id).await.unwrap(),
+                Some(created.clone())
+            );
+            assert_eq!(
+                find_by_name(&db, "LLC").await.unwrap(),
+                Some(created.clone())
+            );
+            assert_eq!(find_by_name(&db, "Trust").await.unwrap(), None);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_duplicate_name_is_reported_as_the_name_being_taken() {
-        let db = mem().await;
-        create(&db, "LLC").await.unwrap();
+        with_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            create(&db, "LLC").await.unwrap();
 
-        let duplicate = create(&db, "LLC").await;
-        assert!(
-            matches!(duplicate, Err(EntityTypeError::NameTaken)),
-            "the unique `entity_type_name` index is the gate, got {duplicate:?}"
-        );
+            let duplicate = create(&db, "LLC").await;
+            assert!(
+                matches!(duplicate, Err(EntityTypeError::NameTaken)),
+                "the unique `entity_type_name` index is the gate, got {duplicate:?}"
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn find_or_create_is_idempotent_on_the_name() {
-        let db = mem().await;
-        let first = find_or_create(&db, "Trust").await.unwrap();
-        let second = find_or_create(&db, "Trust").await.unwrap();
-        assert_eq!(first, second, "the second call returns the existing row");
-        assert_eq!(list(&db, &[]).await.unwrap().len(), 1);
+        with_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            let first = find_or_create(&db, "Trust").await.unwrap();
+            let second = find_or_create(&db, "Trust").await.unwrap();
+            assert_eq!(first, second, "the second call returns the existing row");
+            assert_eq!(list(&db, &[]).await.unwrap().len(), 1);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn listing_orders_by_name_and_honours_the_sort_spec() {
-        let db = mem().await;
-        for name in ["Trust", "Corporation", "LLC"] {
-            create(&db, name).await.unwrap();
-        }
+        with_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            for name in ["Trust", "Corporation", "LLC"] {
+                create(&db, name).await.unwrap();
+            }
 
-        let names = |rows: Vec<super::EntityType>| -> Vec<String> {
-            rows.into_iter().map(|t| t.name).collect()
-        };
+            let names = |rows: Vec<super::EntityType>| -> Vec<String> {
+                rows.into_iter().map(|t| t.name).collect()
+            };
 
-        // Empty spec → ascending name.
-        assert_eq!(
-            names(list(&db, &[]).await.unwrap()),
-            ["Corporation", "LLC", "Trust"]
-        );
-        // Descending on the advertised key.
-        assert_eq!(
-            names(list(&db, &[("name".into(), true)]).await.unwrap()),
-            ["Trust", "LLC", "Corporation"]
-        );
-        // A spec naming no sortable column falls back to ascending name.
-        assert_eq!(
-            names(list(&db, &[("bogus".into(), true)]).await.unwrap()),
-            ["Corporation", "LLC", "Trust"]
-        );
+            // Empty spec → ascending name.
+            assert_eq!(
+                names(list(&db, &[]).await.unwrap()),
+                ["Corporation", "LLC", "Trust"]
+            );
+            // Descending on the advertised key.
+            assert_eq!(
+                names(list(&db, &[("name".into(), true)]).await.unwrap()),
+                ["Trust", "LLC", "Corporation"]
+            );
+            // A spec naming no sortable column falls back to ascending name.
+            assert_eq!(
+                names(list(&db, &[("bogus".into(), true)]).await.unwrap()),
+                ["Corporation", "LLC", "Trust"]
+            );
+        })
+        .await;
     }
 }

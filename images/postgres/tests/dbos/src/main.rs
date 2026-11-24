@@ -52,7 +52,8 @@ async fn main() -> anyhow::Result<()> {
         Ok::<(), dbos::Error<SmokeError>>(())
     })?;
     dbos.launch().await?;
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+    println!("DBOS_READY_PORT {}", listener.local_addr()?.port());
     let server = tokio::spawn(async move {
         axum::serve(
             listener,

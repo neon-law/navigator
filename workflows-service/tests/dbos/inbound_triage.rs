@@ -16,7 +16,8 @@ use workflows_service::inbound_triage::{
     TriageError, TriageProviders,
 };
 
-use crate::support::{database, APP_VERSION, DEADLINE};
+use crate::support::application_process::database;
+use crate::support::{APP_VERSION, DEADLINE};
 
 const ROUTE: &str = "/internal/dbos/inbound-triage";
 const FILING_ROUTE: &str = "/internal/dbos/approved-inbox-filing";
@@ -60,9 +61,8 @@ async fn inbound_triage_preserves_replay_and_confines_classifier_evidence() {
     let Some(db) = database().await else {
         return;
     };
-    let _attachment_filing_store = db.store();
-    let surreal = store::test_support::mem_surreal().await;
-    let firm_id = store::test_support::seed_firm_with_brand(&surreal, "neon").await;
+    let surreal = store::surreal::SurrealDb::uninitialized();
+    let (firm_id, _) = store::test_support::seed_firm_with_new_brand(&surreal, "neon").await;
     let message_id = seed_message(&surreal, firm_id, "triage-replay").await;
     let request = InboundTriageRequest { message_id };
     let dbos = dbos::DBOS::new(workflows::dbos_engine::config(&db.url, APP_VERSION));
@@ -238,21 +238,21 @@ async fn assert_attachment_filing_requires_its_exact_approval(
     let storage: Arc<dyn cloud::StorageService> =
         Arc::new(cloud::FsStorage::new(directory.path()).await.unwrap());
     let bytes = b"synthetic attachment";
-    let asset_id = store::assets::ingest_content(db, &storage, bytes, "text/plain")
-        .await
-        .unwrap();
-    store::inbox::link_message_assets(
+    let attachment = store::inbox::ingest_attachment(
         db,
+        &storage,
         firm_id,
-        filing.message_id,
-        &[store::inbox::IngestAttachment {
-            asset_id,
-            filename: "fixture.txt".into(),
-            sha256: store::documents::sha256_hex(bytes),
-        }],
+        None,
+        "fixture.txt",
+        "text/plain",
+        bytes,
     )
     .await
     .unwrap();
+    let asset_id = attachment.asset_id;
+    store::inbox::link_message_assets(db, firm_id, filing.message_id, &[attachment])
+        .await
+        .unwrap();
     let link = store::inbox::message_assets(db, firm_id, filing.message_id)
         .await
         .unwrap()

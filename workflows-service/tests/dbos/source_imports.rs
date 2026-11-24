@@ -11,7 +11,7 @@ use workflows::dbos_engine::source_imports::{
     self, Context, ImportQueueError, ImportReport, ImportSource, StoreImportSource,
 };
 
-use crate::support::{database, firm_matter, APP_VERSION, DEADLINE};
+use crate::support::{database, native_project, APP_VERSION, DEADLINE};
 
 #[derive(Clone, Default)]
 struct Queue {
@@ -155,47 +155,50 @@ async fn an_unreadable_import_queue_fails_the_slot() {
 
 #[tokio::test]
 async fn the_store_source_reads_pending_imports_and_reports_why_one_stops() {
-    let Some(db) = database().await else {
-        return;
-    };
-    let pg = db.store();
-    let surreal = store::test_support::mem_surreal().await;
-    let matter = firm_matter(&surreal, "Import").await;
-    let source = StoreImportSource::new(surreal, pg.clone(), Arc::new(cloud::NoRuntimeKms));
-    assert!(source.pending().await.unwrap().is_empty());
+    store::test_support::with_postgres(async {
+        let pg = store::postgres::PostgresDb::application().await.unwrap();
+        let surreal = store::surreal::SurrealDb::uninitialized();
+        let (project, admin) = native_project::matter(&surreal).await;
+        let firm = project
+            .firm_id
+            .expect("synthetic Project belongs to the Firm");
+        let source = StoreImportSource::new(surreal, pg.clone(), Arc::new(cloud::NoRuntimeKms));
+        assert!(source.pending().await.unwrap().is_empty());
 
-    // An id the queue never held stops with a reason.
-    assert!(source.apply(Uuid::now_v7()).await.is_err());
+        // An id the queue never held stops with a reason.
+        assert!(source.apply(Uuid::now_v7()).await.is_err());
 
-    // A recorded request on a Firm with no forge token stops before any
-    // forge write, and stays pending for the next slot.
-    let import = Uuid::now_v7();
-    sqlx::query(
-        "INSERT INTO project_source_import \
+        // A recorded request on a Firm with no forge token stops before any
+        // forge write, and stays pending for the next slot.
+        let import = Uuid::now_v7();
+        sqlx::query(
+            "INSERT INTO project_source_import \
          (id, firm_id, project_id, operation_key, tree_sha256, file_count, canonical_zip, \
           state, requested_by_person_id, requested_at) \
          VALUES ($1, $2, $3, 'scheduled-import', $4, 1, $5, 'pending', $6, now())",
-    )
-    .bind(import)
-    .bind(matter.firm)
-    .bind(matter.project)
-    .bind("0".repeat(64))
-    .bind(b"synthetic archive".to_vec())
-    .bind(matter.admin)
-    .execute(pg.pool())
-    .await
-    .expect("record a synthetic pending import");
-    assert_eq!(source.pending().await.unwrap(), vec![import]);
-    let reason = source
-        .apply(import)
+        )
+        .bind(import)
+        .bind(firm)
+        .bind(project.id)
+        .bind("0".repeat(64))
+        .bind(b"synthetic archive".to_vec())
+        .bind(admin)
+        .execute(pg.pool())
         .await
-        .expect_err("no forge is configured for the Firm");
-    assert!(!reason.is_empty());
-    assert_eq!(source.pending().await.unwrap(), vec![import]);
+        .expect("record a synthetic pending import");
+        assert_eq!(source.pending().await.unwrap(), vec![import]);
+        let reason = source
+            .apply(import)
+            .await
+            .expect_err("no forge is configured for the Firm");
+        assert!(reason.contains("forgejo_access_token"), "{reason}");
+        assert_eq!(source.pending().await.unwrap(), vec![import]);
 
-    pg.pool().close().await;
-    assert!(matches!(
-        source.pending().await,
-        Err(ImportQueueError::Queue)
-    ));
+        pg.pool().close().await;
+        assert!(matches!(
+            source.pending().await,
+            Err(ImportQueueError::Queue)
+        ));
+    })
+    .await;
 }

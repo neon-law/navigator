@@ -341,266 +341,300 @@ const SELECT: &str = "id, person_id, email, purpose, token_hash, expires_at, use
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::surreal::test_support::mem;
+    use crate::test_support::with_postgres;
     use chrono::Duration;
 
-    /// Nothing in this module dereferences the person a token acts on, so
-    /// a bare id is the whole reference — which is the shape under test.
-    fn a_person() -> Uuid {
-        Uuid::now_v7()
+    async fn a_person(db: &SurrealDb) -> Uuid {
+        crate::persons::create(
+            db,
+            &crate::persons::NewPerson::new(
+                "Token recipient",
+                format!("{}@example.test", Uuid::now_v7()),
+            ),
+        )
+        .await
+        .unwrap()
+        .id
     }
 
     #[tokio::test]
     async fn mint_then_validate_resolves_person_and_purpose() {
-        let db = mem().await;
-        let person_id = a_person();
-        let now = Utc::now();
+        with_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            let person_id = a_person(&db).await;
+            let now = Utc::now();
 
-        let minted = mint(
-            &db,
-            person_id,
-            "libra@example.com",
-            PURPOSE_PASSWORD_RESET,
-            "the-plaintext-secret",
-            now + Duration::minutes(30),
-        )
-        .await
-        .unwrap();
-
-        // The plaintext is never stored — only its hash.
-        assert_eq!(minted.token_hash, hash_token("the-plaintext-secret"));
-        assert!(minted.used_at.is_none());
-
-        let resolved = validate(&db, "the-plaintext-secret", PURPOSE_PASSWORD_RESET, now)
+            let minted = mint(
+                &db,
+                person_id,
+                "libra@example.com",
+                PURPOSE_PASSWORD_RESET,
+                "the-plaintext-secret",
+                now + Duration::minutes(30),
+            )
             .await
-            .unwrap()
-            .expect("valid token resolves");
-        assert_eq!(resolved.person_id, person_id);
-        assert_eq!(resolved.email, "libra@example.com");
+            .unwrap();
+
+            // The plaintext is never stored — only its hash.
+            assert_eq!(minted.token_hash, hash_token("the-plaintext-secret"));
+            assert!(minted.used_at.is_none());
+
+            let resolved = validate(&db, "the-plaintext-secret", PURPOSE_PASSWORD_RESET, now)
+                .await
+                .unwrap()
+                .expect("valid token resolves");
+            assert_eq!(resolved.person_id, person_id);
+            assert_eq!(resolved.email, "libra@example.com");
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn validate_is_scoped_to_the_purpose() {
-        let db = mem().await;
-        let now = Utc::now();
+        with_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            let now = Utc::now();
 
-        mint(
-            &db,
-            a_person(),
-            "libra@example.com",
-            PURPOSE_EMAIL_CONFIRM,
-            "confirm-token",
-            now + Duration::minutes(30),
-        )
-        .await
-        .unwrap();
+            mint(
+                &db,
+                a_person(&db).await,
+                "libra@example.com",
+                PURPOSE_EMAIL_CONFIRM,
+                "confirm-token",
+                now + Duration::minutes(30),
+            )
+            .await
+            .unwrap();
 
-        // A reset-purpose validate must not accept a confirm-purpose token.
-        assert!(validate(&db, "confirm-token", PURPOSE_PASSWORD_RESET, now)
-            .await
-            .unwrap()
-            .is_none());
-        // …but the matching purpose does.
-        assert!(validate(&db, "confirm-token", PURPOSE_EMAIL_CONFIRM, now)
-            .await
-            .unwrap()
-            .is_some());
+            // A reset-purpose validate must not accept a confirm-purpose token.
+            assert!(validate(&db, "confirm-token", PURPOSE_PASSWORD_RESET, now)
+                .await
+                .unwrap()
+                .is_none());
+            // …but the matching purpose does.
+            assert!(validate(&db, "confirm-token", PURPOSE_EMAIL_CONFIRM, now)
+                .await
+                .unwrap()
+                .is_some());
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn unknown_token_does_not_validate() {
-        let db = mem().await;
-        let resolved = validate(&db, "never-minted", PURPOSE_PASSWORD_RESET, Utc::now())
-            .await
-            .unwrap();
-        assert!(resolved.is_none());
+        with_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            let resolved = validate(&db, "never-minted", PURPOSE_PASSWORD_RESET, Utc::now())
+                .await
+                .unwrap();
+            assert!(resolved.is_none());
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn expired_token_is_treated_as_absent() {
-        let db = mem().await;
-        let now = Utc::now();
+        with_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            let now = Utc::now();
 
-        mint(
-            &db,
-            a_person(),
-            "libra@example.com",
-            PURPOSE_PASSWORD_RESET,
-            "already-expired",
-            now - Duration::seconds(1),
-        )
-        .await
-        .unwrap();
-
-        let resolved = validate(&db, "already-expired", PURPOSE_PASSWORD_RESET, now)
+            mint(
+                &db,
+                a_person(&db).await,
+                "libra@example.com",
+                PURPOSE_PASSWORD_RESET,
+                "already-expired",
+                now - Duration::seconds(1),
+            )
             .await
             .unwrap();
-        assert!(resolved.is_none(), "an expired token must not validate");
+
+            let resolved = validate(&db, "already-expired", PURPOSE_PASSWORD_RESET, now)
+                .await
+                .unwrap();
+            assert!(resolved.is_none(), "an expired token must not validate");
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn consumed_token_stops_validating() {
-        let db = mem().await;
-        let now = Utc::now();
+        with_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            let now = Utc::now();
 
-        let minted = mint(
-            &db,
-            a_person(),
-            "libra@example.com",
-            PURPOSE_PASSWORD_RESET,
-            "single-use",
-            now + Duration::minutes(30),
-        )
-        .await
-        .unwrap();
-
-        assert!(validate(&db, "single-use", PURPOSE_PASSWORD_RESET, now)
+            let minted = mint(
+                &db,
+                a_person(&db).await,
+                "libra@example.com",
+                PURPOSE_PASSWORD_RESET,
+                "single-use",
+                now + Duration::minutes(30),
+            )
             .await
-            .unwrap()
-            .is_some());
-        consume(&db, minted.id, now).await.unwrap();
-        assert!(
-            validate(&db, "single-use", PURPOSE_PASSWORD_RESET, now)
+            .unwrap();
+
+            assert!(validate(&db, "single-use", PURPOSE_PASSWORD_RESET, now)
                 .await
                 .unwrap()
-                .is_none(),
-            "a consumed token must not validate again"
-        );
+                .is_some());
+            consume(&db, minted.id, now).await.unwrap();
+            assert!(
+                validate(&db, "single-use", PURPOSE_PASSWORD_RESET, now)
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "a consumed token must not validate again"
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn consuming_an_unknown_token_is_a_no_op() {
-        let db = mem().await;
-        consume(&db, Uuid::now_v7(), Utc::now()).await.unwrap();
+        with_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            consume(&db, Uuid::now_v7(), Utc::now()).await.unwrap();
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_token_minted_before_the_window_does_not_satisfy_the_throttle() {
-        let db = mem().await;
-        let person_id = a_person();
-        let now = Utc::now();
+        with_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            let person_id = a_person(&db).await;
+            let now = Utc::now();
 
-        mint(
-            &db,
-            person_id,
-            "libra@example.com",
-            PURPOSE_PASSWORD_RESET,
-            "older-than-the-window",
-            now + Duration::minutes(30),
-        )
-        .await
-        .unwrap();
+            mint(
+                &db,
+                person_id,
+                "libra@example.com",
+                PURPOSE_PASSWORD_RESET,
+                "older-than-the-window",
+                now + Duration::minutes(30),
+            )
+            .await
+            .unwrap();
 
-        // The token is live, but `since` is after it was minted. This is
-        // the `inserted_at >= $since` half of the gate — without it the
-        // throttle would suppress every later mint for as long as one
-        // unexpired token survived, and a person who never received the
-        // first email could not request a second.
-        assert!(!has_live_token_since(
-            &db,
-            person_id,
-            PURPOSE_PASSWORD_RESET,
-            now + Duration::seconds(60),
-            now,
-        )
-        .await
-        .unwrap());
+            // The token is live, but `since` is after it was minted. This is
+            // the `inserted_at >= $since` half of the gate — without it the
+            // throttle would suppress every later mint for as long as one
+            // unexpired token survived, and a person who never received the
+            // first email could not request a second.
+            assert!(!has_live_token_since(
+                &db,
+                person_id,
+                PURPOSE_PASSWORD_RESET,
+                now + Duration::seconds(60),
+                now,
+            )
+            .await
+            .unwrap());
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn throttle_sees_a_live_token_inside_the_window_only() {
-        let db = mem().await;
-        let person_id = a_person();
-        let now = Utc::now();
+        with_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            let person_id = a_person(&db).await;
+            let now = Utc::now();
 
-        // No token yet → nothing live.
-        assert!(!has_live_token_since(
-            &db,
-            person_id,
-            PURPOSE_PASSWORD_RESET,
-            now - Duration::seconds(60),
-            now,
-        )
-        .await
-        .unwrap());
+            // No token yet → nothing live.
+            assert!(!has_live_token_since(
+                &db,
+                person_id,
+                PURPOSE_PASSWORD_RESET,
+                now - Duration::seconds(60),
+                now,
+            )
+            .await
+            .unwrap());
 
-        let minted = mint(
-            &db,
-            person_id,
-            "libra@example.com",
-            PURPOSE_PASSWORD_RESET,
-            "fresh",
-            now + Duration::minutes(30),
-        )
-        .await
-        .unwrap();
+            let minted = mint(
+                &db,
+                person_id,
+                "libra@example.com",
+                PURPOSE_PASSWORD_RESET,
+                "fresh",
+                now + Duration::minutes(30),
+            )
+            .await
+            .unwrap();
 
-        // A just-minted token is inside a 60s look-back window.
-        assert!(has_live_token_since(
-            &db,
-            person_id,
-            PURPOSE_PASSWORD_RESET,
-            now - Duration::seconds(60),
-            now,
-        )
-        .await
-        .unwrap());
+            // A just-minted token is inside a 60s look-back window.
+            assert!(has_live_token_since(
+                &db,
+                person_id,
+                PURPOSE_PASSWORD_RESET,
+                now - Duration::seconds(60),
+                now,
+            )
+            .await
+            .unwrap());
 
-        // Once consumed it no longer counts against the throttle.
-        consume(&db, minted.id, now).await.unwrap();
-        assert!(!has_live_token_since(
-            &db,
-            person_id,
-            PURPOSE_PASSWORD_RESET,
-            now - Duration::seconds(60),
-            now,
-        )
-        .await
-        .unwrap());
+            // Once consumed it no longer counts against the throttle.
+            consume(&db, minted.id, now).await.unwrap();
+            assert!(!has_live_token_since(
+                &db,
+                person_id,
+                PURPOSE_PASSWORD_RESET,
+                now - Duration::seconds(60),
+                now,
+            )
+            .await
+            .unwrap());
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn another_persons_live_token_does_not_satisfy_the_throttle() {
-        let db = mem().await;
-        let now = Utc::now();
+        with_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            let now = Utc::now();
 
-        mint(
-            &db,
-            a_person(),
-            "libra@example.com",
-            PURPOSE_PASSWORD_RESET,
-            "someone-elses",
-            now + Duration::minutes(30),
-        )
-        .await
-        .unwrap();
+            mint(
+                &db,
+                a_person(&db).await,
+                "libra@example.com",
+                PURPOSE_PASSWORD_RESET,
+                "someone-elses",
+                now + Duration::minutes(30),
+            )
+            .await
+            .unwrap();
 
-        assert!(!has_live_token_since(
-            &db,
-            a_person(),
-            PURPOSE_PASSWORD_RESET,
-            now - Duration::seconds(60),
-            now,
-        )
-        .await
-        .unwrap());
+            assert!(!has_live_token_since(
+                &db,
+                a_person(&db).await,
+                PURPOSE_PASSWORD_RESET,
+                now - Duration::seconds(60),
+                now,
+            )
+            .await
+            .unwrap());
+        })
+        .await;
     }
 
     #[tokio::test]
-    async fn the_purpose_assert_rejects_an_unknown_purpose() {
-        let db = mem().await;
-        let err = mint(
-            &db,
-            a_person(),
-            "libra@example.com",
-            "not_a_purpose",
-            "bad",
-            Utc::now() + Duration::minutes(30),
-        )
+    async fn an_unknown_token_purpose_is_rejected() {
+        with_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            let err = mint(
+                &db,
+                a_person(&db).await,
+                "libra@example.com",
+                "not_a_purpose",
+                "bad",
+                Utc::now() + Duration::minutes(30),
+            )
+            .await;
+            assert!(err.is_err());
+        })
         .await;
-        assert!(
-            err.is_err(),
-            "the schema ASSERT is the gate on `purpose`, not a Rust check"
-        );
     }
 }

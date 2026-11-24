@@ -30,7 +30,7 @@ pub async fn source_tables(db: &SurrealDb) -> Result<Vec<String>> {
     let live: Option<std::collections::BTreeMap<String, String>> = db
         .query("RETURN (INFO FOR DB).tables")
         .await
-        .and_then(surrealdb::IndexedResults::check)
+        .and_then(store::surreal::IndexedResults::check)
         .context("inventory SurrealDB tables for archive export")?
         .take(0)
         .context("read SurrealDB table inventory for archive export")?;
@@ -69,13 +69,9 @@ pub async fn fetch_batch(db: &SurrealDb, table: &str) -> Result<Option<RecordBat
         .bind(("table", table.to_string()))
         .await
         .with_context(|| format!("select rows from Surreal table `{table}`"))?;
-    let rows: Vec<surrealdb::types::Value> = response
+    let rows: Vec<serde_json::Value> = response
         .take(0)
         .with_context(|| format!("read rows from Surreal table `{table}`"))?;
-    let rows: Vec<serde_json::Value> = rows
-        .into_iter()
-        .map(surrealdb::types::Value::into_json_value)
-        .collect();
     batch_from_rows(&rows)
 }
 

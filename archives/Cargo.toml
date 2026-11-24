@@ -45,7 +45,6 @@ serde_json.workspace = true
 sha2.workspace = true
 sqlx.workspace = true
 store.workspace = true
-surrealdb.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 telemetry.workspace = true

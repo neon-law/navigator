@@ -1,5 +1,5 @@
 //! `FinanceAggregate`'s registered DBOS workflow against a disposable
-//! PostgreSQL executor and synthetic object-store/Surreal data.
+//! PostgreSQL executor and synthetic object storage and application rows.
 
 use std::sync::Arc;
 
@@ -13,7 +13,8 @@ use workflows_service::dbos_finance_aggregate::{
 };
 use workflows_service::dbos_ingress::{FinanceIngress, WorkerIngress};
 
-use crate::support::{database, APP_VERSION, DEADLINE};
+use crate::support::application_process::database;
+use crate::support::{APP_VERSION, DEADLINE};
 
 const INPUT: &str = include_str!("../../../store/tests/data/finance/sample-finance-input.json");
 
@@ -27,12 +28,9 @@ async fn registered_finance_workflow_joins_duplicate_manual_run_id() {
             .await
             .expect("open synthetic object store"),
     );
-    let surreal = store::test_support::mem_surreal().await;
-    let project_id = store::test_support::seed_project_surreal(&surreal, "DBOS Finance").await;
-    let project = store::projects::find_by_id(&surreal, project_id)
-        .await
-        .expect("load synthetic project")
-        .expect("synthetic project exists");
+    let surreal = store::surreal::SurrealDb::uninitialized();
+    let (project, _) = crate::support::native_project::matter(&surreal).await;
+    let project_id = project.id;
     let project_code = project.code;
     storage
         .put(
@@ -149,12 +147,8 @@ async fn registered_finance_workflow_joins_duplicate_manual_run_id() {
             StatusCode::ACCEPTED
         );
     }
-    let other_project_id =
-        store::test_support::seed_project_surreal(&surreal, "DBOS Finance Other").await;
-    let other_project = store::projects::find_by_id(&surreal, other_project_id)
-        .await
-        .expect("load second synthetic project")
-        .expect("second synthetic project exists");
+    let (other_project, _) = crate::support::native_project::matter(&surreal).await;
+    let other_project_id = other_project.id;
     let conflicting = Request::builder()
         .method("POST")
         .uri("/internal/dbos/finance-aggregate")

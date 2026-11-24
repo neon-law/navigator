@@ -1252,8 +1252,8 @@
 {"file":"rules/src/f115.rs","line":122,"function":"record","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"rules/src/f116.rs","line":138,"function":"ungated_submissions","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"rules/src/f116.rs","line":142,"function":"ungated_submissions","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"rules/src/f118.rs","line":243,"function":"walk_routes","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"rules/src/f118.rs","line":255,"function":"walk_routes","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"rules/src/f118.rs","line":242,"function":"walk_routes","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"rules/src/f118.rs","line":254,"function":"walk_routes","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"rules/src/f121.rs","line":124,"function":"ungated_signature_sends","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"rules/src/f121.rs","line":128,"function":"ungated_signature_sends","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"rules/src/f122.rs","line":96,"function":"states_read","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
