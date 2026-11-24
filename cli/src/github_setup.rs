@@ -1324,14 +1324,25 @@ impl GitHubClient {
             slug: String,
             permission: String,
         }
-        let teams: Vec<RepositoryTeam> = self.get_json(&self.repo_path("/teams")).await?;
-        Ok(teams.iter().any(|team| {
-            team.slug.eq_ignore_ascii_case(slug)
-                && matches!(
+        let mut page = 1;
+        loop {
+            let teams: Vec<RepositoryTeam> = self
+                .get_json(&self.repo_path(&format!("/teams?per_page=100&page={page}")))
+                .await?;
+            if let Some(team) = teams
+                .iter()
+                .find(|team| team.slug.eq_ignore_ascii_case(slug))
+            {
+                return Ok(matches!(
                     team.permission.as_str(),
                     "admin" | "push" | "write" | "maintain"
-                )
-        }))
+                ));
+            }
+            if teams.len() < 100 {
+                return Ok(false);
+            }
+            page += 1;
+        }
     }
 
     async fn user_id(&self, handle: &str) -> Result<u64> {
@@ -3474,8 +3485,18 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
             .mount(&server)
             .await;
+        let first_page = (0..100)
+            .map(|n| serde_json::json!({"slug": format!("team-{n}"), "permission": "pull"}))
+            .collect::<Vec<_>>();
         Mock::given(method("GET"))
             .and(path("/repos/acme/navigator/teams"))
+            .and(query_param("page", "1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(first_page))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/repos/acme/navigator/teams"))
+            .and(query_param("page", "2"))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_json(serde_json::json!([{"slug": "counsel", "permission": "push"}])),
