@@ -11011,7 +11011,6 @@ async fn the_iep_defenders_home_renders_its_band_sequence_with_qualifiers() {
         "the hero CTA label is missing: {body}"
     );
     assert!(body.contains(r#"href="/contact""#), "{body}");
-
 }
 
 /// The Lex Tecnica home is a marketing-page band sequence lifted from the
