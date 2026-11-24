@@ -359,8 +359,8 @@ pub fn resolve_pins(dir: &Path) -> Result<Vec<PinResolution>, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        catalog, find, kit_version_for, resolve_pins, run_status, run_use, scaffold_notation,
-        unresolved_message, PinResolution,
+        catalog, find, kit_version_for, record_kit_version, resolve_pins, run_list, run_show,
+        run_status, run_use, scaffold_notation, unresolved_message, PinResolution,
     };
 
     #[test]
@@ -670,5 +670,55 @@ mod tests {
         scaffold(stale.path(), STALE_PIN_FIXTURE);
         assert_eq!(run_status(stale.path()), std::process::ExitCode::SUCCESS);
         assert!(!resolve_pins(stale.path()).unwrap()[0].resolved);
+    }
+
+    #[test]
+    fn list_and_show_read_the_catalog_and_an_unreadable_manifest_is_exit_two() {
+        use std::process::ExitCode;
+        assert_eq!(run_list(), ExitCode::SUCCESS);
+        assert_eq!(run_show("nv", "estates"), ExitCode::SUCCESS);
+        assert_eq!(run_show("zz", "wills"), ExitCode::from(1));
+        let empty = tempfile::tempdir().unwrap();
+        assert_eq!(run_status(empty.path()), ExitCode::from(2));
+        assert_eq!(run_use(empty.path(), "nv", "estates"), ExitCode::from(2));
+        scaffold(empty.path(), "skills: not-a-list\n");
+        assert_eq!(run_use(empty.path(), "nv", "estates"), ExitCode::from(2));
+    }
+
+    #[tokio::test]
+    async fn the_pinned_kit_version_is_written_through_to_the_live_matter() {
+        use crate::projects::test_login::site;
+        use wiremock::matchers::{body_json, method, path};
+        let id = uuid::Uuid::new_v4();
+        let (server, _login) = site(serde_json::json!([{"id": id, "code": "acme"}])).await;
+        wiremock::Mock::given(method("PATCH"))
+            .and(path(format!("/app/api/projects/{id}")))
+            .and(body_json(
+                serde_json::json!({"kit_version": "NV/estates/1"}),
+            ))
+            .respond_with(wiremock::ResponseTemplate::new(200))
+            .expect(2)
+            .mount(&server)
+            .await;
+        let pins =
+            "skills:\n  - jurisdiction: NV\n    practice_area: estates\n    version: \"1\"\n";
+        let dir = tempfile::tempdir().unwrap();
+        // No manifest, no matching pin, and no host each leave the live row alone.
+        record_kit_version(dir.path(), "nv", "estates").await;
+        scaffold(dir.path(), &format!("project: acme\n{pins}"));
+        record_kit_version(dir.path(), "nv", "estates").await;
+        scaffold(
+            dir.path(),
+            &format!("host: {}\nproject: acme\n{pins}", server.uri()),
+        );
+        record_kit_version(dir.path(), "tx", "probate").await;
+        record_kit_version(dir.path(), "nv", "estates").await;
+        record_kit_version(dir.path(), "NV", "Estates").await;
+        // A refused write-through is a warning, never a failed command.
+        scaffold(
+            dir.path(),
+            &format!("host: {}\nproject: absent\n{pins}", server.uri()),
+        );
+        record_kit_version(dir.path(), "nv", "estates").await;
     }
 }

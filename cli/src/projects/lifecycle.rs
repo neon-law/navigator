@@ -1471,6 +1471,72 @@ The Firm will represent the client.
         );
     }
 
+    #[tokio::test]
+    async fn an_open_notation_is_reported_instead_of_opening_a_second_one() {
+        use wiremock::matchers::{method, path};
+        let id = uuid::Uuid::new_v4();
+        let inventory = serde_json::json!([{"id": id, "code": "acme"}]);
+        let (server, _login) = crate::projects::test_login::site(inventory).await;
+        let host = server.uri();
+        let host = Some(host.as_str());
+        let board = |rows: serde_json::Value| {
+            wiremock::Mock::given(method("GET"))
+                .and(path(format!("/app/api/projects/{id}/notation-inventory")))
+                .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(rows))
+                .mount_as_scoped(&server)
+        };
+        for kind in [ONBOARDING, OFFBOARDING] {
+            let root = tempfile::tempdir().unwrap();
+            init_project_repository(root.path(), kind);
+            let open = || async {
+                if kind == ONBOARDING {
+                    super::onboard(host, root.path(), None, None).await
+                } else {
+                    super::offboard(host, root.path(), None).await
+                }
+            };
+            // An unreadable board, then a board with nothing open and no
+            // create door, each stop the command.
+            assert_eq!(open().await, ExitCode::FAILURE);
+            {
+                let _empty = board(serde_json::json!([])).await;
+                assert_eq!(open().await, ExitCode::FAILURE);
+            }
+            let row = serde_json::json!({
+                "template_code": template_code(kind),
+                "notation_id": "0199b9e4-14b7-7ad0-87a5-71ef24a46d41",
+                "current_state": "awaiting_signature",
+                "workflow_states": ["awaiting_signature"],
+                "state_entered_at": {},
+                "respondent_email": "client@example.com",
+                "signature_request_id": null,
+                "last_transition_at": null,
+            });
+            let _open = board(serde_json::json!([row])).await;
+            assert_eq!(open().await, ExitCode::SUCCESS);
+        }
+    }
+
+    #[test]
+    fn a_checkout_without_project_coordinates_cannot_open_a_letter() {
+        let root = tempfile::tempdir().unwrap();
+        let coordinates = |manifest: &str| {
+            std::fs::write(root.path().join("navigator.yaml"), manifest).unwrap();
+            super::project_coordinates(root.path())
+                .err()
+                .map(|error| error.to_string())
+        };
+        assert!(super::project_coordinates(root.path()).is_err());
+        assert_eq!(
+            coordinates("host: navigator.example.test\n").as_deref(),
+            Some("navigator.yaml has no Project code")
+        );
+        assert_eq!(
+            coordinates("project:\n  host: navigator.example.test\n  name: acme\n").as_deref(),
+            Some("navigator.yaml has no project.client_dri")
+        );
+    }
+
     #[test]
     fn signed_pointer_requires_both_signature_name_and_envelope_id() {
         let root = tempfile::tempdir().unwrap();

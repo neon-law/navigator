@@ -738,4 +738,293 @@ mod tests {
             "a run with nothing to change says so"
         );
     }
+
+    use super::{set_at, SetRequest};
+    use crate::projects::test_login::{answer, site};
+    use serde_json::json;
+    use wiremock::matchers::{body_json, method, path};
+    use wiremock::{Mock, ResponseTemplate};
+
+    const CODE: &str = "acme";
+    const FIRM: &str = "11111111-1111-4111-8111-111111111111";
+
+    /// A lint-clean manifest for `acme` on `host`.
+    fn manifest_on(host: &str) -> String {
+        format!(
+            "version: 26.9.14\nproject:\n  host: {host}\n  name: acme\n  \
+             lawyer_dri: lawyer@example.com\n  client_dri: client@example.com\n  \
+             private_slack_channel: https://slack.example.com/private\n  \
+             private_notion_page: https://notion.example.com/private\n  \
+             calendar_id: c_0123@group.calendar.example.com\n"
+        )
+    }
+
+    fn request(host: &str) -> SetRequest<'_> {
+        SetRequest {
+            host_override: Some(host),
+            project_override: None,
+            from_live: false,
+            apply_legal_plan: false,
+            supplied: [None; 4],
+            live_fields: LiveFields::default(),
+            firm: None,
+            brand: None,
+            dry_run: false,
+        }
+    }
+
+    fn checkout(manifest: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("navigator.yaml");
+        std::fs::write(&path, manifest).unwrap();
+        (dir, path)
+    }
+
+    async fn outcome(dir: &std::path::Path, request: SetRequest<'_>) -> Result<String, String> {
+        set_at(dir, request)
+            .await
+            .map(|changed| changed.join(", "))
+            .map_err(|error| format!("{error:#}"))
+    }
+
+    #[tokio::test]
+    async fn a_coordinate_flag_rewrites_only_its_manifest_key_and_a_dry_run_writes_nothing() {
+        let original = manifest_on("site.example.test");
+        let (dir, path) = checkout(&original);
+        let dir = dir.path();
+        let host = "site.example.test";
+        let dri = |dry_run| SetRequest {
+            supplied: [Some(" second@example.com "), None, None, None],
+            dry_run,
+            ..request(host)
+        };
+        assert_eq!(outcome(dir, dri(true)).await.unwrap(), "lawyer_dri");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        assert_eq!(outcome(dir, dri(false)).await.unwrap(), "lawyer_dri");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            original.replace("lawyer@example.com", "second@example.com")
+        );
+        assert_eq!(
+            outcome(dir, dri(false)).await.unwrap(),
+            "coordinates already current"
+        );
+
+        for (refused, expected) in [
+            (request(host), "pass --from-live, a coordinate flag"),
+            (
+                SetRequest {
+                    firm: Some("Sample Firm"),
+                    ..request(host)
+                },
+                "--firm and --brand must be supplied together",
+            ),
+            (
+                SetRequest {
+                    supplied: [Some("not-an-email"), None, None, None],
+                    ..request(host)
+                },
+                "lawyer_dri",
+            ),
+            (
+                SetRequest {
+                    apply_legal_plan: true,
+                    from_live: true,
+                    ..request(host)
+                },
+                "--apply-legal-plan cannot be combined with coordinate changes",
+            ),
+            (
+                SetRequest {
+                    apply_legal_plan: true,
+                    project_override: Some("another"),
+                    ..request(host)
+                },
+                "--apply-legal-plan must target the Project named in navigator.yaml",
+            ),
+        ] {
+            let error = outcome(dir, refused).await.unwrap_err();
+            assert!(error.contains(expected), "{error}");
+        }
+        let plan = SetRequest {
+            apply_legal_plan: true,
+            ..request(host)
+        };
+        assert_eq!(outcome(dir, plan).await.unwrap(), "no Legal Plan declared");
+
+        let empty = tempfile::tempdir().unwrap();
+        let error = outcome(empty.path(), dri(false)).await.unwrap_err();
+        assert!(error.starts_with("read navigator.yaml"), "{error}");
+        std::fs::write(empty.path().join("navigator.yaml"), "version: 26.9.14\n").unwrap();
+        let unbound = SetRequest {
+            host_override: None,
+            ..dri(false)
+        };
+        let error = outcome(empty.path(), unbound).await.unwrap_err();
+        assert!(error.contains("must declare project.host or pass --host"));
+        let error = outcome(empty.path(), dri(false)).await.unwrap_err();
+        assert!(error.contains("must declare project.name or pass a Project code"));
+        assert_eq!(
+            super::run(request(host)).await,
+            std::process::ExitCode::from(1)
+        );
+    }
+
+    #[tokio::test]
+    async fn from_live_fills_unsupplied_coordinates_ownership_and_the_legal_plan() {
+        let id = uuid::Uuid::new_v4();
+        let live = json!([{"id": id, "code": CODE, "firm_id": FIRM, "brand": "sample"}]);
+        let (server, _login) = site(live).await;
+        let host = server.uri();
+        let handles = json!({
+            "code": CODE,
+            "repository_url": null,
+            "lawyer_dri": ["live-lawyer@example.com"],
+            "client_dri": ["client@example.com"],
+            "private_slack_channel": "https://slack.example.com/private",
+            "private_notion_page": "https://notion.example.com/private",
+            "calendar_id": "c_0123@group.calendar.example.com",
+            "legal_plan": "Sample Panel",
+            "dangling_dri_person_ids": [uuid::Uuid::new_v4()],
+        });
+        let door = format!("/app/api/project-surfaces/{id}");
+        answer(&server, "GET", &door, 200, handles).await;
+        let original = manifest_on("site.example.test");
+        let (dir, path) = checkout(&original);
+        let from_live = SetRequest {
+            from_live: true,
+            ..request(&host)
+        };
+        assert_eq!(
+            outcome(dir.path(), from_live).await.unwrap(),
+            "lawyer_dri, manifest Firm and brand, legal_plan"
+        );
+        let written = std::fs::read_to_string(&path).unwrap();
+        for line in [
+            "  lawyer_dri: live-lawyer@example.com\n",
+            &format!("  firm: {FIRM}\n"),
+            "  brand: sample\n",
+            "  legal_plan: Sample Panel\n",
+        ] {
+            assert!(written.contains(line), "{written}");
+        }
+
+        let absent = SetRequest {
+            from_live: true,
+            project_override: Some("absent"),
+            ..request(&host)
+        };
+        let error = outcome(dir.path(), absent).await.unwrap_err();
+        assert_eq!(error, "no live Project");
+    }
+
+    #[tokio::test]
+    async fn live_fields_patch_the_project_row_and_an_empty_calendar_clears_both_records() {
+        let id = uuid::Uuid::new_v4();
+        let (server, _login) = site(json!([{"id": id, "code": CODE}])).await;
+        let host = server.uri();
+        Mock::given(method("PATCH"))
+            .and(path(format!("/app/api/projects/{id}")))
+            .and(body_json(json!({
+                "calendar_id": "",
+                "drive_folder_id": "1QaBcD_2-efGhIjKlMnOpQrStUv",
+                "booking_url": "https://calendar.example.com/book",
+                "onboarding_jurisdiction": "NV",
+            })))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let original = manifest_on("site.example.test");
+        let (dir, path) = checkout(&original);
+        let fields = SetRequest {
+            live_fields: LiveFields {
+                calendar_id: Some(""),
+                drive_folder_id: Some("1QaBcD_2-efGhIjKlMnOpQrStUv"),
+                booking_url: Some("https://calendar.example.com/book"),
+                jurisdiction: Some("NV"),
+            },
+            ..request(&host)
+        };
+        assert_eq!(
+            outcome(dir.path(), fields).await.unwrap(),
+            "drive_folder_id, calendar_id, live Project booking_url, live Project calendar_id, \
+             live Project drive_folder_id, live Project onboarding_jurisdiction"
+        );
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(!written.contains("calendar_id"), "{written}");
+        assert!(written.contains("  drive_folder_id: 1QaBcD_2-efGhIjKlMnOpQrStUv\n"));
+    }
+
+    #[tokio::test]
+    async fn the_declared_legal_plan_is_applied_to_the_live_project_it_names() {
+        let id = uuid::Uuid::new_v4();
+        let live = json!([{"id": id, "code": CODE, "firm_id": FIRM, "brand": "sample"}]);
+        let (server, _login) = site(live).await;
+        let host = server.uri();
+        let declared = format!(
+            "{}  legal_plan: Sample Panel\n  firm: {FIRM}\n  brand: sample\n",
+            manifest_on(&host)
+        );
+        let (dir, _path) = checkout(&declared);
+        let apply = |dry_run| SetRequest {
+            apply_legal_plan: true,
+            dry_run,
+            ..request(&host)
+        };
+        let error = outcome(dir.path(), apply(false)).await.unwrap_err();
+        assert_eq!(
+            error,
+            "apply the manifest Legal Plan: 404 Not Found request refused"
+        );
+        Mock::given(method("PATCH"))
+            .and(path(format!("/app/api/projects/{id}/legal-plan")))
+            .and(body_json(json!({"manifest_legal_plan": {
+                "name": "Sample Panel", "firm_id": FIRM, "brand": "sample", "dry_run": true,
+            }})))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+        assert_eq!(
+            outcome(dir.path(), apply(true)).await.unwrap(),
+            "live Project Legal Plan"
+        );
+
+        let (other, _path) = checkout(&declared.replace("brand: sample", "brand: another"));
+        let error = outcome(other.path(), apply(true)).await.unwrap_err();
+        assert_eq!(
+            error,
+            "navigator.yaml Firm and brand differ from the live Project"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_explicit_firm_and_brand_reassign_the_live_project_and_the_manifest() {
+        let id = uuid::Uuid::new_v4();
+        let (server, _login) = site(json!([{"id": id, "code": CODE}])).await;
+        let host = server.uri();
+        let firms = json!([{"id": FIRM, "name": "Sample Firm", "brands": ["sample"]}]);
+        answer(&server, "GET", "/app/api/firms", 200, firms).await;
+        Mock::given(method("PATCH"))
+            .and(path(format!("/app/api/projects/{id}")))
+            .and(body_json(json!({"firm_id": FIRM, "brand": "sample"})))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let (dir, path) = checkout(&manifest_on("site.example.test"));
+        let owned = |dry_run| SetRequest {
+            firm: Some("sample firm"),
+            brand: Some("sample"),
+            dry_run,
+            ..request(&host)
+        };
+        let planned = "manifest Firm and brand, live Project Firm and brand";
+        assert_eq!(outcome(dir.path(), owned(true)).await.unwrap(), planned);
+        assert_eq!(outcome(dir.path(), owned(false)).await.unwrap(), planned);
+        let written = std::fs::read_to_string(&path).unwrap();
+        let owned = crate::projects::manifest::parse(&written).unwrap();
+        assert_eq!(owned.firm.as_deref(), Some(FIRM));
+        assert_eq!(owned.brand.as_deref(), Some("sample"));
+    }
 }

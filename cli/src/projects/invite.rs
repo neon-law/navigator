@@ -100,4 +100,39 @@ mod tests {
             assert!(draft_body(invalid, "sample-project").is_err());
         }
     }
+
+    #[tokio::test]
+    async fn an_invitation_is_read_before_any_draft_is_prepared() {
+        use crate::projects::test_login::{answer, site};
+        use serde_json::json;
+        let id = uuid::Uuid::new_v4();
+        let (server, _login) = site(json!([{"id": id, "code": "sample-project"}])).await;
+        let host = server.uri();
+        assert_eq!(
+            run(Some(&host), "Not A Code", None).await,
+            ExitCode::FAILURE
+        );
+        assert_eq!(
+            run(Some(&host), "sample-project", None).await,
+            ExitCode::FAILURE
+        );
+        let error = read(&host, "test-token", id).await.err().unwrap();
+        assert!(error
+            .to_string()
+            .starts_with("Project invitation unavailable (404 Not Found)"));
+
+        let door = format!("/app/api/projects/{id}/portal-invitation");
+        let invitation = json!({
+            "recipient": "member@example.test",
+            "portal_url": "https://git.example.test/firm/sample-project",
+        });
+        answer(&server, "GET", &door, 200, invitation).await;
+        let read = read(&host, "test-token", id).await.unwrap();
+        assert_eq!(read.recipient, "member@example.test");
+        // A portal URL that is not the Project's page stops before Gmail.
+        assert_eq!(
+            run(Some(&host), "sample-project", None).await,
+            ExitCode::FAILURE
+        );
+    }
 }

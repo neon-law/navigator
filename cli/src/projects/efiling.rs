@@ -725,4 +725,147 @@ mod tests {
         assert_eq!(parse_date("2026-10-05").as_deref(), Some("2026-10-05"));
         assert_eq!(parse_date("pending"), None);
     }
+
+    use crate::projects::test_login::{site, Login};
+    use wiremock::matchers::{body_json, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    const CODE: &str = "sample-matter";
+
+    /// A signed-in site with one matter, a directory of fixtures, and the
+    /// matter's e-filing door.
+    async fn matter() -> (MockServer, Login, tempfile::TempDir, String) {
+        let id = Uuid::new_v4();
+        let (server, login) = site(json!([{"id": id, "code": CODE}])).await;
+        let files = tempfile::tempdir().unwrap();
+        for (name, bytes) in [
+            ("accepted.eml", ACCEPTED),
+            ("rejected.eml", REJECTED),
+            ("stamped.pdf", b"%PDF-1.4 stamped".as_slice()),
+            ("notes.txt", b"not a pdf".as_slice()),
+        ] {
+            std::fs::write(files.path().join(name), bytes).unwrap();
+        }
+        (
+            server,
+            login,
+            files,
+            format!("/app/api/projects/{id}/efilings"),
+        )
+    }
+
+    #[tokio::test]
+    async fn a_rejection_is_recorded_with_its_reason_and_the_callers_overrides() {
+        let (server, _login, files, door) = matter().await;
+        let host = server.uri();
+        let submitted = Uuid::new_v4();
+        Mock::given(method("POST"))
+            .and(path(door.as_str()))
+            .and(body_json(json!({
+                "transaction_id": "EX-20261005-0043",
+                "status": "rejected",
+                "efsp": "Override EFSP",
+                "court": "Override Court",
+                "case_number": "26EXCV00099",
+                "submitted_document_id": submitted.to_string(),
+                "note": "Document is missing the attorney signature.",
+                "needs_entered_order": true,
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"status": "rejected"})))
+            .mount(&server)
+            .await;
+        let overrides = Overrides {
+            submitted: Some(submitted),
+            efsp: Some("Override EFSP".into()),
+            court: Some("Override Court".into()),
+            case_number: Some("26EXCV00099".into()),
+            filed_on: None,
+            judge_signed: true,
+        };
+        let email = files.path().join("rejected.eml");
+        let recorded = record(Some(&host), Some(CODE), &email, overrides.clone()).await;
+        assert_eq!(recorded, ExitCode::SUCCESS);
+
+        let dated = Overrides {
+            filed_on: Some("2026-10-05".into()),
+            ..overrides
+        };
+        let error = record_email(Some(&host), Some(CODE), &email, dated)
+            .await
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("--filed-on would record a pending filing as filed"));
+        let missing = files.path().join("absent.eml");
+        let unread = record(Some(&host), Some(CODE), &missing, Overrides::default()).await;
+        assert_eq!(unread, ExitCode::FAILURE);
+    }
+
+    #[tokio::test]
+    async fn a_stamped_copy_is_filed_only_against_a_linkable_transaction() {
+        let (server, _login, files, door) = matter().await;
+        let host = Some(server.uri());
+        let host = host.as_deref();
+        let email = files.path().join("accepted.eml");
+        let pdf = files.path().join("stamped.pdf");
+        let dated = || Overrides {
+            filed_on: Some("2026-10-05".into()),
+            ..Overrides::default()
+        };
+        assert_eq!(list(host, Some(CODE)).await, ExitCode::FAILURE);
+        for (rows, expected) in [
+            (json!([]), "names no submitted version"),
+            (
+                json!([{"transaction_id": "EX-20261005-0042", "status": "rejected"}]),
+                "is recorded as rejected",
+            ),
+        ] {
+            let _rows = Mock::given(method("GET"))
+                .and(path(door.as_str()))
+                .respond_with(ResponseTemplate::new(200).set_body_json(rows))
+                .mount_as_scoped(&server)
+                .await;
+            assert_eq!(list(host, Some(CODE)).await, ExitCode::SUCCESS);
+            let error = record_email(host, Some(CODE), &email, Overrides::default())
+                .await
+                .unwrap_err();
+            assert!(error.to_string().contains(expected), "{error}");
+            let error = pair_file(host, Some(CODE), &pdf, "EX-20261005-0042", None, dated())
+                .await
+                .unwrap_err();
+            assert!(error.to_string().contains(expected), "{error}");
+        }
+
+        let notes = files.path().join("notes.txt");
+        for (file, transaction, overrides, expected) in [
+            (&pdf, " ", dated(), ""),
+            (
+                &pdf,
+                "EX-1",
+                Overrides::default(),
+                "pass --filed-on YYYY-MM-DD",
+            ),
+            (&notes, "EX-1", dated(), "is not a PDF"),
+        ] {
+            let error = pair_file(host, Some(CODE), file, transaction, None, overrides)
+                .await
+                .unwrap_err();
+            assert!(error.to_string().contains(expected), "{error}");
+        }
+        let paired = pair(host, None, &pdf, "EX-1", None, dated()).await;
+        assert_eq!(paired, ExitCode::FAILURE);
+    }
+
+    #[test]
+    fn a_judge_signed_row_keeps_an_existing_note() {
+        let mut body = json!({"note": "from the clerk"});
+        mark_judge_signed(&mut body);
+        assert_eq!(
+            body,
+            json!({"note": "from the clerk", "needs_entered_order": true})
+        );
+        let mut body = json!({});
+        mark_judge_signed(&mut body);
+        assert_eq!(body["note"], JUDGE_SIGNED_NOTE);
+    }
 }

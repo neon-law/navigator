@@ -83,3 +83,91 @@ async fn policy(dir: &Path, dry_run: bool) -> Result<()> {
         forge.reconcile_policy(dry_run).await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::projects::test_login::{answer, checkout, site};
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn every_command_fails_outside_a_project_checkout() {
+        let empty = tempfile::tempdir().unwrap();
+        let dir = || empty.path().to_path_buf();
+        let revision = || "@".to_string();
+        for action in [
+            JjCommand::Setup { dir: dir() },
+            JjCommand::Log { dir: dir() },
+            JjCommand::StageTime {
+                revision: revision(),
+                dir: dir(),
+            },
+            JjCommand::Push {
+                revision: revision(),
+                dir: dir(),
+            },
+            JjCommand::Policy {
+                dir: dir(),
+                dry_run: true,
+            },
+        ] {
+            assert_eq!(run(action).await, ExitCode::FAILURE);
+        }
+    }
+
+    #[tokio::test]
+    async fn the_log_and_staging_read_a_tracked_checkout() {
+        let _jj = crate::projects::test_login::jj_stand_in();
+        let tracked = tempfile::tempdir().unwrap();
+        let store = tracked.path().join(".jj");
+        std::fs::create_dir(&store).unwrap();
+        let dir = || tracked.path().to_path_buf();
+        assert_eq!(run(JjCommand::Log { dir: dir() }).await, ExitCode::SUCCESS);
+        // A selected change whose checkout has no manifest cannot stage time.
+        let record = json!({
+            "commit_id": "commit-one", "change_id": "change-one", "author": "a@example.com",
+            "description": "Subject\n\nBilling-Time: 0.2 2026-11-20 00000000-0000-4000-8000-000000000001",
+            "signed": true, "conflict": false, "divergent": false,
+        });
+        std::fs::write(store.join("log"), format!("{record}\n")).unwrap();
+        let stage = JjCommand::StageTime {
+            revision: "@".into(),
+            dir: dir(),
+        };
+        assert_eq!(run(stage).await, ExitCode::FAILURE);
+    }
+
+    #[tokio::test]
+    async fn forgejo_policy_is_reconciled_only_for_the_projects_recorded_source() {
+        let id = uuid::Uuid::new_v4();
+        let (server, _login) = site(json!([{"id": id, "code": "sample-matter"}])).await;
+        let root = server.uri();
+        let origin = format!("{root}/sample-firm/sample-matter.git");
+        let manifest = format!("project:\n  name: sample-matter\n  host: {root}\n");
+        let dir = checkout(&manifest, Some(&origin));
+        let error = policy(dir.path(), true).await.unwrap_err();
+        assert!(error.to_string().contains("NAVIGATOR_FORGEJO_ROOT_URL"));
+
+        std::env::set_var("NAVIGATOR_FORGEJO_ROOT_URL", &root);
+        std::env::set_var("FORGEJO_TOKEN", "forge-token");
+        let project = |origin: &str| {
+            json!({
+                "code": "sample-matter", "status": "open", "firm_id": null, "brand": "sample",
+                "repository_remotes": {"origin": origin, "forgejo": null, "forgejo_status": "missing"},
+            })
+        };
+        let door = format!("/app/api/projects/{id}");
+        answer(
+            &server,
+            "GET",
+            &door,
+            200,
+            project("https://forge.example.test/else"),
+        )
+        .await;
+        let error = policy(dir.path(), true).await.unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("checkout origin must match the Project's recorded source URL"));
+    }
+}

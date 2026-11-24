@@ -970,4 +970,41 @@ lenses:\n      lawyer: [authority_table, boundary_note, provenance_statement]\n\
         assert_eq!(parsed.pages.len(), 2);
         assert_eq!(parsed.dockets.len(), 1);
     }
+
+    #[tokio::test]
+    async fn init_prints_the_proposal_until_asked_to_write_and_never_replaces_without_force() {
+        use super::{run, PagesCmd};
+        use std::process::ExitCode;
+        // The signed-in site lists no matter, so the proposal reads only the checkout.
+        let (_server, _login) = crate::projects::test_login::site(serde_json::json!([])).await;
+        let project = tempfile::tempdir().unwrap();
+        let dir = project.path();
+        let path = dir.join(manifest::FILE);
+        let init = |write, force| {
+            run(PagesCmd::Init {
+                dir: dir.to_path_buf(),
+                write,
+                force,
+            })
+        };
+        assert_eq!(run(PagesCmd::Kinds).await, ExitCode::SUCCESS);
+        assert_eq!(init(false, false).await, ExitCode::from(1));
+        std::fs::write(&path, NESTED).unwrap();
+        assert_eq!(init(false, false).await, ExitCode::from(1));
+
+        let pinned = format!(
+            "{NESTED}skills:\n  - jurisdiction: NV\n    practice_area: litigation\n    version: \"1\"\n"
+        );
+        std::fs::write(&path, &pinned).unwrap();
+        assert_eq!(init(false, false).await, ExitCode::SUCCESS);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), pinned);
+
+        assert_eq!(init(true, false).await, ExitCode::SUCCESS);
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(manifest::parse(&written).unwrap().pages.len(), 2);
+        assert_eq!(init(false, false).await, ExitCode::SUCCESS);
+        assert_eq!(init(true, false).await, ExitCode::from(1));
+        assert_eq!(init(true, true).await, ExitCode::SUCCESS);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), written);
+    }
 }
