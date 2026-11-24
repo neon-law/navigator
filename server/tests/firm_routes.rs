@@ -558,25 +558,13 @@ async fn the_home_explains_the_mcp_setup() {
 async fn the_lawyers_page_maps_a_connected_project() {
     let app = site_app().await;
     let body = body_string(anon_get(&app, "/lawyers").await).await;
-
-    assert!(
-        body.contains("Navigator for lawyers") && body.contains("Exacting Agentic Lawyering"),
-        "the lawyers page keeps the product heading and the protected tagline: {body}"
-    );
-    assert!(
-        body.contains("Navigator is open source under MIT OR Apache-2.0."),
-        "the lawyers page names the licence: {body}"
-    );
-    assert!(
-        body.contains(r#"id="video""#),
-        "the lawyers page publishes the presentation: {body}"
-    );
-    assert!(
-        body.contains(r#"class="fm-project-network""#)
-            && body.contains(r#"src="/public/navigator-wheel.svg""#),
-        "the connected-Project diagram renders the Navigator wheel: {body}"
-    );
-    for label in [
+    for text in [
+        "Navigator for lawyers",
+        "Exacting Agentic Lawyering",
+        "Navigator is open source under MIT OR Apache-2.0.",
+        r#"id="video""#,
+        r#"class="fm-project-network""#,
+        r#"src="/public/navigator-wheel.svg""#,
         "Internal Slack",
         "Internal Notion",
         "Project repository",
@@ -606,57 +594,28 @@ async fn the_lawyers_page_maps_a_connected_project() {
         "Mercury",
         "Twilio",
         "Xero",
+        "Git history of pages, Drafts, and document pointers.",
+        "Large document intake",
+        "Client collaboration when the Project uses it.",
+        "A Project can include one or more cases, companies, filings, and more",
+        "related to the best interest of our clients.",
     ] {
-        assert!(body.contains(label), "the diagram names {label}: {body}");
+        assert!(body.contains(text), "missing {text}: {body}");
     }
-    assert!(
-        !body.contains("separate from protected Project documents"),
-        "the removed public-site node detail is absent: {body}"
-    );
-    assert!(
-        !body.contains("Highlight"),
-        "the removed software vendor is absent from the diagram: {body}"
-    );
-    assert!(
-        !body.contains("Chatwoot"),
-        "the removed support-chat vendor is absent from the diagram: {body}"
-    );
-    assert!(
-        !body.contains("Navigator keeps the Project in view while each connected service retains its own access controls."),
-        "the removed access-controls sentence is absent: {body}"
-    );
-    assert!(
-        !body.contains("The firms we serve work on it too."),
-        "the removed co-counsel-network paragraph is absent: {body}"
-    );
-    assert!(
-        !body.contains("Navigator Web"),
-        "the center names Navigator rather than its prior web-only label: {body}"
-    );
-    assert!(
-        body.contains("Git history of pages, Drafts, and document pointers."),
-        "the repository node describes the Project source contract: {body}"
-    );
+    for retired in [
+        "separate from protected Project documents",
+        "Highlight",
+        "Chatwoot",
+        "Navigator keeps the Project in view while each connected service retains its own access controls.",
+        "The firms we serve work on it too.",
+        "Navigator Web",
+        "Navigator is a website, MCP, and CLI that helps us rapidly create documents, ground sources and truth claims, organize files and folders, and reuse the glossary and ontology.",
+    ] {
+        assert!(!body.contains(retired), "retired copy survives: {body}");
+    }
     assert!(
         !body.to_lowercase().contains("vibe"),
         "Matter Pages are declared, not vibe coded: {body}"
-    );
-    assert!(
-        body.contains("Large document intake"),
-        "the Google Drive node describes its intake role: {body}"
-    );
-    assert!(
-        body.contains("Client collaboration when the Project uses it."),
-        "the Shared Notion node describes its collaboration role: {body}"
-    );
-    assert!(
-        body.contains("A Project can include one or more cases, companies, filings, and more")
-            && body.contains("related to the best interest of our clients."),
-        "the Project description explains how related work belongs together: {body}"
-    );
-    assert!(
-        !body.contains("Navigator is a website, MCP, and CLI that helps us rapidly create documents, ground sources and truth claims, organize files and folders, and reuse the glossary and ontology."),
-        "the removed Navigator summary is absent: {body}"
     );
 }
 
