@@ -785,7 +785,7 @@ mod tests {
         state: &mut Fixture,
         method: Method,
         path: &str,
-        body: Value,
+        body: &Value,
     ) -> axum::response::Response {
         state.writes.push((method, path.to_owned(), body.clone()));
         if path.ends_with("/merge") {
@@ -835,7 +835,7 @@ mod tests {
             &mut state,
             method,
             uri.path(),
-            body.map_or(Value::Null, |Json(body)| body),
+            body.as_deref().unwrap_or(&Value::Null),
         )
     }
 

@@ -704,35 +704,49 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn sync_clones_colocated_jj_configures_both_forges_and_preserves_dirty_work() -> Result<()>
-    {
-        if std::process::Command::new("jj")
+    fn jj_available() -> bool {
+        std::process::Command::new("jj")
             .arg("--version")
             .output()
-            .is_err()
-        {
-            eprintln!("jj is required for the checkout integration test");
+            .is_ok()
+    }
+
+    #[tokio::test]
+    async fn sync_fetches_from_origin_when_mirror_access_changes() -> Result<()> {
+        if !jj_available() {
             return Ok(());
         }
         let temp = tempfile::tempdir()?;
         let dir = temp.path().canonicalize()?;
         let (project, origin, mirror) = seed_checkout_forges(&dir).await?;
-        let origin_only = || {
-            update_checkout(
-                &dir,
-                &project,
-                origin.to_str().unwrap(),
-                FetchRemotes::MirrorUnavailable,
-                "https://site.example.test",
-            )
-        };
-        origin_only().await?;
+        let origin = origin.to_str().unwrap();
         let checkout = dir.join("matter");
+        let sync =
+            |remotes| update_checkout(&dir, &project, origin, remotes, "https://site.example.test");
+        sync(FetchRemotes::MirrorUnavailable).await?;
         assert_eq!(
             command(&checkout, "git", &["remote"]).await?.trim(),
             "origin"
         );
+
+        sync(FetchRemotes::Verified(mirror.to_str().unwrap())).await?;
+        let push_urls = ["remote", "get-url", "--push", "--all", "origin"];
+        let before = command(&checkout, "git", &push_urls).await?;
+        std::fs::rename(&mirror, dir.join("offline.git"))?;
+        sync(FetchRemotes::MirrorUnavailable).await?;
+        assert_eq!(command(&checkout, "git", &push_urls).await?, before);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn sync_clones_colocated_jj_configures_both_forges_and_preserves_dirty_work() -> Result<()>
+    {
+        if !jj_available() {
+            return Ok(());
+        }
+        let temp = tempfile::tempdir()?;
+        let dir = temp.path().canonicalize()?;
+        let (project, origin, mirror) = seed_checkout_forges(&dir).await?;
         let sync = || {
             super::update_checkout(
                 &dir,
@@ -760,6 +774,7 @@ mod tests {
         )
         .await?;
         assert!(existing_root.join("matter/.jj").is_dir());
+        let checkout = dir.join("matter");
         assert!(checkout.join(".jj").is_dir());
         assert!(checkout.join(".git").is_dir());
         assert_eq!(std::fs::read(checkout.join(SKILL_PATH))?, SKILL_BYTES);
@@ -793,19 +808,6 @@ mod tests {
         .await?;
         assert!(repaired.lines().any(|url| url == origin.to_str().unwrap()));
         assert!(repaired.lines().any(|url| url == mirror.to_str().unwrap()));
-        // Losing mirror visibility still permits a fetch from the origin.
-        // Leave the user's existing dual-push setup intact.
-        std::fs::rename(&mirror, dir.join("offline.git"))?;
-        origin_only().await?;
-        assert_eq!(
-            command(
-                &checkout,
-                "git",
-                &["remote", "get-url", "--push", "--all", "origin"]
-            )
-            .await?,
-            repaired
-        );
         let before = working_revision(&checkout).await?;
         std::fs::write(checkout.join("local.txt"), "unfinished work")?;
         let error = sync().await.unwrap_err();
