@@ -378,52 +378,73 @@ fn build(
     Ok(variants)
 }
 
+/// The environment variable naming the public `<project>-assets` bucket.
+pub(crate) const ASSETS_BUCKET_ENV: &str = "NAVIGATOR_ASSETS_BUCKET";
+
+/// The emulator override `pull` and `orphans` honor; ADC against real GCS otherwise.
+fn storage_endpoint() -> Option<String> {
+    std::env::var("NAVIGATOR_STORAGE_ENDPOINT")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+}
+
+/// Run one `hudson ops <command>` operation against a GCS bucket through ADC,
+/// reporting any failure as `navigator: <command>: …` with exit code `2`.
+/// `bucket` falls back to `bucket_env`, and a blank name is refused before
+/// any client is built.
+pub(crate) fn with_bucket<F, Fut>(
+    command: &str,
+    bucket: Option<String>,
+    bucket_env: &str,
+    endpoint: Option<String>,
+    operation: F,
+) -> ExitCode
+where
+    F: FnOnce(GcsStorage, String) -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<()>>,
+{
+    let outcome = bucket
+        .or_else(|| std::env::var(bucket_env).ok())
+        .filter(|name| !name.trim().is_empty())
+        .with_context(|| format!("no bucket — pass --bucket or set {bucket_env}"))
+        .and_then(|bucket| {
+            let runtime = tokio::runtime::Runtime::new().context("tokio runtime")?;
+            runtime.block_on(async {
+                let storage = GcsStorage::new_from_config(GcsStorageConfig {
+                    bucket: bucket.clone(),
+                    endpoint,
+                })
+                .await
+                .map_err(|e| anyhow::anyhow!("open bucket `{bucket}`: {e}"))?;
+                operation(storage, bucket).await
+            })
+        });
+    match outcome {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("navigator: {command}: {e:#}");
+            ExitCode::from(2)
+        }
+    }
+}
+
 /// Entry point for `hudson ops assets upload`. `bucket` defaults to the
 /// `NAVIGATOR_ASSETS_BUCKET` env var (the public `<project>-assets`
 /// bucket, distinct from the app's documents bucket
 /// `NAVIGATOR_DOCUMENTS_BUCKET`) so an upload can never accidentally
 /// write photos into the documents bucket.
 pub fn run_upload(dir: &Path, bucket: Option<String>) -> ExitCode {
-    let bucket = match bucket.or_else(|| std::env::var("NAVIGATOR_ASSETS_BUCKET").ok()) {
-        Some(b) if !b.trim().is_empty() => b,
-        _ => {
-            eprintln!(
-                "navigator: assets upload: no bucket — pass --bucket or set NAVIGATOR_ASSETS_BUCKET"
-            );
-            return ExitCode::from(2);
-        }
-    };
-    let runtime = match tokio::runtime::Runtime::new() {
-        Ok(rt) => rt,
-        Err(e) => {
-            eprintln!("navigator: assets upload: tokio runtime: {e}");
-            return ExitCode::from(2);
-        }
-    };
-    runtime.block_on(async move {
-        // This operator command targets real GCS through ADC.
-        let cfg = GcsStorageConfig {
-            bucket: bucket.clone(),
-            endpoint: None,
-        };
-        let storage = match GcsStorage::new_from_config(cfg).await {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("navigator: assets upload: open bucket `{bucket}`: {e}");
-                return ExitCode::from(2);
-            }
-        };
-        match upload(&storage, dir).await {
-            Ok(n) => {
-                println!("navigator: uploaded {n} variant(s) to gs://{bucket}/img");
-                ExitCode::SUCCESS
-            }
-            Err(e) => {
-                eprintln!("navigator: assets upload: {e:#}");
-                ExitCode::from(2)
-            }
-        }
-    })
+    with_bucket(
+        "assets upload",
+        bucket,
+        ASSETS_BUCKET_ENV,
+        None,
+        |storage, bucket| async move {
+            let n = upload(&storage, dir).await?;
+            println!("navigator: uploaded {n} variant(s) to gs://{bucket}/img");
+            Ok(())
+        },
+    )
 }
 
 /// Entry point for `hudson ops assets fonts upload`. Font files use the
@@ -431,50 +452,21 @@ pub fn run_upload(dir: &Path, bucket: Option<String>) -> ExitCode {
 /// family, so the tree never carries WOFF2 bytes — proprietary in GORP's case
 /// and merely redundant in the rest.
 pub fn run_upload_fonts(dir: &Path, bucket: Option<String>, family: &FontFamily) -> ExitCode {
-    let bucket = match bucket.or_else(|| std::env::var("NAVIGATOR_ASSETS_BUCKET").ok()) {
-        Some(b) if !b.trim().is_empty() => b,
-        _ => {
-            eprintln!(
-                "navigator: assets fonts upload: no bucket — pass --bucket or set NAVIGATOR_ASSETS_BUCKET"
+    with_bucket(
+        "assets fonts upload",
+        bucket,
+        ASSETS_BUCKET_ENV,
+        None,
+        |storage, bucket| async move {
+            let n = upload_font_family(&storage, dir, family).await?;
+            println!(
+                "navigator: uploaded {n} {} face(s) to gs://{bucket}/{}",
+                family.label,
+                family.prefix()
             );
-            return ExitCode::from(2);
-        }
-    };
-    let runtime = match tokio::runtime::Runtime::new() {
-        Ok(rt) => rt,
-        Err(e) => {
-            eprintln!("navigator: assets fonts upload: tokio runtime: {e}");
-            return ExitCode::from(2);
-        }
-    };
-    runtime.block_on(async move {
-        let storage = match GcsStorage::new_from_config(GcsStorageConfig {
-            bucket: bucket.clone(),
-            endpoint: None,
-        })
-        .await
-        {
-            Ok(storage) => storage,
-            Err(e) => {
-                eprintln!("navigator: assets fonts upload: open bucket `{bucket}`: {e}");
-                return ExitCode::from(2);
-            }
-        };
-        match upload_font_family(&storage, dir, family).await {
-            Ok(n) => {
-                println!(
-                    "navigator: uploaded {n} {} face(s) to gs://{bucket}/{}",
-                    family.label,
-                    family.prefix()
-                );
-                ExitCode::SUCCESS
-            }
-            Err(e) => {
-                eprintln!("navigator: assets fonts upload: {e:#}");
-                ExitCode::from(2)
-            }
-        }
-    })
+            Ok(())
+        },
+    )
 }
 
 /// Entry point for `hudson ops assets fonts upload-desktop`. Packages the licensed
@@ -489,46 +481,17 @@ pub fn run_upload_fonts(dir: &Path, bucket: Option<String>, family: &FontFamily)
 /// can never bypass authorization. ADC auth; the `.otf` source is never
 /// committed.
 pub fn run_upload_desktop_fonts(dir: &Path, bucket: Option<String>) -> ExitCode {
-    let bucket = match bucket.or_else(|| std::env::var("NAVIGATOR_DOCUMENTS_BUCKET").ok()) {
-        Some(b) if !b.trim().is_empty() => b,
-        _ => {
-            eprintln!(
-                "navigator: assets fonts upload-desktop: no bucket — pass --bucket or set NAVIGATOR_DOCUMENTS_BUCKET"
-            );
-            return ExitCode::from(2);
-        }
-    };
-    let runtime = match tokio::runtime::Runtime::new() {
-        Ok(rt) => rt,
-        Err(e) => {
-            eprintln!("navigator: assets fonts upload-desktop: tokio runtime: {e}");
-            return ExitCode::from(2);
-        }
-    };
-    runtime.block_on(async move {
-        let storage = match GcsStorage::new_from_config(GcsStorageConfig {
-            bucket: bucket.clone(),
-            endpoint: None,
-        })
-        .await
-        {
-            Ok(storage) => storage,
-            Err(e) => {
-                eprintln!("navigator: assets fonts upload-desktop: open bucket `{bucket}`: {e}");
-                return ExitCode::from(2);
-            }
-        };
-        match upload_gorp_otf_zip(&storage, dir).await {
-            Ok(n) => {
-                println!("navigator: packaged {n} OTF face(s) → gs://{bucket}/{GORP_OTF_ZIP_KEY}");
-                ExitCode::SUCCESS
-            }
-            Err(e) => {
-                eprintln!("navigator: assets fonts upload-desktop: {e:#}");
-                ExitCode::from(2)
-            }
-        }
-    })
+    with_bucket(
+        "assets fonts upload-desktop",
+        bucket,
+        "NAVIGATOR_DOCUMENTS_BUCKET",
+        None,
+        |storage, bucket| async move {
+            let n = upload_gorp_otf_zip(&storage, dir).await?;
+            println!("navigator: packaged {n} OTF face(s) → gs://{bucket}/{GORP_OTF_ZIP_KEY}");
+            Ok(())
+        },
+    )
 }
 
 /// Entry point for `hudson ops assets pull` — the inverse of `upload`, for
@@ -540,52 +503,20 @@ pub fn run_upload_desktop_fonts(dir: &Path, bucket: Option<String>) -> ExitCode 
 /// again — no source JPEGs or a re-`build` required. Read-only against
 /// the bucket; `bucket` defaults to `NAVIGATOR_ASSETS_BUCKET`.
 pub fn run_pull(out: &Path, bucket: Option<String>) -> ExitCode {
-    let bucket = match bucket.or_else(|| std::env::var("NAVIGATOR_ASSETS_BUCKET").ok()) {
-        Some(b) if !b.trim().is_empty() => b,
-        _ => {
-            eprintln!(
-                "navigator: assets pull: no bucket — pass --bucket or set NAVIGATOR_ASSETS_BUCKET"
+    with_bucket(
+        "assets pull",
+        bucket,
+        ASSETS_BUCKET_ENV,
+        storage_endpoint(),
+        |storage, bucket| async move {
+            let n = download(&storage, out).await?;
+            println!(
+                "navigator: pulled {n} variant(s) from gs://{bucket}/img into {}",
+                out.display()
             );
-            return ExitCode::from(2);
-        }
-    };
-    let runtime = match tokio::runtime::Runtime::new() {
-        Ok(rt) => rt,
-        Err(e) => {
-            eprintln!("navigator: assets pull: tokio runtime: {e}");
-            return ExitCode::from(2);
-        }
-    };
-    runtime.block_on(async move {
-        // Same endpoint override as `upload` (emulator support), pointed
-        // at the assets bucket; ADC auth otherwise.
-        let cfg = GcsStorageConfig {
-            bucket: bucket.clone(),
-            endpoint: std::env::var("NAVIGATOR_STORAGE_ENDPOINT")
-                .ok()
-                .filter(|s| !s.trim().is_empty()),
-        };
-        let storage = match GcsStorage::new_from_config(cfg).await {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("navigator: assets pull: open bucket `{bucket}`: {e}");
-                return ExitCode::from(2);
-            }
-        };
-        match download(&storage, out).await {
-            Ok(n) => {
-                println!(
-                    "navigator: pulled {n} variant(s) from gs://{bucket}/img into {}",
-                    out.display()
-                );
-                ExitCode::SUCCESS
-            }
-            Err(e) => {
-                eprintln!("navigator: assets pull: {e:#}");
-                ExitCode::from(2)
-            }
-        }
-    })
+            Ok(())
+        },
+    )
 }
 
 /// Report bucket objects nothing on the site reaches, optionally posting
@@ -596,60 +527,26 @@ pub fn run_pull(out: &Path, bucket: Option<String>) -> ExitCode {
 /// pruning tool is deleting live production photographs. A human reads
 /// this and removes what they recognize.
 pub fn run_orphans(content_root: &Path, bucket: Option<String>) -> ExitCode {
-    let Some(bucket) = bucket
-        .or_else(|| std::env::var("NAVIGATOR_ASSETS_BUCKET").ok())
-        .filter(|b| !b.trim().is_empty())
-    else {
-        eprintln!(
-            "navigator: assets orphans: no bucket — pass --bucket or set NAVIGATOR_ASSETS_BUCKET"
-        );
-        return ExitCode::from(2);
-    };
-    let reachable = match reachable_image_keys(content_root) {
-        Ok(keys) => keys,
-        Err(e) => {
-            eprintln!("navigator: assets orphans: {e:#}");
-            return ExitCode::from(2);
-        }
-    };
-    let runtime = match tokio::runtime::Runtime::new() {
-        Ok(rt) => rt,
-        Err(e) => {
-            eprintln!("navigator: assets orphans: tokio runtime: {e}");
-            return ExitCode::from(2);
-        }
-    };
-    runtime.block_on(async move {
-        let cfg = GcsStorageConfig {
-            bucket: bucket.clone(),
-            endpoint: std::env::var("NAVIGATOR_STORAGE_ENDPOINT")
-                .ok()
-                .filter(|s| !s.trim().is_empty()),
-        };
-        let storage = match GcsStorage::new_from_config(cfg).await {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("navigator: assets orphans: open bucket `{bucket}`: {e}");
-                return ExitCode::from(2);
-            }
-        };
-        let listings = match storage.list("img/").await {
-            Ok(l) => l,
-            Err(e) => {
-                eprintln!("navigator: assets orphans: list `img/` in `{bucket}`: {e}");
-                return ExitCode::from(2);
-            }
-        };
-        let listed: Vec<String> = listings.into_iter().map(|l| l.key).collect();
-        let orphans = orphan_keys(&listed, &reachable);
-        let held = listed.len().saturating_sub(orphans.len());
-        let report = orphan_report(&bucket, &orphans, held);
-        println!("{report}");
-
-        // Orphans are a finding to act on, never a build failure: the tree
-        // is legitimately dirty between a deck edit and its cleanup.
-        ExitCode::SUCCESS
-    })
+    with_bucket(
+        "assets orphans",
+        bucket,
+        ASSETS_BUCKET_ENV,
+        storage_endpoint(),
+        |storage, bucket| async move {
+            let reachable = reachable_image_keys(content_root)?;
+            let listings = storage
+                .list("img/")
+                .await
+                .map_err(|e| anyhow::anyhow!("list `img/` in `{bucket}`: {e}"))?;
+            let listed: Vec<String> = listings.into_iter().map(|l| l.key).collect();
+            let orphans = orphan_keys(&listed, &reachable);
+            let held = listed.len().saturating_sub(orphans.len());
+            // Orphans are a finding to act on, never a build failure: the tree
+            // is legitimately dirty between a deck edit and its cleanup.
+            println!("{}", orphan_report(&bucket, &orphans, held));
+            Ok(())
+        },
+    )
 }
 
 /// Every markdown image target under `content_root` that points at a
@@ -4396,5 +4293,37 @@ Inline raw-HTML tile: <div>![Team](img/thanks-apple/team-lunch.jpg)</div>\n";
             message.contains("lake-tahoe"),
             "names the real slug: {message}"
         );
+    }
+
+    #[test]
+    fn a_bucket_operation_without_a_bucket_name_is_refused_before_it_runs() {
+        let ran = std::cell::Cell::new(false);
+        for bucket in [None, Some("  ".to_owned())] {
+            let code = super::with_bucket(
+                "assets upload",
+                bucket,
+                "NAVIGATOR_EXAMPLE_UNSET_BUCKET",
+                None,
+                |_, _| {
+                    ran.set(true);
+                    async { Ok(()) }
+                },
+            );
+            assert_eq!(code, ExitCode::from(2));
+        }
+        assert!(!ran.get());
+
+        let dir = TempDir::new().unwrap();
+        let blank = || Some(" ".to_owned());
+        for code in [
+            super::run_upload(dir.path(), blank()),
+            super::run_upload_fonts(dir.path(), blank(), &super::GORP_SERIF),
+            super::run_upload_desktop_fonts(dir.path(), blank()),
+            super::run_pull(dir.path(), blank()),
+            super::run_orphans(dir.path(), blank()),
+        ] {
+            assert_eq!(code, ExitCode::from(2));
+        }
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
     }
 }

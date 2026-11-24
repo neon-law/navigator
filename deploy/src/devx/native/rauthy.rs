@@ -442,7 +442,13 @@ fn environment(port: u16) -> Vec<(String, String)> {
 /// The files are rewritten on every `up` rather than written once: the
 /// slot port is baked into `pub_url`, and a worktree that moved slots
 /// would otherwise keep issuing tokens for the port it used to own.
-pub(super) fn service(root: &Path, port: u16, raft_port: u16, api_port: u16) -> Result<Service> {
+pub(super) fn service(
+    root: &Path,
+    program: PathBuf,
+    port: u16,
+    raft_port: u16,
+    api_port: u16,
+) -> Result<Service> {
     let dir = state_dir(root);
     let bootstrap = dir.join("bootstrap");
     std::fs::create_dir_all(&bootstrap)
@@ -460,7 +466,7 @@ pub(super) fn service(root: &Path, port: u16, raft_port: u16, api_port: u16) -> 
 
     Ok(Service {
         label: super::RAUTHY_LABEL,
-        program: resolve()?,
+        program,
         args: vec![
             "serve".to_string(),
             "--config-file".to_string(),
@@ -490,10 +496,84 @@ fn run(command: &mut Command) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        cached_binary, config_toml, environment, release_tag, reports_version, ENC_KEYS,
-        ENC_KEY_ACTIVE, HQL_SECRET_API, HQL_SECRET_RAFT, RAUTHY_MANIFEST, RAUTHY_VERSION,
-        REGISTERED_CLIENTS, SEEDED_USERS,
+        cached_binary, config_toml, environment, is_usable, release_tag, reports_version, run,
+        service, ENC_KEYS, ENC_KEY_ACTIVE, HQL_SECRET_API, HQL_SECRET_RAFT, RAUTHY_MANIFEST,
+        RAUTHY_VERSION, REGISTERED_CLIENTS, SEEDED_USERS,
     };
+    use std::process::Command;
+
+    /// An executable standing in for a cached build that prints `version`.
+    fn cached_build(dir: &Path, version: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let binary = dir.join("rauthy");
+        std::fs::write(&binary, format!("#!/bin/sh\necho rauthy v{version}\n")).unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        binary
+    }
+
+    #[test]
+    fn only_a_cached_build_reporting_the_pinned_version_is_reused() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!is_usable(&dir.path().join("rauthy")), "absent");
+        assert!(is_usable(&cached_build(dir.path(), RAUTHY_VERSION)));
+        assert!(!is_usable(&cached_build(dir.path(), "0.0.1")), "stale");
+        std::fs::write(dir.path().join("rauthy"), "interrupted copy").unwrap();
+        assert!(!is_usable(&dir.path().join("rauthy")), "interrupted");
+    }
+
+    #[test]
+    fn a_cache_directory_override_holds_the_build_that_is_reused() {
+        let cache = tempfile::tempdir().unwrap();
+        let version_dir = cache.path().join(RAUTHY_VERSION);
+        std::fs::create_dir(&version_dir).unwrap();
+        let binary = cached_build(&version_dir, RAUTHY_VERSION);
+        std::env::set_var("NAVIGATOR_RAUTHY_CACHE_DIR", cache.path());
+        let resolved = super::resolve();
+        std::env::remove_var("NAVIGATOR_RAUTHY_CACHE_DIR");
+        assert_eq!(resolved.unwrap(), binary);
+    }
+
+    #[test]
+    fn a_failed_build_step_reports_the_program_and_its_stderr() {
+        run(Command::new("sh").args(["-c", "exit 0"])).unwrap();
+        let failed = run(Command::new("sh").args(["-c", "echo no such tag >&2; exit 1"]));
+        assert_eq!(failed.unwrap_err().to_string(), "sh failed: no such tag");
+        let missing = run(&mut Command::new("example-missing-build-tool"));
+        assert_eq!(
+            missing.unwrap_err().to_string(),
+            "run example-missing-build-tool"
+        );
+    }
+
+    #[test]
+    fn the_service_rewrites_its_state_for_the_slot_port_on_every_up() {
+        let root = tempfile::tempdir().unwrap();
+        let program = PathBuf::from("/cache/rauthy");
+        service(root.path(), program.clone(), 8101, 8102, 8103).unwrap();
+        let described = service(root.path(), program.clone(), 8201, 8202, 8203).unwrap();
+
+        assert_eq!((described.program, described.port), (program, 8201));
+        assert_eq!(described.env, environment(8201));
+        let config = described.cwd.join("config.toml");
+        assert_eq!(
+            described.args,
+            ["serve", "--config-file", config.to_str().unwrap()]
+        );
+        let bootstrap = described.cwd.join("bootstrap");
+        assert_eq!(
+            std::fs::read_to_string(config).unwrap(),
+            config_toml(8201, 8202, 8203, &bootstrap)
+        );
+        assert_eq!(
+            std::fs::read_to_string(bootstrap.join("users.json")).unwrap(),
+            SEEDED_USERS
+        );
+        assert_eq!(
+            std::fs::read_to_string(bootstrap.join("clients.json")).unwrap(),
+            REGISTERED_CLIENTS
+        );
+        assert!(described.cwd.starts_with(root.path()));
+    }
     use std::path::{Path, PathBuf};
 
     /// The KIND fixture's `ConfigMap` and Secret, parsed.

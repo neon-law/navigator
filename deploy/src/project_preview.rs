@@ -1208,6 +1208,55 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn outside_a_project_checkout_the_preview_refuses_to_serve() {
+        assert!(
+            !Path::new("navigator.yaml").exists(),
+            "the crate is no Project"
+        );
+        assert_eq!(super::run(0).await, std::process::ExitCode::from(2));
+    }
+
+    #[test]
+    fn the_branch_and_origin_are_read_from_the_checkout_and_absent_outside_one() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        assert_eq!(super::current_branch(dir.path()), None);
+        assert_eq!(super::origin_url(dir.path()), None);
+        for args in [
+            &["init", "-q", "-b", "draft-timeline"][..],
+            &["remote", "add", "origin", "git@github.com:org/acme.git"],
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@example.com",
+                "commit",
+                "-q",
+            ],
+        ] {
+            let status = std::process::Command::new("git")
+                .current_dir(dir.path())
+                .args(args)
+                .args(if args.contains(&"commit") {
+                    &["--allow-empty", "-m", "x", "--no-gpg-sign"][..]
+                } else {
+                    &[]
+                })
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .status()
+                .expect("git");
+            assert!(status.success(), "git {args:?}");
+        }
+        assert_eq!(
+            super::current_branch(dir.path()).as_deref(),
+            Some("draft-timeline")
+        );
+        assert_eq!(
+            super::origin_url(dir.path()).as_deref(),
+            Some("git@github.com:org/acme.git")
+        );
+    }
+
     #[test]
     fn the_new_pull_request_url_comes_from_any_origin_spelling() {
         for remote in [

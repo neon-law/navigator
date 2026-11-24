@@ -307,7 +307,197 @@ async fn verify_cloud_report(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use clap::Parser as _;
+
+    /// A private directory holding a valid local-root configuration with one destination.
+    fn configured() -> (tempfile::TempDir, PathBuf, Config) {
+        let dir = tempfile::tempdir().unwrap();
+        let value = serde_json::json!({
+            "format_version": 1,
+            "local_root": dir.path().join("sealed"),
+            "source_project_number": null,
+            "source_identity_sha256": "a".repeat(64),
+            "capture": {"scope": "registered_navigator"},
+            "destinations": [{
+                "project_number": 7,
+                "bucket": "example-offsite-archive",
+                "location": "us-west1",
+                "minimum_retention_seconds":
+                    cloud::archives_project::OFFSITE_ARCHIVES_RETENTION_SECONDS,
+            }],
+        });
+        let path = dir.path().join("config.json");
+        std::fs::write(&path, value.to_string()).unwrap();
+        let config = serde_json::from_value(value).unwrap();
+        (dir, path, config)
+    }
+
+    fn receipt(root: &std::path::Path) -> serde_json::Value {
+        serde_json::json!({
+            "root": root,
+            "root_uri": "file:///synthetic",
+            "inventory_key": "inventory.json",
+            "inventory_sha256": "b".repeat(64),
+            "cutoff_at": "2026-01-02T03:04:05Z",
+            "tables": 1,
+            "rows": 2,
+        })
+    }
+
+    fn report(config: &Config, root: &std::path::Path) -> serde_json::Value {
+        serde_json::json!({
+            "config_sha256": config.digest().unwrap(),
+            "local": receipt(root),
+            "destinations": [
+                {"destination": 0, "prepared": null, "outcome": null, "preparation_failed": true}
+            ],
+            "all_destinations_acknowledged": false,
+            "catalog_promoted": false,
+        })
+    }
+
+    #[tokio::test]
+    async fn the_provisioning_plan_is_written_once_as_a_private_proposal() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let (dir, config, _) = configured();
+        let out = dir.path().join("plan.json");
+        let plan = |writer: &str, out: &PathBuf| ArchivesCmd::ProvisioningPlan {
+            config: config.clone(),
+            writer: writer.to_owned(),
+            verifier: "serviceAccount:example-verifier".to_owned(),
+            out: out.clone(),
+        };
+        assert_eq!(
+            run(plan("serviceAccount:example-writer", &out)).await,
+            ExitCode::SUCCESS
+        );
+        assert_eq!(out.metadata().unwrap().permissions().mode() & 0o777, 0o600);
+        let written: serde_json::Value = read(&out).await.unwrap();
+        let destination = &written["destinations"][0];
+        assert_eq!(destination["bucket"]["name"], "example-offsite-archive");
+        assert_eq!(
+            destination["writer_binding"],
+            serde_json::json!({
+                "role": "roles/storage.objectCreator",
+                "member": "serviceAccount:example-writer"
+            })
+        );
+        assert_eq!(destination["automatic_apply"], false);
+
+        let before = std::fs::read(&out).unwrap();
+        assert_eq!(
+            run(plan("serviceAccount:example-other", &out)).await,
+            ExitCode::FAILURE,
+            "an existing output is never replaced"
+        );
+        assert_eq!(std::fs::read(&out).unwrap(), before);
+        let same_identity = dir.path().join("same.json");
+        assert_eq!(
+            run(plan("serviceAccount:example-verifier", &same_identity)).await,
+            ExitCode::FAILURE
+        );
+        assert!(!same_identity.exists());
+    }
+
+    #[tokio::test]
+    async fn a_saved_report_or_its_receipt_names_the_same_sealed_source() {
+        let (dir, _, config) = configured();
+        let (receipt_path, report_path) = (
+            dir.path().join("receipt.json"),
+            dir.path().join("report.json"),
+        );
+        std::fs::write(&receipt_path, receipt(dir.path()).to_string()).unwrap();
+        std::fs::write(&report_path, report(&config, dir.path()).to_string()).unwrap();
+        let from_receipt = read_local(&receipt_path).await.unwrap();
+        let from_report = read_local(&report_path).await.unwrap();
+        assert_eq!(from_receipt.inventory_sha256, "b".repeat(64));
+        assert_eq!(
+            serde_json::to_value(from_receipt).unwrap(),
+            serde_json::to_value(from_report).unwrap()
+        );
+        std::fs::write(&receipt_path, "{}").unwrap();
+        assert!(read_local(&receipt_path).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn cloud_verification_is_bound_to_the_original_config_and_a_prepared_destination() {
+        let (dir, config_path, config) = configured();
+        let previous: operations::Report =
+            serde_json::from_value(report(&config, dir.path())).unwrap();
+        let refusal = |config: Config, previous: operations::Report, destination| async move {
+            verify_cloud_report(&config, &previous, destination)
+                .await
+                .map(drop)
+                .expect_err("refused")
+                .to_string()
+        };
+        assert_eq!(
+            refusal(config.clone(), previous.clone(), 0).await,
+            "destination was never prepared"
+        );
+        assert_eq!(
+            refusal(config.clone(), previous.clone(), 1).await,
+            "destination attempt is missing"
+        );
+        let mut retargeted = config.clone();
+        retargeted.destinations[0].bucket = "example-other-archive".to_owned();
+        assert_eq!(
+            refusal(retargeted, previous, 0).await,
+            "verification configuration differs from original request"
+        );
+
+        let report_path = dir.path().join("report.json");
+        std::fs::write(&report_path, report(&config, dir.path()).to_string()).unwrap();
+        let out = dir.path().join("verification.json");
+        assert_eq!(
+            run(ArchivesCmd::VerifyCloud {
+                config: config_path,
+                destination: 0,
+                report: report_path,
+                out: out.clone(),
+            })
+            .await,
+            ExitCode::FAILURE
+        );
+        assert!(!out.exists(), "a refusal declares no verification");
+    }
+
+    #[tokio::test]
+    async fn an_unsealed_source_fails_capture_and_verification_without_writing_a_result() {
+        let (dir, config, _) = configured();
+        let receipt_path = dir.path().join("receipt.json");
+        std::fs::write(
+            &receipt_path,
+            receipt(&dir.path().join("sealed")).to_string(),
+        )
+        .unwrap();
+        let out = dir.path().join("out.json");
+        for command in [
+            ArchivesCmd::Capture {
+                config: config.clone(),
+                reuse_local: Some(receipt_path.clone()),
+                capture_id: None,
+                delivery_attempt: 0,
+                out: out.clone(),
+            },
+            ArchivesCmd::VerifySealed {
+                config: config.clone(),
+                receipt: receipt_path.clone(),
+                out: out.clone(),
+            },
+            ArchivesCmd::Capture {
+                config: dir.path().join("missing-config.json"),
+                reuse_local: None,
+                capture_id: None,
+                delivery_attempt: 0,
+                out: out.clone(),
+            },
+        ] {
+            assert_eq!(run(command).await, ExitCode::FAILURE);
+            assert!(!out.exists());
+        }
+    }
 
     #[test]
     fn cloud_archive_config_accepts_object_source_and_refuses_ambiguous_backing() {

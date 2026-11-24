@@ -6,21 +6,26 @@ use anyhow::{bail, Result};
 use workflows::attest::sha256_hex;
 use workflows::object_handover::{self, Readback};
 
-fn cli_query(environment: &str, sql: &str) -> Result<String> {
+fn restate_sql(environment: &str, sql: &str) -> Command {
+    let mut command = Command::new("restate");
+    command.args([
+        "--environment",
+        environment,
+        "--json",
+        "--connect-timeout",
+        "3000",
+        "--request-timeout",
+        "13000",
+        "sql",
+        sql,
+    ]);
+    command
+}
+
+fn bounded_stdout(mut command: Command) -> Result<String> {
     use std::io::Read;
     use std::process::Stdio;
-    let mut child = Command::new("restate")
-        .args([
-            "--environment",
-            environment,
-            "--json",
-            "--connect-timeout",
-            "3000",
-            "--request-timeout",
-            "13000",
-            "sql",
-            sql,
-        ])
+    let mut child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
@@ -50,7 +55,7 @@ fn cli_query(environment: &str, sql: &str) -> Result<String> {
 fn frozen_readback(environment: &str) -> Result<Readback> {
     object_handover::check_environment(environment)?;
     Ok(object_handover::frozen_readback_with(|sql| {
-        cli_query(environment, sql)
+        bounded_stdout(restate_sql(environment, sql))
             .map_err(|_| object_handover::CaptureError("object capture transport refused"))
     })?)
 }
@@ -303,6 +308,101 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("operator-writers-held"));
+    }
+
+    fn refusal(operation: Operation) -> String {
+        run(operation).expect_err("refused").to_string()
+    }
+
+    #[test]
+    fn held_operations_refuse_bad_sources_and_captures_before_any_connection() {
+        let directory = tempfile::tempdir().unwrap();
+        let missing = directory.path().join("missing.json");
+        assert!(run(Operation::Capture {
+            environment: "--untrusted-option".to_owned(),
+            output: missing.clone(),
+            operator_writers_held: true,
+        })
+        .is_err());
+        assert_eq!(
+            refusal(Operation::Capture {
+                environment: "synthetic".to_owned(),
+                output: std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("capture.json"),
+                operator_writers_held: true,
+            }),
+            "object captures cannot be stored in a repository"
+        );
+        assert_eq!(
+            refusal(Operation::Import {
+                environment: "synthetic".to_owned(),
+                capture: missing.clone(),
+                sha256: "unused".to_owned(),
+                apply: false,
+                operator_writers_held: false,
+            }),
+            "private capture unavailable"
+        );
+        assert!(refusal(Operation::Import {
+            environment: "synthetic".to_owned(),
+            capture: missing.clone(),
+            sha256: "unused".to_owned(),
+            apply: true,
+            operator_writers_held: false,
+        })
+        .contains("operator-writers-held"));
+        assert_eq!(
+            refusal(Operation::Activate {
+                environment: "synthetic".to_owned(),
+                capture: missing,
+                sha256: "unused".to_owned(),
+                operator_writers_held: true,
+            }),
+            "private capture unavailable"
+        );
+    }
+
+    #[test]
+    fn source_queries_run_the_authenticated_cli_with_bounded_timeouts() {
+        let command = restate_sql("synthetic", "SELECT 1");
+        assert_eq!(command.get_program(), "restate");
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            [
+                "--environment",
+                "synthetic",
+                "--json",
+                "--connect-timeout",
+                "3000",
+                "--request-timeout",
+                "13000",
+                "sql",
+                "SELECT 1"
+            ]
+        );
+    }
+
+    #[test]
+    fn transport_returns_stdout_and_refuses_failures_without_echoing_them() {
+        let shell = |script: &str| {
+            let mut command = Command::new("sh");
+            command.args(["-c", script]);
+            bounded_stdout(command)
+        };
+        assert_eq!(shell("printf rows").unwrap(), "rows");
+        assert_eq!(
+            shell("echo private >&2; exit 3").unwrap_err().to_string(),
+            "object capture transport refused"
+        );
+        assert_eq!(
+            shell("printf '\\377'").unwrap_err().to_string(),
+            "unsupported object capture response"
+        );
+        assert_eq!(
+            bounded_stdout(Command::new("synthetic-missing-transport"))
+                .unwrap_err()
+                .to_string(),
+            "object capture transport unavailable"
+        );
     }
 
     #[test]
