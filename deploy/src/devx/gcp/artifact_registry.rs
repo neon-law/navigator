@@ -1678,7 +1678,7 @@ mod tests {
         // the case the revoke exists for. It must differ from `current`, or the
         // test asserts nothing.
         let stale = wif_principal_set("111111111111", "neon-law-source-code/navigator");
-        let current = wif_principal_set("522147057781", "neon-law-source-code/navigator");
+        let current = wif_principal_set("100000000002", "neon-law-source-code/navigator");
         assert_ne!(
             stale, current,
             "the stale principal must be a different one"

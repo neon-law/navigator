@@ -1,26 +1,29 @@
 ---
 name: deploy-staging
 description: >-
-  Roll the neon-law-stg deployment onto a Navigator release tag by hand and verify it, or verify staging is wholly on a
-  tag without changing anything. Use when the user wants staging updated, rolled, re-rolled, restarted after a secret
+  Roll the staging deployment onto a Navigator release tag by hand and verify it, or verify staging is wholly on a tag
+  without changing anything. Use when the user wants staging updated, rolled, re-rolled, restarted after a secret
   change, or recovered outside release-deploy.yml: "push the hotfix to staging", "put staging on 26.9.30", "verify
   staging". Staging goes first; for both rows, run this, verify it, then use deploy-production.
 ---
 
 # Roll staging
 
-Roll `neon-law-stg` onto a release tag. The tag is the argument, for example `26.9.30-rc.1`. If none was given, ask;
-never infer it from today's date.
+Roll `$NAVIGATOR_STAGING_DEPLOYMENT` onto a release tag. The tag is the argument, for example `26.9.30-rc.1`. If none
+was given, ask; never infer it from today's date.
 
 `.github/workflows/release-deploy.yml` rolls every publishable tag to staging. Use this skill when a person rolls
 instead: a recovery, a re-roll, a secret-only restart, or while `DEPLOY_AUTOMATION_ENABLED` is unset. Check first
 whether a `release-deploy` run for this tag is in flight (`gh run list --workflow release-deploy.yml --limit 5`); never
 roll by hand beside one.
 
-Follow [`docs/manual-roll.md`](../../../docs/manual-roll.md) with `ROW=neon-law-stg` and `ROW_RESTATE_ENV=staging`. It
-carries the whole sequence, from sessions and grants through verification, rollback, and cleanup. Its offline plan
-renders local manifests only; it does not check live drift, cloud authentication, image availability, Secrets, assets,
-Restate, or public endpoints. What follows is specific to this row.
+`NAVIGATOR_STAGING_DEPLOYMENT` is the staging row's directory name under `deployments/`. Export it before starting; if
+it is unset, ask.
+
+Follow [`docs/manual-roll.md`](../../../docs/manual-roll.md) with `ROW=$NAVIGATOR_STAGING_DEPLOYMENT` and
+`ROW_RESTATE_ENV=staging`. It carries the whole sequence, from sessions and grants through verification, rollback, and
+cleanup. Its offline plan renders local manifests only; it does not check live drift, cloud authentication, image
+availability, Secrets, assets, Restate, or public endpoints. What follows is specific to this row.
 
 ## Why staging first
 
@@ -31,7 +34,7 @@ the right place to discover a bad tag.
 ## Verify
 
 ```bash
-./.agents/skills/deploy-staging/scripts/verify-row.sh neon-law-stg <tag>
+./.agents/skills/deploy-staging/scripts/verify-row.sh "$NAVIGATOR_STAGING_DEPLOYMENT" <tag>
 ```
 
 Read every line rather than the exit status alone. Capture the outgoing tag before you start.
@@ -74,5 +77,5 @@ tag is not the cause and a rollback will not fix it.
 
 ## Finishing
 
-Report which row is on which tag, what verified, and anything left outstanding, then remove the `neon-law-stg` kubectl
-context as `docs/manual-roll.md` step 10 describes.
+Report which row is on which tag, what verified, and anything left outstanding, then remove the
+`$NAVIGATOR_STAGING_DEPLOYMENT` kubectl context as `docs/manual-roll.md` step 10 describes.

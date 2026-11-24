@@ -4,8 +4,9 @@ A defensive audit of the path a filed Project document takes from object storage
 the authorization in front of it, the `navigator project sync` download lane that materialises bytes on a laptop, the
 Project-portal Content Security Policy, the per-Project publisher identity, the audit trail of an issued URL, and the CI
 session that verifies pointers against live records. It covers code and configuration this repository owns. Every live
-check ran against the staging deployment (`neon-law-stg`, `staging.neonlaw.com`) on 2026-09-12; production was not read.
-The equivalent production reads are listed in the pull request that landed this note, for a human to run.
+check ran against the staging deployment (`$NAVIGATOR_STAGING_DEPLOYMENT`, `staging.neonlaw.com`) on 2026-09-12;
+production was not read. The equivalent production reads are listed in the pull request that landed this note, for a
+human to run.
 
 Nothing here names a client, a matter, a real Project code, or a production coordinate. Where an example is needed it
 uses `<code>` or the seeded sample matters, which are invented.
@@ -116,7 +117,7 @@ both routes and record the decision beside the TTL rationale.
 
 **Severity: Informational.** The control is in place.
 
-Checked on 2026-09-12 with `gcloud` pinned to `neon-law-stg`:
+Checked on 2026-09-12 with `gcloud` pinned to `$NAVIGATOR_STAGING_DEPLOYMENT`:
 
 - All seven staging buckets (`applications`, `archives`, `assets`, `documents`, `exports`, `logs`, `telemetry`) have
   uniform bucket-level access on and no `allUsers` or `allAuthenticatedUsers` member in any binding.
@@ -339,7 +340,8 @@ provider whose condition was the applications organization on `main`; and an imp
 `<org>/<repo>`. Its grant reconciler stripped `objectCreator`, `objectAdmin`, and `objectUser` from a publisher it found
 and refused to repoint an account already bound to a different prefix.
 
-**What staging carries.** Read on 2026-09-12 with `gcloud` pinned to `neon-law-stg`, with codes withheld:
+**What staging carries.** Read on 2026-09-12 with `gcloud` pinned to `$NAVIGATOR_STAGING_DEPLOYMENT`, with codes
+withheld:
 
 - No `app-publisher` pool, no `ghe-oidc` provider, no `nav-pub-*` account, and no `navigatorApplicationsPublisher` role.
 - Three publisher accounts named `navigator-app-<code>`, each bound on the applications bucket with the predefined

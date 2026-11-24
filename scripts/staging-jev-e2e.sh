@@ -22,7 +22,8 @@
 # doors cannot delete is still findable and removable by hand.
 #
 # Environment: NAVIGATOR_HOST, NAVIGATOR_TOKEN, OUT_DIR (required);
-# RUN_ID, SYNTH_DOMAIN, NAMESPACE, WEB_DEPLOYMENT, KUBECTL_BIN optional.
+# NAMESPACE required: the staging deployment's Kubernetes namespace.
+# RUN_ID, SYNTH_DOMAIN, WEB_DEPLOYMENT, KUBECTL_BIN optional.
 # The bearer is read from the environment and never echoed.
 
 set -euo pipefail
@@ -33,7 +34,7 @@ OUT_DIR="${OUT_DIR:?set OUT_DIR, the directory the run writes its evidence into}
 
 RUN_ID="${RUN_ID:-$(date -u +%Y%m%d-%H%M%S)}"
 SYNTH_DOMAIN="${SYNTH_DOMAIN:-test.neonlaw}"
-NAMESPACE="${NAMESPACE:-neon-law-stg}"
+NAMESPACE="${NAMESPACE:?set NAMESPACE to the staging deployment's Kubernetes namespace}"
 WEB_DEPLOYMENT="${WEB_DEPLOYMENT:-navigator-web}"
 KUBECTL_BIN="${KUBECTL_BIN:-kubectl}"
 

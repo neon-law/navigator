@@ -8,9 +8,8 @@ analytical Parquet/Iceberg `archives` lane.
 Each cloud deployment sets `NAVIGATOR_SURREAL_ARCHIVES_BUCKET` to its own private retention bucket. Each new export has
 a `.manifest.json` sidecar with its byte length and SHA-256, export-time table counts, and a hash of the complete
 database/table schema inventory. Restore drills verify the downloaded bytes against that receipt and the restored
-namespace against the receipt; they do not sample the live source as the expected state. The staging deployment uses
-`neon-law-archives-staging`; the other deployment lanes use distinct operator-configured buckets and must not reuse this
-value. Keys are point-in-time selectable:
+namespace against the receipt; they do not sample the live source as the expected state. Each deployment names its own
+bucket in `NAVIGATOR_SURREAL_ARCHIVES_BUCKET`; no two lanes share one. Keys are point-in-time selectable:
 
 ```text
 surreal-backups/<namespace>/<database>/<utc-timestamp>-<uuid>.surql

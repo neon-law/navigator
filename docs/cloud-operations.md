@@ -28,11 +28,11 @@ The collapse rule is simple: durable policy, invariants, architecture, and opera
 ## Deployment profiles and operator boundary
 
 Exact `NAVIGATOR_ENVIRONMENT=dev` selects the one disposable development profile, which local KIND uses. All three
-persistent hosted rows, `neon-law-stg` included, use exact `production`, because staging is a release-order role rather
-than a reduced runtime. Empty or unset also selects production; `staging`, `test`, mixed case, surrounding whitespace,
-and every other nonempty value fail parsing. Production keeps hosted-persistence requirements: real GCS and no emulator
-endpoint. A normal dev deployment uses real non-production SendGrid and DocuSign demo credentials stamped
-`NAVIGATOR_CREDENTIAL_ENVIRONMENT=dev`; only `NAVIGATOR_CI_HARNESS=1` may use fakes.
+persistent hosted rows, `$NAVIGATOR_STAGING_DEPLOYMENT` included, use exact `production`, because staging is a
+release-order role rather than a reduced runtime. Empty or unset also selects production; `staging`, `test`, mixed case,
+surrounding whitespace, and every other nonempty value fail parsing. Production keeps hosted-persistence requirements:
+real GCS and no emulator endpoint. A normal dev deployment uses real non-production SendGrid and DocuSign demo
+credentials stamped `NAVIGATOR_CREDENTIAL_ENVIRONMENT=dev`; only `NAVIGATOR_CI_HARNESS=1` may use fakes.
 
 The **deployment operator** who supplies Kubernetes, cloud accounts, secrets, domains, and environment values is not a
 Navigator application **admin**. `persons.role = 'admin'` is an application authorization tier and grants no cloud or
@@ -333,12 +333,13 @@ archive.
 ### Staging: confirm a store credential is dead
 
 The store password lives at the SurrealDB provider. Setup creates no Cloud SQL instance, and `ops secrets apply` writes
-no `DATABASE_URL`. Confirm on `neon-law-stg` that those objects are absent; an empty result is the rotation.
+no `DATABASE_URL`. Confirm on `$NAVIGATOR_STAGING_DEPLOYMENT` that those objects are absent; an empty result is the
+rotation.
 
 Pin `gcloud` to staging and confirm, without printing payloads:
 
 ```bash
-gcloud config set project neon-law-stg
+gcloud config set project "$NAVIGATOR_STAGING_DEPLOYMENT"
 gcloud sql instances list
 gcloud secrets list --filter='name~DATABASE_URL'
 ```

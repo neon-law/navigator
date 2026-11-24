@@ -1261,10 +1261,9 @@ The Neon Law-controlled Workspace service account has domain-wide delegation and
 service-account keys, so the web pod's runtime identity signs each delegation as that account. Drive ingest reads
 `NAVIGATOR_DRIVE_NEON_LAW_PROJECTS_DRIVE_ID`, `NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER`, and
 `NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT`, the account's email, which `ops ship` derives from
-`NAVIGATOR_DRIVE_GCP_SERVICE_ACCOUNT_ID`. The two Projects-root variables are
-`NAVIGATOR_DRIVE_NEON_LAW_PRODUCTION_PROJECTS_ROOT_FOLDER_ID` and
-`NAVIGATOR_DRIVE_NEON_LAW_STAGING_PROJECTS_ROOT_FOLDER_ID`; configure each only in the approved operator-managed
-environment that uses that root.
+`NAVIGATOR_DRIVE_GCP_SERVICE_ACCOUNT_ID`. Each deployment names its own Projects folder in
+`NAVIGATOR_DRIVE_PROJECTS_ROOT_FOLDER_ID`, and that folder's name in `NAVIGATOR_DRIVE_PROJECTS_ROOT_NAME` when it is not
+`Projects`.
 
 `NAVIGATOR_CALENDAR_NEON_LAW_OWNER` supplies the bootstrap Google Workspace mailbox. An Owner can save a separate
 mailbox for the Firm in Firm Settings.

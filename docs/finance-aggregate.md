@@ -48,8 +48,8 @@ land in the totals and in no group. The percentages default to 28 overhead, 70 a
    first; it does not verify the live cluster or release availability:
 
    ```bash
-   hudson ops ship --deployment neon-law-stg --tag <release tag> --dry-run
-   hudson ops ship --deployment neon-law-stg --tag <release tag>
+   hudson ops ship --deployment $NAVIGATOR_STAGING_DEPLOYMENT --tag <release tag> --dry-run
+   hudson ops ship --deployment $NAVIGATOR_STAGING_DEPLOYMENT --tag <release tag>
    ```
 
    The schema applies on boot (version 63 adds the `finance_aggregate` table).
@@ -65,11 +65,11 @@ land in the totals and in no group. The percentages default to 28 overhead, 70 a
    It prints the `run_id` (`manual-...`). A `503` means the deployment has no Restate ingress configured.
 5. **Verify the read:** `navigator project finance show sample-finance --host <host> --json` returns `"source":
    "workflow"` and the run id from step 4. "no run stored yet" before the run finishes is expected.
-6. **Verify the trace** in Dash0, dataset `neon-law-stg`: search for the span `finance_aggregate.run` with the run id,
-   and check its children `finance_aggregate.ingest`, `finance_aggregate.aggregate` and `finance_aggregate.store`. The
-   run span carries `navigator.keep`, so the sampler keeps it whatever the sampled percentage. Restate Cloud does not
-   export into the Dash0 dataset: the trace shows the worker's handler span under the web request, and the Restate
-   invocation itself is only in the Restate Cloud console.
+6. **Verify the trace** in Dash0, dataset `$NAVIGATOR_STAGING_DEPLOYMENT`: search for the span `finance_aggregate.run`
+   with the run id, and check its children `finance_aggregate.ingest`, `finance_aggregate.aggregate` and
+   `finance_aggregate.store`. The run span carries `navigator.keep`, so the sampler keeps it whatever the sampled
+   percentage. Restate Cloud does not export into the Dash0 dataset: the trace shows the worker's handler span under the
+   web request, and the Restate invocation itself is only in the Restate Cloud console.
 
 ## Report shape
 

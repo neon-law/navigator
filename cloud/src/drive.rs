@@ -93,9 +93,15 @@ impl DriveWorkspaceConfig {
                     match crate::workspace::DeploymentWorkspace::from_lookup(&get) {
                         Ok(deployment) => {
                             let key = deployment.projects_root_folder_key();
-                            get(key)
-                                .filter(|id| !id.trim().is_empty())
-                                .ok_or_else(|| DriveError::MissingConfig(key.into()))?
+                            match get(key).filter(|id| !id.trim().is_empty()) {
+                                Some(id) => id,
+                                None if deployment.is_deprecated_selection() => {
+                                    return Err(DriveError::MissingConfig(key.into()));
+                                }
+                                // A deployment naming no folder uses a
+                                // dedicated Projects shared drive.
+                                None => projects_drive_id.clone(),
+                            }
                         }
                         // Standalone configurations use a dedicated Projects shared drive.
                         Err(_) => projects_drive_id.clone(),
@@ -1964,23 +1970,21 @@ mod tests {
         let config = |root: Option<&str>| {
             DriveWorkspaceConfig::from_lookup(DriveWorkspace::NeonLaw, |key| {
                 match key {
-                    crate::workspace::NAVIGATOR_GCP_PROJECT_ID => Some("neon-law-stg"),
-                    "NAVIGATOR_DRIVE_NEON_LAW_STAGING_PROJECTS_ROOT_FOLDER_ID" => root,
-                    "NAVIGATOR_DRIVE_NEON_LAW_PRODUCTION_PROJECTS_ROOT_FOLDER_ID" => {
-                        Some("other-root")
-                    }
+                    crate::workspace::NAVIGATOR_GCP_PROJECT_ID => Some("example-project"),
+                    crate::workspace::NAVIGATOR_DRIVE_PROJECTS_ROOT_FOLDER_ID => root,
                     _ => Some("synthetic"),
                 }
                 .map(str::to_owned)
             })
         };
         assert_eq!(
-            config(Some("staging-root"))
+            config(Some("selected-root"))
                 .unwrap()
                 .projects_root_folder_id,
-            "staging-root"
+            "selected-root"
         );
-        assert!(matches!(config(None), Err(DriveError::MissingConfig(_))));
+        // With no folder named, the shared drive itself is the root.
+        assert_eq!(config(None).unwrap().projects_root_folder_id, "synthetic");
     }
 
     #[test]

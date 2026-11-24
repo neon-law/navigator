@@ -146,7 +146,7 @@ fn basename(path: &str) -> &str {
 ///
 /// The retired names are complete organization slugs (`staging-applications`).
 /// The mandatory `<deployment>-applications` bucket lane (ENG-126) resolves to
-/// names like `neon-law-stg-applications` that carry the substring while
+/// names like `example-staging-applications` that carry the substring while
 /// being a different identifier, so a bare `contains` false-positives on the
 /// bucket. Matching whole `[a-z0-9-]+` runs keeps the true invariant — no
 /// retired ORGANIZATION survives — without flagging a bucket that merely shares

@@ -668,12 +668,16 @@ Project's URL.
 and a Project's repository are independent: a deployment can serve a matter whose source lives in a client's own GitLab
 group.
 
-| Deployment | GCP project | Organization | Drive root |
-| --- | --- | --- | --- |
-| Staging | `neon-law-stg` | `neon-law` | `Staging Projects` |
+| Coordinate | Variable |
+| --- | --- |
+| GCP project | `NAVIGATOR_GCP_PROJECT_ID` |
+| Organization | `NAVIGATOR_GITHUB_ORG` |
+| Projects folder | `NAVIGATOR_DRIVE_PROJECTS_ROOT_FOLDER_ID` |
+| Projects folder name | `NAVIGATOR_DRIVE_PROJECTS_ROOT_NAME`, default `Projects` |
 
-The active deployment is identified by `NAVIGATOR_GCP_PROJECT_ID`. It is deliberately not `NAVIGATOR_ENVIRONMENT`, which
-is a two-valued dev/production switch and cannot name a deployment.
+Every coordinate is the deployment's own configuration; no project id is named in source. The active deployment is
+identified by `NAVIGATOR_GCP_PROJECT_ID`. It is deliberately not `NAVIGATOR_ENVIRONMENT`, which is a two-valued
+dev/production switch and cannot name a deployment.
 
 ### An absent repository is legitimate
 

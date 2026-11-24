@@ -412,7 +412,7 @@ mod tests {
 
     fn deployment() -> WorkspaceConfig {
         let pairs: HashMap<String, String> = [
-            (NAVIGATOR_GCP_PROJECT_ID, "neon-law-stg"),
+            (NAVIGATOR_GCP_PROJECT_ID, "example-project"),
             (NAVIGATOR_GITHUB_ORG, AN_ORGANIZATION),
             (NAVIGATOR_GIT_HOST, A_HOST),
         ]
