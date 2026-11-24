@@ -1637,7 +1637,6 @@ mod archive_source {
     /// # Errors
     /// Export transport, section framing, or byte accounting fails.
     pub async fn fingerprint(db: &SurrealDb) -> Result<(u64, String)> {
-        use sha2::Digest;
         let mut stream = db
             .export(())
             .await
@@ -1647,24 +1646,24 @@ mod archive_source {
                 .into_iter()
                 .map(|table| table.name),
         );
-        let mut hash = sha2::Sha256::new();
-        let mut count = Some(0_u64);
+        let mut fingerprint = model::source_capture::Fingerprint::default();
+        let mut accounting = Ok(());
         let mut emit = |bytes: &[u8]| {
-            hash.update(bytes);
-            count = count.and_then(|count| {
-                u64::try_from(bytes.len())
-                    .ok()
-                    .and_then(|len| count.checked_add(len))
-            });
+            if accounting.is_ok() {
+                accounting = fingerprint.update(bytes);
+            }
         };
         while let Some(chunk) = stream.next().await {
             filter.feed(&chunk.context("read canonical source export")?, &mut emit)?;
         }
         filter.finish(&mut emit)?;
-        let count = count
-            .filter(|count| *count > 0)
-            .context("canonical source export has no usable bytes")?;
-        Ok((count, hex::encode(hash.finalize())))
+        accounting.context("count canonical source export bytes")?;
+        let fingerprint = fingerprint.finish();
+        anyhow::ensure!(
+            fingerprint.0 > 0,
+            "canonical source export has no usable bytes"
+        );
+        Ok(fingerprint)
     }
 
     fn sha256(bytes: &[u8]) -> String {

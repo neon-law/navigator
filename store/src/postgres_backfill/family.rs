@@ -1110,29 +1110,18 @@ impl SourceReceipt {
     /// Reading fails or the export does not match the existing canonical receipt.
     pub fn verify_export_reader(
         self,
-        mut export: impl std::io::Read,
+        export: impl std::io::Read,
     ) -> Result<VerifiedSourceReceipt, FamilyError> {
-        use sha2::Digest;
-        let mut hash = sha2::Sha256::new();
-        let mut bytes = 0_u64;
-        let mut buffer = vec![0_u8; 64 * 1024];
-        loop {
-            let read = export.read(&mut buffer).map_err(|_| FamilyError::Receipt)?;
-            if read == 0 {
-                break;
-            }
-            hash.update(&buffer[..read]);
-            bytes = bytes
-                .checked_add(u64::try_from(read).map_err(|_| FamilyError::Receipt)?)
-                .ok_or(FamilyError::Receipt)?;
-        }
+        let (bytes, sha256) = model::source_capture::Fingerprint::read(export)
+            .map_err(|_| FamilyError::Receipt)?
+            .finish();
         if self.format_version != 1
             || !matches!(
                 self.consistency.as_str(),
                 "operator_quiesced" | "best_effort"
             )
             || self.export_bytes != bytes
-            || self.export_sha256 != hex::encode(hash.finalize())
+            || self.export_sha256 != sha256
         {
             return Err(FamilyError::Receipt);
         }
