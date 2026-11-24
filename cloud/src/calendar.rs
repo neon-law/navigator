@@ -188,10 +188,19 @@ pub trait CalendarService: Send + Sync {
     async fn calendar_exists(&self, calendar_id: &str) -> Result<bool, CalendarError>;
     /// Verify a recorded calendar against the Project code and its owning account.
     async fn recorded_calendar_matches(&self, code: &str, id: &str) -> Result<bool, CalendarError> {
-        Ok(self
-            .find_calendar(code)
-            .await?
-            .is_some_and(|calendar| calendar.id == id))
+        Ok(self.recorded_calendar_problem(code, id).await?.is_none())
+    }
+
+    /// Read-only explanation when the recorded calendar cannot be verified.
+    async fn recorded_calendar_problem(
+        &self,
+        code: &str,
+        id: &str,
+    ) -> Result<Option<&'static str>, CalendarError> {
+        let calendar = self.find_calendar(code).await?;
+        Ok(calendar
+            .is_none_or(|calendar| calendar.id != id)
+            .then_some("The provider could not verify the recorded calendar."))
     }
 
     /// Version of the calendar resource itself, or absence after a completed deletion.
@@ -701,7 +710,11 @@ impl CalendarService for GoogleCalendar {
         }
     }
 
-    async fn recorded_calendar_matches(&self, code: &str, id: &str) -> Result<bool, CalendarError> {
+    async fn recorded_calendar_problem(
+        &self,
+        code: &str,
+        id: &str,
+    ) -> Result<Option<&'static str>, CalendarError> {
         let action = "verifying the recorded Project Calendar owner and name";
         let response = self
             .http
@@ -711,7 +724,20 @@ impl CalendarService for GoogleCalendar {
             .await
             .map_err(|source| CalendarError::Request { action, source })?;
         if matches!(response.status().as_u16(), 404 | 410) {
-            return Ok(false);
+            let resource = self
+                .http
+                .get(self.url(&["calendars", id]))
+                .bearer_auth(self.token().await?)
+                .send()
+                .await
+                .map_err(|source| CalendarError::Request { action, source })?;
+            return Ok(Some(match resource.status().as_u16() {
+                200..=299 => "The calendar exists but is absent from the delegated owner's calendar list.",
+                403 => "The delegated account cannot access the recorded calendar.",
+                410 => "The provider reports that the recorded calendar was deleted.",
+                404 => "The calendar is missing or hidden from the delegated account. Confirm with its owner.",
+                status => return Err(CalendarError::Api { action, status }),
+            }));
         }
         let entry = Self::checked(Ok(response), action)?
             .json::<CalendarListEntry>()
@@ -723,10 +749,17 @@ impl CalendarService for GoogleCalendar {
             description.starts_with("Navigator Project Calendar (")
                 && Some(description) != self.ownership_marker().as_deref()
         });
-        Ok(entry.id == id
-            && entry.access_role.as_deref() == Some("owner")
-            && entry.summary.as_deref() == Some(self.project_summary(code).as_ref())
-            && !other_namespace)
+        Ok(if entry.id != id {
+            Some("The provider returned a different calendar ID.")
+        } else if other_namespace {
+            Some("The recorded calendar belongs to another deployment.")
+        } else if entry.access_role.as_deref() != Some("owner") {
+            Some("The delegated account does not own the recorded calendar.")
+        } else if entry.summary.as_deref() != Some(self.project_summary(code).as_ref()) {
+            Some("The recorded calendar name differs from the expected Project calendar name.")
+        } else {
+            None
+        })
     }
 
     async fn calendar_etag(&self, id: &str) -> Result<Option<String>, CalendarError> {
@@ -2613,6 +2646,41 @@ mod tests {
                 .unwrap(),
             status
         );
+    }
+
+    #[tokio::test]
+    async fn calendar_list_absence_is_checked_against_the_recorded_resource() {
+        let server = MockServer::start().await;
+        let calendar = google(&server);
+        for (id, status, expected) in [
+            (
+                "unlisted",
+                200,
+                "absent from the delegated owner's calendar list",
+            ),
+            ("hidden", 404, "missing or hidden"),
+            ("denied", 403, "cannot access"),
+            ("deleted", 410, "was deleted"),
+        ] {
+            Mock::given(method("GET"))
+                .and(path(format!("/users/me/calendarList/{id}")))
+                .respond_with(ResponseTemplate::new(404))
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(format!("/calendars/{id}")))
+                .respond_with(ResponseTemplate::new(status))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let detail = calendar
+                .recorded_calendar_problem("synthetic", id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(detail.contains(expected), "{detail}");
+        }
     }
 
     #[tokio::test]

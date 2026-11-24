@@ -10593,13 +10593,39 @@ impl From<crate::contract_review_walk::ContractReviewError> for ApiError {
     }
 }
 
-/// Map the retainer workflow-drive error (approve / send) to a typed JSON
-/// response. The two caller-facing variants — the PDF isn't rendered yet
-/// (retryable) and a government-form fill/config failure — get their own
-/// status + code; the rest are internal faults, logged and returned as 500.
+fn signature_workflow_response(error: &crate::signature::SignatureError) -> Response {
+    use crate::signature::SignatureError as S;
+    let (status, code, message) = match error {
+        S::AnchorValidation(_) | S::TabValidation(_) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "signature_fields",
+            "Check the signing fields in the rendered PDF and their assigned signers.",
+        ),
+        S::Connection(_) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "signature_connection",
+            "Check the owning Firm’s DocuSign connection and account configuration.",
+        ),
+        S::Authentication(reason) => (StatusCode::BAD_GATEWAY, "signature_authentication", reason.as_str()),
+        S::Unreachable => (StatusCode::BAD_GATEWAY, "signature_unreachable", "Navigator could not reach DocuSign."),
+        S::Provider(_) => (
+            StatusCode::BAD_GATEWAY,
+            "signature_provider",
+            "The signature provider could not complete the envelope operation. Check its status before retrying.",
+        ),
+    };
+    (
+        status,
+        Json(serde_json::json!({"error": code, "message": message})),
+    )
+        .into_response()
+}
+
+/// Map the approval and signature workflow failures to their HTTP status and public diagnosis.
 fn workflow_drive_error(e: crate::retainer_walk::WorkflowDriveError) -> Response {
     use crate::retainer_walk::WorkflowDriveError as E;
     match e {
+        E::Signature(error) => signature_workflow_response(&error),
         e @ E::ApprovalNotReady { .. } => (
             StatusCode::CONFLICT,
             Json(serde_json::json!({
@@ -15290,6 +15316,52 @@ Content-Disposition: attachment; filename=\"records.pdf\"\r\n\
         ))
         .await;
         assert_eq!(body["message"], "that project code is already in use");
+    }
+
+    #[tokio::test]
+    async fn signature_failures_report_the_next_step_without_provider_payloads() {
+        use crate::retainer_walk::WorkflowDriveError;
+        use crate::signature::SignatureError;
+        let private = "private diagnostic";
+        for (failure, status, code) in [
+            (
+                SignatureError::Connection(private.into()),
+                StatusCode::SERVICE_UNAVAILABLE,
+                "signature_connection",
+            ),
+            (
+                SignatureError::Authentication("Check the registered key.".into()),
+                StatusCode::BAD_GATEWAY,
+                "signature_authentication",
+            ),
+            (
+                SignatureError::Unreachable,
+                StatusCode::BAD_GATEWAY,
+                "signature_unreachable",
+            ),
+            (
+                SignatureError::Provider(private.into()),
+                StatusCode::BAD_GATEWAY,
+                "signature_provider",
+            ),
+            (
+                SignatureError::AnchorValidation(private.into()),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "signature_fields",
+            ),
+            (
+                SignatureError::TabValidation(private.into()),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "signature_fields",
+            ),
+        ] {
+            let (response, body) =
+                rendered(ApiError::from(WorkflowDriveError::Signature(failure))).await;
+            assert_eq!(response, status);
+            assert_eq!(body["error"], code);
+            assert!(!body["message"].as_str().unwrap().is_empty());
+            assert!(!body.to_string().contains(private));
+        }
     }
 
     #[tokio::test]

@@ -210,8 +210,8 @@ fn sync_remedy(outcome: &str, code: &str) -> Option<String> {
             format!("nothing was duplicated; `{retry}` again to finish the writes")
         }
         "recorded_resource_missing" => format!(
-            "the recorded calendar is gone; clear it with \
-             `navigator project set {code} --calendar \"\"` or record the right one, then `{retry}`"
+            "preserve the recorded calendar ID and check the delegated owner's access with \
+             `{retry} --dry-run`"
         ),
         _ => return None,
     })
@@ -803,7 +803,7 @@ mod tests {
             ("mirror_incomplete", "nothing was duplicated"),
             (
                 "recorded_resource_missing",
-                "navigator project set sample --calendar",
+                "navigator project deadline sync --project sample --dry-run",
             ),
         ] {
             let remedy = super::sync_remedy(outcome, "sample").unwrap();

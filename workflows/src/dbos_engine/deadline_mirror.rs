@@ -284,6 +284,7 @@ mod tests {
         MirrorReport {
             outcome: store::deadline_calendar::MirrorOutcome::Mirrored,
             dry_run: false,
+            calendar_problem: None,
             creates_calendar: false,
             upserted: vec![Uuid::now_v7()],
             deleted: Vec::new(),

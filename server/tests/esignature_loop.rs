@@ -104,6 +104,17 @@ async fn sent_loop() -> SentLoop {
         .expect(1)
         .mount(&docusign)
         .await;
+    let sender_url = "https://example.com/draft-review";
+    Mock::given(method("POST"))
+        .and(path(format!(
+            "/v2.1/accounts/acct-guid/envelopes/{ENVELOPE_ID}/views/sender"
+        )))
+        .respond_with(
+            ResponseTemplate::new(201).set_body_json(serde_json::json!({"url": sender_url})),
+        )
+        .expect(1)
+        .mount(&docusign)
+        .await;
     // The completion webhook downloads the signed PDF + Certificate of
     // Completion to archive them.
     Mock::given(method("GET"))
@@ -157,9 +168,7 @@ async fn sent_loop() -> SentLoop {
     )
     .await
     .unwrap();
-    // The test bearer takes the documented auth-bypass fallback to the
-    // canonical firm principal, which still needs a firm-side participation
-    // before it may submit questionnaire answers.
+    // The browser and CLI act as the same participating lawyer.
     let lawyer = store::persons::default_firm_dri(&surreal)
         .await
         .unwrap()
@@ -167,6 +176,8 @@ async fn sent_loop() -> SentLoop {
     store::projects::add_participation(&surreal, proj.id, lawyer, "lawyer")
         .await
         .unwrap();
+    let lawyer_bearer =
+        portal::test_support::bearer_header_with_person(store::persons::Role::Lawyer, lawyer);
     let snapshot = workflows::notation_session::questionnaire_snapshot_for_template(
         &surreal,
         Some(&storage),
@@ -177,7 +188,8 @@ async fn sent_loop() -> SentLoop {
     let nid = store::notations::create(
         &surreal,
         &store::notations::NewNotation::new(tmpl.id, libra.id, proj.id, "BEGIN")
-            .with_questionnaire_snapshot(snapshot),
+            .with_questionnaire_snapshot(snapshot)
+            .with_delivery(store::notations::DELIVERY_EMAILED),
     )
     .await
     .unwrap()
@@ -229,10 +241,7 @@ async fn sent_loop() -> SentLoop {
                 Request::builder()
                     .method("POST")
                     .uri(format!("/app/lawyer/notations/{nid}/step"))
-                    .header(
-                        "authorization",
-                        portal::test_support::lawyer_bearer_header(),
-                    )
+                    .header("authorization", &lawyer_bearer)
                     .header("content-type", "application/x-www-form-urlencoded")
                     .body(Body::from(format!("value={}", urlencoding(value))))
                     .unwrap(),
@@ -268,10 +277,7 @@ async fn sent_loop() -> SentLoop {
                 Request::builder()
                     .method("POST")
                     .uri(format!("/app/lawyer/notations/{nid}/{action}"))
-                    .header(
-                        "authorization",
-                        portal::test_support::lawyer_bearer_header(),
-                    )
+                    .header("authorization", &lawyer_bearer)
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -286,6 +292,46 @@ async fn sent_loop() -> SentLoop {
             Some(format!("/app/lawyer/notations/{nid}/review").as_str()),
             "{action} redirect target",
         );
+        if action == "approve-send" {
+            // The CLI prepares and reopens one provider draft before the lawyer sends it.
+            for _ in 0..2 {
+                let prepared = app
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .method("POST")
+                            .uri(format!("/app/api/notations/{nid}/signature"))
+                            .header("authorization", &lawyer_bearer)
+                            .header("content-type", "application/json")
+                            .body(Body::from(r#"{"prepare":true}"#))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                let status = prepared.status();
+                let body = body_string(prepared).await;
+                assert_eq!(status, StatusCode::OK, "{body}");
+                let result: serde_json::Value = serde_json::from_str(&body).unwrap();
+                assert_eq!(result["signature_request_id"], ENVELOPE_ID);
+                assert!(result["state"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("generate_pdf"));
+            }
+            let review = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("/app/lawyer/notations/{nid}/sender-view"))
+                        .header("authorization", &lawyer_bearer)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert!(review.status().is_redirection());
+            assert_eq!(review.headers()["location"], sender_url);
+        }
     }
 
     // The real provider returned ENVELOPE_ID and it was persisted.

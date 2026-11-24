@@ -1,11 +1,8 @@
 //! The Deadline mirror onto a Project's shared Google Calendar.
 //!
-//! Every Deadline row renders as one event on the matter's calendar, on the
-//! same field basis as the ICS feed a subscriber already sees: the summary
-//! fallback by calendar role and authority kind, the description's
-//! authority and matter-page lines, the one-minute block, the cancelled
-//! status, and the internal lead days as the only reminder. What the feed
-//! renders for a subscriber, the mirror puts on the calendar.
+//! Each open or completed Deadline renders as one event with its authority,
+//! matter-page link, one-minute block, and configured reminder. Cancelling a
+//! Deadline removes the managed event. The ICS feed retains its cancellation.
 //!
 //! The mirror is row-authoritative. A change made directly in Google — a
 //! recolor, a moved time, a cancelled event — is the person's, and the
@@ -73,6 +70,9 @@ impl MirrorOutcome {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MirrorReport {
     pub outcome: MirrorOutcome,
+    /// Provider verification detail for a recorded calendar.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calendar_problem: Option<String>,
     /// The pass reported a plan instead of writing it.
     pub dry_run: bool,
     /// The pass would create or adopt the Project's calendar before writing.
@@ -140,16 +140,16 @@ pub async fn reconcile(
     let recorded = recorded_calendar_id(&project);
     if dry_run {
         return if let Some(calendar_id) = recorded {
-            if calendar
-                .recorded_calendar_matches(&project.code, &calendar_id)
+            if let Some(problem) = calendar
+                .recorded_calendar_problem(&project.code, &calendar_id)
                 .await?
             {
-                reconcile_rows(surreal, calendar, &calendar_id, &project, base_url, dry_run).await
+                Ok(MirrorReport {
+                    calendar_problem: Some(problem.into()),
+                    ..MirrorReport::empty(MirrorOutcome::RecordedResourceMissing, dry_run)
+                })
             } else {
-                Ok(MirrorReport::empty(
-                    MirrorOutcome::RecordedResourceMissing,
-                    dry_run,
-                ))
+                reconcile_rows(surreal, calendar, &calendar_id, &project, base_url, dry_run).await
             }
         } else {
             // No calendar yet: a first pass would create one and insert
@@ -194,18 +194,20 @@ async fn reconcile_rows(
     let stored = calendar
         .mirrored_events(calendar_id, MARKER_KEY, MARKER_VALUE)
         .await?;
-    let by_deadline: BTreeMap<String, StoredEvent> = stored
-        .into_iter()
+    let by_deadline: BTreeMap<&String, &StoredEvent> = stored
+        .iter()
         .filter_map(|event| {
             event
                 .private_properties
                 .get(DEADLINE_ID_KEY)
-                .cloned()
                 .map(|id| (id, event))
         })
         .collect();
     let mut live: BTreeSet<String> = BTreeSet::new();
-    for deadline in &rows {
+    for deadline in rows
+        .iter()
+        .filter(|row| row.status != project_deadlines::STATUS_CANCELLED)
+    {
         let sha = body_sha(deadline, &project.code, base_url);
         let id = deadline.id.to_string();
         live.insert(id.clone());
@@ -249,7 +251,10 @@ async fn reconcile_rows(
             }
         }
     }
-    for (deadline_id, event) in &by_deadline {
+    for event in stored {
+        let Some(deadline_id) = event.private_properties.get(DEADLINE_ID_KEY) else {
+            continue;
+        };
         if live.contains(deadline_id) {
             continue;
         }
@@ -274,7 +279,10 @@ async fn plan_rows(
     let rows = project_deadlines::list(surreal, project.id)
         .await
         .map_err(|error| MirrorError::Db(error.to_string()))?;
-    for deadline in &rows {
+    for deadline in rows
+        .iter()
+        .filter(|row| row.status != project_deadlines::STATUS_CANCELLED)
+    {
         match deadline_event(deadline, &project.code, base_url) {
             Ok(_) => report.upserted.push(deadline.id),
             Err(error) => report.failures.push(error.to_string()),
@@ -323,6 +331,7 @@ impl MirrorReport {
     fn empty(outcome: MirrorOutcome, dry_run: bool) -> Self {
         Self {
             outcome,
+            calendar_problem: None,
             dry_run,
             creates_calendar: false,
             upserted: Vec::new(),
@@ -344,6 +353,9 @@ pub fn report_line(report: &MirrorReport) -> String {
         report.in_sync,
         report.deleted.len(),
     );
+    if let Some(problem) = &report.calendar_problem {
+        let _ = write!(line, " {problem}");
+    }
     if !report.failures.is_empty() {
         let _ = write!(line, " failed={}", report.failures.len());
     }
@@ -444,17 +456,25 @@ pub fn event_description(
         push_line(&mut description, &format!("Source document: {document}"));
     }
     push_line(&mut description, &format!("Deadline: {}", deadline.id));
-    if let Some(base_url) = base_url.map(str::trim).filter(|url| !url.is_empty()) {
+    if let Some(origin) = calendar_origin(base_url) {
         push_line(
             &mut description,
-            &format!(
-                "Matter page: {}/app/projects/{}",
-                base_url.trim_end_matches('/'),
-                project_code
-            ),
+            &format!("Matter page: {origin}/app/projects/{project_code}"),
         );
     }
     description
+}
+
+fn calendar_origin(base: Option<&str>) -> Option<String> {
+    let base = base?.trim();
+    let url = if base.contains("://") {
+        url::Url::parse(base)
+    } else {
+        url::Url::parse(&format!("https://{base}"))
+    }
+    .ok()?;
+    (matches!(url.scheme(), "https" | "http") && url.has_host())
+        .then(|| url.origin().ascii_serialization())
 }
 
 fn push_line(description: &mut String, line: &str) {
@@ -517,7 +537,7 @@ pub fn body_sha(deadline: &Deadline, project_code: &str, base_url: Option<&str>)
         "source_document_id": deadline.source_document_id.map(|id| id.to_string()),
         "internal_lead_days": deadline.internal_lead_days,
         "project_code": project_code,
-        "base_url": base_url.map(str::trim).filter(|url| !url.is_empty()),
+        "base_url": calendar_origin(base_url),
     });
     let digest = Sha256::digest(payload.to_string().as_bytes());
     let mut hex = String::with_capacity(digest.len() * 2);
@@ -719,6 +739,48 @@ mod tests {
                 .unwrap();
             assert_eq!(report.upserted, vec![created.id]);
             assert_eq!(report.in_sync, 0);
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn cancelled_deadlines_converge_before_and_after_publication() {
+        with_project(async |db, project_id| {
+            let calendar = FakeCalendar::default();
+            let open = project_deadlines::create(db, &sample(project_id))
+                .await
+                .unwrap();
+            let early = project_deadlines::create(db, &sample(project_id))
+                .await
+                .unwrap();
+            project_deadlines::cancel(db, project_id, early.id)
+                .await
+                .unwrap();
+            for dry_run in [true, false] {
+                let pass = reconcile(db, &calendar, project_id, None, dry_run)
+                    .await
+                    .unwrap();
+                assert_eq!(pass.upserted, [open.id]);
+            }
+            project_deadlines::cancel(db, project_id, open.id)
+                .await
+                .unwrap();
+            for dry_run in [true, false] {
+                let pass = reconcile(db, &calendar, project_id, None, dry_run)
+                    .await
+                    .unwrap();
+                assert!(pass.upserted.is_empty());
+                assert_eq!(pass.deleted.len(), 1);
+            }
+            let pass = reconcile(db, &calendar, project_id, None, true)
+                .await
+                .unwrap();
+            assert!(pass.upserted.is_empty() && pass.deleted.is_empty());
+            let project = crate::projects::find_by_id(db, project_id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(calendar.events(&project.calendar_id.unwrap()).is_empty());
         })
         .await;
     }
@@ -1099,6 +1161,14 @@ mod tests {
         row.description = Some("Briefing schedule attached.".into());
         row.source_document_id = Some(Uuid::now_v7());
         let description = event_description(&row, "ACME", Some("https://www.example.com/"));
+        assert_eq!(
+            event_description(&row, "ACME", Some("www.example.com")),
+            description
+        );
+        assert_eq!(
+            body_sha(&row, "ACME", Some("www.example.com")),
+            body_sha(&row, "ACME", Some("https://www.example.com"))
+        );
         let lines: Vec<&str> = description.lines().collect();
         assert_eq!(lines[0], "Briefing schedule attached.");
         assert_eq!(lines[1], "Authority: Order setting briefing");

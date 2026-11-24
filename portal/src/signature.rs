@@ -265,6 +265,12 @@ pub struct RecipientView {
 pub enum SignatureError {
     #[error("provider error: {0}")]
     Provider(String),
+    #[error("Firm DocuSign connection unavailable: {0}")]
+    Connection(String),
+    #[error("DocuSign authentication failed: {0}")]
+    Authentication(String),
+    #[error("The DocuSign endpoint could not be reached.")]
+    Unreachable,
     /// A missing `nlsig-` anchor, or an unreadable prepared PDF. Refused
     /// before anything is sent or persisted — a document that goes out
     /// without its declared fields is a silently unsigned page.
@@ -2015,8 +2021,13 @@ impl SignatureProvider for DocuSignSignatureProvider {
             ))
             .send()
             .await
-            .map_err(|e| SignatureError::Provider(e.to_string()))?;
+            .map_err(|_| SignatureError::Unreachable)?;
         let response_status = resp.status();
+        if matches!(response_status.as_u16(), 401 | 403) {
+            return Err(SignatureError::Authentication(format!(
+                "envelope request refused with HTTP {response_status}"
+            )));
+        }
         if !response_status.is_success() {
             return Err(SignatureError::Provider(format!(
                 "docusign responded {response_status}"
@@ -2485,7 +2496,7 @@ mod tests {
             .expect_err("missing anchors are a hard error");
         let missing = match err {
             SignatureError::AnchorValidation(message) => message,
-            other @ (SignatureError::Provider(_) | SignatureError::TabValidation(_)) => {
+            other => {
                 panic!("expected AnchorValidation, got {other:?}")
             }
         };
@@ -3092,7 +3103,7 @@ mod tests {
                     "names the unbound role: {message}"
                 );
             }
-            other @ (SignatureError::Provider(_) | SignatureError::AnchorValidation(_)) => {
+            other => {
                 panic!("expected TabValidation, got {other:?}")
             }
         }
@@ -3388,7 +3399,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn docusign_maps_non_2xx_to_provider_error() {
+    async fn docusign_identifies_an_unauthorized_envelope_request() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/v2.1/accounts/acct-guid/envelopes"))
@@ -3402,12 +3413,11 @@ mod tests {
             .await
             .unwrap_err();
         match err {
-            super::SignatureError::Provider(msg) => {
+            super::SignatureError::Authentication(msg) => {
                 assert!(msg.contains("401"), "expected 401 in error, got: {msg}");
             }
-            other @ (super::SignatureError::AnchorValidation(_)
-            | super::SignatureError::TabValidation(_)) => {
-                panic!("expected Provider, got {other:?}")
+            other => {
+                panic!("expected authentication failure, got {other:?}")
             }
         }
     }
@@ -3523,8 +3533,7 @@ mod tests {
             super::SignatureError::Provider(msg) => {
                 assert!(msg.contains("404"), "expected 404 in error, got: {msg}");
             }
-            other @ (super::SignatureError::AnchorValidation(_)
-            | super::SignatureError::TabValidation(_)) => {
+            other => {
                 panic!("expected Provider, got {other:?}")
             }
         }
