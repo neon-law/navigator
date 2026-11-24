@@ -1164,12 +1164,13 @@ mod tests {
 
     #[test]
     fn github_forge_requires_a_token_and_a_deployment_pair() {
-        let error = GitHubForge::from_lookup(lookup(&[(NAVIGATOR_GCP_PROJECT_ID, "neon-law-stg")]))
-            .unwrap_err();
+        let error =
+            GitHubForge::from_lookup(lookup(&[(NAVIGATOR_GCP_PROJECT_ID, "example-project")]))
+                .unwrap_err();
         assert!(error.to_string().contains(NAVIGATOR_GITHUB_ORG), "{error}");
 
         let error = GitHubForge::from_lookup(lookup(&[
-            (NAVIGATOR_GCP_PROJECT_ID, "neon-law-stg"),
+            (NAVIGATOR_GCP_PROJECT_ID, "example-project"),
             (NAVIGATOR_GITHUB_ORG, "an-organization"),
         ]))
         .unwrap_err();
@@ -1184,7 +1185,7 @@ mod tests {
         let (_key_files, private_key, _) = generate_github_app_keypair();
         let private_key = String::from_utf8(private_key).expect("OpenSSL emits UTF-8 PEM");
         let forge = GitHubForge::from_lookup(lookup(&[
-            (NAVIGATOR_GCP_PROJECT_ID, "neon-law-stg"),
+            (NAVIGATOR_GCP_PROJECT_ID, "example-project"),
             (NAVIGATOR_GITHUB_ORG, "an-organization"),
             (NAVIGATOR_GITHUB_APP_ID_ENV, "12345"),
             (NAVIGATOR_GITHUB_INSTALLATION_ID_ENV, "67890"),
@@ -1197,7 +1198,7 @@ mod tests {
     #[test]
     fn malformed_app_private_key_fails_provider_initialization() {
         let error = GitHubForge::from_lookup(lookup(&[
-            (NAVIGATOR_GCP_PROJECT_ID, "neon-law-stg"),
+            (NAVIGATOR_GCP_PROJECT_ID, "example-project"),
             (NAVIGATOR_GITHUB_ORG, "an-organization"),
             (NAVIGATOR_GITHUB_APP_ID_ENV, "12345"),
             (NAVIGATOR_GITHUB_INSTALLATION_ID_ENV, "67890"),
@@ -1212,7 +1213,7 @@ mod tests {
     #[test]
     fn partial_app_credentials_do_not_fall_back_to_a_personal_token() {
         let error = GitHubForge::from_lookup(lookup(&[
-            (NAVIGATOR_GCP_PROJECT_ID, "neon-law-stg"),
+            (NAVIGATOR_GCP_PROJECT_ID, "example-project"),
             (NAVIGATOR_GITHUB_ORG, "an-organization"),
             (NAVIGATOR_GITHUB_APP_ID_ENV, "12345"),
             (NAVIGATOR_GITHUB_TOKEN_ENV, "test-token"),
@@ -1255,7 +1256,7 @@ mod tests {
 
         let private_key = String::from_utf8(private_key).expect("OpenSSL emits UTF-8 PEM");
         let forge = GitHubForge::from_lookup(lookup(&[
-            (NAVIGATOR_GCP_PROJECT_ID, "neon-law-stg"),
+            (NAVIGATOR_GCP_PROJECT_ID, "example-project"),
             (NAVIGATOR_GITHUB_ORG, "an-organization"),
             (NAVIGATOR_GITHUB_APP_ID_ENV, "12345"),
             (NAVIGATOR_GITHUB_INSTALLATION_ID_ENV, "67890"),
@@ -1339,7 +1340,7 @@ mod tests {
             .await;
 
         let forge = GitHubForge::from_lookup(lookup(&[
-            (NAVIGATOR_GCP_PROJECT_ID, "neon-law-stg"),
+            (NAVIGATOR_GCP_PROJECT_ID, "example-project"),
             (NAVIGATOR_GITHUB_ORG, "an-organization"),
             (NAVIGATOR_GIT_HOST, "forge.example"),
             (NAVIGATOR_GITHUB_TOKEN_ENV, "test-token"),
@@ -1373,7 +1374,7 @@ mod tests {
             .await;
 
         let forge = GitHubForge::from_lookup(lookup(&[
-            (NAVIGATOR_GCP_PROJECT_ID, "neon-law-stg"),
+            (NAVIGATOR_GCP_PROJECT_ID, "example-project"),
             (NAVIGATOR_GITHUB_ORG, "an-organization"),
             (NAVIGATOR_GIT_HOST, "forge.example"),
             (NAVIGATOR_GITHUB_TOKEN_ENV, "test-token"),
@@ -1400,7 +1401,7 @@ mod tests {
             .await;
 
         let forge = GitHubForge::from_lookup(lookup(&[
-            (NAVIGATOR_GCP_PROJECT_ID, "neon-law-stg"),
+            (NAVIGATOR_GCP_PROJECT_ID, "example-project"),
             (NAVIGATOR_GITHUB_ORG, "an-organization"),
             (NAVIGATOR_GITHUB_TOKEN_ENV, "test-token"),
             (GITHUB_API_BASE_ENV, server.uri().as_str()),
@@ -1438,7 +1439,7 @@ mod tests {
             .await;
 
         let forge = GitHubForge::from_lookup(lookup(&[
-            (NAVIGATOR_GCP_PROJECT_ID, "neon-law-stg"),
+            (NAVIGATOR_GCP_PROJECT_ID, "example-project"),
             (NAVIGATOR_GITHUB_ORG, "an-organization"),
             (GITHUB_TOKEN_ENV, "test-token"),
             (GITHUB_API_BASE_ENV, server.uri().as_str()),
@@ -1474,7 +1475,7 @@ mod tests {
             .await;
 
         let forge = GitHubForge::from_lookup(lookup(&[
-            (NAVIGATOR_GCP_PROJECT_ID, "neon-law-stg"),
+            (NAVIGATOR_GCP_PROJECT_ID, "example-project"),
             (NAVIGATOR_GITHUB_ORG, "an-organization"),
             (GITHUB_TOKEN_ENV, "test-token"),
             (GITHUB_API_BASE_ENV, server.uri().as_str()),
@@ -1513,7 +1514,7 @@ mod tests {
             .await;
 
         let forge = GitHubForge::from_lookup(lookup(&[
-            (NAVIGATOR_GCP_PROJECT_ID, "neon-law-stg"),
+            (NAVIGATOR_GCP_PROJECT_ID, "example-project"),
             (NAVIGATOR_GITHUB_ORG, "an-organization"),
             (NAVIGATOR_GITHUB_TOKEN_ENV, "test-token"),
             (GITHUB_API_BASE_ENV, server.uri().as_str()),
@@ -1552,7 +1553,7 @@ mod tests {
             .await;
 
         let forge = GitHubForge::from_lookup(lookup(&[
-            (NAVIGATOR_GCP_PROJECT_ID, "neon-law-stg"),
+            (NAVIGATOR_GCP_PROJECT_ID, "example-project"),
             (NAVIGATOR_GITHUB_ORG, "an-organization"),
             (NAVIGATOR_GITHUB_TOKEN_ENV, "test-token"),
             (GITHUB_API_BASE_ENV, server.uri().as_str()),
@@ -1585,7 +1586,7 @@ mod tests {
             .await;
 
         let forge = GitHubForge::from_lookup(lookup(&[
-            (NAVIGATOR_GCP_PROJECT_ID, "neon-law-stg"),
+            (NAVIGATOR_GCP_PROJECT_ID, "example-project"),
             (NAVIGATOR_GITHUB_ORG, "an-organization"),
             (NAVIGATOR_GITHUB_TOKEN_ENV, "test-token"),
             (GITHUB_API_BASE_ENV, server.uri().as_str()),
@@ -1619,7 +1620,7 @@ mod tests {
             .await;
 
         let forge = GitHubForge::from_lookup(lookup(&[
-            (NAVIGATOR_GCP_PROJECT_ID, "neon-law-stg"),
+            (NAVIGATOR_GCP_PROJECT_ID, "example-project"),
             (NAVIGATOR_GITHUB_ORG, "an-organization"),
             (NAVIGATOR_GITHUB_TOKEN_ENV, "test-token"),
             (GITHUB_API_BASE_ENV, server.uri().as_str()),
@@ -1640,7 +1641,7 @@ mod tests {
             .await;
 
         let forge = GitHubForge::from_lookup(lookup(&[
-            (NAVIGATOR_GCP_PROJECT_ID, "neon-law-stg"),
+            (NAVIGATOR_GCP_PROJECT_ID, "example-project"),
             (NAVIGATOR_GITHUB_ORG, "an-organization"),
             (NAVIGATOR_GITHUB_TOKEN_ENV, "test-token"),
             (GITHUB_API_BASE_ENV, server.uri().as_str()),
@@ -1662,7 +1663,7 @@ mod tests {
             .await;
 
         let forge = GitHubForge::from_lookup(lookup(&[
-            (NAVIGATOR_GCP_PROJECT_ID, "neon-law-stg"),
+            (NAVIGATOR_GCP_PROJECT_ID, "example-project"),
             (NAVIGATOR_GITHUB_ORG, "an-organization"),
             (NAVIGATOR_GITHUB_TOKEN_ENV, "test-token"),
             (GITHUB_API_BASE_ENV, server.uri().as_str()),

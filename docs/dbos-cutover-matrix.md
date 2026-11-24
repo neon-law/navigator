@@ -28,8 +28,9 @@ enabled DBOS control never uses Restate as a fallback.
   source/blob parity, migrations and retained runs.
 - **GeneralNag** — DBOS schedule and trigger selection. Remaining: Deployed selection, effect recovery and retained
   runs.
-- **InboundMessageAlert** — DBOS workflow, authenticated ingress and Message-keyed caller selection. Remaining:
-  Notification recovery, deployed selection and retained runs.
+- **InboundMessageAlert** — DBOS workflow on the worker's own PostgreSQL pool, authenticated ingress and
+  Message-keyed caller selection. An alert Slack accepted before its checkpoint reconciles by correlation instead of
+  posting again. Remaining: Deployed selection and retained runs.
 - **NightlyProjectUpdate** — DBOS parent, tagged children and authenticated date handoff. Remaining: Deployed
   selection and retained parent/child runs.
 - **NightlyProjectUpdateMembership** — DBOS child with separate channel-resolution and invite checkpoints.
@@ -75,8 +76,9 @@ available.
 
 - **notation** — DBOS transition workflow, PostgreSQL state/locking and authenticated routes. Remaining: Complete
   data/effect parity, concurrent signals, deployed selection and retained object state.
-- **project-slack** — DBOS workflow, authenticated ingress and caller selection. Remaining: Concurrent recovery,
-  provider effects, deployed selection and retained object state.
+- **project-slack** — DBOS workflow, authenticated ingress and caller selection. Each post carries its step's effect
+  key as the Slack correlation, so a re-run after an accepted post finds it in recent history instead of posting again.
+  Remaining: Concurrent recovery, deployed selection and retained object state.
 
 `workflows-service/src/dbos_notation.rs` and `dbos_project_slack.rs` implement the object ports; `dbos_ingress.rs`
 exposes their authenticated routes. Their presence does not prove old object state or invocations can be discarded.

@@ -34,7 +34,7 @@
 //!
 //! Two more exist only when the deployment names them:
 //!
-//! - `neon-law-archives-<deployment>` — the long-term Iceberg archive of that
+//! - `<archives-prefix><deployment>` — the long-term Iceberg archive of that
 //!   deployment's Surreal store. Standard, no lifecycle rule: this is where
 //!   long-term storage lives, and an age rule here would answer a retention
 //!   question that belongs to a person.
@@ -155,11 +155,19 @@ impl BucketKind {
     /// treated as `Assets`.
     ///
     /// Archives is matched on a *prefix*, not a suffix: its buckets are named
-    /// `neon-law-archives-<deployment>` rather than `<deployment>-archives`, so a
-    /// suffix test would classify `neon-law-archives-prod` as `Assets`
-    /// and create it with no lifecycle distinction from a public bucket.
+    /// `<archives-prefix><deployment>` rather than `<deployment>-archives`, so
+    /// a suffix test would classify one as `Assets` and create it with no
+    /// lifecycle distinction from a public bucket.
     #[must_use]
     pub fn from_name(name: &str) -> Self {
+        let configured = std::env::var(super::NAVIGATOR_ARCHIVES_BUCKET_PREFIX).ok();
+        Self::from_name_with_archives_prefix(
+            name,
+            &super::archives_bucket_prefix(configured.as_deref()),
+        )
+    }
+
+    fn from_name_with_archives_prefix(name: &str, archives_prefix: &str) -> Self {
         if name.ends_with(super::LOGS_BUCKET_SUFFIX) {
             Self::Logs
         } else if name.ends_with(super::DOCUMENTS_BUCKET_SUFFIX) {
@@ -178,7 +186,7 @@ impl BucketKind {
             Self::OffsiteArchives
         } else if name.ends_with(super::GIT_BUNDLES_BUCKET_SUFFIX) {
             Self::GitBundles
-        } else if name.starts_with(super::ARCHIVES_BUCKET_PREFIX) {
+        } else if name.starts_with(archives_prefix) {
             Self::Archives
         } else {
             Self::Assets
@@ -860,6 +868,15 @@ fn legacy_assets_font_cors_rule() -> serde_json::Value {
 mod tests {
     use std::sync::Arc;
 
+    /// An archive bucket under whichever prefix this process resolves.
+    fn archive_bucket() -> String {
+        let configured = std::env::var(crate::devx::gcp::NAVIGATOR_ARCHIVES_BUCKET_PREFIX).ok();
+        format!(
+            "{}production",
+            crate::devx::gcp::archives_bucket_prefix(configured.as_deref())
+        )
+    }
+
     use serde_json::json;
     use wiremock::matchers::{body_partial_json, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -909,20 +926,27 @@ mod tests {
 
     #[test]
     fn archives_is_classified_by_prefix_not_suffix() {
-        // `neon-law-archives-prod` ends in `-production`, so every
-        // suffix test in `from_name` misses it. Without the prefix arm it
-        // falls through to `Assets` — created with no public-access
-        // prevention, and never given the archive lane's treatment.
+        // An archive bucket ends in its deployment's name, so every suffix
+        // test in `from_name` misses it. Without the prefix arm it falls
+        // through to `Assets` — created with no public-access prevention,
+        // and never given the archive lane's treatment.
         assert_eq!(
-            BucketKind::from_name("neon-law-archives-prod"),
+            BucketKind::from_name_with_archives_prefix(
+                "example-archives-production",
+                "example-archives-"
+            ),
             BucketKind::Archives
         );
         assert_eq!(
-            BucketKind::from_name("neon-law-archives-prod"),
+            BucketKind::from_name_with_archives_prefix("other-production", "example-archives-"),
+            BucketKind::Assets
+        );
+        assert_eq!(
+            BucketKind::from_name(&archive_bucket()),
             BucketKind::Archives
         );
         assert_eq!(
-            BucketKind::from_name("neon-law-test-telemetry"),
+            BucketKind::from_name("example-test-telemetry"),
             BucketKind::Telemetry
         );
         // The four original kinds keep classifying exactly as before.
@@ -937,14 +961,14 @@ mod tests {
         // the 30-day expiry and enforced-private access rather than the
         // Assets default.
         assert_eq!(
-            BucketKind::from_name("neon-law-test-applications"),
+            BucketKind::from_name("example-test-applications"),
             BucketKind::Applications
         );
     }
 
     #[test]
     fn archived_projects_is_private_and_never_expires_by_age() {
-        let kind = BucketKind::from_name("neon-law-stg-archived-projects");
+        let kind = BucketKind::from_name("example-staging-archived-projects");
         assert_eq!(kind, BucketKind::ArchivedProjects);
         // Retention belongs to the governed purge, which rechecks Legal
         // Holds; a bucket age rule would bypass them.
@@ -998,9 +1022,9 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/storage/v1/b"))
-            .and(query_param("project", "neon-law"))
+            .and(query_param("project", "example-production"))
             .and(body_partial_json(json!({
-                "name": "neon-law-archives-prod",
+                "name": archive_bucket(),
                 "storageClass": "STANDARD",
                 "iamConfiguration": {
                     "uniformBucketLevelAccess": { "enabled": true },
@@ -1013,7 +1037,7 @@ mod tests {
             .await;
 
         let client = client_pointed_at(&server);
-        let outcome = ensure_bucket(&client, "neon-law", "neon-law-archives-prod", "us-west4")
+        let outcome = ensure_bucket(&client, "example-production", &archive_bucket(), "us-west4")
             .await
             .unwrap();
         assert_eq!(outcome, EnsureOutcome::Created);
@@ -1047,7 +1071,7 @@ mod tests {
         // which is precisely the thing that goes stale in a shared one.
         let server = MockServer::start().await;
         Mock::given(method("PATCH"))
-            .and(path("/storage/v1/b/neon-law-test-telemetry"))
+            .and(path("/storage/v1/b/example-test-telemetry"))
             .and(body_partial_json(json!({
                 "lifecycle": {
                     "rule": [{
@@ -1062,7 +1086,7 @@ mod tests {
             .await;
 
         let client = client_pointed_at(&server);
-        ensure_lifecycle(&client, "neon-law-test-telemetry")
+        ensure_lifecycle(&client, "example-test-telemetry")
             .await
             .unwrap();
     }
@@ -1073,7 +1097,7 @@ mod tests {
         // rule to an archive bucket by hand, the next setup takes it back off.
         let server = MockServer::start().await;
         Mock::given(method("PATCH"))
-            .and(path("/storage/v1/b/neon-law-archives-prod"))
+            .and(path(format!("/storage/v1/b/{}", archive_bucket())))
             .and(body_partial_json(json!({ "lifecycle": { "rule": [] } })))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({"name": "b"})))
             .expect(1)
@@ -1081,9 +1105,7 @@ mod tests {
             .await;
 
         let client = client_pointed_at(&server);
-        ensure_lifecycle(&client, "neon-law-archives-prod")
-            .await
-            .unwrap();
+        ensure_lifecycle(&client, &archive_bucket()).await.unwrap();
     }
 
     #[test]
@@ -1091,7 +1113,7 @@ mod tests {
         // Daily base backups plus WAL: a 30-day age rule always leaves more
         // than two base backups and every WAL segment after the oldest one.
         assert_eq!(
-            BucketKind::from_name("neon-law-stg-postgres-backups"),
+            BucketKind::from_name("example-staging-postgres-backups"),
             BucketKind::PostgresBackups
         );
         assert_eq!(BucketKind::PostgresBackups.storage_class(), "STANDARD");
@@ -1111,9 +1133,9 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/storage/v1/b"))
-            .and(query_param("project", "neon-law-stg"))
+            .and(query_param("project", "example-staging"))
             .and(body_partial_json(json!({
-                "name": "neon-law-stg-postgres-backups",
+                "name": "example-staging-postgres-backups",
                 "location": "us-west4",
                 "storageClass": "STANDARD",
                 "iamConfiguration": {
@@ -1129,8 +1151,8 @@ mod tests {
         let client = client_pointed_at(&server);
         let outcome = ensure_bucket(
             &client,
-            "neon-law-stg",
-            "neon-law-stg-postgres-backups",
+            "example-staging",
+            "example-staging-postgres-backups",
             "us-west4",
         )
         .await
@@ -1142,7 +1164,7 @@ mod tests {
     async fn postgres_backups_lifecycle_sets_a_flat_thirty_day_delete() {
         let server = MockServer::start().await;
         Mock::given(method("PATCH"))
-            .and(path("/storage/v1/b/neon-law-stg-postgres-backups"))
+            .and(path("/storage/v1/b/example-staging-postgres-backups"))
             .and(body_partial_json(json!({
                 "lifecycle": {
                     "rule": [{
@@ -1157,7 +1179,7 @@ mod tests {
             .await;
 
         let client = client_pointed_at(&server);
-        ensure_lifecycle(&client, "neon-law-stg-postgres-backups")
+        ensure_lifecycle(&client, "example-staging-postgres-backups")
             .await
             .unwrap();
     }

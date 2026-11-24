@@ -1076,6 +1076,16 @@ erDiagram
         string sms_policy_version
         string source_path
     }
+    lead_intake {
+        string concern
+        uuid firm_id
+        string id
+        uuid lead_id
+        datetime next_date
+        string relationship
+        string school_district
+        datetime submitted_at
+    }
     legal_plan {
         int acceptance_sla_hours
         string contact
@@ -2393,6 +2403,8 @@ erDiagram
     firm }o--|| journal_source_reference : references
     firm }o--|| journal_source_snapshot : references
     journal_source_reference }o--|| journal_source_snapshot : references
+    firm }o--|| lead_intake : references
+    lead }o--|| lead_intake : references
     firm }o--|| legal_plan : references
     legal_plan }o--|| legal_plan_claim : references
     project }o--|| legal_plan_claim : references

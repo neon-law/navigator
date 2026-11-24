@@ -5805,3 +5805,16 @@ ALTER TABLE plan_fee_schedule DROP CONSTRAINT plan_fee_schedule_matter_type_chec
 ALTER TABLE plan_fee_schedule ADD CONSTRAINT plan_fee_schedule_matter_type_check CHECK (matter_type IN ('document_review', 'letter', 'uncontested_divorce', 'court_appearance', 'contested_divorce', 'custody', 'probate'));
 ALTER TABLE project DROP CONSTRAINT project_plan_matter_type_check;
 ALTER TABLE project ADD CONSTRAINT project_plan_matter_type_check CHECK (plan_matter_type IN ('document_review', 'letter', 'uncontested_divorce', 'court_appearance', 'contested_divorce', 'custody', 'probate'));
+
+-- Migration: 20261124030000_create_lead_intake.sql
+CREATE TABLE lead_intake (
+    id TEXT PRIMARY KEY,
+    lead_id UUID NOT NULL REFERENCES lead(id),
+    firm_id UUID NOT NULL REFERENCES firm(id),
+    submitted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    school_district TEXT NOT NULL,
+    relationship TEXT NOT NULL,
+    concern TEXT NOT NULL,
+    next_date DATE
+);
+CREATE INDEX lead_intake_history ON lead_intake (lead_id, submitted_at);

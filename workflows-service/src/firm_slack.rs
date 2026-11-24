@@ -131,6 +131,31 @@ fn credential_error(project_id: Uuid, error: &SecretStoreError) -> LaneError {
     }
 }
 
+/// Post `text` once per `correlation`: a step re-run after Slack accepted the
+/// post but before its checkpoint finds the correlated receipt and does not
+/// post again. The lookup reads recent history only, so a post that scrolled
+/// out of it can repeat; delivery stays at-least-once, never lost.
+///
+/// # Errors
+/// Slack refused the history read or the post.
+pub(crate) async fn post_once(
+    slack: &dyn SlackBot,
+    channel: &str,
+    correlation: &str,
+    text: &str,
+) -> Result<(), workflows::SlackBotError> {
+    if slack
+        .message_receipt_by_correlation(channel, correlation)
+        .await?
+        .is_none()
+    {
+        slack
+            .post_message_with_receipt(channel, text, Some(correlation))
+            .await?;
+    }
+    Ok(())
+}
+
 /// One bot for every Project. Tests and local fakes compose it around a
 /// `CapturingSlackBot`; production never does, because a shared bot is the
 /// deployment-wide fallback ENG-392 rules out.

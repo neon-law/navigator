@@ -421,8 +421,8 @@ the serving one on the live Ingress, waits, then detaches and deletes the old on
 serving and waits for nothing:
 
 ```bash
-hudson ops certificates pre-roll --deployment neon-law-stg --project-id <staging-project> --dry-run
-hudson ops certificates pre-roll --deployment neon-law-stg --project-id <staging-project>
+hudson ops certificates pre-roll --deployment $NAVIGATOR_STAGING_DEPLOYMENT --project-id <staging-project> --dry-run
+hudson ops certificates pre-roll --deployment $NAVIGATOR_STAGING_DEPLOYMENT --project-id <staging-project>
 hudson ops certificates pre-roll --deployment neon-production --project-id <production-project>
 ```
 
@@ -441,7 +441,7 @@ A rendered manifest and a successful `kubectl apply` are a request, not proof: a
 hosts. `hudson ops brand-readiness --deployment <name>` is the receipt:
 
 ```bash
-cargo run -p hudson -- ops brand-readiness --deployment neon-law-stg
+cargo run -p hudson -- ops brand-readiness --deployment $NAVIGATOR_STAGING_DEPLOYMENT
 cargo run -p hudson -- ops brand-readiness --deployment neon-production
 ```
 
@@ -462,8 +462,8 @@ any one of them is not ready; it never reports success from the certificate mani
 
 ### Staging-first release handoff
 
-1. Render and ship staging (`hudson ops ship --deployment neon-law-stg --tag <tag>`), then run
-   `hudson ops brand-readiness --deployment neon-law-stg` and confirm every host is `Ready`.
+1. Render and ship staging (`hudson ops ship --deployment $NAVIGATOR_STAGING_DEPLOYMENT --tag <tag>`), then run
+   `hudson ops brand-readiness --deployment $NAVIGATOR_STAGING_DEPLOYMENT` and confirm every host is `Ready`.
 2. Only once staging is fully green, ship the same immutable tag to production (`hudson ops ship --deployment
    neon-production --tag <tag>`) and run `hudson ops brand-readiness --deployment neon-production`.
 3. **Production apply remains operator-run.** Neither `ops ship` nor `ops brand-readiness` runs unattended against

@@ -37,7 +37,7 @@ members = [
 ]
 
 [workspace.package]
-version = "26.11.23"
+version = "26.11.24"
 edition = "2021"
 rust-version = "1.95"
 # First-party source and original template material use MIT OR Apache-2.0.
@@ -282,6 +282,8 @@ cucumber = "0.23"
 # present, so production deploys that inject env vars via Kubernetes
 # Secrets / ConfigMaps still work without any code change.
 dotenvy = "0.15"
+# Dev-only: generated fixture identities, so no test names a person by hand.
+fake = "5.1"
 futures = "0.3"
 uuid = { version = "1", default-features = false, features = ["std", "v7", "serde"] }
 # Pure-Rust MIME parser. SendGrid Inbound Parse posts the raw RFC 5322

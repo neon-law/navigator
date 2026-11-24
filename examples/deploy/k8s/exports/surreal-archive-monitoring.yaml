@@ -5,7 +5,7 @@
 # The selectors carry NO namespace matcher on purpose: GMP's isolating
 # admission webhook injects `namespace="<the Rule's own namespace>"` into
 # every selector and REFUSES a Rule whose query names a different one — a
-# hardcoded namespace both broke the neon-law-stg reconcile and could
+# hardcoded namespace both broke the staging reconcile and could
 # silently watch the wrong deployment's jobs.
 apiVersion: monitoring.googleapis.com/v1
 kind: Rules

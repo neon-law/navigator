@@ -27,8 +27,8 @@ Before it writes anything, the command refuses (exit 2) unless:
 
 `.public-snapshot-exclude` lives at the repository root and is read from the source commit's own tree, so the manifest
 that applies is the one reviewed and merged with that commit. Each line is one repository-relative path; `#` starts a
-comment. An entry excludes that file or every path under that directory. `deployments/neon-law-stg` does not exclude
-`deployments/neon-law-stg-two.toml`. An entry that matches nothing produces a warning, not a refusal; remove it once the
+comment. An entry excludes that file or every path under that directory. `deployments/example-row` does not exclude
+`deployments/example-row-two.toml`. An entry that matches nothing produces a warning, not a refusal; remove it once the
 path is gone from the tree. A test holds every checked-in entry to a tracked path.
 
 The manifest has no entries today. Per-deployment rows live outside the repository, and the [public snapshot

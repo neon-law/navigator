@@ -20,7 +20,7 @@
 //!
 //! - **numeric** (the archive project's number): verified by direct equality
 //!   against the probe.
-//! - **project id** (e.g. `neon-law-archive`): not resolvable to a number
+//! - **project id** (e.g. `example-archive`): not resolvable to a number
 //!   under a storage-only credential, so the check verifies the property it
 //!   can — the bucket's project differs from the deployment project's number,
 //!   read from the GKE metadata server (no IAM required). The id is then
@@ -311,7 +311,7 @@ mod tests {
         let storage = ProjectProbe::of(DEPLOYMENT_PROJECT);
         let error = verify_archives_project_with(
             storage.as_ref(),
-            lookup(&[(ARCHIVES_GCP_PROJECT_ENV, "neon-law-archive")]),
+            lookup(&[(ARCHIVES_GCP_PROJECT_ENV, "example-archive")]),
             DEAD_METADATA,
         )
         .await
@@ -330,7 +330,7 @@ mod tests {
         let storage = ProjectProbe::of(999);
         verify_archives_project_with(
             storage.as_ref(),
-            lookup(&[(ARCHIVES_GCP_PROJECT_ENV, "neon-law-archive")]),
+            lookup(&[(ARCHIVES_GCP_PROJECT_ENV, "example-archive")]),
             &metadata.uri(),
         )
         .await
@@ -345,7 +345,7 @@ mod tests {
         let storage = ProjectProbe::of(DEPLOYMENT_PROJECT);
         let error = verify_archives_project_with(
             storage.as_ref(),
-            lookup(&[(ARCHIVES_GCP_PROJECT_ENV, "neon-law-archive")]),
+            lookup(&[(ARCHIVES_GCP_PROJECT_ENV, "example-archive")]),
             &metadata.uri(),
         )
         .await
@@ -379,7 +379,7 @@ mod tests {
 
     #[test]
     fn id_form_confirms_offsite_projects_without_iam() {
-        assert!(confirm_id_archive_project("neon-law-archive", 999, Some(123_456_789)).is_ok());
+        assert!(confirm_id_archive_project("example-archive", 999, Some(123_456_789)).is_ok());
         // The deployment-equality arm fails regardless of the id spelled —
         // the numbers are what the credential can compare.
         assert!(

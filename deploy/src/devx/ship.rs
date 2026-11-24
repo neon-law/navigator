@@ -1416,6 +1416,16 @@ where
             get,
         ),
         optional_env_entry_substitution(
+            "            # NAVIGATOR_OPTIONAL_ENV NAVIGATOR_DRIVE_PROJECTS_ROOT_FOLDER_ID\n",
+            "NAVIGATOR_DRIVE_PROJECTS_ROOT_FOLDER_ID",
+            get,
+        ),
+        optional_env_entry_substitution(
+            "            # NAVIGATOR_OPTIONAL_ENV NAVIGATOR_DRIVE_PROJECTS_ROOT_NAME\n",
+            "NAVIGATOR_DRIVE_PROJECTS_ROOT_NAME",
+            get,
+        ),
+        optional_env_entry_substitution(
             "            # NAVIGATOR_OPTIONAL_ENV NAVIGATOR_DRIVE_NEON_LAW_STAGING_PROJECTS_ROOT_FOLDER_ID\n",
             "NAVIGATOR_DRIVE_NEON_LAW_STAGING_PROJECTS_ROOT_FOLDER_ID",
             get,
@@ -8089,7 +8099,7 @@ mod tests {
     #[test]
     fn project_drive_coordinates_reach_both_folder_reconcilers_when_configured() {
         const DRIVE: &str = "NAVIGATOR_DRIVE_NEON_LAW_PROJECTS_DRIVE_ID";
-        const ROOT: &str = "NAVIGATOR_DRIVE_NEON_LAW_PRODUCTION_PROJECTS_ROOT_FOLDER_ID";
+        const ROOT: &str = "NAVIGATOR_DRIVE_PROJECTS_ROOT_FOLDER_ID";
         let manifests = rendered_manifests(|key| match key {
             DRIVE => Some("shared-drive".into()),
             ROOT => Some("working-root".into()),

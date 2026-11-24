@@ -1,10 +1,8 @@
 //! Anonymous lead capture for the firm's public pages.
 //!
-//! The route is deliberately narrow: it stores an inquiry, never creates a
-//! [`person`](store::persons), and answers accepted and rejected submissions
-//! with the same neutral redirect. The form's CSRF token is minted by the
-//! public Dioxus page middleware, while the write is rate-limited here at the
-//! route boundary.
+//! Stores inquiries before account creation. IEP intake returns validation feedback
+//! and offers signup after a successful write. Public page middleware issues the
+//! CSRF token, and the write route enforces the rate limit.
 
 use axum::{
     extract::{DefaultBodyLimit, Extension, Form, Request, State},
@@ -24,9 +22,8 @@ use crate::{password_reset, rate_limit::RateLimit, AppState, SessionStore};
 /// The dedicated double-submit cookie used by every public lead form.
 pub const LEAD_CSRF_COOKIE_NAME: &str = "navigator_lead_csrf";
 
-/// The maximum encoded form body. The fields are all short, and a bounded
-/// body keeps malformed submissions from becoming an allocation surface.
-pub const MAX_BODY_BYTES: usize = 8 * 1024;
+/// Allow URL-encoded Unicode intake answers alongside the verification token.
+pub const MAX_BODY_BYTES: usize = 16 * 1024;
 
 #[derive(Debug, Deserialize)]
 struct LeadForm {
@@ -39,6 +36,14 @@ struct LeadForm {
     #[serde(default)]
     call_consent: Option<String>,
     #[serde(default)]
+    district: String,
+    #[serde(default)]
+    relationship: String,
+    #[serde(default)]
+    concern: String,
+    #[serde(default)]
+    next_date: String,
+    #[serde(default)]
     website: String,
     #[serde(default, alias = "_csrf")]
     csrf_token: String,
@@ -48,6 +53,32 @@ struct LeadForm {
     consent_version: String,
     #[serde(default, rename = "h-captcha-response")]
     hcaptcha_response: String,
+}
+
+impl LeadForm {
+    fn intake_answers(&self) -> Option<store::leads::LeadIntake<'_>> {
+        let district = self.district.trim();
+        let relationship = self.relationship.trim();
+        let concern = self.concern.trim();
+        if [(district, 160), (relationship, 80), (concern, 600)]
+            .iter()
+            .any(|(value, limit)| value.is_empty() || value.chars().count() > *limit)
+        {
+            return None;
+        }
+        let next_date = if self.next_date.is_empty() {
+            None
+        } else {
+            Some(chrono::NaiveDate::parse_from_str(&self.next_date, "%Y-%m-%d").ok()?)
+        };
+        Some(store::leads::LeadIntake {
+            submission_key: store::assets::sha256_hex(self.csrf_token.as_bytes()),
+            district,
+            relationship,
+            concern,
+            next_date,
+        })
+    }
 }
 
 /// Build the anonymous lead write route with its own rate-limit boundary and
@@ -101,43 +132,23 @@ async fn submit(
     };
 
     let source_path = safe_source_path(brand, &form.source_path);
-    if !password_reset::verify_csrf_with(
-        &state.sessions,
+    let iep_intake = brand == BrandKey::IepDefenders && source_path == "/contact";
+    if let Some(response) = reject_invalid_submission(
+        &state,
+        brand,
         &cookies,
-        &form.csrf_token,
-        LEAD_CSRF_COOKIE_NAME,
-    ) {
-        audit(brand, &source_path, "none", "rejected_csrf");
-        return neutral_redirect();
+        &headers,
+        &form,
+        &source_path,
+        iep_intake,
+    )
+    .await
+    {
+        return response;
     }
-    if !form.website.trim().is_empty() {
-        audit(brand, &source_path, "none", "rejected_honeypot");
-        return neutral_redirect();
-    }
-    if !captcha_passes(&state, &headers, &form.hcaptcha_response).await {
-        audit(brand, &source_path, "none", "rejected_captcha");
-        return neutral_redirect();
-    }
-
-    cookies.add(password_reset::csrf_cookie_with_ttl(
-        LEAD_CSRF_COOKIE_NAME,
-        String::new(),
-        secure_cookies(&state),
-        0,
-    ));
-
     let email = form.email.trim();
     let phone = form.phone.trim();
     let sms_requested = form.sms_consent.as_deref() == Some("on");
-    if !valid_email(email)
-        || !valid_phone(phone)
-        || form.consent_version.trim().is_empty()
-        || source_path == "/leads"
-    {
-        audit(brand, &source_path, "none", "rejected_validation");
-        return neutral_redirect();
-    }
-
     let phone = (!phone.is_empty()).then(|| phone.to_string());
     let sms_opt_in = sms_requested && phone.is_some();
     let call_opt_in = form.call_consent.as_deref() == Some("on") && phone.is_some();
@@ -147,53 +158,142 @@ async fn submit(
         phone: phone.clone(),
         brand_key: brand.as_str().to_string(),
         source_path: source_path.clone(),
-        consent_version: form.consent_version,
+        consent_version: form.consent_version.clone(),
         consented_at: event_time,
     };
+    let site_name = brand
+        .resolve_branding(&views::brand::DEFAULT_BRANDING)
+        .firm
+        .site_name;
     let consent_event = store::leads::NewConsentEvent {
         consented_at: event_time,
         phone,
         source_path: source_path.clone(),
-        sms_consent_version: webapp::lead_capture::server_sms_consent_version(
-            views::brand::FIRM_BRAND.site_name,
-        ),
+        sms_consent_version: webapp::lead_capture::server_sms_consent_version(site_name),
         sms_policy_version: webapp::lead_capture::SMS_POLICY_VERSION.to_string(),
         sms_opt_in,
-        call_consent_version: webapp::lead_capture::server_call_consent_version(
-            views::brand::FIRM_BRAND.site_name,
-        ),
+        call_consent_version: webapp::lead_capture::server_call_consent_version(site_name),
         call_opt_in,
     };
-    match store::leads::record_consent_event(&state.surreal, &new_lead, &consent_event).await {
+    let saved = if iep_intake {
+        let Some(answers) = form.intake_answers() else {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "Please go back and check the school, relationship, concern, and date fields.",
+            )
+                .into_response();
+        };
+        store::leads::record_intake(&new_lead, &consent_event, &answers).await
+    } else {
+        store::leads::record_consent_event(&state.surreal, &new_lead, &consent_event).await
+    };
+    match saved {
         Ok(lead) => {
+            cookies.add(password_reset::csrf_cookie_with_ttl(
+                LEAD_CSRF_COOKIE_NAME,
+                String::new(),
+                secure_cookies(&state),
+                0,
+            ));
             let lead_id = lead.id.to_string();
             audit(brand, &source_path, &lead_id, "accepted");
-            crate::lead_confirm::spawn_send(state.clone(), lead.id, lead.email.clone());
-            telemetry::record_funnel_event(telemetry::FunnelEvent::LeadCaptured {
-                lead_id: &lead_id,
-                brand: brand.as_str(),
-                source_path: &source_path,
-                sms_consent: sms_opt_in,
-            });
-            state
-                .plausible_conversions
-                .record(
-                    brand,
-                    crate::plausible::ConversionGoal::ContactSubmitted,
-                    &source_path,
-                    crate::rate_limit::client_ip_from_headers(&headers),
-                    headers
-                        .get(axum::http::header::USER_AGENT)
-                        .and_then(|value| value.to_str().ok()),
-                )
-                .await;
+            if !iep_intake {
+                crate::lead_confirm::spawn_send(state.clone(), lead.id, lead.email.clone());
+            }
+            record_conversion(&state, brand, &source_path, &headers, &lead_id, sms_opt_in).await;
         }
         Err(error) => {
             tracing::error!(error = %error, brand = brand.as_str(), source_path = %source_path, "lead submission failed");
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     }
+    if iep_intake {
+        return Redirect::to("/contact/sent#signup").into_response();
+    }
     accepted_redirect(brand, &source_path)
+}
+
+async fn record_conversion(
+    state: &AppState,
+    brand: BrandKey,
+    source_path: &str,
+    headers: &axum::http::HeaderMap,
+    lead_id: &str,
+    sms_opt_in: bool,
+) {
+    telemetry::record_funnel_event(telemetry::FunnelEvent::LeadCaptured {
+        lead_id,
+        brand: brand.as_str(),
+        source_path,
+        sms_consent: sms_opt_in,
+    });
+    state
+        .plausible_conversions
+        .record(
+            brand,
+            crate::plausible::ConversionGoal::ContactSubmitted,
+            source_path,
+            crate::rate_limit::client_ip_from_headers(headers),
+            headers
+                .get(axum::http::header::USER_AGENT)
+                .and_then(|value| value.to_str().ok()),
+        )
+        .await;
+}
+
+async fn reject_invalid_submission(
+    state: &AppState,
+    brand: BrandKey,
+    cookies: &Cookies,
+    headers: &axum::http::HeaderMap,
+    form: &LeadForm,
+    source_path: &str,
+    iep_intake: bool,
+) -> Option<Response> {
+    let reject = |reason: &str, message: &'static str| {
+        audit(brand, source_path, "none", reason);
+        if iep_intake {
+            (StatusCode::UNPROCESSABLE_ENTITY, message).into_response()
+        } else {
+            neutral_redirect()
+        }
+    };
+    if !password_reset::verify_csrf_with(
+        &state.sessions,
+        cookies,
+        &form.csrf_token,
+        LEAD_CSRF_COOKIE_NAME,
+    ) {
+        return Some(reject(
+            "rejected_csrf",
+            "Your intake form expired. Reopen the intake page and send it again.",
+        ));
+    }
+    if !form.website.trim().is_empty() {
+        audit(brand, source_path, "none", "rejected_honeypot");
+        return Some(neutral_redirect());
+    }
+    if !captcha_passes(state, headers, &form.hcaptcha_response).await {
+        return Some(reject(
+            "rejected_captcha",
+            "Please go back, complete the verification, and send your intake again.",
+        ));
+    }
+
+    let email = form.email.trim();
+    let phone = form.phone.trim();
+    if !valid_email(email)
+        || !valid_phone(phone)
+        || form.consent_version.trim().is_empty()
+        || source_path == "/leads"
+    {
+        return Some(reject(
+            "rejected_validation",
+            "Please go back and check your email address and phone number.",
+        ));
+    }
+
+    None
 }
 
 fn accepted_redirect(brand: BrandKey, source_path: &str) -> Response {
@@ -353,6 +453,43 @@ mod tests {
                 "browser-selected source path must not enter a lead or telemetry record: {path}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn iep_intake_validates_before_saving_and_offers_signup_after_commit() {
+        store::test_support::with_postgres(async {
+            let db = store::surreal::SurrealDb::uninitialized();
+            store::test_support::seed_firm_with_new_brand(&db, "iep-defenders").await;
+            let (app, sessions) = test_app(db.clone(), RateLimit::disabled()).await;
+            let token = "synthetic-intake-token";
+            let submit = |date| {
+                let fields = [
+                    ("email", "family@example.test"),
+                    ("source_path", "/contact"),
+                    ("consent_version", CONSENT),
+                    ("csrf_token", token),
+                    ("district", "Example District"),
+                    ("relationship", "Parent"),
+                    ("concern", "Missed services"),
+                    ("next_date", date),
+                ];
+                let mut req = request(encoded(&fields), Some(csrf_cookie(&sessions, token)));
+                req.extensions_mut().insert(BrandKey::IepDefenders);
+                app.clone().oneshot(req)
+            };
+            assert_eq!(
+                submit("invalid").await.unwrap().status(),
+                StatusCode::UNPROCESSABLE_ENTITY
+            );
+            assert!(store::leads::list(&db).await.unwrap().is_empty());
+            let response = submit("").await.unwrap();
+            assert_eq!(response.status(), StatusCode::SEE_OTHER);
+            assert_eq!(response.headers()["location"], "/contact/sent#signup");
+            let leads = store::leads::list(&db).await.unwrap();
+            assert_eq!(leads.len(), 1);
+            assert!(leads[0].person_id.is_none());
+        })
+        .await;
     }
 
     #[tokio::test]

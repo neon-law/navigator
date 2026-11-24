@@ -476,7 +476,7 @@ mod tests {
     #[test]
     fn surreal_archive_lane_selects_its_bucket_and_credentials() {
         let values = HashMap::from([
-            ("NAVIGATOR_SURREAL_ARCHIVES_BUCKET", "neon-law-archives"),
+            ("NAVIGATOR_SURREAL_ARCHIVES_BUCKET", "example-archives"),
             ("NAVIGATOR_STORAGE_BUCKET", "exports"),
             ("NAVIGATOR_STORAGE_ENDPOINT", "http://seaweedfs:8333"),
             ("NAVIGATOR_SURREAL_ARCHIVES_ACCESS_KEY", "archive-access"),
@@ -486,7 +486,7 @@ mod tests {
             values.get(key).map(ToString::to_string)
         })
         .unwrap();
-        assert_eq!(config.bucket, "neon-law-archives");
+        assert_eq!(config.bucket, "example-archives");
         assert_eq!(config.access_key, "archive-access");
     }
 
@@ -512,7 +512,7 @@ mod tests {
     #[test]
     fn archives_lane_selects_its_bucket_and_dedicated_credentials() {
         let values = HashMap::from([
-            ("NAVIGATOR_ARCHIVES_BUCKET", "neon-law-archives-staging"),
+            ("NAVIGATOR_ARCHIVES_BUCKET", "example-archives-staging"),
             ("NAVIGATOR_STORAGE_BUCKET", "exports"),
             ("NAVIGATOR_STORAGE_ENDPOINT", "http://seaweedfs:8333"),
             ("NAVIGATOR_ARCHIVES_ACCESS_KEY", "archives-access"),
@@ -521,7 +521,7 @@ mod tests {
         let config =
             S3StorageConfig::archives_from_lookup(|key| values.get(key).map(ToString::to_string))
                 .unwrap();
-        assert_eq!(config.bucket, "neon-law-archives-staging");
+        assert_eq!(config.bucket, "example-archives-staging");
         assert_eq!(config.access_key, "archives-access");
     }
 

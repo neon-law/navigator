@@ -44,7 +44,7 @@ jobs:
     environment: staging-deploy
     timeout-minutes: 60
     env:
-      NAMESPACE: neon-law-stg
+      NAMESPACE: ${{ vars.STAGING_NAMESPACE }}
       WEB_DEPLOYMENT: navigator-web
       NAVIGATOR_HOST: ${{ inputs.host || 'https://staging.neonlaw.com' }}
       RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}

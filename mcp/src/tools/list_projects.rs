@@ -33,7 +33,7 @@ pub fn descriptor() -> Value {
                         client participant gets the matters they are on, each with id, name, \
                         status, brand (which house brand's storefront the matter was opened \
                         through), and the bound Entity's id and name when one is attached — use \
-                        this to pick a Project by name (e.g. \"ShookEstate\") before linking a \
+                        this to pick a Project by name (e.g. \"SampleEstate\") before linking a \
                         Person or attaching a Notation. An owner or admin gets the oversight \
                         directory instead: every matter's code, name, status, and lawyer DRIs, \
                         with no id, because that lens shows which matters exist and who is \
@@ -174,33 +174,8 @@ mod tests {
     use serde_json::json;
     use uuid::Uuid;
 
-    use store::test_support::mem_surreal;
-    async fn db() -> store::surreal::SurrealDb {
-        let surreal = mem_surreal().await;
-        surreal
-    }
-
     async fn seed_entity(surreal: &store::surreal::SurrealDb, name: &str) -> Uuid {
-        // The engine does not validate a `record<>` link and nothing in
-        // this tool resolves either reference, so the fixture points them
-        // at rows it never writes.
-        let jur_id = Uuid::now_v7();
-        let et_id = Uuid::now_v7();
-        store::entities::create(
-            surreal,
-            &store::entities::NewEntity {
-                name: name.into(),
-                entity_type_id: et_id,
-                jurisdiction_id: jur_id,
-                phone: None,
-                url: None,
-                xero_id: None,
-                firm_anchor_key: None,
-            },
-        )
-        .await
-        .unwrap()
-        .id
+        crate::test_fixtures::seed_entity_named(surreal, name).await
     }
 
     async fn seed_project(
@@ -215,6 +190,7 @@ mod tests {
             Some(e) => e,
             None => store::test_support::seed_entity(surreal).await,
         };
+        crate::test_fixtures::seed_brands(surreal).await;
         store::projects::create(
             surreal,
             &store::projects::NewProject {
@@ -241,60 +217,101 @@ mod tests {
 
     #[tokio::test]
     async fn empty_database_returns_zero_count_not_an_error() {
-        let surreal = db().await;
-        let r = call(&surreal, &ReadScope::Deployment, &json!({}))
-            .await
-            .unwrap();
-        assert_eq!(r["structuredContent"]["count"], 0);
-        let text = r["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("No projects"));
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let r = call(&surreal, &ReadScope::Deployment, &json!({}))
+                .await
+                .unwrap();
+            assert_eq!(r["structuredContent"]["count"], 0);
+            let text = r["content"][0]["text"].as_str().unwrap();
+            assert!(text.contains("No projects"));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn returns_seeded_projects_sorted_by_name() {
-        let surreal = db().await;
-        seed_project(&surreal, "Zeta Settlement", "open", None).await;
-        seed_project(&surreal, "Alpha Matter", "open", None).await;
-        let r = call(&surreal, &ReadScope::Deployment, &json!({}))
-            .await
-            .unwrap();
-        let names: Vec<&str> = r["structuredContent"]["projects"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|p| p["name"].as_str().unwrap())
-            .collect();
-        assert_eq!(names, vec!["Alpha Matter", "Zeta Settlement"]);
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            seed_project(&surreal, "Zeta Settlement", "open", None).await;
+            seed_project(&surreal, "Alpha Matter", "open", None).await;
+            let r = call(&surreal, &ReadScope::Deployment, &json!({}))
+                .await
+                .unwrap();
+            let names: Vec<&str> = r["structuredContent"]["projects"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|p| p["name"].as_str().unwrap())
+                .collect();
+            assert_eq!(names, vec!["Alpha Matter", "Zeta Settlement"]);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn row_carries_status_and_bound_entity_name() {
-        let surreal = db().await;
-        let eid = seed_entity(&surreal, "shook.family").await;
-        seed_project(&surreal, "ShookEstate", "open", Some(eid)).await;
-        let r = call(&surreal, &ReadScope::Deployment, &json!({}))
-            .await
-            .unwrap();
-        let row = &r["structuredContent"]["projects"][0];
-        assert_eq!(row["name"], "ShookEstate");
-        assert_eq!(row["status"], "open");
-        assert_eq!(row["entity_id"], eid.to_string());
-        assert_eq!(row["entity_name"], "shook.family");
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let eid = seed_entity(&surreal, crate::test_fixtures::ORGANIZATION.as_str()).await;
+            seed_project(
+                &surreal,
+                crate::test_fixtures::ESTATE.as_str(),
+                "open",
+                Some(eid),
+            )
+            .await;
+            let r = call(&surreal, &ReadScope::Deployment, &json!({}))
+                .await
+                .unwrap();
+            let row = &r["structuredContent"]["projects"][0];
+            assert_eq!(row["name"], crate::test_fixtures::ESTATE.as_str());
+            assert_eq!(row["status"], "open");
+            assert_eq!(row["entity_id"], eid.to_string());
+            assert_eq!(
+                row["entity_name"],
+                crate::test_fixtures::ORGANIZATION.as_str()
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn summary_lists_status_and_bound_entity() {
-        let surreal = db().await;
-        let eid = seed_entity(&surreal, "shook.family").await;
-        seed_project(&surreal, "ShookEstate", "open", Some(eid)).await;
-        seed_project(&surreal, "Sison", "closed", Some(eid)).await;
-        let r = call(&surreal, &ReadScope::Deployment, &json!({}))
-            .await
-            .unwrap();
-        let text = r["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("2 projects:"));
-        assert!(text.contains("ShookEstate (open, shook.family)"));
-        assert!(text.contains("Sison (closed, shook.family)"));
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let eid = seed_entity(&surreal, crate::test_fixtures::ORGANIZATION.as_str()).await;
+            seed_project(
+                &surreal,
+                crate::test_fixtures::ESTATE.as_str(),
+                "open",
+                Some(eid),
+            )
+            .await;
+            seed_project(
+                &surreal,
+                crate::test_fixtures::MATTER.as_str(),
+                "closed",
+                Some(eid),
+            )
+            .await;
+            let r = call(&surreal, &ReadScope::Deployment, &json!({}))
+                .await
+                .unwrap();
+            let text = r["content"][0]["text"].as_str().unwrap();
+            assert!(text.contains("2 projects:"));
+            assert!(text.contains(&format!(
+                "{} (open, {})",
+                *crate::test_fixtures::ESTATE,
+                *crate::test_fixtures::ORGANIZATION
+            )));
+            assert!(text.contains(&format!(
+                "{} (closed, {})",
+                *crate::test_fixtures::MATTER,
+                *crate::test_fixtures::ORGANIZATION
+            )));
+        })
+        .await;
     }
 
     /// A person at `tier`, put on `project_id` when one is given.
@@ -351,59 +368,65 @@ mod tests {
     /// and not the one they are not.
     #[tokio::test]
     async fn a_lawyer_receives_only_the_matter_they_participate_in() {
-        let surreal = db().await;
-        let matter_a = seed_project(&surreal, "Matter A", "open", None).await;
-        seed_project(&surreal, "Matter B", "open", None).await;
-        let lawyer = participant(
-            &surreal,
-            "lawyer@example.com",
-            store::persons::Role::Lawyer,
-            Some(matter_a),
-            store::participation::DriRequest::Unchanged,
-        )
-        .await;
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let matter_a = seed_project(&surreal, "Matter A", "open", None).await;
+            seed_project(&surreal, "Matter B", "open", None).await;
+            let lawyer = participant(
+                &surreal,
+                "lawyer@example.com",
+                store::persons::Role::Lawyer,
+                Some(matter_a),
+                store::participation::DriRequest::Unchanged,
+            )
+            .await;
 
-        let r = call(&surreal, &membership(&lawyer), &json!({}))
-            .await
-            .unwrap();
-        assert_eq!(r["structuredContent"]["lens"], "membership");
-        assert_eq!(names(&r), vec!["Matter A"]);
-        // The unscoped read returned both, so the filter is what is being
-        // observed here rather than a database that only holds one row.
-        let unscoped = call(&surreal, &ReadScope::Deployment, &json!({}))
-            .await
-            .unwrap();
-        assert_eq!(names(&unscoped), vec!["Matter A", "Matter B"]);
+            let r = call(&surreal, &membership(&lawyer), &json!({}))
+                .await
+                .unwrap();
+            assert_eq!(r["structuredContent"]["lens"], "membership");
+            assert_eq!(names(&r), vec!["Matter A"]);
+            // The unscoped read returned both, so the filter is what is being
+            // observed here rather than a database that only holds one row.
+            let unscoped = call(&surreal, &ReadScope::Deployment, &json!({}))
+                .await
+                .unwrap();
+            assert_eq!(names(&unscoped), vec!["Matter A", "Matter B"]);
+        })
+        .await;
     }
 
     /// A client-side row is a different lens, not a narrower firm one: a
     /// lawyer's firm-side matter must not appear in a client's list.
     #[tokio::test]
     async fn a_client_receives_only_their_own_client_side_matter() {
-        let surreal = db().await;
-        let theirs = seed_project(&surreal, "Their Matter", "open", None).await;
-        let other = seed_project(&surreal, "Someone Else", "open", None).await;
-        let client = participant(
-            &surreal,
-            "client@example.com",
-            store::persons::Role::Client,
-            Some(theirs),
-            store::participation::DriRequest::Unchanged,
-        )
-        .await;
-        participant(
-            &surreal,
-            "lawyer@example.com",
-            store::persons::Role::Lawyer,
-            Some(other),
-            store::participation::DriRequest::Unchanged,
-        )
-        .await;
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let theirs = seed_project(&surreal, "Their Matter", "open", None).await;
+            let other = seed_project(&surreal, "Someone Else", "open", None).await;
+            let client = participant(
+                &surreal,
+                "client@example.com",
+                store::persons::Role::Client,
+                Some(theirs),
+                store::participation::DriRequest::Unchanged,
+            )
+            .await;
+            participant(
+                &surreal,
+                "lawyer@example.com",
+                store::persons::Role::Lawyer,
+                Some(other),
+                store::participation::DriRequest::Unchanged,
+            )
+            .await;
 
-        let r = call(&surreal, &membership(&client), &json!({}))
-            .await
-            .unwrap();
-        assert_eq!(names(&r), vec!["Their Matter"]);
+            let r = call(&surreal, &membership(&client), &json!({}))
+                .await
+                .unwrap();
+            assert_eq!(names(&r), vec!["Their Matter"]);
+        })
+        .await;
     }
 
     /// A firm tier with no participation row anywhere sees nothing. There
@@ -411,25 +434,28 @@ mod tests {
     /// directory lens exists for, and a `lawyer` does not get it.
     #[tokio::test]
     async fn a_lawyer_on_no_matter_receives_an_empty_list() {
-        let surreal = db().await;
-        seed_project(&surreal, "Matter A", "open", None).await;
-        let lawyer = participant(
-            &surreal,
-            "unassigned@example.com",
-            store::persons::Role::Lawyer,
-            None,
-            store::participation::DriRequest::Unchanged,
-        )
-        .await;
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            seed_project(&surreal, "Matter A", "open", None).await;
+            let lawyer = participant(
+                &surreal,
+                "unassigned@example.com",
+                store::persons::Role::Lawyer,
+                None,
+                store::participation::DriRequest::Unchanged,
+            )
+            .await;
 
-        let r = call(&surreal, &membership(&lawyer), &json!({}))
-            .await
-            .unwrap();
-        assert_eq!(r["structuredContent"]["count"], 0);
-        // The database is not empty; their scope is. Saying otherwise
-        // would be a claim this read never made.
-        let text = r["content"][0]["text"].as_str().unwrap();
-        assert_eq!(text, "No projects you participate in.");
+            let r = call(&surreal, &membership(&lawyer), &json!({}))
+                .await
+                .unwrap();
+            assert_eq!(r["structuredContent"]["count"], 0);
+            // The database is not empty; their scope is. Saying otherwise
+            // would be a claim this read never made.
+            let text = r["content"][0]["text"].as_str().unwrap();
+            assert_eq!(text, "No projects you participate in.");
+        })
+        .await;
     }
 
     /// The issue's second Done-when, for both admin-tier roles: every
@@ -437,60 +463,63 @@ mod tests {
     #[tokio::test]
     async fn owner_and_admin_receive_the_directory_over_every_matter() {
         for tier in [store::persons::Role::Owner, store::persons::Role::Admin] {
-            let surreal = db().await;
-            let eid = seed_entity(&surreal, "shook.family").await;
-            let matter_a = seed_project(&surreal, "Matter A", "open", Some(eid)).await;
-            seed_project(&surreal, "Matter B", "closed", Some(eid)).await;
-            // Accountability on one matter and not the other, so the
-            // unassigned case is observed rather than assumed.
-            participant(
-                &surreal,
-                "dri@example.com",
-                store::persons::Role::Lawyer,
-                Some(matter_a),
-                store::participation::DriRequest::Designate(store::projects::DriSide::Lawyer),
-            )
-            .await;
-            // The oversight caller holds no participation row at all.
-            let overseer = participant(
-                &surreal,
-                "overseer@example.com",
-                tier,
-                None,
-                store::participation::DriRequest::Unchanged,
-            )
-            .await;
+            store::test_support::with_postgres(async move {
+                let surreal = crate::test_fixtures::handle();
+                let eid = seed_entity(&surreal, crate::test_fixtures::ORGANIZATION.as_str()).await;
+                let matter_a = seed_project(&surreal, "Matter A", "open", Some(eid)).await;
+                seed_project(&surreal, "Matter B", "closed", Some(eid)).await;
+                // Accountability on one matter and not the other, so the
+                // unassigned case is observed rather than assumed.
+                participant(
+                    &surreal,
+                    "dri@example.com",
+                    store::persons::Role::Lawyer,
+                    Some(matter_a),
+                    store::participation::DriRequest::Designate(store::projects::DriSide::Lawyer),
+                )
+                .await;
+                // The oversight caller holds no participation row at all.
+                let overseer = participant(
+                    &surreal,
+                    "overseer@example.com",
+                    tier,
+                    None,
+                    store::participation::DriRequest::Unchanged,
+                )
+                .await;
 
-            let r = call(
-                &surreal,
-                &ReadScope::Directory {
-                    role: overseer.role,
-                },
-                &json!({}),
-            )
-            .await
-            .unwrap();
-            assert_eq!(r["structuredContent"]["lens"], "directory", "{tier:?}");
-            assert_eq!(r["structuredContent"]["count"], 2, "{tier:?}");
-            let rows = r["structuredContent"]["projects"].as_array().unwrap();
-            let a = rows.iter().find(|p| p["name"] == "Matter A").unwrap();
-            assert_eq!(a["status"], "open");
-            assert!(a["code"].is_string(), "the handle is the unique code: {a}");
-            assert_eq!(a["lawyer_dris"][0], "dri@example.com");
-            // No id, deliberately: the lens says a matter exists and who
-            // owns it, and carries nothing a matter contains.
-            assert!(a["id"].is_null(), "the directory lens carries no id: {a}");
-            assert!(a["entity_id"].is_null(), "{a}");
-            let b = rows.iter().find(|p| p["name"] == "Matter B").unwrap();
-            assert_eq!(b["status"], "closed");
-            assert_eq!(
-                b["lawyer_dris"].as_array().unwrap().len(),
-                0,
-                "an unassigned matter is what this lens exists to surface: {b}"
-            );
-            let text = r["content"][0]["text"].as_str().unwrap();
-            assert!(text.contains("DRI unassigned"), "got: {text}");
-            assert!(text.contains("no matter contents"), "got: {text}");
+                let r = call(
+                    &surreal,
+                    &ReadScope::Directory {
+                        role: overseer.role,
+                    },
+                    &json!({}),
+                )
+                .await
+                .unwrap();
+                assert_eq!(r["structuredContent"]["lens"], "directory", "{tier:?}");
+                assert_eq!(r["structuredContent"]["count"], 2, "{tier:?}");
+                let rows = r["structuredContent"]["projects"].as_array().unwrap();
+                let a = rows.iter().find(|p| p["name"] == "Matter A").unwrap();
+                assert_eq!(a["status"], "open");
+                assert!(a["code"].is_string(), "the handle is the unique code: {a}");
+                assert_eq!(a["lawyer_dris"][0], "dri@example.com");
+                // No id, deliberately: the lens says a matter exists and who
+                // owns it, and carries nothing a matter contains.
+                assert!(a["id"].is_null(), "the directory lens carries no id: {a}");
+                assert!(a["entity_id"].is_null(), "{a}");
+                let b = rows.iter().find(|p| p["name"] == "Matter B").unwrap();
+                assert_eq!(b["status"], "closed");
+                assert_eq!(
+                    b["lawyer_dris"].as_array().unwrap().len(),
+                    0,
+                    "an unassigned matter is what this lens exists to surface: {b}"
+                );
+                let text = r["content"][0]["text"].as_str().unwrap();
+                assert!(text.contains("DRI unassigned"), "got: {text}");
+                assert!(text.contains("no matter contents"), "got: {text}");
+            })
+            .await;
         }
     }
 
@@ -498,24 +527,36 @@ mod tests {
     /// Fail-closed with no privileged exception.
     #[tokio::test]
     async fn an_unlinked_caller_receives_nothing() {
-        let surreal = db().await;
-        seed_project(&surreal, "Matter A", "open", None).await;
-        let r = call(&surreal, &ReadScope::Unlinked, &json!({}))
-            .await
-            .unwrap();
-        assert_eq!(r["structuredContent"]["count"], 0);
-        assert_eq!(r["structuredContent"]["lens"], "membership");
-        let text = r["content"][0]["text"].as_str().unwrap();
-        assert_eq!(text, "No projects you participate in.");
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            seed_project(&surreal, "Matter A", "open", None).await;
+            let r = call(&surreal, &ReadScope::Unlinked, &json!({}))
+                .await
+                .unwrap();
+            assert_eq!(r["structuredContent"]["count"], 0);
+            assert_eq!(r["structuredContent"]["lens"], "membership");
+            let text = r["content"][0]["text"].as_str().unwrap();
+            assert_eq!(text, "No projects you participate in.");
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn ignores_arguments_silently() {
-        let surreal = db().await;
-        seed_project(&surreal, "Sison", "open", None).await;
-        let r = call(&surreal, &ReadScope::Deployment, &json!({ "garbage": 42 }))
-            .await
-            .unwrap();
-        assert_eq!(r["structuredContent"]["count"], 1);
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            seed_project(
+                &surreal,
+                crate::test_fixtures::MATTER.as_str(),
+                "open",
+                None,
+            )
+            .await;
+            let r = call(&surreal, &ReadScope::Deployment, &json!({ "garbage": 42 }))
+                .await
+                .unwrap();
+            assert_eq!(r["structuredContent"]["count"], 1);
+        })
+        .await;
     }
 }

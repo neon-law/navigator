@@ -101,9 +101,8 @@ mod tests {
     use serde_json::json;
     use uuid::Uuid;
 
-    use store::test_support::mem_surreal;
-
     async fn project(surreal: &store::surreal::SurrealDb, name: &str) -> Uuid {
+        crate::test_fixtures::seed_brands(surreal).await;
         store::projects::create(
             surreal,
             &store::projects::NewProject {
@@ -178,61 +177,67 @@ mod tests {
 
     #[tokio::test]
     async fn participating_lawyer_receives_only_their_deadlines_with_authority_and_source() {
-        let surreal = mem_surreal().await;
-        let permitted = project(&surreal, "Permitted Matter").await;
-        let denied = project(&surreal, "Denied Matter").await;
-        deadline(&surreal, permitted, "triage:permitted").await;
-        deadline(&surreal, denied, "triage:denied").await;
-        let person = lawyer(&surreal, Some(permitted)).await;
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let permitted = project(&surreal, "Permitted Matter").await;
+            let denied = project(&surreal, "Denied Matter").await;
+            deadline(&surreal, permitted, "triage:permitted").await;
+            deadline(&surreal, denied, "triage:denied").await;
+            let person = lawyer(&surreal, Some(permitted)).await;
 
-        let result = call(
-            &surreal,
-            &ReadScope::Membership {
-                person_id: person.id,
-                role: person.role,
-            },
-            &json!({}),
-        )
-        .await
-        .unwrap();
+            let result = call(
+                &surreal,
+                &ReadScope::Membership {
+                    person_id: person.id,
+                    role: person.role,
+                },
+                &json!({}),
+            )
+            .await
+            .unwrap();
 
-        assert_eq!(result["structuredContent"]["count"], 1);
-        let row = &result["structuredContent"]["deadlines"][0];
-        assert_eq!(row["project_id"], permitted.to_string());
-        assert_eq!(row["statute"], "15 U.S.C. § 1681i(a)(1)");
-        assert_eq!(row["source"], "triage:permitted");
-        let text = result["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("15 U.S.C. § 1681i(a)(1)"));
-        assert!(text.contains("triage:permitted"));
-        assert!(!text.contains("triage:denied"));
+            assert_eq!(result["structuredContent"]["count"], 1);
+            let row = &result["structuredContent"]["deadlines"][0];
+            assert_eq!(row["project_id"], permitted.to_string());
+            assert_eq!(row["statute"], "15 U.S.C. § 1681i(a)(1)");
+            assert_eq!(row["source"], "triage:permitted");
+            let text = result["content"][0]["text"].as_str().unwrap();
+            assert!(text.contains("15 U.S.C. § 1681i(a)(1)"));
+            assert!(text.contains("triage:permitted"));
+            assert!(!text.contains("triage:denied"));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn lawyer_without_participation_receives_no_deadlines() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal, "Private Matter").await;
-        deadline(&surreal, project_id, "triage:private").await;
-        let person = lawyer(&surreal, None).await;
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let project_id = project(&surreal, "Private Matter").await;
+            deadline(&surreal, project_id, "triage:private").await;
+            let person = lawyer(&surreal, None).await;
 
-        let result = call(
-            &surreal,
-            &ReadScope::Membership {
-                person_id: person.id,
-                role: person.role,
-            },
-            &json!({}),
-        )
-        .await
-        .unwrap();
+            let result = call(
+                &surreal,
+                &ReadScope::Membership {
+                    person_id: person.id,
+                    role: person.role,
+                },
+                &json!({}),
+            )
+            .await
+            .unwrap();
 
-        assert_eq!(result["structuredContent"]["count"], 0);
-        assert!(result["structuredContent"]["deadlines"]
-            .as_array()
-            .unwrap()
-            .is_empty());
-        assert_eq!(
-            result["content"][0]["text"],
-            "No deadlines you participate in."
-        );
+            assert_eq!(result["structuredContent"]["count"], 0);
+            assert!(result["structuredContent"]["deadlines"]
+                .as_array()
+                .unwrap()
+                .is_empty());
+            assert_eq!(
+                result["content"][0]["text"],
+                "No deadlines you participate in."
+            );
+        })
+        .await;
     }
 }

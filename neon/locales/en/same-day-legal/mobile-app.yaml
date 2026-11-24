@@ -132,11 +132,10 @@ bands:
         chips: ["$0"]
         body:
           - - text: >-
-                Download Navigator, the free and open-source MCP tool, and
-                prepare your own filings, such as forming your own LLC. No
-                lawyer reviews free work.
+                Use Navigator in your AI assistant to find templates and draft your own
+                letters or filing papers. You review and file them yourself.
         href: "https://github.com/neon-law/navigator"
-        href_label: Get Navigator
+        href_label: Set up the AI assistant
       - title: Ad hoc attorney review
         chips: ["From $50"]
         body:

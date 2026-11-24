@@ -146,12 +146,6 @@ mod tests {
     use crate::tools::ToolError;
     use serde_json::json;
 
-    /// `create_person` writes only `persons`, so its tests need only
-    /// the engine that owns the table.
-    async fn surreal() -> store::surreal::SurrealDb {
-        store::test_support::mem_surreal().await
-    }
-
     #[test]
     fn descriptor_names_the_tool_and_requires_name_and_email() {
         let d = descriptor();
@@ -167,161 +161,191 @@ mod tests {
 
     #[tokio::test]
     async fn happy_path_inserts_and_returns_structured_content() {
-        let surreal = surreal().await;
-        let result = call(
-            &surreal,
-            &json!({ "name": "Libra", "email": "libra@example.com" }),
-        )
-        .await
-        .unwrap();
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let result = call(
+                &surreal,
+                &json!({ "name": "Libra", "email": "libra@example.com" }),
+            )
+            .await
+            .unwrap();
 
-        assert_eq!(result["structuredContent"]["name"], "Libra");
-        assert_eq!(result["structuredContent"]["email"], "libra@example.com");
-        // `id` is rendered as a UUID hex string in JSON.
-        let id = result["structuredContent"]["id"].as_str().unwrap();
-        uuid::Uuid::parse_str(id).expect("id is a valid UUID");
+            assert_eq!(result["structuredContent"]["name"], "Libra");
+            assert_eq!(result["structuredContent"]["email"], "libra@example.com");
+            // `id` is rendered as a UUID hex string in JSON.
+            let id = result["structuredContent"]["id"].as_str().unwrap();
+            uuid::Uuid::parse_str(id).expect("id is a valid UUID");
 
-        let text = result["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("Libra"));
-        assert!(text.contains("libra@example.com"));
+            let text = result["content"][0]["text"].as_str().unwrap();
+            assert!(text.contains("Libra"));
+            assert!(text.contains("libra@example.com"));
 
-        let all = store::persons::list_directory(&surreal).await.unwrap();
-        assert_eq!(all.len(), 1);
-        assert_eq!(all[0].email, "libra@example.com");
-        // The command defaults a role-less create to `client`.
-        assert_eq!(all[0].role, store::persons::Role::Client);
+            let all = store::persons::list_directory(&surreal).await.unwrap();
+            assert_eq!(all.len(), 1);
+            assert_eq!(all[0].email, "libra@example.com");
+            // The command defaults a role-less create to `client`.
+            assert_eq!(all[0].role, store::persons::Role::Client);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn trims_surrounding_whitespace_on_name_and_email() {
-        let surreal = surreal().await;
-        let result = call(
-            &surreal,
-            &json!({ "name": "  Libra ", "email": "  libra@example.com\n" }),
-        )
-        .await
-        .unwrap();
-        assert_eq!(result["structuredContent"]["name"], "Libra");
-        assert_eq!(result["structuredContent"]["email"], "libra@example.com");
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let result = call(
+                &surreal,
+                &json!({ "name": "  Libra ", "email": "  libra@example.com\n" }),
+            )
+            .await
+            .unwrap();
+            assert_eq!(result["structuredContent"]["name"], "Libra");
+            assert_eq!(result["structuredContent"]["email"], "libra@example.com");
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn missing_name_field_is_invalid_arguments() {
-        let surreal = surreal().await;
-        // A missing `name` fails the command's required-field validation.
-        let err = call(&surreal, &json!({ "email": "libra@example.com" }))
-            .await
-            .unwrap_err();
-        assert!(matches!(err, ToolError::InvalidArguments(_)));
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            // A missing `name` fails the command's required-field validation.
+            let err = call(&surreal, &json!({ "email": "libra@example.com" }))
+                .await
+                .unwrap_err();
+            assert!(matches!(err, ToolError::InvalidArguments(_)));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn missing_email_field_is_invalid_arguments() {
-        let surreal = surreal().await;
-        let err = call(&surreal, &json!({ "name": "Libra" }))
-            .await
-            .unwrap_err();
-        assert!(matches!(err, ToolError::InvalidArguments(_)));
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let err = call(&surreal, &json!({ "name": "Libra" }))
+                .await
+                .unwrap_err();
+            assert!(matches!(err, ToolError::InvalidArguments(_)));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn empty_name_is_invalid_arguments() {
-        let surreal = surreal().await;
-        let err = call(
-            &surreal,
-            &json!({ "name": "   ", "email": "libra@example.com" }),
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(err, ToolError::InvalidArguments(_)));
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let err = call(
+                &surreal,
+                &json!({ "name": "   ", "email": "libra@example.com" }),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(err, ToolError::InvalidArguments(_)));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn at_less_email_is_invalid_arguments() {
-        let surreal = surreal().await;
-        let err = call(&surreal, &json!({ "name": "Libra", "email": "not-email" }))
-            .await
-            .unwrap_err();
-        assert!(matches!(err, ToolError::InvalidArguments(_)));
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let err = call(&surreal, &json!({ "name": "Libra", "email": "not-email" }))
+                .await
+                .unwrap_err();
+            assert!(matches!(err, ToolError::InvalidArguments(_)));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn smuggled_role_is_ignored_and_person_stays_client() {
-        // The tool exposes only name/email and has no may_change_roles
-        // gate, so a direct/hallucinated call that smuggles role="admin"
-        // (or a structured legal-name part) must not escalate — the row
-        // lands as a plain client.
-        let surreal = surreal().await;
-        call(
-            &surreal,
-            &json!({
-                "name": "Sneaky",
-                "email": "sneaky@example.com",
-                "role": "admin",
-                "given_name": "Should",
-                "family_name": "Ignore"
-            }),
-        )
-        .await
-        .unwrap();
-        let all = store::persons::list_directory(&surreal).await.unwrap();
-        assert_eq!(all.len(), 1);
-        assert_eq!(all[0].role, store::persons::Role::Client);
-        assert!(all[0].given_name.is_none());
-        assert!(all[0].family_name.is_none());
+        store::test_support::with_postgres(async {
+            // The tool exposes only name/email and has no may_change_roles
+            // gate, so a direct/hallucinated call that smuggles role="admin"
+            // (or a structured legal-name part) must not escalate — the row
+            // lands as a plain client.
+            let surreal = crate::test_fixtures::handle();
+            call(
+                &surreal,
+                &json!({
+                    "name": "Sneaky",
+                    "email": "sneaky@example.com",
+                    "role": "admin",
+                    "given_name": "Should",
+                    "family_name": "Ignore"
+                }),
+            )
+            .await
+            .unwrap();
+            let all = store::persons::list_directory(&surreal).await.unwrap();
+            assert_eq!(all.len(), 1);
+            assert_eq!(all[0].role, store::persons::Role::Client);
+            assert!(all[0].given_name.is_none());
+            assert!(all[0].family_name.is_none());
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn duplicate_email_surfaces_a_conflict_error() {
-        let surreal = surreal().await;
-        call(
-            &surreal,
-            &json!({ "name": "Libra", "email": "dup@example.com" }),
-        )
-        .await
-        .unwrap();
-        let err = call(
-            &surreal,
-            &json!({ "name": "Other", "email": "dup@example.com" }),
-        )
-        .await
-        .unwrap_err();
-        assert!(
-            matches!(err, ToolError::Conflict(_)),
-            "expected Conflict, got {err:?}"
-        );
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            call(
+                &surreal,
+                &json!({ "name": "Libra", "email": "dup@example.com" }),
+            )
+            .await
+            .unwrap();
+            let err = call(
+                &surreal,
+                &json!({ "name": "Other", "email": "dup@example.com" }),
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                matches!(err, ToolError::Conflict(_)),
+                "expected Conflict, got {err:?}"
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn distinct_emails_can_coexist() {
-        let surreal = surreal().await;
-        call(
-            &surreal,
-            &json!({ "name": "Libra", "email": "libra@example.com" }),
-        )
-        .await
-        .unwrap();
-        call(
-            &surreal,
-            &json!({ "name": "Taurus", "email": "taurus@example.com" }),
-        )
-        .await
-        .unwrap();
-        let all = store::persons::list_directory(&surreal).await.unwrap();
-        assert_eq!(all.len(), 2);
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            call(
+                &surreal,
+                &json!({ "name": "Libra", "email": "libra@example.com" }),
+            )
+            .await
+            .unwrap();
+            call(
+                &surreal,
+                &json!({ "name": "Taurus", "email": "taurus@example.com" }),
+            )
+            .await
+            .unwrap();
+            let all = store::persons::list_directory(&surreal).await.unwrap();
+            assert_eq!(all.len(), 2);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn extra_field_is_tolerated() {
-        // The schema declares additionalProperties=false for the model,
-        // but serde tolerates extras at decode time; this pins that an
-        // unknown key doesn't break the call.
-        let surreal = surreal().await;
-        let result = call(
-            &surreal,
-            &json!({ "name": "Libra", "email": "libra@example.com", "extra": "ignored" }),
-        )
+        store::test_support::with_postgres(async {
+            // The schema declares additionalProperties=false for the model,
+            // but serde tolerates extras at decode time; this pins that an
+            // unknown key doesn't break the call.
+            let surreal = crate::test_fixtures::handle();
+            let result = call(
+                &surreal,
+                &json!({ "name": "Libra", "email": "libra@example.com", "extra": "ignored" }),
+            )
+            .await;
+            assert!(result.is_ok());
+        })
         .await;
-        assert!(result.is_ok());
     }
 }

@@ -531,14 +531,11 @@ mod tests {
     /// would satisfy every one of them. `dev staging --context …` takes the
     /// context from the operator's command line, so a typo is the realistic
     /// route to production — and the guard has to refuse on the context alone.
-    ///
-    /// The refused string below is the real context in this repo's kubeconfig,
-    /// not a hypothetical.
     #[test]
     fn reset_refuses_a_production_context_even_when_every_label_says_staging() {
         let err = verify_target(
             DeploymentEnvironment::Dev,
-            Some("gke_neon-law-420305_us-west4_navigator-prod"),
+            Some("gke_example-project-123456_us-west4_navigator-prod"),
             "navigator",
             // Perfectly valid managed-staging labels: the target claiming to
             // be staging must not be enough.

@@ -266,12 +266,6 @@ mod tests {
     use uuid::Uuid;
     use workflows::{InMemoryRuntime, StateMachineRuntime};
 
-    use store::test_support::mem_surreal;
-    async fn db() -> store::surreal::SurrealDb {
-        let surreal = mem_surreal().await;
-        surreal
-    }
-
     async fn call(
         surreal: &store::surreal::SurrealDb,
         runtime: &dyn StateMachineRuntime,
@@ -405,6 +399,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+        crate::test_fixtures::seed_brands(surreal).await;
         let project = store::projects::create(
             surreal,
             &store::projects::NewProject {
@@ -477,61 +472,13 @@ mod tests {
 
     #[tokio::test]
     async fn answering_one_question_returns_the_next_one() {
-        let surreal = db().await;
-        seed(&surreal).await;
-        let runtime = InMemoryRuntime::new();
-        let (id, code) = start_retainer(&surreal, &runtime).await;
-        assert_eq!(code, "entity");
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            seed(&surreal).await;
+            let runtime = InMemoryRuntime::new();
+            let (id, code) = start_retainer(&surreal, &runtime).await;
+            assert_eq!(code, "entity");
 
-        let out = call(
-            &surreal,
-            &runtime,
-            None,
-            None,
-            &json!({
-                "notation_id": id,
-                "question_code": code,
-                "value": "Northstar Ventures LLC",
-            }),
-        )
-        .await
-        .unwrap();
-        assert_eq!(out["structuredContent"]["status"], "needs_answer");
-        assert_eq!(
-            out["structuredContent"]["next_question"]["code"],
-            "address__principal_office"
-        );
-    }
-
-    #[tokio::test]
-    async fn full_walk_lands_on_complete_status() {
-        let surreal = db().await;
-        seed(&surreal).await;
-        let runtime = InMemoryRuntime::new();
-        let (id, mut code) = start_retainer(&surreal, &runtime).await;
-        // The retainer walk asks the entity and its principal office, the
-        // client, the firm DRI, the engagement name, the engagement's start
-        // date/scope (N120 grounded these against the questionnaire), and
-        // which state's law governs (ENG-145 moved the governing-law
-        // question onto the firm's one engagement agreement).
-        let values = [
-            ("entity", "Northstar Ventures LLC"),
-            (
-                "address__principal_office",
-                "100 Innovation Way, Reno, NV 89501",
-            ),
-            ("person__client", "Libra"),
-            ("project__engagement", "Apollo"),
-            ("custom_datetime__engagement_start_date", "2026-09-01"),
-            (
-                "custom_text__engagement_scope",
-                "Draft and file the Apollo formation documents.",
-            ),
-            ("custom_single_choice__governing_law", "nevada"),
-        ];
-        let mut last: Value = Value::Null;
-        for (expected_code, value) in values {
-            assert_eq!(code, expected_code);
             let out = call(
                 &surreal,
                 &runtime,
@@ -540,24 +487,79 @@ mod tests {
                 &json!({
                     "notation_id": id,
                     "question_code": code,
-                    "value": value,
+                    "value": "Northstar Ventures LLC",
                 }),
             )
             .await
             .unwrap();
-            last = out.clone();
-            if let Some(next_code) = out["structuredContent"]["next_question"]["code"].as_str() {
-                code = next_code.to_string();
+            assert_eq!(out["structuredContent"]["status"], "needs_answer");
+            assert_eq!(
+                out["structuredContent"]["next_question"]["code"],
+                "address__principal_office"
+            );
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn full_walk_lands_on_complete_status() {
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            seed(&surreal).await;
+            let runtime = InMemoryRuntime::new();
+            let (id, mut code) = start_retainer(&surreal, &runtime).await;
+            // The retainer walk asks the entity and its principal office, the
+            // client, the firm DRI, the engagement name, the engagement's start
+            // date/scope (N120 grounded these against the questionnaire), and
+            // which state's law governs (ENG-145 moved the governing-law
+            // question onto the firm's one engagement agreement).
+            let values = [
+                ("entity", "Northstar Ventures LLC"),
+                (
+                    "address__principal_office",
+                    "100 Innovation Way, Reno, NV 89501",
+                ),
+                ("person__client", "Libra"),
+                ("project__engagement", "Apollo"),
+                ("custom_datetime__engagement_start_date", "2026-09-01"),
+                (
+                    "custom_text__engagement_scope",
+                    "Draft and file the Apollo formation documents.",
+                ),
+                ("custom_single_choice__governing_law", "nevada"),
+            ];
+            let mut last: Value = Value::Null;
+            for (expected_code, value) in values {
+                assert_eq!(code, expected_code);
+                let out = call(
+                    &surreal,
+                    &runtime,
+                    None,
+                    None,
+                    &json!({
+                        "notation_id": id,
+                        "question_code": code,
+                        "value": value,
+                    }),
+                )
+                .await
+                .unwrap();
+                last = out.clone();
+                if let Some(next_code) = out["structuredContent"]["next_question"]["code"].as_str()
+                {
+                    code = next_code.to_string();
+                }
             }
-        }
-        assert_eq!(last["structuredContent"]["status"], "complete");
-        // No drive is wired into this fixture, so the tool says plainly that
-        // the workflow was not started rather than implying it was.
-        assert!(last["structuredContent"]["workflow_state"].is_null());
-        assert!(last["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("NOT started"));
+            assert_eq!(last["structuredContent"]["status"], "complete");
+            // No drive is wired into this fixture, so the tool says plainly that
+            // the workflow was not started rather than implying it was.
+            assert!(last["structuredContent"]["workflow_state"].is_null());
+            assert!(last["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("NOT started"));
+        })
+        .await;
     }
 
     /// A questionnaire completing is what begins the notation's workflow, and
@@ -584,103 +586,110 @@ mod tests {
 
     #[tokio::test]
     async fn the_last_answer_begins_the_notations_workflow() {
-        let surreal = db().await;
-        seed(&surreal).await;
-        let runtime = InMemoryRuntime::new();
-        let (id, mut code) = start_retainer(&surreal, &runtime).await;
-        let drive = StubDrive::default();
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            seed(&surreal).await;
+            let runtime = InMemoryRuntime::new();
+            let (id, mut code) = start_retainer(&surreal, &runtime).await;
+            let drive = StubDrive::default();
 
-        let values = [
-            ("entity", "Northstar Ventures LLC"),
-            (
-                "address__principal_office",
-                "100 Innovation Way, Reno, NV 89501",
-            ),
-            ("person__client", "Libra"),
-            ("project__engagement", "Apollo"),
-            ("custom_datetime__engagement_start_date", "2026-09-01"),
-            (
-                "custom_text__engagement_scope",
-                "Draft and file the Apollo formation documents.",
-            ),
-            ("custom_single_choice__governing_law", "nevada"),
-        ];
-        let mut last: Value = Value::Null;
-        for (expected_code, value) in values {
-            assert_eq!(code, expected_code);
-            let out = call(
-                &surreal,
-                &runtime,
-                None,
-                Some(&drive),
-                &json!({
-                    "notation_id": id,
-                    "question_code": code,
-                    "value": value,
-                }),
-            )
-            .await
-            .unwrap();
-            last = out.clone();
-            if let Some(next_code) = out["structuredContent"]["next_question"]["code"].as_str() {
-                code = next_code.to_string();
+            let values = [
+                ("entity", "Northstar Ventures LLC"),
+                (
+                    "address__principal_office",
+                    "100 Innovation Way, Reno, NV 89501",
+                ),
+                ("person__client", "Libra"),
+                ("project__engagement", "Apollo"),
+                ("custom_datetime__engagement_start_date", "2026-09-01"),
+                (
+                    "custom_text__engagement_scope",
+                    "Draft and file the Apollo formation documents.",
+                ),
+                ("custom_single_choice__governing_law", "nevada"),
+            ];
+            let mut last: Value = Value::Null;
+            for (expected_code, value) in values {
+                assert_eq!(code, expected_code);
+                let out = call(
+                    &surreal,
+                    &runtime,
+                    None,
+                    Some(&drive),
+                    &json!({
+                        "notation_id": id,
+                        "question_code": code,
+                        "value": value,
+                    }),
+                )
+                .await
+                .unwrap();
+                last = out.clone();
+                if let Some(next_code) = out["structuredContent"]["next_question"]["code"].as_str()
+                {
+                    code = next_code.to_string();
+                }
             }
-        }
 
-        assert_eq!(last["structuredContent"]["status"], "complete");
-        assert_eq!(
-            last["structuredContent"]["workflow_state"], "lawyer_review",
-            "the tool reports where the workflow it began now sits"
-        );
-        let principal = store::persons::find_by_email_ci(&surreal, "principal@example.com")
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            *drive.began.lock().unwrap(),
-            vec![(id, Some(principal.id))],
-            "the drive is called once and keeps the resolved caller"
-        );
+            assert_eq!(last["structuredContent"]["status"], "complete");
+            assert_eq!(
+                last["structuredContent"]["workflow_state"], "lawyer_review",
+                "the tool reports where the workflow it began now sits"
+            );
+            let principal = store::persons::find_by_email_ci(&surreal, "principal@example.com")
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                *drive.began.lock().unwrap(),
+                vec![(id, Some(principal.id))],
+                "the drive is called once and keeps the resolved caller"
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn an_out_of_scope_lawyer_cannot_answer_or_start_a_workflow() {
-        let surreal = db().await;
-        seed(&surreal).await;
-        let runtime = InMemoryRuntime::new();
-        let (id, code) = start_retainer(&surreal, &runtime).await;
-        let outsider = store::persons::create(
-            &surreal,
-            &store::persons::NewPerson::with_role(
-                "Outside Lawyer",
-                "outside-lawyer@example.com",
-                store::persons::Role::Lawyer,
-            ),
-        )
-        .await
-        .unwrap();
-        let drive = StubDrive::default();
-
-        let error = call_as(
-            &surreal,
-            &runtime,
-            None,
-            Some(&drive),
-            Identity {
-                person_id: outsider.id,
-                role: outsider.role,
-            },
-            &json!({ "notation_id": id, "question_code": code, "value": "Nope" }),
-        )
-        .await
-        .unwrap_err();
-
-        assert!(matches!(error, ToolError::NotFound(_)));
-        assert!(store::answers::for_notation(&surreal, id)
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            seed(&surreal).await;
+            let runtime = InMemoryRuntime::new();
+            let (id, code) = start_retainer(&surreal, &runtime).await;
+            let outsider = store::persons::create(
+                &surreal,
+                &store::persons::NewPerson::with_role(
+                    "Outside Lawyer",
+                    "outside-lawyer@example.com",
+                    store::persons::Role::Lawyer,
+                ),
+            )
             .await
-            .unwrap()
-            .is_empty());
-        assert!(drive.began.lock().unwrap().is_empty());
+            .unwrap();
+            let drive = StubDrive::default();
+
+            let error = call_as(
+                &surreal,
+                &runtime,
+                None,
+                Some(&drive),
+                Identity {
+                    person_id: outsider.id,
+                    role: outsider.role,
+                },
+                &json!({ "notation_id": id, "question_code": code, "value": "Nope" }),
+            )
+            .await
+            .unwrap_err();
+
+            assert!(matches!(error, ToolError::NotFound(_)));
+            assert!(store::answers::for_notation(&surreal, id)
+                .await
+                .unwrap()
+                .is_empty());
+            assert!(drive.began.lock().unwrap().is_empty());
+        })
+        .await;
     }
 
     /// ENG-459: the agent surface never reaches
@@ -691,150 +700,162 @@ mod tests {
     /// model is told the declared options so it can retry.
     #[tokio::test]
     async fn an_undeclared_choice_is_invalid_arguments() {
-        let surreal = db().await;
-        seed(&surreal).await;
-        let runtime = InMemoryRuntime::new();
-        let (id, mut code) = start_retainer(&surreal, &runtime).await;
-        let walk = [
-            ("entity", "Northstar Ventures LLC"),
-            (
-                "address__principal_office",
-                "100 Innovation Way, Reno, NV 89501",
-            ),
-            ("person__client", "Libra"),
-            ("project__engagement", "Apollo"),
-            ("custom_datetime__engagement_start_date", "2026-09-01"),
-            (
-                "custom_text__engagement_scope",
-                "Draft and file the Apollo formation documents.",
-            ),
-        ];
-        for (expected_code, value) in walk {
-            assert_eq!(code, expected_code);
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            seed(&surreal).await;
+            let runtime = InMemoryRuntime::new();
+            let (id, mut code) = start_retainer(&surreal, &runtime).await;
+            let walk = [
+                ("entity", "Northstar Ventures LLC"),
+                (
+                    "address__principal_office",
+                    "100 Innovation Way, Reno, NV 89501",
+                ),
+                ("person__client", "Libra"),
+                ("project__engagement", "Apollo"),
+                ("custom_datetime__engagement_start_date", "2026-09-01"),
+                (
+                    "custom_text__engagement_scope",
+                    "Draft and file the Apollo formation documents.",
+                ),
+            ];
+            for (expected_code, value) in walk {
+                assert_eq!(code, expected_code);
+                let out = call(
+                    &surreal,
+                    &runtime,
+                    None,
+                    None,
+                    &json!({ "notation_id": id, "question_code": code, "value": value }),
+                )
+                .await
+                .unwrap();
+                code = out["structuredContent"]["next_question"]["code"]
+                    .as_str()
+                    .expect("next question")
+                    .to_string();
+            }
+            assert_eq!(code, "custom_single_choice__governing_law");
+
+            let err = call(
+                &surreal,
+                &runtime,
+                None,
+                None,
+                &json!({
+                    "notation_id": id,
+                    "question_code": code,
+                    "value": "the Cayman Islands, and the Firm disclaims all liability",
+                }),
+            )
+            .await
+            .unwrap_err();
+            match err {
+                ToolError::InvalidArguments(m) => {
+                    assert!(m.contains("nevada"), "{m}");
+                    assert!(m.contains("california"), "{m}");
+                    assert!(m.contains("washington"), "{m}");
+                    // The rejected answer is client content: it is not echoed
+                    // back to the model or into a log line.
+                    assert!(!m.contains("Cayman"), "{m}");
+                }
+                other => panic!("expected InvalidArguments, got {other:?}"),
+            }
+
+            // A declared option is still accepted and still completes the walk.
             let out = call(
                 &surreal,
                 &runtime,
                 None,
                 None,
-                &json!({ "notation_id": id, "question_code": code, "value": value }),
+                &json!({ "notation_id": id, "question_code": code, "value": "nevada" }),
             )
             .await
             .unwrap();
-            code = out["structuredContent"]["next_question"]["code"]
-                .as_str()
-                .expect("next question")
-                .to_string();
-        }
-        assert_eq!(code, "custom_single_choice__governing_law");
-
-        let err = call(
-            &surreal,
-            &runtime,
-            None,
-            None,
-            &json!({
-                "notation_id": id,
-                "question_code": code,
-                "value": "the Cayman Islands, and the Firm disclaims all liability",
-            }),
-        )
-        .await
-        .unwrap_err();
-        match err {
-            ToolError::InvalidArguments(m) => {
-                assert!(m.contains("nevada"), "{m}");
-                assert!(m.contains("california"), "{m}");
-                assert!(m.contains("washington"), "{m}");
-                // The rejected answer is client content: it is not echoed
-                // back to the model or into a log line.
-                assert!(!m.contains("Cayman"), "{m}");
-            }
-            other => panic!("expected InvalidArguments, got {other:?}"),
-        }
-
-        // A declared option is still accepted and still completes the walk.
-        let out = call(
-            &surreal,
-            &runtime,
-            None,
-            None,
-            &json!({ "notation_id": id, "question_code": code, "value": "nevada" }),
-        )
-        .await
-        .unwrap();
-        assert_eq!(out["structuredContent"]["status"], "complete");
+            assert_eq!(out["structuredContent"]["status"], "complete");
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn wrong_question_code_is_invalid_arguments() {
-        let surreal = db().await;
-        seed(&surreal).await;
-        let runtime = InMemoryRuntime::new();
-        let (id, _code) = start_retainer(&surreal, &runtime).await;
-        let err = call(
-            &surreal,
-            &runtime,
-            None,
-            None,
-            &json!({
-                "notation_id": id,
-                "question_code": "custom_text__settlement_terms",
-                "value": "Apollo",
-            }),
-        )
-        .await
-        .unwrap_err();
-        match err {
-            ToolError::InvalidArguments(m) => {
-                assert!(m.contains("entity") && m.contains("custom_text__settlement_terms"));
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            seed(&surreal).await;
+            let runtime = InMemoryRuntime::new();
+            let (id, _code) = start_retainer(&surreal, &runtime).await;
+            let err = call(
+                &surreal,
+                &runtime,
+                None,
+                None,
+                &json!({
+                    "notation_id": id,
+                    "question_code": "custom_text__settlement_terms",
+                    "value": "Apollo",
+                }),
+            )
+            .await
+            .unwrap_err();
+            match err {
+                ToolError::InvalidArguments(m) => {
+                    assert!(m.contains("entity") && m.contains("custom_text__settlement_terms"));
+                }
+                other => panic!("expected InvalidArguments, got {other:?}"),
             }
-            other => panic!("expected InvalidArguments, got {other:?}"),
-        }
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn unknown_notation_id_is_not_found() {
-        let surreal = db().await;
-        seed(&surreal).await;
-        let runtime = InMemoryRuntime::new();
-        let err = call(
-            &surreal,
-            &runtime,
-            None,
-            None,
-            &json!({
-                "notation_id": Uuid::nil(),
-                "question_code": "person__client",
-                "value": "Libra",
-            }),
-        )
-        .await
-        .unwrap_err();
-        match err {
-            ToolError::NotFound(m) => assert!(m.contains("notation")),
-            other => panic!("expected NotFound, got {other:?}"),
-        }
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            seed(&surreal).await;
+            let runtime = InMemoryRuntime::new();
+            let err = call(
+                &surreal,
+                &runtime,
+                None,
+                None,
+                &json!({
+                    "notation_id": Uuid::nil(),
+                    "question_code": "person__client",
+                    "value": "Libra",
+                }),
+            )
+            .await
+            .unwrap_err();
+            match err {
+                ToolError::NotFound(m) => assert!(m.contains("notation")),
+                other => panic!("expected NotFound, got {other:?}"),
+            }
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn blank_question_code_is_invalid_arguments() {
-        let surreal = db().await;
-        seed(&surreal).await;
-        let runtime = InMemoryRuntime::new();
-        let (id, _) = start_retainer(&surreal, &runtime).await;
-        let err = call(
-            &surreal,
-            &runtime,
-            None,
-            None,
-            &json!({
-                "notation_id": id,
-                "question_code": "  ",
-                "value": "Libra",
-            }),
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(err, ToolError::InvalidArguments(_)));
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            seed(&surreal).await;
+            let runtime = InMemoryRuntime::new();
+            let (id, _) = start_retainer(&surreal, &runtime).await;
+            let err = call(
+                &surreal,
+                &runtime,
+                None,
+                None,
+                &json!({
+                    "notation_id": id,
+                    "question_code": "  ",
+                    "value": "Libra",
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(err, ToolError::InvalidArguments(_)));
+        })
+        .await;
     }
 }

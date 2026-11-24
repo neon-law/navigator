@@ -1,30 +1,33 @@
 ---
 name: deploy-production
 description: >-
-  Roll the neon-law-prod deployment onto a Navigator release tag by hand and verify it, or verify production is wholly
-  on a tag without changing anything. Use when the user wants production updated, promoted, rolled back, restarted after
-  a secret change, or recovered outside release-deploy.yml: "now do prod", "promote that to production", "roll
+  Roll the production deployment onto a Navigator release tag by hand and verify it, or verify production is wholly on a
+  tag without changing anything. Use when the user wants production updated, promoted, rolled back, restarted after a
+  secret change, or recovered outside release-deploy.yml: "now do prod", "promote that to production", "roll
   www.neonlaw.com back". This row serves real client matters, so staging must already serve the same tag.
 ---
 
 # Roll production
 
-Roll `neon-law-prod` onto a release tag. The tag is the argument. This row serves `www.neonlaw.com` and holds real
-client matters.
+Roll `$NAVIGATOR_PRODUCTION_DEPLOYMENT` onto a release tag. The tag is the argument. This row serves `www.neonlaw.com`
+and holds real client matters.
 
 `.github/workflows/release-deploy.yml` rolls every stable tag to production unattended once staging passes, and holds
 every prerelease tag at staging. Use this skill when a person rolls instead. Check first whether a `release-deploy` run
 is in flight (`gh run list --workflow release-deploy.yml --limit 5`); never roll by hand beside one.
 
-Follow [`docs/manual-roll.md`](../../../docs/manual-roll.md) with `ROW=neon-law-prod` and `ROW_RESTATE_ENV=production`.
-What follows is specific to this row.
+`NAVIGATOR_PRODUCTION_DEPLOYMENT` and `NAVIGATOR_STAGING_DEPLOYMENT` are the rows' directory names under `deployments/`.
+Export both before starting; if either is unset, ask.
+
+Follow [`docs/manual-roll.md`](../../../docs/manual-roll.md) with `ROW=$NAVIGATOR_PRODUCTION_DEPLOYMENT` and
+`ROW_RESTATE_ENV=production`. What follows is specific to this row.
 
 ## Staging goes first
 
 Confirm staging already serves this exact tag before the first mutating command:
 
 ```bash
-./.agents/skills/deploy-staging/scripts/verify-row.sh neon-law-stg <tag>
+./.agents/skills/deploy-staging/scripts/verify-row.sh "$NAVIGATOR_STAGING_DEPLOYMENT" <tag>
 ```
 
 If it does not, say so and stop. The exception is a rollback or an emergency where the user has explicitly weighed this
@@ -52,7 +55,7 @@ App, and Restate environment are all this row's own; never copy a coordinate bet
 ## Verify
 
 ```bash
-./.agents/skills/deploy-staging/scripts/verify-row.sh neon-law-prod <tag>
+./.agents/skills/deploy-staging/scripts/verify-row.sh "$NAVIGATOR_PRODUCTION_DEPLOYMENT" <tag>
 ```
 
 Capture the outgoing tag before starting; rolling back is `ops ship --tag <outgoing tag>`.
@@ -60,5 +63,5 @@ Capture the outgoing tag before starting; rolling back is `ops ship --tag <outgo
 ## Finishing
 
 Report both rows and their tags together, along with anything outstanding. If Restate re-registration was judged
-current, say it was compared and found current. Remove the `neon-law-prod` kubectl context as `docs/manual-roll.md` step
-10 describes.
+current, say it was compared and found current. Remove the `$NAVIGATOR_PRODUCTION_DEPLOYMENT` kubectl context as
+`docs/manual-roll.md` step 10 describes.

@@ -235,7 +235,7 @@ pub fn mask_phone(phone: Option<&str>) -> String {
 /// mailbox an identity key.
 pub async fn record(db: &SurrealDb, new: &NewLead) -> Result<Lead, LeadError> {
     if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
-        return crate::postgres::leads::record(&pg, new, None).await;
+        return crate::postgres::leads::record(&pg, new, None, None).await;
     }
 
     let email = new.email.trim().to_string();
@@ -284,6 +284,49 @@ pub async fn record(db: &SurrealDb, new: &NewLead) -> Result<Lead, LeadError> {
     Ok(lead)
 }
 
+/// Answers submitted by a family before opening an IEP account.
+pub struct LeadIntake<'a> {
+    pub submission_key: String,
+    pub district: &'a str,
+    pub relationship: &'a str,
+    pub concern: &'a str,
+    pub next_date: Option<chrono::NaiveDate>,
+}
+
+/// Save the submitted answers, contact details and consent together under the receiving Firm.
+pub async fn record_intake(
+    new: &NewLead,
+    event: &NewConsentEvent,
+    answers: &LeadIntake<'_>,
+) -> Result<Lead, LeadError> {
+    let pg = crate::postgres::matter::authority_for(TABLE)
+        .await?
+        .ok_or(crate::postgres::matter::MatterAuthorityError::Unavailable)?;
+    crate::postgres::leads::record(&pg, new, Some(event), Some(answers)).await
+}
+
+/// Read submissions in the Firm that received them, even if the Brand subsequently moves.
+pub async fn intake_history(
+    lead: Uuid,
+    viewer: Uuid,
+    role: persons::Role,
+) -> Result<Vec<String>, LeadError> {
+    if !matches!(role, persons::Role::Owner | persons::Role::Admin) {
+        return Ok(Vec::new());
+    }
+    let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? else {
+        return Ok(Vec::new());
+    };
+    sqlx::query_scalar("SELECT concat_ws(E'\\n', submitted_at::date::text,
+        'School or district: ' || school_district, 'Relationship: ' || relationship,
+        'Concern: ' || concern, 'Upcoming date: ' || coalesce(next_date::text, 'None given'))
+        FROM lead_intake i WHERE lead_id=$1 AND ($2 OR EXISTS (
+        SELECT 1 FROM person_firm_role m WHERE m.person_id=$3 AND m.firm_id=i.firm_id AND m.membership='admin'
+    )) ORDER BY submitted_at DESC, i.id DESC")
+        .bind(lead).bind(role == persons::Role::Owner).bind(viewer)
+        .fetch_all(pg.pool()).await.map_err(|e| crate::postgres::matter::MatterAuthorityError::from(e).into())
+}
+
 /// Record one immutable consent event and update the lead's current contact
 /// projection in one transaction.
 ///
@@ -298,7 +341,7 @@ pub async fn record_consent_event(
     event: &NewConsentEvent,
 ) -> Result<Lead, LeadError> {
     if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
-        return crate::postgres::leads::record(&pg, new, Some(event)).await;
+        return crate::postgres::leads::record(&pg, new, Some(event), None).await;
     }
 
     let email = new.email.trim().to_string();
@@ -627,6 +670,78 @@ mod tests {
             consent_version: "By sending this, you agree.".to_string(),
             consented_at: Utc::now(),
         }
+    }
+
+    #[tokio::test]
+    async fn iep_intake_retries_and_siblings_keep_firm_scoped_answers() {
+        let Some((options, database)) = crate::postgres_mirror::tests::test_postgres() else {
+            return;
+        };
+        let fixture = crate::test_support::PostgresFixture::create(options.database(&database))
+            .await
+            .unwrap();
+        let pg = fixture.postgres();
+        let admin: Uuid = sqlx::query_scalar("INSERT INTO person (name,email,role) VALUES ('Synthetic Admin','admin@example.test','admin') RETURNING id")
+            .fetch_one(pg.pool()).await.unwrap();
+        let firm: Uuid = sqlx::query_scalar("INSERT INTO firm (name,status,slug) VALUES ('Synthetic Firm','active','synthetic-iep') RETURNING id")
+            .fetch_one(pg.pool()).await.unwrap();
+        sqlx::query("INSERT INTO brand (name,brand_key,firm_id) VALUES ('Synthetic Brand','synthetic-iep',$1)")
+            .bind(firm).execute(pg.pool()).await.unwrap();
+        sqlx::query("INSERT INTO firm_brand (firm_id,brand_key) VALUES ($1,'synthetic-iep')")
+            .bind(firm)
+            .execute(pg.pool())
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO person_firm_role (person_id,firm_id,membership) VALUES ($1,$2,'admin')",
+        )
+        .bind(admin)
+        .bind(firm)
+        .execute(pg.pool())
+        .await
+        .unwrap();
+        crate::postgres::matter::with_test_db(pg.clone(), async {
+            let lead = lead("family@example.test", "synthetic-iep");
+            let event = NewConsentEvent {
+                consented_at: lead.consented_at,
+                phone: None,
+                source_path: lead.source_path.clone(),
+                sms_consent_version: "test".into(),
+                sms_policy_version: "test".into(),
+                sms_opt_in: false,
+                call_consent_version: "test".into(),
+                call_opt_in: false,
+            };
+            let mut answers = super::LeadIntake {
+                submission_key: "first".into(),
+                district: "Example District",
+                relationship: "Parent",
+                concern: "Evaluation",
+                next_date: None,
+            };
+            let first = super::record_intake(&lead, &event, &answers).await.unwrap();
+            let retry = super::record_intake(&lead, &event, &answers).await.unwrap();
+            assert_eq!((retry.id, retry.submissions), (first.id, 1));
+            answers.submission_key = "second".into();
+            answers.concern = "Missed services";
+            let second = super::record_intake(&lead, &event, &answers).await.unwrap();
+            assert_eq!((second.id, second.submissions), (first.id, 2));
+            let rows = super::intake_history(first.id, admin, Role::Admin)
+                .await
+                .unwrap();
+            assert_eq!(rows.len(), 2);
+            assert!(rows[0].contains("Missed services") && rows[1].contains("Evaluation"));
+            assert!(super::intake_history(first.id, Uuid::now_v7(), Role::Admin)
+                .await
+                .unwrap()
+                .is_empty());
+            assert!(super::intake_history(first.id, admin, Role::Client)
+                .await
+                .unwrap()
+                .is_empty());
+        })
+        .await;
+        fixture.close().await.unwrap();
     }
 
     #[tokio::test]

@@ -22,6 +22,8 @@ pub mod principal;
 pub mod protocol;
 pub mod search;
 pub mod server;
+#[cfg(test)]
+mod test_fixtures;
 pub mod tools;
 
 pub use principal::Principal;

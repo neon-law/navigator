@@ -445,18 +445,9 @@ async fn post_once(
     correlation: &str,
     message: &str,
 ) -> Result<(), NightlyError> {
-    if slack
-        .message_receipt_by_correlation(channel, correlation)
+    crate::firm_slack::post_once(slack, channel, correlation, message)
         .await
-        .map_err(|_| NightlyError::Notice)?
-        .is_none()
-    {
-        slack
-            .post_message_with_receipt(channel, message, Some(correlation))
-            .await
-            .map_err(|_| NightlyError::Notice)?;
-    }
-    Ok(())
+        .map_err(|_| NightlyError::Notice)
 }
 
 /// A registered parent workflow on a DBOS instance that never launches, so a
