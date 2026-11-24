@@ -374,6 +374,8 @@ deadline and a five-minute completed-Job TTL. The Secret, service account and po
 collection. The runner executes `one-job --wait`; after it exits successfully, the API must show that Forgejo removed
 its registration. Runner completion does not mean the workflow passed: inspect that exact workflow result separately.
 
+The runner retries a failed Job status read twice, within the original deadline.
+
 Normal success and failure remove both the registration and Job. An interrupted operator process prints the Job name and
 numeric registration ID needed for recovery. Repeat the same command with `--cleanup-registration <id>` and
 `--cleanup-job <exact-job-name>`, omitting egress arguments, to remove only that invocation's resources. A Job deadline
@@ -412,8 +414,7 @@ credential in the controller's application namespace. Every 20 seconds it:
 2. **Reads the queue.** `GET /api/v1/admin/actions/runners/jobs?labels=self-hosted` lists waiting jobs
    installation-wide.
 3. **Mirrors releases.** It mirrors the release each waiting run's `navigator.yaml` pins into the package registry, if
-   it is not there yet. If a mirror attempt fails, that repository's queued jobs wait while the controller retries on
-   the next tick.
+   it is not there yet. A mirror failure defers new launches for that repository until the next tick.
 4. **Launches.** For each repository it starts one runner per waiting job, minus its own runners that have not picked
    a job up yet. So two ticks never start two runners for one job. `--max-runners` (default 4) caps the total.
 
@@ -422,8 +423,8 @@ without an API token, a read-only root filesystem, no host or Docker socket, `/3
 addresses resolved at launch, a thirty-minute deadline and a five-minute TTL. The controller talks to the Kubernetes API
 with its own service account. Its Role reaches only `navigator-forgejo-runners`: Jobs, and creating Secrets, service
 accounts and NetworkPolicies. Its ClusterRole reads that one namespace object. The token stays in the controller and
-never enters a job pod. `--once` runs one tick, waits for its runners and exits. `--context` drives a
-cluster through `kubectl` from an operator host instead.
+never enters a job pod. `--once` runs one tick, waits for its runners and exits. `--context` drives a cluster through
+`kubectl` from an operator host instead.
 
 For a canary, add `--repository <owner/repository>` to the controller arguments. The controller verifies the exact
 private repository and retains its numeric identity. It launches and observes only that repository and recovers only

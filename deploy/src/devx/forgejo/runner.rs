@@ -562,17 +562,35 @@ pub(in crate::devx) fn execute(
     }
     kube.unsuspend(name)?;
     let started = Instant::now();
+    let mut consecutive_read_failures = 0;
     loop {
-        let observed = kube
-            .job(name)?
-            .context("runner Job disappeared while running")?;
-        if observed["status"]["succeeded"].as_u64().unwrap_or(0) > 0 {
-            return Ok(());
+        match kube.job(name) {
+            Ok(observed) => {
+                consecutive_read_failures = 0;
+                let observed = observed.context("runner Job disappeared while running")?;
+                if observed["status"]["succeeded"].as_u64().unwrap_or(0) > 0 {
+                    return Ok(());
+                }
+                ensure!(
+                    observed["status"]["failed"].as_u64().unwrap_or(0) == 0,
+                    "one-job runner failed; inspect the Actions run in Forgejo and the runner Job status"
+                );
+            }
+            Err(error) => {
+                consecutive_read_failures += 1;
+                if consecutive_read_failures == 3 {
+                    return Err(error)
+                        .context("read the running Job after three consecutive failures");
+                }
+                tracing::warn!(
+                    target: "forgejo",
+                    event = "forgejo.runner.poll_failed",
+                    job = name,
+                    attempt = consecutive_read_failures,
+                    "runner Job status read failed; retrying"
+                );
+            }
         }
-        ensure!(
-            observed["status"]["failed"].as_u64().unwrap_or(0) == 0,
-            "one-job runner failed; inspect the Actions run in Forgejo and the runner Job status"
-        );
         ensure!(
             started.elapsed().as_secs() < DEADLINE_SECS + 60,
             "one-job runner timed out"

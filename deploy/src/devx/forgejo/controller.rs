@@ -953,6 +953,8 @@ fn serve(controller: &mut Controller, once: bool, interval: Duration) -> Result<
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use super::*;
     use serde_json::json;
 
@@ -1227,11 +1229,12 @@ mod tests {
         drop(server_runtime);
     }
 
-    /// A cluster with an isolated namespace and Jobs that succeed at once.
+    /// An isolated cluster that loses the first status read of a running Job.
     #[derive(Default)]
     struct LaunchCluster {
         created: Mutex<Vec<String>>,
         deleted: Mutex<Vec<String>>,
+        job_reads: AtomicUsize,
     }
 
     impl Cluster for LaunchCluster {
@@ -1246,6 +1249,8 @@ mod tests {
             Ok(())
         }
         fn job(&self, _: &str) -> Result<Option<Value>> {
+            let read = self.job_reads.fetch_add(1, Ordering::Relaxed);
+            ensure!(read != 1, "synthetic Kubernetes API timeout");
             Ok(Some(
                 json!({"metadata": {"uid": "job-uid"}, "status": {"succeeded": 1}}),
             ))
@@ -1276,7 +1281,7 @@ mod tests {
     /// repository's runs.
     #[test]
     #[allow(clippy::too_many_lines)]
-    fn a_tick_waits_for_the_release_then_runs_each_waiting_job_once() {
+    fn a_tick_waits_for_the_release_then_runs_once_despite_a_poll_failure() {
         use wiremock::matchers::{method, path, path_regex, query_param};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -1443,6 +1448,7 @@ mod tests {
             *cluster.created.lock().unwrap(),
             ["Job", "ServiceAccount", "Secret", "NetworkPolicy"]
         );
+        assert_eq!(cluster.job_reads.load(Ordering::Relaxed), 3);
         let deleted = cluster.deleted.lock().unwrap().clone();
         assert_eq!(deleted.len(), 1);
         assert!(is_runner_job_name(&deleted[0]));
