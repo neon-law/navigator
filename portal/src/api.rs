@@ -2328,7 +2328,7 @@ async fn may_use_mirror(
         store::firm_capability::FirmCapability::UseIntegrations,
     )
     .await
-    .map(|access| access.is_allowed())
+    .map(store::firm_capability::FirmCapabilityDecision::is_allowed)
     .map_err(|error| ApiError::Db(error.to_string()))
 }
 
@@ -2408,15 +2408,14 @@ async fn repair_forgejo_mirror(
     code: &str,
     origin: &str,
 ) -> Result<serde_json::Value, ApiError> {
-    let (repository, outcome) = match find_forgejo_mirror(forge, code).await? {
-        Some(repository) => (repository, "present"),
-        None => {
-            let repository = cloud::ForgeService::ensure_repository(forge, code)
-                .await
-                .map_err(MirrorIssue::from_forge)?;
-            verify_forgejo_mirror(forge, code, &repository)?;
-            (repository, "created")
-        }
+    let (repository, outcome) = if let Some(repository) = find_forgejo_mirror(forge, code).await? {
+        (repository, "present")
+    } else {
+        let repository = cloud::ForgeService::ensure_repository(forge, code)
+            .await
+            .map_err(MirrorIssue::from_forge)?;
+        verify_forgejo_mirror(forge, code, &repository)?;
+        (repository, "created")
     };
     Ok(serde_json::json!({
         "repository_url": repository.url,
