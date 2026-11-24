@@ -217,7 +217,7 @@ async fn run_document_preflight(dir: &Path) -> Result<()> {
 /// Return ignored Pointer paths already in the tree and paths the live check
 /// would create. Git's normal status omits the former, while check-ignore sees
 /// the latter before they exist.
-fn ignored_pointer_paths(
+pub(super) fn ignored_pointer_paths(
     dir: &Path,
     fixes: &[super::document_check::CheckFix],
 ) -> Result<Vec<String>> {
@@ -690,7 +690,7 @@ where
 
 /// Return a terminal deployment, or retain the last observed run at the deadline.
 /// A pending conclusion remains unverified and cannot count as successful delivery.
-async fn watch_deployment<S, Fut>(
+pub(super) async fn watch_deployment<S, Fut>(
     forge: &dyn Forge,
     merge_commit: &str,
     deadline: Instant,

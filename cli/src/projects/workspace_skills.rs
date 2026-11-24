@@ -53,30 +53,39 @@ pub struct Checkout {
     pub firm: Option<String>,
 }
 
+/// Immediate visible directories with a Project manifest, in stable order.
+pub(super) fn project_directories(root: &Path) -> std::io::Result<Vec<PathBuf>> {
+    let mut paths = Vec::new();
+    for entry in std::fs::read_dir(root)?.flatten() {
+        if !entry.file_name().to_string_lossy().starts_with('.')
+            && entry.file_type().is_ok_and(|kind| kind.is_dir())
+            && entry.path().join(manifest::FILE).is_file()
+        {
+            paths.push(entry.path());
+        }
+    }
+    paths.sort();
+    Ok(paths)
+}
+
 /// Every child folder carrying a readable `navigator.yaml`.
 #[must_use]
 pub fn checkouts(root: &Path) -> Vec<Checkout> {
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return Vec::new();
-    };
-    let mut found: Vec<Checkout> = entries
-        .flatten()
-        .filter(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
-        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
-        .filter_map(|entry| {
-            let dir = entry.path();
+    project_directories(root)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|dir| {
+            let code = dir.file_name()?.to_string_lossy().into_owned();
             let manifest = manifest::read(&dir)?;
             Some(Checkout {
-                code: entry.file_name().to_string_lossy().into_owned(),
+                dir,
+                code,
                 host: manifest::non_empty(manifest.host.as_deref())
                     .map(|host| crate::credentials::base_url(&host)),
                 firm: manifest::non_empty(manifest.firm.as_deref()),
-                dir,
             })
         })
-        .collect();
-    found.sort_by(|a, b| a.code.cmp(&b.code));
-    found
+        .collect()
 }
 
 /// What one sync pass did, or in a dry run would do.

@@ -72,6 +72,10 @@ row. Reopen restores a cancelled row to open and preserves its id, replay key, a
 is a no-op; a complete row cannot be reopened. Replaying a cancelled row refuses without changing it and directs the
 caller to reopen first. Replaying a complete row updates its fields while preserving complete status.
 
+`navigator project deadline create` uses the supplied replay key or generates one for the request. If the response is
+lost, Navigator reads the original Project and checks the key and requested fields. It returns the saved row when
+confirmed. It makes at most two create attempts with the same key. An unconfirmed result includes the key to reuse.
+
 **Calendar revision.** `calendar_sequence` is an internal, monotonic RFC 5545 integer. A new row starts at zero; updates
 and status changes increment it atomically. Historical rows keep their timestamp-based exported version until the next
 write increments from that version. Values above 2147483647 are refused.

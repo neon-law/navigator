@@ -771,6 +771,30 @@ replace a different existing `forgejo` remote. GitHub remains the source reposit
 reports the Forgejo URL only after verifying the repository with the same Firm-scoped credential; `forgejo_status`
 distinguishes `verified`, `missing`, `unavailable`, `not_configured`, and `not_authorized` from the GitHub `origin`.
 
+## Reviewing a Project release
+
+Prepare and sign the release changes on `release/<tag>` in each changed Project. With the pinned Navigator release, run
+`navigator release preflight --repo <checkout> --revision release/<tag>`. Its JSON names the commit, the repository
+checks, the paths a local gate would repair and the live document findings. A failed check, pending repair or
+unavailable service produces a nonzero exit. The operator's checkout and index retain their original contents.
+
+Run `navigator release review --tag <tag> --dir <workspace>` to open drafts on the Projects' recorded origins. Navigator
+verifies the outgoing signatures and reports each review's URL, default branch, head SHA and draft state. A repeat run
+adopts the published release topic, including a push interrupted before the review opened. An existing ready review
+keeps its state. Empty and archived repositories have separate outcomes. A base that pins the release and has no topic
+reports `base_pinned`. A missing proposal or a conflicting topic identifies the Project that needs attention while the
+rest of the inventory continues.
+
+A Forgejo-primary checkout uses Forgejo as the reference. Pass `--forgejo-first` during the transition to compare
+against the verified Forgejo repository while the recorded primary still owns review and merge. The report flags that
+cutover gap. Navigator verifies the identity, private visibility and write access of each destination before publishing
+the same signed topic to the explicit origin push URLs. It reads the topic back from each destination. A different base
+or topic, a provider denial, or an unavailable check requires attention.
+
+Review waits for the required checks on the reported head. Add `--land` to land a ready review through the recorded
+primary and verify its merge commit, successful deployment and matching default branches. The draft stays open until an
+authorized reviewer marks it ready.
+
 ## The branch contract
 
 Every Project repository follows one branch contract:
