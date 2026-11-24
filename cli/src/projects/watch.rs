@@ -1027,8 +1027,8 @@ mod tests {
                 "repository inventory changed; retry sync",
             ),
             (
-                json!({"origin": GITHUB, "forgejo": GITHUB}),
-                "no secondary Forgejo URL is configured for this Project",
+                json!({"origin": GITHUB, "forgejo": GITHUB, "forgejo_status": "verified"}),
+                "verified Forgejo mirror has no distinct URL; retry sync",
             ),
         ] {
             let project = listed("sample-matter", Some(GITHUB));
