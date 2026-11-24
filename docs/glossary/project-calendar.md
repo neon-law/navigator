@@ -44,12 +44,12 @@ needs firm-side Project access and the Firm's calendar capability.
 ### Verify a staging calendar
 
 1. Run `navigator project calendar access --project <code> --host <staging-host>`. Read the recorded calendar ID and
-   confirm the staff member is on the current Project roster. The Project's `readable` field reports the deployment's
-   access.
+   confirm the person is a firm-side participant on the current Project roster. The Project's `readable` field reports
+   the deployment's access.
 2. Run `navigator project deadline sync --dry-run --project <code> --host <staging-host>`. A successful preview on a
    recorded calendar verifies the delegated owner's access and the expected `staging-<code>` name. Repeat the access
    read and compare the exact ID.
-3. In the assigned staff member's Google Calendar account, find that ID in their calendar list and read an event on
+3. In that participant's Google Calendar account, find the ID in their calendar list and read an event on
    it, or confirm a successful empty event read for a bounded window. Record list visibility and event readability
    separately. If events are readable by ID but the calendar is absent from the list, investigate the participant's
    subscription and membership job. Keep the ID and the account details in the private administrative record.
