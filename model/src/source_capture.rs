@@ -1,21 +1,28 @@
-//! Bounded streaming selection of canonical operational export sections.
+//! Select and verify sections of a captured operational export without a storage connection.
+
+use std::io::{self, Read};
+
+use sha2::{Digest, Sha256};
 
 use std::collections::BTreeSet;
 
-pub(crate) struct Sections {
+/// Select the sections to keep in a buffered or streaming export.
+pub struct Sections {
     derived: BTreeSet<String>,
     skipping: bool,
 }
 
 impl Sections {
-    pub(crate) fn new(derived: impl IntoIterator<Item = String>) -> Self {
+    /// Start at the beginning of an export, omitting the given table names.
+    pub fn new(derived: impl IntoIterator<Item = String>) -> Self {
         Self {
             derived: derived.into_iter().collect(),
             skipping: false,
         }
     }
 
-    pub(crate) fn retain(&mut self, line: &str) -> bool {
+    /// Advance to the next complete line and report whether to keep it.
+    pub fn retain(&mut self, line: &str) -> bool {
         let header = line
             .trim_end()
             .strip_prefix("-- ")
@@ -33,10 +40,10 @@ impl Sections {
 /// An unexpected banner cannot consume unbounded memory during verification.
 #[derive(Debug, thiserror::Error)]
 #[error("operational export contains an unsupported section banner")]
-pub(crate) struct FilterError;
+pub struct FilterError;
 
 /// Stream payload rows directly; retain only one bounded section banner.
-pub(crate) struct ExportFilter {
+pub struct ExportFilter {
     sections: Sections,
     prefix: Vec<u8>,
     content: bool,
@@ -44,7 +51,7 @@ pub(crate) struct ExportFilter {
 
 impl ExportFilter {
     /// Use the same derived-table set as the canonical buffered export.
-    pub(crate) fn new(derived: impl IntoIterator<Item = String>) -> Self {
+    pub fn new(derived: impl IntoIterator<Item = String>) -> Self {
         Self {
             sections: Sections::new(derived),
             prefix: Vec::with_capacity(256),
@@ -53,7 +60,10 @@ impl ExportFilter {
     }
 
     /// Feed one transport chunk without retaining its payload rows.
-    pub(crate) fn feed(
+    ///
+    /// # Errors
+    /// The export has a malformed or oversized section banner.
+    pub fn feed(
         &mut self,
         mut bytes: &[u8],
         emit: &mut impl FnMut(&[u8]),
@@ -92,8 +102,11 @@ impl ExportFilter {
         Ok(())
     }
 
-    /// Finish a final banner without a newline; content was already streamed.
-    pub(crate) fn finish(&mut self, emit: &mut impl FnMut(&[u8])) -> Result<(), FilterError> {
+    /// Finish a final banner without a newline. Prior content has already streamed.
+    ///
+    /// # Errors
+    /// The final banner has invalid UTF-8.
+    pub fn finish(&mut self, emit: &mut impl FnMut(&[u8])) -> Result<(), FilterError> {
         if !self.prefix.is_empty() {
             self.flush_header(emit)?;
         }
@@ -107,6 +120,52 @@ impl ExportFilter {
         }
         self.prefix.clear();
         Ok(())
+    }
+}
+
+/// Count and hash the exact bytes of an operational capture.
+#[derive(Debug, Default)]
+pub struct Fingerprint {
+    bytes: u64,
+    hash: Sha256,
+}
+
+impl Fingerprint {
+    /// Include the next consecutive bytes.
+    ///
+    /// # Errors
+    /// The cumulative byte count is out of range.
+    pub fn update(&mut self, bytes: &[u8]) -> io::Result<()> {
+        let size = u64::try_from(bytes.len()).map_err(io::Error::other)?;
+        self.bytes = self
+            .bytes
+            .checked_add(size)
+            .ok_or_else(|| io::Error::other("capture size overflow"))?;
+        self.hash.update(bytes);
+        Ok(())
+    }
+
+    /// Read a capture in bounded chunks.
+    ///
+    /// # Errors
+    /// The reader fails or the cumulative byte count overflows.
+    pub fn read(mut input: impl Read) -> io::Result<Self> {
+        let mut fingerprint = Self::default();
+        let mut buffer = vec![0_u8; 64 * 1024];
+        loop {
+            match input.read(&mut buffer) {
+                Ok(0) => return Ok(fingerprint),
+                Ok(read) => fingerprint.update(&buffer[..read])?,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => (),
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    /// Return the byte count and lowercase hexadecimal SHA-256.
+    #[must_use]
+    pub fn finish(self) -> (u64, String) {
+        (self.bytes, hex::encode(self.hash.finalize()))
     }
 }
 

@@ -9,6 +9,7 @@ metadata:
   labels:
     app: nightly-project-update-trigger
 spec:
+  suspend: true
   schedule: "33 3 * * *"
   timeZone: Etc/UTC
   concurrencyPolicy: Forbid

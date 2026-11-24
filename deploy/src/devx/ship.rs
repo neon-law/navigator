@@ -653,7 +653,7 @@ where
         let token = workflows::trigger::DBOS_INGRESS_TOKEN_ENV;
         let url = workflows::trigger::DBOS_INGRESS_URL_ENV;
         for (cronjob, flag) in COHOST_TRIGGERS {
-            let _ = write!(value, "  - target:\n      kind: CronJob\n      name: {cronjob}\n    patch: |\n      apiVersion: batch/v1\n      kind: CronJob\n      metadata:\n        name: {cronjob}\n      spec:\n        jobTemplate:\n          spec:\n            template:\n              metadata:\n                labels:\n                  app: {cronjob}\n              spec:\n                containers:\n                  - name: {cronjob}\n                    env:\n                      - $patch: replace\n                      - name: {flag}\n                        value: \"true\"\n                      - name: {url}\n                        value: {internal}\n                      - name: {token}\n                        valueFrom:\n                          secretKeyRef:\n                            name: {secret}\n                            key: {token}\n                      - name: RUST_LOG\n                        value: info\n");
+            let _ = write!(value, "  - target:\n      kind: CronJob\n      name: {cronjob}\n    patch: |\n      apiVersion: batch/v1\n      kind: CronJob\n      metadata:\n        name: {cronjob}\n      spec:\n        suspend: false\n        jobTemplate:\n          spec:\n            template:\n              metadata:\n                labels:\n                  app: {cronjob}\n              spec:\n                containers:\n                  - name: {cronjob}\n                    env:\n                      - $patch: replace\n                      - name: {flag}\n                        value: \"true\"\n                      - name: {url}\n                        value: {internal}\n                      - name: {token}\n                        valueFrom:\n                          secretKeyRef:\n                            name: {secret}\n                            key: {token}\n                      - name: RUST_LOG\n                        value: info\n");
         }
     }
     Ok(Substitution {
@@ -8586,6 +8586,20 @@ mod tests {
     }
 
     #[test]
+    fn remaining_compatibility_cronjobs_render_suspended() {
+        let manifests = rendered_manifests(env_getter(FULL_ENV));
+        for name in [
+            "archives-trigger",
+            "nightly-project-update-trigger",
+            "social-publish-reconciler-trigger",
+            "youtube-comments-poll-trigger",
+        ] {
+            let cronjob = manifest_doc(&manifests, "CronJob", name);
+            assert_eq!(cronjob["spec"]["suspend"].as_bool(), Some(true), "{name}");
+        }
+    }
+
+    #[test]
     #[expect(
         clippy::too_many_lines,
         reason = "one rendered profile proves topology, authenticated routing and admission across both deployment roles"
@@ -8779,10 +8793,11 @@ mod tests {
                 let original = manifest_doc(&mixed, "CronJob", cronjob);
                 let native = manifest_doc(&manifests, "CronJob", cronjob);
                 assert_eq!(native["spec"]["schedule"].as_str(), Some(cadence));
+                assert_eq!(original["spec"]["suspend"].as_bool(), Some(true));
+                assert_eq!(native["spec"]["suspend"].as_bool(), Some(false));
                 for key in [
                     "schedule",
                     "timeZone",
-                    "suspend",
                     "startingDeadlineSeconds",
                     "concurrencyPolicy",
                 ] {

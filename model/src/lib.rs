@@ -36,5 +36,6 @@ pub mod workspace;
 pub mod brand_letterheads;
 pub mod fi_import;
 
+pub mod source_capture;
 pub mod stripe_keys;
 pub mod workflow_engine;
