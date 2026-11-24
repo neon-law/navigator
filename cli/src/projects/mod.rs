@@ -191,7 +191,7 @@ case "${1:-} ${2:-}" in
         *) echo "jj stand-in: unsupported fetch option: $1" >&2; exit 64 ;;
       esac
     done ;;
-  "diff "*) cat .jj/diff 2>/dev/null || true ;;
+  "diff "*) [ -d .jj ] || exit 1; cat .jj/diff 2>/dev/null || true ;;
   "log --no-graph") case "$*" in
       *"-T conflict") echo false ;;
       *"main@origin -T commit_id") git rev-parse origin/main ;;
