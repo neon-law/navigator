@@ -718,7 +718,7 @@ mod tests {
         }
         let temp = tempfile::tempdir()?;
         let dir = temp.path().canonicalize()?;
-        let (project, origin, mirror) = seed_checkout_forges(&dir).await?;
+        let (project, origin, mirror) = seed_checkout_forges(&dir, "site.example.test").await?;
         let origin = origin.to_str().unwrap();
         let checkout = dir.join("matter");
         let sync =
@@ -1055,7 +1055,7 @@ mod tests {
             Ok(root)
         };
         let update = || async {
-            update_checkout(&dir, &project, GITHUB, None, SITE)
+            update_checkout(&dir, &project, GITHUB, FetchRemotes::Origin, SITE)
                 .await
                 .unwrap_err()
                 .to_string()

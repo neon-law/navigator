@@ -135,6 +135,7 @@ mod tests {
             JjCommand::Policy {
                 dir: dir(),
                 dry_run: true,
+                review_team: None,
             },
         ] {
             assert_eq!(run(action).await, ExitCode::FAILURE);
@@ -171,7 +172,7 @@ mod tests {
         let origin = format!("{root}/sample-firm/sample-matter.git");
         let manifest = format!("project:\n  name: sample-matter\n  host: {root}\n");
         let dir = checkout(&manifest, Some(&origin));
-        let error = policy(dir.path(), true).await.unwrap_err();
+        let error = policy(dir.path(), true, None).await.unwrap_err();
         assert!(error.to_string().contains("NAVIGATOR_FORGEJO_ROOT_URL"));
 
         std::env::set_var("NAVIGATOR_FORGEJO_ROOT_URL", &root);
@@ -191,7 +192,7 @@ mod tests {
             project("https://forge.example.test/else"),
         )
         .await;
-        let error = policy(dir.path(), true).await.unwrap_err();
+        let error = policy(dir.path(), true, None).await.unwrap_err();
         assert!(error
             .to_string()
             .contains("checkout origin must match the Project's recorded source URL"));

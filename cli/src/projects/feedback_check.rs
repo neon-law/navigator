@@ -869,7 +869,7 @@ mod tests {
     #[tokio::test]
     async fn a_term_only_check_runs_offline_and_names_each_carrier() {
         let dir = tempfile::tempdir().unwrap();
-        let terms = ["Harper Cruller".to_string()];
+        let terms = ["sample marker".to_string()];
         let clean = drafted(
             dir.path(),
             "The template cites the wrong rule.\n",
@@ -879,12 +879,12 @@ mod tests {
             run(clean, &terms, &[], false, None).await,
             ExitCode::SUCCESS
         );
-        let named = drafted(dir.path(), "Harper Cruller reported it.\n", "Fix rule");
+        let named = drafted(dir.path(), "sample marker reported it.\n", "Fix rule");
         assert_eq!(
             run(named, &terms, &[], false, None).await,
             ExitCode::FAILURE
         );
-        let titled = drafted(dir.path(), "Reported.\n", "Fix Harper Cruller's letter");
+        let titled = drafted(dir.path(), "Reported.\n", "Fix sample marker's letter");
         assert_eq!(
             run(titled, &terms, &[], false, None).await,
             ExitCode::FAILURE

@@ -472,8 +472,8 @@ mod tests {
                 tokio::spawn(async move { wait_for_token(listener, "the-nonce", TEST_BASE).await });
             let answer = send(addr, &format!("GET {query} HTTP/1.1\r\n\r\n")).await;
             let _ = server.await.unwrap();
-            assert!(answer.starts_with(status), "{query}: {answer}");
-            assert!(answer.contains(page), "{query}: {answer}");
+            assert!(answer.starts_with(status));
+            assert!(answer.contains(page));
         }
     }
 

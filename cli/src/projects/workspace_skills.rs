@@ -685,7 +685,7 @@ mod tests {
         let libraries = serde_json::json!([
             {"slug": "sample-firm", "repository_url": "https://forge.example.test/sample-firm/library"},
             {"slug": "bare-firm", "repository_url": null},
-            {"slug": "Bad Slug", "repository_url": null},
+            {"slug": "invalid slug", "repository_url": null},
         ]);
         answer(&server, "GET", "/app/api/firm-libraries", 200, libraries).await;
         let root = tempfile::tempdir().unwrap();
@@ -694,7 +694,7 @@ mod tests {
         hosted(root.path(), "beta", Some((here, Some("unlisted-firm"))));
         hosted(root.path(), "gamma", Some((here, None)));
         hosted(root.path(), "delta", Some((here, Some("bare-firm"))));
-        hosted(root.path(), "epsilon", Some((here, Some("Bad Slug"))));
+        hosted(root.path(), "epsilon", Some((here, Some("invalid slug"))));
         hosted(root.path(), "eta", None);
         let elsewhere = ("signed-out.example.test", Some("sample-firm"));
         hosted(root.path(), "zeta", Some(elsewhere));
@@ -707,7 +707,7 @@ mod tests {
             format!("gamma: navigator.yaml names no `firm` and {host} lists 3 Firms for you"),
             format!("eta: navigator.yaml names no `firm` and {host} lists 3 Firms for you"),
             "Firm `bare-firm` has no Firm Library repository on its host".to_string(),
-            "Firm slug `Bad Slug` is not a valid folder name".to_string(),
+            "Firm slug `invalid slug` is not a valid folder name".to_string(),
         ] {
             assert!(
                 report

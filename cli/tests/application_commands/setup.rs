@@ -588,7 +588,7 @@ async fn local_render_verbs_write_the_document_each_one_names() {
 
     let mut preview = vec!["notation", "preview", "draft.md", "--no-open"];
     preview.extend(answered);
-    preview.extend(["--answer", "beneficiary=Sample Heir"]);
+    preview.extend(["--answer", "beneficiary=recipient"]);
     let previewed = navigator_in(dir.path(), &preview, &[]).await;
     previewed.succeeded();
     assert!(

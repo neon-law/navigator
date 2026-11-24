@@ -436,10 +436,8 @@ pub fn service_target(
 pub const DBOS_INGRESS_URL_ENV: &str = "NAVIGATOR_DBOS_INGRESS_URL";
 /// The bearer secret for the worker's DBOS ingress.
 pub const DBOS_INGRESS_TOKEN_ENV: &str = "NAVIGATOR_DBOS_INGRESS_TOKEN";
-#[cfg(feature = "dbos")]
 /// The Restate ingress a trigger uses while its workflow's DBOS switch is off.
 pub const RESTATE_INGRESS_URL_ENV: &str = "RESTATE_INGRESS_URL";
-#[cfg(feature = "dbos")]
 /// The optional Restate Cloud bearer.
 pub const RESTATE_AUTH_TOKEN_ENV: &str = "RESTATE_AUTH_TOKEN";
 
