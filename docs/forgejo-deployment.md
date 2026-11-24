@@ -490,8 +490,14 @@ The command uses the installation's PostgreSQL migration role, `NAVIGATOR_FORGEJ
 hudson ops forgejo rename-organization --firm "$firm_id" --from "$old_slug" --to "$new_slug" --organization-id "$org_id"
 ```
 
+If the existing organization has a different name from the recorded Firm slug, add `--forgejo-from
+"$current_organization"` to the preview, application and recovery commands. Confirm its provider ID and an existing
+Project URL or provisioning record binds it to the same Firm. The receipt retains both original names. A second account
+or conflicting Project under either source requires reconciliation before the move.
+
 Use `--token-stdin` for a credential supplied through a pipe. Append `--apply` to record the intent and rename. If the
 connection drops, repeat the same command. It checks each repository's numeric ID at the new path before committing the
 Firm slug, recorded organization and Project URLs. An unprovisioned Firm keeps its provisioning status. Run the preview
 again to verify completion, update checkout remotes and prove a signed push and its deployment before reopening writes.
-To reverse a completed move, preview and apply a new move with the slugs reversed during a maintenance window.
+For a move that began with one shared name, preview and apply the reverse move in a maintenance window. A move that
+began with two names records both for recovery. Resume an interrupted move to the approved destination.
