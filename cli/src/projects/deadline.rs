@@ -303,6 +303,83 @@ fn finish_write(
     Ok(row)
 }
 
+/// Replay keys identify a row across edits. Confirm this payload as well as
+/// its identity so a lost update cannot be mistaken for an earlier create.
+fn matches_create(row: &Value, project: Uuid, key: &str, body: &Value) -> bool {
+    let timestamp = |value: &Value| {
+        value
+            .as_str()
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s.trim()).ok())
+    };
+    row["project_id"] == json!(project)
+        && row["replay_key"] == key
+        && row["status"] != "cancelled"
+        && row["id"].as_str().is_some_and(|id| !id.is_empty())
+        && body.as_object().is_some_and(|fields| {
+            fields.iter().all(|(field, requested)| {
+                let stored = &row[field];
+                match (field.as_str(), requested.as_str().map(str::trim)) {
+                    ("due_at", _) => {
+                        timestamp(requested).is_some() && timestamp(requested) == timestamp(stored)
+                    }
+                    ("description", Some("")) => stored.is_null(),
+                    ("source", Some("")) => stored == "lawyer",
+                    (_, Some(text)) => stored == text,
+                    _ => stored == requested,
+                }
+            })
+        })
+}
+
+/// A response can disappear after the transaction commits. Both attempts use
+/// the same Project URL and normalized key, including the final read-back.
+async fn create_confirmed(
+    client: &reqwest::Client,
+    url: &str,
+    token: &str,
+    project: Uuid,
+    body: &Value,
+    key: &str,
+    timeout: Duration,
+) -> Result<Value> {
+    for attempt in 0..2 {
+        let response = client
+            .post(url)
+            .bearer_auth(token)
+            .json(body)
+            .timeout(timeout)
+            .send()
+            .await;
+        if let Ok(response) = response {
+            let status = response.status();
+            if status.is_success() {
+                if let Ok(row) = response.json::<Value>().await {
+                    if row["id"].as_str().is_some_and(|id| !id.is_empty()) {
+                        return Ok(row);
+                    }
+                }
+            } else if !status.is_server_error() && status != reqwest::StatusCode::REQUEST_TIMEOUT {
+                let detail = response.text().await.unwrap_or_default();
+                if attempt == 0 {
+                    anyhow::bail!("deadline create refused: {status} {detail}");
+                }
+                // An earlier request might still have committed.
+            }
+        }
+        if let Ok(rows) = call(client.get(url).bearer_auth(token), "verify create").await {
+            if let Some(row) = rows.as_array().and_then(|rows| {
+                rows.iter()
+                    .find(|row| matches_create(row, project, key, body))
+            }) {
+                return Ok(row.clone());
+            }
+        }
+    }
+    anyhow::bail!(
+        "deadline create unconfirmed for Project {project}; retry with --replay-key {key}"
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn create(
     host: Option<&str>,
@@ -344,14 +421,21 @@ pub async fn create(
             insert(object, "owner_person_id", owner);
             insert(object, "internal_lead_days", internal_lead_days);
             insert(object, "client_lead_days", client_lead_days);
-            insert(object, "replay_key", replay_key);
+            let key = replay_key
+                .as_deref()
+                .map(str::trim)
+                .filter(|key| !key.is_empty())
+                .map_or_else(|| Uuid::now_v7().to_string(), str::to_owned);
+            insert(object, "replay_key", Some(&key));
             apply_visibility(object, visibility.as_deref(), client_lead_days, true)?;
-            let row = call(
-                reqwest::Client::new()
-                    .post(format!("{base}/app/api/projects/{id}/deadlines"))
-                    .bearer_auth(token)
-                    .json(&body),
-                "create",
+            let row = create_confirmed(
+                &reqwest::Client::new(),
+                &format!("{base}/app/api/projects/{id}/deadlines"),
+                &token,
+                id,
+                &Value::Object(body),
+                &key,
+                Duration::from_secs(30),
             )
             .await?;
             finish_write(row, &base, &code, ics_path, location)
@@ -605,6 +689,75 @@ mod tests {
         answer(&server, "GET", &door, 200, json!({"rows": []})).await;
         let host = server.uri();
         assert_eq!(super::ics(Some(&host), Some(CODE)).await, ExitCode::FAILURE);
+    }
+
+    #[tokio::test]
+    async fn ambiguous_create_reconciles_the_project_key_before_retrying() {
+        use std::sync::{Arc, Mutex};
+        use std::time::Duration;
+
+        let id = Uuid::new_v4();
+        let project = Uuid::new_v4();
+        let client = reqwest::Client::new();
+        let row = json!({"id": id, "project_id": project, "replay_key": "retry"});
+        let body = json!({"replay_key": "retry"});
+        for commit_first in [true, false] {
+            let server = MockServer::start().await;
+            let url = format!("{}/app/api/projects/{project}/deadlines", server.uri());
+            let rows = Arc::new(Mutex::new(Vec::new()));
+            let stored = rows.clone();
+            let saved = row.clone();
+            Mock::given(method("POST"))
+                .and(body_json(body.clone()))
+                .respond_with(move |_: &wiremock::Request| {
+                    if commit_first {
+                        stored.lock().unwrap().push(saved.clone());
+                    }
+                    ResponseTemplate::new(201).set_delay(Duration::from_secs(2))
+                })
+                .up_to_n_times(1)
+                .mount(&server)
+                .await;
+            let stored = rows.clone();
+            let saved = row.clone();
+            Mock::given(method("POST"))
+                .and(body_json(body.clone()))
+                .respond_with(move |_: &wiremock::Request| {
+                    let mut rows = stored.lock().unwrap();
+                    if rows.is_empty() {
+                        rows.push(saved.clone());
+                    }
+                    ResponseTemplate::new(201).set_body_json(&rows[0])
+                })
+                .mount(&server)
+                .await;
+            let stored = rows.clone();
+            Mock::given(method("GET"))
+                .respond_with(move |_: &wiremock::Request| {
+                    ResponseTemplate::new(200).set_body_json(&*stored.lock().unwrap())
+                })
+                .mount(&server)
+                .await;
+            let create = || {
+                super::create_confirmed(
+                    &client,
+                    &url,
+                    "token",
+                    project,
+                    &body,
+                    "retry",
+                    Duration::from_millis(200),
+                )
+            };
+            assert_eq!(create().await.unwrap(), row);
+            assert_eq!(rows.lock().unwrap().len(), 1);
+            let requests = server.received_requests().await.unwrap();
+            assert_eq!(requests.len(), if commit_first { 2 } else { 3 });
+            let (first, second) = tokio::join!(create(), create());
+            assert_eq!(first.unwrap(), row);
+            assert_eq!(second.unwrap(), row);
+            assert_eq!(rows.lock().unwrap().len(), 1);
+        }
     }
 
     #[tokio::test]
