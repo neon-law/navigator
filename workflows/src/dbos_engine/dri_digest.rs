@@ -334,7 +334,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn native_source_keeps_all_projects_and_both_dri_sides() {
+    async fn native_source_lists_only_open_projects_with_both_dri_sides() {
         store::test_support::with_postgres(async {
             use store::persons::{self, NewPerson, Role};
             use store::projects::{designate_dri_in_surreal, DriSide};
@@ -384,6 +384,22 @@ mod tests {
             designate_dri_in_surreal(&surreal, matter.id, client.id, DriSide::Client)
                 .await
                 .unwrap();
+            for status in ["closed", "archived"] {
+                store::projects::create(
+                    &surreal,
+                    &store::projects::NewProject {
+                        code: format!("synthetic-{status}"),
+                        name: format!("Synthetic {status} project"),
+                        status: status.into(),
+                        entity_id: matter.entity_id,
+                        firm_id: Some(firm),
+                        brand: matter.brand.clone(),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+            }
             let source = super::ApplicationDriDigestSource {
                 surreal: surreal.clone(),
                 postgres: pg.clone(),

@@ -1,10 +1,10 @@
 //! The `DriDigest` Restate workflow — a nightly Slack notice listing every
-//! project with its lawyer DRI and client DRI.
+//! open project with its lawyer DRI and client DRI.
 //!
 //! Two durable steps, journaled independently — a notify retry must never
 //! re-run the query, and a query retry must never re-post the notice:
 //!
-//! 1. `ctx.run("query")` — read every project's [`store::projects::dri_digest`]
+//! 1. `ctx.run("query")` — read each open project's [`store::projects::dri_digest`]
 //!    summary: both DRI sides, so an unassigned side on either is visible
 //!    from the notice itself rather than requiring a separate admin-tier
 //!    directory read.
@@ -170,7 +170,7 @@ impl DriDigestService {
         ctx: WorkflowContext<'_>,
         _req: Json<RunRequest>,
     ) -> Result<Json<DriDigestReport>, HandlerError> {
-        // Step 1 — query every project's DRIs. A database error surfaces as a
+        // Step 1 — query each open project's DRIs. A database error surfaces as a
         // retryable `HandlerError` so Restate replays just this step.
         let surreal = self.surreal.clone();
         let projects: Vec<ProjectDriSummary> = ctx
@@ -287,17 +287,17 @@ mod tests {
     }
 
     #[test]
-    fn header_counts_every_project_and_body_lists_each_one() {
+    fn header_counts_the_projects_listed_in_the_body() {
         let msg = dri_digest_message(
             &[
                 project("a", "open", &["Lawyer A"], &[]),
-                project("b", "closed", &[], &["Client B"]),
+                project("b", "open", &[], &["Client B"]),
             ],
             false,
         );
         assert!(msg.starts_with("*Project DRI digest — 2 projects*"));
         assert!(msg.contains("• *a* (open)"));
-        assert!(msg.contains("• *b* (closed)"));
+        assert!(msg.contains("• *b* (open)"));
     }
 
     #[test]
