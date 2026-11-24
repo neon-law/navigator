@@ -29,7 +29,7 @@ Closing the Project makes writers readers and clears the [Booking Link](booking-
 links to the shared calendar under Resources until [Project Calendar Retirement](project-calendar-retirement.md)
 completes. The event backups remain available after the live calendar is deleted.
 
-Create, update, complete, and cancel [Deadlines](deadline.md) in Navigator. The mirror reads its own calendar events to
+Create, update, complete, and cancel [Deadlines](deadline.md) in Navigator. Cancelling a Deadline removes its mirrored event. The mirror reads its own calendar events to
 reconcile changes and preserves unrelated events.
 
 Run `navigator project calendar` in the Project checkout or give it `--project <code>`. It lists event IDs, summaries,

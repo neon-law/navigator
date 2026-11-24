@@ -1,11 +1,8 @@
 //! The Deadline mirror onto a Project's shared Google Calendar.
 //!
-//! Every Deadline row renders as one event on the matter's calendar, on the
-//! same field basis as the ICS feed a subscriber already sees: the summary
-//! fallback by calendar role and authority kind, the description's
-//! authority and matter-page lines, the one-minute block, the cancelled
-//! status, and the internal lead days as the only reminder. What the feed
-//! renders for a subscriber, the mirror puts on the calendar.
+//! Each open or completed Deadline renders as one event with its authority,
+//! matter-page link, one-minute block, and configured reminder. Cancelling a
+//! Deadline removes the managed event. The ICS feed retains its cancellation.
 //!
 //! The mirror is row-authoritative. A change made directly in Google — a
 //! recolor, a moved time, a cancelled event — is the person's, and the
@@ -194,18 +191,20 @@ async fn reconcile_rows(
     let stored = calendar
         .mirrored_events(calendar_id, MARKER_KEY, MARKER_VALUE)
         .await?;
-    let by_deadline: BTreeMap<String, StoredEvent> = stored
-        .into_iter()
+    let by_deadline: BTreeMap<&String, &StoredEvent> = stored
+        .iter()
         .filter_map(|event| {
             event
                 .private_properties
                 .get(DEADLINE_ID_KEY)
-                .cloned()
                 .map(|id| (id, event))
         })
         .collect();
     let mut live: BTreeSet<String> = BTreeSet::new();
-    for deadline in &rows {
+    for deadline in rows
+        .iter()
+        .filter(|row| row.status != project_deadlines::STATUS_CANCELLED)
+    {
         let sha = body_sha(deadline, &project.code, base_url);
         let id = deadline.id.to_string();
         live.insert(id.clone());
@@ -249,7 +248,10 @@ async fn reconcile_rows(
             }
         }
     }
-    for (deadline_id, event) in &by_deadline {
+    for event in stored {
+        let Some(deadline_id) = event.private_properties.get(DEADLINE_ID_KEY) else {
+            continue;
+        };
         if live.contains(deadline_id) {
             continue;
         }
@@ -274,7 +276,10 @@ async fn plan_rows(
     let rows = project_deadlines::list(surreal, project.id)
         .await
         .map_err(|error| MirrorError::Db(error.to_string()))?;
-    for deadline in &rows {
+    for deadline in rows
+        .iter()
+        .filter(|row| row.status != project_deadlines::STATUS_CANCELLED)
+    {
         match deadline_event(deadline, &project.code, base_url) {
             Ok(_) => report.upserted.push(deadline.id),
             Err(error) => report.failures.push(error.to_string()),
@@ -727,6 +732,48 @@ mod tests {
                 .unwrap();
             assert_eq!(report.upserted, vec![created.id]);
             assert_eq!(report.in_sync, 0);
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn cancelled_deadlines_converge_before_and_after_publication() {
+        with_project(async |db, project_id| {
+            let calendar = FakeCalendar::default();
+            let open = project_deadlines::create(db, &sample(project_id))
+                .await
+                .unwrap();
+            let early = project_deadlines::create(db, &sample(project_id))
+                .await
+                .unwrap();
+            project_deadlines::cancel(db, project_id, early.id)
+                .await
+                .unwrap();
+            for dry_run in [true, false] {
+                let pass = reconcile(db, &calendar, project_id, None, dry_run)
+                    .await
+                    .unwrap();
+                assert_eq!(pass.upserted, [open.id]);
+            }
+            project_deadlines::cancel(db, project_id, open.id)
+                .await
+                .unwrap();
+            for dry_run in [true, false] {
+                let pass = reconcile(db, &calendar, project_id, None, dry_run)
+                    .await
+                    .unwrap();
+                assert!(pass.upserted.is_empty());
+                assert_eq!(pass.deleted.len(), 1);
+            }
+            let pass = reconcile(db, &calendar, project_id, None, true)
+                .await
+                .unwrap();
+            assert!(pass.upserted.is_empty() && pass.deleted.is_empty());
+            let project = crate::projects::find_by_id(db, project_id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(calendar.events(&project.calendar_id.unwrap()).is_empty());
         })
         .await;
     }
