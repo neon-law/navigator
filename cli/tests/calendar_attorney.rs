@@ -257,3 +257,57 @@ async fn project_calendar_events_resolve_the_checkout_and_explicit_project() {
     }
     server.verify().await;
 }
+
+#[tokio::test]
+async fn dated_agenda_keeps_deadlines_when_calendar_access_is_missing() {
+    let server = MockServer::start().await;
+    let root = TempDir::new().unwrap();
+    let host = server.uri();
+    let credentials = credentials(root.path(), &host);
+    let project = uuid::Uuid::new_v4();
+    Mock::given(method("GET"))
+        .and(path("/app/api/lawyer/deadline-projects"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {"id": project, "code": "sample-matter", "name": "Sample Matter", "status": "open"}
+        ])))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/app/api/projects/{project}/deadlines")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {"id": uuid::Uuid::new_v4(), "project_id": project, "title": "Synthetic hearing",
+             "due_at": "2099-03-08T15:00:00Z", "status": "open", "category": "hearing"}
+        ])))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/app/api/calendars/events"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "unreadable": [{"missing": "scope"}]
+        })))
+        .mount(&server)
+        .await;
+    let output = Command::cargo_bin("navigator")
+        .unwrap()
+        .current_dir(root.path())
+        .env("NAVIGATOR_CREDENTIALS_FILE", credentials)
+        .args([
+            "calendar",
+            "--host",
+            &host,
+            "--date",
+            "2099-03-08",
+            "--timezone",
+            "UTC",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["entries"][0]["title"], "Synthetic hearing");
+    assert_eq!(
+        report["coverage"]["calendar"]["detail"]["unreadable"][0]["missing"],
+        "scope"
+    );
+}

@@ -724,6 +724,31 @@ async fn read_host(
     Ok(gather(base, token, projects).await)
 }
 
+pub(super) async fn agenda_rows(
+    base: &str,
+    token: &str,
+    day: NaiveDate,
+    now: DateTime<Utc>,
+    zone: Tz,
+) -> Result<Value> {
+    let filters = Filters {
+        status: "open".to_owned(),
+        due_by: Some(day),
+        ..Filters::default()
+    };
+    let (successful, failures) = read_host(base, token, None).await?;
+    let rows = collect_rows(&successful, &failures, &filters, now, zone);
+    Ok(make_report(
+        base,
+        &rows,
+        &failures,
+        &filters,
+        now,
+        zone,
+        successful.len() + failures.len(),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

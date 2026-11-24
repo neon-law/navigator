@@ -12,11 +12,22 @@ use crate::remote;
 
 type Instant = DateTime<FixedOffset>;
 
+mod dated;
+
 #[derive(Args)]
 pub struct PersonalCalendarArgs {
     /// Navigator host.
     #[arg(long, global = true)]
     host: Option<String>,
+    /// Combine calendar events and Deadlines for this local date (YYYY-MM-DD or today).
+    #[arg(long, conflicts_with_all = ["start", "end"])]
+    date: Option<String>,
+    /// IANA time zone for the dated agenda.
+    #[arg(long, requires = "date")]
+    timezone: Option<String>,
+    /// Print the dated agenda as JSON.
+    #[arg(long, requires = "date")]
+    json: bool,
     #[command(flatten)]
     agenda: Agenda,
     #[command(subcommand)]
@@ -128,6 +139,13 @@ enum ProjectAction {
 impl PersonalCalendarArgs {
     pub async fn run(self) -> ExitCode {
         let host = self.host.as_deref();
+        if let Some(date) = self.date.as_deref() {
+            if self.action.is_some() {
+                eprintln!("navigator calendar: use --date without a subcommand");
+                return ExitCode::FAILURE;
+            }
+            return dated::run(host, date, self.timezone.as_deref(), self.json).await;
+        }
         match self.action {
             None => events(host, None, self.agenda, false).await,
             Some(PersonalAction::Events { agenda, project }) => {
