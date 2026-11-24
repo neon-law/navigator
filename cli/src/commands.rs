@@ -2865,8 +2865,11 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
                 json,
             } => {
                 projects::deadline_brief::brief(projects::deadline_brief::BriefOptions {
-                    host: host.host,
-                    all_hosts,
+                    hosts: if all_hosts {
+                        projects::deadline_brief::BriefHosts::AllStored
+                    } else {
+                        projects::deadline_brief::BriefHosts::Selected(host.host)
+                    },
                     project,
                     due_by,
                     today,

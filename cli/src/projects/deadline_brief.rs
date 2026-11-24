@@ -585,9 +585,13 @@ fn render_table(base: &str, rows: &[(Project, Deadline)], zone: Tz) -> String {
     table.to_string()
 }
 
+pub enum BriefHosts {
+    Selected(Option<String>),
+    AllStored,
+}
+
 pub struct BriefOptions {
-    pub host: Option<String>,
-    pub all_hosts: bool,
+    pub hosts: BriefHosts,
     pub project: Option<String>,
     pub due_by: Option<String>,
     pub today: bool,
@@ -622,8 +626,7 @@ pub async fn brief(options: BriefOptions) -> std::process::ExitCode {
 
 async fn run(options: BriefOptions) -> Result<bool> {
     let BriefOptions {
-        host,
-        all_hosts,
+        hosts,
         project,
         due_by,
         today,
@@ -647,7 +650,7 @@ async fn run(options: BriefOptions) -> Result<bool> {
         status,
         project: project.clone(),
     };
-    if all_hosts {
+    let BriefHosts::Selected(host) = hosts else {
         let credentials =
             crate::credentials::load(&crate::credentials::default_credentials_path())?;
         anyhow::ensure!(
@@ -683,7 +686,7 @@ async fn run(options: BriefOptions) -> Result<bool> {
             }
         }
         return Ok(report["complete"] == true);
-    }
+    };
     let (base, token) = remote::resolve(host.as_deref())?;
     let (rendered, complete) = render_host(&base, &token, &filters, now, zone, as_json).await?;
     println!("{rendered}");
@@ -908,8 +911,7 @@ mod tests {
 
     fn options(host: &str) -> BriefOptions {
         BriefOptions {
-            all_hosts: false,
-            host: Some(host.into()),
+            hosts: BriefHosts::Selected(Some(host.into())),
             project: None,
             due_by: None,
             today: false,
@@ -1134,8 +1136,7 @@ mod tests {
         crate::credentials::save(&path, &credentials).unwrap();
         for as_json in [false, true] {
             let options = BriefOptions {
-                host: None,
-                all_hosts: true,
+                hosts: BriefHosts::AllStored,
                 as_json,
                 ..options(&server.uri())
             };
