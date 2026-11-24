@@ -1117,6 +1117,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn all_hosts_reports_expired_sessions_and_still_reads_the_active_host() {
+        let server = site(json!([])).await;
+        let _login = crate::projects::test_login::signed_in(&server.uri()).await;
+        let path = crate::credentials::default_credentials_path();
+        let mut credentials = crate::credentials::load(&path).unwrap();
+        credentials.set(
+            "https://expired.example",
+            crate::credentials::HostCredential {
+                token: "synthetic".to_owned(),
+                person_email: None,
+                role: None,
+                expires_at: 1,
+            },
+        );
+        crate::credentials::save(&path, &credentials).unwrap();
+        for as_json in [false, true] {
+            let options = BriefOptions {
+                host: None,
+                all_hosts: true,
+                as_json,
+                ..options(&server.uri())
+            };
+            assert!(!run(options).await.unwrap());
+        }
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
     async fn a_brief_refuses_bad_input_before_and_after_the_inventory_read() {
         let server = site(json!([])).await;
         let _login = crate::projects::test_login::signed_in(&server.uri()).await;

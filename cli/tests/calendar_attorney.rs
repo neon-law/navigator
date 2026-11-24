@@ -287,22 +287,23 @@ async fn dated_agenda_keeps_deadlines_when_calendar_access_is_missing() {
         })))
         .mount(&server)
         .await;
-    let output = Command::cargo_bin("navigator")
-        .unwrap()
-        .current_dir(root.path())
-        .env("NAVIGATOR_CREDENTIALS_FILE", credentials)
-        .args([
-            "calendar",
-            "--host",
-            &host,
-            "--date",
-            "2099-03-08",
-            "--timezone",
-            "UTC",
-            "--json",
-        ])
-        .output()
-        .unwrap();
+    let agenda = || {
+        let mut command = Command::cargo_bin("navigator").unwrap();
+        command
+            .current_dir(root.path())
+            .env("NAVIGATOR_CREDENTIALS_FILE", &credentials)
+            .args([
+                "calendar",
+                "--host",
+                &host,
+                "--date",
+                "2099-03-08",
+                "--timezone",
+                "UTC",
+            ]);
+        command
+    };
+    let output = agenda().arg("--json").output().unwrap();
     assert_eq!(output.status.code(), Some(1));
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["entries"][0]["title"], "Synthetic hearing");
@@ -310,4 +311,7 @@ async fn dated_agenda_keeps_deadlines_when_calendar_access_is_missing() {
         report["coverage"]["calendar"]["detail"]["unreadable"][0]["missing"],
         "scope"
     );
+    let text = String::from_utf8(agenda().output().unwrap().stdout).unwrap();
+    assert!(text.contains("Court • Synthetic hearing"));
+    assert!(text.contains("Incomplete coverage"));
 }
