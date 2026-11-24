@@ -316,7 +316,7 @@ conflict is recorded in the change instead of stopping work. One command install
 beside `.git`, and copies the checkout's Git author and signing settings:
 
 ```bash
-navigator project repository jj
+navigator jj setup
 ```
 
 | jj | What it is in a matter |
@@ -333,11 +333,11 @@ question: it names a fresh bookmark `push/<change-id>`, the namespace `navigator
 
 ---
 
-Run `navigator project repository jj` in the sample checkout. Edit a file, then `jj st` and `jj describe -m "why"`, and
-push with `jj git push --change @`; open the pull request from the `push/` bookmark on the forge. Repeat the conflict
-exercise with `jj git fetch` and `jj rebase -d main@origin`, and read the conflict in `jj log`. Revise the change and
-push without moving its bookmark, so the room sees the stale push, then fix it with `jj bookmark set`. Finish by
-deleting a file on purpose, running `jj undo`, and reading the step back in `jj op log`.
+Run `navigator jj setup` in the sample checkout. Edit a file, then `jj st` and `jj describe -m "why"`, and push with `jj
+git push --change @`; open the pull request from the `push/` bookmark on the forge. Repeat the conflict exercise with
+`jj git fetch` and `jj rebase -d main@origin`, and read the conflict in `jj log`. Revise the change and push without
+moving its bookmark, so the room sees the stale push, then fix it with `jj bookmark set`. Finish by deleting a file on
+purpose, running `jj undo`, and reading the step back in `jj op log`.
 
 ### Sign in, then receive repository access
 

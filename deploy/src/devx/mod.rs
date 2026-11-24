@@ -47,7 +47,7 @@ mod host_setup;
 mod lifecycle;
 mod native;
 mod native_profile;
-// `navigator project repository jj` installs jj with the same Homebrew seam.
+// `navigator jj setup` installs jj with the same Homebrew seam.
 // `hudson same-day preview` serves the bundle this module stages, so
 // its staging helper is crate-reachable.
 mod observability;

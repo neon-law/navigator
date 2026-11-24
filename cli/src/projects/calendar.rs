@@ -115,6 +115,7 @@ enum PersonalAction {
 #[derive(Subcommand)]
 enum ProjectAction {
     /// List events on the Project Calendar.
+    #[command(hide = true)]
     Events(Agenda),
     /// List busy blocks for the Project and its attorneys.
     Freebusy(Availability),
@@ -155,14 +156,11 @@ impl ProjectCalendarArgs {
         };
         let host = host.as_deref();
         let project = Some(project.as_str());
-        match self.action {
-            None => events(host, project, self.agenda, false).await,
-            Some(ProjectAction::Events(agenda)) => events(host, project, agenda, false).await,
-            Some(ProjectAction::Freebusy(window)) => {
-                availability(host, project, window, false).await
-            }
-            Some(ProjectAction::Check(window)) => availability(host, project, window, true).await,
-            Some(ProjectAction::Access) => access(host, project).await,
+        match self.action.unwrap_or(ProjectAction::Events(self.agenda)) {
+            ProjectAction::Events(agenda) => events(host, project, agenda, false).await,
+            ProjectAction::Freebusy(window) => availability(host, project, window, false).await,
+            ProjectAction::Check(window) => availability(host, project, window, true).await,
+            ProjectAction::Access => access(host, project).await,
         }
     }
 }

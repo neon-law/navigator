@@ -939,7 +939,7 @@ pub enum ProjectsCmd {
         #[command(subcommand)]
         action: CommunicationCmd,
     },
-    /// Read the shared calendar for one Project.
+    /// List events on the shared Project calendar.
     Calendar(projects::calendar::ProjectCalendarArgs),
     /// Review matter billing and record claim activity.
     Billing {
@@ -1568,6 +1568,7 @@ pub enum ProjectRepositoryCmd {
     /// The forge still sees plain Git. `jj git push --change @` names its
     /// bookmark `push/<change-id>`, the namespace `push` already uses.
     /// Idempotent: a re-run rewrites the same settings.
+    #[command(hide = true)]
     Jj {
         /// Project repository root. Defaults to the current directory.
         #[arg(long, default_value = ".")]

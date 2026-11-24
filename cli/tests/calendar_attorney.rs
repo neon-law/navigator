@@ -244,19 +244,14 @@ async fn project_calendar_events_resolve_the_checkout_and_explicit_project() {
     }
     let child = root.path().join("documents");
     std::fs::create_dir(&child).unwrap();
-    for extra in [vec![], vec!["--project", "explicit-matter"]] {
+    for extra in [vec![], vec!["events", "--project", "explicit-matter"]] {
         Command::cargo_bin("navigator")
             .unwrap()
             .current_dir(&child)
             .env("NAVIGATOR_CREDENTIALS_FILE", &credentials)
-            .args([
-                "project",
-                "calendar",
-                "events",
-                "--start",
-                "2026-11-01T15:00:00Z",
-            ])
+            .args(["project", "calendar"])
             .args(extra)
+            .args(["--start", "2026-11-01T15:00:00Z"])
             .assert()
             .success();
     }
