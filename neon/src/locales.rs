@@ -32,6 +32,7 @@ const NEON_LITIGATION_YAML: &str = include_str!("../locales/en/neon/litigation.y
 const NEON_FRACTIONAL_GC_YAML: &str = include_str!("../locales/en/neon/fractional-gc.yaml");
 const NEON_NOTATIONS_YAML: &str = include_str!("../locales/en/neon/notations.yaml");
 const NEON_LEGAL_AID_YAML: &str = include_str!("../locales/en/neon/legal-aid.yaml");
+const NEON_LAWYERS_YAML: &str = include_str!("../locales/en/neon/lawyers.yaml");
 const NEON_FREE_RESOURCES_YAML: &str = include_str!("../locales/en/neon/free-resources.yaml");
 /// `/delete-your-debt` — Neon's own gateway to the DeleteYourDebt.com
 /// practice. The first of a family of Neon-only practice gateways; see
@@ -196,6 +197,7 @@ pub fn catalog_yaml(key: BrandKey, page: &str) -> Option<&'static str> {
         (BrandKey::Neon, "fractional-gc") => Some(NEON_FRACTIONAL_GC_YAML),
         (BrandKey::Neon, "notations") => Some(NEON_NOTATIONS_YAML),
         (BrandKey::Neon, "legal-aid") => Some(NEON_LEGAL_AID_YAML),
+        (BrandKey::Neon, "lawyers") => Some(NEON_LAWYERS_YAML),
         (BrandKey::Neon, "home-marketing") => Some(NEON_HOME_MARKETING_YAML),
         (BrandKey::Neon, "gateway-delete-your-debt") => Some(NEON_GATEWAY_DELETE_YOUR_DEBT_YAML),
         (BrandKey::Neon, "gateway-delete-your-data") => Some(NEON_GATEWAY_DELETE_YOUR_DATA_YAML),
@@ -1506,6 +1508,11 @@ pub fn legal_aid(branding: &views::brand::Branding) -> PageContent {
     marketing_page(load_page(branding, "legal-aid"), None, branding)
 }
 
+/// `/lawyers`, from this brand's `lawyers.yaml`.
+pub fn lawyers(branding: &views::brand::Branding) -> PageContent {
+    marketing_page(load_page(branding, "lawyers"), None, branding)
+}
+
 /// `/services`, from this brand's `services.yaml`.
 pub fn legal_services(branding: &views::brand::Branding) -> PageContent {
     marketing_page(
@@ -1630,7 +1637,7 @@ pub fn same_day_legal_href(deployment_host: Option<&str>) -> String {
     views::brand::BrandKey::SameDayLegal.public_home_href_for(deployment_host)
 }
 
-/// Neon's home is the Navigator page, from `home-marketing.yaml`.
+/// Neon's home is the consumer Navigator page, from `home-marketing.yaml`.
 pub fn neon_home(branding: &views::brand::Branding, _deployment_host: Option<&str>) -> PageContent {
     marketing_page(load_page(branding, "home-marketing"), None, branding)
 }
@@ -2769,36 +2776,41 @@ mod tests {
         );
     }
 
-    /// The home tells the Navigator software story: how to connect, the
-    /// connected Project, the presentation, and the download.
+    /// The home tells the consumer Navigator story: anyone can use it, then
+    /// how to connect in chat.
     #[test]
     fn neon_home_presents_navigator_as_software() {
         let content = neon_home(&views::brand::DEFAULT_BRANDING, None);
         assert_eq!(content.tagline, "Exacting Agentic Lawyering");
-        assert!(content.hero_cta.is_none(), "the platform page is retired");
+        assert!(
+            content.head_title.contains("Navigator")
+                && content.head_title.contains("Exacting Agentic Lawyering"),
+            "the tab title carries product keywords: {}",
+            content.head_title
+        );
+        assert_eq!(
+            content.hero_cta.as_ref().expect("template door").href,
+            "/notations"
+        );
         let kinds: Vec<&str> = content
             .bands
             .iter()
             .map(|band| match band {
+                Band::Cards { .. } => "cards",
                 Band::Steps { .. } => "steps",
-                Band::ProjectNetwork { .. } => "project_network",
-                Band::Video { .. } => "video",
-                Band::Downloads { .. } => "downloads",
                 Band::Cta { action, .. } => {
                     assert!(action.is_none(), "the closing band links no retired page");
                     "cta"
                 }
-                _ => panic!(
-                    "the home publishes only the Navigator bands and the closing call to action"
-                ),
+                _ => panic!("the home publishes only cards, steps, and a closing call to action"),
             })
             .collect();
-        assert_eq!(
-            kinds,
-            ["steps", "project_network", "video", "downloads", "cta"]
-        );
+        assert_eq!(kinds, ["cards", "steps", "cta"]);
         let text = serde_yaml::to_string(&content).expect("home serializes");
         assert!(text.contains("open source under MIT OR Apache-2.0"));
+        assert!(text.contains("representing yourself"));
+        assert!(text.contains("does not create an attorney-client relationship"));
+        assert!(text.contains("href: /lawyers"));
         assert!(!text.contains("href: /navigator"));
         for retired in [
             "Attorneys for the Ambitious",
@@ -2818,6 +2830,31 @@ mod tests {
         ] {
             assert!(!text.contains(retired), "the home publishes {retired}");
         }
+    }
+
+    #[test]
+    fn neon_lawyers_page_maps_the_connected_project() {
+        let content = lawyers(&views::brand::DEFAULT_BRANDING);
+        let kinds: Vec<&str> = content
+            .bands
+            .iter()
+            .map(|band| match band {
+                Band::ProjectNetwork { .. } => "project_network",
+                Band::Video { .. } => "video",
+                Band::Downloads { .. } => "downloads",
+                Band::Cta { action, .. } => {
+                    assert!(action.is_none(), "the closing band links no retired page");
+                    "cta"
+                }
+                _ => panic!("the lawyers page publishes the connected Project"),
+            })
+            .collect();
+        assert_eq!(kinds, ["project_network", "video", "downloads", "cta"]);
+        let text = serde_yaml::to_string(&content).expect("lawyers serializes");
+        assert!(text.contains("open source under MIT OR Apache-2.0"));
+        assert!(!text.contains("href: /navigator"));
+        assert_eq!(content.tagline, "One connected Project");
+        assert_ne!(content.tagline, "Exacting Agentic Lawyering");
     }
 
     #[test]

@@ -30,16 +30,48 @@ pub fn clarify_intent(intent: &str) -> Option<&'static str> {
     )
 }
 
+/// Neon Law's public site for this deployment. Trailing slash is omitted so
+/// callers can append `/notations` and `/lawyers`.
+#[must_use]
+pub fn public_site_href() -> String {
+    let host = std::env::var("NAVIGATOR_PUBLIC_HOST").ok();
+    views::brand::BrandKey::Neon.public_home_href_for(host.as_deref())
+}
+
+/// What a connector should know about Navigator before listing templates.
+#[must_use]
+pub fn site_instructions() -> String {
+    let site = public_site_href();
+    format!(
+        "Navigator is Neon Law's open source agentic lawyering software for anyone, including people representing themselves. \
+         Public site: {site}. Templates: {site}/notations. For lawyers: {site}/lawyers. \
+         Using the public catalog does not create an attorney-client relationship. You review what you file or send."
+    )
+}
+
+#[must_use]
+pub fn site_links() -> Value {
+    let site = public_site_href();
+    json!({
+        "home": site,
+        "templates": format!("{site}/notations"),
+        "lawyers": format!("{site}/lawyers"),
+        "mcp": format!("{site}/app/mcp"),
+    })
+}
+
 #[must_use]
 pub fn descriptor() -> Value {
     json!({
         "name": "list_templates",
-        "description": "List public Templates from Navigator's bundled shared catalog. For a short \
-                        request such as “Create a work in progress”, pass that phrase as intent. Omit personal and matter details. \
+        "description": "List public Templates from Navigator's bundled shared catalog at neonlaw.com. \
+                        Navigator is open source agentic lawyering software for anyone, including people representing themselves. \
+                        For a short request such as “Create a work in progress”, pass that phrase as intent. Omit personal and matter details. \
                         Ask any returned clarification before suggesting a Template or taking action. \
                         Show intake_url to start or resume Nevada LLC formation. Use preview_url to browse agreements. \
                         Keep questionnaire answers in Navigator. \
-                        Use the titles and descriptions to match clear requests, and ask when several fit.",
+                        Use the titles and descriptions to match clear requests, and ask when several fit. \
+                        The structured site field names the public homepage, template catalog, lawyers page, and this MCP endpoint.",
         "annotations": { "readOnlyHint": true, "destructiveHint": false, "openWorldHint": false },
         "inputSchema": {
             "type": "object",
@@ -69,8 +101,7 @@ pub fn call(arguments: &Value) -> Result<Value, ToolError> {
         }));
     }
 
-    let host = std::env::var("NAVIGATOR_PUBLIC_HOST").ok();
-    let site = views::brand::BrandKey::Neon.public_home_href_for(host.as_deref());
+    let site = public_site_href();
     let templates: Vec<_> = store::seed::public_seeded_templates()
         .map_err(|error| ToolError::Internal(error.to_string()))?
         .into_iter()
@@ -114,10 +145,17 @@ pub fn call(arguments: &Value) -> Result<Value, ToolError> {
         })
         .collect::<Vec<_>>()
         .join("\n");
+    let site_links = site_links();
+    let text = format!(
+        "Navigator site: {}. Templates: {}. For lawyers: {}.\n\n{text}",
+        site_links["home"].as_str().unwrap_or(&site),
+        site_links["templates"].as_str().unwrap_or(""),
+        site_links["lawyers"].as_str().unwrap_or(""),
+    );
 
     Ok(json!({
         "content": [{ "type": "text", "text": text }],
-        "structuredContent": { "templates": templates }
+        "structuredContent": { "site": site_links, "templates": templates }
     }))
 }
 
@@ -172,6 +210,17 @@ mod tests {
         assert!(templates
             .iter()
             .all(|row| row.get("body").is_none() && row.get("questionnaire").is_none()));
+        let site = result["structuredContent"]["site"].as_object().unwrap();
+        assert!(site["home"].as_str().unwrap().starts_with("https://"));
+        assert!(site["templates"].as_str().unwrap().ends_with("/notations"));
+        assert!(site["lawyers"].as_str().unwrap().ends_with("/lawyers"));
+        assert!(site["mcp"].as_str().unwrap().ends_with("/app/mcp"));
+        assert!(text.contains(site["home"].as_str().unwrap()));
+        assert!(text.contains(site["lawyers"].as_str().unwrap()));
+        assert!(super::site_instructions().contains("representing themselves"));
+        assert!(
+            super::site_instructions().contains("does not create an attorney-client relationship")
+        );
 
         let result = call(&json!({ "intent": "Create a work in progress!" })).unwrap();
         assert!(result["structuredContent"]["clarification"].is_string());

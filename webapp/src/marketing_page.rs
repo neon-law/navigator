@@ -428,7 +428,7 @@ pub struct HeroCta {
 /// modifier class.
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PageSkin {
-    /// The campaign look the `/navigator` platform page wears.
+    /// The campaign look the `/lawyers` platform page wears.
     #[default]
     Marketing,
     /// The firm's practice look — the serif statement, the glow, and the carded
@@ -1689,7 +1689,7 @@ mod tests {
     /// `document::Stylesheet` is collected by the fullstack head collector and
     /// never appears in `dioxus_ssr::render` output. The covering assertion
     /// that the sheet actually reaches the document lives in
-    /// `server/tests/firm_routes.rs`, against the real `/navigator` route.
+    /// `server/tests/firm_routes.rs`, against the real `/lawyers` route.
     #[test]
     fn only_a_page_with_downloads_asks_for_the_home_stylesheet() {
         assert!(sample_downloads().is_downloads());

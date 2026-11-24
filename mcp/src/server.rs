@@ -173,6 +173,7 @@ fn initialize(id: Value) -> Response {
                 "name": "navigator-mcp",
                 "version": env!("CARGO_PKG_VERSION")
             },
+            "instructions": tools::list_templates::site_instructions(),
         }),
     )
 }
@@ -372,6 +373,10 @@ mod tests {
             assert_eq!(body["result"]["protocolVersion"], "2025-06-18");
             assert_eq!(body["result"]["serverInfo"]["name"], "navigator-mcp");
             assert!(body["result"]["capabilities"]["tools"].is_object());
+            let instructions = body["result"]["instructions"].as_str().unwrap();
+            assert!(instructions.contains("neonlaw.com") || instructions.contains("Navigator"));
+            assert!(instructions.contains("/lawyers"));
+            assert!(instructions.contains("representing themselves"));
         })
         .await;
     }

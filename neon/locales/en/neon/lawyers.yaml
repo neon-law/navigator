@@ -1,0 +1,101 @@
+head_title: "{site_name} | Lawyers"
+meta_description: >-
+  Navigator for lawyers and firms: one Project at the center of Slack, Notion,
+  email, Drive, MCP, and the CLI. Download it or connect it to your tools.
+og_description: >-
+  Navigator for lawyers: one connected Project, the CLI, and the tools around
+  the work. Open source under MIT OR Apache-2.0.
+title: Navigator for lawyers
+hero_mark: helm
+tagline: One connected Project
+hero_lead: >-
+  Run Navigator as the center of a matter. The graph, the CLI, and the
+  workshops are for lawyers, operators, and firms.
+hero_cta:
+  label: Download Navigator
+  href: "#download"
+skin: marketing
+bands:
+  - kind: project_network
+    anchor: connected-project
+    overline: One connected Project
+    heading: Navigator is the center of the work.
+    center_detail: Web API MCP CLI
+    description: >-
+      A Project can include one or more cases, companies, filings, and more so
+      long as it's related to the best interest of our clients.
+    left:
+      - label: Internal Slack
+        detail: Firm-only Project conversation.
+      - label: Internal Notion
+        detail: Firm working notes and knowledge.
+      - label: Project repository
+        detail: The matter's Git history of pages, Drafts, and document pointers.
+      - label: Matter Pages
+        detail: Lawyer and client dashboards declared in navigator.yaml.
+    right:
+      - label: Shared Slack
+        detail: Client collaboration when the Project uses it.
+      - label: Per-Project Inbox
+        detail: Project email intake and conversation.
+      - label: Google Drive folder
+        detail: Large document intake
+      - label: Shared Notion
+        detail: Client collaboration when the Project uses it.
+    mcp_tools:
+      - Court Listener
+      - Descrybe
+      - Exa
+      - Midpage
+      - Perplexity
+    agentic_coding_tools:
+      - Antigravity
+      - Claude Code
+      - Codex
+      - Cursor
+    saas_tools:
+      - Descript
+      - DocuSign
+      - Google Workspace
+      - Linear
+      - Mercury
+      - Postgres
+      - Apache AGE
+      - DBOS
+      - Twilio
+      - Xero
+  - kind: video
+    anchor: video
+    overline: Video
+    heading: Presentation
+    label: Neon Law presentation
+    asset_key: img/neon-home/neon-home-presentation.mp4
+  - kind: downloads
+    anchor: download
+    overline: Download
+    heading: Run Navigator yourself
+    description: >-
+      Navigator is open source under MIT OR Apache-2.0. It is built for Macs and for
+      containers in the cloud: download it for Apple silicon macOS or x86_64 Linux.
+      Each release is attached to the public GitHub repository.
+    archive_label: every release
+    package:
+      heading: Install with Homebrew
+      body:
+        - - text: "The formula lives in our own tap, "
+          - text: neon-law/homebrew-navigator
+            href: https://github.com/neon-law/homebrew-navigator
+          - text: ", which is updated by every release."
+        - - text: "Install with the command below, then run "
+          - text: navigator quickstart
+            code: true
+          - text: >-
+              . With Docker running, it brings up the full stack in KIND with a
+              seeded sample firm and three sample matters, each cloned from
+              its own Project repository: Cruller v. Prine, Widget Works, and
+              the Estate of Cornelius Montgomery.
+  - kind: cta
+    heading: Explore Navigator
+    body: >-
+      Visit the public repository to inspect the code and releases.
+    email: "{firm_email}"

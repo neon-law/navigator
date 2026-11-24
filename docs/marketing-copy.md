@@ -25,11 +25,11 @@ Neon Law (`neon/`):
 
 | File | Page |
 | --- | --- |
-| `neon/locales/en/neon/home-marketing.yaml` | `/` — Navigator and exacting agentic lawyering |
+| `neon/locales/en/neon/home-marketing.yaml` | `/` consumer Navigator home |
+| `neon/locales/en/neon/lawyers.yaml` | `/lawyers` connected Project and CLI |
 | `neon/locales/en/neon/litigation.yaml` | `/disputes` |
 | `neon/locales/en/neon/fractional-gc.yaml` | unpublished; `/business` answers a 301 to `/` |
 | `neon/locales/en/neon/personal-plan.yaml` | `/personal` |
-| `neon/locales/en/neon/navigator.yaml` | `/navigator` |
 | `neon/locales/en/neon/legal-aid.yaml` | `/legal-aid` hosted offer, workshops, and self-hosting |
 | `neon/locales/en/neon/notations.yaml` | `/notations/about` format story |
 | `neon/locales/en/guieb-shook/team.yaml` | `/team` and profiles on guiebshook.com |
@@ -289,12 +289,14 @@ and link nowhere until the apps are published. Its CTA opens a three-step public
 signed-in page exposes the configured enrollment booking link. Legal work begins under a written engagement with Lex
 Tecnica, Ltd. Neon's `/same-day-legal` and retired `/nautilus` paths answer a 301 to the Same Day Legal host.
 
-Neon’s home at `/` presents Navigator with the heading **Exacting Agentic Lawyering**. It explains Projects, Notations,
-and Lawyer Review and links to the Navigator page, Notation library, and Legal Aid.
+Neon’s home at `/` presents Navigator with the heading **Exacting Agentic Lawyering**. It is for anyone, including
+people representing themselves. It links to the public template catalog, a way to contact a lawyer, and `/lawyers` for
+the connected Project. The tab title names Navigator and the heading. Using the public catalog does not create an
+attorney-client relationship. `/navigator` answers a 301 to `/`.
 
-The header links to Navigator at `/navigator` , Notations at `/notations` , and Legal Aid at `/legal-aid` . Hosted
-Navigator is offered only to legal aid organizations. Its price appears on the Legal Aid page, which also links the
-Using and Operating Navigator workshops.
+The header links to Notations at `/notations` , Lawyers at `/lawyers` , and Legal Aid at `/legal-aid` . The shared
+footer names Navigator at `/` (the canonical product URL on neonlaw.com). Hosted Navigator is offered only to legal aid
+organizations. Its price appears on the Legal Aid page, which also links the Using and Operating Navigator workshops.
 
 The `/services` and `/business` paths redirect permanently to `/` . The `/disputes` route returns 404. The business
 template inventory is documented in [business notations](business-notations.md).

@@ -60,9 +60,11 @@ pub const PUBLIC_PATHS: &[&str] = &[
     // Answers a 301 to `/`, like `/personal` above: the business counsel
     // page is retired.
     "/business",
-    // Answers a 301 to `/` too: the platform page is retired.
+    // Answers a 301 to `/`, the canonical Navigator homepage. Published
+    // product links keep resolving.
     "/navigator",
     "/legal-aid",
+    "/lawyers",
     // The Neon-hosted gateway to the DeleteYourDebt.com practice. Neon-only —
     // 404s on every other registered brand host; see
     // `views::brand::BrandKey::publishes_firm_path`.
@@ -210,6 +212,7 @@ pub fn sitemap_for(
             let mut paths: std::collections::BTreeSet<String> = [
                 "/",
                 "/legal-aid",
+                "/lawyers",
                 "/delete-your-debt",
                 "/delete-your-data",
                 "/immigration",
@@ -405,6 +408,11 @@ fn indexed_pages(mark: &str) -> Vec<portal::LlmsTxtLink> {
             mark,
             "/",
             &locales::neon_home(&views::brand::DEFAULT_BRANDING, None).meta_description,
+        ),
+        indexed_page(
+            "Lawyers",
+            "/lawyers",
+            &locales::lawyers(&views::brand::DEFAULT_BRANDING).meta_description,
         ),
         indexed_page(
             "Debt relief with PandA Law",

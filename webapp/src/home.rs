@@ -333,7 +333,7 @@ async fn home_page_data() -> Result<HomePageView, ServerFnError> {
     let injected =
         crate::public_chrome::copy_from_request_or_context(consume_context::<InjectedHome>).await;
     let surreal = consume_context::<store::surreal::SurrealDb>();
-    let testimonials = store::testimonials::published_for_brand(
+    let testimonials = match store::testimonials::published_for_brand(
         &surreal,
         &injected.brand_key,
         if injected.brand_key == "vesta" {
@@ -343,10 +343,12 @@ async fn home_page_data() -> Result<HomePageView, ServerFnError> {
         },
     )
     .await
-    .map_err(|error| ServerFnError::new(error.to_string()))?
-    .into_iter()
-    .map(home_testimonial_card)
-    .collect();
+    {
+        Ok(rows) => rows.into_iter().map(home_testimonial_card).collect(),
+        // Catalog copy is the home. A missing testimonial band must not
+        // blank the page a share, crawler, or visitor opened.
+        Err(_) => Vec::new(),
+    };
     let video_posts = if injected.content.estate.is_some() {
         let posts =
             store::posts::published_for_brand(&surreal, &injected.brand_key, chrono::Utc::now())
@@ -1233,7 +1235,7 @@ mod tests {
                                 }, CopyRun {
                                     text: "Neon Law Navigator".to_string(),
                                     emphasis: false,
-                                    href: Some("/navigator".to_string()),
+                                    href: Some("/".to_string()),
                                 }],
                             ],
                         }),
@@ -1481,7 +1483,7 @@ mod tests {
     fn a_linking_run_renders_as_an_inline_anchor() {
         let out = html();
         assert!(
-            out.contains(r#"<a href="/navigator">"#),
+            out.contains(r#"<a href="/">"#),
             "the linking run is an anchor: {out}"
         );
         assert!(

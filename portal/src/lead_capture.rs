@@ -338,8 +338,10 @@ fn valid_phone(phone: &str) -> bool {
 
 fn safe_source_path(brand: BrandKey, path: &str) -> String {
     let path = path.trim();
-    if matches!(path, "/" | "/contact" | "/navigator" | "/services")
-        || (brand == BrandKey::SameDayLegal && path == SAME_DAY_LEGAL_APP_PATH)
+    if matches!(
+        path,
+        "/" | "/contact" | "/navigator" | "/lawyers" | "/services"
+    ) || (brand == BrandKey::SameDayLegal && path == SAME_DAY_LEGAL_APP_PATH)
     {
         path.to_string()
     } else {
@@ -432,7 +434,7 @@ mod tests {
 
     #[test]
     fn source_path_accepts_only_routes_that_mount_the_lead_form() {
-        for path in ["/", "/contact", "/navigator", "/services"] {
+        for path in ["/", "/contact", "/navigator", "/lawyers", "/services"] {
             assert_eq!(safe_source_path(BrandKey::Neon, path), path);
         }
 

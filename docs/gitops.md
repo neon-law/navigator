@@ -741,10 +741,10 @@ job's `apple-signing` step checks six repository secrets — `APPLE_DEVELOPER_ID
 logs a notice and still attaches the unsigned `navigator-<tag>-macos.tar.gz` — a missing enrollment cannot break a
 release. Once an operator adds all six secrets, the same job imports the certificate into a temporary keychain,
 `codesign`s the binary before it goes in the tarball, `pkgbuild`s it into `navigator-<tag>-macos.pkg`, notarizes and
-staples that package, and `release-cli-publish` attaches it alongside the tarball whenever it exists. Flip
-`/navigator`'s "not yet signed or notarized" copy (`neon/src/firm_copy.rs`, `server/tests/firm_routes.rs`) and the
-Homebrew tap's Slack pitch (`cli/tests/homebrew_tap_dispatch.rs`) only in the release that first publishes a real
-`.pkg`, not before and not as part of landing this workflow.
+staples that package, and `release-cli-publish` attaches it alongside the tarball whenever it exists. Flip `/lawyers`'s
+"not yet signed or notarized" copy (`neon/src/firm_copy.rs`, `server/tests/firm_routes.rs`) and the Homebrew tap's Slack
+pitch (`cli/tests/homebrew_tap_dispatch.rs`) only in the release that first publishes a real `.pkg`, not before and not
+as part of landing this workflow.
 
 **Every public download resolves to this repository's own Release.** `neon-law/navigator` is public, and
 `release-cli-publish` attaches the two CLI archives, the two `navigator-lsp` archives, both Linux/macOS checksums,

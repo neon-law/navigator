@@ -145,11 +145,12 @@ const FIRM_NAV: &[NavLink] = &[
     NavLink::leaf("Book Consultation", SHOOK_CONSULTATION_URL),
 ];
 
-/// Neon's header names its pages: Same Day Legal, the subscription
-/// `/same-day-legal` redirects to; Navigator, the engine; and Notations, the document format. The shared
-/// footer row still links Navigator and Notations for every brand.
+/// Neon's header names its pages: Notations, the document format; Lawyers, the
+/// connected Project; and Legal Aid. The shared footer row still links Navigator
+/// and Notations for every brand.
 const NEON_NAV: &[NavLink] = &[
     NavLink::leaf("Notations", "/notations"),
+    NavLink::leaf("Lawyers", "/lawyers"),
     NavLink::leaf("Legal Aid", "/legal-aid"),
 ];
 
@@ -160,7 +161,7 @@ const FIRM_FOOTER_NAV: &[NavLink] = &[
     NavLink::leaf("Blog", "/blog"),
     NavLink::leaf("Design", "/design"),
     NavLink::leaf("Glossary", "/glossary"),
-    NavLink::leaf("Navigator", "/navigator"),
+    NavLink::leaf("Navigator", "/"),
     NavLink::leaf("Notations", "/notations"),
     NavLink::leaf("Presentations", "/presentations"),
     NavLink::leaf("Team", "/team"),
@@ -3105,7 +3106,11 @@ mod tests {
         let nav: Vec<(&str, &str)> = FIRM_BRAND.nav.iter().map(|n| (n.label, n.href)).collect();
         assert_eq!(
             nav,
-            [("Notations", "/notations"), ("Legal Aid", "/legal-aid"),]
+            [
+                ("Notations", "/notations"),
+                ("Lawyers", "/lawyers"),
+                ("Legal Aid", "/legal-aid"),
+            ]
         );
     }
 
@@ -3136,6 +3141,15 @@ mod tests {
             footer.len(),
             FOOTER_LINK_COUNT,
             "the footer has twelve public destinations: {footer:?}"
+        );
+        assert_eq!(
+            super::firm_footer_nav()
+                .iter()
+                .find(|link| link.label == "Navigator")
+                .expect("the footer names Navigator")
+                .href,
+            "/",
+            "the product URL is the neonlaw.com homepage, not /navigator"
         );
         let mut sorted = footer.clone();
         sorted.sort_unstable();

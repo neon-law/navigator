@@ -215,12 +215,22 @@ async fn no_firm_page_still_markets_the_retired_consumer_plan() {
 #[tokio::test]
 async fn the_home_presents_navigator_and_links_to_its_page() {
     let app = site_app().await;
-    let body = body_string(anon_get(&app, "/").await).await;
-    assert_eq!(body.matches("<h1").count(), 1);
+    let resp = anon_get(&app, "/").await;
+    let status = resp.status();
+    let body = body_string(resp).await;
+    assert_eq!(
+        body.matches("<h1").count(),
+        1,
+        "status={status} len={} body={body}",
+        body.len()
+    );
     for text in [
         "Exacting Agentic Lawyering",
-        r#"href="/notations/about""#,
+        "representing yourself",
+        r#"href="/notations""#,
+        r#"href="/lawyers""#,
         r#"href="/legal-aid""#,
+        "<title>Neon Law | Navigator, Exacting Agentic Lawyering for Everyone</title>",
     ] {
         assert!(body.contains(text), "missing {text}: {body}");
     }
@@ -276,7 +286,7 @@ async fn the_footer_carries_the_pages_the_header_does_not() {
         "/blog",
         "/contact",
         "/glossary",
-        "/navigator",
+        "/",
         "/notations",
         "/presentations",
         "/privacy",
@@ -438,7 +448,11 @@ async fn the_sitemap_lists_the_products_and_excludes_retired_pages() {
     let app = site_app().await;
     let body = body_string(anon_get(&app, "/sitemap.xml").await).await;
     assert!(body.contains("/notations"), "missing /notations: {body}");
-    assert!(!body.contains("/navigator"), "retired page listed: {body}");
+    assert!(body.contains("/lawyers"), "missing /lawyers: {body}");
+    assert!(
+        !body.contains("<loc>https://www.neonlaw.com/navigator</loc>"),
+        "retired page listed: {body}"
+    );
     assert!(!body.contains("/nautilus"));
     assert!(!body.contains("/disputes"));
     assert!(!body.contains("/business"));
@@ -502,7 +516,7 @@ async fn supporting_pages_do_not_publish_separate_fees() {
     }
 }
 
-/// The home offers MCP setup, the presentation, and the local quickstart.
+/// The home offers MCP setup so anyone can connect Navigator in chat.
 #[tokio::test]
 async fn the_home_explains_the_mcp_setup_and_the_quickstart() {
     let app = site_app().await;
@@ -515,23 +529,26 @@ async fn the_home_explains_the_mcp_setup_and_the_quickstart() {
         r#"href="/app/projects""#,
         "https://www.neonlaw.com/app/mcp",
         "Navigator is open source under MIT OR Apache-2.0.",
-        r#"id="video""#,
-        "navigator quickstart",
-        "it brings up the full stack in KIND with a seeded sample firm and three sample matters",
+        r#"href="/lawyers""#,
+        "Agentic lawyering is for anyone.",
     ] {
         assert!(body.contains(expected), "missing {expected}: {body}");
     }
     assert!(
-        body.contains(webapp::cli_release::HOMEBREW_INSTALL_COMMAND),
-        "the quickstart follows the Homebrew install command: {body}"
+        !body.contains(r#"id="video""#),
+        "the presentation lives on /lawyers: {body}"
+    );
+    assert!(
+        !body.contains("navigator quickstart"),
+        "the quickstart lives on /lawyers: {body}"
     );
 }
 
-/// The home maps the Project's connected work around Navigator.
+/// `/lawyers` maps the Project's connected work around Navigator.
 #[tokio::test]
 async fn the_home_maps_a_connected_project() {
     let app = site_app().await;
-    let body = body_string(anon_get(&app, "/").await).await;
+    let body = body_string(anon_get(&app, "/lawyers").await).await;
 
     assert!(
         body.contains(r#"class="fm-project-network""#)
@@ -622,7 +639,7 @@ async fn the_home_maps_a_connected_project() {
     );
 }
 
-/// `/` publishes the CLI as three download boxes and the Homebrew
+/// `/lawyers` publishes the CLI as three download boxes and the Homebrew
 /// route, anonymously, at the release this deployment runs.
 ///
 /// **This is the covering assertion for the whole downloads band**, and it has
@@ -643,7 +660,7 @@ async fn the_home_publishes_the_cli_at_the_release_it_runs() {
     const DOWNLOAD_BASE: &str = "https://github.com/neon-law/navigator/releases/download/";
 
     let app = site_app().await;
-    let body = body_string(anon_get(&app, "/").await).await;
+    let body = body_string(anon_get(&app, "/lawyers").await).await;
 
     // The version, read out of the first download href.
     //
@@ -810,7 +827,8 @@ async fn home_metadata_describes_navigator_at_the_root_url() {
     let app = site_app().await;
     let body = body_string(anon_get(&app, "/").await).await;
     assert!(
-        body.contains("Navigator, exacting agentic lawyering"),
+        body.contains("Navigator, Exacting Agentic Lawyering for Everyone")
+            && body.contains("exacting agentic lawyering for everyone"),
         "{body}"
     );
     assert!(
@@ -1146,7 +1164,7 @@ async fn a_talk_hub_renders_under_the_firm_brand() {
     assert!(
         slides.contains("workshop-navigator-slide")
             && slides.contains(r#"data-practice-mark="helm""#)
-            && slides.contains("neonlaw.com/navigator"),
+            && slides.contains("neonlaw.com"),
         "the Navigator identity slide must replace its Markdown marker: {slides}"
     );
 }

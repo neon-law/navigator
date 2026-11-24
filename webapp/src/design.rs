@@ -2349,7 +2349,7 @@ fn NavigationShowcase() -> Element {
                 "An off-site link opens in a new tab with the OWASP "
                 code { "rel" }
                 " pair and an arrow: "
-                ExternalLink { href: "https://www.neonlaw.com/navigator".to_string(), "Neon Law Navigator" }
+                ExternalLink { href: crate::source_repository::NAVIGATOR_HREF.to_string(), "Neon Law Navigator" }
                 "."
             }
             p {

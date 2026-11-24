@@ -61,6 +61,7 @@ pub const KNOWN_PAGES: &[&str] = &[
     "immigration-humanitarian-relief",
     "immigration-removal-defense",
     "immigration-uscis-notices",
+    "lawyers",
     "legal-aid",
     "litigation",
     "notations",
@@ -723,7 +724,8 @@ pub fn locale_page_kind(stem: &str) -> Option<LocalePageKind> {
         "litigation" => Some(LocalePageKind::Litigation),
         "free-resources" => Some(LocalePageKind::FreeResources),
         "fractional-gc" => Some(LocalePageKind::Transactional),
-        "legal-aid"
+        "lawyers"
+        | "legal-aid"
         | "notations"
         | "services"
         | "car-accidents"
@@ -966,7 +968,7 @@ cta_label: Contact us
 body:
   - - text: We represent those who have not been justly seen.
     - text: Neon Law Navigator
-      href: /navigator
+      href: /
 "#,
         )
         .expect("litigation catalog");

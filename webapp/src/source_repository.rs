@@ -1,7 +1,9 @@
 //! Navigator's product page and public source repository.
 
 /// The product page linked by the platform name in every footer.
-pub const NAVIGATOR_HREF: &str = "https://www.neonlaw.com/navigator";
+pub const NAVIGATOR_HREF: &str = "https://www.neonlaw.com";
+/// The host label shown next to the product link.
+pub const NAVIGATOR_HOST_LABEL: &str = "neonlaw.com";
 /// The public source repository named in the footer.
 pub const SOURCE_REPO: &str = "neon-law/navigator";
 /// The public source repository's web address.

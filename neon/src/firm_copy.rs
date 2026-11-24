@@ -16,6 +16,12 @@ pub fn legal_aid(branding: &views::brand::Branding) -> PageContent {
     locales::legal_aid(branding)
 }
 
+/// `/lawyers` — the connected Project, CLI, and workshops for lawyers and
+/// firms. See `locales/en/neon/lawyers.yaml`.
+pub fn lawyers(branding: &views::brand::Branding) -> PageContent {
+    locales::lawyers(branding)
+}
+
 /// `/services` — the published schedule. See this brand's `services.yaml`.
 pub fn legal_services(branding: &views::brand::Branding) -> PageContent {
     locales::legal_services(branding)
@@ -555,8 +561,8 @@ mod firm_copy_tests {
 
     /// The connected-Project diagram names the Project's work surfaces.
     #[test]
-    fn the_home_maps_connected_project_surfaces() {
-        let content = crate::locales::neon_home(&views::brand::DEFAULT_BRANDING, None);
+    fn the_lawyers_page_maps_connected_project_surfaces() {
+        let content = crate::locales::lawyers(&views::brand::DEFAULT_BRANDING);
         let diagram = content
             .bands
             .iter()
@@ -571,7 +577,7 @@ mod firm_copy_tests {
                 } => Some((left, right, mcp_tools, agentic_coding_tools, saas_tools)),
                 _ => None,
             })
-            .expect("the Navigator page renders its connected-Project diagram");
+            .expect("the lawyers page renders its connected-Project diagram");
 
         let left_labels: Vec<&str> = diagram.0.iter().map(|node| node.label.as_str()).collect();
         assert_eq!(
