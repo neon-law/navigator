@@ -306,47 +306,74 @@ mod tests {
     use tower::ServiceExt;
     use workflows::InMemoryRuntime;
 
-    async fn db() -> store::surreal::SurrealDb {
-        store::test_support::mem_surreal().await
-    }
-
     fn state(surreal: &store::surreal::SurrealDb) -> McpState {
         McpState::new(surreal.clone(), Arc::new(InMemoryRuntime::new()))
     }
 
     async fn call(router: axum::Router, body: Value) -> (StatusCode, Value) {
-        let req = Request::builder()
+        call_as(router, None, body).await
+    }
+
+    /// [`call`] as the authenticated `principal`; an empty body reads as null.
+    async fn call_as(
+        router: axum::Router,
+        principal: Option<&str>,
+        body: Value,
+    ) -> (StatusCode, Value) {
+        let mut req = Request::builder()
             .method("POST")
             .uri("/mcp")
             .header("content-type", "application/json")
             .body(Body::from(serde_json::to_vec(&body).unwrap()))
             .unwrap();
+        if let Some(email) = principal {
+            req.extensions_mut().insert(crate::Principal::new(email));
+        }
         let resp = router.oneshot(req).await.unwrap();
         let status = resp.status();
         let bytes = to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
-        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        let body = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
         (status, body)
+    }
+
+    /// A lawyer-tier caller, whom the HTTP door admits to the CRM writers.
+    async fn lawyer(surreal: &store::surreal::SurrealDb) -> String {
+        let email = crate::test_fixtures::email();
+        store::persons::create(
+            surreal,
+            &store::persons::NewPerson::with_role(
+                crate::test_fixtures::person_name(),
+                email.clone(),
+                store::persons::Role::Lawyer,
+            ),
+        )
+        .await
+        .unwrap();
+        email
     }
 
     #[tokio::test]
     async fn initialize_returns_protocol_version_and_server_info() {
-        let router = build_router(state(&db().await));
-        let (status, body) = call(
-            router,
-            json!({
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "initialize",
-                "params": {}
-            }),
-        )
+        store::test_support::with_postgres(async {
+            let router = build_router(state(&crate::test_fixtures::handle()));
+            let (status, body) = call(
+                router,
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {}
+                }),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(body["jsonrpc"], "2.0");
+            assert_eq!(body["id"], 1);
+            assert_eq!(body["result"]["protocolVersion"], "2025-06-18");
+            assert_eq!(body["result"]["serverInfo"]["name"], "navigator-mcp");
+            assert!(body["result"]["capabilities"]["tools"].is_object());
+        })
         .await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body["jsonrpc"], "2.0");
-        assert_eq!(body["id"], 1);
-        assert_eq!(body["result"]["protocolVersion"], "2025-06-18");
-        assert_eq!(body["result"]["serverInfo"]["name"], "navigator-mcp");
-        assert!(body["result"]["capabilities"]["tools"].is_object());
     }
 
     /// `tools/list` serves the advertised catalog and excludes supervised tools.
@@ -355,63 +382,66 @@ mod tests {
     /// listed stays green when a supervised act is served by mistake.
     #[tokio::test]
     async fn tools_list_withholds_the_confirmation_gated_tools() {
-        let router = build_router(state(&db().await));
-        let (_, body) = call(
-            router,
-            json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }),
-        )
-        .await;
-        let tools = body["result"]["tools"].as_array().unwrap();
-        let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
+        store::test_support::with_postgres(async {
+            let router = build_router(state(&crate::test_fixtures::handle()));
+            let (_, body) = call(
+                router,
+                json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }),
+            )
+            .await;
+            let tools = body["result"]["tools"].as_array().unwrap();
+            let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
 
-        for gated in ["create_notation", "answer_notation", "send_welcome_email"] {
-            assert!(
+            for gated in ["create_notation", "answer_notation", "send_welcome_email"] {
+                assert!(
                 !names.contains(&gated),
                 "`{gated}` is a supervised act and must not be advertised on /mcp; got {names:?}"
             );
-        }
+            }
 
-        for offered in [
-            "create_person",
-            "show_person",
-            "list_jurisdictions",
-            "list_entities",
-            "validate_notation",
-            "list_deadlines",
-            "list_project_deadlines",
-            "create_deadline",
-            "update_deadline",
-            "complete_deadline",
-            "cancel_deadline",
-            "reopen_deadline",
-            "create_project",
-            "close_project",
-            "list_projects",
-            "project_status",
-            "link_person_project",
-            "list_tools",
-            "bulk_import",
-            "spawn_legal_council",
-            "glossary_list",
-            "list_templates",
-            "glossary_show",
-            "project_skill_list",
-            "project_skill_show",
-            "search_case_law",
-            "search_legal_aid",
-        ] {
-            assert!(
-                names.contains(&offered),
-                "`{offered}` missing; got {names:?}"
-            );
-        }
+            for offered in [
+                "create_person",
+                "show_person",
+                "list_jurisdictions",
+                "list_entities",
+                "validate_notation",
+                "list_deadlines",
+                "list_project_deadlines",
+                "create_deadline",
+                "update_deadline",
+                "complete_deadline",
+                "cancel_deadline",
+                "reopen_deadline",
+                "create_project",
+                "close_project",
+                "list_projects",
+                "project_status",
+                "link_person_project",
+                "list_tools",
+                "bulk_import",
+                "spawn_legal_council",
+                "glossary_list",
+                "list_templates",
+                "glossary_show",
+                "project_skill_list",
+                "project_skill_show",
+                "search_case_law",
+                "search_legal_aid",
+            ] {
+                assert!(
+                    names.contains(&offered),
+                    "`{offered}` missing; got {names:?}"
+                );
+            }
 
-        for name in &names {
-            assert!(
-                !name.starts_with("aida_"),
-                "`{name}` still carries the retired vendor prefix"
-            );
-        }
+            for name in &names {
+                assert!(
+                    !name.starts_with("aida_"),
+                    "`{name}` still carries the retired vendor prefix"
+                );
+            }
+        })
+        .await;
     }
 
     /// The withheld set is exactly `requires_confirmation`, computed
@@ -419,35 +449,39 @@ mod tests {
     /// test the day it is classified, with no edit here.
     #[tokio::test]
     async fn tools_list_is_exactly_the_unconfirmed_catalog() {
-        let router = build_router(state(&db().await));
-        let (_, body) = call(
-            router,
-            json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }),
-        )
-        .await;
-        let names: Vec<String> = body["result"]["tools"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter_map(|t| t["name"].as_str().map(String::from))
-            .collect();
+        store::test_support::with_postgres(async {
+            let router = build_router(state(&crate::test_fixtures::handle()));
+            let (_, body) = call(
+                router,
+                json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }),
+            )
+            .await;
+            let names: Vec<String> = body["result"]["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|t| t["name"].as_str().map(String::from))
+                .collect();
 
-        let expected: Vec<String> = crate::tools::list_tools()
-            .iter()
-            .filter_map(|t| t["name"].as_str())
-            .filter(|n| !crate::tools::requires_confirmation(n))
-            .map(String::from)
-            .collect();
-        assert_eq!(names, expected);
-        assert!(
-            crate::tools::list_tools().len() > expected.len(),
-            "the served catalog must be strictly narrower than the whole one"
-        );
+            let expected: Vec<String> = crate::tools::list_tools()
+                .iter()
+                .filter_map(|t| t["name"].as_str())
+                .filter(|n| !crate::tools::requires_confirmation(n))
+                .map(String::from)
+                .collect();
+            assert_eq!(names, expected);
+            assert!(
+                crate::tools::list_tools().len() > expected.len(),
+                "the served catalog must be strictly narrower than the whole one"
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn tools_call_list_templates_clarifies_work_in_progress() {
-        let router = build_router(state(&db().await));
+        store::test_support::with_postgres(async {
+        let router = build_router(state(&crate::test_fixtures::handle()));
         let (status, body) = call(
             router,
             json!({
@@ -468,32 +502,36 @@ mod tests {
                 "clarification": "Do you want a Work In Progress summary for a matter, or do you want to record time or a cost?"
             })
         );
+    }).await;
     }
 
     /// Naming a gated tool anyway is refused *before* dispatch, with a
     /// message routing the caller to where the approval is recorded.
     #[tokio::test]
     async fn tools_call_refuses_a_gated_tool_without_dispatching() {
-        let surreal = db().await;
-        let router = build_router(state(&surreal));
-        let (_, body) = call(
-            router,
-            json!({
-                "jsonrpc": "2.0",
-                "id": 4,
-                "method": "tools/call",
-                "params": {
-                    "name": "create_notation",
-                    "arguments": { "template": "anything" }
-                }
-            }),
-        )
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let router = build_router(state(&surreal));
+            let (_, body) = call(
+                router,
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": 4,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "create_notation",
+                        "arguments": { "template": "anything" }
+                    }
+                }),
+            )
+            .await;
+            assert_eq!(body["result"]["isError"], true);
+            let text = body["result"]["content"][0]["text"].as_str().unwrap();
+            assert!(text.contains("create_notation"), "got `{text}`");
+            assert!(text.contains("Navigator app"), "got `{text}`");
+            assert!(text.contains("approval"), "got `{text}`");
+        })
         .await;
-        assert_eq!(body["result"]["isError"], true);
-        let text = body["result"]["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("create_notation"), "got `{text}`");
-        assert!(text.contains("Navigator app"), "got `{text}`");
-        assert!(text.contains("approval"), "got `{text}`");
     }
 
     /// The refusal is not the unknown-tool answer. An unrecognized name
@@ -501,249 +539,292 @@ mod tests {
     /// "gated" and "no such tool" stay distinguishable to a caller.
     #[tokio::test]
     async fn tools_call_still_reports_an_unknown_tool_as_unknown() {
-        let surreal = db().await;
-        let router = build_router(state(&surreal));
-        let (_, body) = call(
-            router,
-            json!({
-                "jsonrpc": "2.0",
-                "id": 5,
-                "method": "tools/call",
-                "params": { "name": "not_a_tool", "arguments": {} }
-            }),
-        )
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let router = build_router(state(&surreal));
+            let (_, body) = call(
+                router,
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": 5,
+                    "method": "tools/call",
+                    "params": { "name": "not_a_tool", "arguments": {} }
+                }),
+            )
+            .await;
+            assert_eq!(body["result"]["isError"], true);
+            let text = body["result"]["content"][0]["text"].as_str().unwrap();
+            assert!(
+                !text.contains("Navigator app"),
+                "unknown must not read as a gated refusal; got `{text}`"
+            );
+        })
         .await;
-        assert_eq!(body["result"]["isError"], true);
-        let text = body["result"]["content"][0]["text"].as_str().unwrap();
-        assert!(
-            !text.contains("Navigator app"),
-            "unknown must not read as a gated refusal; got `{text}`"
-        );
     }
 
     #[tokio::test]
     async fn tools_call_create_person_inserts_a_row() {
-        let surreal = db().await;
-        let router = build_router(state(&surreal));
-        let (_, body) = call(
-            router,
-            json!({
-                "jsonrpc": "2.0",
-                "id": 3,
-                "method": "tools/call",
-                "params": {
-                    "name": "create_person",
-                    "arguments": { "name": "Libra", "email": "libra@example.com" }
-                }
-            }),
-        )
-        .await;
-        assert_ne!(body["result"]["isError"].as_bool(), Some(true));
-        assert_eq!(body["result"]["structuredContent"]["name"], "Libra");
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let caller = lawyer(&surreal).await;
+            let router = build_router(state(&surreal));
+            let (_, body) = call_as(
+                router,
+                Some(&caller),
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": 3,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "create_person",
+                        "arguments": { "name": "Libra", "email": "libra@example.com" }
+                    }
+                }),
+            )
+            .await;
+            assert_ne!(body["result"]["isError"].as_bool(), Some(true));
+            assert_eq!(body["result"]["structuredContent"]["name"], "Libra");
 
-        let rows = store::persons::list_directory(&surreal).await.unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].email, "libra@example.com");
+            let rows = store::persons::list_directory(&surreal).await.unwrap();
+            assert!(rows.iter().any(|row| row.email == "libra@example.com"));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn tools_call_show_person_returns_an_existing_row() {
-        let surreal = db().await;
-        let router = build_router(state(&surreal));
-        // Seed via the create tool so the test exercises both surfaces.
-        let (_, _) = call(
-            router.clone(),
-            json!({
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "tools/call",
-                "params": {
-                    "name": "create_person",
-                    "arguments": { "name": "Libra", "email": "libra@example.com" }
-                }
-            }),
-        )
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let caller = lawyer(&surreal).await;
+            let router = build_router(state(&surreal));
+            // Seed via the create tool so the test exercises both surfaces.
+            let (_, _) = call_as(
+                router.clone(),
+                Some(&caller),
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "create_person",
+                        "arguments": { "name": "Libra", "email": "libra@example.com" }
+                    }
+                }),
+            )
+            .await;
+            let (_, body) = call_as(
+                router,
+                Some(&caller),
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "show_person",
+                        "arguments": { "email": "libra@example.com" }
+                    }
+                }),
+            )
+            .await;
+            assert_ne!(body["result"]["isError"].as_bool(), Some(true));
+            assert_eq!(body["result"]["structuredContent"]["count"], 1);
+            assert_eq!(
+                body["result"]["structuredContent"]["persons"][0]["name"],
+                "Libra"
+            );
+            assert_eq!(
+                body["result"]["structuredContent"]["persons"][0]["email"],
+                "libra@example.com"
+            );
+        })
         .await;
-        let (_, body) = call(
-            router,
-            json!({
-                "jsonrpc": "2.0",
-                "id": 2,
-                "method": "tools/call",
-                "params": {
-                    "name": "show_person",
-                    "arguments": { "email": "libra@example.com" }
-                }
-            }),
-        )
-        .await;
-        assert_ne!(body["result"]["isError"].as_bool(), Some(true));
-        assert_eq!(body["result"]["structuredContent"]["count"], 1);
-        assert_eq!(
-            body["result"]["structuredContent"]["persons"][0]["name"],
-            "Libra"
-        );
-        assert_eq!(
-            body["result"]["structuredContent"]["persons"][0]["email"],
-            "libra@example.com"
-        );
     }
 
     #[tokio::test]
     async fn tools_call_list_jurisdictions_returns_seeded_rows() {
-        let surreal = db().await;
-        store::jurisdictions::create(
-            &surreal,
-            &store::jurisdictions::NewJurisdiction::new("Nevada", "NV", "state"),
-        )
-        .await
-        .unwrap();
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            store::jurisdictions::create(
+                &surreal,
+                &store::jurisdictions::NewJurisdiction::new("Nevada", "NV", "state"),
+            )
+            .await
+            .unwrap();
 
-        let router = build_router(state(&surreal));
-        let (_, body) = call(
-            router,
-            json!({
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "tools/call",
-                "params": {
-                    "name": "list_jurisdictions",
-                    "arguments": {}
-                }
-            }),
-        )
+            let router = build_router(state(&surreal));
+            let (_, body) = call(
+                router,
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "list_jurisdictions",
+                        "arguments": {}
+                    }
+                }),
+            )
+            .await;
+            assert_ne!(body["result"]["isError"].as_bool(), Some(true));
+            assert_eq!(body["result"]["structuredContent"]["count"], 1);
+            assert_eq!(
+                body["result"]["structuredContent"]["jurisdictions"][0]["code"],
+                "NV"
+            );
+        })
         .await;
-        assert_ne!(body["result"]["isError"].as_bool(), Some(true));
-        assert_eq!(body["result"]["structuredContent"]["count"], 1);
-        assert_eq!(
-            body["result"]["structuredContent"]["jurisdictions"][0]["code"],
-            "NV"
-        );
     }
 
     #[tokio::test]
     async fn tools_call_with_unknown_tool_returns_iserror_result() {
-        let router = build_router(state(&db().await));
-        let (_, body) = call(
-            router,
-            json!({
-                "jsonrpc": "2.0",
-                "id": 4,
-                "method": "tools/call",
-                "params": { "name": "does_not_exist", "arguments": {} }
-            }),
-        )
+        store::test_support::with_postgres(async {
+            let router = build_router(state(&crate::test_fixtures::handle()));
+            let (_, body) = call(
+                router,
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": 4,
+                    "method": "tools/call",
+                    "params": { "name": "does_not_exist", "arguments": {} }
+                }),
+            )
+            .await;
+            // MCP convention: tool failure is a result with isError=true,
+            // not a JSON-RPC error envelope.
+            assert!(body.get("error").is_none());
+            assert_eq!(body["result"]["isError"], true);
+            assert!(body["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("does_not_exist"));
+        })
         .await;
-        // MCP convention: tool failure is a result with isError=true,
-        // not a JSON-RPC error envelope.
-        assert!(body.get("error").is_none());
-        assert_eq!(body["result"]["isError"], true);
-        assert!(body["result"]["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("does_not_exist"));
     }
 
     #[tokio::test]
     async fn tools_call_with_missing_name_param_is_invalid_params() {
-        let router = build_router(state(&db().await));
-        let (_, body) = call(
-            router,
-            json!({
-                "jsonrpc": "2.0",
-                "id": 5,
-                "method": "tools/call",
-                "params": {}
-            }),
-        )
+        store::test_support::with_postgres(async {
+            let router = build_router(state(&crate::test_fixtures::handle()));
+            let (_, body) = call(
+                router,
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": 5,
+                    "method": "tools/call",
+                    "params": {}
+                }),
+            )
+            .await;
+            assert_eq!(body["error"]["code"], -32602);
+        })
         .await;
-        assert_eq!(body["error"]["code"], -32602);
     }
 
     #[tokio::test]
     async fn tools_call_with_invalid_arguments_is_iserror_result() {
-        let router = build_router(state(&db().await));
-        let (_, body) = call(
-            router,
-            json!({
-                "jsonrpc": "2.0",
-                "id": 6,
-                "method": "tools/call",
-                "params": {
-                    "name": "create_person",
-                    "arguments": { "name": "", "email": "libra@example.com" }
-                }
-            }),
-        )
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let caller = lawyer(&surreal).await;
+            let router = build_router(state(&surreal));
+            let (_, body) = call_as(
+                router,
+                Some(&caller),
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": 6,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "create_person",
+                        "arguments": { "name": "", "email": "libra@example.com" }
+                    }
+                }),
+            )
+            .await;
+            assert_eq!(body["result"]["isError"], true);
+            assert!(body["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("invalid arguments"));
+        })
         .await;
-        assert_eq!(body["result"]["isError"], true);
-        assert!(body["result"]["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("invalid arguments"));
     }
 
     #[tokio::test]
     async fn unknown_method_returns_method_not_found_error() {
-        let router = build_router(state(&db().await));
-        let (_, body) = call(
-            router,
-            json!({ "jsonrpc": "2.0", "id": 7, "method": "bogus" }),
-        )
+        store::test_support::with_postgres(async {
+            let router = build_router(state(&crate::test_fixtures::handle()));
+            let (_, body) = call(
+                router,
+                json!({ "jsonrpc": "2.0", "id": 7, "method": "bogus" }),
+            )
+            .await;
+            assert_eq!(body["error"]["code"], -32601);
+            assert!(body["error"]["message"].as_str().unwrap().contains("bogus"));
+        })
         .await;
-        assert_eq!(body["error"]["code"], -32601);
-        assert!(body["error"]["message"].as_str().unwrap().contains("bogus"));
     }
 
     #[tokio::test]
     async fn jsonrpc_version_must_be_exactly_2_0() {
-        let router = build_router(state(&db().await));
-        let (_, body) = call(
-            router,
-            json!({ "jsonrpc": "1.0", "id": 8, "method": "ping" }),
-        )
+        store::test_support::with_postgres(async {
+            let router = build_router(state(&crate::test_fixtures::handle()));
+            let (_, body) = call(
+                router,
+                json!({ "jsonrpc": "1.0", "id": 8, "method": "ping" }),
+            )
+            .await;
+            assert_eq!(body["error"]["code"], -32600);
+        })
         .await;
-        assert_eq!(body["error"]["code"], -32600);
     }
 
     #[tokio::test]
     async fn malformed_json_body_returns_parse_error() {
-        let router = build_router(state(&db().await));
-        let req = Request::builder()
-            .method("POST")
-            .uri("/mcp")
-            .header("content-type", "application/json")
-            .body(Body::from("{ not json"))
-            .unwrap();
-        let resp = router.oneshot(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-        let bytes = to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
-        let body: Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(body["error"]["code"], -32700);
+        store::test_support::with_postgres(async {
+            let router = build_router(state(&crate::test_fixtures::handle()));
+            let req = Request::builder()
+                .method("POST")
+                .uri("/mcp")
+                .header("content-type", "application/json")
+                .body(Body::from("{ not json"))
+                .unwrap();
+            let resp = router.oneshot(req).await.unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+            let bytes = to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+            let body: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(body["error"]["code"], -32700);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn ping_method_returns_empty_result() {
-        let router = build_router(state(&db().await));
-        let (_, body) = call(
-            router,
-            json!({ "jsonrpc": "2.0", "id": 9, "method": "ping" }),
-        )
+        store::test_support::with_postgres(async {
+            let router = build_router(state(&crate::test_fixtures::handle()));
+            let (_, body) = call(
+                router,
+                json!({ "jsonrpc": "2.0", "id": 9, "method": "ping" }),
+            )
+            .await;
+            assert_eq!(body["result"], json!({}));
+        })
         .await;
-        assert_eq!(body["result"], json!({}));
     }
 
     #[tokio::test]
-    async fn notifications_initialized_returns_ok_without_id() {
-        let router = build_router(state(&db().await));
-        let (_, body) = call(
-            router,
-            json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
-        )
+    async fn a_notification_is_accepted_without_a_response_body() {
+        store::test_support::with_postgres(async {
+            let router = build_router(state(&crate::test_fixtures::handle()));
+            let (status, body) = call(
+                router,
+                json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
+            )
+            .await;
+            // No `id` in the request: JSON-RPC sends no response to answer.
+            assert_eq!(status, StatusCode::ACCEPTED);
+            assert_eq!(body, Value::Null);
+        })
         .await;
-        // No `id` in the request → null in the response per JSON-RPC.
-        assert_eq!(body["id"], Value::Null);
-        assert!(body["result"].is_object());
     }
 
     #[test]

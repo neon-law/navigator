@@ -122,7 +122,6 @@ mod tests {
     use uuid::Uuid;
     use workflows::InMemoryRuntime;
 
-    use store::test_support::mem_surreal;
     use workflows::email::CapturingEmail;
 
     /// State carrying a capturing mailer, standing in for the
@@ -130,8 +129,8 @@ mod tests {
     /// decorator writes is asserted in `portal`, where the decorator
     /// lives; here the assertion is that the tool hands the command a
     /// message tagged so that row is attributable.
-    async fn state_with_mailer() -> (McpState, Arc<CapturingEmail>) {
-        let surreal = mem_surreal().await;
+    fn state_with_mailer() -> (McpState, Arc<CapturingEmail>) {
+        let surreal = crate::test_fixtures::handle();
         let runtime: Arc<dyn workflows::StateMachineRuntime> = Arc::new(InMemoryRuntime::new());
         let mut st = McpState::new(surreal, runtime);
         let mailer = Arc::new(CapturingEmail::new());
@@ -139,8 +138,8 @@ mod tests {
         (st, mailer)
     }
 
-    async fn state() -> McpState {
-        state_with_mailer().await.0
+    fn state() -> McpState {
+        state_with_mailer().0
     }
 
     async fn seed_person(surreal: &store::surreal::SurrealDb, name: &str, email: &str) -> Uuid {
@@ -161,77 +160,92 @@ mod tests {
 
     #[tokio::test]
     async fn happy_path_sends_through_the_command_and_returns_sent_status() {
-        let (state, mailer) = state_with_mailer().await;
-        let pid = seed_person(&state.surreal, "Aries", "aries@example.com").await;
-        let r = call(&state, &json!({ "person_id": pid })).await.unwrap();
+        store::test_support::with_postgres(async {
+            let (state, mailer) = state_with_mailer();
+            let pid = seed_person(&state.surreal, "Aries", "aries@example.com").await;
+            let r = call(&state, &json!({ "person_id": pid })).await.unwrap();
 
-        // The message the shared command built — tagged with the template
-        // slug and the person id, which is what makes the `sent_emails`
-        // row the mailer's decorator writes attributable to this person.
-        let sent = mailer.captured();
-        assert_eq!(sent.len(), 1);
-        assert_eq!(sent[0].to, "aries@example.com");
-        assert_eq!(sent[0].template_slug.as_deref(), Some("welcome"));
-        assert_eq!(sent[0].person_id.as_deref(), Some(pid.to_string().as_str()));
-        assert!(
-            sent[0].html_body.is_some(),
-            "the HTML alternative must be set"
-        );
+            // The message the shared command built — tagged with the template
+            // slug and the person id, which is what makes the `sent_emails`
+            // row the mailer's decorator writes attributable to this person.
+            let sent = mailer.captured();
+            assert_eq!(sent.len(), 1);
+            assert_eq!(sent[0].to, "aries@example.com");
+            assert_eq!(sent[0].template_slug.as_deref(), Some("welcome"));
+            assert_eq!(sent[0].person_id.as_deref(), Some(pid.to_string().as_str()));
+            assert!(
+                sent[0].html_body.is_some(),
+                "the HTML alternative must be set"
+            );
 
-        assert_eq!(r["structuredContent"]["person_id"], pid.to_string());
-        assert_eq!(r["structuredContent"]["name"], "Aries");
-        assert_eq!(r["structuredContent"]["email"], "aries@example.com");
-        assert_eq!(r["structuredContent"]["subject"], "Welcome to Neon Law");
-        assert_eq!(r["structuredContent"]["status"], "sent");
-        assert!(r["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("aries@example.com"));
+            assert_eq!(r["structuredContent"]["person_id"], pid.to_string());
+            assert_eq!(r["structuredContent"]["name"], "Aries");
+            assert_eq!(r["structuredContent"]["email"], "aries@example.com");
+            assert_eq!(r["structuredContent"]["subject"], "Welcome to Neon Law");
+            assert_eq!(r["structuredContent"]["status"], "sent");
+            assert!(r["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("aries@example.com"));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn name_and_email_come_from_the_row_not_the_caller() {
-        // The schema forbids extra fields, but even if a caller smuggles
-        // an `email`, the greeting must target the DB row's address.
-        let state = state().await;
-        let pid = seed_person(&state.surreal, "Real Person", "real@example.com").await;
-        let r = call(
-            &state,
-            &json!({ "person_id": pid, "email": "attacker@evil.test" }),
-        )
-        .await
-        .unwrap();
-        assert_eq!(r["structuredContent"]["email"], "real@example.com");
+        store::test_support::with_postgres(async {
+            // The schema forbids extra fields, but even if a caller smuggles
+            // an `email`, the greeting must target the DB row's address.
+            let state = state();
+            let pid = seed_person(&state.surreal, "Real Person", "real@example.com").await;
+            let r = call(
+                &state,
+                &json!({ "person_id": pid, "email": "attacker@evil.test" }),
+            )
+            .await
+            .unwrap();
+            assert_eq!(r["structuredContent"]["email"], "real@example.com");
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn unknown_person_returns_not_found_and_sends_nothing() {
-        let (state, mailer) = state_with_mailer().await;
-        let missing = Uuid::now_v7();
-        let err = call(&state, &json!({ "person_id": missing }))
-            .await
-            .unwrap_err();
-        assert!(matches!(err, ToolError::NotFound(_)));
-        assert!(mailer.captured().is_empty());
+        store::test_support::with_postgres(async {
+            let (state, mailer) = state_with_mailer();
+            let missing = Uuid::now_v7();
+            let err = call(&state, &json!({ "person_id": missing }))
+                .await
+                .unwrap_err();
+            assert!(matches!(err, ToolError::NotFound(_)));
+            assert!(mailer.captured().is_empty());
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_deployment_with_no_mailer_refuses_rather_than_sending_unaudited() {
-        let surreal = mem_surreal().await;
-        let runtime: Arc<dyn workflows::StateMachineRuntime> = Arc::new(InMemoryRuntime::new());
-        let state = McpState::new(surreal, runtime);
-        let pid = seed_person(&state.surreal, "Aries", "aries@example.com").await;
-        let err = call(&state, &json!({ "person_id": pid }))
-            .await
-            .unwrap_err();
-        assert!(matches!(err, ToolError::Internal(_)));
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let runtime: Arc<dyn workflows::StateMachineRuntime> = Arc::new(InMemoryRuntime::new());
+            let state = McpState::new(surreal, runtime);
+            let pid = seed_person(&state.surreal, "Aries", "aries@example.com").await;
+            let err = call(&state, &json!({ "person_id": pid }))
+                .await
+                .unwrap_err();
+            assert!(matches!(err, ToolError::Internal(_)));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn missing_person_id_is_invalid_arguments() {
-        let state = state().await;
-        let err = call(&state, &json!({})).await.unwrap_err();
-        assert!(matches!(err, ToolError::InvalidArguments(_)));
+        store::test_support::with_postgres(async {
+            let state = state();
+            let err = call(&state, &json!({})).await.unwrap_err();
+            assert!(matches!(err, ToolError::InvalidArguments(_)));
+        })
+        .await;
     }
 
     /// The guard ENG-317 exists to hold: this tool reaches the mailer
@@ -240,14 +254,17 @@ mod tests {
     /// in the injected service and this fails.
     #[tokio::test]
     async fn the_tool_sends_through_the_injected_mailer_not_the_workflow_trigger() {
-        let (state, mailer) = state_with_mailer().await;
-        let pid = seed_person(&state.surreal, "Libra", "libra@example.com").await;
-        call(&state, &json!({ "person_id": pid })).await.unwrap();
-        assert_eq!(
-            mailer.captured().len(),
-            1,
-            "the welcome must go through the injected EmailService — a send that \
+        store::test_support::with_postgres(async {
+            let (state, mailer) = state_with_mailer();
+            let pid = seed_person(&state.surreal, "Libra", "libra@example.com").await;
+            call(&state, &json!({ "person_id": pid })).await.unwrap();
+            assert_eq!(
+                mailer.captured().len(),
+                1,
+                "the welcome must go through the injected EmailService — a send that \
              leaves it empty went via the worker, which writes no sent_emails row"
-        );
+            );
+        })
+        .await;
     }
 }

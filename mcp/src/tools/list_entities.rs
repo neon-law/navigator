@@ -91,12 +91,6 @@ mod tests {
     use serde_json::json;
     use uuid::Uuid;
 
-    use store::test_support::mem_surreal;
-    async fn db() -> store::surreal::SurrealDb {
-        let surreal = mem_surreal().await;
-        surreal
-    }
-
     async fn seed_jurisdiction(
         surreal: &store::surreal::SurrealDb,
         name: &str,
@@ -149,65 +143,101 @@ mod tests {
 
     #[tokio::test]
     async fn empty_database_returns_zero_count_not_an_error() {
-        let surreal = db().await;
-        let r = call(&surreal, &json!({})).await.unwrap();
-        assert_eq!(r["structuredContent"]["count"], 0);
-        let text = r["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("No entities"));
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let r = call(&surreal, &json!({})).await.unwrap();
+            assert_eq!(r["structuredContent"]["count"], 0);
+            let text = r["content"][0]["text"].as_str().unwrap();
+            assert!(text.contains("No entities"));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn returns_seeded_entities_sorted_by_name() {
-        let surreal = db().await;
-        let jur = seed_jurisdiction(&surreal, "Nevada", "NV").await;
-        let llc = seed_entity_type(&surreal, "Multi Member LLC").await;
-        let trust = seed_entity_type(&surreal, "Family Trust").await;
-        seed(&surreal, "Zeta Holdings", llc, jur).await;
-        seed(&surreal, "Alpha Trust", trust, jur).await;
-        let r = call(&surreal, &json!({})).await.unwrap();
-        let names: Vec<&str> = r["structuredContent"]["entities"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|e| e["name"].as_str().unwrap())
-            .collect();
-        assert_eq!(names, vec!["Alpha Trust", "Zeta Holdings"]);
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let jur = seed_jurisdiction(&surreal, "Nevada", "NV").await;
+            let llc = seed_entity_type(&surreal, "Multi Member LLC").await;
+            let trust = seed_entity_type(&surreal, "Family Trust").await;
+            seed(&surreal, "Zeta Holdings", llc, jur).await;
+            seed(&surreal, "Alpha Trust", trust, jur).await;
+            let r = call(&surreal, &json!({})).await.unwrap();
+            let names: Vec<&str> = r["structuredContent"]["entities"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|e| e["name"].as_str().unwrap())
+                .collect();
+            assert_eq!(names, vec!["Alpha Trust", "Zeta Holdings"]);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn each_row_carries_id_name_type_and_jurisdiction() {
-        let surreal = db().await;
-        let jur = seed_jurisdiction(&surreal, "Nevada", "NV").await;
-        let trust = seed_entity_type(&surreal, "Family Trust").await;
-        seed(&surreal, "shook.family", trust, jur).await;
-        let r = call(&surreal, &json!({})).await.unwrap();
-        let row = &r["structuredContent"]["entities"][0];
-        assert_eq!(row["name"], "shook.family");
-        assert_eq!(row["entity_type"], "Family Trust");
-        assert_eq!(row["jurisdiction"], "Nevada");
-        let id = row["id"].as_str().unwrap();
-        uuid::Uuid::parse_str(id).expect("valid UUID");
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let jur = seed_jurisdiction(&surreal, "Nevada", "NV").await;
+            let trust = seed_entity_type(&surreal, "Family Trust").await;
+            seed(
+                &surreal,
+                crate::test_fixtures::ORGANIZATION.as_str(),
+                trust,
+                jur,
+            )
+            .await;
+            let r = call(&surreal, &json!({})).await.unwrap();
+            let row = &r["structuredContent"]["entities"][0];
+            assert_eq!(row["name"], crate::test_fixtures::ORGANIZATION.as_str());
+            assert_eq!(row["entity_type"], "Family Trust");
+            assert_eq!(row["jurisdiction"], "Nevada");
+            let id = row["id"].as_str().unwrap();
+            uuid::Uuid::parse_str(id).expect("valid UUID");
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn summary_lists_each_entity_with_type_and_jurisdiction() {
-        let surreal = db().await;
-        let jur = seed_jurisdiction(&surreal, "Nevada", "NV").await;
-        let trust = seed_entity_type(&surreal, "Family Trust").await;
-        seed(&surreal, "shook.family", trust, jur).await;
-        let r = call(&surreal, &json!({})).await.unwrap();
-        let text = r["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("1 entities:"));
-        assert!(text.contains("shook.family (Family Trust, Nevada)"));
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let jur = seed_jurisdiction(&surreal, "Nevada", "NV").await;
+            let trust = seed_entity_type(&surreal, "Family Trust").await;
+            seed(
+                &surreal,
+                crate::test_fixtures::ORGANIZATION.as_str(),
+                trust,
+                jur,
+            )
+            .await;
+            let r = call(&surreal, &json!({})).await.unwrap();
+            let text = r["content"][0]["text"].as_str().unwrap();
+            assert!(text.contains("1 entities:"));
+            assert!(text.contains(&format!(
+                "{} (Family Trust, Nevada)",
+                *crate::test_fixtures::ORGANIZATION
+            )));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn ignores_arguments_silently() {
-        let surreal = db().await;
-        let jur = seed_jurisdiction(&surreal, "Nevada", "NV").await;
-        let trust = seed_entity_type(&surreal, "Family Trust").await;
-        seed(&surreal, "shook.family", trust, jur).await;
-        let r = call(&surreal, &json!({ "garbage": 42 })).await.unwrap();
-        assert_eq!(r["structuredContent"]["count"], 1);
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let jur = seed_jurisdiction(&surreal, "Nevada", "NV").await;
+            let trust = seed_entity_type(&surreal, "Family Trust").await;
+            seed(
+                &surreal,
+                crate::test_fixtures::ORGANIZATION.as_str(),
+                trust,
+                jur,
+            )
+            .await;
+            let r = call(&surreal, &json!({ "garbage": 42 })).await.unwrap();
+            assert_eq!(r["structuredContent"]["count"], 1);
+        })
+        .await;
     }
 }

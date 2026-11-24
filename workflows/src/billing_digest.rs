@@ -18,7 +18,7 @@ const DEFAULT_WINDOW_DAYS: u32 = 30;
 /// digest renders, scoped to the single export table that account writes.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct AccountCost {
-    /// Billing account id (`013469-2BBE03-532C72`), derived from the export
+    /// Billing account id (`000000-AAAAAA-000000`), derived from the export
     /// table name by [`billing::gcp_cost::billing_account_from_table`].
     pub account: String,
     /// Current-window cost by service within this account, highest first.
@@ -424,7 +424,7 @@ mod tests {
     use chrono::{DateTime, Utc};
 
     /// The firm's real billing account — the one with the configured export.
-    const FIRM_ACCOUNT: &str = "013469-2BBE03-532C72";
+    const FIRM_ACCOUNT: &str = "000000-AAAAAA-000000";
     /// A second account, to prove the digest is not structurally single-account.
     const SECOND_ACCOUNT: &str = "01528F-251BB0-54E54F";
 
@@ -453,11 +453,11 @@ mod tests {
             // The same $133.76 the service rows below carry, split across the
             // billing account's projects.
             current_by_project: vec![
-                project("neon-law-420305", 120.00),
+                project("example-project-123456", 120.00),
                 project("neon-law-test", 13.76),
                 project("ghcr", 0.004),
             ],
-            prior_by_project: vec![project("neon-law-420305", 100.00)],
+            prior_by_project: vec![project("example-project-123456", 100.00)],
             current: vec![
                 CostRow {
                     service: "Kubernetes Engine".into(),
@@ -535,7 +535,7 @@ mod tests {
             "covered-accounts line missing: {b}"
         );
         assert!(b.contains("GCP COST BY PROJECT (30 DAYS)"), "{b}");
-        assert!(b.contains("neon-law-420305"), "{b}");
+        assert!(b.contains("example-project-123456"), "{b}");
         assert!(b.contains("neon-law-test"), "{b}");
         assert!(!b.contains("ghcr"), "$0.00 project shown: {b}");
         // Per-project trend: present in the prior window → a delta; absent → n/a.
@@ -630,7 +630,7 @@ mod tests {
         // per-account heading would be noise.
         let b = build_digest_email(&sample_report(), "ops@example.com").body;
         assert!(!b.contains("BY BILLING ACCOUNT"), "{b}");
-        assert!(!b.contains("ACCOUNT 013469-2BBE03-532C72 —"), "{b}");
+        assert!(!b.contains("ACCOUNT 000000-AAAAAA-000000 —"), "{b}");
         // ...but the account is still named on the covered line.
         assert!(b.contains(&format!("COVERED (1): {FIRM_ACCOUNT}")), "{b}");
     }

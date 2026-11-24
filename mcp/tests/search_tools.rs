@@ -66,82 +66,91 @@ fn the_search_tools_are_read_only_and_run_without_confirmation() {
 
 #[tokio::test]
 async fn the_dispatcher_refuses_a_tool_outside_the_catalog() {
-    let surreal = store::test_support::mem_surreal().await;
-    let state = mcp::McpState::new(
-        surreal,
-        std::sync::Arc::new(workflows::InMemoryRuntime::new()),
-    );
-    let err = call_tool(&state, None, "search_case_lawz", &json!({}))
-        .await
-        .unwrap_err();
-    assert!(err.to_string().starts_with("unknown tool"));
+    store::test_support::with_postgres(async {
+        let surreal = store::surreal::test_support::unreachable();
+        let state = mcp::McpState::new(
+            surreal,
+            std::sync::Arc::new(workflows::InMemoryRuntime::new()),
+        );
+        let err = call_tool(&state, None, "search_case_lawz", &json!({}))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().starts_with("unknown tool"));
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn dispatch_without_backends_degrades_to_search_unavailable() {
-    let surreal = store::test_support::mem_surreal().await;
-    let state = mcp::McpState::new(
-        surreal,
-        std::sync::Arc::new(workflows::InMemoryRuntime::new()),
-    );
-    for tool in the_new_tools() {
-        let result = call_tool(&state, None, tool, &json!({ "query": "water rights" }))
-            .await
-            .unwrap_or_else(|e| panic!("{tool} must degrade, not fail: {e}"));
-        let text = result["content"][0]["text"].as_str().unwrap();
-        assert!(
-            text.starts_with("search unavailable: "),
-            "{tool} degraded text was: {text}"
+    store::test_support::with_postgres(async {
+        let surreal = store::surreal::test_support::unreachable();
+        let state = mcp::McpState::new(
+            surreal,
+            std::sync::Arc::new(workflows::InMemoryRuntime::new()),
         );
-    }
+        for tool in the_new_tools() {
+            let result = call_tool(&state, None, tool, &json!({ "query": "water rights" }))
+                .await
+                .unwrap_or_else(|e| panic!("{tool} must degrade, not fail: {e}"));
+            let text = result["content"][0]["text"].as_str().unwrap();
+            assert!(
+                text.starts_with("search unavailable: "),
+                "{tool} degraded text was: {text}"
+            );
+        }
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn a_dispatched_search_proxies_the_terms_and_nothing_else() {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/api/rest/v4/search/"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "results": [] })))
-        .mount(&server)
-        .await;
-    let surreal = store::test_support::mem_surreal().await;
-    let mut state = mcp::McpState::new(
-        surreal,
-        std::sync::Arc::new(workflows::InMemoryRuntime::new()),
-    );
-    state.search = Some(SearchBackends {
-        case_law: Some(std::sync::Arc::new(CourtListener::new(server.uri(), None))),
-        legal_aid: None,
-    });
+    store::test_support::with_postgres(async {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/rest/v4/search/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "results": [] })))
+            .mount(&server)
+            .await;
+        let surreal = store::surreal::test_support::unreachable();
+        let mut state = mcp::McpState::new(
+            surreal,
+            std::sync::Arc::new(workflows::InMemoryRuntime::new()),
+        );
+        state.search = Some(SearchBackends {
+            case_law: Some(std::sync::Arc::new(CourtListener::new(server.uri(), None))),
+            legal_aid: None,
+        });
 
-    let result = call_tool(
-        &state,
-        None,
-        "search_case_law",
-        &json!({ "query": "water rights", "limit": 2 }),
-    )
-    .await
-    .unwrap();
-    assert_eq!(result["structuredContent"]["count"], 0);
+        let result = call_tool(
+            &state,
+            None,
+            "search_case_law",
+            &json!({ "query": "water rights", "limit": 2 }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result["structuredContent"]["count"], 0);
 
-    // The whole sanitization contract, asserted on the wire: exactly the
-    // search terms and the page size — no person id, session data, or
-    // case facts ride along.
-    let req = &server.received_requests().await.unwrap()[0];
-    let query = req.url.query().unwrap();
-    let pairs: Vec<(String, String)> = query
-        .split('&')
-        .map(|p| {
-            let (k, v) = p.split_once('=').unwrap_or((p, ""));
-            (k.to_string(), v.to_string())
-        })
-        .collect();
-    assert_eq!(
-        pairs,
-        vec![
-            ("q".into(), "water+rights".into()), // form-encoded space
-            ("type".into(), "o".into()),
-            ("page_size".into(), "2".into()),
-        ]
-    );
+        // The whole sanitization contract, asserted on the wire: exactly the
+        // search terms and the page size — no person id, session data, or
+        // case facts ride along.
+        let req = &server.received_requests().await.unwrap()[0];
+        let query = req.url.query().unwrap();
+        let pairs: Vec<(String, String)> = query
+            .split('&')
+            .map(|p| {
+                let (k, v) = p.split_once('=').unwrap_or((p, ""));
+                (k.to_string(), v.to_string())
+            })
+            .collect();
+        assert_eq!(
+            pairs,
+            vec![
+                ("q".into(), "water+rights".into()), // form-encoded space
+                ("type".into(), "o".into()),
+                ("page_size".into(), "2".into()),
+            ]
+        );
+    })
+    .await;
 }

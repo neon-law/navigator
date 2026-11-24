@@ -2529,7 +2529,7 @@ mod tests {
     }
 
     #[test]
-    fn iep_staging_home_places_photos_before_results_and_founders_story() {
+    fn iep_staging_home_places_its_photo_before_results() {
         let brand = &views::brand::IEP_DEFENDERS_BRANDING;
         let page = super::iep_home(brand, Some(brand.brand_key.staging_host()));
         let photos: Vec<_> = page
@@ -2542,17 +2542,11 @@ mod tests {
                 Some((images, following))
             })
             .collect();
-        let [(hero, Band::Stats { .. }), (portraits, Band::Statement { heading, .. })] =
-            photos.as_slice()
-        else {
-            panic!("photos should introduce the results and the founders' story");
+        let [(hero, Band::Stats { .. })] = photos.as_slice() else {
+            panic!("the photo should introduce the results");
         };
-        assert_eq!(heading, "This work was personal from the beginning.");
         assert_eq!(hero.len(), 1);
         assert!(hero[0].src.ends_with("/classroom.jpg"));
-        assert_eq!(portraits.len(), 2);
-        assert!(portraits[0].src.ends_with("/sam-castor.jpg"));
-        assert!(portraits[1].src.ends_with("/david-gardner.jpg"));
         let production = super::iep_home(brand, Some(brand.brand_key.canonical_host()));
         assert!(!production
             .bands

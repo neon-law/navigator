@@ -193,7 +193,7 @@ mod tests {
     use store::projects::{
         create, transition_project_with_reason, ClosureReason, NewProject, Transition,
     };
-    use store::test_support::{dri_person, mem_surreal, seed_entity, seed_signed_onboarding};
+    use store::test_support::{dri_person, seed_entity, seed_signed_onboarding};
     use uuid::Uuid;
 
     async fn storage() -> Arc<dyn StorageService> {
@@ -206,6 +206,7 @@ mod tests {
 
     async fn closed_project(surreal: &store::surreal::SurrealDb) -> (Uuid, String) {
         let code = format!("closed-repo-{}", Uuid::now_v7().simple());
+        crate::test_fixtures::seed_brands(surreal).await;
         let created = create(
             surreal,
             &NewProject {
@@ -302,7 +303,11 @@ mod tests {
 
     /// A closed Project owned by a Firm, so a recovery generation can be cut.
     async fn closed_firm_project(surreal: &store::surreal::SurrealDb) -> (Uuid, String) {
-        let firm_id = store::test_support::seed_firm_with_brand(surreal, "neon").await;
+        crate::test_fixtures::seed_brands(surreal).await;
+        let firm_id = store::firms::firm_id_for_brand_key(surreal, "neon")
+            .await
+            .unwrap()
+            .expect("the fixture Brand has a Firm");
         let code = format!(
             "closed-firm-repo-{}",
             &Uuid::now_v7().simple().to_string()[..8]
@@ -441,148 +446,167 @@ mod tests {
 
     #[tokio::test]
     async fn a_matching_archive_without_a_verified_recovery_record_is_not_enough() {
-        let surreal = mem_surreal().await;
-        let (project_id, code) = closed_project(&surreal).await;
-        file_archive(&surreal, &storage().await, project_id, "deadbeefcafe").await;
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let (project_id, code) = closed_project(&surreal).await;
+            file_archive(&surreal, &storage().await, project_id, "deadbeefcafe").await;
 
-        let forge = FakeForge::new();
-        forge.ensure_repository(&code).await.unwrap();
-        forge.set_head_commit_sha(&code, "deadbeefcafe");
-        let forge: Arc<dyn ForgeService> = Arc::new(forge);
+            let forge = FakeForge::new();
+            forge.ensure_repository(&code).await.unwrap();
+            forge.set_head_commit_sha(&code, "deadbeefcafe");
+            let forge: Arc<dyn ForgeService> = Arc::new(forge);
 
-        let error = call_with(
-            &surreal,
-            Some(&forge),
-            None,
-            &json!({ "project_id": project_id, "confirm_handoff": true }),
-        )
-        .await
-        .expect_err("deletion waits on the recovery archive store");
-        let ToolError::InvalidArguments(message) = error else {
-            panic!("expected a readiness refusal, got {error:?}");
-        };
-        assert!(message.contains("recovery archive store"), "{message}");
-        assert!(forge.find_repository(&code).await.unwrap().is_some());
+            let error = call_with(
+                &surreal,
+                Some(&forge),
+                None,
+                &json!({ "project_id": project_id, "confirm_handoff": true }),
+            )
+            .await
+            .expect_err("deletion waits on the recovery archive store");
+            let ToolError::InvalidArguments(message) = error else {
+                panic!("expected a readiness refusal, got {error:?}");
+            };
+            assert!(message.contains("recovery archive store"), "{message}");
+            assert!(forge.find_repository(&code).await.unwrap().is_some());
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn deletes_when_the_archive_matches_live_head_and_closeout_is_ready() {
-        let Some(pg) = test_postgres().await else {
-            return;
-        };
-        let surreal = mem_surreal().await;
-        let (project_id, code) = closed_firm_project(&surreal).await;
-        let storage = storage().await;
-        let head = "c".repeat(40);
-        file_archive(&surreal, &storage, project_id, &head).await;
+        store::test_support::with_postgres(async {
+            let Some(pg) = test_postgres().await else {
+                return;
+            };
+            let surreal = crate::test_fixtures::handle();
+            let (project_id, code) = closed_firm_project(&surreal).await;
+            let storage = storage().await;
+            let head = "c".repeat(40);
+            file_archive(&surreal, &storage, project_id, &head).await;
 
-        let forge = FakeForge::new();
-        forge.ensure_repository(&code).await.unwrap();
-        forge.set_head_commit_sha(&code, head.clone());
-        let forge: Arc<dyn ForgeService> = Arc::new(forge);
-        commit_generation(&surreal, &pg, &storage, project_id, &head).await;
+            let forge = FakeForge::new();
+            forge.ensure_repository(&code).await.unwrap();
+            forge.set_head_commit_sha(&code, head.clone());
+            let forge: Arc<dyn ForgeService> = Arc::new(forge);
+            commit_generation(&surreal, &pg, &storage, project_id, &head).await;
 
-        let result = call_with(
-            &surreal,
-            Some(&forge),
-            Some(&pg),
-            &json!({ "project_id": project_id, "confirm_handoff": true }),
-        )
-        .await
-        .expect("delete repository");
-
-        assert_eq!(result["structuredContent"]["code"], code);
-        assert_eq!(forge.find_repository(&code).await.unwrap(), None);
-        let project = store::projects::find_by_id(&surreal, project_id)
+            let result = call_with(
+                &surreal,
+                Some(&forge),
+                Some(&pg),
+                &json!({ "project_id": project_id, "confirm_handoff": true }),
+            )
             .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(project.repository_url, None);
+            .expect("delete repository");
+
+            assert_eq!(result["structuredContent"]["code"], code);
+            assert_eq!(forge.find_repository(&code).await.unwrap(), None);
+            let project = store::projects::find_by_id(&surreal, project_id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(project.repository_url, None);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn refuses_when_the_recorded_commit_does_not_match_live_head() {
-        let surreal = mem_surreal().await;
-        let (project_id, code) = closed_project(&surreal).await;
-        file_archive(&surreal, &storage().await, project_id, "deadbeefcafe").await;
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let (project_id, code) = closed_project(&surreal).await;
+            file_archive(&surreal, &storage().await, project_id, "deadbeefcafe").await;
 
-        let forge = FakeForge::new();
-        forge.ensure_repository(&code).await.unwrap();
-        forge.set_head_commit_sha(&code, "0000000000000");
-        let forge: Arc<dyn ForgeService> = Arc::new(forge);
+            let forge = FakeForge::new();
+            forge.ensure_repository(&code).await.unwrap();
+            forge.set_head_commit_sha(&code, "0000000000000");
+            let forge: Arc<dyn ForgeService> = Arc::new(forge);
 
-        let error = call(
-            &surreal,
-            Some(&forge),
-            &json!({ "project_id": project_id, "confirm_handoff": true }),
-        )
-        .await
-        .expect_err("mismatched commit must be refused");
-        assert!(matches!(error, ToolError::InvalidArguments(_)));
-        assert!(forge.find_repository(&code).await.unwrap().is_some());
+            let error = call(
+                &surreal,
+                Some(&forge),
+                &json!({ "project_id": project_id, "confirm_handoff": true }),
+            )
+            .await
+            .expect_err("mismatched commit must be refused");
+            assert!(matches!(error, ToolError::InvalidArguments(_)));
+            assert!(forge.find_repository(&code).await.unwrap().is_some());
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn refuses_an_open_project() {
-        let surreal = mem_surreal().await;
-        let code = format!("open-repo-{}", Uuid::now_v7().simple());
-        let created = create(
-            &surreal,
-            &NewProject {
-                code: code.clone(),
-                name: "Still-open matter".into(),
-                status: "open".into(),
-                entity_id: seed_entity(&surreal).await,
-                ..Default::default()
-            },
-        )
-        .await
-        .expect("create project");
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let code = format!("open-repo-{}", Uuid::now_v7().simple());
+            crate::test_fixtures::seed_brands(&surreal).await;
+            let created = create(
+                &surreal,
+                &NewProject {
+                    code: code.clone(),
+                    name: "Still-open matter".into(),
+                    status: "open".into(),
+                    entity_id: seed_entity(&surreal).await,
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create project");
 
-        let forge: Arc<dyn ForgeService> = Arc::new(FakeForge::new());
-        let error = call(
-            &surreal,
-            Some(&forge),
-            &json!({ "project_id": created.id, "confirm_handoff": true }),
-        )
-        .await
-        .expect_err("open project must be refused");
-        assert!(matches!(error, ToolError::InvalidArguments(_)));
+            let forge: Arc<dyn ForgeService> = Arc::new(FakeForge::new());
+            let error = call(
+                &surreal,
+                Some(&forge),
+                &json!({ "project_id": created.id, "confirm_handoff": true }),
+            )
+            .await
+            .expect_err("open project must be refused");
+            assert!(matches!(error, ToolError::InvalidArguments(_)));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn refuses_without_a_filed_archive() {
-        let surreal = mem_surreal().await;
-        let (project_id, _code) = closed_project(&surreal).await;
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let (project_id, _code) = closed_project(&surreal).await;
 
-        let forge: Arc<dyn ForgeService> = Arc::new(FakeForge::new());
-        let error = call(
-            &surreal,
-            Some(&forge),
-            &json!({ "project_id": project_id, "confirm_handoff": true }),
-        )
-        .await
-        .expect_err("missing archive must be refused");
-        assert!(matches!(error, ToolError::InvalidArguments(_)));
+            let forge: Arc<dyn ForgeService> = Arc::new(FakeForge::new());
+            let error = call(
+                &surreal,
+                Some(&forge),
+                &json!({ "project_id": project_id, "confirm_handoff": true }),
+            )
+            .await
+            .expect_err("missing archive must be refused");
+            assert!(matches!(error, ToolError::InvalidArguments(_)));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn requires_confirmation_and_a_configured_forge() {
-        let surreal = mem_surreal().await;
-        let (project_id, _code) = closed_project(&surreal).await;
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let (project_id, _code) = closed_project(&surreal).await;
 
-        let error = call(&surreal, None, &json!({"project_id": project_id}))
+            let error = call(&surreal, None, &json!({"project_id": project_id}))
+                .await
+                .expect_err("missing confirm_handoff must be rejected");
+            assert!(matches!(error, ToolError::InvalidArguments(_)));
+
+            let error = call(
+                &surreal,
+                None,
+                &json!({"project_id": project_id, "confirm_handoff": true}),
+            )
             .await
-            .expect_err("missing confirm_handoff must be rejected");
-        assert!(matches!(error, ToolError::InvalidArguments(_)));
-
-        let error = call(
-            &surreal,
-            None,
-            &json!({"project_id": project_id, "confirm_handoff": true}),
-        )
-        .await
-        .expect_err("an unconfigured forge must be rejected");
-        assert!(matches!(error, ToolError::Internal(_)));
+            .expect_err("an unconfigured forge must be rejected");
+            assert!(matches!(error, ToolError::Internal(_)));
+        })
+        .await;
     }
 }

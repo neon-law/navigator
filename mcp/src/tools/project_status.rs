@@ -298,9 +298,8 @@ mod tests {
     use serde_json::json;
     use uuid::Uuid;
 
-    use store::test_support::mem_surreal;
-
     async fn project(surreal: &store::surreal::SurrealDb, name: &str) -> Uuid {
+        crate::test_fixtures::seed_brands(surreal).await;
         store::projects::create(
             surreal,
             &store::projects::NewProject {
@@ -429,96 +428,105 @@ mod tests {
     /// recent notation events, and the participation ledger in one call.
     #[tokio::test]
     async fn a_participating_lawyer_receives_deadlines_events_and_participation() {
-        let surreal = mem_surreal().await;
-        let matter = project(&surreal, "Status Matter").await;
-        let person = lawyer(&surreal, Some(matter)).await;
-        deadline(&surreal, matter, "triage:status").await;
-        notation_with_event(&surreal, matter, person.id).await;
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let matter = project(&surreal, "Status Matter").await;
+            let person = lawyer(&surreal, Some(matter)).await;
+            deadline(&surreal, matter, "triage:status").await;
+            notation_with_event(&surreal, matter, person.id).await;
 
-        let result = call(
-            &surreal,
-            &ReadScope::Membership {
-                person_id: person.id,
-                role: person.role,
-            },
-            &json!({ "project_id": matter }),
-        )
-        .await
-        .unwrap();
-
-        assert!(result["structuredContent"]["code"].as_str().is_some());
-        assert_eq!(result["structuredContent"]["name"], "Status Matter");
-        assert_eq!(result["structuredContent"]["status"], "open");
-
-        let deadlines = result["structuredContent"]["deadlines"].as_array().unwrap();
-        assert_eq!(deadlines.len(), 1);
-        assert_eq!(deadlines[0]["statute"], "15 U.S.C. § 1681i(a)(1)");
-
-        let events = result["structuredContent"]["notation_events"]
-            .as_array()
+            let result = call(
+                &surreal,
+                &ReadScope::Membership {
+                    person_id: person.id,
+                    role: person.role,
+                },
+                &json!({ "project_id": matter }),
+            )
+            .await
             .unwrap();
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0]["from_state"], "BEGIN");
-        assert_eq!(events[0]["to_state"], "lawyer_review");
 
-        let participation = result["structuredContent"]["participation"]
-            .as_array()
-            .unwrap();
-        assert_eq!(participation.len(), 1);
-        assert_eq!(participation[0]["person_id"], person.id.to_string());
-        assert_eq!(participation[0]["participation"], "lawyer");
-        assert_eq!(participation[0]["is_lawyer_dri"], true);
-        assert_eq!(participation[0]["is_client_dri"], false);
+            assert!(result["structuredContent"]["code"].as_str().is_some());
+            assert_eq!(result["structuredContent"]["name"], "Status Matter");
+            assert_eq!(result["structuredContent"]["status"], "open");
 
-        let text = result["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("Status Matter"));
-        assert!(text.contains("15 U.S.C. § 1681i(a)(1)"));
-        assert!(text.contains("lawyer_review"));
-        assert!(text.contains("lawyer DRI"));
+            let deadlines = result["structuredContent"]["deadlines"].as_array().unwrap();
+            assert_eq!(deadlines.len(), 1);
+            assert_eq!(deadlines[0]["statute"], "15 U.S.C. § 1681i(a)(1)");
+
+            let events = result["structuredContent"]["notation_events"]
+                .as_array()
+                .unwrap();
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0]["from_state"], "BEGIN");
+            assert_eq!(events[0]["to_state"], "lawyer_review");
+
+            let participation = result["structuredContent"]["participation"]
+                .as_array()
+                .unwrap();
+            assert_eq!(participation.len(), 1);
+            assert_eq!(participation[0]["person_id"], person.id.to_string());
+            assert_eq!(participation[0]["participation"], "lawyer");
+            assert_eq!(participation[0]["is_lawyer_dri"], true);
+            assert_eq!(participation[0]["is_client_dri"], false);
+
+            let text = result["content"][0]["text"].as_str().unwrap();
+            assert!(text.contains("Status Matter"));
+            assert!(text.contains("15 U.S.C. § 1681i(a)(1)"));
+            assert!(text.contains("lawyer_review"));
+            assert!(text.contains("lawyer DRI"));
+        })
+        .await;
     }
 
     /// The issue's second Done-when: a non-participant gets nothing, not
     /// even confirmation that the matter exists.
     #[tokio::test]
     async fn a_lawyer_without_participation_is_refused_as_not_found() {
-        let surreal = mem_surreal().await;
-        let matter = project(&surreal, "Private Matter").await;
-        deadline(&surreal, matter, "triage:private").await;
-        let person = lawyer(&surreal, None).await;
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let matter = project(&surreal, "Private Matter").await;
+            deadline(&surreal, matter, "triage:private").await;
+            let person = lawyer(&surreal, None).await;
 
-        let error = call(
-            &surreal,
-            &ReadScope::Membership {
-                person_id: person.id,
-                role: person.role,
-            },
-            &json!({ "project_id": matter }),
-        )
-        .await
-        .unwrap_err();
+            let error = call(
+                &surreal,
+                &ReadScope::Membership {
+                    person_id: person.id,
+                    role: person.role,
+                },
+                &json!({ "project_id": matter }),
+            )
+            .await
+            .unwrap_err();
 
-        assert!(matches!(error, crate::tools::ToolError::NotFound(_)));
+            assert!(matches!(error, crate::tools::ToolError::NotFound(_)));
+        })
+        .await;
     }
 
     /// A genuinely nonexistent project id is refused identically — the
     /// point being that the two cases cannot be told apart.
     #[tokio::test]
     async fn an_unknown_project_id_is_also_refused_as_not_found() {
-        let surreal = mem_surreal().await;
-        let person = lawyer(&surreal, None).await;
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let person = lawyer(&surreal, None).await;
 
-        let error = call(
-            &surreal,
-            &ReadScope::Membership {
-                person_id: person.id,
-                role: person.role,
-            },
-            &json!({ "project_id": Uuid::now_v7() }),
-        )
-        .await
-        .unwrap_err();
+            let error = call(
+                &surreal,
+                &ReadScope::Membership {
+                    person_id: person.id,
+                    role: person.role,
+                },
+                &json!({ "project_id": Uuid::now_v7() }),
+            )
+            .await
+            .unwrap_err();
 
-        assert!(matches!(error, crate::tools::ToolError::NotFound(_)));
+            assert!(matches!(error, crate::tools::ToolError::NotFound(_)));
+        })
+        .await;
     }
 
     /// Owner/Admin's directory lens is metadata-only and an unauthenticated
@@ -526,48 +534,54 @@ mod tests {
     /// scope may reach matter contents through this tool.
     #[tokio::test]
     async fn no_non_membership_scope_reaches_matter_contents() {
-        let surreal = mem_surreal().await;
-        let matter = project(&surreal, "Scoped Matter").await;
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let matter = project(&surreal, "Scoped Matter").await;
 
-        for scope in [
-            ReadScope::Deployment,
-            ReadScope::Directory {
-                role: store::persons::Role::Owner,
-            },
-            ReadScope::Unlinked,
-        ] {
-            let error = call(&surreal, &scope, &json!({ "project_id": matter }))
-                .await
-                .unwrap_err();
-            assert!(matches!(error, crate::tools::ToolError::NotFound(_)));
-        }
+            for scope in [
+                ReadScope::Deployment,
+                ReadScope::Directory {
+                    role: store::persons::Role::Owner,
+                },
+                ReadScope::Unlinked,
+            ] {
+                let error = call(&surreal, &scope, &json!({ "project_id": matter }))
+                    .await
+                    .unwrap_err();
+                assert!(matches!(error, crate::tools::ToolError::NotFound(_)));
+            }
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn rejects_unknown_fields_and_missing_project_id() {
-        let surreal = mem_surreal().await;
-        let person = lawyer(&surreal, None).await;
-        let scope = ReadScope::Membership {
-            person_id: person.id,
-            role: person.role,
-        };
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let person = lawyer(&surreal, None).await;
+            let scope = ReadScope::Membership {
+                person_id: person.id,
+                role: person.role,
+            };
 
-        let error = call(&surreal, &scope, &json!({})).await.unwrap_err();
-        assert!(matches!(
-            error,
-            crate::tools::ToolError::InvalidArguments(_)
-        ));
+            let error = call(&surreal, &scope, &json!({})).await.unwrap_err();
+            assert!(matches!(
+                error,
+                crate::tools::ToolError::InvalidArguments(_)
+            ));
 
-        let error = call(
-            &surreal,
-            &scope,
-            &json!({ "project_id": Uuid::now_v7(), "extra": true }),
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(
-            error,
-            crate::tools::ToolError::InvalidArguments(_)
-        ));
+            let error = call(
+                &surreal,
+                &scope,
+                &json!({ "project_id": Uuid::now_v7(), "extra": true }),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                error,
+                crate::tools::ToolError::InvalidArguments(_)
+            ));
+        })
+        .await;
     }
 }

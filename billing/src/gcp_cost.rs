@@ -245,8 +245,8 @@ pub fn billing_export_tables(raw: &str) -> Vec<String> {
 ///
 /// Cloud Billing names the table `gcp_billing_export_<kind>_v1_<ACCOUNT>` with
 /// the account's hyphens rewritten as underscores, so
-/// `…gcp_billing_export_resource_v1_013469_2BBE03_532C72` identifies account
-/// `013469-2BBE03-532C72`. Deriving the label means a deploy naming its tables
+/// `…gcp_billing_export_resource_v1_000000_AAAAAA_000000` identifies account
+/// `000000-AAAAAA-000000`. Deriving the label means a deploy naming its tables
 /// never has to also name its accounts and cannot mislabel one. A table that
 /// doesn't match the convention falls back to its own name — wrong-looking in
 /// the digest, but never silently attributed to the wrong account.
@@ -590,7 +590,7 @@ mod tests {
         let resp = json!({
             "jobComplete": true,
             "rows": [
-                { "f": [ {"v": "neon-law-420305"}, {"v": "269.67"} ] },
+                { "f": [ {"v": "example-project-123456"}, {"v": "269.67"} ] },
                 { "f": [ {"v": "neon-law-test"},  {"v": "0.13"} ] }
             ]
         });
@@ -598,7 +598,7 @@ mod tests {
             parse_project_costs(&resp).unwrap(),
             vec![
                 ProjectCost {
-                    project: "neon-law-420305".into(),
+                    project: "example-project-123456".into(),
                     cost: 269.67
                 },
                 ProjectCost {
@@ -666,12 +666,12 @@ mod tests {
     fn billing_account_is_recovered_from_the_export_table_name() {
         use super::billing_account_from_table;
 
-        // The real production table, resource-level export.
+        // A resource-level export table.
         assert_eq!(
             billing_account_from_table(
-                "neon-law-420305.billing_export.gcp_billing_export_resource_v1_013469_2BBE03_532C72"
+                "example-project-123456.billing_export.gcp_billing_export_resource_v1_000000_AAAAAA_000000"
             ),
-            "013469-2BBE03-532C72"
+            "000000-AAAAAA-000000"
         );
         // Standard (non-resource) export names the same way.
         assert_eq!(

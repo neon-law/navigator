@@ -58,6 +58,7 @@ const WORKSPACE_DEPENDENCIES: &[&str] = &[
     "ed25519-dalek",
     "encoding_rs",
     "ephemeris",
+    "fake",
     "fantoccini",
     "features",
     "flate2",

@@ -119,27 +119,6 @@ bands:
           - - text: >-
                 If we can take the matter, we explain the scope, fees, and
                 next legal step before you decide how to proceed.
-  - kind: photos
-    items:
-      - asset_key: img/iep-defenders/sam-castor.jpg
-        alt: Sam Castor, Esq.
-      - asset_key: img/iep-defenders/david-gardner.jpg
-        alt: David Gardner, Esq.
-  - kind: statement
-    anchor: attorney
-    overline: Sam Castor, Esq.
-    heading: This work was personal from the beginning.
-    body:
-      - - text: >-
-            For co-founder David Gardner, the need became clear while
-            advocating for his own child. Even as an attorney working with
-            the Department of Education, he found the IEP process
-            intimidating, complicated, and difficult to navigate.
-      - - text: >-
-            If it was this difficult for an attorney familiar with
-            education law, what was it like for a parent facing the
-            process alone?
-      - - text: That question helped inspire IEP Defenders.
   - kind: cards
     anchor: fees
     overline: How fees are handled
@@ -156,41 +135,6 @@ bands:
       - title: >-
             We explain the scope of representation and fee arrangement
             before you move forward.
-  - kind: testimonials
-    anchor: reviews
-    overline: What parents say
-    heading: What parents say about working with IEP Defenders.
-    description: Hear from families who have worked with the team.
-    items:
-      - author: Alysa Brown
-        when: Parent review
-        body: >-
-          Dylan is very professional and compassionate and really cared
-          about my child getting the services he deserved. He was honest,
-          reasonable and answered all my emails and phone calls at all
-          hours of the night. Very thankful to have him represent us and
-          highly recommend him. He didnt seem like an "attorney" he seemed
-          like a relatable parent who could negotiate strongly on my son's
-          behalf. He operates with extreme integrity and we are so grateful
-          to have him in our corner!
-      - author: Sierra Zamorano
-        when: Parent review
-        body: Dylan is the best and really went above and beyond to help us.
-      - author: Danyel Sheely
-        when: Parent review
-        body: >-
-          Justin and his team went above and beyond for my son. They know
-          the AZ Educational Laws and Rights, and stood by our family when
-          we needed it most. The circumstances surrounding our case were
-          uniquely complex, but Justin's support and dedication never
-          wavered. I am forever grateful for their time, compassion, and
-          investment in protecting my son's future.
-      - author: Wendy Aumick
-        when: Parent review
-        body: >-
-          From the fist call to the last document signed this was an
-          amazing group to work with. They did the hard work and made life
-          so much easier for me!! 1000% recommend
   - kind: cta
     heading: Tell us what is going on.
     body: >-
