@@ -391,106 +391,8 @@ fn up_locked(
     demo_image: Option<&str>,
 ) -> Result<()> {
     let slug = slug_for(root)?;
-    let existing = read_descriptor(root);
-    anyhow::ensure!(
-        !descriptor_path(root).exists() || existing.is_some(),
-        "worktree descriptor is invalid"
-    );
-    anyhow::ensure!(
-        demo_image.is_some() || existing.as_ref().is_none_or(|d| d.mode != "demo"),
-        "run dev undeploy before starting host development in this demo worktree"
-    );
-    let mut db_name = match runtime {
-        Runtime::Kind => String::new(),
-        Runtime::Native => existing
-            .as_ref()
-            .filter(|descriptor| descriptor.runtime == Runtime::Native)
-            .and_then(|descriptor| descriptor.db_name.clone())
-            .unwrap_or_else(|| super::native::database_name(root, &slug)),
-    };
-    let claimed_slots = match runtime {
-        Runtime::Kind => claimed_worktree_slots(root, &list_kind_cluster_ports)?,
-        // Native has no KIND containers. The same descriptor read is still
-        // protected by the shared Git lock and reserves live worktrees while
-        // they are between claim and process startup.
-        Runtime::Native => super::native::claimed_slots(root)?,
-    };
-    let slot = choose_worktree_slot(
-        root,
-        existing.as_ref().and_then(WorktreeEnv::dev_slot),
-        &claimed_slots,
-        base_cfg,
-        &port_listening,
-    )?;
-    let mut cfg = worktree_kind_config(base_cfg, root, slot);
-    if demo_image.is_some() {
-        anyhow::ensure!(
-            !port_listening(cfg.web_port)
-                && !port_listening(super::native_profile::dbos_port(&cfg)?),
-            "stop the worktree's host web and DBOS worker before starting the demo image"
-        );
-    }
-    if runtime == Runtime::Native {
-        // The native lane shares these three listeners host-wide. The slot
-        // still belongs to this descriptor and remains the source of truth
-        // for Restate, web, and every future per-worktree process.
-        cfg.rauthy_port = base_cfg.rauthy_port;
-        cfg.seaweedfs_s3_port = base_cfg.seaweedfs_s3_port;
-        cfg.surreal_port = base_cfg.surreal_port;
-    }
-    if runtime == Runtime::Kind {
-        anyhow::ensure!(
-            existing
-                .as_ref()
-                .is_none_or(|descriptor| descriptor.runtime == Runtime::Kind),
-            "an existing host-process tier requires explicit cleanup before selecting KIND"
-        );
-        db_name = super::native_profile::select_database(
-            root,
-            &cfg,
-            existing
-                .as_ref()
-                .and_then(|descriptor| descriptor.db_name.as_deref()),
-        )?;
-    }
-    match runtime {
-        Runtime::Kind => eprintln!(
-            "==> worktree-env up (dev, kind): slug={slug} cluster={} database={db_name}",
-            cfg.cluster
-        ),
-        Runtime::Native => {
-            eprintln!("==> worktree-env up (dev, native): slug={slug} database={db_name}");
-        }
-    }
-
-    // Claim the cluster on the host before anything binds a port, for the same
-    // reason the descriptor is written early: an interrupted setup otherwise
-    // leaves a cluster that no clone admits owning, which is exactly what
-    // `sweep` would then delete out from under a checkout that still exists.
-    // The native lane starts no cluster, so it has none to claim.
-    if runtime == Runtime::Kind {
-        register_worktree_cluster(&host_cluster_registry_path(), &cfg.cluster, root)?;
-    }
-
-    // Record the claim before anything binds a port. An interrupted setup
-    // otherwise leaves a cluster holding ports with no reservation behind it,
-    // which is how a slot silently becomes available to a second worktree.
-    write_descriptor(
-        root,
-        &WorktreeEnv {
-            slug: slug.clone(),
-            mode: if demo_image.is_some() { "demo" } else { "dev" }.into(),
-            db_name: Some(db_name.clone()),
-            web_port: if demo_image.is_some() {
-                cfg.ingress_http_port
-            } else {
-                cfg.web_port
-            },
-            slot: Some(slot),
-            runtime,
-        },
-    )?;
-
+    let (cfg, db_name, slot) =
+        reserve_worktree_tier(root, &slug, runtime, base_cfg, demo_image.is_some())?;
     if runtime == Runtime::Kind && super::native_profile::selected(root, &cfg)? {
         super::orchestrate::up_native_in(root, &cfg, no_deps)?;
         if let Some(image) = demo_image {
@@ -529,6 +431,109 @@ fn up_locked(
 
     print_dev_summary(&slug, &db_name, runtime, &cfg);
     Ok(())
+}
+
+/// Reserve the tier under the setup locks before a workload can bind its ports.
+fn reserve_worktree_tier(
+    root: &Path,
+    slug: &str,
+    runtime: Runtime,
+    base_cfg: &KindConfig,
+    demo: bool,
+) -> Result<(KindConfig, String, u16)> {
+    let existing = read_descriptor(root);
+    anyhow::ensure!(
+        !descriptor_path(root).exists() || existing.is_some(),
+        "worktree descriptor is invalid"
+    );
+    anyhow::ensure!(
+        demo || existing.as_ref().is_none_or(|d| d.mode != "demo"),
+        "run dev undeploy before starting host development in this demo worktree"
+    );
+    let mut db_name = match runtime {
+        Runtime::Kind => String::new(),
+        Runtime::Native => existing
+            .as_ref()
+            .filter(|descriptor| descriptor.runtime == Runtime::Native)
+            .and_then(|descriptor| descriptor.db_name.clone())
+            .unwrap_or_else(|| super::native::database_name(root, slug)),
+    };
+    let claimed_slots = match runtime {
+        Runtime::Kind => claimed_worktree_slots(root, &list_kind_cluster_ports)?,
+        // Native has no KIND containers. The same descriptor read is still
+        // protected by the shared Git lock and reserves live worktrees while
+        // they are between claim and process startup.
+        Runtime::Native => super::native::claimed_slots(root)?,
+    };
+    let slot = choose_worktree_slot(
+        root,
+        existing.as_ref().and_then(WorktreeEnv::dev_slot),
+        &claimed_slots,
+        base_cfg,
+        &port_listening,
+    )?;
+    let mut cfg = worktree_kind_config(base_cfg, root, slot);
+    if demo {
+        anyhow::ensure!(
+            !port_listening(cfg.web_port)
+                && !port_listening(super::native_profile::dbos_port(&cfg)?),
+            "stop the worktree's host web and DBOS worker before starting the demo image"
+        );
+    }
+    if runtime == Runtime::Native {
+        // The native lane shares these three listeners host-wide. The slot
+        // still belongs to this descriptor and remains the source of truth
+        // for Restate, web, and every future per-worktree process.
+        cfg.rauthy_port = base_cfg.rauthy_port;
+        cfg.seaweedfs_s3_port = base_cfg.seaweedfs_s3_port;
+        cfg.surreal_port = base_cfg.surreal_port;
+    }
+    if runtime == Runtime::Kind {
+        anyhow::ensure!(
+            existing
+                .as_ref()
+                .is_none_or(|descriptor| descriptor.runtime == Runtime::Kind),
+            "an existing host-process tier requires explicit cleanup before selecting KIND"
+        );
+        db_name = super::native_profile::select_database(
+            root,
+            &cfg,
+            existing
+                .as_ref()
+                .and_then(|descriptor| descriptor.db_name.as_deref()),
+        )?;
+    }
+    let mode = if demo { "demo" } else { "dev" };
+    eprintln!("==> worktree-env up ({mode}, {runtime}): slug={slug} database={db_name}");
+
+    // Claim the cluster on the host before anything binds a port, for the same
+    // reason the descriptor is written early: an interrupted setup otherwise
+    // leaves a cluster that no clone admits owning, which is exactly what
+    // `sweep` would then delete out from under a checkout that still exists.
+    // The native lane starts no cluster, so it has none to claim.
+    if runtime == Runtime::Kind {
+        register_worktree_cluster(&host_cluster_registry_path(), &cfg.cluster, root)?;
+    }
+
+    // Record the claim before anything binds a port. An interrupted setup
+    // otherwise leaves a cluster holding ports with no reservation behind it,
+    // which is how a slot silently becomes available to a second worktree.
+    write_descriptor(
+        root,
+        &WorktreeEnv {
+            slug: slug.to_owned(),
+            mode: mode.into(),
+            db_name: Some(db_name.clone()),
+            web_port: if demo {
+                cfg.ingress_http_port
+            } else {
+                cfg.web_port
+            },
+            slot: Some(slot),
+            runtime,
+        },
+    )?;
+    Ok((cfg, db_name, slot))
 }
 
 /// Provision or restore the explicitly selected compatibility topology.

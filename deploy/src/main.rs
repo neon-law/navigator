@@ -1385,7 +1385,7 @@ enum DevCmd {
     #[command(subcommand)]
     WorktreeEnv(WorktreeEnvCmd),
     /// Deploy the released web image in KIND. Fresh worktrees use seeded
-    /// PostgreSQL and the cohosted DBOS worker. NAVIGATOR_IMAGE_TAG pins the release.
+    /// PostgreSQL and the cohosted DBOS worker. `NAVIGATOR_IMAGE_TAG` pins the release.
     Deploy,
     /// Remove the disposable demo and its data.
     Undeploy,
