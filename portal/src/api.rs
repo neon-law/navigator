@@ -255,6 +255,11 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
         ),
         (
             "GET",
+            "/app/api/firm-libraries",
+            get(crate::firm_forgejo_api::libraries),
+        ),
+        (
+            "GET",
             "/app/api/firms/{id}/journal/audits",
             get(firm_journal_api::audits),
         ),

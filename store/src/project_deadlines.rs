@@ -364,41 +364,21 @@ pub async fn list(surreal: &SurrealDb, project_id: Uuid) -> Result<Vec<Deadline>
 
 /// Open Deadlines across `project_ids`, earliest due instant first: one
 /// statement for the whole workbench rather than one per Project.
-pub async fn open_for_projects(
-    surreal: &SurrealDb,
-    project_ids: &[Uuid],
-) -> Result<Vec<Deadline>, DeadlineError> {
+pub async fn open_for_projects(project_ids: &[Uuid]) -> Result<Vec<Deadline>, DeadlineError> {
     if project_ids.is_empty() {
         return Ok(Vec::new());
     }
-    if let Some(pg) = crate::postgres::matter::authority_for("project_deadlines").await? {
-        return Ok(crate::postgres::matter::select_any(
-            &pg,
-            "project_deadlines",
-            serde_json::json!({"status": STATUS_OPEN}),
-            ("project_id", project_ids),
-            &["due_at", "id"],
-        )
-        .await?);
-    }
-
-    let ids: Vec<_> = project_ids
-        .iter()
-        .map(|id| record_id("project", *id))
-        .collect();
-    let mut response = surreal
-        .query(format!(
-            "SELECT {SELECT} FROM project_deadlines WHERE project_id IN $project_ids \
-             AND status = 'open' ORDER BY due_at, id"
-        ))
-        .bind(("project_ids", ids))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<DeadlineRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(DeadlineRow::into_deadline)
-        .collect())
+    let pg = crate::postgres::matter::authority_for("project_deadlines")
+        .await?
+        .ok_or(crate::postgres::matter::MatterAuthorityError::Unavailable)?;
+    Ok(crate::postgres::matter::select_any(
+        &pg,
+        "project_deadlines",
+        serde_json::json!({"status": STATUS_OPEN}),
+        ("project_id", project_ids),
+        &["due_at", "id"],
+    )
+    .await?)
 }
 
 pub async fn find(
@@ -1261,62 +1241,6 @@ mod tests {
                 .unwrap_err(),
             DeadlineError::Invalid(_)
         ));
-    }
-
-    #[tokio::test]
-    async fn calendar_sequence_increments_on_rapid_updates_and_cancellation() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal).await;
-        let row = create(&surreal, &sample(project_id)).await.unwrap();
-        assert_eq!(row.calendar_sequence, Some(0));
-        for sequence in 1..=3 {
-            let updated = update(&surreal, project_id, row.id, &DeadlinePatch::default())
-                .await
-                .unwrap();
-            assert_eq!(updated.id, row.id);
-            assert_eq!(updated.calendar_sequence, Some(sequence));
-        }
-        let cancelled = cancel(&surreal, project_id, row.id).await.unwrap();
-        assert_eq!(cancelled.id, row.id);
-        assert_eq!(cancelled.calendar_sequence, Some(4));
-    }
-
-    #[tokio::test]
-    async fn historical_calendar_versions_never_regress_and_overflow_is_refused() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal).await;
-        let row = create(&surreal, &sample(project_id)).await.unwrap();
-        surreal
-            .query("UPDATE $id SET calendar_sequence = NONE, updated_at = '2026-10-26T00:00:00Z'")
-            .bind(("id", record_id("project_deadlines", row.id)))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-        let updated = update(&surreal, project_id, row.id, &DeadlinePatch::default())
-            .await
-            .unwrap();
-        assert_eq!(updated.calendar_sequence, Some(1_792_972_801));
-        surreal
-            .query("UPDATE $id SET calendar_sequence = 2147483647")
-            .bind(("id", record_id("project_deadlines", row.id)))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-        assert!(
-            update(&surreal, project_id, row.id, &DeadlinePatch::default())
-                .await
-                .is_err()
-        );
-        assert_eq!(
-            find(&surreal, project_id, row.id)
-                .await
-                .unwrap()
-                .unwrap()
-                .calendar_sequence,
-            Some(2_147_483_647)
-        );
     }
 
     #[tokio::test]

@@ -53,6 +53,9 @@ pub enum PlanMatterType {
     Letter,
     UncontestedDivorce,
     CourtAppearance,
+    ContestedDivorce,
+    Custody,
+    Probate,
 }
 
 impl PlanMatterType {
@@ -63,6 +66,9 @@ impl PlanMatterType {
             Self::Letter => "letter",
             Self::UncontestedDivorce => "uncontested_divorce",
             Self::CourtAppearance => "court_appearance",
+            Self::ContestedDivorce => "contested_divorce",
+            Self::Custody => "custody",
+            Self::Probate => "probate",
         }
     }
 
@@ -76,6 +82,9 @@ impl PlanMatterType {
             "letter" => Ok(Self::Letter),
             "uncontested_divorce" => Ok(Self::UncontestedDivorce),
             "court_appearance" => Ok(Self::CourtAppearance),
+            "contested_divorce" => Ok(Self::ContestedDivorce),
+            "custody" => Ok(Self::Custody),
+            "probate" => Ok(Self::Probate),
             _ => Err(LegalPlanError::Invalid("matter_type")),
         }
     }
@@ -549,6 +558,9 @@ mod tests {
             PlanMatterType::Letter,
             PlanMatterType::UncontestedDivorce,
             PlanMatterType::CourtAppearance,
+            PlanMatterType::ContestedDivorce,
+            PlanMatterType::Custody,
+            PlanMatterType::Probate,
         ] {
             assert_eq!(
                 PlanMatterType::parse(matter_type.as_str()).unwrap(),

@@ -1227,6 +1227,34 @@ fn canonical_document(base: &str) -> Value {
             }
           }
         },
+        "/app/api/firm-libraries": {
+          "get": {
+            "summary": "List the caller's Firm Libraries",
+            "description":
+              "Every Firm the caller belongs to (a Firm role, or participation in a Project the Firm owns), sorted by slug, \
+               with the https clone URL of the Firm's `library` repository on this deployment's Forgejo. No other Firm is listed. \
+               `repository_url` is null when the Firm has no recorded Forgejo organization or the deployment has no Forgejo. \
+               Scoped sessions are refused.",
+            "tags": ["Firms"],
+            "responses": {
+              "200": { "description": "The caller's Firms and their library clone URLs", "content": { "application/json": {
+                "schema": { "type": "array", "items": { "type": "object", "required": ["slug", "repository_url"], "properties": {
+                  "slug": { "type": "string", "description": "The Firm's immutable slug." },
+                  "repository_url": { "type": ["string", "null"], "description": "`<forgejo root>/<organization>/library.git`." }
+                } } }
+              } } },
+              "401": { "description": "No authenticated session", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } },
+              "403": { "description": "Scoped session", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } },
+              "503": { "description": "PostgreSQL is unavailable", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } }
+            }
+          }
+        },
         "/app/api/firms/{id}": {
           "patch": {
             "operationId": "renameFirm",
@@ -1527,7 +1555,7 @@ fn canonical_document(base: &str) -> Value {
                 "plan_case_number": { "type": ["string", "null"], "description": "The plan's own number for this referral (ARAG CaseAssist, LegalEASE member case), verbatim." },
                 "plan_member_id": { "type": ["string", "null"] },
                 "benefit_code": { "type": ["string", "null"] },
-                "plan_matter_type": { "type": ["string", "null"], "enum": ["document_review", "letter", "uncontested_divorce", "court_appearance", null] },
+                "plan_matter_type": { "type": ["string", "null"], "enum": ["document_review", "letter", "uncontested_divorce", "court_appearance", "contested_divorce", "custody", "probate", null] },
                 "plan_state": { "type": ["string", "null"], "description": "Lowercase jurisdiction code." },
                 "plan_assigned_on": { "type": ["string", "null"], "format": "date" },
                 "plan_accepted_on": { "type": ["string", "null"], "format": "date" },
@@ -1560,7 +1588,7 @@ fn canonical_document(base: &str) -> Value {
                 "plan_case_number": { "type": "string", "description": "The plan's own number for this referral (ARAG CaseAssist, LegalEASE member case), verbatim." },
                 "plan_member_id": { "type": "string" },
                 "benefit_code": { "type": "string" },
-                "plan_matter_type": { "type": "string", "enum": ["document_review", "letter", "uncontested_divorce", "court_appearance"] },
+                "plan_matter_type": { "type": "string", "enum": ["document_review", "letter", "uncontested_divorce", "court_appearance", "contested_divorce", "custody", "probate"] },
                 "plan_state": { "type": "string", "description": "Lowercase jurisdiction code." },
                 "plan_assigned_on": { "type": "string", "format": "date" },
                 "plan_accepted_on": { "type": "string", "format": "date" },
@@ -1586,7 +1614,7 @@ fn canonical_document(base: &str) -> Value {
                 "plan_case_number": { "type": ["string", "null"], "description": "The plan's own number for this referral (ARAG CaseAssist, LegalEASE member case), verbatim." },
                 "plan_member_id": { "type": ["string", "null"] },
                 "benefit_code": { "type": ["string", "null"] },
-                "plan_matter_type": { "type": ["string", "null"], "enum": ["document_review", "letter", "uncontested_divorce", "court_appearance", null] },
+                "plan_matter_type": { "type": ["string", "null"], "enum": ["document_review", "letter", "uncontested_divorce", "court_appearance", "contested_divorce", "custody", "probate", null] },
                 "plan_state": { "type": ["string", "null"], "description": "Lowercase jurisdiction code." },
                 "plan_assigned_on": { "type": ["string", "null"], "format": "date" },
                 "plan_accepted_on": { "type": ["string", "null"], "format": "date" },

@@ -1229,6 +1229,11 @@ pub async fn step_post(
     if !in_scope {
         return (StatusCode::NOT_FOUND, "notation not found").into_response();
     }
+    if notation.state == StateName::BEGIN {
+        if let Some(response) = resume_completed_questionnaire(&state, notation_id, acting).await {
+            return response;
+        }
+    }
     // A rendered form carries the question it was built for. Refuse a stale
     // tab before binding its generic `value` field to a different question.
     // Forms from older clients without this marker retain their existing
@@ -1308,13 +1313,44 @@ pub async fn step_post(
             return Redirect::to(&format!("/app/lawyer/notations/{notation_id}/step"))
                 .into_response();
         }
+        Err(e @ NotationSessionError::QuestionMismatch { .. }) => {
+            return (StatusCode::CONFLICT, e.to_string()).into_response();
+        }
         Err(e) => {
             tracing::error!(error = %e, %notation_id, "walker: answer_step failed");
-            return (StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("could not file the answer to `{}`: {e}", question.code),
+            )
+                .into_response();
         }
     };
 
     finish_questionnaire_step(&state, notation_id, acting, next).await
+}
+
+/// Every answer is filed but the notation never left BEGIN: the request that
+/// filed the last answer failed before its workflow began. Begin it now; the
+/// drive is idempotent, so a retried fill advances exactly once.
+async fn resume_completed_questionnaire(
+    state: &AdminState,
+    notation_id: Uuid,
+    acting: Option<Uuid>,
+) -> Option<Response> {
+    let step = notation_session::current_step(
+        &state.surreal,
+        state.questionnaire_runtime.as_ref(),
+        Some(&state.storage),
+        notation_id,
+    )
+    .await;
+    if !matches!(step, Ok(NextStep::QuestionnaireComplete)) {
+        return None;
+    }
+    Some(
+        finish_questionnaire_step(state, notation_id, acting, NextStep::QuestionnaireComplete)
+            .await,
+    )
 }
 
 async fn finish_questionnaire_step(
@@ -1360,7 +1396,14 @@ async fn finish_questionnaire_step(
                 }
                 Err(e) => {
                     tracing::error!(error = %e, %notation_id, "walker: workflow drive failed");
-                    (StatusCode::INTERNAL_SERVER_ERROR, "workflow failed").into_response()
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!(
+                            "every answer is filed, but the notation did not reach \
+                             lawyer review: {e}. Retry the fill to resume."
+                        ),
+                    )
+                        .into_response()
                 }
             }
         }
@@ -5139,5 +5182,276 @@ Sign: {{client.signature}}";
             }
         }
         (notation_id, accepted)
+    }
+
+    /// A one-question onboarding Draft: a lawyer-audience single choice and a
+    /// workflow that goes straight from BEGIN to lawyer review.
+    const ONE_QUESTION_ONBOARDING: &str = "---
+kind: onboarding
+title: Synthetic one-question onboarding
+respondent_type: person
+confidential: true
+prompts:
+  governing_law: Which state's law governs?
+audiences:
+  governing_law: lawyer
+choices:
+  governing_law:
+    nevada: Nevada
+    washington: Washington
+questionnaire:
+  BEGIN:
+    _: custom_single_choice__governing_law
+  custom_single_choice__governing_law:
+    _: END
+  END: {}
+clauses:
+  arbitration:
+    source: engagement_arbitration@1
+    inputs:
+      law: custom_single_choice__governing_law
+      seat: custom_single_choice__governing_law
+workflow:
+  BEGIN:
+    created: lawyer_review
+  lawyer_review:
+    approved: generate_pdf__engagement_pdf
+  generate_pdf__engagement_pdf:
+    generated: sent_for_signature__pending
+  sent_for_signature__pending:
+    signed: END
+  END: {}
+---
+
+{{> arbitration}}
+
+{{client.signature}} {{client.date}} {{firm.signature}} {{firm.date}}
+";
+
+    /// POST the walker form for `notation_id` as a participating lawyer.
+    async fn post_step(
+        state: &crate::admin::AdminState,
+        notation_id: Uuid,
+        lawyer: Uuid,
+        fields: &[(&str, &str)],
+    ) -> axum::response::Response {
+        let mut session =
+            crate::session::SessionData::fresh("synthetic-lawyer", store::persons::Role::Lawyer);
+        session.person_id = Some(lawyer);
+        super::step_post(
+            axum::extract::State(state.clone()),
+            axum::extract::Path(notation_id),
+            Some(axum::Extension(session)),
+            axum::Form(
+                fields
+                    .iter()
+                    .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                    .collect(),
+            ),
+        )
+        .await
+    }
+
+    /// A participating lawyer, a client, and a Project on the PostgreSQL
+    /// fixture, with the one-question onboarding Draft published to it.
+    async fn onboarding_matter(
+        state: &crate::admin::AdminState,
+        db: &store::surreal::SurrealDb,
+    ) -> (Uuid, Uuid, Uuid) {
+        let project = store::test_support::seed_project(db, "Synthetic onboarding").await;
+        let client = store::persons::create(
+            db,
+            &store::persons::NewPerson::new("Synthetic Client", "client@example.com"),
+        )
+        .await
+        .unwrap();
+        let lawyer = store::persons::create(
+            db,
+            &store::persons::NewPerson::with_role(
+                "Synthetic Lawyer",
+                "lawyer@example.com",
+                store::persons::Role::Lawyer,
+            ),
+        )
+        .await
+        .unwrap();
+        store::projects::add_participation(db, project.id, lawyer.id, "lawyer")
+            .await
+            .unwrap();
+        store::template_source::persist_contents(
+            db,
+            &state.storage,
+            project.id,
+            "onboarding",
+            ONE_QUESTION_ONBOARDING.into(),
+            "synthetic-commit".into(),
+        )
+        .await
+        .unwrap();
+        (project.id, client.id, lawyer.id)
+    }
+
+    async fn open_notation(
+        state: &crate::admin::AdminState,
+        db: &store::surreal::SurrealDb,
+        code: &str,
+        client: Uuid,
+        project: Uuid,
+    ) -> Uuid {
+        workflows::start_notation(
+            db,
+            state.questionnaire_runtime.as_ref(),
+            Some(&state.storage),
+            code,
+            client,
+            project,
+            None,
+        )
+        .await
+        .unwrap()
+        .notation_id
+    }
+
+    async fn notation_state(db: &store::surreal::SurrealDb, notation_id: Uuid) -> String {
+        store::notations::find_by_id(db, notation_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .state
+    }
+
+    const GOVERNING_LAW: &str = "custom_single_choice__governing_law";
+
+    /// LAW-465: filing the last lawyer-audience answer on a one-question
+    /// onboarding notation advances it out of BEGIN to lawyer review.
+    #[tokio::test]
+    async fn the_last_lawyer_answer_advances_a_one_question_onboarding_to_review() {
+        store::test_support::with_postgres(async {
+            let (state, db) = postgres_walk_state().await;
+            let (project, client, lawyer) = onboarding_matter(&state, &db).await;
+            let notation = open_notation(&state, &db, "onboarding", client, project).await;
+            let response = post_step(
+                &state,
+                notation,
+                lawyer,
+                &[("value", "nevada"), ("_nav_question_code", GOVERNING_LAW)],
+            )
+            .await;
+            assert!(response.status().is_redirection(), "{response:?}");
+            assert_eq!(notation_state(&db, notation).await, "lawyer_review");
+        })
+        .await;
+    }
+
+    /// LAW-465: the bundled catalog onboarding letter reaches lawyer review
+    /// when its last, lawyer-audience answer is filed through the walker.
+    #[tokio::test]
+    async fn the_last_lawyer_answer_advances_the_catalog_onboarding_letter_to_review() {
+        store::test_support::with_postgres(async {
+            let (state, db) = postgres_walk_state().await;
+            let (project, client, lawyer) = onboarding_matter(&state, &db).await;
+            let notation = open_notation(&state, &db, "onboarding__letter", client, project).await;
+            for (code, value) in [
+                ("entity", "Synthetic Ventures LLC"),
+                ("address__principal_office", "1 Example Way, Reno, NV 89501"),
+                ("person__client", "Synthetic Client"),
+                ("project__engagement", "Synthetic engagement"),
+                ("custom_datetime__engagement_start_date", "2026-09-01"),
+                ("custom_text__engagement_scope", "Synthetic scope."),
+            ] {
+                workflows::answer_step(
+                    &db,
+                    state.questionnaire_runtime.as_ref(),
+                    Some(&state.storage),
+                    notation,
+                    code,
+                    value,
+                    workflows::AnswerAuthor::lawyer(Some(lawyer)),
+                )
+                .await
+                .unwrap_or_else(|e| panic!("`{code}`: {e}"));
+            }
+            let response = post_step(
+                &state,
+                notation,
+                lawyer,
+                &[("value", "nevada"), ("_nav_question_code", GOVERNING_LAW)],
+            )
+            .await;
+            assert!(response.status().is_redirection(), "{response:?}");
+            assert_eq!(notation_state(&db, notation).await, "lawyer_review");
+        })
+        .await;
+    }
+
+    /// LAW-465: the last answer was filed and the questionnaire completed,
+    /// but the request failed before the workflow began, leaving the
+    /// notation at BEGIN. A retried fill begins the workflow, and a further
+    /// retry does not advance it a second time.
+    #[tokio::test]
+    async fn a_retried_fill_resumes_an_interrupted_completion_exactly_once() {
+        store::test_support::with_postgres(async {
+            let (state, db) = postgres_walk_state().await;
+            let (project, client, lawyer) = onboarding_matter(&state, &db).await;
+            let notation = open_notation(&state, &db, "onboarding", client, project).await;
+            let completed = workflows::answer_step(
+                &db,
+                state.questionnaire_runtime.as_ref(),
+                Some(&state.storage),
+                notation,
+                GOVERNING_LAW,
+                "nevada",
+                workflows::AnswerAuthor::lawyer(Some(lawyer)),
+            )
+            .await
+            .unwrap();
+            assert_eq!(completed, workflows::NextStep::QuestionnaireComplete);
+            assert_eq!(notation_state(&db, notation).await, "BEGIN");
+
+            for _ in 0..2 {
+                let response =
+                    post_step(&state, notation, lawyer, &[("_nav_action", "resume")]).await;
+                assert_ne!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+                assert_eq!(notation_state(&db, notation).await, "lawyer_review");
+            }
+            let events = workflows::StateMachineRuntime::events(
+                state.workflow_runtime.as_ref(),
+                workflows::MachineKind::Workflow,
+                notation,
+            )
+            .await;
+            assert_eq!(events.len(), 1, "the workflow advanced exactly once");
+        })
+        .await;
+    }
+
+    async fn postgres_walk_state() -> (crate::admin::AdminState, store::surreal::SurrealDb) {
+        let db = store::surreal::SurrealDb::uninitialized();
+        let app = crate::test_support::app_state(db.clone()).await;
+        store::seed::seed_canonical(&db, &app.storage)
+            .await
+            .expect("canonical seed");
+        let state = crate::admin::AdminState {
+            surreal: app.surreal,
+            workflow_runtime: app.workflow_runtime,
+            signature_provider: app.signature_provider,
+            retainer_intake_questionnaire: workflows::retainer_intake_questionnaire(),
+            questionnaire_runtime: app.questionnaire_runtime,
+            storage: app.storage,
+            assets_storage: app.assets_storage,
+            forms_registry: app.forms_registry,
+            email: app.email,
+            billing_provider: app.billing_provider,
+            contract_reviewer: app.contract_reviewer,
+            bootstrap_owner_email: app.bootstrap_owner_email,
+            on_call_lawyer_email: app.on_call_lawyer_email,
+            bootstrap_company: crate::admin::bootstrap_company_from_env(),
+            sessions: app.sessions,
+            secure_cookies: false,
+            attachment_scanner: app.attachment_scanner,
+            runtime_kms: app.runtime_kms,
+            twilio_registry: None,
+        };
+        (state, db)
     }
 }

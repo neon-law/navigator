@@ -427,7 +427,7 @@ fn repo_coordinates(repo_full_name: &str) -> Result<(&str, &str), String> {
 }
 
 /// The Forgejo origin from the environment; unset or empty is unconfigured.
-fn forgejo_root_url_from_env() -> Option<String> {
+pub(crate) fn forgejo_root_url_from_env() -> Option<String> {
     std::env::var(cloud::forgejo_forge::NAVIGATOR_FORGEJO_ROOT_URL_ENV)
         .ok()
         .filter(|url| !url.trim().is_empty())

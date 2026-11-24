@@ -4,7 +4,7 @@
 # no separate digest worker. This CronJob is a thin trigger that POSTs to the
 # Restate Cloud ingress and exits in seconds. Restate owns the retry schedule.
 #
-# `DriDigest` reads every project's lawyer and client DRIs and posts firm ops
+# `DriDigest` reads each open project's lawyer and client DRIs and posts firm ops
 # one Slack line per project naming both sides — "none" when a side is
 # unassigned, so the gap is visible from the notice itself.
 #

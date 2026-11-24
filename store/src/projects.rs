@@ -1380,7 +1380,7 @@ pub async fn project_canvas(
     }))
 }
 
-/// Every project's DRIs on both sides, for the nightly digest.
+/// Each open project's DRIs on both sides, for the nightly digest.
 ///
 /// Unlike [`matter_directory`], this has no role gate: the caller is a
 /// headless workflow with no session, not a person, and the digest's whole
@@ -1388,7 +1388,8 @@ pub async fn project_canvas(
 /// are read here, where `matter_directory` deliberately reads only the
 /// lawyer side for its Owner/Admin oversight view.
 pub async fn dri_digest(surreal: &SurrealDb) -> Result<Vec<ProjectDriSummary>, ProjectStoreError> {
-    let projects = all(surreal).await?;
+    let mut projects = all(surreal).await?;
+    projects.retain(|project| project.status == "open");
     if projects.is_empty() {
         return Ok(Vec::new());
     }
@@ -3046,7 +3047,7 @@ impl PlanColumns {
 }
 
 const PLAN_MATTER_TYPE_INVALID: &str =
-    "plan_matter_type is not one of document_review, letter, uncontested_divorce, court_appearance";
+    "plan_matter_type is not one of document_review, letter, uncontested_divorce, court_appearance, contested_divorce, custody, probate";
 const PLAN_STATE_INVALID: &str = "plan_state is not a lowercase jurisdiction code";
 const PLAN_DATE_INVALID: &str = "plan date is not an ISO YYYY-MM-DD date";
 const PLAN_CASE_NUMBER_INVALID: &str =
@@ -6007,7 +6008,7 @@ mod surreal_read_tests {
     /// role gate at all — the nightly workflow that reads it runs headless,
     /// with no session to check.
     #[tokio::test]
-    async fn dri_digest_reports_both_sides_for_every_project() {
+    async fn dri_digest_reports_both_sides_for_open_projects() {
         let surreal = mem_surreal().await;
         let lawyer = crate::persons::create(
             &surreal,

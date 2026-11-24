@@ -265,6 +265,9 @@ fn matter_type_choices() -> Vec<Choice> {
         Choice::new("letter", "Letter"),
         Choice::new("uncontested_divorce", "Uncontested divorce"),
         Choice::new("court_appearance", "Court appearance"),
+        Choice::new("contested_divorce", "Contested divorce"),
+        Choice::new("custody", "Custody"),
+        Choice::new("probate", "Probate"),
     ]
 }
 

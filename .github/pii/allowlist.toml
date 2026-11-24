@@ -280,6 +280,10 @@ reason = "Synthetic names used only by the PII scanner's recognizer canary and r
 values = ["John Smith", "Zelda Quillstone", "Fixture Person"]
 
 [[non_name_words]]
+reason = "County and court place names in the public court-filing Agent Skills (Clark County, Nevada and Washington; Wahkiakum and Walla Walla Counties, Washington), not people."
+values = ["clark", "wahkiakum", "walla"]
+
+[[non_name_words]]
 reason = "Latin legal term of art in published court form titles (in forma pauperis fee-waiver applications) and a San Francisco street name in the court seeds' provenance comments — published court reference data, not people."
 values = ["pauperis", "forma", "mcallister"]
 

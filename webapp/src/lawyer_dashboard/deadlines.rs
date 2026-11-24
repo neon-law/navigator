@@ -56,7 +56,6 @@ fn band(due: DateTime<FixedOffset>, now: DateTime<Utc>) -> &'static str {
 /// Open Deadlines on `projects`' open matters, one batched read, earliest first.
 #[cfg(feature = "server")]
 pub(super) async fn load(
-    db: &store::surreal::SurrealDb,
     projects: &[store::projects::Project],
 ) -> Result<Vec<Entry>, ServerFnError> {
     let open: std::collections::HashMap<uuid::Uuid, &store::projects::Project> = projects
@@ -65,7 +64,7 @@ pub(super) async fn load(
         .map(|project| (project.id, project))
         .collect();
     let ids: Vec<uuid::Uuid> = open.keys().copied().collect();
-    let rows = store::project_deadlines::open_for_projects(db, &ids)
+    let rows = store::project_deadlines::open_for_projects(&ids)
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "dashboard: open deadlines failed");
