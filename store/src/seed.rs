@@ -1644,7 +1644,15 @@ pub async fn seed_sample_portfolio(
     storage: &std::sync::Arc<dyn cloud::StorageService>,
 ) -> anyhow::Result<SeedReport> {
     let mut r = SeedReport::default();
-    seed_sample_portfolio_into(surreal, storage, &mut r).await?;
+    seed_sample_portfolio_into(
+        surreal,
+        storage,
+        &mut r,
+        std::env::var(crate::sample_project::STAGE_ENV)
+            .ok()
+            .as_deref(),
+    )
+    .await?;
     Ok(r)
 }
 
@@ -1738,11 +1746,35 @@ pub async fn seed_environment_with(
     environment: crate::DeploymentEnvironment,
     brand: BrandSeed,
 ) -> anyhow::Result<SeedReport> {
+    seed_environment_with_stage(
+        surreal,
+        storage,
+        environment,
+        brand,
+        std::env::var(crate::sample_project::STAGE_ENV)
+            .ok()
+            .as_deref(),
+    )
+    .await
+}
+
+/// Apply the deployment seed using sample sources staged by the caller.
+///
+/// # Errors
+///
+/// Returns a store or staged source error if the seed cannot be applied.
+pub async fn seed_environment_with_stage(
+    surreal: &SurrealDb,
+    storage: &std::sync::Arc<dyn cloud::StorageService>,
+    environment: crate::DeploymentEnvironment,
+    brand: BrandSeed,
+    sample_stage: Option<&str>,
+) -> anyhow::Result<SeedReport> {
     let mut r = SeedReport::default();
     seed_canonical_into(surreal, storage, &mut r).await?;
     seed_brand_into(surreal, brand, &mut r).await?;
     if environment != crate::DeploymentEnvironment::Production {
-        seed_sample_portfolio_into(surreal, storage, &mut r).await?;
+        seed_sample_portfolio_into(surreal, storage, &mut r, sample_stage).await?;
     }
     Ok(r)
 }
@@ -1799,9 +1831,10 @@ async fn seed_sample_portfolio_into(
     surreal: &SurrealDb,
     storage: &std::sync::Arc<dyn cloud::StorageService>,
     r: &mut SeedReport,
+    sample_stage: Option<&str>,
 ) -> anyhow::Result<()> {
     seed_mailrooms(surreal, sample_seeds::MAILROOM, "sample/Mailroom.yaml", r).await?;
-    seed_role_matrix_sample(surreal, storage, r).await?;
+    seed_role_matrix_sample(surreal, storage, r, sample_stage).await?;
     seed_firm_memberships(surreal).await?;
     seed_git_repositories(surreal, r).await?;
     seed_letters(surreal, r).await?;
@@ -2030,6 +2063,7 @@ async fn seed_role_matrix_sample(
     surreal: &SurrealDb,
     storage: &std::sync::Arc<dyn cloud::StorageService>,
     report: &mut SeedReport,
+    sample_stage: Option<&str>,
 ) -> anyhow::Result<()> {
     let nevada = jurisdictions::find_by_name(surreal, "Nevada")
         .await?
@@ -2107,7 +2141,16 @@ async fn seed_role_matrix_sample(
         dri: dri_id,
     };
     for matter in SAMPLE_MATTERS {
-        open_sample_matter(surreal, storage, report, matter, &cast, nevada.id).await?;
+        open_sample_matter(
+            surreal,
+            storage,
+            report,
+            matter,
+            &cast,
+            nevada.id,
+            sample_stage,
+        )
+        .await?;
     }
     Ok(())
 }
@@ -2143,6 +2186,7 @@ async fn open_sample_matter(
     matter: &SampleMatter,
     cast: &FixtureCast,
     jurisdiction_id: Uuid,
+    sample_stage: Option<&str>,
 ) -> anyhow::Result<()> {
     let FixtureCast {
         owner: owner_id,
@@ -2238,7 +2282,7 @@ async fn open_sample_matter(
             &project,
             lawyer_id,
             jurisdiction_id,
-            |key| std::env::var(key).ok(),
+            |_| sample_stage.map(str::to_owned),
         )
         .await?;
     }

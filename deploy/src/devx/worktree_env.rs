@@ -17,10 +17,9 @@
 //!   host `web` cohosts the DBOS handlers. Its private Database Origin intent
 //!   binds repeated starts to the same verified resource. Existing legacy
 //!   descriptors retain their explicit Source/Restate compatibility topology.
-//! - **demo (`--demo`)** — the full stack running *in* KIND from the
-//!   images CI published to Artifact Registry (no local build). Delegates to the
-//!   pull-based [`super::deploy`]; one full stack at a time (a demo is
-//!   shown, not parallelised).
+//! - **demo (`--demo`)** — the published web image runs inside the isolated
+//!   KIND tier and cohosts DBOS. Recorded historical deployments keep the
+//!   compatibility overlay.
 //!
 //! The per-worktree state (`.devx/worktree.json` + `.devx/env`) lives
 //! inside the worktree, which is itself gitignored (`/.devx/`), so
@@ -92,9 +91,7 @@ pub enum WorktreeEnvCmd {
         /// `.worktrees/<slug>` checkout is created from `origin/main`.
         #[arg(long)]
         branch: Option<String>,
-        /// Full-stack demo: run `web` + `workflows-service` IN the KIND
-        /// cluster from published Artifact Registry images, instead of the
-        /// light host-`web` + shared-deps dev environment.
+        /// Run the published web image and its DBOS worker in this worktree’s KIND tier.
         #[arg(long)]
         demo: bool,
         /// Pin an immutable registry image tag to pull (`YY.M.D` or
@@ -157,8 +154,7 @@ struct WorktreeEnv {
     db_name: Option<String>,
     /// Host `web` port (dev mode) / ingress note (demo mode).
     web_port: u16,
-    /// Isolated KIND port slot for dev mode. Demo mode uses the ordinary
-    /// single-stack topology and does not reserve a slot.
+    /// Isolated KIND port slot. Older shared demos have no reservation.
     #[serde(default)]
     slot: Option<u16>,
     /// Which dependency tier `up` provisioned.
@@ -382,94 +378,31 @@ fn git_checked(root: &Path, args: &[&str], action: &str) -> Result<()> {
 // ---------- dev mode ----------
 
 fn up_dev(root: &Path, no_deps: bool, runtime: Runtime, base_cfg: &KindConfig) -> Result<()> {
-    let slug = slug_for(root)?;
-    // Several worktrees can start concurrently. Serialize slot reservation
-    // and lifecycle work so no two environments create the same host forwards.
     let _setup_lock = acquire_worktree_env_lock(root)?;
     let _host_lock = acquire_host_worktree_env_lock()?;
-    let existing = read_descriptor(root);
-    let mut db_name = match runtime {
-        Runtime::Kind => String::new(),
-        Runtime::Native => existing
-            .as_ref()
-            .filter(|descriptor| descriptor.runtime == Runtime::Native)
-            .and_then(|descriptor| descriptor.db_name.clone())
-            .unwrap_or_else(|| super::native::database_name(root, &slug)),
-    };
-    let claimed_slots = match runtime {
-        Runtime::Kind => claimed_worktree_slots(root, &list_kind_cluster_ports)?,
-        // Native has no KIND containers. The same descriptor read is still
-        // protected by the shared Git lock and reserves live worktrees while
-        // they are between claim and process startup.
-        Runtime::Native => super::native::claimed_slots(root)?,
-    };
-    let slot = choose_worktree_slot(
-        root,
-        existing.as_ref().and_then(WorktreeEnv::dev_slot),
-        &claimed_slots,
-        base_cfg,
-        &port_listening,
-    )?;
-    let mut cfg = worktree_kind_config(base_cfg, root, slot);
-    if runtime == Runtime::Native {
-        // The native lane shares these three listeners host-wide. The slot
-        // still belongs to this descriptor and remains the source of truth
-        // for Restate, web, and every future per-worktree process.
-        cfg.rauthy_port = base_cfg.rauthy_port;
-        cfg.seaweedfs_s3_port = base_cfg.seaweedfs_s3_port;
-        cfg.surreal_port = base_cfg.surreal_port;
-    }
-    if runtime == Runtime::Kind {
-        anyhow::ensure!(
-            existing
-                .as_ref()
-                .is_none_or(|descriptor| descriptor.runtime == Runtime::Kind),
-            "an existing host-process tier requires explicit cleanup before selecting KIND"
-        );
-        db_name = super::native_profile::select_database(
-            root,
-            &cfg,
-            existing
-                .as_ref()
-                .and_then(|descriptor| descriptor.db_name.as_deref()),
-        )?;
-    }
-    match runtime {
-        Runtime::Kind => eprintln!(
-            "==> worktree-env up (dev, kind): slug={slug} cluster={} database={db_name}",
-            cfg.cluster
-        ),
-        Runtime::Native => {
-            eprintln!("==> worktree-env up (dev, native): slug={slug} database={db_name}");
-        }
-    }
+    up_locked(root, no_deps, runtime, base_cfg, None)
+}
 
-    // Claim the cluster on the host before anything binds a port, for the same
-    // reason the descriptor is written early: an interrupted setup otherwise
-    // leaves a cluster that no clone admits owning, which is exactly what
-    // `sweep` would then delete out from under a checkout that still exists.
-    // The native lane starts no cluster, so it has none to claim.
-    if runtime == Runtime::Kind {
-        register_worktree_cluster(&host_cluster_registry_path(), &cfg.cluster, root)?;
-    }
-
-    // Record the claim before anything binds a port. An interrupted setup
-    // otherwise leaves a cluster holding ports with no reservation behind it,
-    // which is how a slot silently becomes available to a second worktree.
-    write_descriptor(
-        root,
-        &WorktreeEnv {
-            slug: slug.clone(),
-            mode: "dev".into(),
-            db_name: Some(db_name.clone()),
-            web_port: cfg.web_port,
-            slot: Some(slot),
-            runtime,
-        },
-    )?;
-
+fn up_locked(
+    root: &Path,
+    no_deps: bool,
+    runtime: Runtime,
+    base_cfg: &KindConfig,
+    demo_image: Option<&str>,
+) -> Result<()> {
+    let slug = slug_for(root)?;
+    let (cfg, db_name, slot) =
+        reserve_worktree_tier(root, &slug, runtime, base_cfg, demo_image.is_some())?;
     if runtime == Runtime::Kind && super::native_profile::selected(root, &cfg)? {
         super::orchestrate::up_native_in(root, &cfg, no_deps)?;
+        if let Some(image) = demo_image {
+            super::orchestrate::deploy_native_image(root, &cfg, image)?;
+            eprintln!(
+                "==> Demo ready at http://localhost:{}",
+                cfg.ingress_http_port
+            );
+            return Ok(());
+        }
         print_dev_summary(&slug, &db_name, runtime, &cfg);
         return Ok(());
     }
@@ -498,6 +431,109 @@ fn up_dev(root: &Path, no_deps: bool, runtime: Runtime, base_cfg: &KindConfig) -
 
     print_dev_summary(&slug, &db_name, runtime, &cfg);
     Ok(())
+}
+
+/// Reserve the tier under the setup locks before a workload can bind its ports.
+fn reserve_worktree_tier(
+    root: &Path,
+    slug: &str,
+    runtime: Runtime,
+    base_cfg: &KindConfig,
+    demo: bool,
+) -> Result<(KindConfig, String, u16)> {
+    let existing = read_descriptor(root);
+    anyhow::ensure!(
+        !descriptor_path(root).exists() || existing.is_some(),
+        "worktree descriptor is invalid"
+    );
+    anyhow::ensure!(
+        demo || existing.as_ref().is_none_or(|d| d.mode != "demo"),
+        "run dev undeploy before starting host development in this demo worktree"
+    );
+    let mut db_name = match runtime {
+        Runtime::Kind => String::new(),
+        Runtime::Native => existing
+            .as_ref()
+            .filter(|descriptor| descriptor.runtime == Runtime::Native)
+            .and_then(|descriptor| descriptor.db_name.clone())
+            .unwrap_or_else(|| super::native::database_name(root, slug)),
+    };
+    let claimed_slots = match runtime {
+        Runtime::Kind => claimed_worktree_slots(root, &list_kind_cluster_ports)?,
+        // Native has no KIND containers. The same descriptor read is still
+        // protected by the shared Git lock and reserves live worktrees while
+        // they are between claim and process startup.
+        Runtime::Native => super::native::claimed_slots(root)?,
+    };
+    let slot = choose_worktree_slot(
+        root,
+        existing.as_ref().and_then(WorktreeEnv::dev_slot),
+        &claimed_slots,
+        base_cfg,
+        &port_listening,
+    )?;
+    let mut cfg = worktree_kind_config(base_cfg, root, slot);
+    if demo {
+        anyhow::ensure!(
+            !port_listening(cfg.web_port)
+                && !port_listening(super::native_profile::dbos_port(&cfg)?),
+            "stop the worktree's host web and DBOS worker before starting the demo image"
+        );
+    }
+    if runtime == Runtime::Native {
+        // The native lane shares these three listeners host-wide. The slot
+        // still belongs to this descriptor and remains the source of truth
+        // for Restate, web, and every future per-worktree process.
+        cfg.rauthy_port = base_cfg.rauthy_port;
+        cfg.seaweedfs_s3_port = base_cfg.seaweedfs_s3_port;
+        cfg.surreal_port = base_cfg.surreal_port;
+    }
+    if runtime == Runtime::Kind {
+        anyhow::ensure!(
+            existing
+                .as_ref()
+                .is_none_or(|descriptor| descriptor.runtime == Runtime::Kind),
+            "an existing host-process tier requires explicit cleanup before selecting KIND"
+        );
+        db_name = super::native_profile::select_database(
+            root,
+            &cfg,
+            existing
+                .as_ref()
+                .and_then(|descriptor| descriptor.db_name.as_deref()),
+        )?;
+    }
+    let mode = if demo { "demo" } else { "dev" };
+    eprintln!("==> worktree-env up ({mode}, {runtime}): slug={slug} database={db_name}");
+
+    // Claim the cluster on the host before anything binds a port, for the same
+    // reason the descriptor is written early: an interrupted setup otherwise
+    // leaves a cluster that no clone admits owning, which is exactly what
+    // `sweep` would then delete out from under a checkout that still exists.
+    // The native lane starts no cluster, so it has none to claim.
+    if runtime == Runtime::Kind {
+        register_worktree_cluster(&host_cluster_registry_path(), &cfg.cluster, root)?;
+    }
+
+    // Record the claim before anything binds a port. An interrupted setup
+    // otherwise leaves a cluster holding ports with no reservation behind it,
+    // which is how a slot silently becomes available to a second worktree.
+    write_descriptor(
+        root,
+        &WorktreeEnv {
+            slug: slug.to_owned(),
+            mode: mode.into(),
+            db_name: Some(db_name.clone()),
+            web_port: if demo {
+                cfg.ingress_http_port
+            } else {
+                cfg.web_port
+            },
+            slot: Some(slot),
+            runtime,
+        },
+    )?;
+    Ok((cfg, db_name, slot))
 }
 
 /// Provision or restore the explicitly selected compatibility topology.
@@ -568,7 +604,7 @@ fn native_teardown_config(
     };
     let descriptor = descriptor.context("native tier descriptor is missing or corrupt; explicit owned-resource recovery is required")?;
     anyhow::ensure!(
-        descriptor.mode == "dev" && descriptor.runtime == Runtime::Kind,
+        descriptor.dev_slot().is_some() && descriptor.runtime == Runtime::Kind,
         "native tier descriptor identifies another runtime"
     );
     let slot = descriptor
@@ -589,6 +625,10 @@ pub(super) fn down(root: &Path, base_cfg: &KindConfig) -> Result<()> {
     // remove a reservation or database while another worktree is setting up.
     let _environment_lock = acquire_worktree_env_lock(root)?;
     let _host_lock = acquire_host_worktree_env_lock()?;
+    down_locked(root, base_cfg)
+}
+
+fn down_locked(root: &Path, base_cfg: &KindConfig) -> Result<()> {
     let desc = read_descriptor(root);
     if let Some(cfg) = native_teardown_config(root, base_cfg, desc.as_ref())? {
         verify_postgres_fixture_target(root, &cfg)?;
@@ -681,7 +721,9 @@ fn status_report(root: &Path, base_cfg: &KindConfig, port_in_use: &dyn Fn(u16) -
                                 cfg.postgres_port,
                                 yes_no(port_in_use(cfg.postgres_port))
                             );
-                            if let Ok(port) = super::native_profile::dbos_port(&cfg) {
+                            if d.mode == "demo" {
+                                let _ = writeln!(out, "  DBOS cohost: deployment/navigator-web");
+                            } else if let Ok(port) = super::native_profile::dbos_port(&cfg) {
                                 let _ = writeln!(
                                     out,
                                     "  DBOS cohost 127.0.0.1:{port}: {}",
@@ -729,35 +771,44 @@ pub(super) fn up_kind(root: &Path, base_cfg: &KindConfig) -> Result<()> {
 
 // ---------- demo mode ----------
 
-fn up_demo(root: &Path, tag: Option<&str>, base_cfg: &KindConfig) -> Result<()> {
-    let slug = slug_for(root)?;
-    let _setup_lock = acquire_worktree_env_lock(root)?;
-    eprintln!(
-        "==> worktree-env up (demo): full stack in KIND from Artifact Registry (slug={slug})"
-    );
-    // Validate `--tag` up front so a bad tag fails before any cluster
-    // work, then hand it to `deploy` as a parameter (no process-env
-    // mutation).
+pub(super) fn up_demo(root: &Path, tag: Option<&str>, base_cfg: &KindConfig) -> Result<()> {
     if let Some(tag) = tag {
         super::registry::validate_release_tag(tag)?;
     }
-    super::deploy(base_cfg, tag)?;
-    write_descriptor(
-        root,
-        &WorktreeEnv {
-            slug,
-            mode: "demo".into(),
-            db_name: None,
-            web_port: 8080,
-            slot: None,
-            runtime: Runtime::Kind,
-        },
-    )?;
-    eprintln!();
-    eprintln!("==> demo stack up. Reach navigator-web through the KIND ingress:");
-    eprintln!("    http://localhost:8080");
-    eprintln!("    (pre-seed a lawyer role with `hudson dev grant-lawyer`)");
-    Ok(())
+    let _setup_lock = acquire_worktree_env_lock(root)?;
+    let _host_lock = acquire_host_worktree_env_lock()?;
+    let existing = read_descriptor(root);
+    if existing.as_ref().is_some_and(|d| {
+        d.db_name.as_deref() == Some("navigator") || (d.mode == "demo" && d.slot.is_none())
+    }) {
+        let cfg = existing
+            .as_ref()
+            .and_then(WorktreeEnv::dev_slot)
+            .map_or_else(
+                || base_cfg.clone(),
+                |slot| worktree_kind_config(base_cfg, root, slot),
+            );
+        verify_postgres_fixture_target(root, &cfg)?;
+        return super::orchestrate::deploy_captured(root, &cfg, tag);
+    }
+    let image = super::orchestrate::resolve_demo_image(tag)?;
+    up_locked(root, false, Runtime::Kind, base_cfg, Some(&image))
+}
+
+/// The namespace is part of a native database's identity. Retire its owned
+/// cluster and local intent together so a later deploy can create a fresh demo.
+pub(super) fn undeploy_demo(root: &Path, cfg: &KindConfig) -> Result<()> {
+    let _setup_lock = acquire_worktree_env_lock(root)?;
+    let _host_lock = acquire_host_worktree_env_lock()?;
+    let descriptor = read_descriptor(root);
+    if native_teardown_config(root, cfg, descriptor.as_ref())?.is_some() {
+        anyhow::ensure!(
+            descriptor.is_some_and(|d| d.mode == "demo"),
+            "this worktree owns a development tier; use dev down to remove it"
+        );
+        return down_locked(root, cfg);
+    }
+    super::undeploy(cfg)
 }
 
 // ---------- slug + port derivation (pure, unit-tested) ----------
@@ -1086,6 +1137,16 @@ pub(super) fn verify_postgres_fixture_target(root: &Path, cfg: &KindConfig) -> R
     );
     if descriptor_path(root).exists() {
         let descriptor = read_descriptor(root).context("fixture worktree descriptor is invalid")?;
+        if descriptor.mode == "demo" && descriptor.slot.is_none() {
+            anyhow::ensure!(
+                descriptor.runtime == Runtime::Kind
+                    && descriptor.db_name.is_none()
+                    && cfg.cluster == super::DEFAULT_CLUSTER_NAME
+                    && super::native_profile::Intent::read(root)?.is_none(),
+                "legacy demo coordinates cannot identify a native or isolated fixture"
+            );
+            return Ok(());
+        }
         let slot = descriptor
             .dev_slot()
             .context("fixture requires a development worktree slot")?;
@@ -1135,6 +1196,13 @@ pub(super) fn verify_postgres_fixture_target(root: &Path, cfg: &KindConfig) -> R
         );
     }
     Ok(())
+}
+
+/// The descriptor records the browser-facing listener for both host and pod web.
+pub(super) fn web_port(root: &Path) -> Result<u16> {
+    Ok(read_descriptor(root)
+        .context("worktree descriptor is missing")?
+        .web_port)
 }
 
 pub(super) fn is_native(root: &Path) -> bool {
@@ -2014,7 +2082,9 @@ fn web_start_instructions(web_port: u16, delete_your_data_web_port: u16) -> Stri
 impl WorktreeEnv {
     /// The recorded isolated KIND slot, but only for a dev-mode descriptor.
     fn dev_slot(&self) -> Option<u16> {
-        (self.mode == "dev").then_some(self.slot).flatten()
+        matches!(self.mode.as_str(), "dev" | "demo")
+            .then_some(self.slot)
+            .flatten()
     }
 }
 
