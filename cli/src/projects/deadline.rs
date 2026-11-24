@@ -761,6 +761,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unavailable_verification_returns_the_same_key_after_two_attempts() {
+        let server = MockServer::start().await;
+        let project = Uuid::now_v7();
+        let url = format!("{}/app/api/projects/{project}/deadlines", server.uri());
+        let body = json!({"replay_key":"retry","title":"Synthetic deadline"});
+        Mock::given(method("POST"))
+            .and(body_json(&body))
+            .respond_with(ResponseTemplate::new(504))
+            .expect(2)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(503))
+            .expect(2)
+            .mount(&server)
+            .await;
+        let error = super::create_confirmed(
+            &reqwest::Client::new(),
+            &url,
+            "token",
+            project,
+            &body,
+            "retry",
+            std::time::Duration::from_secs(1),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("unconfirmed"));
+        assert!(error.to_string().contains("--replay-key retry"));
+    }
+
+    #[tokio::test]
     async fn create_sends_only_supplied_fields_and_exports_the_saved_row() {
         let (server, _login, door) = matter().await;
         let (document, owner) = (Uuid::new_v4(), Uuid::new_v4());
