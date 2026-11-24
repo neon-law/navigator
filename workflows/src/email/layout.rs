@@ -166,14 +166,19 @@ mod tests {
     #[tokio::test]
     async fn brand_without_a_raster_uses_a_wordmark_and_its_own_theme() {
         let key = views::brand::BrandKey::LexTecnica;
-        views::brand::scope(key.resolve_branding(&views::brand::DEFAULT_BRANDING), async {
-            let html = render_email_html("[Reset](https://mail.test/reset)", "https://mail.test");
-            assert!(html.contains("<strong>Lex Tecnica</strong>"));
-            assert!(!html.contains("<img"));
-            assert!(html.contains("font-family:'Tinos', 'Times New Roman', serif"));
-            assert!(html.contains("https://mail.test/public/fonts/tinos/Tinos-Regular.woff2"));
-            assert!(html.contains(r##"style="color:#000000;" href="https://mail.test/reset""##));
-        }).await;
+        views::brand::scope(
+            key.resolve_branding(&views::brand::DEFAULT_BRANDING),
+            async {
+                let html =
+                    render_email_html("[Reset](https://mail.test/reset)", "https://mail.test");
+                assert!(html.contains("<strong>Lex Tecnica</strong>"));
+                assert!(!html.contains("<img"));
+                assert!(html.contains("font-family:'Tinos', 'Times New Roman', serif"));
+                assert!(html.contains("https://mail.test/public/fonts/tinos/Tinos-Regular.woff2"));
+                assert!(html.contains(r#"style="color:#000000;" href="https://mail.test/reset""#));
+            },
+        )
+        .await;
     }
 
     #[test]
