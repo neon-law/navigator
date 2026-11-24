@@ -133,8 +133,8 @@ pub fn LeadCaptureForm(
             extra_fields: Some(rsx! {
                 if iep_intake {
                     div { id: "iep-draft-controls", hidden: true,
-                        label { input { id: "iep-save-draft", r#type: "checkbox" } " Let me resume these answers on this device for 24 hours" }
-                        button { id: "iep-clear-draft", r#type: "button", "Clear draft" }
+                        label { input { id: "iep-save-draft", class: "nav-checkbox", r#type: "checkbox" } " Let me resume these answers on this device for 24 hours" }
+                        button { id: "iep-clear-draft", class: "nav-btn nav-btn--secondary", r#type: "button", "Clear draft" }
                         span { id: "iep-draft-status", role: "status" }
                     }
                 }
