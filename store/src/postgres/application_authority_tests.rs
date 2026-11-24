@@ -771,8 +771,8 @@ async fn open_deadlines_batch_across_projects_in_postgres() {
     let mut projects = Vec::new();
     for code in ["included", "excluded"] {
         let id = sqlx::query_scalar(
-            "INSERT INTO project (code, name, status, entity_id)
-             SELECT $1, $1, 'open', entity_id FROM project WHERE id = $2 RETURNING id",
+            "INSERT INTO project (code, name, status, entity_id, brand, firm_id)
+             SELECT $1, $1, 'open', entity_id, brand, firm_id FROM project WHERE id = $2 RETURNING id",
         )
         .bind(code)
         .bind(project)
