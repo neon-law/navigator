@@ -986,6 +986,13 @@
       {
         "action": "export",
         "schema": "public",
+        "name": "lead_intake",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
         "name": "legal_plan",
         "kind": "table",
         "accessible": true

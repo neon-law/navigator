@@ -147,6 +147,7 @@ pub const POSTGRES_TABLES: &[&str] = &[
     "letter",
     "lead",
     "lead_consent",
+    "lead_intake",
     "credential",
     "email_token",
     "entity_role",

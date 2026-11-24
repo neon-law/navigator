@@ -63,6 +63,7 @@ pub enum FieldKind {
     Textarea {
         value: String,
         rows: u8,
+        maxlength: Option<u32>,
     },
     Select {
         options: Vec<Choice>,
@@ -244,6 +245,7 @@ impl Field {
             FieldKind::Textarea {
                 value: value.into(),
                 rows,
+                maxlength: None,
             },
         )
     }
@@ -480,11 +482,13 @@ impl Field {
         self
     }
 
-    /// Bound the number of characters accepted by an input (no-op on other
+    /// Bound the number of characters accepted by an input or textarea (no-op on other
     /// kinds). The server must still validate the same bound.
     #[must_use]
     pub fn maxlength(mut self, limit: u32) -> Self {
-        if let FieldKind::Input { maxlength, .. } = &mut self.kind {
+        if let FieldKind::Input { maxlength, .. } | FieldKind::Textarea { maxlength, .. } =
+            &mut self.kind
+        {
             *maxlength = Some(limit);
         }
         self
@@ -744,7 +748,11 @@ impl Field {
                 }
             },
             FieldKind::Input { .. } => self.render_input(described_by.as_deref(), help_block),
-            FieldKind::Textarea { value, rows } => rsx! {
+            FieldKind::Textarea {
+                value,
+                rows,
+                maxlength,
+            } => rsx! {
                 div { class: "{field_class}",
                     label { class: "nav-label", r#for: "{control_id}",
                         "{label}"
@@ -762,6 +770,7 @@ impl Field {
                         id: "{control_id}",
                         name: "{name}",
                         rows: "{rows}",
+                        maxlength: maxlength.map(|n| n.to_string()),
                         required,
                         "aria-describedby": described_by,
                         "aria-invalid": invalid,

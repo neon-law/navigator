@@ -97,6 +97,8 @@ pub struct LeadShowView {
     pub notice: Option<String>,
     #[serde(default)]
     pub error: Option<String>,
+    #[serde(default)]
+    pub intake: Vec<String>,
     pub lead: Option<LeadDetail>,
 }
 
@@ -272,6 +274,7 @@ pub async fn lead_show_view() -> Result<LeadShowView, ServerFnError> {
             csrf_token,
             notice: query.notice,
             error: query.error,
+            intake: Vec::new(),
             lead: None,
         });
     };
@@ -297,6 +300,20 @@ pub async fn lead_show_view() -> Result<LeadShowView, ServerFnError> {
         sms_policy_version,
     ) = consent_detail(latest_consent);
 
+    let mut intake = Vec::new();
+    if lead.brand_key == "iep-defenders" {
+        if let Some(viewer) = crate::admin_listing::injected_person_id().await {
+            let tier = if role.is_owner() {
+                store::persons::Role::Owner
+            } else {
+                store::persons::Role::Admin
+            };
+            intake = store::leads::intake_history(id, viewer, tier)
+                .await
+                .map_err(|e| ServerFnError::new(e.to_string()))?;
+        }
+    }
+
     Ok(LeadShowView {
         firm_name: crate::app_chrome::firm_name_from_context().await,
         role,
@@ -305,6 +322,7 @@ pub async fn lead_show_view() -> Result<LeadShowView, ServerFnError> {
         csrf_token,
         notice: query.notice,
         error: query.error,
+        intake,
         lead: Some(LeadDetail {
             id: lead.id.to_string(),
             email: linked_person
@@ -534,6 +552,16 @@ pub fn lead_show_body(view: &LeadShowView) -> Element {
                     }
                 }
             }
+            if !view.intake.is_empty() {
+                section {
+                    h2 { "IEP intake" }
+                    for answers in &view.intake {
+                        article {
+                            for line in answers.lines() { p { "{line}" } }
+                        }
+                    }
+                }
+            }
             FormCard {
                 title: "Change status".to_string(),
                 action: status_action,
@@ -646,6 +674,7 @@ mod tests {
             csrf_token: "TOK".to_string(),
             notice: None,
             error: None,
+            intake: Vec::new(),
             lead: Some(LeadDetail {
                 id: "11111111-1111-1111-1111-111111111111".to_string(),
                 email: "visitor@example.com".to_string(),
@@ -696,6 +725,7 @@ mod tests {
             csrf_token: "TOK".to_string(),
             notice: None,
             error: Some("A Person already holds this mailbox.".to_string()),
+            intake: Vec::new(),
             lead: Some(LeadDetail {
                 id: "11111111-1111-1111-1111-111111111111".to_string(),
                 email: "visitor@example.com".to_string(),
@@ -737,6 +767,7 @@ mod tests {
             csrf_token: "TOK".to_string(),
             notice: None,
             error: None,
+            intake: Vec::new(),
             lead: Some(LeadDetail {
                 id: "11111111-1111-1111-1111-111111111111".to_string(),
                 email: "visitor@example.com".to_string(),

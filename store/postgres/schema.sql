@@ -5796,3 +5796,16 @@ CREATE TABLE project_calendar_retirement (
     deleted_at TIMESTAMPTZ,
     PRIMARY KEY (project_id, firm_id, calendar_id)
 );
+
+-- Migration: 20261123200000_create_lead_intake.sql
+CREATE TABLE lead_intake (
+    id TEXT PRIMARY KEY,
+    lead_id UUID NOT NULL REFERENCES lead(id),
+    firm_id UUID NOT NULL REFERENCES firm(id),
+    submitted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    school_district TEXT NOT NULL,
+    relationship TEXT NOT NULL,
+    concern TEXT NOT NULL,
+    next_date DATE
+);
+CREATE INDEX lead_intake_history ON lead_intake (lead_id, submitted_at);

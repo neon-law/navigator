@@ -85,17 +85,59 @@ pub fn server_call_consent_version(site_name: &str) -> String {
 pub fn LeadCaptureForm(
     copy: LeadCaptureCopy,
     context: LeadCaptureContext,
+    #[props(default)] iep_intake: bool,
     #[props(default = "Send".to_string())] submit_label: String,
 ) -> Element {
+    let mut fields = Vec::new();
+    if iep_intake {
+        fields.extend([
+            Field::text(
+                "Which school or district is involved, and in what state?",
+                "district",
+                "",
+            )
+            .required()
+            .maxlength(160),
+            Field::text(
+                "What is your relationship to the student?",
+                "relationship",
+                "",
+            )
+            .required()
+            .maxlength(80),
+            Field::textarea(
+                "What did you ask the school to do, and what happened?",
+                "concern",
+                "",
+                4,
+            )
+            .required()
+            .maxlength(600),
+            Field::input(
+                "Next meeting, hearing, or response date (if known)",
+                "next_date",
+                "",
+                "date",
+            ),
+        ]);
+    }
+    fields.extend(lead_capture_fields(&copy));
     rsx! {
         FormCard {
-            title: "Lead capture".to_string(),
+            title: if iep_intake { "IEP intake".to_string() } else { "Lead capture".to_string() },
             action: "/leads".to_string(),
             submit_label,
             heading: Heading::Hidden,
             csrf_token: Some(context.csrf_token),
-            fields: lead_capture_fields(&copy),
+            fields,
             extra_fields: Some(rsx! {
+                if iep_intake {
+                    div { id: "iep-draft-controls", hidden: true,
+                        label { input { id: "iep-save-draft", r#type: "checkbox" } " Let me resume these answers on this device for 24 hours" }
+                        button { id: "iep-clear-draft", r#type: "button", "Clear draft" }
+                        span { id: "iep-draft-status", role: "status" }
+                    }
+                }
                 Honeypot { name: "website".to_string() }
                 input { r#type: "hidden", name: "source_path", value: "{context.source_path}" }
                 input { r#type: "hidden", name: "consent_version", value: "{copy.consent_sentence}" }
