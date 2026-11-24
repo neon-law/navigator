@@ -219,6 +219,13 @@ jobs:
           bash store/postgres/tests/integrated_recovery.sh kind-postgres-compatibility \
             "$PWD/images/postgres/tests/dbos/target/debug/dbos-image-smoke" 25433 \
             2>&1 | tee "$RUNNER_TEMP/postgres-smoke/integrated-recovery.log"
+      - name: Recover an in-flight DBOS workflow in a replacement pod
+        env:
+          KUBECONFIG: /tmp/postgres-kind.config
+        run: |
+          bash images/postgres/tests/dbos-pod-recovery.sh kind-postgres-compatibility \
+            "$PWD/images/postgres/tests/dbos/target/debug/dbos-image-smoke" \
+            2>&1 | tee "$RUNNER_TEMP/postgres-smoke/dbos-pod-recovery.log"
       - name: Capture Kubernetes evidence
         if: always()
         run: |

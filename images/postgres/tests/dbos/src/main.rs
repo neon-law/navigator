@@ -1,6 +1,8 @@
 use dbos::{Config, DBOS, step};
 use std::time::Duration;
 
+const WORKFLOW_ID: &str = "stable-smoke";
+
 #[derive(Debug, thiserror::Error, serde::Serialize, serde::Deserialize)]
 #[error("{0}")]
 struct SmokeError(String);
@@ -35,7 +37,8 @@ async fn write_effect(key: &str) -> dbos::Result<(), SmokeError> {
 async fn main() -> anyhow::Result<()> {
     let mut config = Config::from_env("image-smoke");
     config.app_version = Some("smoke-v1".into());
-    config.executor_id = Some("smoke-worker".into());
+    config.executor_id =
+        Some(std::env::var("SMOKE_EXECUTOR_ID").unwrap_or_else(|_| "smoke-worker".into()));
     let dbos = DBOS::new(config);
     let workflow = dbos.register_workflow("checkpoint-smoke", |_: ()| async {
         step("checkpoint-one", || write_effect("checkpoint-one")).await?;
@@ -61,15 +64,19 @@ async fn main() -> anyhow::Result<()> {
         )
         .await
     });
-    let handle = workflow
-        .start_with(
-            (),
-            dbos::StartOptions {
-                workflow_id: Some("stable-smoke"),
-                ..Default::default()
-            },
-        )
-        .await?;
+    let handle = if std::env::var_os("RECOVER_EXISTING").is_some() {
+        dbos.retrieve_workflow::<(), SmokeError>(WORKFLOW_ID)?
+    } else {
+        workflow
+            .start_with(
+                (),
+                dbos::StartOptions {
+                    workflow_id: Some(WORKFLOW_ID),
+                    ..Default::default()
+                },
+            )
+            .await?
+    };
     handle.result().await?;
     dbos.shutdown().await;
     server.abort();
