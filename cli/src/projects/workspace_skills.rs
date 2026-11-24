@@ -841,19 +841,23 @@ mod tests {
     #[test]
     fn an_empty_root_gets_agents_skills_and_relative_claude_links() {
         let root = tempfile::tempdir().unwrap();
-        let report = materialize(root.path(), GENERIC, &BTreeMap::new(), false).unwrap();
+        let catalog = project_scaffold::WORKSPACE_SKILLS;
+        let report = materialize(root.path(), catalog, &BTreeMap::new(), false).unwrap();
         assert_eq!(
             std::fs::read_to_string(root.path().join("AGENTS.md")).unwrap(),
             WORKSPACE_AGENTS
         );
-        let link = root.path().join(CLAUDE_SKILLS).join("records-subpoena");
+        let link = root.path().join(CLAUDE_SKILLS).join("today");
         assert_eq!(
             std::fs::read_link(&link).unwrap(),
-            Path::new("../../.agents/skills/records-subpoena")
+            Path::new("../../.agents/skills/today")
         );
-        assert_eq!(skill_text(&link), GENERIC[0].1);
+        assert_eq!(
+            skill_text(&link),
+            skill_text(&root.path().join(SKILLS).join("today"))
+        );
         assert!(report.missing.is_empty(), "{:?}", report.missing);
-        let again = materialize(root.path(), GENERIC, &BTreeMap::new(), false).unwrap();
+        let again = materialize(root.path(), catalog, &BTreeMap::new(), false).unwrap();
         assert!(again.changes.is_empty(), "{:?}", again.changes);
     }
 
