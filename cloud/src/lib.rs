@@ -27,6 +27,8 @@ pub mod contacts;
 pub mod delegation;
 pub mod drive;
 pub mod forge;
+#[cfg(feature = "forge-sync")]
+pub mod forge_sync;
 pub mod forgejo_forge;
 pub mod forgejo_governance;
 pub mod forgejo_organization;

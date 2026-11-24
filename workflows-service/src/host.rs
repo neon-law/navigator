@@ -569,6 +569,7 @@ async fn run_host(
         Some((
             settings,
             dbos_engine::Schedules {
+                forge_parity: true,
                 general_nag,
                 dri_digest,
                 billing_canary,

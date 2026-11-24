@@ -1229,6 +1229,7 @@ async fn dbos_schedules(
     };
 
     Ok(dbos_engine::Schedules {
+        forge_parity: enabled,
         daily_cost_export,
         linear_backlog,
         general_nag,
