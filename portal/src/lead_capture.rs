@@ -200,24 +200,7 @@ async fn submit(
             if !iep_intake {
                 crate::lead_confirm::spawn_send(state.clone(), lead.id, lead.email.clone());
             }
-            telemetry::record_funnel_event(telemetry::FunnelEvent::LeadCaptured {
-                lead_id: &lead_id,
-                brand: brand.as_str(),
-                source_path: &source_path,
-                sms_consent: sms_opt_in,
-            });
-            state
-                .plausible_conversions
-                .record(
-                    brand,
-                    crate::plausible::ConversionGoal::ContactSubmitted,
-                    &source_path,
-                    crate::rate_limit::client_ip_from_headers(&headers),
-                    headers
-                        .get(axum::http::header::USER_AGENT)
-                        .and_then(|value| value.to_str().ok()),
-                )
-                .await;
+            record_conversion(&state, brand, &source_path, &headers, &lead_id, sms_opt_in).await;
         }
         Err(error) => {
             tracing::error!(error = %error, brand = brand.as_str(), source_path = %source_path, "lead submission failed");
@@ -228,6 +211,34 @@ async fn submit(
         return Redirect::to("/contact/sent#signup").into_response();
     }
     accepted_redirect(brand, &source_path)
+}
+
+async fn record_conversion(
+    state: &AppState,
+    brand: BrandKey,
+    source_path: &str,
+    headers: &axum::http::HeaderMap,
+    lead_id: &str,
+    sms_opt_in: bool,
+) {
+    telemetry::record_funnel_event(telemetry::FunnelEvent::LeadCaptured {
+        lead_id,
+        brand: brand.as_str(),
+        source_path,
+        sms_consent: sms_opt_in,
+    });
+    state
+        .plausible_conversions
+        .record(
+            brand,
+            crate::plausible::ConversionGoal::ContactSubmitted,
+            source_path,
+            crate::rate_limit::client_ip_from_headers(headers),
+            headers
+                .get(axum::http::header::USER_AGENT)
+                .and_then(|value| value.to_str().ok()),
+        )
+        .await;
 }
 
 async fn reject_invalid_submission(

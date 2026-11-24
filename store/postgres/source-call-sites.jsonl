@@ -1077,9 +1077,9 @@
 {"file":"portal/src/journal_webhooks.rs","line":50,"function":"verify","operation":"update","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/journal_webhooks.rs","line":181,"function":"signature_covers_original_bytes_and_fails_closed","operation":"update","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/lead_capture.rs","line":111,"function":"inject_page_context","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"portal/src/lead_capture.rs","line":386,"function":"test_app_with_state","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"portal/src/lead_capture.rs","line":466,"function":"iep_intake_validates_before_saving_and_offers_signup_after_commit","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"portal/src/lead_capture.rs","line":515,"function":"same_day_legal_records_contact_before_redirecting_to_sign_in","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"portal/src/lead_capture.rs","line":397,"function":"test_app_with_state","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"portal/src/lead_capture.rs","line":477,"function":"iep_intake_validates_before_saving_and_offers_signup_after_commit","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"portal/src/lead_capture.rs","line":526,"function":"same_day_legal_records_contact_before_redirecting_to_sign_in","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/legal_sandbox.rs","line":216,"function":"require_same_day_subscription","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/legal_sandbox.rs","line":217,"function":"require_same_day_subscription","operation":"insert","sql_operations":[],"tables":["person"],"transaction":false}
 {"file":"portal/src/lib.rs","line":871,"function":"public_asset","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
