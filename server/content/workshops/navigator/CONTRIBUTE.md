@@ -98,7 +98,7 @@ Save each finished PNG or JPEG under `server/public/img/<deck-slug>/` and refere
 in the presentation. Run these commands from the Navigator repository root:
 
 ```bash
-hudson ops assets upload --dir server/public/img --bucket neon-law-stg-assets
+hudson ops assets upload --dir server/public/img --bucket ${NAVIGATOR_STAGING_DEPLOYMENT}-assets
 hudson ops assets verify --base-url https://staging.neonlaw.com/assets
 ```
 
@@ -112,9 +112,9 @@ the Markdown reference and accurate alt text. The image key must be identical lo
 bucket upload.
 
 `assets upload` uses Google Application Default Credentials. Its explicit `--bucket` selects the destination without
-changing the active gcloud project. Upload to `neon-law-stg-assets`, confirm the objects' byte lengths and hashes, and
-check the staging public asset origin before the authorized operator repeats the upload for the other deployment's
-assets bucket. Publishing to staging does not publish to another bucket.
+changing the active gcloud project. Upload to `${NAVIGATOR_STAGING_DEPLOYMENT}-assets`, confirm the objects' byte
+lengths and hashes, and check the staging public asset origin before the authorized operator repeats the upload for the
+other deployment's assets bucket. Publishing to staging does not publish to another bucket.
 
 The upload command walks every recognized image below `--dir`. To publish just one presentation, prepare a temporary
 directory containing only its `<deck-slug>/` folder and pass that temporary parent as `--dir`; passing the slug folder

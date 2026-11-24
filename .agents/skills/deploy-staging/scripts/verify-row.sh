@@ -10,7 +10,7 @@
 # succeed — leaving a row that looks rolled and is not.
 #
 # Usage, from the repository root:
-#   .agents/skills/deploy-staging/scripts/verify-row.sh <neon-law-stg|neon-law-prod> <tag>
+#   .agents/skills/deploy-staging/scripts/verify-row.sh <deployment-row> <tag>
 set -uo pipefail
 
 ROW="${1:?usage: verify-row.sh <row> <tag>}"

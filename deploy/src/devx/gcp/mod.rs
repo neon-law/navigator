@@ -117,10 +117,23 @@ pub const APPLICATIONS_BUCKET_SUFFIX: &str = "-applications";
 pub const TELEMETRY_BUCKET_SUFFIX: &str = "-telemetry";
 /// The private Project Recovery Archive bucket, `<deployment>-archived-projects`.
 pub const ARCHIVED_PROJECTS_BUCKET_SUFFIX: &str = "-archived-projects";
-/// Archive buckets are `neon-law-archives-<deployment>`, a PREFIX rather than the
-/// suffix every other lane uses. The archive of a project is named for the
-/// archive family first and the deployment second.
-pub const ARCHIVES_BUCKET_PREFIX: &str = "neon-law-archives-";
+/// Environment key naming the archive buckets' PREFIX. An archive bucket is
+/// `<prefix><deployment>`: named for the archive family first and the
+/// deployment second, where every other lane uses a suffix.
+pub const NAVIGATOR_ARCHIVES_BUCKET_PREFIX: &str = "NAVIGATOR_ARCHIVES_BUCKET_PREFIX";
+/// Deprecated: the prefix when [`NAVIGATOR_ARCHIVES_BUCKET_PREFIX`] is unset.
+const DEPRECATED_ARCHIVES_BUCKET_PREFIX: &str = "neon-law-archives-";
+
+/// The archive bucket prefix: `configured`, or the deprecated default when it
+/// is unset or blank.
+#[must_use]
+pub fn archives_bucket_prefix(configured: Option<&str>) -> String {
+    configured
+        .map(str::trim)
+        .filter(|prefix| !prefix.is_empty())
+        .unwrap_or(DEPRECATED_ARCHIVES_BUCKET_PREFIX)
+        .to_string()
+}
 /// The offsite Iceberg archive bucket, `<deployment>-archives-offsite`, created
 /// in a different GCP project than the deployment and carrying a locked 25-year
 /// retention policy. The suffix lets `buckets::from_name` classify the lane
@@ -205,7 +218,7 @@ pub struct SetupConfig {
     /// Long-term Iceberg archive for this deployment's Surreal store, and the
     /// 90-day telemetry landing zone the nightly lane promotes into it.
     ///
-    /// Neither derives from `project_id`. `neon-law-archives-<deployment>` is
+    /// Neither derives from `project_id`. `<archives-prefix><deployment>` is
     /// prefix-shaped, and `<deployment>-telemetry` names the deployment while
     /// the project may be named for the entity — `example-project` lives in
     /// `neon-law`, so a derived `neon-law-telemetry` would be a bucket nobody

@@ -8,7 +8,7 @@ The rows below are the attachment records — one per deployment directory:
 
 | Deployment | Public host | GCP project | GitHub organization | DocuSign |
 | --- | --- | --- | --- | --- |
-| `neon-law-stg` | `www.neonlaw.com` | `neon-law-stg` | `neon-law-stg-projects` | demo |
+| `$NAVIGATOR_STAGING_DEPLOYMENT` | `www.neonlaw.com` | same | `<row>-projects` | demo |
 | the production deployment | `www.neonlaw.com` | its own project | its own organization | production |
 | a second production row | `www.neonlaw.com` | `neon-law` | its own organization | production |
 
@@ -22,7 +22,7 @@ records any recovery owner.
 
 | Deployment | GitHub App |
 | --- | --- |
-| `neon-law-stg` | `navigator-neon-law-stg` |
+| `$NAVIGATOR_STAGING_DEPLOYMENT` | `navigator-$NAVIGATOR_STAGING_DEPLOYMENT` |
 | the production deployment | `navigator-<deployment>` |
 | a second production row | `navigator-<deployment>` |
 
@@ -32,16 +32,16 @@ Create **six** OAuth client registrations: one browser client and one Gemini Ent
 browser client owns interactive sign-in. The Gemini client identifies tokens from that deployment's Gemini Enterprise
 data store.
 
-Google Auth Platform branding, audience, and consent are configured per GCP project. Staging uses the `neon-law-stg`
-project's consent configuration; the two production projects each have their own. Use an Internal audience when every
-user belongs to the selected Workspace organization; an External audience requires the appropriate test-user or
-verification process.
+Google Auth Platform branding, audience, and consent are configured per GCP project. Staging uses the
+`$NAVIGATOR_STAGING_DEPLOYMENT` project's consent configuration; the two production projects each have their own. Use an
+Internal audience when every user belongs to the selected Workspace organization; an External audience requires the
+appropriate test-user or verification process.
 
 Use these names and exact browser callbacks:
 
 | Deployment | Authorized browser redirect URI |
 | --- | --- |
-| `neon-law-stg` | `https://www.neonlaw.com/auth/callback` |
+| `$NAVIGATOR_STAGING_DEPLOYMENT` | `https://www.neonlaw.com/auth/callback` |
 | the production deployment | `https://www.neonlaw.com/auth/callback` |
 | a second production row | `https://www.neonlaw.com/auth/callback` |
 
@@ -61,9 +61,10 @@ similarly named `gcloud iam oauth-clients` surface creates Workforce Identity Fe
 substitute. An authorized operator must complete the eight client registrations in Google Auth Platform and record each
 resulting ID in the matching `config.toml` and each secret in the matching `secrets.enc.yaml` (`sops set`).
 
-Retiring the old brand staging rows also retires `navigator-neon-law-stg-browser`, `navigator-neon-law-stg-gemini`,
-`navigator-neon-staging-browser`, and `navigator-neon-staging-gemini` in the `neon-law-stg` project. Delete those
-registrations manually in Google Auth Platform; do not repurpose their IDs, callbacks, or secrets for a surviving row.
+Retiring the old brand staging rows also retires `navigator-${NAVIGATOR_STAGING_DEPLOYMENT}-browser`,
+`navigator-${NAVIGATOR_STAGING_DEPLOYMENT}-gemini`, `navigator-neon-staging-browser`, and
+`navigator-neon-staging-gemini` in the `$NAVIGATOR_STAGING_DEPLOYMENT` project. Delete those registrations manually in
+Google Auth Platform; do not repurpose their IDs, callbacks, or secrets for a surviving row.
 
 Google requires the authorization request's redirect URI to exactly match the client registration, including scheme,
 case, path, and trailing slash. Never place two deployments' callback URIs on one browser client.

@@ -1757,18 +1757,18 @@ mod tests {
                 ("NAVIGATOR_ARCHIVES_BUCKET", "proj-archives"),
                 (
                     cloud::archives_project::ARCHIVES_GCP_PROJECT_ENV,
-                    "neon-law-archive",
+                    "example-archive",
                 ),
             ]),
         )
         .expect("a named bucket resolves");
         assert!(
-            msg.contains("• *archive project* — neon-law-archive (offsite bucket)"),
+            msg.contains("• *archive project* — example-archive (offsite bucket)"),
             "annotation line: {msg}"
         );
         assert!(
             msg.contains(
-                "<https://console.cloud.google.com/storage/browser/proj-archives/application/persons?project=neon-law-archive|view in GCP>"
+                "<https://console.cloud.google.com/storage/browser/proj-archives/application/persons?project=example-archive|view in GCP>"
             ),
             "console link pinned to the archive project: {msg}"
         );

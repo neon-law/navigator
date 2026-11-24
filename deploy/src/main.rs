@@ -1795,7 +1795,7 @@ enum OpsCmd {
     /// failing host when any check is not ready. Safe to rerun as often as
     /// needed — this is a point-in-time receipt, not a wait-until-ready loop.
     BrandReadiness {
-        /// Deployment directory under `deployments/`, such as `neon-law-stg`.
+        /// Deployment directory under `deployments/`, such as `example-deployment`.
         #[arg(long)]
         deployment: String,
         /// The directory CONTAINING `deployments/` — the same flag `ops ship`
@@ -1831,7 +1831,7 @@ enum OpsCmd {
     /// published record (`--project-id`) or `deployments/<name>/config.toml`.
     /// Run once per cluster, then `ops ship` (or rollout-restart) the binaries.
     Observability {
-        /// Deployment directory under `deployments/`, such as `neon-law-stg`.
+        /// Deployment directory under `deployments/`, such as `example-deployment`.
         #[arg(long)]
         deployment: String,
         /// The directory CONTAINING `deployments/` — the same flag `ops ship`
@@ -2075,7 +2075,7 @@ enum SecretsCmd {
     /// revokes nothing, because anyone holding repository history and the KMS
     /// key can still read every prior ciphertext.
     Apply {
-        /// Deployment directory under `deployments/`, such as `neon-law-stg`.
+        /// Deployment directory under `deployments/`, such as `example-deployment`.
         #[arg(long)]
         deployment: String,
         /// Opt-in infrastructure service whose file Secret is provisioned.

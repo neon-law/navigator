@@ -26,6 +26,14 @@ use thiserror::Error;
 
 /// Environment key naming the GCP project that owns the active deployment.
 pub const NAVIGATOR_GCP_PROJECT_ID: &str = "NAVIGATOR_GCP_PROJECT_ID";
+/// Environment key naming this deployment's Projects folder within its shared
+/// drive. Each deployment supplies its own, so no project id selects one.
+pub const NAVIGATOR_DRIVE_PROJECTS_ROOT_FOLDER_ID: &str = "NAVIGATOR_DRIVE_PROJECTS_ROOT_FOLDER_ID";
+/// Environment key naming that folder as Drive shows it. Unset resolves to
+/// [`DEFAULT_PROJECTS_ROOT_NAME`].
+pub const NAVIGATOR_DRIVE_PROJECTS_ROOT_NAME: &str = "NAVIGATOR_DRIVE_PROJECTS_ROOT_NAME";
+/// The Projects folder name a deployment has when it names none.
+pub const DEFAULT_PROJECTS_ROOT_NAME: &str = "Projects";
 /// The Workspace user the Drive service account impersonates.
 pub const NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER: &str = "NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER";
 /// The Workspace service account's email, which the runtime identity signs
@@ -137,10 +145,16 @@ pub enum GoogleWorkspace {
     NeonLaw,
 }
 
-/// The persistent Navigator deployments that own Project workspaces.
+/// How a deployment's Project workspace was selected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeploymentWorkspace {
+    /// The deployment names its own Projects folder in
+    /// [`NAVIGATOR_DRIVE_PROJECTS_ROOT_FOLDER_ID`].
+    Configured,
+    /// Deprecated: selected by project id, for a deployment that has not set
+    /// [`NAVIGATOR_DRIVE_PROJECTS_ROOT_FOLDER_ID`] yet.
     NeonLawProduction,
+    /// Deprecated, as [`Self::NeonLawProduction`].
     NeonLawStaging,
 }
 
@@ -242,7 +256,7 @@ pub struct DriveCoordinates {
     pub google_workspace: GoogleWorkspace,
     pub shared_drive_id: String,
     pub projects_root_folder_id: String,
-    pub expected_projects_root_name: &'static str,
+    pub expected_projects_root_name: String,
 }
 
 impl DriveCoordinates {
@@ -270,7 +284,7 @@ pub struct WorkspaceConfig {
     pub deployment: DeploymentWorkspace,
     pub customer: WorkspaceCustomer,
     pub google_workspace: GoogleWorkspace,
-    pub expected_projects_root_name: &'static str,
+    pub expected_projects_root_name: String,
     /// The one organization this deployment's own automation lives in, read
     /// from [`NAVIGATOR_GITHUB_ORG`].
     ///
@@ -290,10 +304,8 @@ pub struct WorkspaceConfig {
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum WorkspaceConfigError {
-    #[error("{NAVIGATOR_GCP_PROJECT_ID} must select a known Project workspace deployment")]
+    #[error("{NAVIGATOR_GCP_PROJECT_ID} must name the deployment's GCP project")]
     MissingDeployment,
-    #[error("{NAVIGATOR_GCP_PROJECT_ID} {project_id:?} has no Project workspace configuration")]
-    UnknownDeployment { project_id: String },
     #[error("missing Project workspace coordinate: {0}")]
     MissingCoordinate(&'static str),
 }
@@ -311,9 +323,9 @@ struct DeploymentFacts {
 
 impl DeploymentWorkspace {
     /// Resolve which deployment is active without reading provider credentials
-    /// or making a network call. Unknown deployments deliberately have no
-    /// fallback: borrowing another deployment's Drive or repository
-    /// organization would cross the workspace boundary.
+    /// or making a network call. Every coordinate is the deployment's own
+    /// configuration, so there is no other deployment's Drive or repository
+    /// organization to borrow.
     pub fn from_lookup<F: Fn(&str) -> Option<String>>(
         get: F,
     ) -> Result<Self, WorkspaceConfigError> {
@@ -321,13 +333,15 @@ impl DeploymentWorkspace {
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
             .ok_or(WorkspaceConfigError::MissingDeployment)?;
+        if get(NAVIGATOR_DRIVE_PROJECTS_ROOT_FOLDER_ID)
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            return Ok(Self::Configured);
+        }
         match project_id.as_str() {
-            // `neon-law-prod` is the production project id since the
-            // deployment and project names were unified; `neon-law` is the
-            // retired name and stays accepted so older env files still load.
             "neon-law" | "neon-law-prod" => Ok(Self::NeonLawProduction),
             "neon-law-stg" => Ok(Self::NeonLawStaging),
-            _ => Err(WorkspaceConfigError::UnknownDeployment { project_id }),
+            _ => Ok(Self::Configured),
         }
     }
 
@@ -341,8 +355,22 @@ impl DeploymentWorkspace {
         self.facts().projects_root_folder_id_key
     }
 
+    /// Whether the deployment was selected by project id rather than by its
+    /// own [`NAVIGATOR_DRIVE_PROJECTS_ROOT_FOLDER_ID`].
+    #[must_use]
+    pub const fn is_deprecated_selection(self) -> bool {
+        !matches!(self, Self::Configured)
+    }
+
     const fn facts(self) -> DeploymentFacts {
         match self {
+            Self::Configured => DeploymentFacts {
+                customer: WorkspaceCustomer::NeonLaw,
+                google_workspace: GoogleWorkspace::NeonLaw,
+                expected_projects_root_name: DEFAULT_PROJECTS_ROOT_NAME,
+                shared_drive_id_key: "NAVIGATOR_DRIVE_NEON_LAW_PROJECTS_DRIVE_ID",
+                projects_root_folder_id_key: NAVIGATOR_DRIVE_PROJECTS_ROOT_FOLDER_ID,
+            },
             Self::NeonLawProduction => DeploymentFacts {
                 customer: WorkspaceCustomer::NeonLaw,
                 google_workspace: GoogleWorkspace::NeonLaw,
@@ -412,8 +440,7 @@ impl WorkspaceConfig {
     ///
     /// # Errors
     ///
-    /// [`WorkspaceConfigError::MissingDeployment`] or
-    /// [`WorkspaceConfigError::UnknownDeployment`] when
+    /// [`WorkspaceConfigError::MissingDeployment`] when
     /// [`NAVIGATOR_GCP_PROJECT_ID`] names no deployment, and
     /// [`WorkspaceConfigError::MissingCoordinate`] when it names one but
     /// [`NAVIGATOR_GITHUB_ORG`] is unset or [`NAVIGATOR_GIT_HOST`] is blank.
@@ -426,7 +453,14 @@ impl WorkspaceConfig {
             deployment,
             customer: facts.customer,
             google_workspace: facts.google_workspace,
-            expected_projects_root_name: facts.expected_projects_root_name,
+            expected_projects_root_name: match deployment {
+                DeploymentWorkspace::Configured => defaulted(
+                    &get,
+                    NAVIGATOR_DRIVE_PROJECTS_ROOT_NAME,
+                    facts.expected_projects_root_name,
+                )?,
+                _ => facts.expected_projects_root_name.to_string(),
+            },
             organization: required(&get, NAVIGATOR_GITHUB_ORG)?,
             host: defaulted(&get, NAVIGATOR_GIT_HOST, DEFAULT_GIT_HOST)?,
             shared_drive_id_key: facts.shared_drive_id_key,
@@ -477,7 +511,7 @@ impl WorkspaceConfig {
             google_workspace: self.google_workspace,
             shared_drive_id: required(&get, self.shared_drive_id_key)?,
             projects_root_folder_id: required(&get, self.projects_root_folder_id_key)?,
-            expected_projects_root_name: self.expected_projects_root_name,
+            expected_projects_root_name: self.expected_projects_root_name.clone(),
         })
     }
 
@@ -549,7 +583,8 @@ mod tests {
         documents_prefix, is_navigator_repository, is_valid_slug, DeploymentWorkspace,
         GoogleWorkspace, WorkspaceConfig, WorkspaceConfigError, WorkspaceCustomer,
         DEFAULT_GIT_HOST, LEGACY_NAVIGATOR_REPOSITORY_URL, NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER,
-        NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT, NAVIGATOR_GCP_PROJECT_ID, NAVIGATOR_GITHUB_ORG,
+        NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT, NAVIGATOR_DRIVE_PROJECTS_ROOT_FOLDER_ID,
+        NAVIGATOR_DRIVE_PROJECTS_ROOT_NAME, NAVIGATOR_GCP_PROJECT_ID, NAVIGATOR_GITHUB_ORG,
         NAVIGATOR_GIT_HOST, NAVIGATOR_REPOSITORY_URL, RESERVED_PROJECT_CODES, SLUG_MAX_LEN,
     };
     use std::collections::HashMap;
@@ -567,12 +602,60 @@ mod tests {
         move |key| map.get(key).cloned()
     }
 
-    /// The configured organization every deployment fixture supplies.
+    /// An invented project id. Which GCP project a deployment runs in is
+    /// configuration, so no real project id is a fixture value here.
+    const A_PROJECT: &str = "example-project";
+
+    /// A deployment that names its own Projects folder and organization.
     fn forge(project_id: &'static str) -> Vec<(&'static str, &'static str)> {
+        let mut pairs = selected_by_project_id(project_id);
+        pairs.push((NAVIGATOR_DRIVE_PROJECTS_ROOT_FOLDER_ID, "root-synthetic"));
+        pairs
+    }
+
+    /// A deployment that names no Projects folder, so only its project id can
+    /// select it: the deprecated path.
+    fn selected_by_project_id(project_id: &'static str) -> Vec<(&'static str, &'static str)> {
         vec![
             (NAVIGATOR_GCP_PROJECT_ID, project_id),
             (NAVIGATOR_GITHUB_ORG, AN_ORGANIZATION),
         ]
+    }
+
+    #[test]
+    fn a_deployment_names_its_own_projects_folder() {
+        let workspace = WorkspaceConfig::from_lookup(lookup(&forge(A_PROJECT))).unwrap();
+        assert_eq!(workspace.deployment, DeploymentWorkspace::Configured);
+        assert!(!workspace.deployment.is_deprecated_selection());
+        let drive = workspace
+            .drive_coordinates(lookup(&[
+                (
+                    "NAVIGATOR_DRIVE_NEON_LAW_PROJECTS_DRIVE_ID",
+                    "drive-synthetic",
+                ),
+                (NAVIGATOR_DRIVE_PROJECTS_ROOT_FOLDER_ID, "root-synthetic"),
+            ]))
+            .unwrap();
+        assert_eq!(drive.projects_root_folder_id, "root-synthetic");
+        assert_eq!(drive.project_path("matter-42"), "Projects/matter-42");
+
+        let mut named = forge(A_PROJECT);
+        named.push((NAVIGATOR_DRIVE_PROJECTS_ROOT_NAME, "Synthetic Projects"));
+        let named = WorkspaceConfig::from_lookup(lookup(&named)).unwrap();
+        assert_eq!(named.expected_projects_root_name, "Synthetic Projects");
+
+        let mut blank = forge(A_PROJECT);
+        blank.push((NAVIGATOR_DRIVE_PROJECTS_ROOT_NAME, " "));
+        assert_eq!(
+            WorkspaceConfig::from_lookup(lookup(&blank)),
+            Err(WorkspaceConfigError::MissingCoordinate(
+                NAVIGATOR_DRIVE_PROJECTS_ROOT_NAME
+            ))
+        );
+
+        // The deployment's own folder wins over selection by project id.
+        let both = WorkspaceConfig::from_lookup(lookup(&forge("neon-law-stg"))).unwrap();
+        assert_eq!(both.deployment, DeploymentWorkspace::Configured);
     }
 
     #[test]
@@ -602,8 +685,9 @@ mod tests {
         ];
 
         for (project_id, shared_drive_id, root_folder_id, root_name, customer) in cases {
-            let workspace = WorkspaceConfig::from_lookup(lookup(&forge(project_id)))
-                .expect("known deployment resolves");
+            let workspace =
+                WorkspaceConfig::from_lookup(lookup(&selected_by_project_id(project_id)))
+                    .expect("known deployment resolves");
             assert_eq!(workspace.customer, customer, "{project_id}");
             assert_eq!(
                 workspace.google_workspace,
@@ -646,7 +730,8 @@ mod tests {
 
     #[test]
     fn deployment_workspace_does_not_fall_back_to_another_deployments_coordinates() {
-        let staging = WorkspaceConfig::from_lookup(lookup(&forge("neon-law-stg"))).unwrap();
+        let staging =
+            WorkspaceConfig::from_lookup(lookup(&selected_by_project_id("neon-law-stg"))).unwrap();
         let error = staging
             .drive_coordinates(lookup(&[
                 ("NAVIGATOR_DRIVE_NEON_LAW_PROJECTS_DRIVE_ID", "drive-neon"),
@@ -662,15 +747,15 @@ mod tests {
                 "NAVIGATOR_DRIVE_NEON_LAW_STAGING_PROJECTS_ROOT_FOLDER_ID"
             )
         );
+    }
 
-        let error = WorkspaceConfig::from_lookup(lookup(&forge("other")))
-            .expect_err("unknown deployment must not borrow a repository organization");
-        assert_eq!(
-            error,
-            WorkspaceConfigError::UnknownDeployment {
-                project_id: "other".into()
-            }
-        );
+    #[test]
+    fn a_deployment_without_a_projects_folder_resolves_with_drive_disabled() {
+        let workspace =
+            WorkspaceConfig::from_lookup(lookup(&selected_by_project_id(A_PROJECT))).unwrap();
+        assert_eq!(workspace.deployment, DeploymentWorkspace::Configured);
+        assert_eq!(workspace.organization, AN_ORGANIZATION);
+        assert_eq!(workspace.drive_setup(lookup(&[])), DriveSetup::Disabled);
     }
 
     #[test]
@@ -687,7 +772,8 @@ mod tests {
                 "NAVIGATOR_DRIVE_NEON_LAW_PRODUCTION_PROJECTS_ROOT_FOLDER_ID",
             ),
         ] {
-            let workspace = WorkspaceConfig::from_lookup(lookup(&forge(project_id))).unwrap();
+            let workspace =
+                WorkspaceConfig::from_lookup(lookup(&selected_by_project_id(project_id))).unwrap();
             assert_eq!(workspace.drive_setup(lookup(&[])), DriveSetup::Disabled);
             // Calendar's delegation alone leaves Drive ingest off.
             assert_eq!(
@@ -750,7 +836,7 @@ mod tests {
                 NAVIGATOR_GIT_HOST
             ]
         );
-        assert!(WorkspaceConfig::missing_settings(lookup(&forge("neon-law"))).is_empty());
+        assert!(WorkspaceConfig::missing_settings(lookup(&forge(A_PROJECT))).is_empty());
     }
 
     #[test]
@@ -770,8 +856,11 @@ mod tests {
     #[test]
     fn a_named_deployment_missing_its_organization_fails_closed() {
         assert_eq!(
-            WorkspaceConfig::from_lookup(lookup(&[(NAVIGATOR_GCP_PROJECT_ID, "neon-law")]))
-                .expect_err("a named deployment must carry an organization"),
+            WorkspaceConfig::from_lookup(lookup(&[
+                (NAVIGATOR_GCP_PROJECT_ID, A_PROJECT),
+                (NAVIGATOR_DRIVE_PROJECTS_ROOT_FOLDER_ID, "root-synthetic")
+            ]))
+            .expect_err("a named deployment must carry an organization"),
             WorkspaceConfigError::MissingCoordinate(NAVIGATOR_GITHUB_ORG)
         );
 
@@ -779,7 +868,8 @@ mod tests {
         // configuration was templated and never filled in must not resolve.
         assert_eq!(
             WorkspaceConfig::from_lookup(lookup(&[
-                (NAVIGATOR_GCP_PROJECT_ID, "neon-law"),
+                (NAVIGATOR_GCP_PROJECT_ID, A_PROJECT),
+                (NAVIGATOR_DRIVE_PROJECTS_ROOT_FOLDER_ID, "root-synthetic"),
                 (NAVIGATOR_GITHUB_ORG, "   "),
             ]))
             .expect_err("a blank organization is not an organization"),
@@ -804,7 +894,8 @@ mod tests {
     fn a_named_deployment_whose_host_is_blank_fails_closed_naming_the_key() {
         assert_eq!(
             WorkspaceConfig::from_lookup(lookup(&[
-                (NAVIGATOR_GCP_PROJECT_ID, "neon-law"),
+                (NAVIGATOR_GCP_PROJECT_ID, A_PROJECT),
+                (NAVIGATOR_DRIVE_PROJECTS_ROOT_FOLDER_ID, "root-synthetic"),
                 (NAVIGATOR_GITHUB_ORG, AN_ORGANIZATION),
                 (NAVIGATOR_GIT_HOST, "   "),
             ]))
@@ -822,7 +913,8 @@ mod tests {
     #[test]
     fn the_forge_pair_resolves_together_and_the_host_defaults() {
         let configured = WorkspaceConfig::from_lookup(lookup(&[
-            (NAVIGATOR_GCP_PROJECT_ID, "neon-law"),
+            (NAVIGATOR_GCP_PROJECT_ID, A_PROJECT),
+            (NAVIGATOR_DRIVE_PROJECTS_ROOT_FOLDER_ID, "root-synthetic"),
             (NAVIGATOR_GITHUB_ORG, AN_ORGANIZATION),
             (NAVIGATOR_GIT_HOST, "forge.example"),
         ]))
@@ -830,7 +922,7 @@ mod tests {
         assert_eq!(configured.organization, AN_ORGANIZATION);
         assert_eq!(configured.host, "forge.example");
 
-        let defaulted = WorkspaceConfig::from_lookup(lookup(&forge("neon-law")))
+        let defaulted = WorkspaceConfig::from_lookup(lookup(&forge(A_PROJECT)))
             .expect("an unnamed host resolves to the default");
         assert_eq!(defaulted.organization, AN_ORGANIZATION);
         assert_eq!(defaulted.host, DEFAULT_GIT_HOST);
@@ -844,7 +936,8 @@ mod tests {
     #[test]
     fn the_expected_repository_is_the_forge_pair_plus_the_code() {
         let workspace = WorkspaceConfig::from_lookup(lookup(&[
-            (NAVIGATOR_GCP_PROJECT_ID, "neon-law-stg"),
+            (NAVIGATOR_GCP_PROJECT_ID, A_PROJECT),
+            (NAVIGATOR_DRIVE_PROJECTS_ROOT_FOLDER_ID, "root-synthetic"),
             (NAVIGATOR_GITHUB_ORG, AN_ORGANIZATION),
             (NAVIGATOR_GIT_HOST, "forge.example"),
         ]))
@@ -865,7 +958,7 @@ mod tests {
     /// deployment that names no host still has a creation target.
     #[test]
     fn the_expected_repository_uses_the_default_host_when_none_is_named() {
-        let workspace = WorkspaceConfig::from_lookup(lookup(&forge("neon-law-stg")))
+        let workspace = WorkspaceConfig::from_lookup(lookup(&forge(A_PROJECT)))
             .expect("an unnamed host resolves to the default");
 
         assert_eq!(
@@ -883,8 +976,7 @@ mod tests {
     /// has to keep it true.
     #[test]
     fn the_expected_repository_ends_in_the_code() {
-        let workspace =
-            WorkspaceConfig::from_lookup(lookup(&forge("neon-law-stg"))).expect("resolves");
+        let workspace = WorkspaceConfig::from_lookup(lookup(&forge(A_PROJECT))).expect("resolves");
 
         for code in ["sample-litigation", "sample-transactional", "a1"] {
             let url = workspace.expected_repository_url(code);
@@ -903,7 +995,8 @@ mod tests {
     #[test]
     fn no_deployment_composes_navigators_own_repository_for_a_project() {
         let navigators_own_pair = WorkspaceConfig::from_lookup(lookup(&[
-            (NAVIGATOR_GCP_PROJECT_ID, "neon-law-stg"),
+            (NAVIGATOR_GCP_PROJECT_ID, A_PROJECT),
+            (NAVIGATOR_DRIVE_PROJECTS_ROOT_FOLDER_ID, "root-synthetic"),
             (NAVIGATOR_GITHUB_ORG, "neon-law"),
         ]))
         .expect("resolves");

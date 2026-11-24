@@ -285,7 +285,7 @@ mod tests {
             .and(path("/v3/projects/ghcr"))
             .respond_with(
                 ResponseTemplate::new(200)
-                    .set_body_json(json!({ "name": "projects/464694154887" })),
+                    .set_body_json(json!({ "name": "projects/100000000001" })),
             )
             .mount(server)
             .await;
@@ -367,7 +367,7 @@ mod tests {
             .and(body_partial_json(json!({
                 "policy": { "bindings": [{
                     "role": "roles/iam.workloadIdentityUser",
-                    "members": [wif_principal_set("464694154887", "neon-law/navigator")]
+                    "members": [wif_principal_set("100000000001", "neon-law/navigator")]
                 }] }
             })))
             .respond_with(ResponseTemplate::new(200))

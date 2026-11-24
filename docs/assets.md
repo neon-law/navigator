@@ -526,7 +526,7 @@ Because the slots are empty on a fresh clone, the dev `/public` mount 404s every
 re-encode, and no generated-image source needed:
 
 ```bash
-NAVIGATOR_STORAGE_ENDPOINT= cargo run -p hudson -- ops assets pull --bucket neon-law-stg-assets
+NAVIGATOR_STORAGE_ENDPOINT= cargo run -p hudson -- ops assets pull --bucket ${NAVIGATOR_STAGING_DEPLOYMENT}-assets
 ```
 
 This downloads every supported image file (`.avif`, `.webp`, `.jpg`, `.jpeg`, `.png`) under the bucket's `img/` prefix

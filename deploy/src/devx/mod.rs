@@ -446,7 +446,7 @@ pub enum CertificatesCmd {
     /// release. A no-op when the certificate already serves; `--dry-run`
     /// reads the live certificate and prints the plan without writing.
     PreRoll {
-        /// Deployment directory under `deployments/`, such as `neon-law-stg`.
+        /// Deployment directory under `deployments/`, such as `example-deployment`.
         #[arg(long)]
         deployment: String,
         /// The directory CONTAINING `deployments/`. Defaults to
@@ -701,7 +701,7 @@ pub enum GcpCmd {
         #[arg(long, env = "NAVIGATOR_GITHUB_ORG")]
         applications_publisher_org: Option<String>,
         /// Long-term Iceberg archive of this deployment's Surreal store
-        /// (`neon-law-archives-<deployment>`). No lifecycle rule: this is where
+        /// (`<archives-prefix><deployment>`). No lifecycle rule: this is where
         /// long-term storage lives. Omit to skip the lane entirely — there is
         /// no derived default, because the name is prefix-shaped rather than
         /// `<project-id>-`-shaped.
@@ -3426,7 +3426,7 @@ admin_base_url = "https://production-env.example.invalid:9070"
     #[test]
     fn the_rows_admin_url_selects_its_cli_environment_not_the_current_one() {
         let target = RegisterTarget {
-            deployment: "neon-law-stg",
+            deployment: "example-staging",
             admin_url: Some(" https://staging-env.example.invalid:9070/ "),
         };
         assert_eq!(
@@ -3439,13 +3439,13 @@ admin_base_url = "https://production-env.example.invalid:9070"
     fn a_row_without_restate_admin_url_is_refused_by_name() {
         for admin_url in [None, Some("  ")] {
             let target = RegisterTarget {
-                deployment: "neon-law-stg",
+                deployment: "example-staging",
                 admin_url,
             };
             let error = restate_cli_environment(&target, RESTATE_CLI_CONFIG)
                 .unwrap_err()
                 .to_string();
-            assert!(error.contains("neon-law-stg"), "{error}");
+            assert!(error.contains("example-staging"), "{error}");
             assert!(error.contains("RESTATE_ADMIN_URL"), "{error}");
         }
     }
@@ -3453,13 +3453,13 @@ admin_base_url = "https://production-env.example.invalid:9070"
     #[test]
     fn an_admin_url_no_cli_environment_holds_is_refused() {
         let target = RegisterTarget {
-            deployment: "neon-law-stg",
+            deployment: "example-staging",
             admin_url: Some("https://other-env.example.invalid:9070"),
         };
         let error = restate_cli_environment(&target, RESTATE_CLI_CONFIG)
             .unwrap_err()
             .to_string();
-        assert!(error.contains("neon-law-stg"), "{error}");
+        assert!(error.contains("example-staging"), "{error}");
         assert!(
             error.contains("https://other-env.example.invalid:9070"),
             "{error}"

@@ -15,8 +15,7 @@ description = "Public OAuth client IDs and an installation placeholder are ident
 condition = "AND"
 regexTarget = "line"
 paths = [
-  '''deployments/neon-law-prod/config\.toml$''',
-  '''deployments/neon-law-stg/config\.toml$''',
+  '''deployments/[^/]+/config\.toml$''',
 ]
 regexes = ['''OAUTH_MICROSOFT_CLIENT_ID = "[0-9a-f-]{36}"''']
 

@@ -197,14 +197,11 @@ reached — is gone.
 
 The selected Workspace block in each deployment's config is:
 
-| Deployment | Required Drive variables |
-| --- | --- |
-| `<deployment>` | shared Drive ID + staging Projects root ID |
-| the production deployment | shared Drive ID + production Projects root ID |
-
-Every deployment supplies `NAVIGATOR_DRIVE_NEON_LAW_PROJECTS_DRIVE_ID` and its selected root ID:
-`NAVIGATOR_DRIVE_NEON_LAW_STAGING_PROJECTS_ROOT_FOLDER_ID` or
-`NAVIGATOR_DRIVE_NEON_LAW_PRODUCTION_PROJECTS_ROOT_FOLDER_ID`. Drive and Contacts use
+Every deployment that uses Drive supplies `NAVIGATOR_DRIVE_NEON_LAW_PROJECTS_DRIVE_ID` and its own Projects folder in
+`NAVIGATOR_DRIVE_PROJECTS_ROOT_FOLDER_ID`, plus `NAVIGATOR_DRIVE_PROJECTS_ROOT_NAME` when that folder is not named
+`Projects`. The per-tier keys `NAVIGATOR_DRIVE_NEON_LAW_STAGING_PROJECTS_ROOT_FOLDER_ID` and
+`NAVIGATOR_DRIVE_NEON_LAW_PRODUCTION_PROJECTS_ROOT_FOLDER_ID` are deprecated: only a deployment that has not set the
+folder variable reads one, selected by its project id, and `navigator project doctor` warns. Drive and Contacts use
 `NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER`. Calendar uses `NAVIGATOR_CALENDAR_NEON_LAW_OWNER`. Both use the
 deployment-specific keyless signing account `NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT`. Drive ingest is optional: a
 deployment that sets neither the shared Drive ID nor its root ID has it disabled, and `navigator project doctor` reports
@@ -242,9 +239,14 @@ once its contents are verified elsewhere.
 
 | Bucket | Holds | Retention | Setup flags |
 | --- | --- | --- | --- |
-| `neon-law-archives-<deployment>` | Iceberg tables, rewritten in place | None (overwrite lane) | `--archives-bucket` |
+| `<archives-prefix><deployment>` | Iceberg tables, rewritten in place | None (overwrite lane) | `--archives-bucket` |
 | `<deployment>-bundles` | Git bundles and receipts | Locked, 7 years | `--forgejo-archives-*` |
 | `<deployment>-archives-offsite` | Offsite Iceberg archive, create-only | Locked, 25 years | `--offsite-archives-*` |
+
+`<archives-prefix>` is `NAVIGATOR_ARCHIVES_BUCKET_PREFIX`. `hudson ops gcp setup` classifies a bucket as an archive by
+that prefix, and reads the installation's runtime projects from the comma-separated `NAVIGATOR_ENVIRONMENT_PROJECT_IDS`
+to refuse provisioning the image hub into one. Both have a deprecated built-in default for a deployment that has not set
+them.
 
 The two locked buckets live in the archive project, never the deployment's; each `--*-project-id` flag names it beside
 the `--*-bucket` flag. Bundles come from `hudson ops forgejo bundle archive` and the nightly repository backup. Bundles

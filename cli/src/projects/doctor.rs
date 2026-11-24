@@ -158,6 +158,19 @@ pub fn diagnose(probe: &Probe<'_>) -> Diagnosis {
         }
     };
 
+    if workspace.deployment.is_deprecated_selection() {
+        checks.push(Check::warn(
+            "projects folder",
+            format!(
+                "this deployment's Projects folder is selected by its project id, which is \
+                 deprecated; set {} (and {} unless the folder is named {:?})",
+                model::workspace::NAVIGATOR_DRIVE_PROJECTS_ROOT_FOLDER_ID,
+                model::workspace::NAVIGATOR_DRIVE_PROJECTS_ROOT_NAME,
+                model::workspace::DEFAULT_PROJECTS_ROOT_NAME,
+            ),
+        ));
+    }
+
     checks.push(Check::ok(
         "google workspace",
         format!(
@@ -260,10 +273,6 @@ fn deployment_error_detail(error: &WorkspaceConfigError) -> String {
         WorkspaceConfigError::MissingDeployment => format!(
             "{} is unset — set it to the GCP project of the deployment you are operating",
             model::workspace::NAVIGATOR_GCP_PROJECT_ID
-        ),
-        WorkspaceConfigError::UnknownDeployment { project_id } => format!(
-            "{project_id:?} is not a Project workspace deployment; expected one of \
-             neon-law, neon-law-stg"
         ),
         WorkspaceConfigError::MissingCoordinate(key) if *key == NAVIGATOR_GITHUB_ORG => {
             format!(
@@ -505,7 +514,7 @@ mod tests {
         match project_id {
             "neon-law" => "NAVIGATOR_DRIVE_NEON_LAW_PRODUCTION_PROJECTS_ROOT_FOLDER_ID",
             "neon-law-stg" => "NAVIGATOR_DRIVE_NEON_LAW_STAGING_PROJECTS_ROOT_FOLDER_ID",
-            other => unreachable!("unknown deployment {other}"),
+            _ => cloud::workspace::NAVIGATOR_DRIVE_PROJECTS_ROOT_FOLDER_ID,
         }
     }
 
@@ -513,6 +522,7 @@ mod tests {
     #[test]
     fn every_deployment_resolves_its_own_drive_and_one_repository_coordinate() {
         for (project_id, root_name) in [
+            ("example-project", "Projects"),
             ("neon-law", "Projects"),
             ("neon-law-stg", "Staging Projects"),
         ] {
@@ -660,20 +670,26 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_deployment_names_the_known_ones_instead_of_guessing() {
+    fn selection_by_project_id_is_reported_as_deprecated() {
         let creds = Credentials::default();
-        let diagnosis = diagnose(&Probe {
-            env: &env(&[(GCP, "some-other-project")]),
-            credentials: &creds,
-            now: 0,
-            host: None,
-            project_code: None,
-        });
-
-        assert!(!diagnosis.is_healthy());
-        let detail = &diagnosis.check("deployment").unwrap().detail;
-        assert!(detail.contains("some-other-project"), "{detail}");
-        assert!(detail.contains("neon-law-stg"), "{detail}");
+        let warned = |project_id: &'static str| {
+            diagnose(&Probe {
+                env: &env(&without_drive(project_id)),
+                credentials: &creds,
+                now: 0,
+                host: None,
+                project_code: None,
+            })
+            .check("projects folder")
+            .map(|check| (check.status, check.detail.clone()))
+        };
+        let (status, detail) = warned("neon-law-stg").expect("the deprecated path is reported");
+        assert_eq!(status, Status::Warn);
+        assert!(
+            detail.contains(cloud::workspace::NAVIGATOR_DRIVE_PROJECTS_ROOT_FOLDER_ID),
+            "{detail}"
+        );
+        assert!(warned("example-project").is_none());
     }
 
     #[test]
@@ -766,7 +782,7 @@ mod tests {
     #[test]
     fn a_deployment_without_drive_is_healthy_and_needs_no_folder() {
         let creds = Credentials::default();
-        for project_id in ["neon-law", "neon-law-stg"] {
+        for project_id in ["example-project", "neon-law-stg"] {
             let lookup = env(&without_drive(project_id));
             let diagnosis = diagnose(&Probe {
                 env: &lookup,

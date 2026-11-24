@@ -301,15 +301,15 @@ mod tests {
         // annotation line, and every per-table link opens the console in
         // the archive project's context.
         let mut report = sample(vec![snap("persons", 10)], vec![]);
-        report.archive_project = Some("neon-law-archive".into());
+        report.archive_project = Some("example-archive".into());
         let msg = render_archives_slack(&report);
         assert!(
-            msg.contains("• *archive project* — neon-law-archive (offsite bucket)"),
+            msg.contains("• *archive project* — example-archive (offsite bucket)"),
             "annotation line: {msg}"
         );
         assert!(
             msg.contains(
-                "<https://console.cloud.google.com/storage/browser/navigator-exports/application/persons?project=neon-law-archive|view in GCP>"
+                "<https://console.cloud.google.com/storage/browser/navigator-exports/application/persons?project=example-archive|view in GCP>"
             ),
             "console link pinned to the archive project: {msg}"
         );

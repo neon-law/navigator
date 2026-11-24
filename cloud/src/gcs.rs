@@ -1073,14 +1073,14 @@ mod tests {
     fn surreal_archive_lane_prefers_the_firm_retention_bucket() {
         use std::collections::HashMap;
         let map: HashMap<&str, &str> = HashMap::from([
-            ("NAVIGATOR_SURREAL_ARCHIVES_BUCKET", "neon-law-archives"),
+            ("NAVIGATOR_SURREAL_ARCHIVES_BUCKET", "example-archives"),
             ("NAVIGATOR_STORAGE_BUCKET", "worktree-exports"),
         ]);
         let cfg = GcsStorageConfig::surreal_archives_from_lookup(|key| {
             map.get(key).map(|value| (*value).to_string())
         })
         .unwrap();
-        assert_eq!(cfg.bucket, "neon-law-archives");
+        assert_eq!(cfg.bucket, "example-archives");
     }
 
     #[test]
@@ -1494,14 +1494,14 @@ mod tests {
     fn archives_lane_resolves_its_dedicated_bucket() {
         use std::collections::HashMap;
         let map: HashMap<&str, &str> = HashMap::from([
-            ("NAVIGATOR_ARCHIVES_BUCKET", "neon-law-archives-staging"),
+            ("NAVIGATOR_ARCHIVES_BUCKET", "example-archives-staging"),
             ("NAVIGATOR_STORAGE_BUCKET", "worktree-exports"),
         ]);
         let cfg = GcsStorageConfig::archives_from_lookup(|key| {
             map.get(key).map(|value| (*value).to_string())
         })
         .unwrap();
-        assert_eq!(cfg.bucket, "neon-law-archives-staging");
+        assert_eq!(cfg.bucket, "example-archives-staging");
     }
 
     #[test]

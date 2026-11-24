@@ -7,7 +7,7 @@
 # exact string, so any other value leaves that requirement — and the
 # `SecretProviderClass` block gated on it — unexercised by the whole suite.
 #
-# The directory is deliberately NOT named for that project. A `neon-law-stg`
+# The directory is deliberately NOT named for that project. A real row's
 # directory sitting in a fixture tree reads as the real tree never having
 # moved, and the code scopes on the coordinate rather than the directory name.
 
