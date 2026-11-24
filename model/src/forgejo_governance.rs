@@ -104,8 +104,6 @@ impl<'a> Policy<'a> {
             "enable_merge_whitelist": false,
             "enable_status_check": true,
             "status_check_contexts": [self.context],
-            "required_approvals": 0,
-            "enable_approvals_whitelist": false,
             "block_on_rejected_reviews": true,
             "block_on_official_review_requests": false,
             "block_on_outdated_branch": false,
@@ -247,6 +245,76 @@ impl Forgejo {
             )
         };
         Ok((repo, branch))
+    }
+
+    /// Require an independent, current approval from the Project's reviewer team.
+    ///
+    /// # Errors
+    /// The ordinary Project policy must already be in force. An existing
+    /// reviewer allowlist belongs to its administrator and cannot be replaced.
+    pub async fn require_review_team(
+        &self,
+        repository: &str,
+        team: &str,
+        dry_run: bool,
+    ) -> Result<()> {
+        let repository = repository_target(repository)?;
+        ensure!(
+            crate::workspace::is_valid_slug(team),
+            "invalid reviewer team slug"
+        );
+        self.verify(repository, &Policy::new(REQUIRED_CHECK_CONTEXT)?)
+            .await?;
+        let assigned = self
+            .read(&format!("repos/{repository}/teams/{team}"))
+            .await?;
+        ensure!(
+            assigned["name"] == team
+                && (matches!(assigned["permission"].as_str(), Some("admin" | "owner"))
+                    || matches!(
+                        assigned["units_map"]["repo.pulls"].as_str(),
+                        Some("write" | "admin" | "owner")
+                    )),
+            "the review team needs pull request write access to this repository"
+        );
+        let path = format!("repos/{repository}/branch_protections/main");
+        let current = self.read(&path).await?;
+        let approvals = current["required_approvals"]
+            .as_u64()
+            .context("read required approvals")?;
+        let wanted = json!({
+            "required_approvals": approvals.max(1),
+            "enable_approvals_whitelist": true,
+            "approvals_whitelist_teams": [team],
+            "approvals_whitelist_username": [],
+            "dismiss_stale_approvals": true,
+            "apply_to_admins": true
+        });
+        let empty = |value: &Value| value.is_null() || value.as_array().is_some_and(Vec::is_empty);
+        ensure!(
+            empty(&current["approvals_whitelist_username"])
+                && (empty(&current["approvals_whitelist_teams"])
+                    || current["approvals_whitelist_teams"] == wanted["approvals_whitelist_teams"]),
+            "inspect the existing Forgejo reviewer allowlist before selecting a team"
+        );
+        let matches = |live: &Value| {
+            // The API can return a null slice for an empty username allowlist.
+            live.get("approvals_whitelist_username").is_some_and(empty)
+                && differences(&wanted, live)
+                    .iter()
+                    .all(|field| field == "approvals_whitelist_username")
+        };
+        if !matches(&current) && !dry_run {
+            self.request(Method::PATCH, &path, Some(&wanted))
+                .await?
+                .error_for_status()
+                .context("set the required Forgejo review team")?;
+            ensure!(
+                matches(&self.read(&path).await?),
+                "Forgejo did not retain the required review team"
+            );
+        }
+        Ok(())
     }
 
     /// Dry runs issue GETs only. Readable controls are verified after apply.
@@ -634,6 +702,10 @@ mod tests {
 
     fn fixture_get(state: &Fixture, uri: &Uri) -> axum::response::Response {
         let path = uri.path();
+        if path.ends_with("/teams/counsel") {
+            return Json(json!({"name":"counsel", "units_map":{"repo.pulls":"write"}}))
+                .into_response();
+        }
         if path.ends_with("/commits/synthetic-head/status") {
             return (StatusCode::OK, Json(json!({"statuses": state.statuses}))).into_response();
         }
@@ -713,7 +785,7 @@ mod tests {
         state: &mut Fixture,
         method: Method,
         path: &str,
-        body: Value,
+        body: &Value,
     ) -> axum::response::Response {
         state.writes.push((method, path.to_owned(), body.clone()));
         if path.ends_with("/merge") {
@@ -722,7 +794,17 @@ mod tests {
         }
         if state.accept_writes {
             if path.contains("branch_protections") {
-                state.branch = Some(body);
+                let live = state.branch.get_or_insert_with(|| {
+                    json!({
+                        "required_approvals": 0,
+                        "enable_approvals_whitelist": false,
+                        "approvals_whitelist_username": [],
+                        "approvals_whitelist_teams": []
+                    })
+                });
+                live.as_object_mut()
+                    .unwrap()
+                    .extend(body.as_object().unwrap().clone());
             } else {
                 for key in ["allow_manual_merge", "autodetect_manual_merge"] {
                     if let Some(value) = body.get(key) {
@@ -753,7 +835,7 @@ mod tests {
             &mut state,
             method,
             uri.path(),
-            body.map_or(Value::Null, |Json(body)| body),
+            body.as_deref().unwrap_or(&Value::Null),
         )
     }
 
@@ -878,6 +960,47 @@ mod tests {
             server.state.lock().unwrap().writes.last().unwrap().0,
             Method::PATCH
         );
+    }
+
+    #[tokio::test]
+    async fn supervised_main_keeps_its_review_team_through_policy_repairs() -> Result<()> {
+        let server = serve(Fixture::default()).await;
+        let repo = "example/sample";
+        server
+            .client
+            .reconcile(repo, REQUIRED_CHECK_CONTEXT, false)
+            .await?;
+        server
+            .client
+            .require_review_team(repo, "counsel", true)
+            .await?;
+        assert_eq!(server.state.lock().unwrap().writes.len(), 2);
+        server
+            .client
+            .require_review_team(repo, "counsel", false)
+            .await?;
+        server
+            .client
+            .require_review_team(repo, "counsel", false)
+            .await?;
+        assert_eq!(server.state.lock().unwrap().writes.len(), 3);
+        assert!(server
+            .client
+            .require_review_team(repo, "contributors", false)
+            .await
+            .is_err());
+        server.state.lock().unwrap().branch.as_mut().unwrap()["enable_status_check"] = false.into();
+        server
+            .client
+            .reconcile(repo, REQUIRED_CHECK_CONTEXT, false)
+            .await?;
+        let state = server.state.lock().unwrap();
+        let branch = state.branch.as_ref().unwrap();
+        assert_eq!(branch["required_approvals"], 1);
+        assert_eq!(branch["enable_approvals_whitelist"], true);
+        assert_eq!(branch["approvals_whitelist_teams"], json!(["counsel"]));
+        assert_eq!(branch["dismiss_stale_approvals"], true);
+        Ok(())
     }
 
     #[tokio::test]
@@ -1338,7 +1461,7 @@ mod tests {
     }
 
     #[test]
-    fn policy_requires_prs_checks_signatures_and_squash_without_reviews() {
+    fn policy_requires_prs_checks_signatures_and_squash() {
         let policy = Policy::new("ci / ci (pull_request)").unwrap();
         let branch = policy.branch();
         assert_eq!(branch["enable_push"], false);
@@ -1348,7 +1471,6 @@ mod tests {
             branch["status_check_contexts"],
             json!(["ci / ci (pull_request)"])
         );
-        assert_eq!(branch["required_approvals"], 0);
         let repo = Policy::repository();
         assert_eq!(repo["allow_squash_merge"], true);
         assert_eq!(repo["allow_merge_commits"], false);

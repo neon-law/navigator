@@ -159,6 +159,12 @@ async fn project_plan_view(firm: Uuid, project: Project) -> Result<ProjectPlan, 
     })
 }
 
+/// The refusal for a plan name the Firm does not hold, naming the verbs that
+/// list the Firm's plans and add one.
+const PLAN_NOT_IN_FIRM: &str = "legal_plan does not name one of the Firm's legal plans; \
+     `navigator legal-plans --firm <firm> list` shows them and \
+     `navigator legal-plans --firm <firm> create --name <plan>` adds one";
+
 /// `GET /app/api/projects/{id}/legal-plan` — how this matter is paid: its
 /// plan, Plan Case Number, and plan dates. `legal_plan` is null for a matter
 /// no plan referred.
@@ -243,7 +249,7 @@ async fn apply_manifest_plan(
         Ok(Some(plan)) => plan,
         Ok(None) => {
             return Err(ApiError::Project(ProjectCommandError::Invalid(
-                "legal_plan does not name one of the Firm's legal plans",
+                PLAN_NOT_IN_FIRM,
             )));
         }
         Err(error) => return Ok(plan_error(&error)),
@@ -307,7 +313,7 @@ pub(super) async fn set_project(
                 Ok(Some(plan)) => Some(plan.id),
                 Ok(None) => {
                     return Err(ApiError::Project(ProjectCommandError::Invalid(
-                        "legal_plan does not name one of the Firm's legal plans",
+                        PLAN_NOT_IN_FIRM,
                     )))
                 }
                 Err(e) => return Ok(plan_error(&e)),

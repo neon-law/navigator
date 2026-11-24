@@ -1237,12 +1237,13 @@ clone includes the Project's committed Agent Skills under `.agents/skills/`. `sy
 separately from whether a source repository is configured, and the workspace drift below. It does not contact a forge,
 create the root, or change files. A failed checkout leaves the opened Project available for a sync retry.
 
-Missing repositories are cloned with `jj git clone --colocate`. Clean existing Git directories are colocated with jj; a
-directory with local edits is left in place. Sync checks the Project and host in the manifest, configures the secondary
-Forgejo remote and both origin push destinations during the dual run, and fetches remote bookmarks. Local work,
-conflicts, unexpected remotes, or unsafe paths skip that Project and make the run fail after the other Projects are
-processed. Closed Project checkouts are reported and retained. Document hydration stays in `project sync` and `project
-watch`; one-shot sync handles source checkouts only.
+Sync clones missing checkouts with `jj git clone --colocate` and colocates clean existing Git directories with jj. It
+checks the Project and host in the manifest and fetches bookmarks from the recorded origin. When the host verifies a
+secondary Forgejo URL, sync configures the mirror, checks both push destinations and fetches both remotes. When the
+mirror is hidden, missing, unconfigured or unavailable, sync reports the status and fetches only from origin. Existing
+push settings stay in place. The contributor authenticates to the origin with their own forge account. Local edits,
+conflicts and unsafe paths skip that checkout. Closed checkouts stay on disk. Document hydration uses `project sync` or
+`project watch` with the caller's document permissions.
 
 ### The workspace root
 
@@ -1469,6 +1470,34 @@ source](notation.md#notation-document-source)), never in a Project repository or
 Navigator Project participation authorizes Navigator and the matter show page. It never grants source-forge access.
 Outside lawyers work through Navigator and Drive without any membership of the forge that hosts the source. Repository
 access is an independently administered source-control decision.
+
+### Supervised contributions
+
+A Clerk works on an assigned Project with a supervising Lawyer DRI. A participating Lawyer can also contribute from a
+personal checkout. A Firm administrator coordinates the Project assignment, the contributor's individual forge account
+and the repository's review team.
+
+1. Confirm the Project assignment and the Clerk's supervising Lawyer DRI in Navigator. Identify the contributor's
+   individual forge login and grant read access to that private Project repository. The contributor signs in to
+   Navigator and the forge, runs `navigator sync --host <host>` and checks the Project's checkout.
+2. Create a reviewer team on the Project's primary forge with write access to that repository. Verify each account
+   belongs to a Lawyer, Firm Admin or Owner authorized to review this Project. Keep Clerks outside the team and its
+   membership administration. Provide a second eligible reviewer for changes authored by a team member.
+3. From the Project checkout, a repository administrator runs `navigator jj policy` to reconcile the ordinary gate.
+   Run `navigator jj policy --review-team <team> --dry-run`, then `navigator jj policy --review-team <team>`. Confirm
+   the command verifies the team rule before granting contributor write access. The rule covers every PR to `main`,
+   including PRs opened in the browser. New changes require fresh approval. On GitHub the rule has its own ruleset,
+   `project-supervision`. On Forgejo it uses the protected branch's approval count and team allowlist.
+4. Give the contributor write access to the Project repository with a personal account. Reserve repository and
+   workflow administration for administrators. The contributor pushes a signed topic branch to the source forge and
+   opens a PR against `main`, naming the supervising lawyer as reviewer. For an existing dual-remote checkout, verify
+   the branch's push destination before publishing.
+5. In the Project checkout, run `navigator jj reviews` to list open PRs with their author, draft status, requested
+   people and teams, and forge link. The supervising lawyer assigns an eligible reviewer to each ready PR, requests
+   changes or approves the current revision on the forge. The reviewer checks client visibility on changed Pointers.
+   Auto-merge waits for the forge's required approval and checks.
+6. When supervision, assignment or role changes, update the Project roster, remove obsolete forge grants and review
+   team memberships, and reassign open reviews. Access to a previously downloaded checkout follows device offboarding.
 
 This is also why the model stops at one repository per Project rather than one repository per organization with
 `projects/<code>/` subdirectories, which would be the same logic one step further. **Repository access is the per-matter

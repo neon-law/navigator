@@ -45,8 +45,8 @@ async fn get(base: &str, token: &str, id: Uuid) -> Result<Project> {
 }
 
 /// Check the selected checkout against the signed-in site's Project binding.
-pub(super) async fn verify_policy_target(dir: &Path, origin: &str) -> Result<()> {
-    let manifest = manifest::read(dir).context("repository policy needs a Project manifest")?;
+pub(super) async fn verify_checkout_binding(dir: &Path, origin: &str) -> Result<()> {
+    let manifest = manifest::read(dir).context("this command needs a Project manifest")?;
     let host = manifest.host.as_deref().context("manifest needs a host")?;
     let code = manifest
         .project
@@ -60,7 +60,7 @@ pub(super) async fn verify_policy_target(dir: &Path, origin: &str) -> Result<()>
         .map_err(anyhow::Error::msg)?;
     ensure!(
         project.code == code && project.repository_remotes.origin.as_deref() == Some(origin),
-        "checkout origin must match the Project's recorded source URL to change repository policy"
+        "checkout origin must match the Project's recorded source URL"
     );
     Ok(())
 }

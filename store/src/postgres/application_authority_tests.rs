@@ -768,6 +768,19 @@ async fn deadline_concurrent_identical_replay_keeps_calendar_revision() {
 async fn open_deadlines_batch_across_projects_in_postgres() {
     use crate::project_deadlines as deadlines;
     let (pg, _, _, project, _) = application_fixture().await;
+    let mut projects = Vec::new();
+    for code in ["included", "excluded"] {
+        let id = sqlx::query_scalar(
+            "INSERT INTO project (code, name, status, entity_id, brand, firm_id)
+             SELECT $1, $1, 'open', entity_id, brand, firm_id FROM project WHERE id = $2 RETURNING id",
+        )
+        .bind(code)
+        .bind(project)
+        .fetch_one(pg.pool())
+        .await
+        .unwrap();
+        projects.push(id);
+    }
     PostgresDb::with_test_db(pg, async {
         let source = crate::surreal::SurrealDb::uninitialized();
         let open = deadlines::create(&source, &native_deadline(project))
@@ -779,15 +792,20 @@ async fn open_deadlines_batch_across_projects_in_postgres() {
         deadlines::complete(&source, project, closed.id)
             .await
             .unwrap();
-        let other = uuid::Uuid::new_v4();
-        let rows = deadlines::open_for_projects(&source, &[project, other])
+        let mut early = native_deadline(projects[0]);
+        early.due_at = "2020-01-01T00:00:00Z".into();
+        let early = deadlines::create(&source, &early).await.unwrap();
+        deadlines::create(&source, &native_deadline(projects[1]))
             .await
             .unwrap();
-        assert_eq!(rows.iter().map(|d| d.id).collect::<Vec<_>>(), vec![open.id]);
-        assert!(deadlines::open_for_projects(&source, &[])
+        let rows = deadlines::open_for_projects(&[project, projects[0]])
             .await
-            .unwrap()
-            .is_empty());
+            .unwrap();
+        assert_eq!(
+            rows.iter().map(|d| d.id).collect::<Vec<_>>(),
+            [early.id, open.id]
+        );
+        assert!(deadlines::open_for_projects(&[]).await.unwrap().is_empty());
     })
     .await;
 }

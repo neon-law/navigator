@@ -823,7 +823,7 @@ async fn plan_columns_refuse_bad_input_and_allow_an_unset_panel() {
         )
         .await,
         Err(crate::projects::ProjectCommandError::Invalid(
-            "plan_matter_type is not one of document_review, letter, uncontested_divorce, court_appearance"
+            "plan_matter_type is not one of document_review, letter, uncontested_divorce, court_appearance, contested_divorce, custody, probate"
         ))
     ));
     // A Plan Case Number is one printable token, so an inbox rule can match

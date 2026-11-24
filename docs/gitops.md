@@ -240,7 +240,7 @@ takes the CODEOWNERS half and waits for a real `ci.yml` before it can take the r
 Every governed source repository carries `production`. It has no bypass actors and binds everyone to required checks,
 linear history, no deletion or force-push, squash-only merges, and resolved review threads. Its pull request rule
 requires zero approvals, disables code-owner approval, and disables the extra-approval condition for unattributed
-changes, so no approval rule can keep an otherwise-green PR from auto-merging.
+changes. Project review requirements are additive.
 
 Repository settings enable auto-merge. Once the required checks pass and all review threads are resolved, GitHub can
 squash-merge the PR. `navigator github setup` deletes an existing `production-review` ruleset on governed source
@@ -254,8 +254,9 @@ grant repository write access. A user without write permission cannot push, rega
 `require_extra_approval_for_unattributed_changes: false` are explicit in `production`. Keeping all three conditions
 clear prevents a hidden approval requirement from reappearing through bot- or agent-authored changes.
 
-All governed repositories use the same approval-free merge gate. Required checks, resolved threads, and auto-merge
-control the squash.
+Private Projects with supervised contributors add the `project-supervision` ruleset through `navigator jj policy
+--review-team <team>`. It requires the designated team's approval across the tree and dismisses stale approvals. Both
+rulesets apply to the squash. See [supervised contributions](project-repositories.md#supervised-contributions).
 
 **Once the Project gate-pin rollout reaches a repository, its pinned `navigator project gate` runs inside the required
 `ci` check.** It validates the manifest key set and value shapes, document pointers, the origin scan over the built
@@ -365,9 +366,8 @@ prerelease stays on staging. `release-cut.yml` opens the version-bump PR once `R
 
 `main` is governed by rulesets alone: `production` protects the default branch, and `release-tags` protects release
 tags. The production ruleset has no bypass actors and requires status checks, linear history, pull requests, resolved
-review threads, and squash-only merging. Its approval count is zero, and no other approval rule is desired. `ops github
-setup` removes an existing `production-review` ruleset so its approval requirement cannot remain active after
-reconciliation.
+review threads, and squash-only merging. Its approval count is zero. The separate `project-supervision` ruleset adds the
+required team review on supervised Projects.
 
 One caveat learned the hard way: GitHub caches a pull request's merge state. Changing branch protection does **not**
 recompute it for pull requests whose checks have already finished — they stay `BLOCKED` until some later event on the

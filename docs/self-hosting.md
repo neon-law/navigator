@@ -44,11 +44,9 @@ set -a; source .devx/env; set +a
 cargo run -p neon
 ```
 
-`dev up` creates the `navigator` KIND cluster and builds the `workflows-service` image from the checkout. It applies the
-dependency overlay `k8s/overlays/kind-deps`: SurrealDB, Rauthy, SeaweedFS, Restate, ClamAV, and OpenObserve. It then
-opens host port-forwards, applies the SurrealDB schema, and writes `.devx/env`. That file is the complete environment
-for a host-side `web`. It carries only local, synthetic values, and `NAVIGATOR_CI_HARNESS=1` lets the dev profile boot
-with fake email and signature providers. The website listens on `PORT` from `.devx/env` (default `3001`).
+A fresh `dev up` provisions a worktree-owned KIND tier with PostgreSQL, Rauthy, SeaweedFS, ClamAV, and telemetry. The
+host-side web process runs DBOS. Read its port and the complete development environment from `.devx/env`. The
+development harness uses synthetic email and signature providers.
 
 No `.env` is needed. When one exists it loads before `.devx/env` and wins on any shared key; copy
 [`.env.example`](../.env.example) to start one with your own provider credentials.
@@ -110,8 +108,9 @@ export NAVIGATOR_IMAGE_REGISTRY=ghcr.io/<owner>/navigator
 cargo run -p hudson -- dev deploy
 ```
 
-`dev deploy` runs the full in-cluster stack from published images. `dev up` never contacts a registry for Navigator's
-own images.
+`dev deploy` and `dev worktree-env up --demo` run the in-cluster compatibility stack from published images. They require
+admitted PostgreSQL or a prepared, empty compatibility source for first enrollment. An uninitialized SurrealDB fixture
+cannot bootstrap that stack. Use `dev up` for a fresh PostgreSQL environment.
 
 ### PostgreSQL and Apache AGE image
 

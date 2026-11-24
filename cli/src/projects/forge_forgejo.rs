@@ -71,6 +71,25 @@ impl ForgejoForge {
         )
     }
 
+    pub(super) async fn review_page(&self, page: usize) -> Result<Vec<super::reviews::Review>> {
+        self.get(&format!("pulls?state=open&limit=50&page={page}"))
+            .await
+    }
+
+    pub(super) async fn require_review_team(&self, team: &str, dry_run: bool) -> Result<()> {
+        self.governance
+            .require_review_team(&self.repository, team, dry_run)
+            .await?;
+        if dry_run {
+            println!(
+                "Review policy preview: main requires the selected team's approval after apply."
+            );
+        } else {
+            println!("Verified the required review team on main.");
+        }
+        Ok(())
+    }
+
     pub(super) async fn reconcile_policy(&self, dry_run: bool) -> Result<()> {
         let drift = self
             .governance

@@ -194,7 +194,7 @@ pub async fn get_firm_edit_form() -> Result<FirmEditView, ServerFnError> {
     };
 
     let google_workspace_calendar_owner = if role == ViewerRole::Owner {
-        store::firms::calendar_owner(&surreal, id)
+        store::firms::calendar_owner(id)
             .await
             .map_err(|error| ServerFnError::new(error.to_string()))?
     } else {

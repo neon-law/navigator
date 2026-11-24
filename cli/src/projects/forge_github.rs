@@ -89,6 +89,11 @@ impl GitHubForge {
         Self::new("https://api.github.com", &owner, &name, &token)
     }
 
+    pub(super) async fn review_page(&self, page: usize) -> Result<Vec<super::reviews::Review>> {
+        self.get_json(&self.repo_path(&format!("pulls?state=open&per_page=50&page={page}")))
+            .await
+    }
+
     /// Read an authoritative merged review before reconciling its mirror.
     pub async fn merged_review(&self, number: u64) -> Result<(String, String, String)> {
         #[derive(Deserialize)]

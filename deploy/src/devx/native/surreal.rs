@@ -5,10 +5,7 @@
 //! counterpart is genuinely just the same binary with the same argument,
 //! bound to the host-wide native port instead of a Service.
 //!
-//! Memory-backed here too, and for the same reason it is memory-backed in
-//! the cluster: local Surreal data resets with the process, which is a
-//! decision the schema-apply step relies on rather than an oversight. The
-//! schema is applied on every `up`, not migrated.
+//! The in-memory database lives for the lifetime of the shared host process.
 
 use std::path::Path;
 
@@ -103,8 +100,7 @@ mod tests {
     /// `memory` is the same storage argument
     /// `k8s/overlays/kind/surreal/surreal.yaml` passes. A native tier
     /// that quietly acquired a persistent store would diverge from the
-    /// cluster lane on exactly the behavior — data resetting with the
-    /// process — that the schema-apply step is written against.
+    /// cluster lane on whether data survives a process restart.
     #[test]
     fn the_native_engine_is_memory_backed_like_the_cluster_one() {
         let args = start_args(8000);
