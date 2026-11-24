@@ -102,6 +102,10 @@ pub fn require_macos(os: &str) -> Result<()> {
 /// its repo-level settings.
 pub fn run(dir: &Path) -> Result<()> {
     require_macos(std::env::consts::OS)?;
+    setup(dir)
+}
+
+fn setup(dir: &Path) -> Result<()> {
     if !dir.join(".git").exists() {
         bail!(
             "{} is not a Git checkout; clone the Project repository first",
@@ -256,6 +260,71 @@ mod tests {
         let quoted = toml_string(PUSH_BOOKMARK_TEMPLATE);
         let parsed: toml::Value = toml::from_str(&format!("v = {quoted}")).unwrap();
         assert_eq!(parsed["v"].as_str(), Some(PUSH_BOOKMARK_TEMPLATE));
+    }
+
+    fn calls(dir: &Path) -> Vec<String> {
+        std::fs::read_to_string(dir.join(".jj/calls"))
+            .unwrap()
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    }
+
+    #[test]
+    fn setup_colocates_once_and_rewrites_the_settings_from_git_config() {
+        use crate::projects::test_login::{checkout, jj_stand_in};
+        let _jj = jj_stand_in();
+        let empty = tempfile::tempdir().unwrap();
+        let error = setup(empty.path()).unwrap_err();
+        assert!(error.to_string().contains("is not a Git checkout"));
+
+        let fixture = checkout("project: sample-matter\n", None);
+        let dir = fixture.path();
+        for (key, value) in [
+            ("user.name", "Ada Lawyer"),
+            ("user.email", "ada@example.com"),
+            ("commit.gpgsign", "true"),
+            ("gpg.format", "x509"),
+        ] {
+            assert!(git(dir, &["config", key, value]).unwrap().status.success());
+        }
+        setup(dir).unwrap();
+        assert!(dir.join(".jj").is_dir());
+        let first = calls(dir);
+        for expected in [
+            "config set --repo user.name \"Ada Lawyer\" []",
+            "config set --repo user.email \"ada@example.com\" []",
+            "config set --repo signing.behavior \"own\" []",
+            "config set --repo signing.backend \"gpgsm\" []",
+        ] {
+            assert!(first.iter().any(|call| call == expected), "{first:?}");
+        }
+        setup(dir).unwrap();
+        assert_eq!(calls(dir).len(), first.len() * 2);
+    }
+
+    #[test]
+    fn a_push_names_one_change_and_never_follows_tags() {
+        let _jj = crate::projects::test_login::jj_stand_in();
+        let fixture = tempfile::tempdir().unwrap();
+        let dir = fixture.path();
+        std::fs::create_dir(dir.join(".jj")).unwrap();
+        std::env::remove_var("GIT_CONFIG_PARAMETERS");
+        push_revision(dir, "commit-one", true).unwrap();
+        std::env::set_var("GIT_CONFIG_PARAMETERS", "'user.name=Ada'");
+        push_revision(dir, "commit-one", false).unwrap();
+        assert_eq!(
+            calls(dir),
+            [
+                "git push --remote origin --change commit-one --dry-run ['push.followTags=false']",
+                "git push --remote origin --change commit-one ['user.name=Ada' 'push.followTags=false']",
+            ]
+        );
+        let error = output(dir, &["status"]).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "jj status failed: jj stand-in: unsupported: status"
+        );
     }
 
     #[test]

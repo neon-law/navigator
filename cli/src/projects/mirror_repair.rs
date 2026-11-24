@@ -168,7 +168,124 @@ pub(super) async fn request(
 
 #[cfg(test)]
 mod tests {
-    use super::{remote_action, verified_mirror_url, RemoteAction};
+    use super::{remote_action, request, run, verified_mirror_url, RemoteAction};
+    use crate::projects::test_login::{answer, checkout, site};
+    use serde_json::json;
+    use std::process::ExitCode;
+
+    const MANIFEST: &str = "project:\n  name: sample-matter\n  host: site.example.test\n";
+    const ORIGIN: &str = "https://github.com/sample-firm/sample-matter";
+    const MIRROR: &str = "https://forge.example.test/sample-firm/sample-matter";
+
+    fn repaired(status: &str) -> serde_json::Value {
+        json!({
+            "ci_provider": "github",
+            "source_repository_url": ORIGIN,
+            "repository_url": MIRROR,
+            "forgejo_owner": "sample-firm",
+            "mirror_status": status,
+        })
+    }
+
+    #[tokio::test]
+    async fn repair_adds_the_verified_remote_once_and_refuses_a_different_one() {
+        let id = uuid::Uuid::new_v4();
+        let (server, _login) = site(json!([{"id": id, "code": "sample-matter"}])).await;
+        let door = format!("/app/api/project-forgejo-mirrors/{id}");
+        answer(&server, "POST", &door, 200, repaired("created")).await;
+        let dir = checkout(MANIFEST, Some(ORIGIN));
+        let host = server.uri();
+        let remote =
+            || crate::projects::lifecycle::git_text(dir.path(), &["remote", "get-url", "forgejo"]);
+
+        assert_eq!(run(dir.path(), Some(&host)).await, ExitCode::SUCCESS);
+        assert_eq!(remote().unwrap(), MIRROR);
+        assert_eq!(run(dir.path(), Some(&host)).await, ExitCode::SUCCESS);
+
+        let other = "https://forge.example.test/other/sample-matter";
+        crate::projects::lifecycle::git_text(dir.path(), &["remote", "set-url", "forgejo", other])
+            .unwrap();
+        assert_eq!(run(dir.path(), Some(&host)).await, ExitCode::FAILURE);
+        assert_eq!(remote().unwrap(), other);
+    }
+
+    #[tokio::test]
+    async fn repair_needs_a_project_checkout_whose_origin_is_its_github_source() {
+        let empty = tempfile::tempdir().unwrap();
+        assert_eq!(run(empty.path(), None).await, ExitCode::FAILURE);
+        for (manifest, origin, expected) in [
+            ("host: site.example.test\n", ORIGIN, "no Project code"),
+            (
+                MANIFEST,
+                "https://forge.example.test/sample-firm/sample-matter",
+                "must be its GitHub source repository",
+            ),
+            (
+                MANIFEST,
+                "https://github.com/sample-firm/another-matter",
+                "does not match its Project code",
+            ),
+        ] {
+            let dir = checkout(manifest, Some(origin));
+            let error = super::run_inner(dir.path(), None).await.unwrap_err();
+            assert!(format!("{error:#}").contains(expected), "{error:#}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_repair_answer_must_name_this_github_source_and_a_known_outcome() {
+        let server = wiremock::MockServer::start().await;
+        let cases = [
+            (
+                403,
+                json!({"message": "not an admin"}),
+                "refused: 403 Forbidden: not an admin",
+            ),
+            (
+                200,
+                json!({"ci_provider": "forgejo"}),
+                "not configured for GitHub CI/CD",
+            ),
+            (
+                200,
+                json!({"ci_provider": "github"}),
+                "no GitHub source URL",
+            ),
+            (
+                200,
+                json!({"ci_provider": "github", "source_repository_url": "https://github.com/other/sample-matter"}),
+                "does not match the Project's GitHub source",
+            ),
+            (
+                200,
+                json!({"ci_provider": "github", "source_repository_url": ORIGIN}),
+                "no verified Forgejo URL",
+            ),
+            (
+                200,
+                json!({"ci_provider": "github", "source_repository_url": ORIGIN, "repository_url": MIRROR}),
+                "no verified Forgejo organization",
+            ),
+            (200, repaired("unknown"), "no known outcome"),
+        ];
+        for (status, body, expected) in cases {
+            let id = uuid::Uuid::new_v4();
+            let door = format!("/app/api/project-forgejo-mirrors/{id}");
+            answer(&server, "POST", &door, status, body).await;
+            let error = request(&server.uri(), "t", id, "sample-firm", "sample-matter")
+                .await
+                .err()
+                .unwrap();
+            assert!(error.to_string().contains(expected), "{error}");
+        }
+        let id = uuid::Uuid::new_v4();
+        let door = format!("/app/api/project-forgejo-mirrors/{id}");
+        answer(&server, "POST", &door, 200, repaired("present")).await;
+        let mirror = request(&server.uri(), "t", id, "Sample-Firm", "sample-matter")
+            .await
+            .unwrap();
+        assert_eq!((mirror.url.as_str(), mirror.outcome), (MIRROR, "adopted"));
+    }
 
     #[test]
     fn mirror_repair_adds_only_a_missing_or_matching_remote() {

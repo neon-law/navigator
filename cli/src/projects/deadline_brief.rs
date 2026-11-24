@@ -19,6 +19,8 @@ use crate::remote;
 
 const INVENTORY_PATH: &str = "/app/api/lawyer/deadline-projects";
 const READ_CONCURRENCY: usize = 8;
+const LOCAL_FORMAT: &str = "%Y-%m-%d %H:%M %:z";
+const BANDS: [&str; 4] = ["Overdue", "Today", "Next 7 days", "Next 30 days"];
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct Project {
@@ -157,6 +159,19 @@ fn band(deadline: &Deadline, now: DateTime<Utc>, zone: Tz) -> Option<&'static st
     })
 }
 
+fn title(row: &Deadline) -> &str {
+    row.title
+        .as_deref()
+        .filter(|title| !title.is_empty())
+        .unwrap_or("Deadline")
+}
+
+fn due_utc(row: &Deadline) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(&row.due_at)
+        .ok()
+        .map(|due| due.with_timezone(&Utc))
+}
+
 fn source_href(base: &str, project: &Project, deadline: &Deadline) -> String {
     format!(
         "{base}/app/projects/{}/deadlines#deadline-{}",
@@ -165,16 +180,15 @@ fn source_href(base: &str, project: &Project, deadline: &Deadline) -> String {
 }
 
 fn deadline_value(base: &str, project: &Project, row: &Deadline, zone: Tz) -> Value {
-    let parsed = DateTime::parse_from_rfc3339(&row.due_at).ok();
     json!({
         "id": row.id,
         "project_code": project.code,
         "project_name": project.name,
         "project_href": format!("{base}/app/projects/{}", project.code),
         "deadline_href": source_href(base, project, row),
-        "title": row.title.as_deref().filter(|title| !title.is_empty()).unwrap_or("Deadline"),
+        "title": title(row),
         "due_at": row.due_at,
-        "due_local": parsed.map(|at| at.with_timezone(&zone).format("%Y-%m-%d %H:%M %:z").to_string()),
+        "due_local": due_utc(row).map(|at| at.with_timezone(&zone).format(LOCAL_FORMAT).to_string()),
         "status": row.status,
         "category": row.category,
         "calendar_role": row.calendar_role,
@@ -274,11 +288,7 @@ fn collect_rows(
             .filter(|row| row.status == "open")
             .cloned()
             .collect::<Vec<_>>();
-        open.sort_by_key(|row| {
-            DateTime::parse_from_rfc3339(&row.due_at)
-                .ok()
-                .map(|d| d.with_timezone(&Utc))
-        });
+        open.sort_by_key(due_utc);
         if let Some(next) = open.first() {
             next_by_project.push((project.clone(), next.clone()));
         }
@@ -294,15 +304,7 @@ fn collect_rows(
         }
         rows.extend(matching.into_iter().map(|row| (project.clone(), row)));
     }
-    rows.sort_by(|a, b| {
-        let left = DateTime::parse_from_rfc3339(&a.1.due_at)
-            .ok()
-            .map(|d| d.with_timezone(&Utc));
-        let right = DateTime::parse_from_rfc3339(&b.1.due_at)
-            .ok()
-            .map(|d| d.with_timezone(&Utc));
-        left.cmp(&right).then_with(|| a.1.id.cmp(&b.1.id))
-    });
+    rows.sort_by_key(|(_, row)| (due_utc(row), row.id));
     let matched_project_codes = successful
         .iter()
         .filter(|(project, _)| project_is_selected(project, filters))
@@ -337,7 +339,7 @@ fn make_report(
         .iter()
         .map(|(project, row)| deadline_value(base, project, row, zone))
         .collect::<Vec<_>>();
-    let views = ["Overdue", "Today", "Next 7 days", "Next 30 days"]
+    let views = BANDS
         .into_iter()
         .map(|label| {
             let items = rows
@@ -389,7 +391,7 @@ fn render(
     now: DateTime<Utc>,
     zone: Tz,
     as_json: bool,
-) {
+) -> String {
     let inventory_projects = successful.len() + failures.len();
     let rows = collect_rows(successful, failures, filters, now, zone);
     let report = make_report(
@@ -402,10 +404,9 @@ fn render(
         inventory_projects,
     );
     if as_json {
-        println!("{report}");
-        return;
+        return report.to_string();
     }
-    render_console(base, &rows, failures, filters, now, zone, &report);
+    render_console(base, &rows, failures, filters, now, zone, &report)
 }
 
 fn render_console(
@@ -416,57 +417,81 @@ fn render_console(
     now: DateTime<Utc>,
     zone: Tz,
     report: &Value,
-) {
-    println!(
-        "Deadline brief · {} · as of {}",
-        zone.name(),
-        now.with_timezone(&zone).format("%Y-%m-%d %H:%M %:z")
+) -> String {
+    let mut lines = vec![
+        format!(
+            "Deadline brief · {} · as of {}",
+            zone.name(),
+            now.with_timezone(&zone).format(LOCAL_FORMAT)
+        ),
+        format!(
+            "Coverage: {}/{} Projects read; {} empty source reads; {} reads with no filter matches; {} failed reads.",
+            data.matched_project_codes.len(),
+            data.selected_projects,
+            data.empty_reads,
+            data.no_filter_matches,
+            failures.len()
+        ),
+    ];
+    lines.extend(
+        failures
+            .iter()
+            .filter(|failure| project_is_selected(&failure.project, filters))
+            .map(|failure| format!("  FAILED {}: {}", failure.project.code, failure.message)),
     );
-    println!(
-        "Coverage: {}/{} Projects read; {} empty source reads; {} reads with no filter matches; {} failed reads.",
-        data.matched_project_codes.len(),
-        data.selected_projects,
-        data.empty_reads,
-        data.no_filter_matches,
-        failures.len()
-    );
-    for failure in failures
-        .iter()
-        .filter(|failure| project_is_selected(&failure.project, filters))
-    {
-        println!("  FAILED {}: {}", failure.project.code, failure.message);
-    }
     if failures.is_empty() && data.rows.is_empty() {
-        println!("No deadlines match the selected filters.");
+        lines.push("No deadlines match the selected filters.".into());
     }
-    render_table(base, &data.rows, zone);
-    render_bands(&data.rows, now, zone);
-    render_next(data, zone);
-    println!(
+    lines.push(render_table(base, &data.rows, zone));
+    for label in BANDS {
+        lines.push(format!("{label}:"));
+        let before = lines.len();
+        lines.extend(
+            data.rows
+                .iter()
+                .filter(|(_, row)| row.status == "open" && band(row, now, zone) == Some(label))
+                .map(|(project, row)| {
+                    format!(
+                        "  {} · {} · {} · {}",
+                        project.code,
+                        format_due(&row.due_at, zone),
+                        row.category.as_deref().unwrap_or("uncategorized"),
+                        title(row)
+                    )
+                }),
+        );
+        if lines.len() == before {
+            lines.push("  none".into());
+        }
+    }
+    lines.push("Next recorded operative deadline per Project:".into());
+    lines.extend(data.next_by_project.iter().map(|(project, row)| {
+        format!(
+            "  {} · {} · {}",
+            project.code,
+            format_due(&row.due_at, zone),
+            row.title.as_deref().unwrap_or("Deadline")
+        )
+    }));
+    let count = |label: &str| report["views"][label].as_array().map_or(0, Vec::len);
+    lines.push(format!(
         "Views: overdue {}, today {}, next 7 days {}, next 30 days {}.",
-        report["views"]["Overdue"].as_array().map_or(0, Vec::len),
-        report["views"]["Today"].as_array().map_or(0, Vec::len),
-        report["views"]["Next 7 days"]
-            .as_array()
-            .map_or(0, Vec::len),
-        report["views"]["Next 30 days"]
-            .as_array()
-            .map_or(0, Vec::len)
-    );
+        count(BANDS[0]),
+        count(BANDS[1]),
+        count(BANDS[2]),
+        count(BANDS[3])
+    ));
+    lines.join("\n")
 }
 
 fn format_due(due_at: &str, zone: Tz) -> String {
     DateTime::parse_from_rfc3339(due_at).map_or_else(
         |_| due_at.to_owned(),
-        |date| {
-            date.with_timezone(&zone)
-                .format("%Y-%m-%d %H:%M %:z")
-                .to_string()
-        },
+        |date| date.with_timezone(&zone).format(LOCAL_FORMAT).to_string(),
     )
 }
 
-fn render_table(base: &str, rows: &[(Project, Deadline)], zone: Tz) {
+fn render_table(base: &str, rows: &[(Project, Deadline)], zone: Tz) -> String {
     let mut table = Table::new();
     table
         .load_style(UTF8_FULL)
@@ -479,12 +504,6 @@ fn render_table(base: &str, rows: &[(Project, Deadline)], zone: Tz) {
         "Source context",
     ]);
     for (project, row) in rows {
-        let due = format_due(&row.due_at, zone);
-        let title = row
-            .title
-            .as_deref()
-            .filter(|title| !title.is_empty())
-            .unwrap_or("Deadline");
         let context = format!(
             "{}: {} · source {} · note {} · owner {} · source document {} · {}",
             row.authority_kind,
@@ -511,53 +530,13 @@ fn render_table(base: &str, rows: &[(Project, Deadline)], zone: Tz) {
         );
         table.add_row([
             Cell::new(&project.code),
-            Cell::new(due),
+            Cell::new(format_due(&row.due_at, zone)),
             Cell::new(row.category.as_deref().unwrap_or("uncategorized")),
-            Cell::new(title),
+            Cell::new(title(row)),
             Cell::new(context),
         ]);
     }
-    println!("{table}");
-}
-
-fn render_bands(rows: &[(Project, Deadline)], now: DateTime<Utc>, zone: Tz) {
-    for label in ["Overdue", "Today", "Next 7 days", "Next 30 days"] {
-        println!("{label}:");
-        let mut found = false;
-        for (project, row) in rows
-            .iter()
-            .filter(|(_, row)| row.status == "open" && band(row, now, zone) == Some(label))
-        {
-            found = true;
-            let due = format_due(&row.due_at, zone);
-            println!(
-                "  {} · {} · {} · {}",
-                project.code,
-                due,
-                row.category.as_deref().unwrap_or("uncategorized"),
-                row.title
-                    .as_deref()
-                    .filter(|title| !title.is_empty())
-                    .unwrap_or("Deadline")
-            );
-        }
-        if !found {
-            println!("  none");
-        }
-    }
-}
-
-fn render_next(data: &ReportRows, zone: Tz) {
-    println!("Next recorded operative deadline per Project:");
-    for (project, row) in &data.next_by_project {
-        let due = format_due(&row.due_at, zone);
-        println!(
-            "  {} · {} · {}",
-            project.code,
-            due,
-            row.title.as_deref().unwrap_or("Deadline")
-        );
-    }
+    table.to_string()
 }
 
 pub struct BriefOptions {
@@ -621,7 +600,10 @@ async fn run(options: BriefOptions) -> Result<bool> {
         );
     }
     let (successful, failures) = gather(&base, &token, projects).await;
-    render(&base, &successful, &failures, &filters, now, zone, as_json);
+    println!(
+        "{}",
+        render(&base, &successful, &failures, &filters, now, zone, as_json)
+    );
     Ok(failures.is_empty())
 }
 
@@ -762,5 +744,258 @@ mod tests {
     fn malformed_due_instants_fail_the_project_read() {
         let error = validate_deadlines(vec![deadline("not-an-instant", "open")]).unwrap_err();
         assert!(format!("{error:#}").contains("unreadable due_at"));
+    }
+
+    fn options(host: &str) -> BriefOptions {
+        BriefOptions {
+            host: Some(host.into()),
+            project: None,
+            due_by: None,
+            today: false,
+            overdue: false,
+            status: "open".into(),
+            timezone: Some("America/Los_Angeles".into()),
+            as_json: false,
+        }
+    }
+
+    #[test]
+    fn the_console_brief_reports_coverage_bands_and_source_context() {
+        let now: DateTime<Utc> = "2028-05-02T18:00:00Z".parse().unwrap();
+        let zone = chrono_tz::America::Los_Angeles;
+        let base = "https://navigator.example.test";
+        let mut unsourced = deadline("2028-05-20T09:00:00-07:00", "open");
+        unsourced.title = Some(String::new());
+        unsourced.description = None;
+        unsourced.authority = String::new();
+        unsourced.source_document_id = None;
+        unsourced.owner_person_id = None;
+        unsourced.category = None;
+        let sourced = deadline("2028-05-01T09:00:00-07:00", "open");
+        let asset = sourced.source_document_id.unwrap();
+        let successful = vec![
+            (
+                project("synthetic-matter"),
+                vec![
+                    unsourced,
+                    sourced,
+                    deadline("2028-05-02T16:00:00-07:00", "open"),
+                    deadline("2028-05-05T09:00:00-07:00", "open"),
+                    deadline("2028-09-01T09:00:00-07:00", "open"),
+                    deadline("2028-05-03T09:00:00-07:00", "complete"),
+                ],
+            ),
+            (project("synthetic-quiet"), Vec::new()),
+            (
+                project("synthetic-done"),
+                vec![deadline("2028-05-03T09:00:00-07:00", "complete")],
+            ),
+        ];
+        let failures = vec![ReadFailure {
+            project: project("synthetic-failed"),
+            message: "HTTP 503 Service Unavailable: ".into(),
+        }];
+        let filters = Filters {
+            status: "open".into(),
+            ..Filters::default()
+        };
+        let text = render(base, &successful, &failures, &filters, now, zone, false);
+        for expected in [
+            "Deadline brief · America/Los_Angeles · as of 2028-05-02 11:00 -07:00",
+            "Coverage: 3/4 Projects read; 1 empty source reads; 1 reads with no filter matches; 1 failed reads.",
+            "  FAILED synthetic-failed: HTTP 503 Service Unavailable: ",
+            "Overdue:\n  synthetic-matter · 2028-05-01 09:00 -07:00 · court · Synthetic filing",
+            "Today:\n  synthetic-matter · 2028-05-02 16:00 -07:00 · court · Synthetic filing",
+            "Next 7 days:\n  synthetic-matter · 2028-05-05 09:00 -07:00",
+            "Next 30 days:\n  synthetic-matter · 2028-05-20 09:00 -07:00 · uncategorized · Deadline",
+            "Next recorded operative deadline per Project:\n  synthetic-matter · 2028-05-01 09:00 -07:00 · Synthetic filing",
+            "Views: overdue 1, today 1, next 7 days 1, next 30 days 1.",
+            "unspecified",
+            "unassigned",
+        ] {
+            assert!(text.contains(expected), "missing `{expected}` in:\n{text}");
+        }
+        assert!(!text.contains("No deadlines match"));
+        assert!(text.contains(&asset.to_string()));
+
+        let json = render(base, &successful, &failures, &filters, now, zone, true);
+        let report: Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(report["complete"], false);
+        assert_eq!(report["coverage"]["projects_expected"], 4);
+        assert_eq!(report["coverage"]["inventory_projects"], 4);
+        assert_eq!(
+            report["coverage"]["failed_projects"][0]["project_code"],
+            "synthetic-failed"
+        );
+        assert_eq!(report["deadlines"].as_array().unwrap().len(), 5);
+        assert_eq!(
+            report["deadlines"][0]["due_local"],
+            "2028-05-01 09:00 -07:00"
+        );
+        assert_eq!(
+            report["deadlines"][0]["source_document_href"],
+            format!("{base}/app/projects/synthetic-matter/documents/{asset}/download")
+        );
+        assert_eq!(report["filters"]["status"], "open");
+    }
+
+    #[test]
+    fn a_project_filter_narrows_coverage_and_an_empty_brief_says_so() {
+        let now: DateTime<Utc> = "2028-05-02T18:00:00Z".parse().unwrap();
+        let successful = vec![
+            (project("synthetic-quiet"), Vec::new()),
+            (
+                project("synthetic-other"),
+                vec![deadline("2028-05-03T09:00:00Z", "open")],
+            ),
+        ];
+        let filters = Filters {
+            overdue: true,
+            project: Some("synthetic-quiet".into()),
+            ..Filters::default()
+        };
+        let zone = chrono_tz::UTC;
+        let text = render("", &successful, &[], &filters, now, zone, false);
+        assert!(text.contains("Coverage: 1/1 Projects read; 1 empty source reads"));
+        assert!(text.contains("No deadlines match the selected filters."));
+        assert!(text.contains("Overdue:\n  none"));
+        assert!(!text.contains("synthetic-other"));
+        let json = render("", &successful, &[], &filters, now, zone, true);
+        let report: Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(report["complete"], true);
+        assert_eq!(report["filters"]["status"], "open");
+        assert_eq!(report["filters"]["project"], "synthetic-quiet");
+    }
+
+    #[test]
+    fn later_deadlines_fall_outside_every_band_and_unreadable_dates_never_match() {
+        let now: DateTime<Utc> = "2028-05-02T12:00:00Z".parse().unwrap();
+        let zone = chrono_tz::UTC;
+        let later = deadline("2028-09-01T12:00:00Z", "open");
+        for (due_at, expected) in [
+            ("2028-09-01T12:00:00Z", Some("Later")),
+            ("2028-05-02T23:00:00Z", Some("Today")),
+            ("2028-05-20T12:00:00Z", Some("Next 30 days")),
+            ("soon", None),
+        ] {
+            assert_eq!(band(&deadline(due_at, "open"), now, zone), expected);
+        }
+        let open = Filters {
+            status: "open".into(),
+            ..Filters::default()
+        };
+        assert!(!selected(&deadline("soon", "open"), &open, now, zone));
+        assert_eq!(format_due("soon", zone), "soon");
+        let today = Filters {
+            today: true,
+            ..open
+        };
+        assert!(!selected(&later, &today, now, zone));
+    }
+
+    #[test]
+    fn the_zone_is_the_named_one_and_an_unknown_name_is_refused() {
+        assert_eq!(
+            local_zone(Some("America/Chicago")).unwrap(),
+            chrono_tz::America::Chicago
+        );
+        let error = local_zone(Some("Mars/Olympus")).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("unknown IANA time zone `Mars/Olympus`"));
+    }
+
+    async fn site(inventory: Value) -> wiremock::MockServer {
+        use wiremock::matchers::{header, method, path};
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(method("GET"))
+            .and(path(INVENTORY_PATH))
+            .and(header("authorization", "Bearer test-token"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(inventory))
+            .mount(&server)
+            .await;
+        server
+    }
+
+    async fn deadlines(server: &wiremock::MockServer, id: Uuid, status: u16, body: Value) {
+        use wiremock::matchers::{method, path};
+        wiremock::Mock::given(method("GET"))
+            .and(path(format!("/app/api/projects/{id}/deadlines")))
+            .respond_with(wiremock::ResponseTemplate::new(status).set_body_json(body))
+            .mount(server)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn a_brief_reads_each_inventory_project_and_fails_when_one_read_fails() {
+        let (good, bad) = (Uuid::new_v4(), Uuid::new_v4());
+        let server = site(json!([
+            {"id": good, "code": "synthetic-good", "name": "Good", "status": "open"},
+            {"id": bad, "code": "synthetic-bad", "name": "Bad", "status": "open"},
+        ]))
+        .await;
+        let row = json!({"id": Uuid::new_v4(), "project_id": good, "due_at": "2028-05-03T12:00:00Z", "status": "open"});
+        deadlines(&server, good, 200, json!([row])).await;
+        deadlines(&server, bad, 503, json!({"error": "unavailable"})).await;
+        let _login = crate::projects::test_login::signed_in(&server.uri()).await;
+
+        assert!(!run(options(&server.uri())).await.unwrap());
+        assert_eq!(
+            brief(options(&server.uri())).await,
+            std::process::ExitCode::from(1)
+        );
+
+        let only_good = || BriefOptions {
+            project: Some("synthetic-good".into()),
+            due_by: Some("2028-06-01".into()),
+            as_json: true,
+            ..options(&server.uri())
+        };
+        assert!(run(only_good()).await.unwrap());
+        assert_eq!(brief(only_good()).await, std::process::ExitCode::SUCCESS);
+    }
+
+    #[tokio::test]
+    async fn a_brief_refuses_bad_input_before_and_after_the_inventory_read() {
+        let server = site(json!([])).await;
+        let _login = crate::projects::test_login::signed_in(&server.uri()).await;
+        let error = run(BriefOptions {
+            due_by: Some("June".into()),
+            ..options(&server.uri())
+        })
+        .await
+        .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("--due-by must be YYYY-MM-DD, got `June`"));
+        let error = run(BriefOptions {
+            project: Some("synthetic-absent".into()),
+            ..options(&server.uri())
+        })
+        .await
+        .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("no visible open Project has code `synthetic-absent`"));
+        let unknown_zone = BriefOptions {
+            timezone: Some("Mars/Olympus".into()),
+            ..options(&server.uri())
+        };
+        assert_eq!(brief(unknown_zone).await, std::process::ExitCode::FAILURE);
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_inventory_or_deadline_body_is_an_error() {
+        let server = wiremock::MockServer::start().await;
+        let client = reqwest::Client::new();
+        let error = list::<Vec<Project>>(&client, format!("{}/absent", server.uri()), "t")
+            .await
+            .unwrap_err();
+        assert!(error.to_string().starts_with("HTTP 404"));
+        let unreadable = project("synthetic-unreadable");
+        deadlines(&server, unreadable.id, 200, json!({"not": "a list"})).await;
+        let (read, failed) = gather(&server.uri(), "t", vec![unreadable]).await;
+        assert!(read.is_empty());
+        assert!(failed[0].message.contains("parse Navigator read response"));
     }
 }

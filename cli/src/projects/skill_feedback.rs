@@ -94,7 +94,8 @@ pub async fn run(
     jurisdiction: Option<String>,
     practice_area: Option<String>,
 ) -> ExitCode {
-    match run_checked(file, jurisdiction.as_deref(), practice_area.as_deref()).await {
+    let (jurisdiction, practice_area) = (jurisdiction.as_deref(), practice_area.as_deref());
+    match run_checked(Path::new("."), file, jurisdiction, practice_area).await {
         Outcome::Prepared => ExitCode::SUCCESS,
         Outcome::Identifier(count) => {
             eprintln!(
@@ -111,6 +112,7 @@ pub async fn run(
 }
 
 async fn run_checked(
+    dir: &Path,
     file: Option<PathBuf>,
     jurisdiction: Option<&str>,
     practice_area: Option<&str>,
@@ -122,7 +124,7 @@ async fn run_checked(
     };
     // 2. The matter's manifest: pins for provenance, host and project for the
     //    private-terms door.
-    let Some(parsed) = manifest::read(Path::new(".")) else {
+    let Some(parsed) = manifest::read(dir) else {
         return Outcome::Fatal(anyhow!(
             "no readable navigator.yaml here; run from the Project repository root"
         ));
@@ -187,8 +189,69 @@ async fn run_checked(
 
 #[cfg(test)]
 mod tests {
-    use super::{prepared_issue, select_pin};
+    use super::{prepared_issue, run_checked, select_pin, Outcome};
     use crate::projects::manifest::SkillPin;
+    use crate::projects::test_login::{answer, site};
+    use serde_json::json;
+
+    const PINNED: &str =
+        "skills:\n  - jurisdiction: NV\n    practice_area: estates\n    version: '1'\n";
+
+    /// Run the flow over `draft` in a checkout whose manifest is `manifest`.
+    async fn outcome(manifest: &str, draft: Option<&str>) -> Result<usize, String> {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("navigator.yaml"), manifest).unwrap();
+        let file = dir.path().join("draft.md");
+        if let Some(draft) = draft {
+            std::fs::write(&file, draft).unwrap();
+        }
+        match run_checked(dir.path(), Some(file), None, None).await {
+            Outcome::Prepared => Ok(0),
+            Outcome::Identifier(count) => Ok(count),
+            Outcome::Fatal(error) => Err(error.to_string()),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_report_is_prepared_only_when_the_matter_and_its_terms_are_readable() {
+        let id = uuid::Uuid::new_v4();
+        let (server, _login) = site(json!([{"id": id, "code": "sample-matter"}])).await;
+        let host = server.uri();
+        let bound = format!("project: sample-matter\nhost: {host}\n{PINNED}");
+        let clean = Some("Section 3 cites the wrong statute.");
+        for (manifest, draft, expected) in [
+            (bound.as_str(), None, "could not read the draft"),
+            ("- a list\n", clean, "no readable navigator.yaml here"),
+            ("project: sample-matter\n", clean, "no Kit is pinned"),
+            (PINNED, clean, "names no host"),
+            (
+                &format!("host: {host}\n{PINNED}"),
+                clean,
+                "names no project",
+            ),
+            (
+                &format!("project: sample-matter\nhost: signed-out.example.test\n{PINNED}"),
+                clean,
+                "site login unavailable or expired",
+            ),
+            (bound.as_str(), clean, "could not read private terms"),
+        ] {
+            let error = outcome(manifest, draft).await.unwrap_err();
+            assert!(error.contains(expected), "{error}");
+        }
+
+        let terms = json!({
+            "code": "sample-matter",
+            "name": "Sample Matter",
+            "identifiers": [],
+            "participants": [{"name": "Harper Cruller", "email": "harper@crullers.example", "phone": null}],
+        });
+        let door = format!("/app/api/projects/{id}/private-terms");
+        answer(&server, "GET", &door, 200, terms).await;
+        assert_eq!(outcome(&bound, clean).await, Ok(0));
+        let named = Some("Harper Cruller says section 3 is wrong.");
+        assert_eq!(outcome(&bound, named).await, Ok(1));
+    }
 
     fn pin(jurisdiction: &str, practice_area: &str, version: &str) -> SkillPin {
         SkillPin {

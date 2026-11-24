@@ -578,4 +578,224 @@ mod tests {
             CheckVerdict::Pending
         );
     }
+
+    const REPOSITORY: &str = "example/sample-litigation";
+
+    fn review() -> ReviewRef {
+        ReviewRef {
+            number: 7,
+            head_sha: "head".into(),
+            url: "https://forge.example/pulls/7".into(),
+        }
+    }
+
+    /// Pull 7 from this repository's `change` branch, with `fields` laid over it.
+    fn pull_with(fields: &serde_json::Value) -> serde_json::Value {
+        let mut pull = json!({
+            "number": 7,
+            "head": {"sha": "head", "ref": "change", "repo": {"full_name": REPOSITORY}},
+            "base": {"sha": "base", "ref": "main"},
+            "html_url": "https://forge.example/pulls/7",
+            "draft": false, "merged": false, "merge_commit_sha": null, "mergeable": true
+        });
+        for (key, value) in fields.as_object().unwrap() {
+            pull[key] = value.clone();
+        }
+        pull
+    }
+
+    async fn answer(server: &MockServer, verb: &str, suffix: &str, body: serde_json::Value) {
+        Mock::given(method(verb))
+            .and(path(format!("/api/v1/{suffix}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(server)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn the_required_status_and_mergeability_decide_the_verdict() {
+        for (pull, state, expected) in [
+            (
+                json!({}),
+                "failure",
+                CheckVerdict::Failed(REQUIRED_CHECK_CONTEXT.into()),
+            ),
+            (json!({}), "success", CheckVerdict::Green),
+            (
+                json!({"mergeable": false}),
+                "success",
+                CheckVerdict::Conflict,
+            ),
+            (
+                json!({"mergeable": false, "merged": true}),
+                "success",
+                CheckVerdict::Green,
+            ),
+            (json!({}), "pending", CheckVerdict::Pending),
+        ] {
+            let server = MockServer::start().await;
+            let pulls = format!("repos/{REPOSITORY}/pulls/7");
+            answer(&server, "GET", &pulls, pull_with(&pull)).await;
+            let statuses = json!({"statuses": [
+                {"context": "another", "state": "failure"},
+                {"context": REQUIRED_CHECK_CONTEXT, "state": state},
+            ]});
+            let status = format!("repos/{REPOSITORY}/commits/head/status");
+            answer(&server, "GET", &status, statuses).await;
+            let forge = ForgejoForge::new(&server.uri(), REPOSITORY, "t".into()).unwrap();
+            assert_eq!(forge.check_verdict(&review()).await.unwrap(), expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_merge_is_reported_only_from_the_reviewed_head() {
+        for (pull, expected) in [
+            (json!({}), Ok(None)),
+            (
+                json!({"merged": true, "merge_commit_sha": "merged"}),
+                Ok(Some("merged".to_string())),
+            ),
+            (json!({"merged": true, "merge_commit_sha": ""}), Ok(None)),
+            (
+                json!({"head": {"sha": "newer", "ref": "change"}}),
+                Err("review head changed; re-run the verb before merging".to_string()),
+            ),
+        ] {
+            let server = MockServer::start().await;
+            let pulls = format!("repos/{REPOSITORY}/pulls/7");
+            answer(&server, "GET", &pulls, pull_with(&pull)).await;
+            let forge = ForgejoForge::new(&server.uri(), REPOSITORY, "t".into()).unwrap();
+            let merged = forge.merge_commit(&review()).await;
+            assert_eq!(merged.map_err(|error| error.to_string()), expected);
+            if let Ok(Some(merge_commit)) = expected {
+                let armed = forge.arm_merge(&review()).await.unwrap();
+                assert_eq!(armed, ArmOutcome::MergedNow { merge_commit });
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_new_review_is_opened_for_this_repository_and_never_as_a_draft() {
+        let request = || ReviewRequest {
+            head_branch: "change".into(),
+            base_branch: "main".into(),
+            title: "A change".into(),
+            body: "Why".into(),
+        };
+        for (existing, created, expected) in [
+            (json!([]), json!({}), Ok(7)),
+            (
+                json!([]),
+                json!({"head": {"sha": "head", "ref": "change", "repo": {"full_name": "fork/x"}}}),
+                Err("created review request belongs to another source repository"),
+            ),
+            (
+                json!([pull_with(&json!({"draft": true}))]),
+                json!({}),
+                Err("the existing review request is a draft; mark it ready before continuing"),
+            ),
+            (
+                json!([pull_with(
+                    &json!({"base": {"sha": "base", "ref": "release"}})
+                )]),
+                json!({}),
+                Err("existing review request targets another base"),
+            ),
+        ] {
+            let server = MockServer::start().await;
+            let pulls = format!("repos/{REPOSITORY}/pulls");
+            answer(&server, "GET", &pulls, existing).await;
+            Mock::given(method("POST"))
+                .and(path(format!("/api/v1/{pulls}")))
+                .and(wiremock::matchers::body_json(json!({
+                    "title": "A change", "head": "change", "base": "main", "body": "Why"
+                })))
+                .respond_with(ResponseTemplate::new(201).set_body_json(pull_with(&created)))
+                .mount(&server)
+                .await;
+            let forge = ForgejoForge::new(&server.uri(), REPOSITORY, "t".into()).unwrap();
+            let opened = forge.open_review(request()).await;
+            assert_eq!(
+                opened
+                    .map(|review| review.number)
+                    .map_err(|error| error.to_string()),
+                expected.map_err(str::to_owned)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn the_forge_names_its_identity_and_refuses_a_primary_without_actions() {
+        let server = MockServer::start().await;
+        let forge = ForgejoForge::new(&server.uri(), REPOSITORY, "t".into()).unwrap();
+        let error = forge.identity().await.unwrap_err();
+        assert_eq!(error.to_string(), "Forgejo request refused");
+        assert!(forge.remote_reachable().await.is_err());
+        assert!(forge.find_merged_review("change", "head").await.is_err());
+
+        answer(&server, "GET", "user", json!({"login": "lawyer"})).await;
+        assert_eq!(forge.identity().await.unwrap(), "lawyer");
+        let repository = format!("repos/{REPOSITORY}/");
+        answer(&server, "GET", &repository, json!({})).await;
+        forge.remote_reachable().await.unwrap();
+        let primary = format!("repos/{REPOSITORY}");
+        answer(&server, "GET", &primary, json!({"has_actions": false})).await;
+        let error = forge.verify_workspace().await.unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Forgejo Actions are disabled for the Project's primary repository"
+        );
+        let runs = format!("repos/{REPOSITORY}/actions/runs");
+        answer(&server, "GET", &runs, json!({"workflow_runs": []})).await;
+        assert!(forge.verification(&review()).await.unwrap().is_none());
+        assert!(ForgejoForge::new(&server.uri(), "not a repository", "t".into()).is_err());
+    }
+
+    #[test]
+    fn a_checkout_binds_only_to_the_configured_forgejo_origin() {
+        use crate::projects::test_login::checkout;
+        std::env::set_var("NAVIGATOR_FORGEJO_ROOT_URL", "https://forge.example.test");
+        std::env::set_var("FORGEJO_TOKEN", "forge-token");
+        for (origin, expected) in [
+            (
+                "git@forge.example.test:example/sample-litigation.git",
+                Ok(()),
+            ),
+            (
+                "https://forge.example.test/example/sample-litigation",
+                Ok(()),
+            ),
+            (
+                "ssh://git@forge.example.test/example/sample-litigation.git",
+                Ok(()),
+            ),
+            (
+                "https://other.example.test/example/sample-litigation",
+                Err("checkout remote differs from configured Forgejo host"),
+            ),
+            (
+                "http://forge.example.test/example/sample-litigation",
+                Err("checkout remote differs from configured Forgejo origin"),
+            ),
+        ] {
+            let dir = checkout("project: sample-litigation\n", Some(origin));
+            let bound = ForgejoForge::from_checkout(dir.path());
+            assert_eq!(
+                bound
+                    .map(|forge| assert_eq!(forge.repository, REPOSITORY))
+                    .map_err(|error| error.to_string()),
+                expected.map_err(str::to_owned),
+                "{origin}"
+            );
+        }
+        std::env::remove_var("FORGEJO_TOKEN");
+        let dir = checkout(
+            "project: sample-litigation\n",
+            Some("git@forge.example.test:a/b"),
+        );
+        let error = ForgejoForge::from_checkout(dir.path()).err().unwrap();
+        assert!(error
+            .to_string()
+            .contains("FORGEJO_TOKEN must be configured"));
+    }
 }

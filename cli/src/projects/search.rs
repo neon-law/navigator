@@ -764,4 +764,128 @@ mod tests {
             Record::WorkProduct
         );
     }
+
+    fn project(files: &[(&str, &[u8])]) -> tempfile::TempDir {
+        let root = tempfile::tempdir().unwrap();
+        for (path, bytes) in files {
+            let path = root.path().join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, bytes).unwrap();
+        }
+        root
+    }
+
+    #[test]
+    fn the_exit_code_separates_hits_no_hits_and_incomplete_coverage() {
+        use std::process::ExitCode;
+        let root = project(&[(
+            "documents/correspondence/letter.txt",
+            b"Dear counsel,\nthe hearing moved.\n",
+        )]);
+        let run = |pattern: &str, dir: &std::path::Path, json: bool| {
+            super::run(pattern, dir, true, 1, json, false)
+        };
+        assert_eq!(run("HEARING", root.path(), false), ExitCode::SUCCESS);
+        assert_eq!(run("hearing", root.path(), true), ExitCode::SUCCESS);
+        assert_eq!(run("trial", root.path(), false), ExitCode::from(1));
+        assert_eq!(run("(", root.path(), false), ExitCode::from(2));
+        let letter = root.path().join("documents/correspondence/letter.txt");
+        assert_eq!(run("hearing", &letter, false), ExitCode::from(2));
+        assert_eq!(
+            run("hearing", &root.path().join("absent"), false),
+            ExitCode::from(2)
+        );
+        std::fs::write(root.path().join("documents/scan"), b"\x00").unwrap();
+        assert_eq!(run("hearing", root.path(), false), ExitCode::from(2));
+    }
+
+    #[test]
+    fn each_hit_names_its_record_class_line_and_context() {
+        let root = project(&[
+            (
+                "documents/filings/motion.txt",
+                b"first\nneedle here\nlast\n",
+            ),
+            ("documents/correspondence/letter.md", b"needle"),
+            ("documents/transcripts/call.csv", b"needle"),
+            ("documents/exhibits/photo.xml", b"needle"),
+            ("notes/memo.yaml", b"needle"),
+        ]);
+        let report = search("needle", root.path(), false, 1, false).unwrap();
+        let classes: Vec<_> = report
+            .hits
+            .iter()
+            .map(|hit| (hit.path.as_str(), hit.record_class))
+            .collect();
+        assert_eq!(
+            classes,
+            vec![
+                ("documents/correspondence/letter.md", "correspondence"),
+                ("documents/exhibits/photo.xml", "other"),
+                ("documents/filings/motion.txt", "court record"),
+                ("documents/transcripts/call.csv", "client statement"),
+                ("notes/memo.yaml", "work product"),
+            ]
+        );
+        let motion = &report.hits[2];
+        assert_eq!((motion.page, motion.line), (None, Some(2)));
+        assert_eq!(motion.context, vec!["first", "needle here", "last"]);
+
+        let court = search("needle", root.path(), false, 0, true).unwrap();
+        assert_eq!(court.hits.len(), 1);
+        assert_eq!(court.coverage.searched_by_kind["txt"], 1);
+    }
+
+    #[test]
+    fn an_undecodable_file_is_reported_with_its_reason() {
+        let root = project(&[
+            ("documents/a.json", b"{not json"),
+            ("documents/b.json", br#"{"emails": ["loose text"]}"#),
+            ("documents/c.txt", b"\xff\xfe"),
+            ("documents/d.docx", b"not a package"),
+            ("documents/e", b"needle"),
+            (
+                "documents/f.json",
+                br#"{"mail": [{"Sender": "a@example.test", "sent_at": "2026-01-02", "body": ["needle", 7]}]}"#,
+            ),
+            ("documents/g.json", br#"{"thread": {"from": "b@example.test"}, "text": "needle"}"#),
+        ]);
+        let report = search("needle", root.path(), false, 0, false).unwrap();
+        let reasons: Vec<_> = report
+            .coverage
+            .not_searched
+            .iter()
+            .map(|missed| (missed.path.as_str(), missed.reason.as_str()))
+            .collect();
+        assert_eq!(reasons.len(), 5, "{reasons:?}");
+        for (path, reason) in [
+            ("documents/a.json", "JSON decode error"),
+            (
+                "documents/b.json",
+                "JSON mail export has a non-object message",
+            ),
+            ("documents/c.txt", "UTF-8 decode error"),
+            ("documents/d.docx", "DOCX decode error"),
+            ("documents/e", "unsupported file type: .[none]"),
+        ] {
+            assert!(
+                reasons
+                    .iter()
+                    .any(|(missed, why)| *missed == path && why.starts_with(reason)),
+                "{path}: {reasons:?}"
+            );
+        }
+        let provenance: Vec<_> = report
+            .hits
+            .iter()
+            .map(|hit| (hit.from.as_deref(), hit.message_date.as_deref()))
+            .collect();
+        assert_eq!(
+            provenance,
+            vec![
+                (Some("a@example.test"), Some("2026-01-02")),
+                (Some("b@example.test"), None),
+            ]
+        );
+    }
 }

@@ -1,5 +1,6 @@
 //! Run a Project's gate with the release declared in its manifest.
 
+use std::ffi::OsString;
 use std::io::Write as _;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
@@ -114,11 +115,14 @@ async fn run(root: &Path, running_release: &str, arguments: &[&str]) -> Result<O
 }
 
 fn cache_root() -> Result<PathBuf> {
-    if let Some(path) = std::env::var_os("XDG_CACHE_HOME").filter(|path| !path.is_empty()) {
+    cache_root_from(std::env::var_os("XDG_CACHE_HOME"), std::env::var_os("HOME"))
+}
+
+fn cache_root_from(xdg: Option<OsString>, home: Option<OsString>) -> Result<PathBuf> {
+    if let Some(path) = xdg.filter(|path| !path.is_empty()) {
         return Ok(PathBuf::from(path));
     }
-    std::env::var_os("HOME")
-        .filter(|path| !path.is_empty())
+    home.filter(|path| !path.is_empty())
         .map(|path| PathBuf::from(path).join(".cache"))
         .ok_or_else(|| anyhow!("set XDG_CACHE_HOME or HOME to cache the pinned gate release"))
 }
@@ -384,5 +388,69 @@ mod tests {
         .unwrap();
         verify_version(&destination, "26.10.24").await.unwrap();
         assert_eq!(std::fs::read(&destination).unwrap(), script);
+    }
+
+    #[tokio::test]
+    async fn a_different_pin_runs_the_cached_release_and_returns_its_exit_code() {
+        let project = tempfile::tempdir().unwrap();
+        let pinned = |version: &str| {
+            let manifest = format!("version: {version}\n");
+            std::fs::write(project.path().join("navigator.yaml"), manifest).unwrap();
+        };
+        pinned("latest");
+        let error = run(project.path(), "26.10.24", &[]).await.unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("version `latest` must be an exact Navigator release tag"));
+
+        pinned("26.10.23");
+        let cache = tempfile::tempdir().unwrap();
+        std::env::set_var("XDG_CACHE_HOME", cache.path());
+        std::env::remove_var(DELEGATED_RELEASE);
+        let platform = if cfg!(target_os = "macos") {
+            "macos"
+        } else {
+            "linux"
+        };
+        let binary = cache
+            .path()
+            .join("navigator/releases/26.10.23")
+            .join(platform)
+            .join("navigator");
+        std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        let install = |script: &str| {
+            std::fs::write(&binary, script).unwrap();
+            std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        install("#!/bin/sh\nprintf 'navigator 26.10.22\\n'\n");
+        let error = run(project.path(), "26.10.24", &[]).await.unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("does not report navigator 26.10.23"));
+
+        // The pinned release answers `--version`, then sees the gate flags
+        // and the delegation marker.
+        install(
+            "#!/bin/sh\nif [ \"$1\" = --version ]; then printf 'navigator 26.10.23\\n'; exit 0; fi\n\
+             [ \"$*\" = 'project gate --ci' ] && [ \"$NAVIGATOR_PINNED_GATE_DELEGATED\" = 26.10.23 ] \
+             && exit 7\nexit 1\n",
+        );
+        let outcome = run(project.path(), "26.10.24", &["--ci"]).await.unwrap();
+        assert_eq!(outcome, Some(ExitCode::from(7)));
+
+        std::env::set_var(DELEGATED_RELEASE, "26.10.24");
+        let error = run(project.path(), "26.10.24", &[]).await.unwrap_err();
+        assert!(error.to_string().contains("refusing to delegate again"));
+    }
+
+    #[test]
+    fn the_release_cache_sits_under_the_xdg_cache_or_the_home_cache() {
+        let home = || Some(OsString::from("/home/lawyer"));
+        let root = cache_root_from(Some("/var/cache/xdg".into()), home()).unwrap();
+        assert_eq!(root, Path::new("/var/cache/xdg"));
+        let root = cache_root_from(Some(OsString::new()), home()).unwrap();
+        assert_eq!(root, Path::new("/home/lawyer/.cache"));
+        let error = cache_root_from(None, Some(OsString::new())).unwrap_err();
+        assert!(error.to_string().contains("set XDG_CACHE_HOME or HOME"));
     }
 }

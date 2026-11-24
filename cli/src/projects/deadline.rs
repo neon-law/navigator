@@ -256,6 +256,16 @@ fn category_field(category: Option<&str>) -> Result<Option<String>> {
     Ok(category.map(str::to_string))
 }
 
+fn insert<T: serde::Serialize>(
+    object: &mut serde_json::Map<String, Value>,
+    key: &str,
+    value: Option<T>,
+) {
+    if let Some(value) = value {
+        object.insert(key.into(), json!(value));
+    }
+}
+
 fn export_row(base: &str, code: &str, row: &Value, location: Option<&str>) -> Result<String> {
     let url = reqwest::Url::parse(base)?;
     let mut row = row.clone();
@@ -320,44 +330,21 @@ pub async fn create(
                 return Err(anyhow!("--title must name what is due"));
             }
             let (base, token, id, code) = coordinates_with_code(host, project).await?;
-            let mut body = json!({
-                "due_at": due_at,
-                "authority_kind": authority_kind,
-                "calendar_role": calendar_role,
-            });
-            let Some(object) = body.as_object_mut() else {
-                return Err(anyhow!("deadline body is an object"));
-            };
-            if let Some(title) = title {
-                object.insert("title".into(), json!(title));
-            }
-            if let Some(description) = description {
-                object.insert("description".into(), json!(description));
-            }
-            if let Some(category) = category_field(category.as_deref())? {
-                object.insert("category".into(), json!(category));
-            }
-            if let Some(authority) = authority {
-                object.insert("authority".into(), json!(authority));
-            }
-            if let Some(source) = source {
-                object.insert("source".into(), json!(source));
-            }
-            if let Some(document) = source_document {
-                object.insert("source_document_id".into(), json!(document));
-            }
-            if let Some(owner) = owner {
-                object.insert("owner_person_id".into(), json!(owner));
-            }
-            if let Some(days) = internal_lead_days {
-                object.insert("internal_lead_days".into(), json!(days));
-            }
-            if let Some(days) = client_lead_days {
-                object.insert("client_lead_days".into(), json!(days));
-            }
-            if let Some(key) = replay_key {
-                object.insert("replay_key".into(), json!(key));
-            }
+            let mut body = serde_json::Map::new();
+            let object = &mut body;
+            insert(object, "due_at", Some(due_at));
+            insert(object, "authority_kind", Some(authority_kind));
+            insert(object, "calendar_role", Some(calendar_role));
+            insert(object, "title", title);
+            insert(object, "description", description);
+            insert(object, "category", category_field(category.as_deref())?);
+            insert(object, "authority", authority);
+            insert(object, "source", source);
+            insert(object, "source_document_id", source_document);
+            insert(object, "owner_person_id", owner);
+            insert(object, "internal_lead_days", internal_lead_days);
+            insert(object, "client_lead_days", client_lead_days);
+            insert(object, "replay_key", replay_key);
             apply_visibility(object, visibility.as_deref(), client_lead_days, true)?;
             let row = call(
                 reqwest::Client::new()
@@ -397,51 +384,24 @@ pub async fn update(
     finish(
         async {
             let (base, token, project_id, code) = coordinates_with_code(host, project).await?;
-            let mut body = json!({});
-            let Some(object) = body.as_object_mut() else {
-                return Err(anyhow!("deadline body is an object"));
-            };
-            if let Some(title) = title {
-                object.insert("title".into(), json!(title));
-            }
-            if let Some(due_at) = due_at {
-                object.insert("due_at".into(), json!(due_at));
-            }
-            if let Some(kind) = authority_kind {
-                object.insert("authority_kind".into(), json!(kind));
-            }
-            if let Some(authority) = authority {
-                object.insert("authority".into(), json!(authority));
-            }
-            if let Some(source) = source {
-                object.insert("source".into(), json!(source));
-            }
-            if let Some(document) = source_document {
-                object.insert("source_document_id".into(), json!(document));
-            }
-            if let Some(owner) = owner {
-                object.insert("owner_person_id".into(), json!(owner));
-            }
-            if let Some(role) = calendar_role {
-                object.insert("calendar_role".into(), json!(role));
-            }
+            let mut body = serde_json::Map::new();
+            let object = &mut body;
+            insert(object, "title", title);
+            insert(object, "due_at", due_at);
+            insert(object, "authority_kind", authority_kind);
+            insert(object, "authority", authority);
+            insert(object, "source", source);
+            insert(object, "source_document_id", source_document);
+            insert(object, "owner_person_id", owner);
+            insert(object, "calendar_role", calendar_role);
             // Absent flag preserves the stored category; an empty value
             // clears it. The portal's double-Option carries the difference.
             if let Some(raw) = category.as_deref() {
-                object.insert(
-                    "category".into(),
-                    category_field(Some(raw))?.map_or(Value::Null, |category| json!(category)),
-                );
+                object.insert("category".into(), json!(category_field(Some(raw))?));
             }
-            if let Some(days) = internal_lead_days {
-                object.insert("internal_lead_days".into(), json!(days));
-            }
-            if let Some(days) = client_lead_days {
-                object.insert("client_lead_days".into(), json!(days));
-            }
-            if let Some(description) = description {
-                object.insert("description".into(), json!(description));
-            }
+            insert(object, "internal_lead_days", internal_lead_days);
+            insert(object, "client_lead_days", client_lead_days);
+            insert(object, "description", description);
             apply_visibility(object, visibility.as_deref(), client_lead_days, false)?;
             let row = call(
                 reqwest::Client::new()
@@ -603,5 +563,268 @@ mod tests {
         assert_eq!(client["visibility"], "client");
         apply_visibility(client.as_object_mut().unwrap(), None, Some(3), true).unwrap();
         assert!(client["client_lead_days"].is_null());
+        let error = apply_visibility(client.as_object_mut().unwrap(), Some("public"), None, true)
+            .unwrap_err();
+        assert_eq!(error.to_string(), "visibility must be internal or client");
+    }
+
+    use crate::projects::test_login::{answer, site};
+    use serde_json::json;
+    use std::process::ExitCode;
+    use wiremock::matchers::body_json;
+
+    const CODE: &str = "sample-matter";
+
+    async fn matter() -> (MockServer, crate::projects::test_login::Login, String) {
+        let id = Uuid::new_v4();
+        let (server, login) = site(json!([{"id": id, "code": CODE}])).await;
+        (server, login, format!("/app/api/projects/{id}/deadlines"))
+    }
+
+    #[tokio::test]
+    async fn list_and_ics_read_the_project_rows_and_refuse_a_failed_read() {
+        let (server, _login, door) = matter().await;
+        let host = server.uri();
+        let host = Some(host.as_str());
+        assert_eq!(super::list(host, Some(CODE)).await, ExitCode::FAILURE);
+        assert_eq!(super::list(host, None).await, ExitCode::FAILURE);
+        let rows = json!([{
+            "id": "deadline-1", "due_at": "2026-11-02T17:00:00-08:00",
+            "updated_at": "2026-10-26T00:00:00Z", "status": "open", "title": "Response",
+            "category": null, "client_lead_days": null,
+        }]);
+        answer(&server, "GET", &door, 200, rows).await;
+        assert_eq!(super::list(host, Some(CODE)).await, ExitCode::SUCCESS);
+        assert_eq!(super::ics(host, Some(CODE)).await, ExitCode::SUCCESS);
+        assert_eq!(super::ics(host, Some("absent")).await, ExitCode::FAILURE);
+    }
+
+    #[tokio::test]
+    async fn ics_refuses_a_deadline_list_that_is_not_an_array() {
+        let (server, _login, door) = matter().await;
+        answer(&server, "GET", &door, 200, json!({"rows": []})).await;
+        let host = server.uri();
+        assert_eq!(super::ics(Some(&host), Some(CODE)).await, ExitCode::FAILURE);
+    }
+
+    #[tokio::test]
+    async fn create_sends_only_supplied_fields_and_exports_the_saved_row() {
+        let (server, _login, door) = matter().await;
+        let (document, owner) = (Uuid::new_v4(), Uuid::new_v4());
+        Mock::given(method("POST"))
+            .and(path(door))
+            .and(body_json(json!({
+                "due_at": "2026-11-02T17:00:00-08:00",
+                "authority_kind": "court_order",
+                "calendar_role": "firm",
+                "title": "Response",
+                "description": "Served by mail",
+                "category": "court",
+                "authority": "Scheduling order",
+                "source": "lawyer",
+                "source_document_id": document,
+                "owner_person_id": owner,
+                "internal_lead_days": 7,
+                "client_lead_days": 3,
+                "replay_key": "replay-1",
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "deadline-1", "due_at": "2026-11-02T17:00:00-08:00",
+                "updated_at": "2026-10-26T00:00:00Z", "status": "open", "title": "Response",
+            })))
+            .mount(&server)
+            .await;
+        let host = server.uri();
+        let directory = tempfile::tempdir().unwrap();
+        let calendar = directory.path().join("event.ics");
+        let create = |title: Option<&str>, category: &str, visibility: &str| {
+            super::create(
+                Some(&host),
+                Some(CODE),
+                title.map(str::to_owned),
+                Some("Served by mail".into()),
+                Some(visibility.into()),
+                "2026-11-02T17:00:00-08:00".into(),
+                "court_order".into(),
+                Some("Scheduling order".into()),
+                Some("lawyer".into()),
+                Some(document),
+                Some(owner),
+                "firm".into(),
+                Some(category.into()),
+                Some(7),
+                Some(3),
+                Some("replay-1".into()),
+                Some(&calendar),
+                Some("Courtroom 4"),
+            )
+        };
+        assert_eq!(
+            create(Some("  "), "court", "client").await,
+            ExitCode::FAILURE
+        );
+        assert_eq!(
+            create(Some("Response"), "nonsense", "client").await,
+            ExitCode::FAILURE
+        );
+        assert_eq!(
+            create(Some("Response"), "court", "public").await,
+            ExitCode::FAILURE
+        );
+        assert!(!calendar.exists());
+        assert_eq!(
+            create(Some("Response"), "court", "client").await,
+            ExitCode::SUCCESS
+        );
+        let exported = std::fs::read_to_string(&calendar).unwrap();
+        assert!(exported.contains("LOCATION:Courtroom 4\r\n"), "{exported}");
+    }
+
+    #[tokio::test]
+    async fn update_patches_named_fields_and_an_empty_category_clears_it() {
+        let (server, _login, door) = matter().await;
+        let id = Uuid::new_v4();
+        let (document, owner) = (Uuid::new_v4(), Uuid::new_v4());
+        Mock::given(method("PATCH"))
+            .and(path(format!("{door}/{id}")))
+            .and(body_json(json!({
+                "title": "Reply",
+                "due_at": "2026-11-09T17:00:00-08:00",
+                "authority_kind": "rule",
+                "authority": "Local rule 7",
+                "source": "lawyer",
+                "source_document_id": document,
+                "owner_person_id": owner,
+                "calendar_role": "client",
+                "category": null,
+                "internal_lead_days": 5,
+                "client_lead_days": null,
+                "description": "Moved by stipulation",
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": id})))
+            .mount(&server)
+            .await;
+        let host = server.uri();
+        let update = |category: &str| {
+            super::update(
+                Some(&host),
+                Some(CODE),
+                id,
+                Some("Reply".into()),
+                Some("Moved by stipulation".into()),
+                Some("internal".into()),
+                Some("2026-11-09T17:00:00-08:00".into()),
+                Some("rule".into()),
+                Some("Local rule 7".into()),
+                Some("lawyer".into()),
+                Some(document),
+                Some(owner),
+                Some("client".into()),
+                Some(category.into()),
+                Some(5),
+                Some(2),
+                None,
+                None,
+            )
+        };
+        assert_eq!(update("").await, ExitCode::SUCCESS);
+        assert_eq!(update("nonsense").await, ExitCode::FAILURE);
+    }
+
+    #[tokio::test]
+    async fn each_transition_verb_posts_to_its_own_door() {
+        let (server, _login, door) = matter().await;
+        let id = Uuid::new_v4();
+        let host = server.uri();
+        let host = Some(host.as_str());
+        for verb in ["complete", "cancel"] {
+            let route = format!("{door}/{id}/{verb}");
+            answer(&server, "POST", &route, 200, json!({"status": verb})).await;
+        }
+        assert_eq!(
+            super::complete(host, Some(CODE), id).await,
+            ExitCode::SUCCESS
+        );
+        assert_eq!(super::cancel(host, Some(CODE), id).await, ExitCode::SUCCESS);
+        assert_eq!(super::reopen(host, Some(CODE), id).await, ExitCode::FAILURE);
+    }
+
+    #[tokio::test]
+    async fn sync_succeeds_only_when_every_result_is_an_accepted_outcome() {
+        let (server, _login, _door) = matter().await;
+        let host = server.uri();
+        let door = "/app/api/integrations/calendar/deadline-mirror";
+        assert_eq!(
+            super::sync(Some(&host), Some(CODE), true).await,
+            ExitCode::FAILURE
+        );
+        for (results, expected) in [
+            (json!({"results": {}}), ExitCode::FAILURE),
+            (json!({"results": []}), ExitCode::FAILURE),
+            (
+                json!({"results": [
+                    {"project_code": CODE, "outcome": "mirrored", "detail": "2 events"},
+                    {"project_code": CODE, "outcome": "calendar_unprovisioned"},
+                ]}),
+                ExitCode::FAILURE,
+            ),
+            (
+                json!({"results": [{"project_code": CODE, "outcome": "planned"}]}),
+                ExitCode::SUCCESS,
+            ),
+        ] {
+            server.reset().await;
+            answer(
+                &server,
+                "GET",
+                "/app/api/projects",
+                200,
+                json!([{"id": Uuid::new_v4(), "code": CODE}]),
+            )
+            .await;
+            Mock::given(method("POST"))
+                .and(path(door))
+                .and(body_json(
+                    json!({"project_code": CODE, "all": false, "dry_run": true}),
+                ))
+                .respond_with(ResponseTemplate::new(200).set_body_json(results))
+                .mount(&server)
+                .await;
+            assert_eq!(super::sync(Some(&host), Some(CODE), true).await, expected);
+        }
+    }
+
+    #[test]
+    fn each_incomplete_sync_outcome_names_its_next_step() {
+        for (outcome, expected) in [
+            ("calendar_unprovisioned", "has no calendar yet"),
+            ("provider_unauthorized", "domain-wide"),
+            ("provider_unavailable", "nothing was duplicated"),
+            ("mirror_incomplete", "nothing was duplicated"),
+            (
+                "recorded_resource_missing",
+                "navigator project set sample --calendar",
+            ),
+        ] {
+            let remedy = super::sync_remedy(outcome, "sample").unwrap();
+            assert!(remedy.contains(expected), "{remedy}");
+            assert!(remedy.contains("navigator project deadline sync --project sample"));
+        }
+        assert_eq!(super::sync_remedy("mirrored", "sample"), None);
+    }
+
+    #[test]
+    fn a_category_is_trimmed_validated_and_cleared_when_blank() {
+        let known = model::project_deadlines::CATEGORIES[0];
+        assert_eq!(
+            super::category_field(Some(&format!(" {known} ")))
+                .unwrap()
+                .as_deref(),
+            Some(known)
+        );
+        assert_eq!(super::category_field(Some("  ")).unwrap(), None);
+        assert_eq!(super::category_field(None).unwrap(), None);
+        let error = super::category_field(Some("nonsense")).unwrap_err();
+        assert!(error.to_string().starts_with("--category must be one of "));
     }
 }
