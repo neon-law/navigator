@@ -478,6 +478,13 @@
     },
     {
       "extra_column": null,
+      "extra_table": "lead_intake",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
       "extra_table": "legal_plan",
       "missing_column": null,
       "missing_table": null,
@@ -2271,7 +2278,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 193,
+    "table_count": 194,
     "tables": {
       "address": {
         "columns": {
@@ -4400,6 +4407,33 @@
         "foreign_keys": [],
         "name": "lead_consent",
         "references": []
+      },
+      "lead_intake": {
+        "columns": {
+          "concern": "TEXT",
+          "firm_id": "UUID",
+          "id": "TEXT",
+          "lead_id": "UUID",
+          "next_date": "DATE",
+          "relationship": "TEXT",
+          "school_district": "TEXT",
+          "submitted_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "firm_id",
+            "firm"
+          ],
+          [
+            "lead_id",
+            "lead"
+          ]
+        ],
+        "name": "lead_intake",
+        "references": [
+          "firm",
+          "lead"
+        ]
       },
       "legal_plan": {
         "columns": {

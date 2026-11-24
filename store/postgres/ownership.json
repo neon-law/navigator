@@ -464,6 +464,13 @@
     "scope": "Lead evidence history",
     "through": "lead_id is the typed source link; orphaned historical events remain reportable, and history cannot be rewritten or cascaded away"
   },
+  "lead_intake": {
+    "migration_slice": "communications-storage",
+    "parity_scenario": "a repeated submission is idempotent and separate inquiries retain their own answers",
+    "scope": "intake held by its receiving Firm",
+    "target_only": true,
+    "through": "lead_id and the firm_id recorded when the Brand receives the intake"
+  },
   "legal_plan_claim": {
     "migration_slice": "legal-plan-collections",
     "parity_scenario": "closed Project claims retain verified benefits and reconcile confirmed cash once",

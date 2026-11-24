@@ -8,6 +8,7 @@ pub(crate) async fn record(
     pg: &crate::postgres::PostgresDb,
     new: &NewLead,
     event: Option<&NewConsentEvent>,
+    intake: Option<&crate::leads::LeadIntake<'_>>,
 ) -> Result<Lead, LeadError> {
     use crate::postgres::matter::MatterAuthorityError as PgError;
     let email = new.email.trim();
@@ -18,6 +19,21 @@ pub(crate) async fn record(
         .execute(&mut *tx)
         .await
         .map_err(PgError::from)?;
+    if let Some(answers) = intake {
+        let prior: Option<serde_json::Value> = sqlx::query_scalar(
+            "SELECT to_jsonb(r) FROM lead r JOIN lead_intake i ON i.lead_id=r.id
+             WHERE i.id=$1 AND r.email_lower=$2 AND r.brand_key=$3",
+        )
+        .bind(&answers.submission_key)
+        .bind(&email_lower)
+        .bind(&new.brand_key)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(PgError::from)?;
+        if let Some(row) = prior {
+            return Ok(serde_json::from_value(row).map_err(PgError::from)?);
+        }
+    }
     let existing: Option<Uuid> = sqlx::query_scalar("SELECT id FROM lead WHERE email_lower=$1 AND brand_key=$2 ORDER BY updated_at DESC,id DESC LIMIT 1 FOR UPDATE")
         .bind(&email_lower).bind(&new.brand_key).fetch_optional(&mut *tx).await.map_err(PgError::from)?;
     let id = existing.unwrap_or_else(Uuid::now_v7);
@@ -36,6 +52,13 @@ pub(crate) async fn record(
             .bind(Uuid::now_v7()).bind(id).bind(event.consented_at).bind(&event.phone)
             .bind(&event.source_path).bind(&event.sms_consent_version).bind(&event.sms_policy_version)
             .bind(event.sms_opt_in).bind(&event.call_consent_version).bind(event.call_opt_in)
+            .execute(&mut *tx).await.map_err(PgError::from)?;
+    }
+    if let Some(answers) = intake {
+        sqlx::query("INSERT INTO lead_intake (id,lead_id,firm_id,school_district,relationship,concern,next_date)
+            VALUES ($1,$2,(SELECT firm_id FROM firm_brand WHERE brand_key=$3),$4,$5,$6,$7)")
+            .bind(&answers.submission_key).bind(id).bind(&new.brand_key)
+            .bind(answers.district).bind(answers.relationship).bind(answers.concern).bind(answers.next_date)
             .execute(&mut *tx).await.map_err(PgError::from)?;
     }
     let lead = serde_json::from_value(row).map_err(PgError::from)?;

@@ -1918,7 +1918,11 @@ fn resolve_firm_contact_content(
     let firm_name = branding.firm.site_name;
 
     let legal_entity = branding.firm.legal_entity;
-    let page_title = "Contact";
+    let page_title = if branding.brand_key == BrandKey::IepDefenders {
+        "IEP intake"
+    } else {
+        "Contact"
+    };
     let meta_description = match branding.brand_key {
         BrandKey::DeleteYourData => format!(
             "Reach {firm_name}, a practice of {legal_entity}, about a data-deletion request. \
@@ -1960,7 +1964,13 @@ fn resolve_firm_contact_content(
         email_label: "Email".to_string(),
         phone_label: "Phone".to_string(),
         firm_email: branding.firm_email.to_string(),
-        booking_href: branding.consultation_url.to_string(),
+        iep_intake: branding.brand_key == BrandKey::IepDefenders,
+        booking_href: if branding.brand_key == BrandKey::IepDefenders {
+            "https://calendar.notion.com/meet/nick-shook/or15n4yy7"
+        } else {
+            branding.consultation_url
+        }
+        .to_string(),
         booking_label: if branding.brand_key == BrandKey::DeleteYourDebt {
             "Contact PandA Law"
         } else {

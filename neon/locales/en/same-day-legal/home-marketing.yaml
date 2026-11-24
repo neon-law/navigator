@@ -1,12 +1,12 @@
 head_title: "{site_name} | Home"
 meta_description: >-
-  Pre-sign up for free tools to prepare your own business filing before the new year. Choose
+  Use your AI assistant to draft records requests and prepare your own legal paperwork. Choose
   ad hoc attorney review from $50 or ongoing help for $29 per month.
 title: ""
-tagline: Get your business filing started before the new year
+tagline: Prepare your own legal paperwork
 hero_lead: >-
   Create your free account now. When you’re ready, use Navigator in your AI assistant
-  to find templates and prepare your own paperwork. You file it yourself and pay any government fees.
+  to find a template, draft a records request, or prepare small claims papers. You review and send or file them yourself.
 skin: same_day_legal
 bands:
   - kind: cards
@@ -62,3 +62,17 @@ bands:
       - title: Respond to a dispute
         body:
           - - text: Discuss what happened, any deadlines, and your options.
+
+  - kind: cards
+    anchor: school-records
+    overline: AI assistant
+    heading: Draft a school records request
+    items:
+      - title: Ask for a letter you can send
+        body:
+          - - text: >-
+                Try asking your AI assistant, “Draft a letter asking my school district to let me review the
+                current IEP, evaluations, and progress reports. Leave blanks for names and dates.”
+                Fill in the blanks yourself, then send it to the district’s special education office.
+        href: /auth/signup
+        href_label: Create your free account

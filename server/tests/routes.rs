@@ -10954,6 +10954,37 @@ fn assert_live_practice_home(key: views::brand::BrandKey, host: &str, body: &str
     );
 }
 
+/// A family can send its intake before the site asks it to register or book.
+#[tokio::test]
+async fn iep_intake_collects_answers_before_offering_signup() {
+    ensure_repo_root();
+    let state = AppState {
+        canonical_host: CanonicalHost::new(None),
+        ..portal::test_support::app_state(store::surreal::SurrealDb::uninitialized()).await
+    };
+    let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
+    let contact = get_on_host(&app, "/contact", "iep.neonlaw.com").await;
+    assert_eq!(contact.status(), StatusCode::OK);
+    let html = body_string(contact).await;
+    for field in [
+        "district",
+        "relationship",
+        "concern",
+        "next_date",
+        "email",
+        "_csrf",
+    ] {
+        assert!(html.contains(&format!(r#"name="{field}""#)), "{field}");
+    }
+    assert!(html.contains(r#"action="/leads""#));
+    assert!(!html.contains("or15n4yy7"));
+    let next = get_on_host(&app, "/contact/sent", "iep.neonlaw.com").await;
+    assert_eq!(next.status(), StatusCode::OK);
+    let html = body_string(next).await;
+    assert!(html.contains(r#"href="/auth/signup""#));
+    assert!(html.contains("calendar.notion.com/meet/nick-shook/or15n4yy7"));
+}
+
 /// The IEP Defenders home is a marketing-page band sequence, so its rendered
 /// HTML carries every band's anchor, the hero CTA, exactly one `<h1>`, and a
 /// qualifier beside each stat — a stat without its qualifier is a bare
@@ -11007,7 +11038,7 @@ async fn the_iep_defenders_home_renders_its_band_sequence_with_qualifiers() {
 
     // The hero CTA names its destination.
     assert!(
-        body.contains("Start with what your child is missing."),
+        body.contains("Start your IEP intake"),
         "the hero CTA label is missing: {body}"
     );
     assert!(body.contains(r#"href="/contact""#), "{body}");

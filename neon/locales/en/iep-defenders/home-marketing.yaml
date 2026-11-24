@@ -8,14 +8,11 @@ meta_description: >-
 title: A practice of Lex Tecnica, Ltd.
 tagline: Free special education lawyers defending your child's rights
 hero_lead: >-
-  When the school keeps delaying, denying, or ignoring the IEP, your child
-  is the one who loses time. Our special education attorneys help you
-  understand what the school should be doing and what your legal options
-  are when it is not happening. You do not need to know the legal term for
-  the problem before you call.
+  If your child is missing support at school, tell us what happened and whether a meeting
+  or deadline is coming up. You can start even if you don’t have the IEP yet.
 hero_cta:
   href: /contact
-  label: Start with what your child is missing.
+  label: Start your IEP intake
 skin: practice
 bands:
   - kind: photos
@@ -98,27 +95,25 @@ bands:
                 look.
   - kind: steps
     anchor: process
-    overline: What happens when you contact a special education lawyer
-    heading: Start with what happened.
-    description: >-
-      Bring the IEP, emails, evaluations, or notices you have. We can tell
-      you what else we need.
+    overline: Before you meet with us
+    heading: Get your school records together
+    description: Start with what you have. You can finish intake while you wait for records.
     items:
-      - title: Tell us where things broke down.
+      - title: Make a short timeline
+        body:
+          - - text: Write down what you asked the school to do, its response, and the date of your next meeting.
+      - title: Ask the district for your child’s records
         body:
           - - text: >-
-                What did you ask the school to do? What was the response?
-                What is your child still missing?
-      - title: We review the record.
+                Write to the district’s special education office. Ask to review your child’s current IEP,
+                evaluations, progress reports, and written notices. Keep your request and the reply together.
+      - title: Get help drafting a request
         body:
           - - text: >-
-                Our team looks at the IEP, timeline, and prior requests to
-                determine whether the matter fits the legal work we handle.
-      - title: Understand your next step.
-        body:
-          - - text: >-
-                If we can take the matter, we explain the scope, fees, and
-                next legal step before you decide how to proceed.
+                With Same Day Legal, you can use your AI assistant to draft a letter. Start with a description
+                of the records you need, leave names blank, then review and send the letter yourself.
+            - text: Use the Same Day Legal AI Assistant
+              href: https://sameday.neonlaw.com/#school-records
   - kind: cards
     anchor: fees
     overline: How fees are handled
@@ -136,13 +131,9 @@ bands:
             We explain the scope of representation and fee arrangement
             before you move forward.
   - kind: cta
-    heading: Tell us what is going on.
-    body: >-
-      If the IEP problem is still happening after you have asked the school
-      to fix it, tell us what is going on. You do not need the right legal
-      words. Tell us what your child is missing, what the school has said,
-      and what you have already tried. We will start there.
+    heading: Ready to tell us what happened?
+    body: Answer a few questions, then create your account. You can gather your documents afterward.
     email: "{firm_email}"
     action:
       href: /contact
-      label: Start with what your child is missing.
+      label: Start your IEP intake

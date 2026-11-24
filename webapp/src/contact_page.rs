@@ -31,6 +31,8 @@ pub struct ContactContent {
     pub phone_label: String,
     pub firm_email: String,
     /// The next step offered alongside the firm's published contact details.
+    #[serde(default)]
+    pub iep_intake: bool,
     pub booking_href: String,
     pub booking_label: String,
     /// The firm's published voice line, rendered as written and dialled from
@@ -126,14 +128,22 @@ pub fn ContactPage(
                         }
                     }
                 }
-                a { class: "nav-btn nav-btn--primary", href: "{content.booking_href}", "{content.booking_label}" }
-                // Plan-referred members land here from their provider's
-                // letter; the same booking step starts their covered matter.
-                p { class: "contact-plan-note",
-                    "Sent here by your legal plan? "
-                    a { href: "{content.booking_href}", "Start here." }
+                if content.iep_intake {
+                    document::Script { src: "/public/js/iep-intake.js", defer: true }
+                    p { a { href: "/services#records", "How to request school records" } }
+                    p { "Tell us what is happening at school. Leave out student names, diagnoses, and documents. You can create your account after sending." }
+                } else {
+                    a { class: "nav-btn nav-btn--primary", href: "{content.booking_href}", "{content.booking_label}" }
+                    // Plan-referred members land here from their provider's
+                    // letter; the same booking step starts their covered matter.
+                    p { class: "contact-plan-note",
+                        "Sent here by your legal plan? "
+                        a { href: "{content.booking_href}", "Start here." }
+                    }
                 }
                 LeadCaptureForm {
+                    iep_intake: content.iep_intake,
+                    submit_label: if content.iep_intake { "Send intake".to_string() } else { "Send".to_string() },
                     copy: content.lead_capture.clone(),
                     context: lead_capture,
                 }
@@ -148,6 +158,8 @@ pub fn ContactPage(
 pub struct ContactSentPageView {
     pub chrome: PublicChrome,
     pub firm_phone: String,
+    #[serde(default)]
+    pub iep_booking: Option<String>,
 }
 
 /// Resolve the public chrome and the firm's published phone for the neutral
@@ -161,6 +173,7 @@ pub async fn contact_sent_page_view() -> Result<ContactSentPageView, ServerFnErr
     Ok(ContactSentPageView {
         chrome: crate::public_chrome::firm_public_chrome_from_context().await,
         firm_phone: content.firm_phone,
+        iep_booking: content.iep_intake.then_some(content.booking_href),
     })
 }
 
@@ -176,6 +189,7 @@ pub fn ContactSentPageEntry() -> Element {
         ContactSentPage {
             chrome: view.chrome,
             firm_phone: view.firm_phone,
+            iep_booking: view.iep_booking,
         }
     }
 }
@@ -183,7 +197,11 @@ pub fn ContactSentPageEntry() -> Element {
 /// The page shown after a lead form submission, regardless of whether the
 /// submission was accepted or silently rejected.
 #[component]
-pub fn ContactSentPage(chrome: PublicChrome, firm_phone: String) -> Element {
+pub fn ContactSentPage(
+    chrome: PublicChrome,
+    firm_phone: String,
+    #[props(default)] iep_booking: Option<String>,
+) -> Element {
     let firm_tel = crate::components::site_footer::tel_href(&firm_phone);
     let header = rsx! {
         PublicHeader { chrome: chrome.clone() }
@@ -194,10 +212,21 @@ pub fn ContactSentPage(chrome: PublicChrome, firm_phone: String) -> Element {
         PublicShell { header, footer,
             article { class: "contact-sent-page",
                 h1 { "Thank you" }
-                p {
-                    "We received your note. Check your email for a link that confirms your address and signs you in, where you can book a consultation. Someone from the firm will reply by email. This does not make you a client yet, and nothing here is legal advice. If it is urgent, call "
-                    a { href: "{firm_tel}", "{firm_phone}" }
-                    "."
+                if let Some(href) = iep_booking {
+                    section { id: "signup",
+                        document::Script { src: "/public/js/iep-intake.js", defer: true }
+                        h2 { "Create your IEP Defenders account" }
+                        p { "You can sign up while you gather your school records." }
+                        a { class: "nav-btn nav-btn--primary", href: "/auth/signup", "Create an account" }
+                        p { "Already have an account? " a { href: "/auth/login", "Sign in" } }
+                        p { a { href, "Optional: book time with Nick Shook" } }
+                    }
+                } else {
+                    p {
+                        "We received your note. Check your email for a link that confirms your address and signs you in, where you can book a consultation. Someone from the firm will reply by email. This does not make you a client yet, and nothing here is legal advice. If it is urgent, call "
+                        a { href: "{firm_tel}", "{firm_phone}" }
+                        "."
+                    }
                 }
             }
         }
@@ -229,6 +258,7 @@ mod tests {
                 email_label: "Email".to_string(),
                 phone_label: "Phone".to_string(),
                 firm_email: "support@example.com".to_string(),
+                iep_intake: false,
                 booking_href: "https://calendar.example/book".to_string(),
                 booking_label: "Book Consultation".to_string(),
                 firm_phone: "+1 555 010 0100".to_string(),

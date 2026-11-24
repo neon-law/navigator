@@ -97,6 +97,8 @@ pub struct LeadShowView {
     pub notice: Option<String>,
     #[serde(default)]
     pub error: Option<String>,
+    #[serde(default)]
+    pub intake: Vec<String>,
     pub lead: Option<LeadDetail>,
 }
 
@@ -234,6 +236,27 @@ pub async fn leads_list_view() -> Result<LeadsListView, ServerFnError> {
     })
 }
 
+#[cfg(feature = "server")]
+async fn lead_intake_history(
+    lead: &store::leads::Lead,
+    role: ViewerRole,
+) -> Result<Vec<String>, ServerFnError> {
+    if lead.brand_key != "iep-defenders" {
+        return Ok(Vec::new());
+    }
+    let Some(viewer) = crate::admin_listing::injected_person_id().await else {
+        return Ok(Vec::new());
+    };
+    let tier = if role.is_owner() {
+        store::persons::Role::Owner
+    } else {
+        store::persons::Role::Admin
+    };
+    store::leads::intake_history(lead.id, viewer, tier)
+        .await
+        .map_err(|error| ServerFnError::new(error.to_string()))
+}
+
 /// Load one lead: Owner/Admin only, with the recorded phone.
 #[server]
 pub async fn lead_show_view() -> Result<LeadShowView, ServerFnError> {
@@ -255,6 +278,17 @@ pub async fn lead_show_view() -> Result<LeadShowView, ServerFnError> {
         .map(|axum::extract::Query(q)| q)
         .unwrap_or_default();
 
+    let mut view = LeadShowView {
+        firm_name: crate::app_chrome::firm_name_from_context().await,
+        role,
+        logo: crate::app_chrome::app_logo_from_context().await,
+        tokens_href: crate::app_chrome::app_tokens_href_from_context().await,
+        csrf_token,
+        notice: query.notice,
+        error: query.error,
+        intake: Vec::new(),
+        lead: None,
+    };
     let surreal = consume_context::<store::surreal::SurrealDb>();
     let Some(lead) = store::leads::find(&surreal, id)
         .await
@@ -264,16 +298,7 @@ pub async fn lead_show_view() -> Result<LeadShowView, ServerFnError> {
             axum::http::StatusCode::NOT_FOUND,
             None,
         );
-        return Ok(LeadShowView {
-            firm_name: crate::app_chrome::firm_name_from_context().await,
-            role,
-            logo: crate::app_chrome::app_logo_from_context().await,
-            tokens_href: crate::app_chrome::app_tokens_href_from_context().await,
-            csrf_token,
-            notice: query.notice,
-            error: query.error,
-            lead: None,
-        });
+        return Ok(view);
     };
 
     let linked_person = if let Some(person_id) = lead.person_id {
@@ -297,45 +322,38 @@ pub async fn lead_show_view() -> Result<LeadShowView, ServerFnError> {
         sms_policy_version,
     ) = consent_detail(latest_consent);
 
-    Ok(LeadShowView {
-        firm_name: crate::app_chrome::firm_name_from_context().await,
-        role,
-        logo: crate::app_chrome::app_logo_from_context().await,
-        tokens_href: crate::app_chrome::app_tokens_href_from_context().await,
-        csrf_token,
-        notice: query.notice,
-        error: query.error,
-        lead: Some(LeadDetail {
-            id: lead.id.to_string(),
-            email: linked_person
-                .as_ref()
-                .map_or_else(|| lead.email.clone(), |person| person.email.clone()),
-            phone: linked_person
-                .as_ref()
-                .and_then(|person| person.phone.clone())
-                .or(lead.phone)
-                .unwrap_or_else(|| "—".to_string()),
-            brand_key: lead.brand_key,
-            source_path: lead.source_path,
-            consent_version: lead.consent_version,
-            consented_at: format_time(lead.consented_at),
-            sms_consented_at,
-            sms_opt_in,
-            call_opt_in,
-            sms_consent_phone,
-            sms_consent_source_path,
-            sms_consent_version,
-            sms_policy_version,
-            status: lead.status,
-            submissions: lead.submissions.to_string(),
-            unsubscribed_at: format_optional_time(lead.unsubscribed_at),
-            person_id: lead
-                .person_id
-                .map_or_else(|| "—".to_string(), |id| id.to_string()),
-            person_name: linked_person.map(|person| person.name),
-            existing_person_id,
-        }),
-    })
+    view.intake = lead_intake_history(&lead, role).await?;
+    view.lead = Some(LeadDetail {
+        id: lead.id.to_string(),
+        email: linked_person
+            .as_ref()
+            .map_or_else(|| lead.email.clone(), |person| person.email.clone()),
+        phone: linked_person
+            .as_ref()
+            .and_then(|person| person.phone.clone())
+            .or(lead.phone)
+            .unwrap_or_else(|| "—".to_string()),
+        brand_key: lead.brand_key,
+        source_path: lead.source_path,
+        consent_version: lead.consent_version,
+        consented_at: format_time(lead.consented_at),
+        sms_consented_at,
+        sms_opt_in,
+        call_opt_in,
+        sms_consent_phone,
+        sms_consent_source_path,
+        sms_consent_version,
+        sms_policy_version,
+        status: lead.status,
+        submissions: lead.submissions.to_string(),
+        unsubscribed_at: format_optional_time(lead.unsubscribed_at),
+        person_id: lead
+            .person_id
+            .map_or_else(|| "—".to_string(), |id| id.to_string()),
+        person_name: linked_person.map(|person| person.name),
+        existing_person_id,
+    });
+    Ok(view)
 }
 
 /// `/app/admin/leads`.
@@ -534,6 +552,7 @@ pub fn lead_show_body(view: &LeadShowView) -> Element {
                     }
                 }
             }
+            {intake_section(&view.intake)}
             FormCard {
                 title: "Change status".to_string(),
                 action: status_action,
@@ -543,6 +562,22 @@ pub fn lead_show_body(view: &LeadShowView) -> Element {
                 fields: status_fields,
             }
             {conversion}
+        }
+    }
+}
+
+fn intake_section(intake: &[String]) -> Element {
+    if intake.is_empty() {
+        return rsx! {};
+    }
+    rsx! {
+        section {
+            h2 { "IEP intake" }
+            for answers in intake {
+                article {
+                    for line in answers.lines() { p { "{line}" } }
+                }
+            }
         }
     }
 }
@@ -646,6 +681,7 @@ mod tests {
             csrf_token: "TOK".to_string(),
             notice: None,
             error: None,
+            intake: Vec::new(),
             lead: Some(LeadDetail {
                 id: "11111111-1111-1111-1111-111111111111".to_string(),
                 email: "visitor@example.com".to_string(),
@@ -696,6 +732,7 @@ mod tests {
             csrf_token: "TOK".to_string(),
             notice: None,
             error: Some("A Person already holds this mailbox.".to_string()),
+            intake: Vec::new(),
             lead: Some(LeadDetail {
                 id: "11111111-1111-1111-1111-111111111111".to_string(),
                 email: "visitor@example.com".to_string(),
@@ -737,6 +774,7 @@ mod tests {
             csrf_token: "TOK".to_string(),
             notice: None,
             error: None,
+            intake: Vec::new(),
             lead: Some(LeadDetail {
                 id: "11111111-1111-1111-1111-111111111111".to_string(),
                 email: "visitor@example.com".to_string(),
