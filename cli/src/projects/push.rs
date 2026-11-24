@@ -690,7 +690,7 @@ where
 
 /// Return a terminal deployment, or retain the last observed run at the deadline.
 /// A pending conclusion remains unverified and cannot count as successful delivery.
-async fn watch_deployment<S, Fut>(
+pub(super) async fn watch_deployment<S, Fut>(
     forge: &dyn Forge,
     merge_commit: &str,
     deadline: Instant,

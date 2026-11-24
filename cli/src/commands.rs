@@ -205,12 +205,18 @@ enum Command {
 
 #[derive(Subcommand)]
 enum ReleaseCmd {
-    /// Open or resume reviews for signed release/<tag> topics in the selected workspace.
+    /// Open or resume reviews for signed release topics in the selected workspace.
     Review {
         #[arg(long)]
         tag: String,
         #[arg(long)]
         dir: Option<PathBuf>,
+        /// Compare against Forgejo and publish the topic to the configured private mirrors.
+        #[arg(long)]
+        forgejo_first: bool,
+        /// Land an existing ready review and verify its deployment and remote main revisions.
+        #[arg(long)]
+        land: bool,
     },
     /// Check a Project commit and its live document pointers. Prints JSON.
     Preflight {
@@ -297,16 +303,19 @@ enum ForgejoReleaseCmd {
 
 async fn run_release(action: ReleaseCmd) -> ExitCode {
     match action {
-        ReleaseCmd::Review { tag, dir } => {
-            match projects::release_review::run(dir.as_deref(), &tag).await {
-                Ok(true) => ExitCode::SUCCESS,
-                Ok(false) => ExitCode::FAILURE,
-                Err(err) => {
-                    eprintln!("navigator release review: {err:#}");
-                    ExitCode::FAILURE
-                }
+        ReleaseCmd::Review {
+            tag,
+            dir,
+            forgejo_first,
+            land,
+        } => match projects::release_review::run(dir.as_deref(), &tag, forgejo_first, land).await {
+            Ok(true) => ExitCode::SUCCESS,
+            Ok(false) => ExitCode::FAILURE,
+            Err(err) => {
+                eprintln!("navigator release review: {err:#}");
+                ExitCode::FAILURE
             }
-        }
+        },
         ReleaseCmd::Preflight { repo, revision } => {
             projects::release_preflight::run(&repo, &revision)
         }

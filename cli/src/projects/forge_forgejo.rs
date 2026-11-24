@@ -40,6 +40,10 @@ impl ForgejoForge {
 
     pub fn from_checkout(dir: &Path) -> Result<Self> {
         let remote = git_text(dir, &["remote", "get-url", "origin"])?;
+        Self::from_remote(&remote)
+    }
+
+    pub(super) fn from_remote(remote: &str) -> Result<Self> {
         let root = std::env::var("NAVIGATOR_FORGEJO_ROOT_URL")
             .context("configure NAVIGATOR_FORGEJO_ROOT_URL for this Forgejo checkout")?;
         let origin = url::Url::parse(&root)?;
@@ -47,7 +51,7 @@ impl ForgejoForge {
         let repository = if let Some(path) = remote.strip_prefix(&format!("git@{host}:")) {
             path.trim_end_matches(".git").to_owned()
         } else {
-            let url = url::Url::parse(&remote).context("parse Forgejo origin remote")?;
+            let url = url::Url::parse(remote).context("parse Forgejo origin remote")?;
             ensure!(
                 url.host_str() == Some(host),
                 "checkout remote differs from configured Forgejo host"
@@ -341,8 +345,55 @@ impl ForgejoForge {
 #[async_trait]
 impl super::release_review::ReleaseForge for ForgejoForge {
     async fn source(&self) -> Result<super::release_review::Source> {
-        self.request(Method::GET, &format!("repos/{}", self.repository), None)
-            .await
+        let source: super::release_review::Source = self
+            .request(Method::GET, &format!("repos/{}", self.repository), None)
+            .await?;
+        source.verify(&self.repository)?;
+        Ok(source)
+    }
+
+    async fn checks(&self, review: &ReviewRef, base: &str) -> Result<bool> {
+        #[derive(Deserialize)]
+        struct Protection {
+            enable_status_check: bool,
+            status_check_contexts: Vec<String>,
+        }
+        ensure!(
+            self.pull(review).await?.base.name == base,
+            "review base changed"
+        );
+        let combined: serde_json::Value = self
+            .get(&format!("commits/{}/status", review.head_sha))
+            .await?;
+        ensure!(
+            combined["sha"] == review.head_sha,
+            "check result belongs to another commit"
+        );
+        let statuses = combined["statuses"]
+            .as_array()
+            .context("missing status list")?;
+        let rules: Protection = self.get(&format!("branch_protections/{base}")).await?;
+        ensure!(
+            rules.enable_status_check && !rules.status_check_contexts.is_empty(),
+            "base branch has no required check"
+        );
+        let mut passed = true;
+        for context in rules.status_check_contexts {
+            let latest = statuses
+                .iter()
+                .filter(|s| s["context"] == context)
+                .max_by_key(|s| s["id"].as_u64());
+            if let Some(check) = latest {
+                match check["status"].as_str().or_else(|| check["state"].as_str()) {
+                    Some("success") => (),
+                    Some("pending" | "running") => passed = false,
+                    _ => bail!("required Forgejo check {context} did not pass"),
+                }
+            } else {
+                passed = false;
+            }
+        }
+        Ok(passed)
     }
 
     async fn draft(&self, request: ReviewRequest) -> Result<(ReviewRef, bool)> {
@@ -431,6 +482,7 @@ impl Forge for ForgejoForge {
         #[derive(Deserialize)]
         struct Status {
             context: String,
+            #[serde(alias = "status")]
             state: String,
         }
         #[derive(Deserialize)]

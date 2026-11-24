@@ -785,6 +785,16 @@ keeps its state. Empty and archived repositories have separate outcomes. A base 
 reports `base_pinned`. A missing proposal or a conflicting topic identifies the Project that needs attention while the
 rest of the inventory continues.
 
+A Forgejo-primary checkout uses Forgejo as the reference. Pass `--forgejo-first` during the transition to compare
+against the verified Forgejo repository while the recorded primary still owns review and merge. The report flags that
+cutover gap. Navigator verifies the identity, private visibility and write access of each destination before publishing
+the same signed topic to the explicit origin push URLs. It reads the topic back from each destination. A different base
+or topic, a provider denial, or an unavailable check requires attention.
+
+Review waits for the required checks on the reported head. Add `--land` to land a ready review through the recorded
+primary and verify its merge commit, successful deployment and matching default branches. The draft stays open until an
+authorized reviewer marks it ready.
+
 ## The branch contract
 
 Every Project repository follows one branch contract:
