@@ -18,8 +18,8 @@ hero_lead: >-
   matter fits the legal work we handle is determined from the record: the
   IEP, the timeline, and the requests you have already made.
 hero_cta:
-  href: "tel:+17434374357"
-  label: Call now
+  href: /contact
+  label: Start your IEP intake
 skin: practice
 bands:
   - kind: cards
@@ -105,11 +105,35 @@ bands:
           - - text: >-
                 We explain the scope of representation and fee arrangement
                 before you move forward.
+  - kind: cards
+    anchor: records
+    overline: Getting ready
+    heading: Which records do you need?
+    items:
+      - title: Your child’s school records
+        body:
+          - - text: Ask the district’s special education office for access to your child’s IEP, evaluations, progress reports, and notices.
+        href: https://studentprivacy.ed.gov/ferpa
+        href_label: Learn about access to student records
+      - title: District policies or reports
+        body:
+          - - text: >-
+                Use the district’s public records process under state law to ask for an existing policy or report,
+                such as its policy on missed services. For records held by a federal agency, use a federal
+                Freedom of Information Act (FOIA) request.
+        href: https://www.foia.gov/how-to.html
+        href_label: How to request federal records
+      - title: Help writing the letter
+        body:
+          - - text: Use your AI assistant with Same Day Legal to prepare a draft you can review and send.
+        href: https://sameday.neonlaw.com/#school-records
+        href_label: Use the Same Day Legal AI Assistant
   - kind: cta
-    heading: Tell us what's happening
+    heading: Start with what happened at school
     body: >-
-      You do not need the right legal words. Tell us what your child is
-      missing, what the school has said, and what you have already tried.
-      We will start there. We do not represent families directly at IEP
-      meetings.
+      Tell us what support your child needs and what you have asked the school to do.
+      We do not represent families directly at IEP meetings.
     email: "{firm_email}"
+    action:
+      href: /contact
+      label: Start your IEP intake
