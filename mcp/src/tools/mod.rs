@@ -32,6 +32,7 @@ pub mod list_deadlines;
 pub mod list_entities;
 pub mod list_jurisdictions;
 pub mod list_projects;
+pub mod list_public_pages;
 pub mod list_templates;
 pub mod list_tools;
 pub mod project_deadlines;
@@ -75,6 +76,7 @@ pub fn list_tools() -> Vec<Value> {
         spawn_legal_council::descriptor(),
         send_welcome_email::descriptor(),
         glossary_list::descriptor(),
+        list_public_pages::descriptor(),
         list_templates::descriptor(),
         glossary_show::descriptor(),
         project_skill_list::descriptor(),
@@ -122,6 +124,7 @@ pub fn advertised_catalog() -> Vec<Value> {
 /// entry to [`READ_ONLY_TOOLS`].
 const ASSISTANT_TOOLS: &[&str] = &[
     "glossary_list",
+    "list_public_pages",
     "list_templates",
     "glossary_show",
     "project_skill_list",
@@ -183,6 +186,7 @@ const READ_ONLY_TOOLS: &[&str] = &[
     "list_tools",
     "spawn_legal_council",
     "glossary_list",
+    "list_public_pages",
     "list_templates",
     "glossary_show",
     "project_skill_list",
@@ -394,6 +398,7 @@ async fn dispatch_tool(
         "list_tools" => list_tools::call(arguments).await,
         "spawn_legal_council" => spawn_legal_council::call(arguments).await,
         "send_welcome_email" => send_welcome_email::call(state, arguments).await,
+        "list_public_pages" => list_public_pages::call(arguments),
         "list_templates" => list_templates::call(arguments),
         "glossary_list" => glossary_list::call(arguments).await,
         "glossary_show" => glossary_show::call(arguments).await,
@@ -884,6 +889,8 @@ mod tests {
         assert!(names.contains(&"send_welcome_email"));
         assert!(names.contains(&"glossary_list"));
         assert!(names.contains(&"glossary_show"));
+        assert!(names.contains(&"list_public_pages"));
+        assert!(names.contains(&"list_templates"));
     }
 
     #[test]
@@ -1411,6 +1418,7 @@ mod tests {
             names,
             [
                 "glossary_list",
+                "list_public_pages",
                 "list_templates",
                 "glossary_show",
                 "project_skill_list",

@@ -7319,6 +7319,10 @@ pub fn documented_operations() -> Vec<(String, String)> {
 /// of that pressure, so it needs a reason a reader can disagree with.
 pub const TOOLS_WITHOUT_AN_API_OPERATION: &[(&str, &str)] = &[
     (
+        "list_public_pages",
+        "Public neonlaw.com page URLs for crawlers and language models, with no API command twin.",
+    ),
+    (
         "list_templates",
         "Public bundled Template metadata and intent clarification are compiled reference lookups, with no API command twin.",
     ),

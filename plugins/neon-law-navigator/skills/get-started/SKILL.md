@@ -3,6 +3,9 @@ name: get-started
 description: Find and preview public Neon Law Navigator templates and start Nevada LLC formation intake.
 ---
 
+Call `list_public_pages` when the person asks what Neon Law publishes, how to reach the site, or where lawyers start.
+Share the home URL for everyone and `/lawyers` for the connected Project.
+
 Call `list_templates` for public template requests. When listing the catalog, show up to three relevant results. Use
 their descriptions to explain when they fit. A mutual NDA fits a discussion where both parties expect to disclose
 confidential information. A one-way NDA fits a discussion where only one party expects to disclose it.

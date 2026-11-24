@@ -13,7 +13,7 @@ routing.
   the declared tools.
 - **MCP** — JSON-RPC at `/app/mcp`. Used by Claude.ai Connectors, Claude Code, LibreChat, and other Anthropic-stack
   clients. The MCP-side LLM (e.g. Claude) does its own tool routing client-side; our server just dispatches the named
-  tool.
+  tool. Anonymous connections offer `list_public_pages` (neonlaw.com URLs) and `list_templates` (the public catalog).
 
 Navigator MCP is **LLM-agnostic** by design — the router behind A2A is one implementation of a trait that could be
 swapped for Claude (direct or via Vertex AI Model Garden), a local model, or even a rules engine without touching the

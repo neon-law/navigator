@@ -184,17 +184,20 @@ fn dispatch_public(id: Value, method: &str, params: &Value) -> Response {
         "ping" => Response::ok(id, json!({})),
         "tools/list" => Response::ok(
             id,
-            json!({ "tools": [tools::list_templates::descriptor()] }),
+            json!({ "tools": [
+                tools::list_public_pages::descriptor(),
+                tools::list_templates::descriptor()
+            ] }),
         ),
         "tools/call" => {
             let Some(name) = params.get("name").and_then(Value::as_str) else {
                 return Response::err(id, codes::INVALID_PARAMS, "`name` is required");
             };
+            let empty = json!({});
+            let arguments = params.get("arguments").unwrap_or(&empty);
             let result = match name {
-                "list_templates" => {
-                    let empty = json!({});
-                    tools::list_templates::call(params.get("arguments").unwrap_or(&empty))
-                }
+                "list_public_pages" => tools::list_public_pages::call(arguments),
+                "list_templates" => tools::list_templates::call(arguments),
                 _ => Err(ToolError::Unknown(name.to_owned())),
             };
             Response::ok(
@@ -426,6 +429,7 @@ mod tests {
                 "bulk_import",
                 "spawn_legal_council",
                 "glossary_list",
+                "list_public_pages",
                 "list_templates",
                 "glossary_show",
                 "project_skill_list",
