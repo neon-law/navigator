@@ -335,7 +335,6 @@ dependencies = [
  "sha2 0.11.1",
  "sqlx",
  "store",
- "surrealdb",
  "telemetry",
  "tempfile",
  "thiserror 2.0.21",
@@ -10294,7 +10293,6 @@ dependencies = [
  "sha2 0.11.1",
  "tempfile",
  "walkdir",
- "workflows",
  "zip",
 ]
 

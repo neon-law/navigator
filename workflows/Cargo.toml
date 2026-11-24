@@ -28,8 +28,7 @@ repos.workspace = true
 reqwest.workspace = true
 # The retainer-first gate classifies a template by its declared `kind`
 # through the one classifier (`rules::kind::Kind::opens_a_matter`), the same
-# one the lawyer matter list reads. `rules` carries `workflows` only as a
-# dev-dependency (one drift test), and Cargo permits that cycle.
+# one the lawyer matter list reads.
 rules.workspace = true
 serde = { workspace = true }
 serde_json.workspace = true

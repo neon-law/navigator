@@ -18,7 +18,8 @@ use workflows::SocialPublishRequest;
 use workflows_service::dbos_social_publisher::{self, Pacing, PublisherContext, ReconcilerContext};
 use workflows_service::social_publisher::{Publisher, SocialPublisherService};
 
-use crate::support::{database, TestDatabase, APP_VERSION, DEADLINE};
+use crate::support::application_process::{database, ApplicationDatabase};
+use crate::support::{APP_VERSION, DEADLINE};
 
 const BRAND: &str = "synthetic-brand";
 const PAGE: &str = "facebook-page";
@@ -27,6 +28,7 @@ const PROVIDER_POST: &str = "provider-post-1";
 
 struct Fixture {
     db: store::surreal::SurrealDb,
+    pg: store::postgres::PostgresDb,
     admin: Uuid,
     kms: cloud::FakeKms,
     storage: Arc<cloud::FsStorage>,
@@ -35,43 +37,8 @@ struct Fixture {
 
 impl Fixture {
     async fn new(name: &str) -> Self {
-        let db = store::test_support::mem_surreal().await;
-        let admin = store::persons::create(
-            &db,
-            &store::persons::NewPerson::with_role(
-                name,
-                format!("{name}-{}@example.com", Uuid::now_v7()),
-                store::persons::Role::Admin,
-            ),
-        )
-        .await
-        .unwrap();
-        let firm = store::firms::create(
-            &db,
-            &store::firms::NewFirm {
-                name: format!("{name} Firm"),
-                status: "active".into(),
-                entity_id: store::test_support::seed_entity(&db).await,
-                admin_dri_person_id: admin.id,
-            },
-        )
-        .await
-        .unwrap();
-        store::brands::create(
-            &db,
-            store::persons::Role::Admin,
-            Some(admin.id),
-            &store::brands::NewBrand {
-                name: format!("{name} Brand"),
-                key: BRAND.into(),
-                firm_id: Some(firm.id),
-                primary_color: None,
-                accent_color: None,
-                typeface: None,
-            },
-        )
-        .await
-        .unwrap();
+        let db = store::surreal::SurrealDb::uninitialized();
+        let (_, admin) = store::test_support::seed_firm_with_new_brand(&db, BRAND).await;
         let dir = tempfile::tempdir().unwrap();
         let storage = cloud::FsStorage::new(dir.path()).await.unwrap();
         storage
@@ -80,7 +47,8 @@ impl Fixture {
             .unwrap();
         Self {
             db,
-            admin: admin.id,
+            pg: store::postgres::PostgresDb::application().await.unwrap(),
+            admin,
             kms: cloud::FakeKms::new(name),
             storage: Arc::new(storage),
             _dir: dir,
@@ -133,24 +101,20 @@ async fn scheduled_facebook_post(fixture: &Fixture, publish_at: DateTime<Utc>) -
     .await
     .unwrap();
     let id = Uuid::now_v7();
-    fixture
-        .db
-        .query(
-            "CREATE $id SET brand_key = $brand, slug = $slug, title = 'Synthetic', \
-             description = 'Synthetic description', body_html = '', status = 'scheduled', \
-             publish_at = <datetime>$publish_at, facebook_caption = 'Facebook copy', \
-             selected_social_accounts = [$account], inserted_at = time::now(), \
-             updated_at = time::now()",
-        )
-        .bind(("id", store::surreal::record_id("post", id)))
-        .bind(("brand", BRAND))
-        .bind(("slug", id.to_string()))
-        .bind(("publish_at", publish_at.to_rfc3339()))
-        .bind(("account", account.id))
-        .await
-        .unwrap()
-        .check()
-        .unwrap();
+    sqlx::query(
+        "INSERT INTO post (id, brand_key, slug, title, description, status, publish_at,
+                           facebook_caption, selected_social_accounts)
+         VALUES ($1, $2, $3, 'Synthetic', 'Synthetic description', 'scheduled', $4,
+                 'Facebook copy', ARRAY[$5])",
+    )
+    .bind(id)
+    .bind(BRAND)
+    .bind(id.to_string())
+    .bind(publish_at)
+    .bind(account.id)
+    .execute(fixture.pg.pool())
+    .await
+    .unwrap();
     id
 }
 
@@ -176,7 +140,7 @@ async fn feed_post_count(server: &MockServer) -> usize {
         .count()
 }
 
-async fn wait_for_status(db: &TestDatabase, workflow_id: &str, status: &str) {
+async fn wait_for_status(db: &ApplicationDatabase, workflow_id: &str, status: &str) {
     tokio::time::timeout(DEADLINE, async {
         loop {
             let current: Option<String> = sqlx::query_scalar(
@@ -465,25 +429,20 @@ async fn scheduled_instagram_post(fixture: &Fixture, publish_at: DateTime<Utc>) 
     .await
     .unwrap();
     let id = Uuid::now_v7();
-    fixture
-        .db
-        .query(
-            "CREATE $id SET brand_key = $brand, slug = $slug, title = 'Synthetic', \
-             description = 'Synthetic description', body_html = '', status = 'scheduled', \
-             publish_at = <datetime>$publish_at, instagram_caption = 'Instagram copy', \
-             video_asset = 'synthetic/video.mp4', vertical_video = true, \
-             selected_social_accounts = [$account], inserted_at = time::now(), \
-             updated_at = time::now()",
-        )
-        .bind(("id", store::surreal::record_id("post", id)))
-        .bind(("brand", BRAND))
-        .bind(("slug", id.to_string()))
-        .bind(("publish_at", publish_at.to_rfc3339()))
-        .bind(("account", account.id))
-        .await
-        .unwrap()
-        .check()
-        .unwrap();
+    sqlx::query(
+        "INSERT INTO post (id, brand_key, slug, title, description, status, publish_at,
+                           instagram_caption, selected_social_accounts, video_asset, vertical_video)
+         VALUES ($1, $2, $3, 'Synthetic', 'Synthetic description', 'scheduled', $4,
+                 'Instagram copy', ARRAY[$5], 'synthetic/video.mp4', true)",
+    )
+    .bind(id)
+    .bind(BRAND)
+    .bind(id.to_string())
+    .bind(publish_at)
+    .bind(account.id)
+    .execute(fixture.pg.pool())
+    .await
+    .unwrap();
     id
 }
 
@@ -643,15 +602,11 @@ async fn a_container_that_never_becomes_ready_times_out_without_publishing() {
         0,
         "a never-ready container is never published"
     );
-    let status: String = fixture
-        .db
-        .query("SELECT VALUE status FROM ONLY $id")
-        .bind(("id", store::surreal::record_id("post", post_id)))
+    let status = store::posts::find_by_id(&fixture.db, post_id)
         .await
         .unwrap()
-        .take::<Option<String>>(0)
-        .unwrap()
-        .expect("read the post status");
+        .expect("read scheduled post")
+        .status;
     assert_eq!(status, "scheduled", "the timed-out post is not published");
 }
 
@@ -737,15 +692,14 @@ async fn scheduled_tiktok_post(fixture: &Fixture, publish_at: DateTime<Utc>) -> 
     .await
     .unwrap();
     let post_id = scheduled_instagram_post(fixture, publish_at).await;
-    fixture
-        .db
-        .query("UPDATE $id SET selected_social_accounts = [$account], tiktok_ai_generated = false")
-        .bind(("id", store::surreal::record_id("post", post_id)))
-        .bind(("account", account.id))
-        .await
-        .unwrap()
-        .check()
-        .unwrap();
+    sqlx::query(
+        "UPDATE post SET selected_social_accounts = ARRAY[$1], tiktok_ai_generated = false WHERE id = $2",
+    )
+    .bind(account.id)
+    .bind(post_id)
+    .execute(fixture.pg.pool())
+    .await
+    .unwrap();
     store::posts::record_video(&fixture.db, BRAND, "synthetic/video.mp4", 1080, 1920)
         .await
         .unwrap();

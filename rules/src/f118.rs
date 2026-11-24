@@ -9,13 +9,12 @@
 //! nor fallback, a question no route reaches, or a walk that stops or
 //! cycles before `END` strands the respondent or lies about the step
 //! total. This is the authoring-time / LSP mirror of
-//! [`workflows::QuestionnaireSpec::validate`] and
-//! [`workflows::QuestionnaireSpec::validate_routes`] — the same
+//! `workflows::QuestionnaireSpec::validate` and
+//! `workflows::QuestionnaireSpec::validate_routes` — the same
 //! invariants the parse gate enforces, hoisted to a red squiggle in the
 //! editor. The
 //! `route_classification_matches_questionnaire_spec_validation` drift
-//! test below locks the two definitions together (`workflows` stays a
-//! dev-dependency so the lint engine's build graph stays lean).
+//! test in the workflows crate checks the public lint against the runtime.
 //!
 //! Files without frontmatter or without a `questionnaire:` key are
 //! silently skipped, like the other questionnaire-shape rules. Base
@@ -410,115 +409,5 @@ mod tests {
     fn is_error_severity() {
         use crate::{severity_for_code, Severity};
         assert_eq!(severity_for_code("N118"), Severity::Error);
-    }
-
-    /// Drift lock: N118's route classification must stay identical to
-    /// the parse gate's (`workflows::QuestionnaireSpec::validate` and
-    /// `validate_routes`). For every corpus entry: rule finding ⇔ a
-    /// gate error; base-shape parse errors and valid specs both stay
-    /// unflagged.
-    #[test]
-    fn route_classification_matches_questionnaire_spec_validation() {
-        use workflows::{QuestionnaireSpec, WorkflowSpecError};
-
-        /// `(questionnaire yaml, choices yaml)` — the choices block is
-        /// the same top-level `choices:` map the template carries.
-        const CORPUS: &[(&str, Option<&str>)] = &[
-            // linear (valid)
-            (
-                "BEGIN:\n  _: a\na:\n  _: END\nEND: {}\n",
-                None,
-            ),
-            // empty-but-linear (valid)
-            ("BEGIN:\n  _: END\nEND: {}\n", None),
-            // named condition on a state that cannot route
-            (
-                "BEGIN:\n  _: a\na:\n  skip: END\n  _: END\nEND: {}\n",
-                None,
-            ),
-            // unreachable question
-            (
-                "BEGIN:\n  _: a\na:\n  _: END\norphan:\n  _: END\nEND: {}\n",
-                None,
-            ),
-            // dead end before END
-            ("BEGIN:\n  _: a\na: {}\nEND: {}\n", None),
-            // cycle before END
-            (
-                "BEGIN:\n  _: a\na:\n  _: b\nb:\n  _: a\nEND: {}\n",
-                None,
-            ),
-            // converging diamond — both branches rejoin one follow-up
-            // (valid: a revisit after full exploration is not a cycle)
-            (
-                "BEGIN:\n  _: custom_single_choice__p\ncustom_single_choice__p:\n  litigation: \
-                 custom_datetime__close\n  transactional: custom_datetime__close\n\
-                 custom_datetime__close:\n  _: END\nEND: {}\n",
-                Some("path:\n  litigation: Litigation\n  transactional: Transactional\n"),
-            ),
-            // branched and covered (valid)
-            (
-                "BEGIN:\n  _: custom_single_choice__path\ncustom_single_choice__path:\n  \
-                 litigation: jurisdiction__venue\n  transactional: custom_datetime__closing_date\n\
-                 jurisdiction__venue:\n  _: END\ncustom_datetime__closing_date:\n  _: END\nEND: {}\n",
-                Some("path:\n  litigation: Litigation\n  transactional: Transactional\n"),
-            ),
-            // branched with the `_` fallback covering the rest (valid)
-            (
-                "BEGIN:\n  _: custom_single_choice__path\ncustom_single_choice__path:\n  \
-                 litigation: jurisdiction__venue\n  _: custom_datetime__closing_date\n\
-                 jurisdiction__venue:\n  _: END\ncustom_datetime__closing_date:\n  _: END\nEND: {}\n",
-                Some("path:\n  litigation: Litigation\n  transactional: Transactional\n"),
-            ),
-            // declared choice routed nowhere (the answer dead-end)
-            (
-                "BEGIN:\n  _: custom_single_choice__path\ncustom_single_choice__path:\n  \
-                 litigation: jurisdiction__venue\n  transactional: custom_datetime__closing_date\n\
-                 jurisdiction__venue:\n  _: END\ncustom_datetime__closing_date:\n  _: END\nEND: {}\n",
-                Some("path:\n  litigation: Litigation\n  transactional: Transactional\n  mediation: Mediation\n"),
-            ),
-            // named route no answer can take
-            (
-                "BEGIN:\n  _: custom_single_choice__path\ncustom_single_choice__path:\n  \
-                 litigation: jurisdiction__venue\n  transactional: custom_datetime__closing_date\n  \
-                 mediation: jurisdiction__venue\njurisdiction__venue:\n  _: END\n\
-                 custom_datetime__closing_date:\n  _: END\nEND: {}\n",
-                Some("path:\n  litigation: Litigation\n  transactional: Transactional\n"),
-            ),
-            // base-shape: missing END (not N118's finding)
-            ("BEGIN:\n  _: a\na: {}\n", None),
-            // base-shape: dangling target (not N118's finding)
-            ("BEGIN:\n  _: ghost\nEND: {}\n", None),
-        ];
-
-        for (yaml, choices) in CORPUS {
-            let raw: std::collections::BTreeMap<
-                String,
-                std::collections::BTreeMap<String, String>,
-            > = serde_yaml::from_str(yaml).expect("corpus yaml parses");
-            let parsed_choices: std::collections::BTreeMap<
-                String,
-                std::collections::BTreeMap<String, String>,
-            > = choices
-                .map(|c| serde_yaml::from_str(c).expect("corpus choices parse"))
-                .unwrap_or_default();
-            let rule_flags = super::route_finding(&raw, &parsed_choices).is_some();
-            // Only the route variants count — base-shape errors
-            // (missing END, dangling) belong to the parse gate, not
-            // N118; the choice-coverage half needs the choices map.
-            let gate_flags = match QuestionnaireSpec::from_yaml(yaml) {
-                Err(error) => matches!(
-                    error,
-                    WorkflowSpecError::QuestionnaireCondition { .. }
-                        | WorkflowSpecError::QuestionnaireUnreachable { .. }
-                        | WorkflowSpecError::QuestionnaireChainBroken { .. }
-                ),
-                Ok(spec) => spec.validate_routes(&parsed_choices).is_err(),
-            };
-            assert_eq!(
-                rule_flags, gate_flags,
-                "N118 drifted from QuestionnaireSpec::validate for:\n{yaml}"
-            );
-        }
     }
 }

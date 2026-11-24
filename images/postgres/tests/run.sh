@@ -68,7 +68,9 @@ for _ in $(seq 1 90); do
   sleep 1
 done
 [[ $(sql "SELECT count(*) FROM effects WHERE key='business-write'") == 1 ]]
-curl -f http://localhost:8080/ready
+ready_port=$(awk '$1 == "DBOS_READY_PORT" {print $2; exit}' worker-first.log)
+[[ "$ready_port" =~ ^[0-9]+$ ]]
+curl -f "http://127.0.0.1:$ready_port/ready"
 kill -KILL "$worker"
 wait "$worker" 2>/dev/null || true
 worker=''

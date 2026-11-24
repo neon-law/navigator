@@ -27,6 +27,18 @@ captured-import completion receipts. Its consuming cleanup drops only that owned
 unactivated fixtures retain their separate admission contracts. These fixtures do not certify Kubernetes role
 boundaries, production cutover, or recovery.
 
+### DBOS workflow tests
+
+Set `NAVIGATOR_TEST_POSTGRES_PORT` to the test server port. Run the entire DBOS application test binary with:
+
+```sh
+NAV_REQUIRE_POSTGRES=1 cargo nextest run --locked -p workflows-service --test dbos
+```
+
+Each case owns its database. Tests that launch application work in new tasks run the worker in a child process with that
+database in its connection settings. The PostgreSQL image smoke test also kills and restarts the standalone DBOS worker
+between a business write and its checkpoint.
+
 ## Fresh KIND application tiers
 
 The fresh local KIND tier is distinct from the focused unit-test server above. Hudson creates a unique PostgreSQL

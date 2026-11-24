@@ -15,7 +15,8 @@ use workflows::dbos_engine;
 use workflows::{CapturingSlackBot, SlackBot, SlackBotError, SlackChannel, SlackMessageReceipt};
 use workflows_service::dbos_reconcile::{self, Context, ReconcileDbosError, ReconcileRunner};
 
-use crate::support::{database, APP_VERSION, DEADLINE};
+use crate::support::application_process::database;
+use crate::support::{APP_VERSION, DEADLINE};
 
 #[derive(Clone, Default)]
 struct AcceptThenLoseReply {
@@ -355,24 +356,12 @@ async fn executor_restart_reuses_reconcile_checkpoint_and_finance_receipt() {
 #[tokio::test]
 async fn executor_restart_does_not_repeat_provider_mirror_writes() {
     let Some(db) = database().await else { return };
-    let surreal = store::surreal::test_support::mem().await;
-    let entity = store::test_support::seed_entity(&surreal).await;
-    let project = store::projects::create(
-        &surreal,
-        &store::projects::NewProject {
-            code: "dbos-reconcile".into(),
-            name: "DBOS reconcile synthetic project".into(),
-            status: "open".into(),
-            entity_id: entity,
-            ..Default::default()
-        },
-    )
-    .await
-    .expect("seed synthetic Project");
+    let surreal = store::surreal::SurrealDb::uninitialized();
+    let (project, _) = crate::support::native_project::matter(&surreal).await;
     let provider = Arc::new(StubBillingProvider::new());
     provider.set_listed_invoices(vec![ReceivableInvoice {
         invoice_id: "synthetic-xero-invoice-1".into(),
-        reference: "Matter dbos-reconcile".into(),
+        reference: format!("Matter {}", project.code),
         status: "AUTHORISED".into(),
         amount_cents: 12500,
         amount_paid_cents: 0,
@@ -441,7 +430,7 @@ async fn executor_restart_does_not_repeat_provider_mirror_writes() {
 #[tokio::test]
 async fn mid_step_restart_reuses_natural_trust_transaction_identity() {
     let Some(db) = database().await else { return };
-    let surreal = store::surreal::test_support::mem().await;
+    let surreal = store::surreal::SurrealDb::uninitialized();
     let project_id = seed_trust_deposit(&surreal).await;
 
     let provider = Arc::new(StubBillingProvider::new());

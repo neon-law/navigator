@@ -3,89 +3,33 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context as _, Result};
-use sqlx::postgres::{PgConnectOptions, PgSslMode};
-use store::test_support::PostgresFixture;
+use anyhow::Result;
 use workflows::dbos_engine;
 use workflows_service::dbos_ingress::{NightlyIngress, WorkerIngress, YoutubeIngress};
 use workflows_service::dbos_nightly_project_update::{self as nightly, Providers};
 use workflows_service::nightly_project_update::repository::RepositoryForge;
 use workflows_service::youtube_comments::{self as youtube, YoutubeCommentsPollerService};
 
-const CHILD: &str = "NAVIGATOR_NATIVE_CRON_PROBE";
-const CASE: &str = "retained_cron_routes_authenticate_and_replay_on_native_dbos";
+#[path = "support/application_process.rs"]
+mod application_process;
+
 const DEADLINE: Duration = Duration::from_secs(90);
 
 #[tokio::test]
 async fn retained_cron_routes_authenticate_and_replay_on_native_dbos() {
-    if std::env::var_os(CHILD).is_some() {
-        exercise_routes().await.unwrap();
-    } else {
-        isolated_executor().await.unwrap();
-    }
-}
-
-async fn isolated_executor() -> Result<()> {
-    let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {
-        assert_ne!(std::env::var("NAV_REQUIRE_POSTGRES").as_deref(), Ok("1"));
-        return Ok(());
+    let Some(database) = application_process::database().await else {
+        return;
     };
-    let options = PgConnectOptions::new()
-        .host("127.0.0.1")
-        .port(port.parse()?)
-        .username("postgres")
-        .password("synthetic")
-        .database("postgres")
-        .ssl_mode(PgSslMode::Disable)
-        .options([("session_preload_libraries", "age")]);
-    let fixture = PostgresFixture::create(options).await?;
-    let mut command = tokio::process::Command::new(std::env::current_exe()?);
-    command
-        .args(["--exact", CASE, "--nocapture"])
-        .env(CHILD, "1");
-    for prefix in ["NAVIGATOR_POSTGRES", "NAVIGATOR_DBOS"] {
-        for (key, value) in [
-            ("HOST", "127.0.0.1"),
-            ("PORT", port.as_str()),
-            ("USER", "postgres"),
-            ("PASSWORD", "synthetic"),
-            ("DATABASE", fixture.database()),
-            ("SSLMODE", "disable"),
-        ] {
-            command.env(format!("{prefix}_{key}"), value);
-        }
-    }
-    command
-        .env("NAVIGATOR_DBOS_EXECUTOR_ID", "native-cron-test")
-        .env("NAVIGATOR_RELEASE_TAG", "native-cron-test")
-        .env("NAV_REQUIRE_POSTGRES", "1")
-        .env("NAVIGATOR_FORBID_SURREAL", "1")
-        .kill_on_drop(true);
-    let outcome = run_child(command).await;
-    let cleanup = fixture.close().await;
-    outcome?;
-    cleanup
+    exercise_routes(&database).await.unwrap();
 }
 
-async fn run_child(mut command: tokio::process::Command) -> Result<()> {
-    let mut child = command
-        .spawn()
-        .context("start isolated native Cron executor")?;
-    let status = if let Ok(status) = tokio::time::timeout(DEADLINE, child.wait()).await {
-        status?
-    } else {
-        child.kill().await?;
-        child.wait().await?;
-        anyhow::bail!("isolated native Cron executor exceeded its deadline");
-    };
-    anyhow::ensure!(status.success(), "isolated native Cron executor failed");
-    Ok(())
-}
-
-async fn exercise_routes() -> Result<()> {
-    let pg = store::postgres::PostgresDb::application().await?;
-    let settings = dbos_engine::Settings::from_lookup(|key| std::env::var(key).ok())?;
-    let executor = dbos::DBOS::new(settings.config());
+async fn exercise_routes(database: &application_process::ApplicationDatabase) -> Result<()> {
+    let pg = database.store();
+    let executor = dbos::DBOS::new(dbos_engine::config_with_executor_id(
+        &database.url,
+        "native-cron-test",
+        "native-cron-test",
+    ));
     let slack = Arc::new(workflows::CapturingSlackBot::new());
     let inert = store::surreal::SurrealDb::uninitialized();
     let nightly = nightly::register(
@@ -129,7 +73,7 @@ async fn exercise_routes() -> Result<()> {
             .with_graceful_shutdown(stopped.cancelled_owned())
             .await
     });
-    let result = verify_routes(&origin, &token, &executor, &slack, &pg).await;
+    let result = verify_routes(&origin, &token, &executor, &slack, pg).await;
     stop.cancel();
     server.await??;
     executor.shutdown().await;

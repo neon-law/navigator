@@ -6,13 +6,14 @@ use std::sync::Arc;
 
 use chrono::{TimeZone, Utc};
 use store::notation_reset::ResetOutcome;
-use store::test_support::{mem_surreal, seed_notation};
+use store::test_support::seed_notation;
 use tokio::sync::Notify;
 use workflows::dbos_engine::{self, notation_reset};
 use workflows::notation_reset::NotationResetReport;
 use workflows::{CapturingSlackBot, SlackBot, SlackBotError, SlackChannel, SlackMessageReceipt};
 
-use crate::support::{database, APP_VERSION, DEADLINE};
+use crate::support::application_process::database;
+use crate::support::{APP_VERSION, DEADLINE};
 
 fn slot() -> chrono::DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 10, 21, 4, 20, 0).unwrap()
@@ -97,7 +98,7 @@ async fn two_executors_run_one_reset_per_slot_and_post_once() {
     let Some(db) = database().await else {
         return;
     };
-    let surreal = mem_surreal().await;
+    let surreal = store::surreal::SurrealDb::uninitialized();
     let drafts = [seed_notation(&surreal).await, seed_notation(&surreal).await];
     let (first_bot, second_bot) = (CapturingSlackBot::new(), CapturingSlackBot::new());
     let first = dbos::DBOS::new(dbos_engine::config(&db.url, APP_VERSION));
@@ -154,7 +155,7 @@ async fn recovery_keeps_checkpointed_deletes_and_posts_once() {
     let Some(db) = database().await else {
         return;
     };
-    let surreal = mem_surreal().await;
+    let surreal = store::surreal::SurrealDb::uninitialized();
     let draft = seed_notation(&surreal).await;
     let held = HeldBot::default();
     let id = notation_reset::workflow_id(slot());

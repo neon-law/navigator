@@ -7,7 +7,7 @@
 //! does, the way hovering a function shows its doc) and the allow-list
 //! `N104` validates against. It mirrors the engine registry
 //! `workflows::step::STEP_PREFIXES`; the drift test
-//! `catalog_covers_every_engine_prefix` (below) fails the build if the
+//! `catalog_covers_every_engine_prefix` in the workflows crate fails if the
 //! engine gains a step this catalog doesn't describe, so a new step
 //! *forces* a description here — there is no such thing as an
 //! undocumented workflow step.
@@ -323,33 +323,5 @@ mod tests {
             "the summary must tie the filing to the pleading-declared docket, got {:?}",
             s.summary
         );
-    }
-
-    #[test]
-    fn catalog_covers_every_engine_prefix() {
-        // The drift guard: every prefix the workflow engine routes must
-        // be described here. A new step in workflows::step forces a
-        // description in this catalog — no undocumented steps.
-        for (prefix, _) in workflows::step::STEP_PREFIXES {
-            assert!(
-                WORKFLOW_STEPS.iter().any(|s| s.prefix == *prefix),
-                "engine step prefix `{prefix}` has no entry in the workflow-step catalog",
-            );
-        }
-    }
-
-    #[test]
-    fn catalog_has_no_prefix_unknown_to_the_engine() {
-        // And the reverse: the catalog must not describe a step the
-        // engine doesn't route, or hover would lie.
-        for step in WORKFLOW_STEPS {
-            assert!(
-                workflows::step::STEP_PREFIXES
-                    .iter()
-                    .any(|(p, _)| *p == step.prefix),
-                "catalog prefix `{}` is not a real engine step",
-                step.prefix,
-            );
-        }
     }
 }

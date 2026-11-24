@@ -855,8 +855,9 @@ workflow:
         // catalog's own drift test pins to workflows::step::STEP_PREFIXES.
         // This guards the N104 entry point specifically, including the
         // `_signature` suffix family.
-        for (prefix, _) in workflows::step::STEP_PREFIXES {
-            if *prefix == "_signature" {
+        for step in crate::workflow_steps::WORKFLOW_STEPS {
+            let prefix = step.prefix;
+            if prefix == "_signature" {
                 assert!(
                     valid_workflow_step_prefix("member_signatures"),
                     "signature suffix family should be accepted by N104",

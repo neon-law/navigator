@@ -7,7 +7,6 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use store::test_support::mem_surreal;
 use tokio::sync::{Mutex, Notify};
 use tower::ServiceExt;
 use workflows::dbos_engine;
@@ -19,7 +18,8 @@ use workflows_service::dbos_nightly_project_update::{
 use workflows_service::nightly_project_update::repository::RepositoryForge;
 use workflows_service::nightly_project_update::NightlyProjectUpdateReport;
 
-use crate::support::{database, APP_VERSION, DEADLINE};
+use crate::support::application_process::database;
+use crate::support::{APP_VERSION, DEADLINE};
 
 #[derive(Clone, Default)]
 struct AcceptInviteThenHold {
@@ -62,6 +62,9 @@ impl SlackBot for AcceptInviteThenHold {
     }
     async fn channel_member_ids(&self, _channel: &str) -> Result<Vec<String>, SlackBotError> {
         Ok(self.members.lock().await.clone())
+    }
+    async fn unarchive_channel(&self, channel: &str) -> Result<bool, SlackBotError> {
+        self.inner.unarchive_channel(channel).await
     }
     async fn invite_to_channel(
         &self,
@@ -131,18 +134,7 @@ impl SlackBot for AcceptInviteThenHold {
 }
 
 async fn seed_project(surreal: &store::surreal::SurrealDb) -> uuid::Uuid {
-    let project = store::projects::create(
-        surreal,
-        &store::projects::NewProject {
-            code: "synthetic-nightly".into(),
-            name: "Synthetic Nightly Project".into(),
-            status: "open".into(),
-            entity_id: store::test_support::seed_entity(surreal).await,
-            ..Default::default()
-        },
-    )
-    .await
-    .expect("seed synthetic Project");
+    let (project, _) = crate::support::native_project::matter(surreal).await;
     store::projects::set_internal_slack_channel_id(surreal, project.id, "C0123456789")
         .await
         .expect("set synthetic internal Slack channel");
@@ -183,10 +175,7 @@ async fn seed_project(surreal: &store::surreal::SurrealDb) -> uuid::Uuid {
 #[allow(clippy::too_many_lines)] // One crash/restart scenario keeps the DBOS evidence together.
 async fn registered_nightly_parent_resumes_the_same_date_and_deduplicates_notices() {
     let Some(db) = database().await else { return };
-    let surreal = mem_surreal().await;
-    store::schema::apply(&surreal)
-        .await
-        .expect("apply synthetic Surreal schema");
+    let surreal = store::surreal::SurrealDb::uninitialized();
     let _project = seed_project(&surreal).await;
     let slack = Arc::new(AcceptInviteThenHold::holding_invites());
     let context = Context::new(
@@ -241,9 +230,15 @@ async fn registered_nightly_parent_resumes_the_same_date_and_deduplicates_notice
             .unwrap();
         assert_eq!(response.status(), StatusCode::ACCEPTED);
     }
-    tokio::time::timeout(DEADLINE, slack.accepted.notified())
-        .await
-        .expect("synthetic Slack invite accepted before the worker loses its reply");
+    let parent = first
+        .retrieve_workflow::<NightlyProjectUpdateReport, NightlyError>(&id)
+        .unwrap();
+    tokio::time::timeout(DEADLINE, async {
+        tokio::select! {
+            () = slack.accepted.notified() => (),
+            outcome = parent.result() => panic!("nightly parent ended before Slack acceptance: {outcome:?}"),
+        }
+    }).await.expect("synthetic Slack invite accepted before the worker loses its reply");
     assert_eq!(slack.members.lock().await.as_slice(), ["U_SYNTHETIC"]);
     first.shutdown().await;
 
@@ -292,10 +287,7 @@ async fn registered_nightly_parent_resumes_the_same_date_and_deduplicates_notice
 #[allow(clippy::too_many_lines)] // End-to-end registered child crash/restart scenario.
 async fn registered_slack_child_reuses_receipt_after_acceptance_before_checkpoint() {
     let Some(db) = database().await else { return };
-    let surreal = mem_surreal().await;
-    store::schema::apply(&surreal)
-        .await
-        .expect("apply synthetic Surreal schema");
+    let surreal = store::surreal::SurrealDb::uninitialized();
     let _project_id = seed_project(&surreal).await;
     let slack = Arc::new(AcceptInviteThenHold::holding_project_notices());
     let context = Context::new(
@@ -327,9 +319,15 @@ async fn registered_slack_child_reuses_receipt_after_acceptance_before_checkpoin
         )
         .await
         .expect("start Nightly parent and its Slack child");
-    tokio::time::timeout(DEADLINE, slack.accepted.notified())
-        .await
-        .expect("Slack accepted the daily Project notice");
+    let parent = first
+        .retrieve_workflow::<NightlyProjectUpdateReport, NightlyError>(&id)
+        .unwrap();
+    tokio::time::timeout(DEADLINE, async {
+        tokio::select! {
+            () = slack.accepted.notified() => (),
+            outcome = parent.result() => panic!("nightly parent ended before Slack acceptance: {outcome:?}"),
+        }
+    }).await.expect("Slack accepted the daily Project notice");
     assert_eq!(slack.inner.posted_messages().len(), 2);
     first.shutdown().await;
 

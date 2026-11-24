@@ -5,7 +5,7 @@
 //! filing with a government office (`mailroom_send`, `mailroom_receive`,
 //! `certified_mail`, `e_filing`, `filing__*`). This is the
 //! authoring-time / LSP mirror of the runtime guardrail
-//! [`workflows::guardrail::lawyer_review_precedes_submission`]: the same
+//! `workflows::guardrail::lawyer_review_precedes_submission`: the same
 //! "no outbound act without a human" invariant the engine enforces at
 //! run time, hoisted to validation so a template that mails or files
 //! without an attorney review is a red squiggle in the editor and a
@@ -26,7 +26,7 @@
 //!   separately.
 //!
 //! The gated prefix set is kept in lockstep with the engine by the
-//! `outbound_set_matches_workflows_guardrail` drift test below.
+//! `outbound_set_matches_workflows_guardrail` test in the workflows crate.
 //!
 //! Files without frontmatter or without a `workflow:` key are silently
 //! skipped, like the other workflow-shape rules.
@@ -56,7 +56,7 @@ fn prefix_of(state: &str) -> &str {
 
 /// A state that submits a document to the outside world — mail to a
 /// party or a filing with a government office. Mirrors
-/// [`workflows::guardrail::is_submission_state`]; the drift test locks
+/// `workflows::guardrail::is_submission_state`; the drift test locks
 /// the two definitions together.
 fn is_submission(state: &str) -> bool {
     matches!(
@@ -153,7 +153,7 @@ fn ungated_submissions(workflow: &BTreeMap<String, BTreeMap<String, String>>) ->
 
 #[cfg(test)]
 mod tests {
-    use super::{is_submission, F116LawyerReviewGatesSubmission};
+    use super::F116LawyerReviewGatesSubmission;
     use crate::{Rule, SourceFile};
     use std::path::PathBuf;
 
@@ -364,42 +364,5 @@ workflow:
     fn is_error_severity() {
         use crate::{severity_for_code, Severity};
         assert_eq!(severity_for_code("N116"), Severity::Error);
-    }
-
-    #[test]
-    fn outbound_set_matches_workflows_guardrail() {
-        // Drift lock: N116's outbound-submission classification must stay
-        // identical to the runtime guardrail it mirrors. If the engine
-        // adds or moves a submission prefix, this fails until N116 keeps
-        // up — one definition of "outbound", two enforcement points.
-        use workflows::guardrail::is_submission_state;
-        use workflows::spec::StateName;
-        for state in [
-            "mailroom_send",
-            "mailroom_send__notice",
-            "mailroom_receive",
-            "mailroom_receive__biometrics",
-            "certified_mail",
-            "certified_mail__demand",
-            "e_filing",
-            "e_filing__uscis",
-            "filing__nv_sos",
-            "generate_pdf__retainer_pdf",
-            "sent_for_signature__pending",
-            "sent_for_signature__settlement",
-            "lawyer_review",
-            "lawyer_review__for_grantor",
-            "client_review",
-            "document_drafts__estate",
-            "intake_persisted__client",
-            "BEGIN",
-            "END",
-        ] {
-            assert_eq!(
-                is_submission(state),
-                is_submission_state(&StateName::from(state)),
-                "N116 outbound set drifted from workflows::guardrail::is_submission_state for `{state}`",
-            );
-        }
     }
 }
