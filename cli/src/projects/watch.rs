@@ -304,22 +304,42 @@ async fn sync_checkout(dir: &Path, project: &Project, base: &str, token: &str) -
         status["repository_remotes"]["origin"].as_str() == Some(url),
         "repository inventory changed; retry sync"
     );
-    let forgejo = status["repository_remotes"]["forgejo"]
-        .as_str()
-        .filter(|mirror| *mirror != url);
-    let github = super::lifecycle::github_origin(dir, url).await.is_some();
-    ensure!(
-        !github || forgejo.is_some(),
-        "no secondary Forgejo URL is configured for this Project"
-    );
-    update_checkout(dir, project, url, if github { forgejo } else { None }, base).await
+    let remotes = if super::lifecycle::github_origin(dir, url).await.is_some() {
+        checkout_mirror(&status["repository_remotes"], url)?
+    } else {
+        FetchRemotes::Origin
+    };
+    update_checkout(dir, project, url, remotes, base).await
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum FetchRemotes<'a> {
+    Origin,
+    MirrorUnavailable,
+    Verified(&'a str),
+}
+
+fn checkout_mirror<'a>(remotes: &'a serde_json::Value, origin: &str) -> Result<FetchRemotes<'a>> {
+    match remotes["forgejo_status"].as_str() {
+        Some("verified") => Ok(FetchRemotes::Verified(
+            remotes["forgejo"]
+                .as_str()
+                .filter(|url| !url.is_empty() && *url != origin)
+                .context("verified Forgejo mirror has no distinct URL; retry sync")?,
+        )),
+        Some(status @ ("not_authorized" | "missing" | "unavailable" | "not_configured")) => {
+            eprintln!("Forgejo mirror is {status}. Fetching from origin only.");
+            Ok(FetchRemotes::MirrorUnavailable)
+        }
+        _ => bail!("unrecognized Forgejo mirror status; check the Navigator host and CLI versions"),
+    }
 }
 
 async fn update_checkout(
     dir: &Path,
     project: &Project,
     url: &str,
-    forgejo: Option<&str>,
+    remotes: FetchRemotes<'_>,
     base: &str,
 ) -> Result<()> {
     let root = dir.join(&project.code);
@@ -353,17 +373,38 @@ async fn update_checkout(
         "local origin differs from the Project repository"
     );
     prepare_clean_jj(&root).await?;
-    if let Some(mirror) = forgejo {
-        configure_mirror(&root, url, mirror).await?;
-    } else {
-        check_push_destinations(&root, &[url])?;
+    // Fetch only the remotes the live Project inventory verified. An existing
+    // checkout may retain an earlier mirror or a contributor's personal fork.
+    let mut fetch = vec![
+        "--ignore-working-copy",
+        "git",
+        "fetch",
+        "--remote",
+        "origin",
+    ];
+    match remotes {
+        FetchRemotes::Verified(mirror) => {
+            configure_mirror(&root, url, mirror).await?;
+            fetch.extend(["--remote", "forgejo"]);
+        }
+        FetchRemotes::Origin => {
+            check_push_destinations(&root, &[url])?;
+        }
+        FetchRemotes::MirrorUnavailable => {
+            let mirror =
+                git_output(&root, &["config", "--local", "--get", "remote.forgejo.url"]).await?;
+            ensure!(
+                mirror.status.success() || mirror.status.code() == Some(1),
+                "could not inspect the existing Forgejo remote"
+            );
+            let local = String::from_utf8(mirror.stdout)?;
+            let urls = check_push_destinations(&root, &[url, local.trim()])?;
+            if urls.lines().any(|push| push != url) {
+                eprintln!("The checkout still has a secondary push destination. Verify it before pushing.");
+            }
+        }
     }
-    command(
-        &root,
-        "jj",
-        &["--ignore-working-copy", "git", "fetch", "--all-remotes"],
-    )
-    .await?;
+    command(&root, "jj", &fetch).await?;
     Ok(())
 }
 
@@ -642,6 +683,27 @@ mod tests {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
+    #[test]
+    fn only_a_verified_mirror_is_used_for_sync() -> Result<()> {
+        let origin = "https://github.com/example/matter";
+        let mirror = "https://forge.example.test/example/matter";
+        for status in ["not_authorized", "missing", "not_configured", "unavailable"] {
+            let remotes = serde_json::json!({"forgejo_status": status, "forgejo": mirror});
+            assert_eq!(
+                checkout_mirror(&remotes, origin)?,
+                FetchRemotes::MirrorUnavailable
+            );
+        }
+        let mut remotes = serde_json::json!({"forgejo_status": "verified", "forgejo": mirror});
+        assert_eq!(
+            checkout_mirror(&remotes, origin)?,
+            FetchRemotes::Verified(mirror)
+        );
+        remotes["forgejo"] = serde_json::Value::Null;
+        assert!(checkout_mirror(&remotes, origin).is_err());
+        Ok(())
+    }
+
     #[tokio::test]
     async fn sync_clones_colocated_jj_configures_both_forges_and_preserves_dirty_work() -> Result<()>
     {
@@ -656,12 +718,27 @@ mod tests {
         let temp = tempfile::tempdir()?;
         let dir = temp.path().canonicalize()?;
         let (project, origin, mirror) = seed_checkout_forges(&dir).await?;
+        let origin_only = || {
+            update_checkout(
+                &dir,
+                &project,
+                origin.to_str().unwrap(),
+                FetchRemotes::MirrorUnavailable,
+                "https://site.example.test",
+            )
+        };
+        origin_only().await?;
+        let checkout = dir.join("matter");
+        assert_eq!(
+            command(&checkout, "git", &["remote"]).await?.trim(),
+            "origin"
+        );
         let sync = || {
             super::update_checkout(
                 &dir,
                 &project,
                 origin.to_str().unwrap(),
-                Some(mirror.to_str().unwrap()),
+                FetchRemotes::Verified(mirror.to_str().unwrap()),
                 "https://site.example.test",
             )
         };
@@ -678,12 +755,11 @@ mod tests {
             &existing_root,
             &project,
             origin.to_str().unwrap(),
-            Some(mirror.to_str().unwrap()),
+            FetchRemotes::Verified(mirror.to_str().unwrap()),
             "https://site.example.test",
         )
         .await?;
         assert!(existing_root.join("matter/.jj").is_dir());
-        let checkout = dir.join("matter");
         assert!(checkout.join(".jj").is_dir());
         assert!(checkout.join(".git").is_dir());
         assert_eq!(std::fs::read(checkout.join(SKILL_PATH))?, SKILL_BYTES);
@@ -717,6 +793,19 @@ mod tests {
         .await?;
         assert!(repaired.lines().any(|url| url == origin.to_str().unwrap()));
         assert!(repaired.lines().any(|url| url == mirror.to_str().unwrap()));
+        // Losing mirror visibility still permits a fetch from the origin.
+        // Leave the user's existing dual-push setup intact.
+        std::fs::rename(&mirror, dir.join("offline.git"))?;
+        origin_only().await?;
+        assert_eq!(
+            command(
+                &checkout,
+                "git",
+                &["remote", "get-url", "--push", "--all", "origin"]
+            )
+            .await?,
+            repaired
+        );
         let before = working_revision(&checkout).await?;
         std::fs::write(checkout.join("local.txt"), "unfinished work")?;
         let error = sync().await.unwrap_err();
