@@ -60,7 +60,8 @@ pub enum LegalPlansCmd {
 /// flag keeps the value; an empty one (`--case-number ""`) clears it.
 #[derive(Args, Debug, Default)]
 pub struct PlanFields {
-    /// One of the Firm's plan names, for example `ARAG`.
+    /// One of the Firm's plan names, for example `ARAG`. `navigator
+    /// legal-plans --firm <firm> list` shows them; `create` adds one.
     #[arg(long)]
     pub plan: Option<String>,
     /// The plan's own number for this referral (the ARAG `CaseAssist`
@@ -73,7 +74,8 @@ pub struct PlanFields {
     /// The benefit code the plan assigned.
     #[arg(long)]
     pub benefit_code: Option<String>,
-    /// `document_review`, `letter`, `uncontested_divorce`, or `court_appearance`.
+    /// `document_review`, `letter`, `uncontested_divorce`, `court_appearance`,
+    /// `contested_divorce`, `custody`, or `probate`.
     #[arg(long)]
     pub matter_type: Option<String>,
     /// Lowercase jurisdiction code, for example `nv`.

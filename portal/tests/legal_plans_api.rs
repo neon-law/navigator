@@ -291,10 +291,11 @@ async fn run() {
         &owner,
         "PATCH",
         &link,
-        Some(json!({"plan_accepted_on": "2026-11-04"})),
+        Some(json!({"plan_accepted_on": "2026-11-04", "plan_matter_type": "contested_divorce"})),
     )
     .await;
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(status, StatusCode::OK, "{accepted}");
+    assert_eq!(accepted["plan_matter_type"], "contested_divorce");
     assert_eq!(accepted["plan_case_number"], "4900000-001");
     assert_eq!(accepted["plan_state"], "wa");
     assert_eq!(accepted["plan_accepted_on"], "2026-11-04");
@@ -341,19 +342,26 @@ async fn run() {
         StatusCode::NO_CONTENT
     );
     assert_eq!(send(&app, &owner, "GET", &link, None).await.1, accepted);
-    // A plan the Firm does not hold, and a malformed number, are refused.
-    assert_eq!(
-        send(
-            &app,
-            &owner,
-            "PATCH",
-            &link,
-            Some(json!({"legal_plan": "Elsewhere"}))
-        )
-        .await
-        .0,
-        StatusCode::BAD_REQUEST
+    // A plan the Firm does not hold is refused whole, naming the verbs that
+    // list and add the Firm's plans; a malformed number is refused too.
+    let (status, refused) = send(
+        &app,
+        &owner,
+        "PATCH",
+        &link,
+        Some(json!({
+            "legal_plan": "Elsewhere", "plan_case_number": "4900000-002", "plan_member_id": "M-0002"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let message = refused["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("navigator legal-plans --firm <firm> list"),
+        "{refused}"
     );
+    assert!(message.contains("create --name <plan>"), "{refused}");
+    assert_eq!(send(&app, &owner, "GET", &link, None).await.1, accepted);
     assert_eq!(
         send(
             &app,
