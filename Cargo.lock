@@ -7597,6 +7597,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "csv",
+ "hex",
  "include_dir",
  "mail-parser",
  "reqwest 0.13.5",

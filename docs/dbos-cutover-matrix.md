@@ -60,10 +60,11 @@ poller, set `NAVIGATOR_DBOS_YOUTUBE_COMMENTS_POLLER_ENABLED=true` on the worker 
 worker's ingress token and give both callers the matching token and ingress URL. The poller submits triage through the
 same selector as the Portal, so its worker also needs the ingress URL when triage uses DBOS.
 
-In `web`, NightlyProjectUpdate, YoutubeCommentsPoller, and SocialPublishReconciler run only under the complete native
-cohost; on a mixed deployment their switches leave the Restate CronJobs in place. See [DBOS-only workflow
-hosting](environments.md#dbos-only-workflow-hosting). The reconciler also requires
-`NAVIGATOR_DBOS_SOCIAL_PUBLISHER_ENABLED`.
+Hosted compatibility manifests suspend the legacy Archives, NightlyProjectUpdate, YoutubeCommentsPoller, and
+SocialPublishReconciler CronJobs. When Archives moves to DBOS in `web`, shipping removes its old CronJob. The complete
+native cohost removes the SocialPublishReconciler trigger and schedules NightlyProjectUpdate and YoutubeCommentsPoller
+through the authenticated DBOS Service. The reconciler also requires `NAVIGATOR_DBOS_SOCIAL_PUBLISHER_ENABLED`. See
+[DBOS-only workflow hosting](environments.md#dbos-only-workflow-hosting).
 
 BillingCanary, BillingDigest, ReconcileInvoices, and SandboxCreditReset are disabled on both engines. Retained trigger
 images are inert, automatic schedules and manual starts cannot submit, and their switches are not native deployment

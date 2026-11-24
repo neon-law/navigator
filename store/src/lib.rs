@@ -113,7 +113,7 @@ pub mod document_comments;
 pub mod docusign_completion;
 pub mod evidence_shares;
 /// Canonical export section selection for buffered capture and streaming verification.
-pub(crate) mod export_filter;
+pub(crate) use model::source_capture as export_filter;
 pub mod project_envelopes;
 pub use model::document_pointers;
 pub use model::pleading;

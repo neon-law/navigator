@@ -171,6 +171,11 @@ pod-name identity or scaling the fleet up.
 replacement-pod recovery is automated, deployments must account for this operator handoff before treating DBOS as a
 fully unattended host for external effects.
 
+The PostgreSQL compatibility workflow runs a replacement-pod rehearsal in a disposable namespace. It first observes the
+pending workflow, its application version, its executor identity, and the completed checkpoint. It waits for the first
+pod to disappear before the replacement takes that identity. The replacement retrieves the existing workflow. The
+rehearsal compares the journal and the synthetic effect receipt after recovery.
+
 ### Turning it on and off
 
 Both rows ship `NAVIGATOR_DBOS_ENABLED = "true"`. With it on, `ops ship` refuses the row until

@@ -4,6 +4,7 @@ metadata:
   name: social-publish-reconciler-trigger
   namespace: navigator
 spec:
+  suspend: true
   schedule: "*/5 * * * *"
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 120
