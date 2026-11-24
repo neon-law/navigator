@@ -834,13 +834,6 @@ fn launch_one(
     }
     let started = Instant::now();
     let result = runner::execute(cluster, name, repository, origin, ips, dns, &registration);
-    // The pod goes with its Job, so its log is read before cleanup.
-    match cluster.job_log(name) {
-        Ok(log) => forward_job_log(repository, name, &log),
-        Err(error) => {
-            tracing::warn!(target: "forgejo", event = "forgejo.runner.log_unavailable", job = name, error = %error, "runner log could not be read");
-        }
-    }
     tracing::info!(
         target: "forgejo",
         event = "forgejo.runner.finished",
@@ -852,18 +845,6 @@ fn launch_one(
     );
     let cleanup = runner::cleanup(cluster, &api, &runtime, name, registration.id);
     cleanup.and(result)
-}
-
-/// Re-emit a finished runner's stdout, one record per line, so a job's log
-/// reaches the collector (and from it Dash0 and Cloud Logging) with the
-/// repository and runner Job attached. Each line passes the telemetry
-/// crate's content screen like any other record; a line that looks like
-/// client content is dropped there, and `hudson ops forgejo logs` still
-/// reads the whole log from Forgejo.
-fn forward_job_log(repository: &str, job: &str, log: &str) {
-    for line in log.lines().filter(|line| !line.trim().is_empty()) {
-        tracing::info!(target: "forgejo.job.log", job = job, forgejo.repository = repository, "{line}");
-    }
 }
 
 /// `hudson ops forgejo runner-controller`.
@@ -1171,9 +1152,6 @@ mod tests {
                 .cloned()
                 .collect())
         }
-        fn job_log(&self, _: &str) -> Result<String> {
-            Ok(String::new())
-        }
     }
 
     /// Killing the controller mid-job leaves a finished Job and a live
@@ -1249,8 +1227,7 @@ mod tests {
         drop(server_runtime);
     }
 
-    /// A cluster that accepts every launch: an isolated namespace, a Job that
-    /// succeeds at once, and a two-line runner log.
+    /// A cluster with an isolated namespace and Jobs that succeed at once.
     #[derive(Default)]
     struct LaunchCluster {
         created: Mutex<Vec<String>>,
@@ -1292,14 +1269,11 @@ mod tests {
         fn runner_jobs(&self) -> Result<Vec<Value>> {
             Ok(Vec::new())
         }
-        fn job_log(&self, _: &str) -> Result<String> {
-            Ok("step one\n\nstep two\n".into())
-        }
     }
 
     /// One queued job in `o/a`: the tick mirrors the release its commit pins,
-    /// starts exactly one isolated runner, forwards its log, removes it, and
-    /// reports the repository's runs and its missed CD once each.
+    /// starts exactly one isolated runner, removes it, and reports the
+    /// repository's runs.
     #[test]
     #[allow(clippy::too_many_lines)]
     fn a_tick_waits_for_the_release_then_runs_each_waiting_job_once() {

@@ -421,8 +421,8 @@ Each launch is the `runner-once` Job, unchanged: a repository-scoped ephemeral r
 without an API token, a read-only root filesystem, no host or Docker socket, `/32` egress to the `--egress-host`
 addresses resolved at launch, a thirty-minute deadline and a five-minute TTL. The controller talks to the Kubernetes API
 with its own service account. Its Role reaches only `navigator-forgejo-runners`: Jobs, and creating Secrets, service
-accounts and NetworkPolicies, plus pod logs. Its ClusterRole reads that one namespace object. The token stays in the
-controller and never enters a job pod. `--once` runs one tick, waits for its runners and exits. `--context` drives a
+accounts and NetworkPolicies. Its ClusterRole reads that one namespace object. The token stays in the controller and
+never enters a job pod. `--once` runs one tick, waits for its runners and exits. `--context` drives a
 cluster through `kubectl` from an operator host instead.
 
 For a canary, add `--repository <owner/repository>` to the controller arguments. The controller verifies the exact
@@ -438,8 +438,8 @@ controller picks it up within one tick.
 `hudson ops forgejo logs <owner>/<repository> --run <n> --url <forgejo> --context <context>` prints every job log of run
 `<n>`, the number on the run's page. Forgejo 15.0.9 serves job logs only through a web route that refuses tokens. So the
 verb lists the run's tasks through the API with `FORGEJO_TOKEN`, then reads each finished log through `kubectl exec`
-into `navigator-forgejo-0`. A job that is still running has no file yet. The same output also reaches Cloud Logging from
-the runner pod, and Dash0 through the controller; see [observability](observability.md#forgejo-actions).
+into `navigator-forgejo-0`. A job that is still running has no file yet. Shared telemetry records the run number and
+outcome so an authorized operator can find the job in Forgejo. See [observability](observability.md#forgejo-actions).
 
 ## Git bundle archive and restore
 

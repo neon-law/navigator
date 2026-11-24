@@ -205,32 +205,6 @@ impl Cluster for InCluster {
             .context("runner Job inventory is unavailable")?;
         Ok(listed["items"].as_array().cloned().unwrap_or_default())
     }
-
-    fn job_log(&self, name: &str) -> Result<String> {
-        let pods = self
-            .get_json(&format!(
-                "{}?labelSelector=job-name%3D{name}",
-                self.namespaced("api/v1", "pods")
-            ))?
-            .context("runner pod inventory is unavailable")?;
-        let Some(pod) = pods["items"]
-            .as_array()
-            .and_then(|items| items.first())
-            .and_then(|pod| pod["metadata"]["name"].as_str())
-        else {
-            return Ok(String::new());
-        };
-        let (status, body) = self.send(
-            Method::GET,
-            &format!("{}/{pod}/log", self.namespaced("api/v1", "pods")),
-            None,
-        )?;
-        ensure!(
-            status.is_success(),
-            "runner pod log read refused ({status})"
-        );
-        Ok(body)
-    }
 }
 
 #[cfg(test)]
@@ -306,7 +280,7 @@ mod tests {
     }
 
     #[test]
-    fn identities_policies_logs_and_deletes_stay_in_the_runner_namespace() {
+    fn identities_policies_and_deletes_stay_in_the_runner_namespace() {
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let server = runtime.block_on(async {
             let server = MockServer::start().await;
@@ -337,27 +311,6 @@ mod tests {
                 .respond_with(ResponseTemplate::new(200).set_body_json(json!({"items": []})))
                 .mount(&server)
                 .await;
-            Mock::given(method("GET"))
-                .and(path("/api/v1/namespaces/runners/pods"))
-                .and(query_param("labelSelector", "job-name=forgejo-job-x"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(
-                    json!({"items": [{"metadata": {"name": "forgejo-job-x-abcde"}}]}),
-                ))
-                .mount(&server)
-                .await;
-            Mock::given(method("GET"))
-                .and(path("/api/v1/namespaces/runners/pods"))
-                .and(query_param("labelSelector", "job-name=forgejo-job-y"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(json!({"items": []})))
-                .mount(&server)
-                .await;
-            Mock::given(method("GET"))
-                .and(path(
-                    "/api/v1/namespaces/runners/pods/forgejo-job-x-abcde/log",
-                ))
-                .respond_with(ResponseTemplate::new(200).set_body_string("step one\n"))
-                .mount(&server)
-                .await;
             Mock::given(method("DELETE"))
                 .and(path("/apis/batch/v1/namespaces/runners/jobs/forgejo-job-x"))
                 .respond_with(ResponseTemplate::new(404))
@@ -382,9 +335,6 @@ mod tests {
             "runners"
         );
         assert_eq!(api.network_policies().unwrap(), json!({"items": []}));
-        assert_eq!(api.job_log("forgejo-job-x").unwrap(), "step one\n");
-        // A Job whose pod is already gone has an empty log.
-        assert_eq!(api.job_log("forgejo-job-y").unwrap(), "");
         api.delete_job("forgejo-job-x").unwrap();
         assert!(api.delete_job("forgejo-job-y").is_err());
         drop(runtime);
