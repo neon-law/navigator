@@ -223,6 +223,8 @@ enum ReleaseCmd {
     #[command(hide = true)]
     InspectTree {
         #[arg(long)]
+        revision: String,
+        #[arg(long)]
         repair: bool,
     },
 
@@ -306,20 +308,14 @@ async fn run_release(action: ReleaseCmd) -> ExitCode {
             }
         }
         ReleaseCmd::Preflight { repo, revision } => {
-            projects::release_preflight::run(&repo, &revision).await
+            projects::release_preflight::run(&repo, &revision)
         }
-        ReleaseCmd::InspectTree { repair: false } => {
-            run_repository_gate(Path::new("."), true, false)
-        }
-        ReleaseCmd::InspectTree { repair: true } => {
-            match projects::release_preflight::simulate_repairs(Path::new(".")) {
-                Ok(paths) => {
-                    println!("{}", serde_json::json!(paths));
-                    ExitCode::SUCCESS
-                }
+        ReleaseCmd::InspectTree { revision, repair } => {
+            match projects::release_preflight::inspect(&revision, repair).await {
+                Ok(status) => status,
                 Err(err) => {
                     eprintln!("{err:#}");
-                    ExitCode::FAILURE
+                    ExitCode::from(2)
                 }
             }
         }

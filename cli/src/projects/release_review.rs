@@ -66,7 +66,7 @@ async fn review_checkout(dir: &Path, tag: &str) -> Result<Value> {
     } else {
         Box::new(ForgejoForge::from_checkout(dir)?)
     };
-    review(dir, tag, forge.as_ref()).await
+    review(dir, tag, &origin, forge.as_ref()).await
 }
 
 fn pin_at(dir: &Path, sha: &str) -> Result<String> {
@@ -76,12 +76,12 @@ fn pin_at(dir: &Path, sha: &str) -> Result<String> {
         .context("Project manifest must name a release")
 }
 
-async fn review(dir: &Path, tag: &str, forge: &dyn ReleaseForge) -> Result<Value> {
+async fn review(dir: &Path, tag: &str, origin: &str, forge: &dyn ReleaseForge) -> Result<Value> {
     let source = forge.source().await?;
     if source.archived {
         return Ok(json!({"status":"archived"}));
     }
-    let heads = git_text(dir, &["ls-remote", "--heads", "origin"])?;
+    let heads = git_text(dir, &["ls-remote", "--heads", "--", origin])?;
     if heads.is_empty() {
         return Ok(json!({"status":"empty"}));
     }
@@ -107,7 +107,7 @@ async fn review(dir: &Path, tag: &str, forge: &dyn ReleaseForge) -> Result<Value
                 "--no-tags",
                 "--no-write-fetch-head",
                 "--refmap=",
-                "origin",
+                origin,
                 name,
             ],
         )
@@ -147,11 +147,8 @@ async fn review(dir: &Path, tag: &str, forge: &dyn ReleaseForge) -> Result<Value
             .context("verify the outgoing release signature")?;
     }
     if remote.is_none() {
-        let origin = git_text(dir, &["remote", "get-url", "origin"])?;
-        ensure!(
-            git_text(dir, &["remote", "get-url", "--push", "--all", "origin"])? == origin,
-            "release review requires a single push destination matching origin"
-        );
+        // During a dual run, origin can have multiple push URLs. A draft
+        // belongs only to the verified primary and leaves its mirror alone.
         git_text(
             dir,
             &[
@@ -159,7 +156,8 @@ async fn review(dir: &Path, tag: &str, forge: &dyn ReleaseForge) -> Result<Value
                 "push.followTags=false",
                 "push",
                 &format!("--force-with-lease={topic}:"),
-                "origin",
+                "--",
+                origin,
                 &format!("{head}:{topic}"),
             ],
         )?;
@@ -239,6 +237,19 @@ mod tests {
             "version: '2.0.0'\nproject: sample\n",
         )?;
         git_text(&dir, &["commit", "-am", "Release"])?;
+        let mirror = temp.path().join("mirror.git");
+        git_text(temp.path(), &["init", "--bare", mirror.to_str().unwrap()])?;
+        for url in [&origin, &mirror] {
+            git_text(
+                &dir,
+                &[
+                    "config",
+                    "--add",
+                    "remote.origin.pushurl",
+                    url.to_str().unwrap(),
+                ],
+            )?;
+        }
         let head = git_text(&dir, &["rev-parse", "HEAD"])?;
         git_text(&dir, &["switch", "main"])?;
         std::fs::write(dir.join("unrelated"), "keep staged")?;
@@ -303,15 +314,28 @@ mod tests {
                 opened.lock().unwrap().push(pull.clone());
                 ResponseTemplate::new(201).set_body_json(pull)
             }).expect(1).mount(&server).await;
-            assert!(review(&dir, "2.0.0", forge.as_ref()).await.is_err());
-            let first = review(&dir, "2.0.0", forge.as_ref()).await?;
-            let second = review(&dir, "2.0.0", forge.as_ref()).await?;
+            assert!(
+                review(&dir, "2.0.0", origin.to_str().unwrap(), forge.as_ref())
+                    .await
+                    .is_err()
+            );
+            let first = review(&dir, "2.0.0", origin.to_str().unwrap(), forge.as_ref()).await?;
+            let second = review(&dir, "2.0.0", origin.to_str().unwrap(), forge.as_ref()).await?;
             assert_eq!(first, second);
             assert_eq!(second["draft"], true);
             assert_eq!(second["head"], head);
             assert_eq!(git_text(&dir, &["diff", "--cached"])?, before);
             assert_eq!(git_text(&dir, &["branch", "--show-current"])?, "main");
-            git_text(&dir, &["push", "origin", "--delete", "release/2.0.0"])?;
+            assert!(git_text(&mirror, &["for-each-ref", "refs/heads"])?.is_empty());
+            git_text(
+                &dir,
+                &[
+                    "push",
+                    "--delete",
+                    origin.to_str().unwrap(),
+                    "release/2.0.0",
+                ],
+            )?;
         }
         Ok(())
     }

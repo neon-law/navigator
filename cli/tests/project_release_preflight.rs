@@ -53,6 +53,7 @@ fn preflight_names_the_commit_and_ignores_working_copy_repairs() {
         let result = Command::cargo_bin("navigator")
             .unwrap()
             .current_dir(dir)
+            .env("GIT_INDEX_FILE", dir.join(".git/index"))
             .env("NAVIGATOR_RELEASE_TAG", env!("CARGO_PKG_VERSION"))
             .args(["release", "preflight", "--revision", &sha])
             .assert()
