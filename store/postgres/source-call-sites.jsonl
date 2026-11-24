@@ -206,10 +206,10 @@
 {"file":"cli/src/github_setup.rs","line":1232,"function":"with_token","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/github_setup.rs","line":1236,"function":"with_token","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/github_setup.rs","line":1240,"function":"with_token","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"cli/src/github_setup.rs","line":2167,"function":"read_live_rulesets","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"cli/src/github_setup.rs","line":2185,"function":"read_live_rulesets","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"cli/src/github_setup.rs","line":2523,"function":"apply","operation":"delete","sql_operations":[],"tables":[],"transaction":false}
-{"file":"cli/src/github_setup.rs","line":4999,"function":"test_client","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/github_setup.rs","line":2272,"function":"read_live_rulesets","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/github_setup.rs","line":2290,"function":"read_live_rulesets","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/github_setup.rs","line":2628,"function":"apply","operation":"delete","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/github_setup.rs","line":5161,"function":"test_client","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/github_setup/deploy_environments.rs","line":188,"function":"apply","operation":"delete","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/legal_plans.rs","line":196,"function":"firm_command","operation":"query","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/mail.rs","line":451,"function":"call","operation":"query","sql_operations":[],"tables":[],"transaction":false}
@@ -299,8 +299,8 @@
 {"file":"cli/src/projects/skill.rs","line":240,"function":"record_kit_version","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/projects/source_import.rs","line":43,"function":"tree_from_checkout","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/projects/source_import.rs","line":98,"function":"import_tree","operation":"query","sql_operations":[],"tables":[],"transaction":false}
-{"file":"cli/src/projects/watch.rs","line":592,"function":"hydrate","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"cli/src/projects/watch.rs","line":634,"function":"hydrate","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/projects/watch.rs","line":633,"function":"hydrate","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/projects/watch.rs","line":675,"function":"hydrate","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/projects/workspace_skills.rs","line":131,"function":"materialize","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/projects/workspace_skills.rs","line":153,"function":"materialize","operation":"insert","sql_operations":[],"tables":["firm"],"transaction":false}
 {"file":"cli/src/projects/workspace_skills.rs","line":172,"function":"materialize","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
@@ -850,8 +850,8 @@
 {"file":"mcp/src/tools/delete_closed_repository.rs","line":358,"function":"commit_generation","operation":"query","sql_operations":["DELETE"],"tables":[],"transaction":false}
 {"file":"model/src/fi_import.rs","line":375,"function":"parse","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"model/src/fi_import.rs","line":488,"function":"parse","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"model/src/forgejo_governance.rs","line":691,"function":"review_page","operation":"query","sql_operations":[],"tables":[],"transaction":false}
-{"file":"model/src/forgejo_governance.rs","line":706,"function":"review_page","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"model/src/forgejo_governance.rs","line":763,"function":"review_page","operation":"query","sql_operations":[],"tables":[],"transaction":false}
+{"file":"model/src/forgejo_governance.rs","line":778,"function":"review_page","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"model/src/forgejo_governance/scheduler.rs","line":316,"function":"total_response","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"model/src/forgejo_governance/scheduler.rs","line":325,"function":"get","operation":"query","sql_operations":[],"tables":[],"transaction":false}
 {"file":"model/src/forgejo_governance/scheduler.rs","line":531,"function":"changed_head_and_merge_conflict_are_explicit_outcomes","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
