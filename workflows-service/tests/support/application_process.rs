@@ -60,16 +60,16 @@ pub async fn database() -> Option<ApplicationDatabase> {
             .kill_on_drop(true)
             .spawn()
             .expect("start native DBOS test");
-        match tokio::time::timeout(std::time::Duration::from_secs(180), child.wait()).await {
-            Ok(status) => assert!(
-                status.unwrap().success(),
-                "{name} failed in its owned database"
-            ),
-            Err(_) => {
-                child.kill().await.expect("stop timed-out worker");
-                panic!("{name} timed out in its owned database");
-            }
-        }
+        let Ok(status) =
+            tokio::time::timeout(std::time::Duration::from_secs(180), child.wait()).await
+        else {
+            child.kill().await.expect("stop timed-out worker");
+            panic!("{name} timed out in its owned database");
+        };
+        assert!(
+            status.expect("wait for native DBOS test").success(),
+            "{name} failed in its owned database"
+        );
     })
     .await;
     None

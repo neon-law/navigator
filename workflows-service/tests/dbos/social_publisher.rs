@@ -111,7 +111,7 @@ async fn scheduled_facebook_post(fixture: &Fixture, publish_at: DateTime<Utc>) -
     .bind(BRAND)
     .bind(id.to_string())
     .bind(publish_at)
-    .bind(account.id.to_string())
+    .bind(account.id)
     .execute(fixture.pg.pool())
     .await
     .unwrap();
@@ -439,7 +439,7 @@ async fn scheduled_instagram_post(fixture: &Fixture, publish_at: DateTime<Utc>) 
     .bind(BRAND)
     .bind(id.to_string())
     .bind(publish_at)
-    .bind(account.id.to_string())
+    .bind(account.id)
     .execute(fixture.pg.pool())
     .await
     .unwrap();
@@ -692,9 +692,14 @@ async fn scheduled_tiktok_post(fixture: &Fixture, publish_at: DateTime<Utc>) -> 
     .await
     .unwrap();
     let post_id = scheduled_instagram_post(fixture, publish_at).await;
-    sqlx::query("UPDATE post SET selected_social_accounts = ARRAY[$1], tiktok_ai_generated = false WHERE id = $2")
-        .bind(account.id.to_string()).bind(post_id)
-        .execute(fixture.pg.pool()).await.unwrap();
+    sqlx::query(
+        "UPDATE post SET selected_social_accounts = ARRAY[$1], tiktok_ai_generated = false WHERE id = $2",
+    )
+    .bind(account.id)
+    .bind(post_id)
+    .execute(fixture.pg.pool())
+    .await
+    .unwrap();
     store::posts::record_video(&fixture.db, BRAND, "synthetic/video.mp4", 1080, 1920)
         .await
         .unwrap();
