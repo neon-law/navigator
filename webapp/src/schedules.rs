@@ -103,7 +103,7 @@ const JOB_COPY: &[JobCopy] = &[
         cron_name: "dri-digest-trigger",
         name: "DRI digest",
         cadence: "Daily · 17:11 PST (prior day)",
-        description: "Reads every project's lawyer and client DRI and posts firm ops one Slack \
+        description: "Reads each open project's lawyer and client DRI and posts firm ops one Slack \
                       line per project naming both sides, saying \"none\" where a side is \
                       unassigned so the gap is visible from the notice itself.",
         manual_slug: None,
