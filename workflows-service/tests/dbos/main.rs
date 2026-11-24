@@ -23,6 +23,7 @@ mod notation_reset;
 mod profit_digest;
 mod project_calendar;
 mod project_recovery;
+mod purchase_activation;
 mod reconcile;
 mod retention_purge;
 mod schedules;

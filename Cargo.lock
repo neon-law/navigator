@@ -15383,6 +15383,7 @@ dependencies = [
  "chrono-tz",
  "cloud",
  "dbos",
+ "dotenvy",
  "mail-parser",
  "opentelemetry",
  "opentelemetry_sdk",

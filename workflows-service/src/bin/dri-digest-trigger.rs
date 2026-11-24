@@ -21,53 +21,11 @@
 //! shared [`workflows::start_workflow`] helper attaches the header only when
 //! the token is present and non-empty, so the same binary works in both.
 
-use anyhow::{Context, Result};
-
 #[tokio::main]
-async fn main() -> Result<()> {
-    let _ = dotenvy::dotenv();
-    let _ = dotenvy::from_path(".devx/env");
-    // One observability seam for every binary: stdout logs (JSON when an
-    // OTLP endpoint is set) plus OTLP traces + metrics. Held to end of main
-    // so the drop flushes any batched export before the process exits.
-    let _telemetry = telemetry::init("navigator-dri-digest-trigger");
-
-    // The DBOS engine's standalone schedule owns this job when its switch
-    // is on: there is no worker ingress route to submit to, so the CronJob
-    // exits without submitting and the engine fires the workflow itself.
-    // With the switch off this binary drives the Restate submit.
-    if workflows::trigger::dbos_owns_schedule("NAVIGATOR_DBOS_DRI_DIGEST_ENABLED", |name| {
-        std::env::var(name).ok()
-    })
-    .context("read NAVIGATOR_DBOS_DRI_DIGEST_ENABLED")?
-    {
-        tracing::info!("DBOS engine owns the DriDigest schedule; skipping the Restate submit");
-        println!("DBOS engine owns DriDigest; Restate submit skipped");
-        return Ok(());
-    }
-
-    let ingress = std::env::var("RESTATE_INGRESS_URL")
-        .context("RESTATE_INGRESS_URL must be set (the Restate ingress endpoint)")?;
-    // Optional bearer — present only when targeting Restate Cloud.
-    let auth_token = std::env::var("RESTATE_AUTH_TOKEN").ok();
-    // Workflow key = UTC run date. Restate admits at most one invocation per
-    // workflow key, so a duplicate nightly fire is a no-op rather than a
-    // second digest post.
-    let run_id = chrono::Utc::now().format("%Y-%m-%d").to_string();
-
-    let _response = workflows::start_workflow(
-        &ingress,
-        auth_token.as_deref(),
-        "DriDigest",
-        &run_id,
-        "run",
-        &serde_json::json!({}),
-        true, // one-way: accept the invocation and exit; Restate runs it.
+async fn main() -> anyhow::Result<()> {
+    workflows::trigger::run_cron_trigger(
+        "navigator-dri-digest-trigger",
+        workflows_service::cron_triggers::dri_digest(chrono::Utc::now()),
     )
     .await
-    .context("triggering DriDigest workflow")?;
-
-    tracing::info!(%run_id, "dri digest workflow triggered");
-    println!("triggered DriDigest/{run_id}");
-    Ok(())
 }
