@@ -1,56 +1,3 @@
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_local_day_tracks_dst_and_keeps_calendar_gaps_visible() {
-        let (day, start, end, now) = dates(
-            "today",
-            chrono_tz::America::New_York,
-            "2026-03-08T12:00:00Z".parse().unwrap(),
-        )
-        .unwrap();
-        assert_eq!((end - start).num_hours(), 23);
-        let report = assemble(
-            day,
-            start,
-            end,
-            now,
-            Ok(json!({"complete": true, "deadlines": []})),
-            Ok(json!({"unreadable": [{"missing": "scope"}]})),
-        );
-        assert_eq!(report["complete"], false);
-        assert_eq!(
-            report["coverage"]["calendar"]["detail"]["unreadable"][0]["missing"],
-            "scope"
-        );
-    }
-
-    #[test]
-    fn court_work_leads_the_day_and_overdue_work_stays_separate() {
-        let (day, start, end, now) = dates(
-            "2026-11-24",
-            chrono_tz::America::New_York,
-            "2026-11-24T15:00:00Z".parse().unwrap(),
-        )
-        .unwrap();
-        assert_eq!(day.to_string(), "2026-11-24");
-        let brief = json!({"complete": true, "deadlines": [
-            {"due_at": "2026-11-24T12:00:00Z", "title": "Past internal"},
-            {"due_at": "2026-11-24T17:00:00Z", "title": "Internal"},
-            {"due_at": "2026-11-24T18:00:00Z", "title": "Hearing", "category": "hearing"},
-            {"due_at": "2026-11-25T06:00:00Z", "title": "Tomorrow"}
-        ]});
-        let calendar =
-            json!([{"summary": "Meeting", "start": {"dateTime": "2026-11-24T16:00:00Z"}}]);
-        let report = assemble(day, start, end, now, Ok(brief), Ok(calendar));
-        assert_eq!(report["entries"][0]["title"], "Hearing");
-        assert_eq!(report["entries"][1]["title"], "Meeting");
-        assert_eq!(report["entries"][2]["title"], "Internal");
-        assert_eq!(report["overdue"][0]["title"], "Past internal");
-        assert_eq!(report["entries"].as_array().unwrap().len(), 3);
-    }
-}
 use anyhow::{Context, Result};
 use chrono::{DateTime, NaiveDate, NaiveTime, TimeZone, Utc};
 use chrono_tz::Tz;
@@ -234,5 +181,59 @@ fn print(report: &Value) {
     }
     if report["complete"] != true {
         println!("Incomplete coverage: {}", report["coverage"]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_local_day_tracks_dst_and_keeps_calendar_gaps_visible() {
+        let (day, start, end, now) = dates(
+            "today",
+            chrono_tz::America::New_York,
+            "2026-03-08T12:00:00Z".parse().unwrap(),
+        )
+        .unwrap();
+        assert_eq!((end - start).num_hours(), 23);
+        let report = assemble(
+            day,
+            start,
+            end,
+            now,
+            Ok(json!({"complete": true, "deadlines": []})),
+            Ok(json!({"unreadable": [{"missing": "scope"}]})),
+        );
+        assert_eq!(report["complete"], false);
+        assert_eq!(
+            report["coverage"]["calendar"]["detail"]["unreadable"][0]["missing"],
+            "scope"
+        );
+    }
+
+    #[test]
+    fn court_work_leads_the_day_and_overdue_work_stays_separate() {
+        let (day, start, end, now) = dates(
+            "2026-11-24",
+            chrono_tz::America::New_York,
+            "2026-11-24T15:00:00Z".parse().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(day.to_string(), "2026-11-24");
+        let brief = json!({"complete": true, "deadlines": [
+            {"due_at": "2026-11-24T12:00:00Z", "title": "Past internal"},
+            {"due_at": "2026-11-24T17:00:00Z", "title": "Internal"},
+            {"due_at": "2026-11-24T18:00:00Z", "title": "Hearing", "category": "hearing"},
+            {"due_at": "2026-11-25T06:00:00Z", "title": "Tomorrow"}
+        ]});
+        let calendar =
+            json!([{"summary": "Meeting", "start": {"dateTime": "2026-11-24T16:00:00Z"}}]);
+        let report = assemble(day, start, end, now, Ok(brief), Ok(calendar));
+        assert_eq!(report["entries"][0]["title"], "Hearing");
+        assert_eq!(report["entries"][1]["title"], "Meeting");
+        assert_eq!(report["entries"][2]["title"], "Internal");
+        assert_eq!(report["overdue"][0]["title"], "Past internal");
+        assert_eq!(report["entries"].as_array().unwrap().len(), 3);
     }
 }
