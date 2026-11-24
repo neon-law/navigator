@@ -46,33 +46,41 @@ impl ForgejoForge {
     pub(super) fn from_remote(remote: &str) -> Result<Self> {
         let root = std::env::var("NAVIGATOR_FORGEJO_ROOT_URL")
             .context("configure NAVIGATOR_FORGEJO_ROOT_URL for this Forgejo checkout")?;
-        let origin = url::Url::parse(&root)?;
-        let host = origin.host_str().context("Forgejo origin needs a host")?;
-        let repository = if let Some(path) = remote.strip_prefix(&format!("git@{host}:")) {
-            path.trim_end_matches(".git").to_owned()
-        } else {
-            let url = url::Url::parse(remote).context("parse Forgejo origin remote")?;
-            ensure!(
-                url.host_str() == Some(host),
-                "checkout remote differs from configured Forgejo host"
-            );
-            if url.scheme() != "ssh" {
-                ensure!(
-                    url.origin() == origin.origin(),
-                    "checkout remote differs from configured Forgejo origin"
-                );
-            }
-            url.path()
-                .trim_start_matches('/')
-                .trim_end_matches(".git")
-                .to_owned()
-        };
+        let repository = Self::remote_repository(&root, remote)?;
         Self::new(
             &root,
             &repository,
             std::env::var("FORGEJO_TOKEN")
                 .context("FORGEJO_TOKEN must be configured on this trusted host")?,
         )
+    }
+
+    fn remote_repository(root: &str, remote: &str) -> Result<String> {
+        let origin = url::Url::parse(root)?;
+        let host = origin.host_str().context("Forgejo origin needs a host")?;
+        if let Some(path) = remote.strip_prefix(&format!("git@{host}:")) {
+            return Ok(path.trim_end_matches(".git").to_owned());
+        }
+        let url = url::Url::parse(remote).context("parse Forgejo origin remote")?;
+        ensure!(
+            url.host_str() == Some(host) && url.query().is_none() && url.fragment().is_none(),
+            "checkout remote differs from configured Forgejo host"
+        );
+        let path = if url.scheme() == "ssh" {
+            url.path().trim_start_matches('/')
+        } else {
+            ensure!(
+                url.origin() == origin.origin()
+                    && url.username().is_empty()
+                    && url.password().is_none(),
+                "checkout remote differs from configured Forgejo origin"
+            );
+            let prefix = format!("{}/", origin.path().trim_end_matches('/'));
+            url.path()
+                .strip_prefix(&prefix)
+                .context("checkout remote is outside the configured Forgejo root")?
+        };
+        Ok(path.trim_end_matches(".git").to_owned())
     }
 
     pub(super) async fn review_page(&self, page: usize) -> Result<Vec<super::reviews::Review>> {
@@ -549,6 +557,27 @@ mod tests {
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
+    #[test]
+    fn release_remote_uses_the_configured_forgejo_root() -> Result<()> {
+        let root = "https://forge.example.test/git/";
+        assert_eq!(
+            ForgejoForge::remote_repository(
+                root,
+                "https://forge.example.test/git/firm/matter.git"
+            )?,
+            "firm/matter"
+        );
+        assert_eq!(
+            ForgejoForge::remote_repository(root, "git@forge.example.test:firm/matter.git")?,
+            "firm/matter"
+        );
+        assert!(ForgejoForge::remote_repository(
+            root,
+            "https://forge.example.test/other/firm/matter"
+        )
+        .is_err());
+        Ok(())
+    }
     #[tokio::test]
     async fn deployment_selects_exact_push_commit_and_its_jobs() {
         let server = MockServer::start().await;

@@ -10,11 +10,8 @@ skin: marketing
 bands:
   - kind: steps
     anchor: connect-mcp
-    overline: Remote MCP
+    overline: Navigator MCP
     heading: Connect Navigator to ChatGPT
-    description: >-
-      Find public legal templates in chat. When you’re ready to start a Nevada LLC or draft an agreement,
-      sign in on Neon Law’s website to enter your details.
     items:
       - title: Add Navigator to ChatGPT
         body:
@@ -95,8 +92,9 @@ bands:
       - Google Workspace
       - Linear
       - Mercury
-      - Restate
-      - SurrealDB
+      - Postgres
+      - Apache AGE
+      - DBOS
       - Twilio
       - Xero
   - kind: video

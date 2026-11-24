@@ -758,26 +758,6 @@ for the prerequisites and ordered application.
 Review one synthetic deployment's dry-run without exposing decrypted values. Explain why deploying the forge and
 changing a Project's repository URL are separate operations. Keep the current forge until cutover passes.
 
-### Separate people, Git transport, and machine access
-
-| Access | Current contract or migration requirement |
-| --- | --- |
-| People | Verified allowed-domain OIDC sign-in, mandatory TOTP, explicit repository grants |
-| Git transport | HTTPS; the deployment template disables SSH |
-| SSH certificates | Prove issuance, expiry, revocation, principal mapping and CA rotation before enabling |
-| Workflow identity | Add Forgejo Actions OIDC trust; Navigator's existing CI exchange trusts GitHub |
-| Repository automation | Restrict identity and API scope to its repositories and permitted operations |
-| Policy administration | Separate from the credentials available to untrusted PR jobs |
-
-Forgejo's reserved bootstrap administrator holds the first administrator seat; its random password is discarded and
-password sign-in is disabled. Operators use Forgejo's administrator CLI rather than sharing that password.
-
----
-
-An SSH certificate authenticates a Git connection. It does not grant repository access, sign a commit, or authorize a
-Navigator upload by itself. A service identity's repository scope and its credential lifetime are separate controls.
-Test both. Keep private signing keys and decrypted service configuration out of repositories, slides and logs.
-
 ### Scope a Firm mirror token
 
 In Navigator, open the owning Firm and confirm each active Project's recorded primary. Match each mirror to its exact
@@ -800,9 +780,31 @@ synthetic private mirror and confirm divergent refs stay intact. Preserve branch
 rotating, verify the replacement and revoke the previous token in Forgejo. Removing a Navigator secret alone leaves the
 provider token valid.
 
+---
+
 Use a dedicated service identity for unattended work. Replace the token with a smaller allowlist when a Project closes
 or leaves the Firm. Exercise the denied path against a private synthetic repository outside the allowlist. A failed
 Project lookup is a reason to inspect its binding and scope before changing any permissions.
+
+### Separate people, Git transport, and machine access
+
+| Access | Current contract or migration requirement |
+| --- | --- |
+| People | Verified allowed-domain OIDC sign-in, mandatory TOTP, explicit repository grants |
+| Git transport | HTTPS; the deployment template disables SSH |
+| SSH certificates | Prove issuance, expiry, revocation, principal mapping and CA rotation before enabling |
+| Workflow identity | Add Forgejo Actions OIDC trust; Navigator's existing CI exchange trusts GitHub |
+| Repository automation | Restrict identity and API scope to its repositories and permitted operations |
+| Policy administration | Separate from the credentials available to untrusted PR jobs |
+
+Forgejo's reserved bootstrap administrator holds the first administrator seat; its random password is discarded and
+password sign-in is disabled. Operators use Forgejo's administrator CLI rather than sharing that password.
+
+---
+
+An SSH certificate authenticates a Git connection. It does not grant repository access, sign a commit, or authorize a
+Navigator upload by itself. A service identity's repository scope and its credential lifetime are separate controls.
+Test both. Keep private signing keys and decrypted service configuration out of repositories, slides and logs.
 
 ### Require the gate and protected-main policy
 

@@ -2146,59 +2146,18 @@ async fn repair_project_forgejo_mirror_door(
         .await
         .map_err(|error| ApiError::Db(error.to_string()))?
         .ok_or(ApiError::NotFound)?;
-    if !project
+    let origin = project
         .repository_url
         .as_deref()
-        .is_some_and(github_project_origin)
-    {
-        return Err(ApiError::NotFound);
-    }
-    let firm_id = project.firm_id.ok_or(ApiError::NotFound)?;
-    let allowed = store::firm_capability::allowed_firm_ids(
-        &state.surreal,
-        session.role,
-        session.person_id,
-        store::firm_capability::FirmCapability::UseIntegrations,
-    )
-    .await
-    .map_err(|error| ApiError::Db(error.to_string()))?;
-    if !allowed.contains(&firm_id) {
-        return Err(ApiError::NotFound);
-    }
-
-    let kms = crate::integrations::runtime_kms_from_env().await;
-    let forge =
-        store::project_surfaces::forgejo_for_project(&state.surreal, id, kms.as_ref(), |key| {
-            std::env::var(key).ok()
-        })
-        .await
-        .map_err(|error| ApiError::Db(error.to_string()))?;
-    let existing = cloud::ForgeService::find_repository(&forge, &project.code)
-        .await
-        .map_err(|error| ApiError::Db(error.to_string()))?;
-    let repository = cloud::ForgeService::ensure_repository(&forge, &project.code)
-        .await
-        .map_err(|error| ApiError::Db(error.to_string()))?;
-    let firm = store::firms::find_by_id(&state.surreal, firm_id)
-        .await
-        .map_err(|error| ApiError::Db(error.to_string()))?
+        .filter(|origin| github_project_origin(origin))
         .ok_or(ApiError::NotFound)?;
-    let path = store::firms::forgejo::repository_path(&firm, &project)
-        .map_err(|error| ApiError::Db(error.to_string()))?;
-    if !is_verified_forgejo_repository_url(&repository.url, &path.owner, &path.repository) {
+    let firm_id = project.firm_id.ok_or(ApiError::NotFound)?;
+    if !may_use_mirror(&state, &session, firm_id).await? {
         return Err(ApiError::NotFound);
     }
-    Ok((
-        StatusCode::OK,
-        Json(serde_json::json!({
-            "repository_url": repository.url,
-            "forgejo_owner": path.owner,
-            "mirror_status": if existing.is_some() { "present" } else { "created" },
-            "source_repository_url": project.repository_url,
-            "ci_provider": "github"
-        })),
-    )
-        .into_response())
+    let forge = connect_project_mirror(&state, firm_id).await?;
+    let repair = repair_forgejo_mirror(&forge, &project.code, origin).await?;
+    Ok(Json(repair).into_response())
 }
 
 /// `GET /app/api/project-surfaces/{id}` — read only the nonsecret coordinates
@@ -2323,95 +2282,270 @@ async fn repository_remotes(
     project: &store::projects::Project,
     viewer: &crate::SessionData,
 ) -> Result<serde_json::Value, ApiError> {
-    let mut forgejo_url = None;
-    let mut forgejo_status = "not_configured";
-    if project
-        .repository_url
-        .as_deref()
-        .is_some_and(github_project_origin)
-    {
-        if let Some(firm_id) = project.firm_id {
-            let access = store::firm_capability::resolve(
-                &state.surreal,
-                viewer.role,
-                viewer.person_id,
-                firm_id,
-                store::firm_capability::FirmCapability::UseIntegrations,
-            )
-            .await
-            .map_err(|error| ApiError::Db(error.to_string()))?;
-            if !access.is_allowed() {
-                forgejo_status = "not_authorized";
-            } else if std::env::var("NAVIGATOR_FORGEJO_ROOT_URL")
-                .ok()
-                .is_none_or(|root| root.trim().is_empty())
-            {
-                forgejo_status = "not_configured";
-            } else {
-                let kms = crate::integrations::runtime_kms_from_env().await;
-                match store::project_surfaces::forgejo_for_project(
-                    &state.surreal,
-                    project.id,
-                    kms.as_ref(),
-                    |key| std::env::var(key).ok(),
-                )
-                .await
-                {
-                    Ok(forge) => {
-                        match cloud::ForgeService::find_repository(&forge, &project.code).await {
-                            Ok(Some(repository)) => {
-                                let firm = store::firms::find_by_id(&state.surreal, firm_id)
-                                    .await
-                                    .map_err(|error| ApiError::Db(error.to_string()))?;
-                                if firm.is_some_and(|firm| {
-                                    store::firms::forgejo::repository_path(&firm, project)
-                                        .is_ok_and(|path| {
-                                            is_verified_forgejo_repository_url(
-                                                &repository.url,
-                                                &path.owner,
-                                                &path.repository,
-                                            )
-                                        })
-                                }) {
-                                    forgejo_url = Some(repository.url);
-                                    forgejo_status = "verified";
-                                } else {
-                                    forgejo_status = "unavailable";
-                                }
-                            }
-                            Ok(None) => forgejo_status = "missing",
-                            Err(_) => forgejo_status = "unavailable",
-                        }
-                    }
-                    Err(_) => forgejo_status = "unavailable",
-                }
+    let origin = project.repository_url.as_deref();
+    if !origin.is_some_and(github_project_origin) {
+        return Ok(serde_json::json!({
+            "origin": origin,
+            "forgejo": null,
+            "forgejo_status": "not_configured"
+        }));
+    }
+    let mirror = match project.firm_id {
+        Some(firm_id) if may_use_mirror(state, viewer, firm_id).await? => {
+            match connect_project_mirror(state, firm_id).await {
+                Ok(forge) => find_forgejo_mirror(&forge, &project.code).await,
+                Err(issue) => Err(issue),
             }
         }
+        Some(_) => Err(MirrorIssue::new(
+            StatusCode::FORBIDDEN,
+            "not_authorized",
+            "firm_access_required",
+            "Firm integration access is required to verify this mirror.",
+            "Ask an administrator of the owning Firm to check your Firm membership.",
+        )),
+        None => Err(MirrorIssue::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "not_configured",
+            "firm_missing",
+            "The Project has no owning Firm.",
+            "Assign the Project to its owning Firm before retrying.",
+        )),
+    };
+    Ok(forgejo_mirror_payload(origin, mirror))
+}
+
+async fn may_use_mirror(
+    state: &ApiState,
+    viewer: &crate::SessionData,
+    firm_id: Uuid,
+) -> Result<bool, ApiError> {
+    store::firm_capability::resolve(
+        &state.surreal,
+        viewer.role,
+        viewer.person_id,
+        firm_id,
+        store::firm_capability::FirmCapability::UseIntegrations,
+    )
+    .await
+    .map(store::firm_capability::FirmCapabilityDecision::is_allowed)
+    .map_err(|error| ApiError::Db(error.to_string()))
+}
+
+async fn connect_project_mirror(
+    state: &ApiState,
+    firm_id: Uuid,
+) -> Result<cloud::ForgejoForge, MirrorIssue> {
+    use cloud::forgejo_forge::NAVIGATOR_FORGEJO_ROOT_URL_ENV;
+    use store::project_surfaces::SurfaceError;
+
+    let root = std::env::var(NAVIGATOR_FORGEJO_ROOT_URL_ENV)
+        .ok()
+        .filter(|root| !root.trim().is_empty())
+        .ok_or_else(MirrorIssue::root_configuration)?;
+    let kms = crate::integrations::runtime_kms_from_env().await;
+    store::project_surfaces::forgejo_for_firm(&state.surreal, Some(firm_id), kms.as_ref(), |key| {
+        (key == NAVIGATOR_FORGEJO_ROOT_URL_ENV).then(|| root.clone())
+    })
+    .await
+    .map_err(|error| match error {
+        SurfaceError::ForgejoUnavailable(_) => MirrorIssue::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "unavailable",
+            "credential_missing",
+            "No owning Firm or active Forgejo access token could be resolved for this Project.",
+            "Check the owning Firm and save its Forgejo access token in Integration secrets.",
+        ),
+        SurfaceError::ForgejoCredential(store::firm_secrets::SecretStoreError::Kms(_)) => {
+            MirrorIssue::upstream(
+                "credential_decryption_failed",
+                "The deployment could not decrypt the Firm's Forgejo access token.",
+                "Check the deployment's runtime KMS configuration and workload permissions, then retry.",
+            )
+        }
+        SurfaceError::Forge(cloud::forge::ForgeError::InvalidConfig(
+            NAVIGATOR_FORGEJO_ROOT_URL_ENV,
+        )) => MirrorIssue::root_configuration(),
+        SurfaceError::Forge(error) => MirrorIssue::from_forge(error),
+        _ => MirrorIssue::upstream(
+            "configuration_unavailable",
+            "The deployment could not load the Project's Forgejo configuration.",
+            "Check the Firm and integration credential store, then retry.",
+        ),
+    })
+}
+
+async fn find_forgejo_mirror(
+    forge: &cloud::ForgejoForge,
+    code: &str,
+) -> Result<Option<cloud::forge::ForgeRepository>, MirrorIssue> {
+    let repository = cloud::ForgeService::find_repository(forge, code)
+        .await
+        .map_err(MirrorIssue::from_forge)?;
+    if let Some(repository) = &repository {
+        verify_forgejo_mirror(forge, code, repository)?;
     }
+    Ok(repository)
+}
+
+fn verify_forgejo_mirror(
+    forge: &cloud::ForgejoForge,
+    code: &str,
+    repository: &cloud::forge::ForgeRepository,
+) -> Result<(), MirrorIssue> {
+    if forge.verify_repository_url(code, &repository.url) {
+        Ok(())
+    } else {
+        Err(MirrorIssue::identity(
+            "repository_url_mismatch",
+            "Forgejo returned a repository URL outside the configured root or Project path.",
+        ))
+    }
+}
+
+async fn repair_forgejo_mirror(
+    forge: &cloud::ForgejoForge,
+    code: &str,
+    origin: &str,
+) -> Result<serde_json::Value, ApiError> {
+    let (repository, outcome) = if let Some(repository) = find_forgejo_mirror(forge, code).await? {
+        (repository, "present")
+    } else {
+        let repository = cloud::ForgeService::ensure_repository(forge, code)
+            .await
+            .map_err(MirrorIssue::from_forge)?;
+        verify_forgejo_mirror(forge, code, &repository)?;
+        (repository, "created")
+    };
     Ok(serde_json::json!({
-        "origin": project.repository_url,
-        "forgejo": forgejo_url,
-        "forgejo_status": forgejo_status
+        "repository_url": repository.url,
+        "forgejo_owner": forge.owner(),
+        "mirror_status": outcome,
+        "source_repository_url": origin,
+        "ci_provider": "github"
     }))
 }
 
-fn is_verified_forgejo_repository_url(value: &str, owner: &str, project: &str) -> bool {
-    let Ok(url) = url::Url::parse(value) else {
-        return false;
+fn forgejo_mirror_payload(
+    origin: Option<&str>,
+    mirror: Result<Option<cloud::forge::ForgeRepository>, MirrorIssue>,
+) -> serde_json::Value {
+    let (url, status, issue) = match mirror {
+        Ok(Some(repository)) => (Some(repository.url), "verified", None),
+        Ok(None) => (
+            None,
+            "missing",
+            Some(MirrorIssue::new(
+                StatusCode::NOT_FOUND,
+                "missing",
+                "repository_not_found",
+                "Forgejo did not return the Project repository for the Firm's access token.",
+                "Confirm the token can read the Firm's repositories. If the mirror is absent, ask a Firm administrator to run navigator project repository repair-mirror.",
+            )),
+        ),
+        Err(issue) => (None, issue.status, Some(issue)),
     };
-    let Some(host) = url.host_str() else {
-        return false;
-    };
-    let internal_http =
-        host == "localhost" || host == "127.0.0.1" || host.ends_with(".svc.cluster.local");
-    let path = url.path().trim_end_matches('/');
-    let repository_path = format!("/{owner}/{project}");
-    (url.scheme() == "https" || (url.scheme() == "http" && internal_http))
-        && url.username().is_empty()
-        && url.password().is_none()
-        && url.query().is_none()
-        && url.fragment().is_none()
-        && (path.ends_with(&repository_path) || path.ends_with(&format!("{repository_path}.git")))
+    serde_json::json!({
+        "origin": origin,
+        "forgejo": url,
+        "forgejo_status": status,
+        "forgejo_issue": issue
+    })
+}
+
+/// Public diagnostics describe a verified failure without returning provider
+/// bodies, credentials or deployment coordinates.
+#[derive(Debug, Serialize)]
+pub struct MirrorIssue {
+    #[serde(skip)]
+    http_status: StatusCode,
+    #[serde(skip)]
+    status: &'static str,
+    code: &'static str,
+    message: &'static str,
+    remedy: &'static str,
+}
+
+impl MirrorIssue {
+    fn new(
+        http_status: StatusCode,
+        status: &'static str,
+        code: &'static str,
+        message: &'static str,
+        remedy: &'static str,
+    ) -> Self {
+        Self {
+            http_status,
+            status,
+            code,
+            message,
+            remedy,
+        }
+    }
+
+    fn upstream(code: &'static str, message: &'static str, remedy: &'static str) -> Self {
+        Self::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "unavailable",
+            code,
+            message,
+            remedy,
+        )
+    }
+
+    fn root_configuration() -> Self {
+        Self::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "not_configured",
+            "root_url_unconfigured",
+            "The deployment has no usable Forgejo root URL.",
+            "Set NAVIGATOR_FORGEJO_ROOT_URL to the deployment's Forgejo root and retry.",
+        )
+    }
+
+    fn identity(code: &'static str, message: &'static str) -> Self {
+        Self::new(
+            StatusCode::CONFLICT,
+            "unavailable",
+            code,
+            message,
+            "Confirm the repository's private visibility, Firm organization and Project code in Forgejo, then retry.",
+        )
+    }
+
+    fn from_forge(error: cloud::forge::ForgeError) -> Self {
+        use cloud::forge::ForgeError;
+        match error {
+            ForgeError::Authentication => Self::upstream(
+                "access_denied",
+                "Forgejo denied access with the owning Firm's access token.",
+                "Confirm the token and its access to the Firm organization, then update Integration secrets and retry.",
+            ),
+            ForgeError::NotPrivate { .. } => Self::identity(
+                "repository_not_private",
+                "Forgejo did not confirm private visibility for this mirror.",
+            ),
+            ForgeError::ForeignRepository { .. } => Self::identity(
+                "repository_identity_mismatch",
+                "Forgejo returned a repository with a different owner or name.",
+            ),
+            ForgeError::MissingUrl { .. } | ForgeError::Response { .. } => Self::upstream(
+                "invalid_forgejo_response",
+                "Forgejo did not return a usable repository description.",
+                "Check the deployment's Forgejo API and retry.",
+            ),
+            ForgeError::Request { source, .. } if source.is_timeout() => Self::upstream(
+                "forgejo_timeout",
+                "Forgejo timed out while verifying the mirror.",
+                "Check Forgejo availability from the deployment and retry.",
+            ),
+            _ => Self::upstream(
+                "forgejo_request_failed",
+                "The Forgejo mirror request failed.",
+                "Check Forgejo health and the owning Firm's repository access, then retry.",
+            ),
+        }
+    }
 }
 
 /// The Drive folder a Project links, if any.
@@ -10507,6 +10641,7 @@ pub enum ApiError {
     /// expected outcome of a fleet-wide backfill sweep, reported per Project
     /// rather than a bare internal fault.
     ForgejoUnavailable(String),
+    ProjectMirror(MirrorIssue),
     /// The Project's Firm has no DocuSign connection this deployment can
     /// use. The message names the failed check, never a credential byte;
     /// a Firm administrator fixes it by saving the connection.
@@ -10514,6 +10649,12 @@ pub enum ApiError {
     /// A collection request the caller can correct: an unadvertised filter
     /// or sort field, a `page[size]` out of range, or a stale cursor.
     ListInvalid(store::listing::ListError),
+}
+
+impl From<MirrorIssue> for ApiError {
+    fn from(issue: MirrorIssue) -> Self {
+        Self::ProjectMirror(issue)
+    }
 }
 
 impl From<store::persons::PersonError> for ApiError {
@@ -11718,6 +11859,15 @@ impl IntoResponse for ApiError {
                 )
                     .into_response()
             }
+            Self::ProjectMirror(issue) => (
+                issue.http_status,
+                Json(serde_json::json!({
+                    "error": issue.code,
+                    "message": issue.message,
+                    "remedy": issue.remedy
+                })),
+            )
+                .into_response(),
             Self::ForgejoUnavailable(missing) => (
                 StatusCode::UNPROCESSABLE_ENTITY,
                 Json(serde_json::json!({
@@ -11844,33 +11994,71 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn forgejo_repository_url_must_match_the_firm_project_and_safe_transport() {
-        assert!(super::is_verified_forgejo_repository_url(
-            "https://forge.example.test/firm/project",
-            "firm",
-            "project"
-        ));
-        assert!(super::is_verified_forgejo_repository_url(
-            "http://127.0.0.1:3000/firm/project",
-            "firm",
-            "project"
-        ));
-        assert!(!super::is_verified_forgejo_repository_url(
-            "https://forge.example.test/other/project",
-            "firm",
-            "project"
-        ));
-        assert!(!super::is_verified_forgejo_repository_url(
-            "http://forge.example.test/firm/project",
-            "firm",
-            "project"
-        ));
-        assert!(!super::is_verified_forgejo_repository_url(
-            "https://user:secret@forge.example.test/firm/project",
-            "firm",
-            "project"
-        ));
+    #[tokio::test]
+    async fn project_mirror_status_and_repair_recover_after_forgejo_denies_access() {
+        use wiremock::matchers::{header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let code = "sample-matter";
+        let origin = "https://github.com/sample-firm/sample-matter";
+        let repository = "/sample-firm/sample-matter";
+        let url = format!("{}{repository}", server.uri());
+        let forge = cloud::ForgejoForge::new(&server.uri(), "sample-firm", "fixture").unwrap();
+        let route = format!("/api/v1/repos{repository}");
+        Mock::given(method("GET"))
+            .and(path(&route))
+            .and(header("Authorization", "token fixture"))
+            .respond_with(ResponseTemplate::new(403))
+            .expect(2)
+            .mount(&server)
+            .await;
+        let read = super::forgejo_mirror_payload(
+            Some(origin),
+            super::find_forgejo_mirror(&forge, code).await,
+        );
+        assert_eq!(read["forgejo_status"], "unavailable");
+        assert_eq!(read["forgejo_issue"]["code"], "access_denied");
+        assert!(read["forgejo"].is_null());
+        let error = super::repair_forgejo_mirror(&forge, code, origin)
+            .await
+            .unwrap_err();
+        let response = error.into_response();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let failure: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(failure["error"], "access_denied");
+        assert_eq!(failure["remedy"], read["forgejo_issue"]["remedy"]);
+
+        server.verify().await;
+        server.reset().await;
+        Mock::given(method("GET"))
+            .and(path(&route))
+            .and(header("Authorization", "token fixture"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "html_url": url,
+                "name": code,
+                "owner": { "login": "sample-firm" },
+                "private": true
+            })))
+            .expect(2)
+            .mount(&server)
+            .await;
+        let read = super::forgejo_mirror_payload(
+            Some(origin),
+            super::find_forgejo_mirror(&forge, code).await,
+        );
+        assert_eq!(read["forgejo_status"], "verified");
+        assert_eq!(read["forgejo"], url);
+        let repaired = super::repair_forgejo_mirror(&forge, code, origin)
+            .await
+            .unwrap();
+        assert_eq!(repaired["mirror_status"], "present");
+        assert_eq!(repaired["forgejo_owner"], "sample-firm");
+        assert_eq!(repaired["repository_url"], url);
+        assert_eq!(repaired["source_repository_url"], origin);
     }
 
     #[test]

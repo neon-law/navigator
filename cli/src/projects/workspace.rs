@@ -26,6 +26,8 @@ pub(super) struct Remotes {
     pub(super) origin: Option<String>,
     pub(super) forgejo: Option<String>,
     pub(super) forgejo_status: String,
+    #[serde(default)]
+    pub(super) forgejo_issue: serde_json::Value,
 }
 
 async fn get(base: &str, token: &str, id: Uuid) -> Result<Project> {
@@ -47,13 +49,13 @@ async fn get(base: &str, token: &str, id: Uuid) -> Result<Project> {
 /// Check the selected checkout against the signed-in site's Project binding.
 pub(super) async fn verify_checkout_binding(dir: &Path, origin: &str) -> Result<()> {
     ensure!(
-        checkout_remotes(dir).await?.origin.as_deref() == Some(origin),
+        checkout_remotes(dir).await?.1.origin.as_deref() == Some(origin),
         "checkout origin must match the Project's recorded source URL"
     );
     Ok(())
 }
 
-pub(super) async fn checkout_remotes(dir: &Path) -> Result<Remotes> {
+pub(super) async fn checkout_remotes(dir: &Path) -> Result<(String, Remotes)> {
     let manifest = manifest::read(dir).context("this command needs a Project manifest")?;
     let host = manifest.host.as_deref().context("manifest needs a host")?;
     let code = manifest
@@ -70,7 +72,7 @@ pub(super) async fn checkout_remotes(dir: &Path) -> Result<Remotes> {
         project.code == code,
         "checkout must match the recorded Project code"
     );
-    Ok(project.repository_remotes)
+    Ok((project.code, project.repository_remotes))
 }
 
 /// A finished setup has an initialized main, the repository's normal forge

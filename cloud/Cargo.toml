@@ -10,7 +10,7 @@ publish.workspace = true
 path = "src/lib.rs"
 
 [features]
-forge-sync = ["dep:git2", "dep:tempfile"]
+forge-sync = ["dep:git2", "dep:tempfile", "reqwest/blocking"]
 
 [dependencies]
 git2 = { workspace = true, optional = true }

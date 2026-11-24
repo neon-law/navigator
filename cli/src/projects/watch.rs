@@ -329,6 +329,9 @@ fn checkout_mirror<'a>(remotes: &'a serde_json::Value, origin: &str) -> Result<F
         )),
         Some(status @ ("not_authorized" | "missing" | "unavailable" | "not_configured")) => {
             eprintln!("Forgejo mirror is {status}. Fetching from origin only.");
+            if let Some(detail) = super::mirror_repair::issue_detail(&remotes["forgejo_issue"]) {
+                eprintln!("{detail}");
+            }
             Ok(FetchRemotes::MirrorUnavailable)
         }
         _ => bail!("unrecognized Forgejo mirror status; check the Navigator host and CLI versions"),

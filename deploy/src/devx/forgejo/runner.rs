@@ -393,8 +393,6 @@ pub(in crate::devx) trait Cluster: Send + Sync {
     fn network_policies(&self) -> Result<Value>;
     /// Every Job labelled [`RUNNER_JOB_LABEL`].
     fn runner_jobs(&self) -> Result<Vec<Value>>;
-    /// The stdout of the Job's pod: the runner's own lines and the job's steps.
-    fn job_log(&self, name: &str) -> Result<String>;
 }
 
 impl Cluster for Kube {
@@ -463,10 +461,6 @@ impl Cluster for Kube {
         ])?)?;
         Ok(listed["items"].as_array().cloned().unwrap_or_default())
     }
-
-    fn job_log(&self, name: &str) -> Result<String> {
-        self.output(&["logs", &format!("job/{name}"), "--tail=-1"])
-    }
 }
 
 /// Refuse to start `name` unless the runner namespace is declared isolated
@@ -528,9 +522,8 @@ pub(in crate::devx) fn cleanup(
     Ok(())
 }
 
-/// The one-job runner's configuration. `log.job_level` puts every step's
-/// output on the pod's stdout, which is how a job's log reaches Cloud Logging
-/// and, through the controller, Dash0 (ENG-1238).
+/// Keep workflow step output in Forgejo. The runner's process log stays at
+/// info because debug mode also copies job output to the local log.
 fn runner_config(origin: &str, registration: &Registration) -> Result<String> {
     Ok(serde_yaml::to_string(&json!({
         "log": {"level": "info", "job_level": "info"},
@@ -569,17 +562,35 @@ pub(in crate::devx) fn execute(
     }
     kube.unsuspend(name)?;
     let started = Instant::now();
+    let mut consecutive_read_failures = 0;
     loop {
-        let observed = kube
-            .job(name)?
-            .context("runner Job disappeared while running")?;
-        if observed["status"]["succeeded"].as_u64().unwrap_or(0) > 0 {
-            return Ok(());
+        match kube.job(name) {
+            Ok(observed) => {
+                consecutive_read_failures = 0;
+                let observed = observed.context("runner Job disappeared while running")?;
+                if observed["status"]["succeeded"].as_u64().unwrap_or(0) > 0 {
+                    return Ok(());
+                }
+                ensure!(
+                    observed["status"]["failed"].as_u64().unwrap_or(0) == 0,
+                    "one-job runner failed; inspect the Actions run in Forgejo and the runner Job status"
+                );
+            }
+            Err(error) => {
+                consecutive_read_failures += 1;
+                if consecutive_read_failures == 3 {
+                    return Err(error)
+                        .context("read the running Job after three consecutive failures");
+                }
+                tracing::warn!(
+                    target: "forgejo",
+                    event = "forgejo.runner.poll_failed",
+                    job = name,
+                    attempt = consecutive_read_failures,
+                    "runner Job status read failed; retrying"
+                );
+            }
         }
-        ensure!(
-            observed["status"]["failed"].as_u64().unwrap_or(0) == 0,
-            "one-job runner failed; inspect the private pod log"
-        );
         ensure!(
             started.elapsed().as_secs() < DEADLINE_SECS + 60,
             "one-job runner timed out"

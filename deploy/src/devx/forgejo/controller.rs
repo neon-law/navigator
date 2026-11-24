@@ -8,9 +8,9 @@
 //!    `forgejo-job-*` registrations with no Job for two ticks in a row;
 //! 2. lists waiting jobs installation-wide through the admin API, mirrors the
 //!    release each one pins into Forgejo's package registry, and
-//! 3. launches exactly enough runners: per repository, the waiting jobs minus
-//!    this process's runners that have not picked a job up yet, under one
-//!    global cap.
+//! 3. launches runners for repositories whose pinned releases are ready,
+//!    subtracting runners that have not picked a job up yet and enforcing
+//!    the global cap.
 //!
 //! Every launch is the same code `runner-once` runs ([`runner::execute`]):
 //! a per-Job service account without an API token, a read-only root
@@ -538,12 +538,14 @@ impl Controller {
         idle
     }
 
-    /// Mirror the release each waiting run of `repository` pins.
-    fn mirror_pinned(&mut self, repository: &str) {
+    /// Mirror the release each waiting run of `repository` pins and report
+    /// whether the identified releases are ready for the runners.
+    fn mirror_pinned(&mut self, repository: &str) -> bool {
         let runs = self
             .runtime
             .block_on(self.forgejo.runs(repository, Some("waiting")))
             .unwrap_or_default();
+        let mut ready = true;
         for run in runs {
             let Ok(run) = serde_json::from_value::<Run>(run) else {
                 continue;
@@ -562,10 +564,12 @@ impl Controller {
                     self.mirrored.insert(version);
                 }
                 Err(error) => {
-                    tracing::warn!(target: "forgejo", event = "forgejo.release.mirror_failed", version = %version, error = %error, "release mirror failed; the job will report it");
+                    ready = false;
+                    tracing::warn!(target: "forgejo", event = "forgejo.release.mirror_failed", forgejo.repository = repository, version = %version, error = %error, "release mirror failed; runner launch deferred");
                 }
             }
         }
+        ready
     }
 
     /// The installation's repositories, refreshed every ten minutes, and
@@ -737,10 +741,11 @@ impl Controller {
             };
             waiting.insert(repository, count);
         }
-        for repository in waiting.keys() {
-            self.mirror_pinned(repository);
+        let waiting_count = waiting.values().sum();
+        waiting.retain(|repository, _| {
             self.observer.watched.insert(repository.clone());
-        }
+            self.mirror_pinned(repository)
+        });
         let ips = runner::egress_destinations(&self.egress_ip, &self.egress_host)?;
         let in_flight = self.in_flight().0.len();
         let launches = plan(&waiting, &self.idle(), in_flight, self.max_runners);
@@ -749,7 +754,7 @@ impl Controller {
         }
         self.observe();
         Ok(TickReport {
-            waiting: waiting.values().sum(),
+            waiting: waiting_count,
             launched: launches.len(),
             orphans_cleaned,
         })
@@ -829,13 +834,6 @@ fn launch_one(
     }
     let started = Instant::now();
     let result = runner::execute(cluster, name, repository, origin, ips, dns, &registration);
-    // The pod goes with its Job, so its log is read before cleanup.
-    match cluster.job_log(name) {
-        Ok(log) => forward_job_log(repository, name, &log),
-        Err(error) => {
-            tracing::warn!(target: "forgejo", event = "forgejo.runner.log_unavailable", job = name, error = %error, "runner log could not be read");
-        }
-    }
     tracing::info!(
         target: "forgejo",
         event = "forgejo.runner.finished",
@@ -847,18 +845,6 @@ fn launch_one(
     );
     let cleanup = runner::cleanup(cluster, &api, &runtime, name, registration.id);
     cleanup.and(result)
-}
-
-/// Re-emit a finished runner's stdout, one record per line, so a job's log
-/// reaches the collector (and from it Dash0 and Cloud Logging) with the
-/// repository and runner Job attached. Each line passes the telemetry
-/// crate's content screen like any other record; a line that looks like
-/// client content is dropped there, and `hudson ops forgejo logs` still
-/// reads the whole log from Forgejo.
-fn forward_job_log(repository: &str, job: &str, log: &str) {
-    for line in log.lines().filter(|line| !line.trim().is_empty()) {
-        tracing::info!(target: "forgejo.job.log", job = job, forgejo.repository = repository, "{line}");
-    }
 }
 
 /// `hudson ops forgejo runner-controller`.
@@ -967,6 +953,8 @@ fn serve(controller: &mut Controller, once: bool, interval: Duration) -> Result<
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use super::*;
     use serde_json::json;
 
@@ -1166,9 +1154,6 @@ mod tests {
                 .cloned()
                 .collect())
         }
-        fn job_log(&self, _: &str) -> Result<String> {
-            Ok(String::new())
-        }
     }
 
     /// Killing the controller mid-job leaves a finished Job and a live
@@ -1244,12 +1229,12 @@ mod tests {
         drop(server_runtime);
     }
 
-    /// A cluster that accepts every launch: an isolated namespace, a Job that
-    /// succeeds at once, and a two-line runner log.
+    /// An isolated cluster that loses the first status read of a running Job.
     #[derive(Default)]
     struct LaunchCluster {
         created: Mutex<Vec<String>>,
         deleted: Mutex<Vec<String>>,
+        job_reads: AtomicUsize,
     }
 
     impl Cluster for LaunchCluster {
@@ -1264,6 +1249,8 @@ mod tests {
             Ok(())
         }
         fn job(&self, _: &str) -> Result<Option<Value>> {
+            let read = self.job_reads.fetch_add(1, Ordering::Relaxed);
+            ensure!(read != 1, "synthetic Kubernetes API timeout");
             Ok(Some(
                 json!({"metadata": {"uid": "job-uid"}, "status": {"succeeded": 1}}),
             ))
@@ -1287,17 +1274,14 @@ mod tests {
         fn runner_jobs(&self) -> Result<Vec<Value>> {
             Ok(Vec::new())
         }
-        fn job_log(&self, _: &str) -> Result<String> {
-            Ok("step one\n\nstep two\n".into())
-        }
     }
 
     /// One queued job in `o/a`: the tick mirrors the release its commit pins,
-    /// starts exactly one isolated runner, forwards its log, removes it, and
-    /// reports the repository's runs and its missed CD once each.
+    /// starts exactly one isolated runner, removes it, and reports the
+    /// repository's runs.
     #[test]
     #[allow(clippy::too_many_lines)]
-    fn a_tick_runs_each_waiting_job_once_and_reports_the_repository() {
+    fn a_tick_waits_for_the_release_then_runs_once_despite_a_poll_failure() {
         use wiremock::matchers::{method, path, path_regex, query_param};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -1351,6 +1335,15 @@ mod tests {
                 .and(path("/api/v1/repos/o/a/raw/navigator.yaml"))
                 .and(query_param("ref", "abc123"))
                 .respond_with(ResponseTemplate::new(200).set_body_string("version: 26.11.5\n"))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path_regex(
+                    "^/api/packages/navigator/generic/navigator/26.11.5/",
+                ))
+                .respond_with(ResponseTemplate::new(503))
+                .with_priority(1)
+                .up_to_n_times(1)
                 .mount(&server)
                 .await;
             Mock::given(method("GET"))
@@ -1431,6 +1424,12 @@ mod tests {
                 .unwrap(),
         };
 
+        let blocked = controller.tick().unwrap();
+        assert_eq!(blocked.waiting, 1);
+        assert_eq!(blocked.launched, 0);
+        assert!(cluster.created.lock().unwrap().is_empty());
+        assert!(!controller.mirrored.contains("26.11.5"));
+
         let report = controller.tick().unwrap();
         assert_eq!(
             report,
@@ -1449,6 +1448,7 @@ mod tests {
             *cluster.created.lock().unwrap(),
             ["Job", "ServiceAccount", "Secret", "NetworkPolicy"]
         );
+        assert_eq!(cluster.job_reads.load(Ordering::Relaxed), 3);
         let deleted = cluster.deleted.lock().unwrap().clone();
         assert_eq!(deleted.len(), 1);
         assert!(is_runner_job_name(&deleted[0]));

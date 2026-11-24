@@ -180,8 +180,18 @@ case "${1:-} ${2:-}" in
   "git clone") git clone --quiet --branch main -- "$7" "$8"
     mkdir "$8/.jj" && echo '/*' > "$8/.jj/.gitignore" ;;
   "git init") mkdir .jj && echo '/*' > .jj/.gitignore ;;
-  "git fetch") git fetch --quiet --all ;;
-  "diff "*) cat .jj/diff 2>/dev/null || true ;;
+  "git fetch")
+    shift 2
+    if [ "$#" -eq 0 ]; then git fetch --quiet -- origin; fi
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --remote) git fetch --quiet -- "$2"; shift 2 ;;
+        --branch) git fetch --quiet -- origin "refs/heads/$2:refs/remotes/origin/$2"; shift 2 ;;
+        --all-remotes) git fetch --quiet --all; shift ;;
+        *) echo "jj stand-in: unsupported fetch option: $1" >&2; exit 64 ;;
+      esac
+    done ;;
+  "diff "*) [ -d .jj ] || exit 1; cat .jj/diff 2>/dev/null || true ;;
   "log --no-graph") case "$*" in
       *"-T conflict") echo false ;;
       *"main@origin -T commit_id") git rev-parse origin/main ;;

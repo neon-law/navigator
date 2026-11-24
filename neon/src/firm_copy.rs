@@ -619,8 +619,9 @@ mod firm_copy_tests {
                 "Google Workspace",
                 "Linear",
                 "Mercury",
-                "Restate",
-                "SurrealDB",
+                "Postgres",
+                "Apache AGE",
+                "DBOS",
                 "Twilio",
                 "Xero"
             ]

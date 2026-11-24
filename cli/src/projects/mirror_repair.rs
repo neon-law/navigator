@@ -126,11 +126,12 @@ pub(super) async fn request(
         .context("request Forgejo mirror repair")?;
     let status = response.status();
     let body: serde_json::Value = response.json().await.unwrap_or_default();
+    let detail = issue_detail(&body);
     ensure!(
         status.is_success(),
         "Forgejo mirror repair refused: {status}: {}",
-        body["message"]
-            .as_str()
+        detail
+            .as_deref()
             .or_else(|| body["error"].as_str())
             .unwrap_or_default()
     );
@@ -163,6 +164,14 @@ pub(super) async fn request(
         source: source.to_owned(),
         url: verified.to_owned(),
         outcome,
+    })
+}
+
+pub(super) fn issue_detail(issue: &serde_json::Value) -> Option<String> {
+    let message = issue["message"].as_str()?;
+    Some(match issue["remedy"].as_str() {
+        Some(remedy) => format!("{message} {remedy}"),
+        None => message.to_string(),
     })
 }
 
@@ -240,6 +249,11 @@ mod tests {
                 403,
                 json!({"message": "not an admin"}),
                 "refused: 403 Forbidden: not an admin",
+            ),
+            (
+                503,
+                json!({"message": "Forgejo denied access.", "remedy": "Update the Firm token."}),
+                "Forgejo denied access. Update the Firm token.",
             ),
             (
                 200,

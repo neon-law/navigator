@@ -446,7 +446,7 @@ fn indexed_pages(mark: &str) -> Vec<portal::LlmsTxtLink> {
             "Divorce",
             "/divorce",
             "Neon's gateway page naming Daybridge Divorce Law as the destination. \
-             $500 if you agree. $5,000 for up to two years if you do not. After two years, continued representation costs $5 a day. Court fees and discovery expenses, including expert fees, are separate. You can accept these prices within 90 days of your consultation. Joint \
+             $500 if you agree. $5,000 for up to two years if you do not. After two years, continued representation costs $5 a day. Court fees and discovery expenses, including expert fees, are separate. Joint \
              representation is subject to applicable rules, conflict review, and \
              informed written consent. No result or timeline is promised.",
         ),
