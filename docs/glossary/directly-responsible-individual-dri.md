@@ -46,5 +46,5 @@ validates the entity and the client role before any row is created.
 - Rules, authorization, and the audit write: [`store::participation`](../../store/src/participation.rs)
 - Nightly digest: the `DriDigest` Restate workflow
   ([`workflows-service/src/dri_digest.rs`](../../workflows-service/src/dri_digest.rs)) reads
-  `store::projects::dri_digest` and posts firm ops one Slack line per project naming both DRI sides, fired nightly by
-  the `dri-digest-trigger` `CronJob`
+  `store::projects::dri_digest` and posts firm ops one Slack line per open project naming both DRI sides, fired nightly
+  by the `dri-digest-trigger` `CronJob`

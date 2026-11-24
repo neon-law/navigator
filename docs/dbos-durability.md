@@ -236,9 +236,9 @@ service flag defaults off. Enabling the DBOS executor alone does not start anoth
 remains active. The DBOS digest posts with the deployment's Slack Firm bot to `SLACK_GENERAL_CHANNEL_ID`, beside
 `GeneralNag`'s open-matters notice; an enabled host fails boot when that channel is absent or blank.
 
-The schedule uses the existing 01:11 UTC daily slot and the workflow id `DriDigest-<UTC date>`. It reads the same DRI
-summary and, outside simulated-matters deployments, posts the same open-matters and pitches follow-up. The Restate
-workflow and CronJob remain the rollback path until deployment configuration switches engines together.
+The schedule uses the existing 01:11 UTC daily slot and the workflow id `DriDigest-<UTC date>`. It lists DRIs for open
+Projects and, outside simulated-matters deployments, posts the open-matters and pitches follow-up. The Restate workflow
+and CronJob remain the rollback path until deployment configuration switches engines together.
 
 Switch engines the same way as `GeneralNag`, with `NAVIGATOR_DBOS_DRI_DIGEST_ENABLED = "true"`; ship drops and deletes
 the `dri-digest-trigger` CronJob and renders `SLACK_GENERAL_CHANNEL_ID` into `web`. Ship refuses the switch unless the
