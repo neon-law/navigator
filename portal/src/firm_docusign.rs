@@ -80,9 +80,7 @@ impl Connection {
 /// which check failed and never carries a credential byte, so it is safe in
 /// logs and in the API response a Firm administrator acts on.
 fn unavailable(reason: &str) -> SignatureError {
-    SignatureError::Provider(format!(
-        "The Firm's DocuSign connection is unavailable: {reason}"
-    ))
+    SignatureError::Connection(reason.to_owned())
 }
 
 /// serde's message can quote the offending value, so only its category and

@@ -201,7 +201,9 @@ impl DocuSignJwtAuth {
             now_secs,
             MAX_TTL_SECS,
         )
-        .map_err(|e| SignatureError::Provider(format!("jwt assertion: {e}")))?;
+        .map_err(|_| {
+            SignatureError::Authentication("Check the Firm’s registered RSA signing key.".into())
+        })?;
 
         let url = format!("{}/oauth/token", self.oauth_base.trim_end_matches('/'));
         let resp = self
@@ -213,7 +215,7 @@ impl DocuSignJwtAuth {
             ])
             .send()
             .await
-            .map_err(|e| SignatureError::Provider(e.to_string()))?;
+            .map_err(|_| SignatureError::Unreachable)?;
         let status = resp.status();
         if !status.is_success() {
             let body = resp.json::<serde_json::Value>().await.unwrap_or_default();
@@ -231,9 +233,12 @@ impl DocuSignJwtAuth {
                 }
                 _ => "",
             };
-            return Err(SignatureError::Provider(format!(
-                "docusign oauth responded {status}{reason}"
-            )));
+            let message = format!("docusign oauth responded {status}{reason}");
+            return Err(if matches!(status.as_u16(), 400 | 401 | 403) {
+                SignatureError::Authentication(message)
+            } else {
+                SignatureError::Provider(message)
+            });
         }
         let token: TokenResponse = resp
             .json()
