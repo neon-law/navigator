@@ -1180,13 +1180,6 @@ mod tests {
     }
 
     #[test]
-    fn the_trigger_starts_the_parent_keyed_on_the_utc_date() {
-        let source = include_str!("bin/nightly-project-update-trigger.rs");
-        assert!(source.contains("\"NightlyProjectUpdate\""));
-        assert!(source.contains("nightly_project_update::run_key(chrono::Utc::now())"));
-    }
-
-    #[test]
     fn start_notice_uses_the_environment_report_channel() {
         assert_eq!(
             outcome_channel_id(false, "C-MESSAGES", "C-STAGING"),

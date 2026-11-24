@@ -32,74 +32,51 @@ fn scheduled_run(now: chrono::DateTime<chrono::Utc>) -> chrono::DateTime<chrono:
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    let _ = dotenvy::dotenv();
-    let _ = dotenvy::from_path(".devx/env");
-    // One observability seam for every binary: stdout logs (JSON when an
-    // OTLP endpoint is set) plus OTLP traces + metrics. Held to end of main
-    // so the drop flushes any batched export before the process exits.
-    let _telemetry = telemetry::init("navigator-archives-trigger");
-
-    // The DBOS engine's standalone schedule owns this job when its switch
-    // is on: there is no worker ingress route to submit to, so the CronJob
-    // exits without submitting and the engine fires the workflow itself.
-    // With the switch off this binary drives the Restate submit.
-    if workflows::trigger::dbos_owns_schedule("NAVIGATOR_DBOS_ARCHIVES_ENABLED", |name| {
-        std::env::var(name).ok()
-    })
-    .context("read NAVIGATOR_DBOS_ARCHIVES_ENABLED")?
-    {
-        tracing::info!("DBOS engine owns the Archives schedule; skipping the Restate submit");
-        println!("DBOS engine owns Archives; Restate submit skipped");
-        return Ok(());
-    }
-
+/// The Restate key and body for the run `now` belongs to. Each bounded
+/// trigger retry resolves to the same UTC scheduled time.
+fn restate_run(
+    lookup: &dyn Fn(&str) -> Option<String>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<(String, serde_json::Value)> {
     anyhow::ensure!(
-        std::env::var_os("NAVIGATOR_ARCHIVE_WRITE_ONLY_CONFIG").is_none(),
+        lookup("NAVIGATOR_ARCHIVE_WRITE_ONLY_CONFIG").is_none(),
         "write-only archive scheduling requires selected DBOS"
     );
-    let ingress = std::env::var("RESTATE_INGRESS_URL")
-        .context("RESTATE_INGRESS_URL must be set (the Restate ingress endpoint)")?;
-    // Optional bearer — present only when targeting Restate Cloud.
-    let auth_token = std::env::var("RESTATE_AUTH_TOKEN").ok();
-    // Each bounded trigger retry resolves to the same UTC scheduled time.
-    let requested = std::env::var("ARCHIVES_SCHEDULED_FOR").ok();
-    let now = requested.as_deref().map_or_else(
-        || Ok(chrono::Utc::now()),
-        |value| {
-            value
-                .parse::<chrono::DateTime<chrono::Utc>>()
-                .context("parse ARCHIVES_SCHEDULED_FOR as RFC 3339")
-        },
-    )?;
+    let requested = lookup("ARCHIVES_SCHEDULED_FOR");
+    let now = requested.as_deref().map_or(Ok(now), |value| {
+        value
+            .parse::<chrono::DateTime<chrono::Utc>>()
+            .context("parse ARCHIVES_SCHEDULED_FOR as RFC 3339")
+    })?;
     let scheduled_for = scheduled_run(now);
     anyhow::ensure!(
         requested.is_none() || scheduled_for == now,
         "ARCHIVES_SCHEDULED_FOR must name 05:55 or 17:55 UTC exactly"
     );
-    let run_id = scheduled_for.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    Ok((
+        scheduled_for.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        serde_json::json!({ "scheduled_for": scheduled_for }),
+    ))
+}
 
-    let _response = workflows::start_workflow(
-        &ingress,
-        auth_token.as_deref(),
-        "Archives",
-        &run_id,
-        "run",
-        &serde_json::json!({ "scheduled_for": scheduled_for }),
-        true, // one-way: accept the invocation and exit; Restate runs it.
+#[tokio::main]
+async fn main() -> Result<()> {
+    let now = chrono::Utc::now();
+    workflows::trigger::run_cron_trigger(
+        "navigator-archives-trigger",
+        workflows::trigger::CronTrigger {
+            flag: "NAVIGATOR_DBOS_ARCHIVES_ENABLED",
+            service: "Archives",
+            dbos: None,
+            restate: Box::new(move |lookup| restate_run(lookup, now)),
+        },
     )
     .await
-    .context("triggering Archives workflow")?;
-
-    tracing::info!(%run_id, "archives workflow triggered");
-    println!("triggered Archives/{run_id}");
-    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::scheduled_run;
+    use super::{restate_run, scheduled_run};
     use chrono::{DateTime, Utc};
 
     fn at(value: &str) -> DateTime<Utc> {
@@ -127,6 +104,47 @@ mod tests {
             scheduled_run(at("2026-10-11T17:54:59Z")),
             at("2026-10-11T05:55:00Z")
         );
+    }
+
+    #[test]
+    fn the_restate_run_is_keyed_on_the_scheduled_slot_and_carries_it() {
+        let (key, body) = restate_run(&|_| None, at("2026-10-11T06:01:30Z")).unwrap();
+        assert_eq!(key, "2026-10-11T05:55:00Z");
+        assert_eq!(
+            body,
+            serde_json::json!({"scheduled_for": "2026-10-11T05:55:00Z"})
+        );
+        // A requested slot replaces the clock.
+        let requested = |name: &str| {
+            (name == "ARCHIVES_SCHEDULED_FOR").then(|| "2026-10-10T17:55:00Z".to_owned())
+        };
+        let (key, _) = restate_run(&requested, at("2026-10-11T06:01:30Z")).unwrap();
+        assert_eq!(key, "2026-10-10T17:55:00Z");
+    }
+
+    #[test]
+    fn restate_refuses_write_only_archives_and_a_requested_time_off_the_slot() {
+        for (name, value, message) in [
+            (
+                "NAVIGATOR_ARCHIVE_WRITE_ONLY_CONFIG",
+                "/config/archive.json",
+                "write-only archive scheduling requires selected DBOS",
+            ),
+            (
+                "ARCHIVES_SCHEDULED_FOR",
+                "noon",
+                "parse ARCHIVES_SCHEDULED_FOR as RFC 3339",
+            ),
+            (
+                "ARCHIVES_SCHEDULED_FOR",
+                "2026-10-11T05:56:00Z",
+                "ARCHIVES_SCHEDULED_FOR must name 05:55 or 17:55 UTC exactly",
+            ),
+        ] {
+            let lookup = |asked: &str| (asked == name).then(|| value.to_owned());
+            let error = restate_run(&lookup, at("2026-10-11T06:00:00Z")).unwrap_err();
+            assert_eq!(error.to_string(), message);
+        }
     }
 
     #[test]
