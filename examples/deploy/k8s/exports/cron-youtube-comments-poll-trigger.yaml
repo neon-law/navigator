@@ -4,6 +4,7 @@ metadata:
   name: youtube-comments-poll-trigger
   namespace: navigator
 spec:
+  suspend: true
   schedule: "*/15 * * * *"
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 120

@@ -13,6 +13,7 @@ metadata:
   labels:
     app: archives-trigger
 spec:
+  suspend: true
   schedule: "55 5,17 * * *"
   timeZone: Etc/UTC
   concurrencyPolicy: Forbid
