@@ -270,16 +270,83 @@ struct Pull {
     mergeable: bool,
 }
 impl Pull {
-    fn review(self) -> Result<ReviewRef> {
+    fn review(self, allow_draft: bool) -> Result<(ReviewRef, bool)> {
         ensure!(
-            !self.draft,
+            allow_draft || !self.draft,
             "the existing review request is a draft; mark it ready before continuing"
         );
-        Ok(ReviewRef {
-            number: self.number,
-            head_sha: self.head.sha,
-            url: self.html_url,
-        })
+        Ok((
+            ReviewRef {
+                number: self.number,
+                head_sha: self.head.sha,
+                url: self.html_url,
+            },
+            self.draft,
+        ))
+    }
+}
+
+impl ForgejoForge {
+    async fn open(&self, request: ReviewRequest, draft: bool) -> Result<(ReviewRef, bool)> {
+        let mut page = 1;
+        loop {
+            let pulls: Vec<Pull> = self
+                .get(&format!("pulls?state=open&page={page}&limit=50"))
+                .await?;
+            let count = pulls.len();
+            for pull in pulls {
+                if pull.head.name == request.head_branch
+                    && pull
+                        .head
+                        .repo
+                        .as_ref()
+                        .is_some_and(|repo| repo.full_name == self.repository)
+                {
+                    ensure!(
+                        pull.base.name == request.base_branch,
+                        "existing review request targets another base"
+                    );
+                    return pull.review(draft);
+                }
+            }
+            if count < 50 {
+                break;
+            }
+            page += 1;
+        }
+        let pull: Pull = self
+            .request(
+                Method::POST,
+                &format!("repos/{}/pulls", self.repository),
+                Some(&json!({"title": if draft { format!("WIP: {}", request.title) } else { request.title }, "head": request.head_branch,
+                "base": request.base_branch, "body": request.body})),
+            )
+            .await?;
+        ensure!(
+            pull.head
+                .repo
+                .as_ref()
+                .is_some_and(|repo| repo.full_name == self.repository),
+            "created review request belongs to another source repository"
+        );
+        ensure!(
+            pull.base.name == request.base_branch && pull.head.name == request.head_branch,
+            "forge returned different review branches"
+        );
+        ensure!(!draft || pull.draft, "forge did not create a draft");
+        pull.review(draft)
+    }
+}
+
+#[async_trait]
+impl super::release_review::ReleaseForge for ForgejoForge {
+    async fn source(&self) -> Result<super::release_review::Source> {
+        self.request(Method::GET, &format!("repos/{}", self.repository), None)
+            .await
+    }
+
+    async fn draft(&self, request: ReviewRequest) -> Result<(ReviewRef, bool)> {
+        self.open(request, true).await
     }
 }
 
@@ -300,48 +367,7 @@ impl Forge for ForgejoForge {
     }
 
     async fn open_review(&self, request: ReviewRequest) -> Result<ReviewRef> {
-        let mut page = 1;
-        loop {
-            let pulls: Vec<Pull> = self
-                .get(&format!("pulls?state=open&page={page}&limit=50"))
-                .await?;
-            let count = pulls.len();
-            for pull in pulls {
-                if pull.head.name == request.head_branch
-                    && pull
-                        .head
-                        .repo
-                        .as_ref()
-                        .is_some_and(|repo| repo.full_name == self.repository)
-                {
-                    ensure!(
-                        pull.base.name == request.base_branch,
-                        "existing review request targets another base"
-                    );
-                    return pull.review();
-                }
-            }
-            if count < 50 {
-                break;
-            }
-            page += 1;
-        }
-        let pull: Pull = self
-            .request(
-                Method::POST,
-                &format!("repos/{}/pulls", self.repository),
-                Some(&json!({"title": request.title, "head": request.head_branch,
-                "base": request.base_branch, "body": request.body})),
-            )
-            .await?;
-        ensure!(
-            pull.head
-                .repo
-                .as_ref()
-                .is_some_and(|repo| repo.full_name == self.repository),
-            "created review request belongs to another source repository"
-        );
-        pull.review()
+        self.open(request, false).await.map(|(review, _)| review)
     }
 
     async fn find_merged_review(&self, branch: &str, sha: &str) -> Result<Option<ReviewRef>> {
@@ -362,7 +388,7 @@ impl Forge for ForgejoForge {
                         .as_ref()
                         .is_some_and(|repo| repo.full_name == self.repository)
                 {
-                    return pull.review().map(Some);
+                    return pull.review(false).map(|(review, _)| Some(review));
                 }
             }
             if count < 50 {

@@ -419,7 +419,15 @@ struct Pull {
 
 #[derive(Debug, Deserialize)]
 struct PullHead {
+    #[serde(rename = "ref")]
+    branch: Option<String>,
+    repo: Option<HeadRepo>,
     sha: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct HeadRepo {
+    full_name: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -482,21 +490,8 @@ fn verdict(mergeable_state: &str, runs: &[CheckRun]) -> CheckVerdict {
     }
 }
 
-#[async_trait]
-impl Forge for GitHubForge {
-    async fn identity(&self) -> Result<String> {
-        let user: User = self.get_json("/user").await?;
-        Ok(user.login)
-    }
-
-    async fn remote_reachable(&self) -> Result<()> {
-        self.get_json::<serde_json::Value>(&self.repo_path(""))
-            .await
-            .with_context(|| format!("reach {}/{} on GitHub", self.owner, self.name))?;
-        Ok(())
-    }
-
-    async fn open_review(&self, request: ReviewRequest) -> Result<ReviewRef> {
+impl GitHubForge {
+    async fn open(&self, request: ReviewRequest, draft: bool) -> Result<(ReviewRef, bool)> {
         let existing: Vec<Pull> = self
             .get_json(&self.repo_path(&format!(
                 "pulls?head={}:{}&state=open",
@@ -508,14 +503,20 @@ impl Forge for GitHubForge {
             .find(|pull| pull.base.git_ref == request.base_branch)
         {
             anyhow::ensure!(
-                !pull.draft,
+                draft || !pull.draft,
                 "the existing review request is a draft; mark it ready before continuing"
             );
-            return Ok(ReviewRef {
-                number: pull.number,
-                head_sha: pull.head.sha.clone(),
-                url: pull.html_url.clone(),
-            });
+            if draft {
+                self.verify_release_source(pull, &request)?;
+            }
+            return Ok((
+                ReviewRef {
+                    number: pull.number,
+                    head_sha: pull.head.sha.clone(),
+                    url: pull.html_url.clone(),
+                },
+                pull.draft,
+            ));
         }
         if let Some(pull) = existing.first() {
             bail!(
@@ -535,7 +536,7 @@ impl Forge for GitHubForge {
                     "head": request.head_branch,
                     "base": request.base_branch,
                     "body": request.body,
-                    "draft": false,
+                    "draft": draft,
                 }),
             )
             .await
@@ -550,11 +551,60 @@ impl Forge for GitHubForge {
             })
             .and_then(|body| serde_json::from_str(&body).context("decode the review request"))
             .context("open the review request")?;
-        Ok(ReviewRef {
-            number: created.number,
-            head_sha: created.head.sha,
-            url: created.html_url,
-        })
+        if draft {
+            self.verify_release_source(&created, &request)?;
+            anyhow::ensure!(created.draft, "forge did not create a draft");
+        }
+        Ok((
+            ReviewRef {
+                number: created.number,
+                head_sha: created.head.sha,
+                url: created.html_url,
+            },
+            created.draft,
+        ))
+    }
+
+    fn verify_release_source(&self, pull: &Pull, request: &ReviewRequest) -> Result<()> {
+        anyhow::ensure!(
+            pull.base.git_ref == request.base_branch
+                && pull.head.branch.as_ref() == Some(&request.head_branch)
+                && pull.head.repo.as_ref().is_some_and(|repo| repo
+                    .full_name
+                    .eq_ignore_ascii_case(&format!("{}/{}", self.owner, self.name))),
+            "review differs from the requested repository or branches"
+        );
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl super::release_review::ReleaseForge for GitHubForge {
+    async fn source(&self) -> Result<super::release_review::Source> {
+        self.get_json(&self.repo_path("")).await
+    }
+
+    async fn draft(&self, request: ReviewRequest) -> Result<(ReviewRef, bool)> {
+        self.open(request, true).await
+    }
+}
+
+#[async_trait]
+impl Forge for GitHubForge {
+    async fn identity(&self) -> Result<String> {
+        let user: User = self.get_json("/user").await?;
+        Ok(user.login)
+    }
+
+    async fn remote_reachable(&self) -> Result<()> {
+        self.get_json::<serde_json::Value>(&self.repo_path(""))
+            .await
+            .with_context(|| format!("reach {}/{} on GitHub", self.owner, self.name))?;
+        Ok(())
+    }
+
+    async fn open_review(&self, request: ReviewRequest) -> Result<ReviewRef> {
+        self.open(request, false).await.map(|(review, _)| review)
     }
 
     async fn find_merged_review(&self, branch: &str, sha: &str) -> Result<Option<ReviewRef>> {

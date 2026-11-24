@@ -205,6 +205,27 @@ enum Command {
 
 #[derive(Subcommand)]
 enum ReleaseCmd {
+    /// Open or resume reviews for signed release/<tag> topics in the selected workspace.
+    Review {
+        #[arg(long)]
+        tag: String,
+        #[arg(long)]
+        dir: Option<PathBuf>,
+    },
+    /// Check a Project commit and its live document pointers. Prints JSON.
+    Preflight {
+        #[arg(long, default_value = ".")]
+        repo: PathBuf,
+        #[arg(long, default_value = "HEAD")]
+        revision: String,
+    },
+    /// Run the offline portion of the CI gate in a disposable snapshot.
+    #[command(hide = true)]
+    InspectTree {
+        #[arg(long)]
+        repair: bool,
+    },
+
     /// Suggest the next date-based release tag.
     DefaultTag {
         #[arg(long, default_value = ".")]
@@ -272,8 +293,36 @@ enum ForgejoReleaseCmd {
     },
 }
 
-fn run_release(action: ReleaseCmd) -> ExitCode {
+async fn run_release(action: ReleaseCmd) -> ExitCode {
     match action {
+        ReleaseCmd::Review { tag, dir } => {
+            match projects::release_review::run(dir.as_deref(), &tag).await {
+                Ok(true) => ExitCode::SUCCESS,
+                Ok(false) => ExitCode::FAILURE,
+                Err(err) => {
+                    eprintln!("navigator release review: {err:#}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        ReleaseCmd::Preflight { repo, revision } => {
+            projects::release_preflight::run(&repo, &revision).await
+        }
+        ReleaseCmd::InspectTree { repair: false } => {
+            run_repository_gate(Path::new("."), true, false)
+        }
+        ReleaseCmd::InspectTree { repair: true } => {
+            match projects::release_preflight::simulate_repairs(Path::new(".")) {
+                Ok(paths) => {
+                    println!("{}", serde_json::json!(paths));
+                    ExitCode::SUCCESS
+                }
+                Err(err) => {
+                    eprintln!("{err:#}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         ReleaseCmd::DefaultTag { repo, no_fetch } => {
             crate::release_default_tag::run(chrono::Utc::now(), &repo, !no_fetch)
         }
@@ -603,7 +652,7 @@ fn run() -> ExitCode {
         Command::Relationship { action } => runtime().block_on(relationship_log::run(action)),
         Command::Glossary { action } => crate::glossary::run(action),
         Command::Site { action } => run_site(action),
-        Command::Release { action } => run_release(action),
+        Command::Release { action } => runtime().block_on(run_release(action)),
         Command::Github { action } => run_github(action),
         Command::Forgejo { action } => run_forgejo(action),
         Command::Calendar(args) => runtime().block_on(args.run()),
@@ -4483,6 +4532,15 @@ pub async fn run_gate(ci: bool, check: bool, deep: bool) -> ExitCode {
         return ownership;
     }
 
+    let offline = run_repository_gate(dir, ci, ci);
+    if offline != ExitCode::SUCCESS || !is_project_repository(dir) {
+        return offline;
+    }
+    eprintln!("navigator project gate: live project status");
+    projects::gate::live_status(dir, ci).await
+}
+
+pub(crate) fn run_repository_gate(dir: &Path, ci: bool, check_trailer: bool) -> ExitCode {
     eprintln!("navigator project gate: markdown content");
     let project = is_project_repository(dir);
     // The Project's documents directory holds committed YAML pointers and
@@ -4548,7 +4606,7 @@ pub async fn run_gate(ci: bool, check: bool, deep: bool) -> ExitCode {
     // Under `--ci` on a pull request, the body's own closing trailer: a
     // body that closes an issue while saying its rollout, apply, or caller
     // pin is still pending must use `Refs` instead (`closing_trailer`).
-    if ci {
+    if check_trailer {
         for refusal in closing_trailer::refusals_for_this_pull_request() {
             let message = refusal.message();
             eprintln!("pull request body: {message}");
@@ -4587,13 +4645,7 @@ pub async fn run_gate(ci: bool, check: bool, deep: bool) -> ExitCode {
         }
         return ExitCode::from(1);
     }
-    if !project {
-        return ExitCode::SUCCESS;
-    }
-    eprintln!("navigator project gate: live project status");
-    // The live Project coordinates are read under the operator's stored
-    // login locally, or a scoped OIDC document session in CI.
-    projects::gate::live_status(dir, ci).await
+    ExitCode::SUCCESS
 }
 
 pub fn fix_gate_markdown(

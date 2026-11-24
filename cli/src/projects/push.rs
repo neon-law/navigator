@@ -217,7 +217,7 @@ async fn run_document_preflight(dir: &Path) -> Result<()> {
 /// Return ignored Pointer paths already in the tree and paths the live check
 /// would create. Git's normal status omits the former, while check-ignore sees
 /// the latter before they exist.
-fn ignored_pointer_paths(
+pub(super) fn ignored_pointer_paths(
     dir: &Path,
     fixes: &[super::document_check::CheckFix],
 ) -> Result<Vec<String>> {
