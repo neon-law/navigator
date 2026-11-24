@@ -217,14 +217,10 @@ impl ForgejoForge {
     }
 
     #[cfg(feature = "forge-sync")]
-    pub(crate) async fn git_access(
-        &self,
-        code: &str,
-    ) -> Result<(String, String, String), ForgeError> {
+    pub(crate) fn git_access(&self, code: &str) -> Result<(String, String), ForgeError> {
         self.repo_url(code)?;
-        let login = crate::forgejo_organization::token_login(&self.root, &self.token).await?;
         let url = format!("{}{}/{code}.git", self.root, self.owner);
-        Ok((url, login, self.token.clone()))
+        Ok((url, self.token.clone()))
     }
 
     /// Read a file at a specific revision, or use the existing default when omitted.
@@ -676,6 +672,21 @@ mod tests {
 
     fn forge(server: &MockServer, firm: &str) -> ForgejoForge {
         ForgejoForge::new(&server.uri(), firm, "synthetic-token").unwrap()
+    }
+
+    #[cfg(feature = "forge-sync")]
+    #[tokio::test]
+    async fn scoped_git_access_is_bound_to_the_project_without_an_account_lookup() {
+        let server = MockServer::start().await;
+        let source = forge(&server, "sample-firm");
+        let (url, token) = source.git_access("sample-project").unwrap();
+        assert_eq!(
+            url,
+            format!("{}/sample-firm/sample-project.git", server.uri())
+        );
+        assert_eq!(token, "synthetic-token");
+        assert!(source.git_access("../elsewhere").is_err());
+        assert!(server.received_requests().await.unwrap().is_empty());
     }
 
     #[tokio::test]

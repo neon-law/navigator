@@ -120,7 +120,7 @@ pub async fn fast_forward(
     let Ok(Some(verified)) = forgejo.lookup(code, true).await else {
         return SyncResult::Unavailable;
     };
-    let Ok((url, user, password)) = forgejo.git_access(code).await else {
+    let Ok((url, password)) = forgejo.git_access(code) else {
         return SyncResult::Unavailable;
     };
     if url.strip_suffix(".git") != Some(verified.url.trim_end_matches('/'))
@@ -136,9 +136,11 @@ pub async fn fast_forward(
         user: "x-access-token".into(),
         password: password_gh,
     };
+    // Forgejo authenticates the token in the HTTPS password field. Its owner
+    // is resolved by Forgejo, including for repository-specific tokens.
     let forgejo = Access {
         url,
-        user,
+        user: "x-access-token".into(),
         password,
     };
     tokio::task::spawn_blocking(move || {

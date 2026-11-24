@@ -778,6 +778,32 @@ An SSH certificate authenticates a Git connection. It does not grant repository 
 Navigator upload by itself. A service identity's repository scope and its credential lifetime are separate controls.
 Test both. Keep private signing keys and decrypted service configuration out of repositories, slides and logs.
 
+### Scope a Firm mirror token
+
+In Navigator, open the owning Firm and confirm each active Project's recorded primary. Match each mirror to its exact
+Forgejo organization and repository, confirm private visibility and check the main ref. Exclude closed Projects,
+archived repositories and uncertain matches. A Firm slug that differs from the mirror organization needs an explicit
+mapping or a coordinated migration. Creating an empty repository at the expected path can hide the mismatch.
+
+In Forgejo **Settings → Applications → New access token**, choose **Specific repositories** and select the verified
+mirrors. Grant **repository → Read and write** for fast-forward maintenance. Leave the other permissions at **No
+access**. Forgejo also permits public repository reads in this mode. Keep the inventory of selected private repositories
+in the Firm's operator record.
+
+In Navigator **Owner → Firms**, select the owning Firm. Under **Integration secrets**, select **Forgejo access token**,
+enter the one-time value and save. Confirm the active credential metadata. Keep the token out of shell arguments,
+repository URLs, screenshots, workshop examples and agent prompts.
+
+Use the Project status command to check an enrolled mirror. A verified result identifies the expected destination. A
+missing result calls for checking the organization, repository name and token selection. Test a fast-forward on a
+synthetic private mirror and confirm divergent refs stay intact. Preserve branch protection and review rules. When
+rotating, verify the replacement and revoke the previous token in Forgejo. Removing a Navigator secret alone leaves the
+provider token valid.
+
+Use a dedicated service identity for unattended work. Replace the token with a smaller allowlist when a Project closes
+or leaves the Firm. Exercise the denied path against a private synthetic repository outside the allowlist. A failed
+Project lookup is a reason to inspect its binding and scope before changing any permissions.
+
 ### Require the gate and protected-main policy
 
 Read the actual gate's check context from a run on the installation. Review policy drift without writing:
