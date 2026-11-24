@@ -63,7 +63,7 @@ Daybridge Divorce Law (`daybridge/`):
 | `neon/locales/en/daybridge/services.yaml` | `/services` scope, timing, and cost disclosures |
 
 Daybridge charges $500 for an agreed divorce or $5,000 for up to two years of contested representation. After two years,
-continued contested representation costs $5 a day. You can accept these prices within 90 days of your consultation.
+continued contested representation costs $5 a day.
 Motions are included. Court fees and discovery expenses, including expert fees, are separate. The homepage offers a
 consultation and account creation. Its header links to published testimonials. The sibling-practice card links to Vesta
 Estate Planning for a review after divorce under a separate engagement. The services page explains the limits on joint
