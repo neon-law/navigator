@@ -19,7 +19,6 @@
 //! two checkouts have two engines, so their
 //! rows cannot meet.
 
-use anyhow::{Context, Result};
 use store::surreal::{AuthScope, SurrealAuth, SurrealConfig};
 
 use super::{KindConfig, SURREAL_LOCAL_PASSWORD, SURREAL_LOCAL_USER, SURREAL_NAMESPACE};
@@ -47,32 +46,6 @@ pub(super) fn host_config(cfg: &KindConfig, database: &str) -> SurrealConfig {
             password: SURREAL_LOCAL_PASSWORD.to_string(),
         },
     }
-}
-
-/// Apply the DEFINE schema to this environment's database.
-///
-/// Idempotent, so every `up` runs it: a reused cluster converges on the
-/// current definitions, and a fresh one gets them for the first time.
-/// `worktree-env up` applies it unconditionally.
-pub(super) fn apply_schema(cfg: &KindConfig, database: &str) -> Result<()> {
-    let config = host_config(cfg, database);
-    runtime()?.block_on(async {
-        let db = store::surreal::connect(&config)
-            .await
-            .with_context(|| format!("connect to SurrealDB at {}", config.endpoint))?;
-        store::schema::apply(&db)
-            .await
-            .context("apply the SurrealDB schema")
-    })
-}
-
-/// A private current-thread runtime, mirroring how the rest of `devx`
-/// bridges its sync command handlers to async work.
-fn runtime() -> Result<tokio::runtime::Runtime> {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("build tokio runtime for SurrealDB schema operations")
 }
 
 #[cfg(test)]

@@ -477,15 +477,6 @@ fn up_dev(root: &Path, no_deps: bool, runtime: Runtime, base_cfg: &KindConfig) -
     let sample_project_refreshed =
         provision_compatibility_tier(root, slot, &cfg, &db_name, runtime, no_deps)?;
 
-    // The schema is applied, not migrated: one idempotent DEFINE file
-    // re-applied on every `up` (#1093). Unconditional, because a reused
-    // cluster skips `up_in` entirely and would otherwise keep whatever
-    // definitions it was created with. This is the database the
-    // in-cluster worker owns too, so a worktree can make the schema ready
-    // without creating a private topology Restate cannot observe.
-    super::surreal::apply_schema(&cfg, &db_name)?;
-    eprintln!("==> applied the SurrealDB schema to {db_name}");
-
     if !sample_project_refreshed {
         super::sample_project::run_for_root(false, root)?;
     }

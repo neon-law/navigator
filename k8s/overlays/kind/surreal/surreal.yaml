@@ -12,12 +12,8 @@
 # up` opens, and the in-cluster `workflows-service` worker reaches it at
 # `surreal.navigator.svc.cluster.local:8000`.
 #
-# Memory-backed, so local data resets with the pod: boot re-applies the
-# DEFINE schema and re-seeds. That is the deliberate property of the
-# local loop (#1093, 2026-07-29), not an oversight — a file-backed
-# SurrealKV volume is the cheap opt-in if mid-session resets ever hurt.
-# Each dependency next door keeps its own emptyDir and its own lifecycle; the
-# two engines run side by side until cutover.
+# This compatibility source loses its contents on pod restart. Captured
+# enrollment reads a prepared fixture. Application seeds go to PostgreSQL.
 
 apiVersion: v1
 kind: Secret

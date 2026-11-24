@@ -65,11 +65,6 @@ pub(super) fn up_in(root: &Path, cfg: &KindConfig) -> Result<()> {
     bootstrap_postgres_in(root, cfg, "navigator")?;
     restore_dependency_forwards(root, cfg)?;
 
-    // The tier is reachable now, so the schema can be applied before
-    // anything is told the environment is ready. Idempotent: a reused
-    // cluster converges on the current definitions.
-    super::surreal::apply_schema(cfg, "navigator")?;
-
     // Development always refreshes every sample matter's application before
     // the environment is written. The generated variable below then points the
     // host-side web process at this exact set of staged bundles.
@@ -2235,7 +2230,7 @@ fn hold_fixture_writers(
     Ok(held)
 }
 
-/// Before schema installation, census only tables that actually exist.
+/// Census the tables present on the frozen source before the archive reader runs.
 async fn fixture_source_counts(
     source: &store::surreal::SurrealDb,
 ) -> Result<std::collections::BTreeMap<String, i64>> {
@@ -2301,7 +2296,6 @@ async fn enroll_fixture(
         let source = crate::surreal_archive::connect_http(&config).await?;
         let counts = fixture_source_counts(&source).await?;
         super::postgres_fixture::require_fresh_source(&counts)?;
-        store::schema::apply(&source).await?;
         let (bytes, receipt) = crate::surreal_archive::capture_quiesced(&source).await?;
         super::postgres_fixture::require_fresh_source(&receipt.table_counts)?;
         write_fixture_private(&root.join(".devx/postgres/capture.surql"), &bytes)?;
