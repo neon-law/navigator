@@ -71,6 +71,10 @@ pub const WORKSPACE_SKILLS: &[(&str, &str)] = &[
         include_str!("../../.agents/skills/legal-authority/SKILL.md"),
     ),
     (
+        "legal-plan-acceptance",
+        include_str!("../../.agents/skills/legal-plan-acceptance/SKILL.md"),
+    ),
+    (
         "legal-writing",
         include_str!("../../.agents/skills/legal-writing/SKILL.md"),
     ),
