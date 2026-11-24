@@ -918,6 +918,7 @@ async fn run_host(
                     slack_bot_enabled,
                     dbos_alert_portal_origin,
                 ),
+                postgres.clone(),
             ))
         } else {
             None

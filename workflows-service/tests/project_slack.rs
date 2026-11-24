@@ -25,6 +25,10 @@ use support::{database, APP_VERSION};
 #[path = "support/native_project.rs"]
 mod native_project;
 
+#[path = "support/lost_response_slack.rs"]
+mod lost_response_slack;
+use lost_response_slack::LostResponseSlackBot;
+
 async fn firm_matter_on(
     pg: &store::postgres::PostgresDb,
     db: &store::surreal::SurrealDb,
@@ -482,5 +486,86 @@ async fn the_ingress_never_rebinds_a_claimed_event_id() {
     let response = router.oneshot(deliver(missing)).await.unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
     lane.executor.shutdown().await;
+    db.close().await;
+}
+
+/// Slack accepted the post but the worker stopped before the step's
+/// checkpoint. Recovery re-runs the step; the correlated lookup finds the
+/// accepted post, so neither lane posts twice and the receipt lands once.
+#[tokio::test]
+async fn a_post_accepted_before_its_checkpoint_is_not_repeated_on_recovery() {
+    let Some(db) = database().await else { return };
+    let surreal = store::surreal::SurrealDb::uninitialized();
+    let matter = firm_matter_on(&db.store(), &surreal).await;
+    for (request, id) in [
+        (
+            LaneRequest::MainPush(push("abc1234", 1)),
+            dbos_project_slack::main_push_workflow_id(matter.id, &push("abc1234", 1)),
+        ),
+        (
+            LaneRequest::ClientView,
+            dbos_project_slack::client_view_workflow_id(matter.id),
+        ),
+    ] {
+        let bot = Arc::new(LostResponseSlackBot::default());
+        let executor = dbos::DBOS::new(dbos_engine::config(&db.url, APP_VERSION));
+        let workflow = dbos_project_slack::register(
+            &executor,
+            dbos_project_slack::Context::new(
+                surreal.clone(),
+                Arc::new(workflows_service::firm_slack::SharedSlackBot(bot.clone())),
+                db.store(),
+                false,
+            ),
+        )
+        .expect("register ProjectSlack");
+        executor.launch().await.expect("launch DBOS");
+        let running = {
+            let id = id.clone();
+            tokio::spawn(async move {
+                workflow
+                    .run_with(
+                        request,
+                        dbos::RunOptions {
+                            workflow_id: Some(&id),
+                            ..Default::default()
+                        },
+                    )
+                    .await
+            })
+        };
+        tokio::time::timeout(Duration::from_mins(1), bot.reached.notified())
+            .await
+            .expect("the lane never reached Slack");
+        executor.shutdown().await;
+        let interrupted = running.await.expect("the lane task panicked");
+        assert!(
+            matches!(interrupted, Err(dbos::Error::Interrupted { .. })),
+            "shutdown interrupts the post: {interrupted:?}"
+        );
+
+        executor.launch().await.expect("relaunch DBOS");
+        tokio::time::timeout(
+            Duration::from_mins(1),
+            executor
+                .retrieve_workflow::<(), LaneError>(&id)
+                .expect("retrieve the recovered lane")
+                .result(),
+        )
+        .await
+        .expect("the recovered lane never finished")
+        .expect("the recovered lane succeeds");
+        executor.shutdown().await;
+        assert_eq!(
+            bot.posted().len(),
+            1,
+            "{id} posted twice: {:?}",
+            bot.posted()
+        );
+        assert!(
+            bot.posted()[0].1.is_some(),
+            "{id} posted without a correlation Slack can find again"
+        );
+    }
     db.close().await;
 }

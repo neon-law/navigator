@@ -52,19 +52,33 @@ pub enum InboundMessageAlertError {
 #[derive(Clone)]
 pub struct Context {
     service: InboundMessageAlertService,
+    postgres: store::postgres::PostgresDb,
 }
 
 impl Context {
     #[must_use]
-    pub fn new(service: InboundMessageAlertService) -> Self {
-        Self { service }
+    pub fn new(service: InboundMessageAlertService, postgres: store::postgres::PostgresDb) -> Self {
+        Self { service, postgres }
     }
 }
 
 pub fn register(dbos: &DBOS, context: Context) -> dbos::Result<InboundMessageAlertWorkflow> {
     dbos.register_workflow(WORKFLOW, move |request: InboundMessageAlertRequest| {
         let context = context.clone();
-        async move { run_alert(context, request).await }
+        // The SDK detaches workflow execution but awaits step bodies inline,
+        // so the worker's own pool serves every Message read and receipt.
+        async move {
+            store::postgres::PostgresDb::with_application_db(
+                context.postgres.clone(),
+                run_alert(context, request),
+            )
+            .await
+            .map_err(|_| {
+                dbos::Error::Application(InboundMessageAlertError::Store(
+                    "PostgreSQL application admission unavailable".to_owned(),
+                ))
+            })?
+        }
     })
 }
 
