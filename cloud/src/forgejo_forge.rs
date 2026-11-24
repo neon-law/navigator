@@ -178,20 +178,17 @@ impl ForgejoForge {
     /// is not a valid slug, or the token is blank.
     pub fn new(root_url: &str, firm_slug: &str, token: &str) -> Result<Self, ForgeError> {
         let root = root_url.trim().trim_end_matches('/');
-        let loopback = root.starts_with("http://127.0.0.1") || root.starts_with("http://localhost");
-        // A cluster-internal service name (the KIND smoke tier's in-pod
-        // receiver) is the loopback test host's analogue: the name resolves
-        // only inside the cluster network, so the token never crosses the
-        // boundary in plaintext. Strip any :port — the boundary is the
-        // name, not the port.
-        let host = root
-            .strip_prefix("http://")
-            .unwrap_or_default()
-            .split(['/', ':'])
-            .next()
-            .unwrap_or_default();
-        let cluster_internal = root.starts_with("http://") && host.ends_with(".svc.cluster.local");
-        if !(root.starts_with("https://") || loopback || cluster_internal) {
+        let parsed = url::Url::parse(root)
+            .map_err(|_| ForgeError::InvalidConfig(NAVIGATOR_FORGEJO_ROOT_URL_ENV))?;
+        let internal_http = parsed.host_str().is_some_and(|host| {
+            matches!(host, "localhost" | "127.0.0.1") || host.ends_with(".svc.cluster.local")
+        });
+        if !(parsed.scheme() == "https" || (parsed.scheme() == "http" && internal_http))
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+            || parsed.query().is_some()
+            || parsed.fragment().is_some()
+        {
             return Err(ForgeError::InvalidConfig(NAVIGATOR_FORGEJO_ROOT_URL_ENV));
         }
         if !crate::workspace::is_valid_slug(firm_slug) {
@@ -213,6 +210,24 @@ impl ForgejoForge {
     #[must_use]
     pub fn owner(&self) -> &str {
         &self.owner
+    }
+
+    /// Checks that the verified repository's public URL uses this forge's
+    /// configured root, including its path prefix, and this Project's path.
+    #[must_use]
+    pub fn verify_repository_url(&self, project_code: &str, value: &str) -> bool {
+        let expected = url::Url::parse(&format!("{}{}/{project_code}", self.root, self.owner));
+        let actual = url::Url::parse(value);
+        let (Ok(expected), Ok(actual)) = (expected, actual) else {
+            return false;
+        };
+        let path = actual.path().trim_end_matches('/');
+        actual.origin() == expected.origin()
+            && actual.username().is_empty()
+            && actual.password().is_none()
+            && actual.query().is_none()
+            && actual.fragment().is_none()
+            && path.strip_suffix(".git").unwrap_or(path) == expected.path()
     }
 
     fn repo_url(&self, project_code: &str) -> Result<String, ForgeError> {
@@ -633,6 +648,30 @@ mod tests {
 
     fn forge(server: &MockServer, firm: &str) -> ForgejoForge {
         ForgejoForge::new(&server.uri(), firm, "synthetic-token").unwrap()
+    }
+
+    #[test]
+    fn mirror_url_must_belong_to_the_configured_forge_root() {
+        let forge = ForgejoForge::new(
+            "https://forge.example.test/git/",
+            "sample-firm",
+            "synthetic-token",
+        )
+        .unwrap();
+        assert!(forge.verify_repository_url(
+            "sample-matter",
+            "https://forge.example.test/git/sample-firm/sample-matter.git",
+        ));
+        for url in [
+            "https://other.example.test/git/sample-firm/sample-matter",
+            "https://forge.example.test/other/sample-firm/sample-matter",
+            "https://forge.example.test/git/sample-firm/sample-matter?access=unexpected",
+        ] {
+            assert!(!forge.verify_repository_url("sample-matter", url));
+        }
+        assert!(
+            ForgejoForge::new("http://localhost.example.test", "sample-firm", "fixture").is_err()
+        );
     }
 
     #[tokio::test]

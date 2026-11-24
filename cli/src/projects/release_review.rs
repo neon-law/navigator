@@ -43,6 +43,16 @@ impl Source {
         );
         Ok(())
     }
+
+    fn matches_project(&self, code: &str) -> Result<()> {
+        ensure!(
+            self.full_name
+                .rsplit_once('/')
+                .is_some_and(|(_, name)| name.eq_ignore_ascii_case(code)),
+            "forge repository name differs from the recorded Project code"
+        );
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -116,17 +126,18 @@ async fn review_checkout(dir: &Path, tag: &str, forgejo_first: bool, land: bool)
         "the Project must have its own checkout"
     );
     let origin = git_text(dir, &["remote", "get-url", "origin"])?;
-    let inventory = workspace::checkout_remotes(dir).await?;
+    let (code, inventory) = workspace::checkout_remotes(dir).await?;
     let primary = inventory
         .origin
         .context("Project has no recorded primary")?;
     let github = github_origin(dir, &primary).await.is_some();
     let dual = forgejo_first || !github || inventory.forgejo.as_deref() == Some(&origin);
     let reference = if dual && github {
-        ensure!(
-            inventory.forgejo_status == "verified",
-            "cutover gap: Forgejo reference is unverified"
-        );
+        if inventory.forgejo_status != "verified" {
+            let detail = super::mirror_repair::issue_detail(&inventory.forgejo_issue)
+                .unwrap_or(inventory.forgejo_status);
+            anyhow::bail!("cutover gap: Forgejo reference is unverified. {detail}");
+        }
         inventory
             .forgejo
             .context("cutover gap: missing Forgejo reference URL")?
@@ -165,12 +176,14 @@ async fn review_checkout(dir: &Path, tag: &str, forgejo_first: bool, land: bool)
     }
     let forge = backend(dir, &primary).await?;
     let source = forge.source().await?;
+    source.matches_project(&code)?;
     if source.archived {
         return Ok(json!({"status":"archived"}));
     }
     source.writable()?;
     for url in destinations.iter().filter(|url| **url != primary) {
         let secondary = backend(dir, url).await?.source().await?;
+        secondary.matches_project(&code)?;
         secondary.writable()?;
         ensure!(
             secondary.default_branch == source.default_branch,
@@ -271,7 +284,13 @@ async fn publish(
 ) -> Result<()> {
     verify_bases(dir, targets, base, base_sha).await?;
     for url in &targets.destinations {
-        if remote_ref(dir, url, topic).await?.is_none() {
+        let existing = remote_ref(dir, url, topic).await?;
+        if let Some(existing) = existing {
+            ensure!(
+                existing == head,
+                "divergent release topic; remote refs were preserved"
+            );
+        } else {
             workspace::git(
                 dir,
                 &[

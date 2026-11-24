@@ -197,6 +197,11 @@ fn print_status(value: &serde_json::Value) {
             println!("workspace {step}: {}", outcome.as_str().unwrap_or_default());
         }
     }
+    if let Some(detail) =
+        super::mirror_repair::issue_detail(&value["repository_remotes"]["forgejo_issue"])
+    {
+        println!("Forgejo mirror: {detail}");
+    }
     if let Some(missing) = value["missing"].as_array() {
         for item in missing {
             println!("missing: {}", item.as_str().unwrap_or_default());

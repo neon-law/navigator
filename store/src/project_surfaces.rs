@@ -212,6 +212,8 @@ pub enum SurfaceError {
     Db(String),
     #[error("Forgejo provisioning needs {0}")]
     ForgejoUnavailable(String),
+    #[error("Forgejo could not load the owning Firm's credential: {0}")]
+    ForgejoCredential(#[source] crate::firm_secrets::SecretStoreError),
 }
 
 /// Read one Project's manifest coordinates without reconciling or writing any
@@ -696,24 +698,44 @@ pub async fn forgejo_for_project(
     let project = projects::find_by_id(surreal, project_id)
         .await?
         .ok_or(SurfaceError::NotFound)?;
+    forgejo_for_firm(surreal, project.firm_id, kms, lookup).await
+}
+
+/// Resolve Forgejo for an already authorized owning Firm.
+/// A caller with a Project snapshot can use its authorized Firm ID directly.
+///
+/// # Errors
+/// Returns a configuration, credential or store error.
+pub async fn forgejo_for_firm(
+    surreal: &SurrealDb,
+    firm_id: Option<Uuid>,
+    kms: &dyn cloud::RuntimeKms,
+    lookup: impl Fn(&str) -> Option<String>,
+) -> Result<cloud::ForgejoForge, SurfaceError> {
     let root = lookup(cloud::forgejo_forge::NAVIGATOR_FORGEJO_ROOT_URL_ENV)
         .filter(|value| !value.trim().is_empty());
-    let firm = match project.firm_id {
+    let firm = match firm_id {
         Some(firm_id) => crate::firms::find_by_id(surreal, firm_id)
             .await
             .map_err(|error| SurfaceError::Db(error.to_string()))?,
         None => None,
     };
     let token = match firm.as_ref() {
-        Some(firm) => crate::firm_secrets::resolve_firm_credential(
-            surreal,
-            firm.id,
-            crate::firm_secrets::IntegrationProvider::Forgejo,
-            crate::firm_secrets::IntegrationSecretKind::ForgejoAccessToken,
-            kms,
-        )
-        .await
-        .ok(),
+        Some(firm) => {
+            match crate::firm_secrets::resolve_firm_credential(
+                surreal,
+                firm.id,
+                crate::firm_secrets::IntegrationProvider::Forgejo,
+                crate::firm_secrets::IntegrationSecretKind::ForgejoAccessToken,
+                kms,
+            )
+            .await
+            {
+                Ok(token) => Some(token),
+                Err(crate::firm_secrets::SecretStoreError::NotConfigured { .. }) => None,
+                Err(error) => return Err(SurfaceError::ForgejoCredential(error)),
+            }
+        }
         None => None,
     };
     let mut missing = Vec::new();

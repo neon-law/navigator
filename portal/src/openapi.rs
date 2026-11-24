@@ -2677,7 +2677,9 @@ fn canonical_document(base: &str) -> Value {
               "401": { "description": "No authenticated session", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
               "403": { "description": "Authenticated caller is not admin-tier", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
               "404": { "description": "Project is unavailable or the caller lacks Firm integration access", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
-              "500": { "description": "Forgejo provisioning failed", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }
+              "409": { "description": "Forgejo could not verify private repository identity or URL. Includes a recovery step.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "422": { "description": "Forgejo configuration is incomplete. Includes a recovery step.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "503": { "description": "The Firm credential or Forgejo request is unavailable. Includes a recovery step.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }
             }
           }
         },
