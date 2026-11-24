@@ -103,58 +103,78 @@ pub fn fetch_tags(registry: &str, image: &str) -> Result<Vec<String>> {
         .build()
         .context("build tokio runtime for registry tag resolution")?;
     let repository = format!("{namespace}/{image}");
-    let token_url =
-        format!("https://{host}/token?scope=repository:{repository}:pull&service={host}");
-    let list_url = format!("https://{host}/v2/{repository}/tags/list");
-    runtime.block_on(async move {
-        let client = reqwest::Client::new();
-        let token: String = if is_artifact_registry(host) {
-            super::gcp::auth::adc_token_provider()
-                .await
-                .context("acquire a Google credential to read the private image registry")?
-                .token()
-                .await
-                .context("mint a Google access token for the image registry")?
-        } else {
-            client
-                .get(&token_url)
-                .send()
-                .await
-                .context("request registry pull token")?
-                .json::<serde_json::Value>()
-                .await
-                .context("parse registry token response")?
-                .get("token")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_string)
-                .with_context(|| format!("{host} returned no pull token for {repository}"))?
-        };
-        let resp = client
-            .get(&list_url)
-            .bearer_auth(token)
-            .send()
+    runtime.block_on(tags_from_urls(
+        registry,
+        host,
+        &repository,
+        &format!("https://{host}/token?scope=repository:{repository}:pull&service={host}"),
+        &format!("https://{host}/v2/{repository}/tags/list"),
+    ))
+}
+
+/// The bearer that reads `repository` on `host`: see [`fetch_tags`].
+async fn pull_token(
+    client: &reqwest::Client,
+    host: &str,
+    repository: &str,
+    token_url: &str,
+) -> Result<String> {
+    if is_artifact_registry(host) {
+        return super::gcp::auth::adc_token_provider()
             .await
-            .context("request registry tags/list")?;
-        if !resp.status().is_success() {
-            bail!(
-                "tags/list for {repository} returned {} — is the image published, and does the \
-                 caller hold `roles/artifactregistry.reader` on {registry}? Images there are \
-                 deleted 7 days after push, so a tag older than a week is gone.",
-                resp.status()
-            );
-        }
-        let body: serde_json::Value = resp.json().await.context("parse registry tags/list")?;
-        let tags = body
-            .get("tags")
-            .and_then(serde_json::Value::as_array)
-            .map(|a| {
-                a.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default();
-        Ok(tags)
-    })
+            .context("acquire a Google credential to read the private image registry")?
+            .token()
+            .await
+            .context("mint a Google access token for the image registry");
+    }
+    client
+        .get(token_url)
+        .send()
+        .await
+        .context("request registry pull token")?
+        .json::<serde_json::Value>()
+        .await
+        .context("parse registry token response")?
+        .get("token")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .with_context(|| format!("{host} returned no pull token for {repository}"))
+}
+
+async fn tags_from_urls(
+    registry: &str,
+    host: &str,
+    repository: &str,
+    token_url: &str,
+    list_url: &str,
+) -> Result<Vec<String>> {
+    let client = reqwest::Client::new();
+    let token = pull_token(&client, host, repository, token_url).await?;
+    let resp = client
+        .get(list_url)
+        .bearer_auth(token)
+        .send()
+        .await
+        .context("request registry tags/list")?;
+    if !resp.status().is_success() {
+        bail!(
+            "tags/list for {repository} returned {} — is the image published, and does the \
+             caller hold `roles/artifactregistry.reader` on {registry}? Images there are \
+             deleted 7 days after push, so a tag older than a week is gone.",
+            resp.status()
+        );
+    }
+    let body: serde_json::Value = resp.json().await.context("parse registry tags/list")?;
+    let tags = body
+        .get("tags")
+        .and_then(serde_json::Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(tags)
 }
 
 /// Whether `tag` is published for `<registry>/<image>`.
@@ -192,27 +212,7 @@ async fn tag_digest_from_urls(
     manifest_url: &str,
 ) -> Result<String> {
     let client = reqwest::Client::new();
-    let token: String = if is_artifact_registry(host) {
-        super::gcp::auth::adc_token_provider()
-            .await
-            .context("acquire a Google credential to read the private image registry")?
-            .token()
-            .await
-            .context("mint a Google access token for the image registry")?
-    } else {
-        client
-            .get(token_url)
-            .send()
-            .await
-            .context("request registry pull token")?
-            .json::<serde_json::Value>()
-            .await
-            .context("parse registry token response")?
-            .get("token")
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_string)
-            .with_context(|| format!("{host} returned no pull token for {repository}"))?
-    };
+    let token = pull_token(&client, host, repository, token_url).await?;
     let response = client
         .get(manifest_url)
         .bearer_auth(token)
@@ -431,6 +431,75 @@ mod tests {
             pick_latest_release_tag(&["latest".to_string(), "ci-x".to_string()]),
             None
         );
+    }
+
+    async fn listed(server: &MockServer) -> Result<Vec<String>> {
+        tags_from_urls(
+            TEST_REGISTRY,
+            "registry.example",
+            "team/navigator-web",
+            &format!("{}/token", server.uri()),
+            &format!("{}/v2/team/navigator-web/tags/list", server.uri()),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn tags_are_listed_with_the_public_pull_token() {
+        let server = MockServer::start().await;
+        assert!(listed(&server).await.is_err(), "no token endpoint yet");
+        Mock::given(method("GET"))
+            .and(path("/token"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"token": "pull-token"})),
+            )
+            .mount(&server)
+            .await;
+        let refused = listed(&server).await.unwrap_err().to_string();
+        assert!(
+            refused.starts_with("tags/list for team/navigator-web returned 404")
+                && refused.contains(TEST_REGISTRY),
+            "{refused}"
+        );
+        Mock::given(method("GET"))
+            .and(path("/v2/team/navigator-web/tags/list"))
+            .and(header("authorization", "Bearer pull-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"name": "team/navigator-web", "tags": ["26.6.23", 7, "latest"]}),
+            ))
+            .mount(&server)
+            .await;
+        assert_eq!(listed(&server).await.unwrap(), ["26.6.23", "latest"]);
+    }
+
+    #[tokio::test]
+    async fn a_package_without_tags_lists_none_and_a_tokenless_registry_is_named() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        assert_eq!(
+            listed(&server).await.unwrap_err().to_string(),
+            "registry.example returned no pull token for team/navigator-web"
+        );
+        Mock::given(method("GET"))
+            .and(path("/token"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"token": "pull-token"})),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/v2/team/navigator-web/tags/list"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&server)
+            .await;
+        assert!(listed(&server).await.unwrap().is_empty());
     }
 
     #[test]

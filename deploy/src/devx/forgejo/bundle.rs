@@ -292,15 +292,7 @@ async fn backfill_one(
     let key = format!("{object_prefix}{}.bundle", uuid::Uuid::new_v4());
     let receipt = receipts.join(format!("{}-{fingerprint}.json", project.id));
     let result = if receipt.exists() {
-        let verified_receipt = std::fs::read(&receipt)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice::<BundleReceipt>(&bytes).ok())
-            .is_some_and(|receipt| {
-                receipt.object.starts_with(&object_prefix)
-                    && format!("{}\n", receipt.head).as_bytes() == head
-                    && format!("{}\n", receipt.refs).as_bytes() == refs
-            });
-        if !verified_receipt {
+        if !receipt_matches_source(&receipt, &object_prefix, &head, &refs) {
             return "receipt-does-not-match-source";
         }
         restore_with_storage(&receipt, &scratch.path().join("restored"), storage).await
@@ -312,6 +304,18 @@ async fn backfill_one(
     } else {
         "archive-or-restore-failed"
     }
+}
+
+/// Whether the saved receipt names an object under this source's prefix with its exact refs.
+fn receipt_matches_source(receipt: &Path, object_prefix: &str, head: &[u8], refs: &[u8]) -> bool {
+    std::fs::read(receipt)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<BundleReceipt>(&bytes).ok())
+        .is_some_and(|receipt| {
+            receipt.object.starts_with(object_prefix)
+                && format!("{}\n", receipt.head).as_bytes() == head
+                && format!("{}\n", receipt.refs).as_bytes() == refs
+        })
 }
 
 async fn check_github_archive(owner: &str, repo: &str) -> Result<(), &'static str> {
@@ -335,14 +339,16 @@ async fn check_github_archive(owner: &str, repo: &str) -> Result<(), &'static st
     if !metadata.status.success() {
         return Err("github-inaccessible");
     }
-    let Ok(metadata) = serde_json::from_slice::<GitHubArchive>(&metadata.stdout) else {
-        return Err("github-metadata-unavailable");
-    };
-    if !metadata.archived {
-        return Err("repository-not-archived");
-    }
+    archived(&metadata.stdout)
+}
 
-    Ok(())
+/// A closed Project's GitHub source is exported only once GitHub reports it archived.
+fn archived(metadata: &[u8]) -> Result<(), &'static str> {
+    match serde_json::from_slice::<GitHubArchive>(metadata) {
+        Ok(GitHubArchive { archived: true }) => Ok(()),
+        Ok(_) => Err("repository-not-archived"),
+        Err(_) => Err("github-metadata-unavailable"),
+    }
 }
 
 fn verify_close_head(filed: &str, actual: &[u8]) -> bool {
@@ -829,6 +835,151 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_closed_project_without_a_matching_github_source_is_never_cloned() {
+        let project = |repository_url: Option<&str>| ArchiveProject {
+            id: uuid::Uuid::nil(),
+            code: "sample-estate".to_owned(),
+            repository_url: repository_url.map(str::to_owned),
+            firm_id: None,
+            status: "closed".to_owned(),
+        };
+        let receipts = tempfile::tempdir().unwrap();
+        let storage = MemoryStorage::default();
+        for (repository_url, outcome) in [
+            (None, "repository-unrecorded"),
+            (
+                Some("https://forge.example.com/example-firm/sample-estate"),
+                "source-is-not-github",
+            ),
+            (
+                Some("https://github.com/example-firm/another-matter"),
+                "source-project-mismatch",
+            ),
+            (
+                Some("https://github.com/Example_Firm/sample-estate"),
+                "source-project-mismatch",
+            ),
+        ] {
+            assert_eq!(
+                backfill_one(
+                    "https://navigator.example.com",
+                    &project(repository_url),
+                    receipts.path(),
+                    &storage
+                )
+                .await,
+                outcome
+            );
+        }
+        assert_eq!(std::fs::read_dir(receipts.path()).unwrap().count(), 0);
+        assert!(storage.bytes.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn closed_project_backfill_requires_an_existing_private_receipt_directory() {
+        let work = tempfile::tempdir().unwrap();
+        let host = "https://navigator.example.com";
+        assert!(backfill_closed(host, &work.path().join("missing")).is_err());
+        let shared = work.path().join("shared");
+        std::fs::create_dir(&shared).unwrap();
+        std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o750)).unwrap();
+        assert_eq!(
+            backfill_closed(host, &shared).unwrap_err().to_string(),
+            "receipt directory must be private (mode 0700)"
+        );
+        assert_eq!(std::fs::read_dir(&shared).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn a_receipt_is_published_private_and_never_replaced() -> Result<()> {
+        let work = tempfile::tempdir()?;
+        let path = work.path().join("archive.receipt");
+        let receipt = BundleReceipt {
+            format: 1,
+            object: "opaque-object-key".to_owned(),
+            generation: 7,
+            size_bytes: 3,
+            sha256: sha256_hex(b"abc"),
+            head: "refs/heads/main".to_owned(),
+            refs: String::new(),
+        };
+        write_receipt(&path, &receipt)?;
+        assert_eq!(path.metadata()?.permissions().mode() & 0o777, 0o600);
+        let before = std::fs::read(&path)?;
+        assert_eq!(
+            write_receipt(&path, &receipt).unwrap_err().to_string(),
+            "receipt destination already exists"
+        );
+        assert_eq!(std::fs::read(&path)?, before);
+
+        let (head, refs) = (b"refs/heads/main\n".as_slice(), b"\n".as_slice());
+        assert!(receipt_matches_source(&path, "opaque-", head, refs));
+        assert!(!receipt_matches_source(&path, "closed/", head, refs));
+        assert!(!receipt_matches_source(
+            &path,
+            "opaque-",
+            b"refs/heads/trunk\n",
+            refs
+        ));
+        assert!(!receipt_matches_source(
+            &path,
+            "opaque-",
+            head,
+            b"refs/heads/main 0\n"
+        ));
+        assert!(!receipt_matches_source(work.path(), "opaque-", head, refs));
+        assert_eq!(
+            receipt.sha256,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn restore_refuses_receipts_it_cannot_honor_before_reading_storage() -> Result<()> {
+        let work = tempfile::tempdir()?;
+        let storage = MemoryStorage::default();
+        let receipt = work.path().join("archive.receipt");
+        let refusal = |output: std::path::PathBuf| {
+            let (receipt, storage) = (&receipt, &storage);
+            async move {
+                restore_with_storage(receipt, &output, storage)
+                    .await
+                    .unwrap_err()
+                    .to_string()
+            }
+        };
+        assert_eq!(
+            refusal(work.path().join("restored.git")).await,
+            "read private bundle receipt"
+        );
+        std::fs::write(&receipt, "not a receipt")?;
+        assert_eq!(
+            refusal(work.path().join("restored.git")).await,
+            "parse bundle receipt"
+        );
+        let saved = |format: u32| {
+            serde_json::json!({
+                "format": format, "object": "opaque-object-key", "generation": 1,
+                "size_bytes": 0, "sha256": "", "head": "", "refs": ""
+            })
+            .to_string()
+        };
+        std::fs::write(&receipt, saved(2))?;
+        assert_eq!(
+            refusal(work.path().join("restored.git")).await,
+            "unsupported bundle receipt format"
+        );
+        std::fs::write(&receipt, saved(1))?;
+        assert_eq!(
+            refusal(work.path().to_path_buf()).await,
+            "restore destination already exists"
+        );
+        assert!(storage.bytes.lock().unwrap().is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn failed_read_back_never_publishes_a_receipt() -> Result<()> {
         let work = tempfile::tempdir()?;
         let mirror = synthetic_mirror(work.path())?;
@@ -905,7 +1056,23 @@ mod tests {
 
 #[cfg(test)]
 mod close_tests {
-    use super::verify_close_head;
+    use super::{archived, verify_close_head};
+
+    #[test]
+    fn only_a_source_github_reports_archived_is_exported() {
+        assert_eq!(
+            archived(br#"{"archived":true,"name":"sample-estate"}"#),
+            Ok(())
+        );
+        assert_eq!(
+            archived(br#"{"archived":false}"#),
+            Err("repository-not-archived")
+        );
+        assert_eq!(
+            archived(br#"{"message":"Not Found"}"#),
+            Err("github-metadata-unavailable")
+        );
+    }
 
     #[test]
     fn closed_source_requires_the_exact_filed_head() {

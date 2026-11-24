@@ -158,6 +158,15 @@ pub const PUBLIC_PATHS: &[&str] = &[
 /// they are states of a session, not documents.
 #[must_use]
 pub fn sitemap_paths(state: &AppState, key: BrandKey) -> std::collections::BTreeSet<String> {
+    sitemap_for(state.workshops.materials(), key)
+}
+
+/// [`sitemap_paths`] over the catalog's materials alone.
+#[must_use]
+pub fn sitemap_for(
+    materials: &[portal::WorkshopMaterial],
+    key: BrandKey,
+) -> std::collections::BTreeSet<String> {
     match key {
         // Privacy keeps the monthly product on one page, with office details separate.
         BrandKey::DeleteYourData => ["/", "/contact", "/testimonials"]
@@ -225,7 +234,7 @@ pub fn sitemap_paths(state: &AppState, key: BrandKey) -> std::collections::BTree
             .iter()
             .map(|path| (*path).to_string())
             .collect();
-            for material in state.workshops.materials().iter().filter(|material| {
+            for material in materials.iter().filter(|material| {
                 matches!(material.category.as_str(), "presentations" | "workshops")
             }) {
                 let path = format!("/{}/{}", material.category, material.slug);
@@ -290,6 +299,12 @@ fn practice_brand_llms_txt(key: BrandKey) -> portal::LlmsTxt {
 /// [`sitemap_paths`] rather than curated here.
 #[must_use]
 pub fn llms_txt(state: &AppState, key: BrandKey) -> portal::LlmsTxt {
+    llms_for(state.workshops.materials(), key)
+}
+
+/// [`llms_txt`] over the catalog's materials alone.
+#[must_use]
+pub fn llms_for(materials: &[portal::WorkshopMaterial], key: BrandKey) -> portal::LlmsTxt {
     match key {
         // Each practice brand indexes the two pages it serves, from its own
         // compiled `Branding` — the descriptions are the brand's own words,
@@ -358,9 +373,7 @@ pub fn llms_txt(state: &AppState, key: BrandKey) -> portal::LlmsTxt {
                     .into_iter()
                     .map(|(heading, category)| portal::LlmsTxtSection {
                         heading: heading.to_string(),
-                        links: state
-                            .workshops
-                            .materials()
+                        links: materials
                             .iter()
                             .filter(|material| material.category == category)
                             .map(|material| portal::LlmsTxtLink {

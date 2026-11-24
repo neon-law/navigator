@@ -427,13 +427,6 @@ mod tests {
     }
 
     #[test]
-    fn the_trigger_starts_the_workflow_keyed_on_the_utc_date() {
-        let source = include_str!("bin/notation-reset-trigger.rs");
-        assert!(source.contains("\"NotationReset\""));
-        assert!(source.contains("notation_reset::run_key(chrono::Utc::now())"));
-    }
-
-    #[test]
     fn the_journaled_clock_must_be_rfc_3339() {
         let at = parse_clock("2026-10-21T04:20:00+02:00").expect("an RFC 3339 instant");
         assert_eq!(at.to_rfc3339(), "2026-10-21T02:20:00+00:00");

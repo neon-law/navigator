@@ -741,3 +741,7 @@ mod tests {
         assert!(cfg.is_enforced());
     }
 }
+
+#[cfg(test)]
+#[path = "auth_tests.rs"]
+mod boundary_tests;

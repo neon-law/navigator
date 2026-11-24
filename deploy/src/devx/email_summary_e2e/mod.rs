@@ -253,11 +253,7 @@ fn assert_running_image(cfg: &KindConfig, image: &str) -> Result<()> {
             .context("read worker pods")?;
         ensure!(output.status.success(), "could not list the worker pods");
         let listing = String::from_utf8_lossy(&output.stdout).to_string();
-        let running: Vec<&str> = listing
-            .lines()
-            .filter(|line| line.starts_with("Running "))
-            .collect();
-        if running.last().is_some_and(|line| line.ends_with(image)) {
+        if newest_running_uses(&listing, image) {
             return Ok(());
         }
         if std::time::Instant::now() > deadline {
@@ -267,9 +263,26 @@ fn assert_running_image(cfg: &KindConfig, image: &str) -> Result<()> {
     }
 }
 
+/// Whether the newest `Running` pod in a creation-ordered `phase image` listing uses `image`.
+fn newest_running_uses(listing: &str, image: &str) -> bool {
+    listing
+        .lines()
+        .rfind(|line| line.starts_with("Running "))
+        .is_some_and(|line| line.ends_with(image))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_newest_running_pod_decides_which_image_serves() {
+        let draining = "Running img:e2e-old\nRunning img:e2e-new\nPending img:e2e-next\n";
+        assert!(newest_running_uses(draining, "img:e2e-new"));
+        assert!(!newest_running_uses(draining, "img:e2e-old"));
+        assert!(!newest_running_uses(draining, "img:e2e-next"));
+        assert!(!newest_running_uses("Pending img:e2e-new\n", "img:e2e-new"));
+    }
 
     #[test]
     fn only_an_orbstack_engine_passes() {

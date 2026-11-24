@@ -160,36 +160,9 @@ async fn run_offline_lint(found: &Resolved, slug: &str, port: u16) -> Result<()>
     }
     eprintln!("    no blocking rule violations");
 
-    let doc = portal::notation_preview_doc::from_markdown(
-        slug,
-        &found.path.display().to_string(),
-        &found.src,
-    );
-    // LAW-466: the preview binds the same Firm legal name the PDF render
-    // would print — one Brand resolution through the manifest, else the
-    // default Brand, exactly the render's chain. Nothing resolvable leaves
-    // the key absent, so the token washes as it does in a PDF.
-    let mut doc = doc;
-    doc.firm_legal_name = cli::projects::matter::find_manifest(&found.path)
-        .and_then(|path| {
-            let contents = std::fs::read_to_string(&path).ok()?;
-            let manifest = cli::projects::manifest::parse(&contents).ok()?;
-            cli::rendering_letterhead::for_project(
-                manifest.brand.as_deref(),
-                manifest.host.as_deref(),
-            )
-            .ok()
-        })
-        .or_else(|| cli::rendering_letterhead::for_brand(views::brand::BrandKey::Neon).ok())
-        .map(|letterhead| letterhead.entity.trim().to_string())
-        .filter(|entity| !entity.is_empty());
-
-    let questions = doc.demo_questions.len();
-    let states = doc.demo_workflow.len();
-    let title = doc.title.clone();
-    let questionnaire_error = doc.questionnaire_error.clone();
-
+    let doc = local_doc(found, slug);
     let bundle = client_bundle_dir();
+    let summary = render_summary(&doc, found, bundle.as_deref());
     if let Some(dir) = &bundle {
         // Safe on this edition, and set before the router is built because
         // `ServeConfig::new` reads it exactly once, at construction.
@@ -203,33 +176,7 @@ async fn run_offline_lint(found: &Resolved, slug: &str, port: u16) -> Result<()>
         .with_context(|| format!("binding {addr}"))?;
     let bound = listener.local_addr().context("reading the bound port")?;
 
-    eprintln!("==> local render: {title}");
-    eprintln!(
-        "    {} question(s), {} workflow state(s), from {}{}",
-        questions,
-        states,
-        found.path.display(),
-        if found.bundled {
-            " (bundled in this binary)"
-        } else {
-            ""
-        }
-    );
-    if let Some(error) = &questionnaire_error {
-        eprintln!("    WARNING: {error}");
-        eprintln!(
-            "    the page shows the failure panel in place of the questionnaire — fix the \
-             template; do not trust this preview's counts."
-        );
-    }
-    eprintln!("    this is a local render, not the Project's portal — nothing is pushed.");
-    match &bundle {
-        Some(dir) => eprintln!("    client bundle: {}", dir.display()),
-        None => eprintln!(
-            "    client bundle: none — the page renders but the questionnaire will not step. \
-             Build one with `hudson dev build-webapp`."
-        ),
-    }
+    eprintln!("{summary}");
     eprintln!("==> http://{bound}/notations/{slug}");
     eprintln!("    Ctrl-C to stop.");
 
@@ -240,6 +187,73 @@ async fn run_offline_lint(found: &Resolved, slug: &str, port: u16) -> Result<()>
         .await
         .context("serving the lint")?;
     Ok(())
+}
+
+/// The template as the local render shows it.
+///
+/// LAW-466: the preview binds the same Firm legal name the PDF render
+/// would print — one Brand resolution through the manifest, else the
+/// default Brand, exactly the render's chain. Nothing resolvable leaves
+/// the key absent, so the token washes as it does in a PDF.
+fn local_doc(found: &Resolved, slug: &str) -> webapp::notation_preview::PreviewDoc {
+    let mut doc = portal::notation_preview_doc::from_markdown(
+        slug,
+        &found.path.display().to_string(),
+        &found.src,
+    );
+    doc.firm_legal_name = cli::projects::matter::find_manifest(&found.path)
+        .and_then(|path| {
+            let contents = std::fs::read_to_string(&path).ok()?;
+            let manifest = cli::projects::manifest::parse(&contents).ok()?;
+            cli::rendering_letterhead::for_project(
+                manifest.brand.as_deref(),
+                manifest.host.as_deref(),
+            )
+            .ok()
+        })
+        .or_else(|| cli::rendering_letterhead::for_brand(views::brand::BrandKey::Neon).ok())
+        .map(|letterhead| letterhead.entity.trim().to_string())
+        .filter(|entity| !entity.is_empty());
+    doc
+}
+
+/// What the lint tells the author about the render it is about to serve.
+fn render_summary(
+    doc: &webapp::notation_preview::PreviewDoc,
+    found: &Resolved,
+    bundle: Option<&Path>,
+) -> String {
+    use std::fmt::Write as _;
+    let mut out = format!(
+        "==> local render: {}\n    {} question(s), {} workflow state(s), from {}{}\n",
+        doc.title,
+        doc.demo_questions.len(),
+        doc.demo_workflow.len(),
+        found.path.display(),
+        if found.bundled {
+            " (bundled in this binary)"
+        } else {
+            ""
+        }
+    );
+    if let Some(error) = &doc.questionnaire_error {
+        let _ = writeln!(
+            out,
+            "    WARNING: {error}\n    the page shows the failure panel in place of the \
+             questionnaire — fix the template; do not trust this preview's counts."
+        );
+    }
+    out.push_str("    this is a local render, not the Project's portal — nothing is pushed.\n");
+    match bundle {
+        Some(dir) => {
+            let _ = write!(out, "    client bundle: {}", dir.display());
+        }
+        None => out.push_str(
+            "    client bundle: none — the page renders but the questionnaire will not step. \
+             Build one with `hudson dev build-webapp`.",
+        ),
+    }
+    out
 }
 
 /// Every blocking violation in `found`, under the rule set `navigator
@@ -956,6 +970,38 @@ mod tests {
                 .contains(&format!("{} blocking rule violation(s)", violations.len())),
             "{err}"
         );
+    }
+
+    #[test]
+    fn the_render_summary_counts_the_template_and_names_its_source_and_bundle() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("sample_letter.md");
+        std::fs::write(&file, TEMPLATE).expect("write");
+        let found = resolve_template(dir.path(), &file).expect("resolves");
+        let mut doc = super::local_doc(&found, "sample-letter");
+        assert_eq!(
+            (doc.slug.as_str(), doc.title.as_str()),
+            ("sample-letter", "Sample Letter")
+        );
+
+        let served = super::render_summary(&doc, &found, Some(Path::new("/bundle/dioxus")));
+        assert_eq!(
+            served,
+            format!(
+                "==> local render: Sample Letter\n    {} question(s), {} workflow state(s), from {}\n    \
+                 this is a local render, not the Project's portal — nothing is pushed.\n    \
+                 client bundle: /bundle/dioxus",
+                doc.demo_questions.len(),
+                doc.demo_workflow.len(),
+                file.display()
+            )
+        );
+
+        doc.questionnaire_error = Some("the questionnaire has no END".to_owned());
+        let degraded = super::render_summary(&doc, &found, None);
+        assert!(degraded.contains("\n    WARNING: the questionnaire has no END\n"));
+        assert!(degraded.contains("do not trust this preview's counts.\n"));
+        assert!(degraded.ends_with("Build one with `hudson dev build-webapp`."));
     }
 
     /// The draft push names the template by its file stem, spelled as the

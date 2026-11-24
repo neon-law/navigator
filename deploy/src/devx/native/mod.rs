@@ -247,6 +247,7 @@ pub(super) fn up(root: &Path, slot: u16, cfg: &KindConfig, database: &str) -> Re
         )?,
         rauthy::service(
             &shared_root,
+            rauthy::resolve()?,
             cfg.rauthy_port,
             RAUTHY_RAFT_PORT_BASE,
             RAUTHY_API_PORT_BASE,

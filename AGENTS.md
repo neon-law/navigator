@@ -84,7 +84,7 @@ Keep email correspondence, including Gmail, draft-only. The lawyer reviews and s
 
 Write the least amount of code the behavior needs: delete dead code instead of annotating it, consolidate duplicated
 helpers into the sanctioned seams, and name a test before the change that satisfies it. CI holds the workspace at a
-90.0% line-coverage floor, measured without SurrealDB, and that floor only goes up — ENG-1375 raises it to 95.0% as
+92.0% line-coverage floor, measured without SurrealDB, and that floor only goes up — ENG-1375 raises it to 95.0% as
 domains leave SurrealDB. A subtraction lands only with coverage re-verified (`docs/agent-workflows.md` explains the
 measurement).
 

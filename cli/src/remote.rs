@@ -1648,48 +1648,49 @@ impl DocumentClient {
         unreachable!("the final attempt returns")
     }
 
-    /// Every document revision visible through the caller's Project lens.
-    pub async fn list_documents(&self) -> Result<Vec<LiveDocumentSummary>> {
-        let url = format!(
-            "{}/app/api/projects/{}/documents",
-            self.base, self.project_id
-        );
-        let response = self
+    /// Send one JSON request to a door under `/app/api/projects/{id}/` and
+    /// return the success body. A refusal reads
+    /// `"{action} failed: {status}: {first line}"`.
+    async fn door(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        body: Option<serde_json::Value>,
+        action: &str,
+    ) -> Result<String> {
+        let url = format!("{}/app/api/projects/{}/{path}", self.base, self.project_id);
+        let mut request = self
             .client
-            .get(&url)
-            .bearer_auth(&self.token)
+            .request(method.clone(), &url)
+            .bearer_auth(&self.token);
+        if let Some(body) = body {
+            request = request.json(&body);
+        }
+        let response = request
             .send()
             .await
-            .with_context(|| format!("GET {url}"))?;
+            .with_context(|| format!("{method} {url}"))?;
         let status = response.status();
         let text = response.text().await.unwrap_or_default();
         if !status.is_success() {
-            return Err(anyhow!(
-                "list documents failed: {status}: {}",
-                first_line(&text)
-            ));
+            return Err(anyhow!("{action} failed: {status}: {}", first_line(&text)));
         }
+        Ok(text)
+    }
+
+    /// Every document revision visible through the caller's Project lens.
+    pub async fn list_documents(&self) -> Result<Vec<LiveDocumentSummary>> {
+        let text = self
+            .door(reqwest::Method::GET, "documents", None, "list documents")
+            .await?;
         serde_json::from_str(&text).context("parse document inventory response")
     }
 
     /// `GET /app/api/projects/{id}/service` — every Service on the Project.
     pub async fn list_service(&self) -> Result<Vec<model::project_service::ProjectService>> {
-        let url = format!("{}/app/api/projects/{}/service", self.base, self.project_id);
-        let response = self
-            .client
-            .get(&url)
-            .bearer_auth(&self.token)
-            .send()
-            .await
-            .with_context(|| format!("GET {url}"))?;
-        let status = response.status();
-        let text = response.text().await.unwrap_or_default();
-        if !status.is_success() {
-            return Err(anyhow!(
-                "list service failed: {status}: {}",
-                first_line(&text)
-            ));
-        }
+        let text = self
+            .door(reqwest::Method::GET, "service", None, "list service")
+            .await?;
         serde_json::from_str(&text).context("parse service response")
     }
 
@@ -1713,23 +1714,15 @@ impl DocumentClient {
     /// `PUT /app/api/projects/{id}/pages` — replace the Project's stored
     /// Matter Pages with `pages`. Returns how many the server stored.
     pub async fn put_pages(&self, pages: &[rules::pages::PageEntry]) -> Result<usize> {
-        let url = format!("{}/app/api/projects/{}/pages", self.base, self.project_id);
-        let response = self
-            .client
-            .put(&url)
-            .bearer_auth(&self.token)
-            .json(&serde_json::json!({ "pages": pages }))
-            .send()
-            .await
-            .with_context(|| format!("PUT {url}"))?;
-        let status = response.status();
-        let text = response.text().await.unwrap_or_default();
-        if !status.is_success() {
-            return Err(anyhow!(
-                "store matter pages failed: {status}: {}",
-                first_line(&text)
-            ));
-        }
+        let body = serde_json::json!({ "pages": pages });
+        let text = self
+            .door(
+                reqwest::Method::PUT,
+                "pages",
+                Some(body),
+                "store matter pages",
+            )
+            .await?;
         let body: serde_json::Value =
             serde_json::from_str(&text).context("parse matter pages response")?;
         Ok(body["pages"].as_array().map_or(0, Vec::len))
@@ -1739,23 +1732,11 @@ impl DocumentClient {
     /// Matter Caption with `matter`; `None` removes it. Returns whether the
     /// server now holds one.
     pub async fn put_matter(&self, matter: Option<&word::matter::Matter>) -> Result<bool> {
-        let url = format!("{}/app/api/projects/{}/matter", self.base, self.project_id);
-        let response = self
-            .client
-            .put(&url)
-            .bearer_auth(&self.token)
-            .json(&serde_json::json!({ "matter": matter }))
-            .send()
-            .await
-            .with_context(|| format!("PUT {url}"))?;
-        let status = response.status();
-        let text = response.text().await.unwrap_or_default();
-        if !status.is_success() {
-            return Err(anyhow!(
-                "store matter caption failed: {status}: {}",
-                first_line(&text)
-            ));
-        }
+        let body = serde_json::json!({ "matter": matter });
+        let action = "store matter caption";
+        let text = self
+            .door(reqwest::Method::PUT, "matter", Some(body), action)
+            .await?;
         let body: serde_json::Value =
             serde_json::from_str(&text).context("parse matter caption response")?;
         Ok(!body["matter"].is_null())
@@ -2365,26 +2346,8 @@ impl DocumentClient {
 
     /// Reconcile the desired pointer visibility through Navigator's API.
     pub async fn set_visibility(&self, asset_id: Uuid, visibility: &str) -> Result<()> {
-        let url = format!(
-            "{}/app/api/projects/{}/documents/{asset_id}",
-            self.base, self.project_id
-        );
-        let response = self
-            .client
-            .patch(&url)
-            .bearer_auth(&self.token)
-            .json(&serde_json::json!({ "visibility": visibility }))
-            .send()
-            .await
-            .with_context(|| format!("PATCH {url}"))?;
-        let status = response.status();
-        let text = response.text().await.unwrap_or_default();
-        if !status.is_success() {
-            return Err(anyhow!(
-                "document visibility failed: {status}: {}",
-                first_line(&text)
-            ));
-        }
+        let body = serde_json::json!({ "visibility": visibility });
+        self.patch_document(asset_id, body, "visibility").await?;
         Ok(())
     }
 
@@ -2393,26 +2356,8 @@ impl DocumentClient {
     /// clear — the PATCH door's tri-state folder field needs the field
     /// present, not absent.
     pub async fn set_folder(&self, asset_id: Uuid, folder: Option<&str>) -> Result<()> {
-        let url = format!(
-            "{}/app/api/projects/{}/documents/{asset_id}",
-            self.base, self.project_id
-        );
-        let response = self
-            .client
-            .patch(&url)
-            .bearer_auth(&self.token)
-            .json(&serde_json::json!({ "folder": folder }))
-            .send()
-            .await
-            .with_context(|| format!("PATCH {url}"))?;
-        let status = response.status();
-        let text = response.text().await.unwrap_or_default();
-        if !status.is_success() {
-            return Err(anyhow!(
-                "document folder failed: {status}: {}",
-                first_line(&text)
-            ));
-        }
+        let body = serde_json::json!({ "folder": folder });
+        self.patch_document(asset_id, body, "folder").await?;
         Ok(())
     }
 
@@ -2425,31 +2370,11 @@ impl DocumentClient {
         kind: Option<&str>,
         dry_run: bool,
     ) -> Result<serde_json::Value> {
-        let url = format!(
-            "{}/app/api/projects/{}/documents/{asset_id}",
-            self.base, self.project_id
-        );
         let mut body = serde_json::json!({ "slug": slug, "dry_run": dry_run });
         if let Some(kind) = kind {
             body["kind"] = serde_json::Value::String(kind.to_string());
         }
-        let response = self
-            .client
-            .patch(&url)
-            .bearer_auth(&self.token)
-            .json(&body)
-            .send()
-            .await
-            .with_context(|| format!("PATCH {url}"))?;
-        let status = response.status();
-        let text = response.text().await.unwrap_or_default();
-        if !status.is_success() {
-            return Err(anyhow!(
-                "document slug failed: {status}: {}",
-                first_line(&text)
-            ));
-        }
-        serde_json::from_str(&text).context("parse document slug response")
+        document_json(&self.patch_document(asset_id, body, "slug").await?, "slug")
     }
 
     /// Replace a legacy kind the asset lane rejects on a row and its chain.
@@ -2460,27 +2385,8 @@ impl DocumentClient {
         kind: &str,
         dry_run: bool,
     ) -> Result<serde_json::Value> {
-        let url = format!(
-            "{}/app/api/projects/{}/documents/{asset_id}",
-            self.base, self.project_id
-        );
-        let response = self
-            .client
-            .patch(&url)
-            .bearer_auth(&self.token)
-            .json(&serde_json::json!({ "kind": kind, "dry_run": dry_run }))
-            .send()
-            .await
-            .with_context(|| format!("PATCH {url}"))?;
-        let status = response.status();
-        let text = response.text().await.unwrap_or_default();
-        if !status.is_success() {
-            return Err(anyhow!(
-                "document kind failed: {status}: {}",
-                first_line(&text)
-            ));
-        }
-        serde_json::from_str(&text).context("parse document kind response")
+        let body = serde_json::json!({ "kind": kind, "dry_run": dry_run });
+        document_json(&self.patch_document(asset_id, body, "kind").await?, "kind")
     }
 
     /// Change a chain from one accepted kind to another.
@@ -2491,27 +2397,9 @@ impl DocumentClient {
         kind: &str,
         dry_run: bool,
     ) -> Result<serde_json::Value> {
-        let url = format!(
-            "{}/app/api/projects/{}/documents/{asset_id}/reclassify",
-            self.base, self.project_id
-        );
-        let response = self
-            .client
-            .post(&url)
-            .bearer_auth(&self.token)
-            .json(&serde_json::json!({ "kind": kind, "dry_run": dry_run }))
-            .send()
+        let body = serde_json::json!({ "kind": kind, "dry_run": dry_run });
+        self.document_command(asset_id, "reclassify", Some(body))
             .await
-            .with_context(|| format!("POST {url}"))?;
-        let status = response.status();
-        let text = response.text().await.unwrap_or_default();
-        if !status.is_success() {
-            return Err(anyhow!(
-                "document reclassify failed: {status}: {}",
-                first_line(&text)
-            ));
-        }
-        serde_json::from_str(&text).context("parse document reclassify response")
     }
 
     /// Move the row's document identity to `new_slug`, across its whole chain.
@@ -2522,116 +2410,83 @@ impl DocumentClient {
         new_slug: &str,
         dry_run: bool,
     ) -> Result<serde_json::Value> {
-        let url = format!(
-            "{}/app/api/projects/{}/documents/{asset_id}",
-            self.base, self.project_id
-        );
-        let response = self
-            .client
-            .patch(&url)
-            .bearer_auth(&self.token)
-            .json(&serde_json::json!({ "slug": new_slug, "reslug": true, "dry_run": dry_run }))
-            .send()
-            .await
-            .with_context(|| format!("PATCH {url}"))?;
-        let status = response.status();
-        let text = response.text().await.unwrap_or_default();
-        if !status.is_success() {
-            return Err(anyhow!(
-                "document reslug failed: {status}: {}",
-                first_line(&text)
-            ));
-        }
-        serde_json::from_str(&text).context("parse document reslug response")
+        let body = serde_json::json!({ "slug": new_slug, "reslug": true, "dry_run": dry_run });
+        document_json(
+            &self.patch_document(asset_id, body, "reslug").await?,
+            "reslug",
+        )
     }
 
     /// Restore a missing storage object from a same-hash sibling.
     pub async fn repair_storage(&self, asset_id: Uuid, dry_run: bool) -> Result<serde_json::Value> {
-        let url = format!(
-            "{}/app/api/projects/{}/documents/{asset_id}/storage",
-            self.base, self.project_id
-        );
-        let response = self
-            .client
-            .post(&url)
-            .bearer_auth(&self.token)
-            .json(&serde_json::json!({ "dry_run": dry_run }))
-            .send()
-            .await
-            .with_context(|| format!("POST {url}"))?;
-        let status = response.status();
-        let text = response.text().await.unwrap_or_default();
-        if !status.is_success() {
-            return Err(anyhow!(
-                "document repair failed: {status}: {}",
-                first_line(&text)
-            ));
-        }
-        serde_json::from_str(&text).context("parse document repair response")
+        let text = self
+            .door(
+                reqwest::Method::POST,
+                &format!("documents/{asset_id}/storage"),
+                Some(serde_json::json!({ "dry_run": dry_run })),
+                "document repair",
+            )
+            .await?;
+        document_json(&text, "repair")
     }
 
-    /// POST one retention command (`delete`, `restore`, `hold`) for the
+    /// `PATCH` one document row; a refusal names `field`.
+    async fn patch_document(
+        &self,
+        asset_id: Uuid,
+        body: serde_json::Value,
+        field: &str,
+    ) -> Result<String> {
+        self.door(
+            reqwest::Method::PATCH,
+            &format!("documents/{asset_id}"),
+            Some(body),
+            &format!("document {field}"),
+        )
+        .await
+    }
+
+    /// POST one command (`reclassify`, `delete`, `restore`, `hold`) for the
     /// document identity `asset_id` belongs to, and return the server's JSON.
-    async fn retention_command(
+    async fn document_command(
         &self,
         asset_id: Uuid,
         verb: &str,
         body: Option<serde_json::Value>,
     ) -> Result<serde_json::Value> {
-        let url = format!(
-            "{}/app/api/projects/{}/documents/{asset_id}/{verb}",
-            self.base, self.project_id
-        );
-        let request = self.client.post(&url).bearer_auth(&self.token);
-        let request = match body {
-            Some(body) => request.json(&body),
-            None => request,
-        };
-        let response = request
-            .send()
-            .await
-            .with_context(|| format!("POST {url}"))?;
-        let status = response.status();
-        let text = response.text().await.unwrap_or_default();
-        if !status.is_success() {
-            return Err(anyhow!(
-                "document {verb} failed: {status}: {}",
-                first_line(&text)
-            ));
-        }
-        serde_json::from_str(&text).with_context(|| format!("parse document {verb} response"))
+        let text = self
+            .door(
+                reqwest::Method::POST,
+                &format!("documents/{asset_id}/{verb}"),
+                body,
+                &format!("document {verb}"),
+            )
+            .await?;
+        document_json(&text, verb)
     }
 
     /// Soft-delete the document `asset_id` belongs to for 180 days, recording
     /// the source commit that removed its pointer.
     pub async fn soft_delete(&self, asset_id: Uuid, commit_sha: &str) -> Result<serde_json::Value> {
-        self.retention_command(
-            asset_id,
-            "delete",
-            Some(serde_json::json!({ "commit_sha": commit_sha })),
-        )
-        .await
+        let body = serde_json::json!({ "commit_sha": commit_sha });
+        self.document_command(asset_id, "delete", Some(body)).await
     }
 
     /// Soft-delete a mistaken document chain that has no pointer-removal commit.
     pub async fn retire(&self, asset_id: Uuid) -> Result<serde_json::Value> {
-        self.retention_command(
-            asset_id,
-            "delete",
-            Some(serde_json::json!({ "manual": true })),
-        )
-        .await
+        let body = serde_json::json!({ "manual": true });
+        self.document_command(asset_id, "delete", Some(body)).await
     }
 
     /// Restore a soft-deleted document with its revision history.
     pub async fn restore(&self, asset_id: Uuid) -> Result<serde_json::Value> {
-        self.retention_command(asset_id, "restore", None).await
+        self.document_command(asset_id, "restore", None).await
     }
 
     /// Place (`held`) or release a Legal Hold on the document's chain.
     pub async fn set_legal_hold(&self, asset_id: Uuid, held: bool) -> Result<serde_json::Value> {
-        self.retention_command(asset_id, "hold", Some(serde_json::json!({ "held": held })))
-            .await
+        let body = serde_json::json!({ "held": held });
+        self.document_command(asset_id, "hold", Some(body)).await
     }
 
     /// File one inbound message's attachments into the matter
@@ -2645,31 +2500,20 @@ impl DocumentClient {
         visibility: &str,
         dry_run: bool,
     ) -> Result<MailFileResponse> {
-        let url = format!(
-            "{}/app/api/projects/{}/mail/file",
-            self.base, self.project_id
-        );
-        let response = self
-            .client
-            .post(&url)
-            .bearer_auth(&self.token)
-            .json(&serde_json::json!({
-                "message_id": message_id,
-                "kind": kind,
-                "visibility": visibility,
-                "dry_run": dry_run,
-            }))
-            .send()
-            .await
-            .with_context(|| format!("POST {url}"))?;
-        let status = response.status();
-        let text = response.text().await.unwrap_or_default();
-        if !status.is_success() {
-            return Err(anyhow!(
-                "filing message {message_id} failed: {status}: {}",
-                first_line(&text)
-            ));
-        }
+        let body = serde_json::json!({
+            "message_id": message_id,
+            "kind": kind,
+            "visibility": visibility,
+            "dry_run": dry_run,
+        });
+        let text = self
+            .door(
+                reqwest::Method::POST,
+                "mail/file",
+                Some(body),
+                &format!("filing message {message_id}"),
+            )
+            .await?;
         serde_json::from_str(&text).context("parse mail-file response")
     }
 }
@@ -3975,22 +3819,10 @@ pub async fn post_integration_door(
     payload: serde_json::Value,
 ) -> Result<IntegrationReportBody> {
     let url = format!("{base}{path}");
-    let response = reqwest::Client::new()
-        .post(&url)
-        .bearer_auth(token)
-        .json(&payload)
-        .send()
-        .await
-        .with_context(|| format!("POST {url}"))?;
-    let status = response.status();
-    let body = response.text().await.unwrap_or_default();
-    if !status.is_success() {
-        return Err(anyhow!(
-            "integration door failed: {status}: {}",
-            first_line(&body)
-        ));
-    }
-    serde_json::from_str(&body).with_context(|| format!("parse POST {url}"))
+    let call = format!("POST {url}");
+    let request = reqwest::Client::new().post(&url).json(&payload);
+    let body = send_for_body(request, token, &call, "integration door").await?;
+    serde_json::from_str(&body).with_context(|| format!("parse {call}"))
 }
 
 /// `navigator project close <project-code>` — move a matter directly to
@@ -4057,21 +3889,9 @@ async fn post_project_transition(
     if let Some(effective_at) = effective_at {
         payload["effective_at"] = serde_json::json!(effective_at);
     }
-    let response = client
-        .post(&url)
-        .bearer_auth(token)
-        .json(&payload)
-        .send()
-        .await
-        .with_context(|| format!("POST {url}"))?;
-    let status = response.status();
-    if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
-        return Err(anyhow!(
-            "{transition} project `{project_code}` failed: {status}: {}",
-            first_line(&body)
-        ));
-    }
+    let action = format!("{transition} project `{project_code}`");
+    let request = client.post(&url).json(&payload);
+    send_for_body(request, &token, &format!("POST {url}"), &action).await?;
     Ok(())
 }
 
@@ -4216,6 +4036,67 @@ enum EntitySelection<'a> {
     HumanIn(&'a str),
 }
 
+/// Send `request` as the caller and return the success body. `call` names
+/// the request when it never arrives; a refusal reads
+/// `"{action} failed: {status}: {first line}"`.
+async fn send_for_body(
+    request: reqwest::RequestBuilder,
+    token: &str,
+    call: &str,
+    action: &str,
+) -> Result<String> {
+    let (status, body) = send_as(request, token, call).await?;
+    if !status.is_success() {
+        return Err(anyhow!("{action} failed: {status}: {}", first_line(&body)));
+    }
+    Ok(body)
+}
+
+/// Send `request` as the caller and return the status and body it answered.
+async fn send_as(
+    request: reqwest::RequestBuilder,
+    token: &str,
+    call: &str,
+) -> Result<(reqwest::StatusCode, String)> {
+    let response = request
+        .bearer_auth(token)
+        .send()
+        .await
+        .with_context(|| call.to_string())?;
+    let status = response.status();
+    Ok((status, response.text().await.unwrap_or_default()))
+}
+
+/// [`send_for_body`] for the notation doors, whose refusals carry a JSON
+/// `{error, reason}` body. `redirects` accepts a `3xx`: the lifecycle POSTs
+/// redirect on success.
+async fn send_notation(
+    request: reqwest::RequestBuilder,
+    token: &str,
+    call: &str,
+    action: &str,
+    redirects: bool,
+) -> Result<String> {
+    let (status, body) = send_as(request, token, call).await?;
+    if !(status.is_success() || (redirects && status.is_redirection())) {
+        return Err(anyhow!("{action} failed: {}", server_error(status, &body)));
+    }
+    Ok(body)
+}
+
+/// `GET {base}{path}` as the caller, decoded as `T`.
+async fn get_json<T: serde::de::DeserializeOwned>(
+    client: &reqwest::Client,
+    base: &str,
+    token: &str,
+    path: &str,
+    action: &str,
+) -> Result<T> {
+    let call = format!("GET {path}");
+    let body = send_for_body(client.get(format!("{base}{path}")), token, &call, action).await?;
+    serde_json::from_str(&body).with_context(|| format!("parse {call}"))
+}
+
 /// Resolve an **existing** Entity by name over `GET /app/api/entities`.
 /// Never creates one — a missing name is the caller's to fix.
 async fn resolve_existing_entity(
@@ -4224,22 +4105,8 @@ async fn resolve_existing_entity(
     token: &str,
     needle: &str,
 ) -> Result<Uuid> {
-    let entities_resp = client
-        .get(format!("{base}/app/api/entities"))
-        .bearer_auth(token)
-        .send()
-        .await
-        .context("GET /app/api/entities")?;
-    let entities_status = entities_resp.status();
-    let entities_body = entities_resp.text().await.unwrap_or_default();
-    if !entities_status.is_success() {
-        return Err(anyhow!(
-            "list entities failed: {entities_status}: {}",
-            first_line(&entities_body)
-        ));
-    }
     let entities: Vec<VisibleEntity> =
-        serde_json::from_str(&entities_body).context("parse GET /app/api/entities")?;
+        get_json(client, base, token, "/app/api/entities", "list entities").await?;
     entities
         .into_iter()
         .find(|e| e.name.eq_ignore_ascii_case(needle))
@@ -4259,44 +4126,52 @@ async fn create_human_entity(
     client_name: &str,
     jurisdiction_name: &str,
 ) -> Result<(Uuid, Uuid)> {
-    let types_resp = client
-        .get(format!("{base}/app/api/entity-types"))
-        .bearer_auth(token)
-        .send()
-        .await
-        .context("GET /app/api/entity-types")?;
-    let types_status = types_resp.status();
-    let types_body = types_resp.text().await.unwrap_or_default();
-    if !types_status.is_success() {
-        return Err(anyhow!(
-            "list entity types failed: {types_status}: {}",
-            first_line(&types_body)
-        ));
-    }
-    let entity_types: Vec<VisibleEntityType> =
-        serde_json::from_str(&types_body).context("parse GET /app/api/entity-types")?;
+    let (entity_type_id, jurisdiction_id) =
+        human_entity_selection(client, base, token, jurisdiction_name).await?;
+    let request = client
+        .post(format!("{base}/app/api/entities"))
+        .json(&serde_json::json!({
+            "name": client_name,
+            "entity_type_id": entity_type_id,
+            "jurisdiction_id": jurisdiction_id,
+        }));
+    let action = format!("create the Human entity for `{client_name}`");
+    let body = send_for_body(request, token, "POST /app/api/entities", &action).await?;
+    let created: CreatedEntityId =
+        serde_json::from_str(&body).context("parse POST /app/api/entities")?;
+    Ok((created.id, jurisdiction_id))
+}
+
+/// The `Human` entity type and the named jurisdiction, read without writing
+/// anything. The scaffold runs this before creating a missing contact, so an
+/// invalid jurisdiction cannot leave a partially prepared directory behind.
+async fn human_entity_selection(
+    client: &reqwest::Client,
+    base: &str,
+    token: &str,
+    jurisdiction_name: &str,
+) -> Result<(Uuid, Uuid)> {
+    let entity_types: Vec<VisibleEntityType> = get_json(
+        client,
+        base,
+        token,
+        "/app/api/entity-types",
+        "list entity types",
+    )
+    .await?;
     let entity_type_id = entity_types
         .into_iter()
         .find(|t| t.name.eq_ignore_ascii_case("Human"))
         .map(|t| t.id)
         .ok_or_else(|| anyhow!("no `Human` entity type on this deployment"))?;
-
-    let jurisdictions_resp = client
-        .get(format!("{base}/app/api/jurisdictions"))
-        .bearer_auth(token)
-        .send()
-        .await
-        .context("GET /app/api/jurisdictions")?;
-    let jurisdictions_status = jurisdictions_resp.status();
-    let jurisdictions_body = jurisdictions_resp.text().await.unwrap_or_default();
-    if !jurisdictions_status.is_success() {
-        return Err(anyhow!(
-            "list jurisdictions failed: {jurisdictions_status}: {}",
-            first_line(&jurisdictions_body)
-        ));
-    }
-    let jurisdictions: Vec<VisibleJurisdiction> =
-        serde_json::from_str(&jurisdictions_body).context("parse GET /app/api/jurisdictions")?;
+    let jurisdictions: Vec<VisibleJurisdiction> = get_json(
+        client,
+        base,
+        token,
+        "/app/api/jurisdictions",
+        "list jurisdictions",
+    )
+    .await?;
     let jurisdiction_id = jurisdictions
         .into_iter()
         .find(|j| {
@@ -4307,89 +4182,7 @@ async fn create_human_entity(
         })
         .map(|j| j.id)
         .ok_or_else(|| anyhow!("no jurisdiction named `{jurisdiction_name}`"))?;
-
-    let create_resp = client
-        .post(format!("{base}/app/api/entities"))
-        .bearer_auth(token)
-        .json(&serde_json::json!({
-            "name": client_name,
-            "entity_type_id": entity_type_id,
-            "jurisdiction_id": jurisdiction_id,
-        }))
-        .send()
-        .await
-        .context("POST /app/api/entities")?;
-    let create_status = create_resp.status();
-    let create_body = create_resp.text().await.unwrap_or_default();
-    if !create_status.is_success() {
-        return Err(anyhow!(
-            "create the Human entity for `{client_name}` failed: {create_status}: {}",
-            first_line(&create_body)
-        ));
-    }
-    let created: CreatedEntityId =
-        serde_json::from_str(&create_body).context("parse POST /app/api/entities")?;
-    Ok((created.id, jurisdiction_id))
-}
-
-/// Validate a Human Entity's type and jurisdiction without writing anything.
-/// The scaffold runs this before creating a missing contact, so an invalid
-/// jurisdiction cannot leave a partially prepared directory behind.
-async fn validate_human_entity_selection(
-    client: &reqwest::Client,
-    base: &str,
-    token: &str,
-    jurisdiction_name: &str,
-) -> Result<()> {
-    let entity_types = client
-        .get(format!("{base}/app/api/entity-types"))
-        .bearer_auth(token)
-        .send()
-        .await
-        .context("GET /app/api/entity-types")?;
-    let status = entity_types.status();
-    let body = entity_types.text().await.unwrap_or_default();
-    if !status.is_success() {
-        return Err(anyhow!(
-            "list entity types failed: {status}: {}",
-            first_line(&body)
-        ));
-    }
-    let entity_types: Vec<VisibleEntityType> =
-        serde_json::from_str(&body).context("parse GET /app/api/entity-types")?;
-    if !entity_types
-        .iter()
-        .any(|entity_type| entity_type.name.eq_ignore_ascii_case("Human"))
-    {
-        return Err(anyhow!("no `Human` entity type on this deployment"));
-    }
-
-    let jurisdictions = client
-        .get(format!("{base}/app/api/jurisdictions"))
-        .bearer_auth(token)
-        .send()
-        .await
-        .context("GET /app/api/jurisdictions")?;
-    let status = jurisdictions.status();
-    let body = jurisdictions.text().await.unwrap_or_default();
-    if !status.is_success() {
-        return Err(anyhow!(
-            "list jurisdictions failed: {status}: {}",
-            first_line(&body)
-        ));
-    }
-    let jurisdictions: Vec<VisibleJurisdiction> =
-        serde_json::from_str(&body).context("parse GET /app/api/jurisdictions")?;
-    if !jurisdictions.iter().any(|jurisdiction| {
-        jurisdiction.name.eq_ignore_ascii_case(jurisdiction_name)
-            || jurisdiction
-                .code
-                .as_deref()
-                .is_some_and(|code| code.eq_ignore_ascii_case(jurisdiction_name))
-    }) {
-        return Err(anyhow!("no jurisdiction named `{jurisdiction_name}`"));
-    }
-    Ok(())
+    Ok((entity_type_id, jurisdiction_id))
 }
 
 async fn resolve_entity_selection(
@@ -4518,24 +4311,16 @@ pub async fn projects_create_named(
                 resolve_existing_entity(&client, &base, &token, needle).await?;
             }
             EntitySelection::HumanIn(jurisdiction_name) => {
-                validate_human_entity_selection(&client, &base, &token, jurisdiction_name).await?;
+                human_entity_selection(&client, &base, &token, jurisdiction_name).await?;
             }
         }
         let person = match existing_person {
             Some(person) => person,
             None if !client_name.trim().is_empty() => {
-                let response = client
+                let request = client
                     .post(format!("{base}/app/api/people"))
-                    .bearer_auth(&token)
-                    .json(&serde_json::json!({"name":client_name,"email":client_email,"role":"client"}))
-                    .send()
-                    .await
-                    .context("POST /app/api/people")?;
-                let status = response.status();
-                let body = response.text().await.unwrap_or_default();
-                if !status.is_success() {
-                    return Err(anyhow!("create client contact failed: {status}: {}", first_line(&body)));
-                }
+                    .json(&serde_json::json!({"name":client_name,"email":client_email,"role":"client"}));
+                let body = send_for_body(request, &token, "POST /app/api/people", "create client contact").await?;
                 serde_json::from_str::<VisiblePerson>(&body).context("parse POST /app/api/people")?
             }
             None => return Err(anyhow!("no person with email `{client_email}` — create it first with `navigator site import person <seed-file>`")),
@@ -4569,21 +4354,9 @@ pub async fn projects_create_named(
             payload["status"] = serde_json::json!("closed");
             payload["closed_at"] = serde_json::json!(closed_at);
         }
-        let response = client
-            .post(format!("{base}/app/api/projects"))
-            .bearer_auth(&token)
-            .json(&payload)
-            .send()
-            .await
-            .context("POST /app/api/projects")?;
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        if !status.is_success() {
-            return Err(anyhow!(
-                "create project `{code}` failed: {status}: {}",
-                first_line(&body)
-            ));
-        }
+        let request = client.post(format!("{base}/app/api/projects")).json(&payload);
+        let action = format!("create project `{code}`");
+        let body = send_for_body(request, &token, "POST /app/api/projects", &action).await?;
         let created: CreatedProjectResponse =
             serde_json::from_str(&body).context("parse POST /app/api/projects")?;
         println!(
@@ -4615,22 +4388,9 @@ pub async fn projects_create_named(
 /// uniqueness and closes a race between this read and the final open.
 pub async fn project_code_exists(host: Option<&str>, code: &str) -> Result<bool> {
     let (base, token) = resolve(host)?;
-    let response = reqwest::Client::new()
-        .get(format!("{base}/app/api/projects"))
-        .bearer_auth(token)
-        .send()
-        .await
-        .context("GET /app/api/projects")?;
-    let status = response.status();
-    let body = response.text().await.unwrap_or_default();
-    if !status.is_success() {
-        return Err(anyhow!(
-            "list Projects failed: {status}: {}",
-            first_line(&body)
-        ));
-    }
+    let client = reqwest::Client::new();
     let projects: Vec<serde_json::Value> =
-        serde_json::from_str(&body).context("parse GET /app/api/projects")?;
+        get_json(&client, &base, &token, "/app/api/projects", "list Projects").await?;
     Ok(projects
         .iter()
         .any(|project| project.get("code").and_then(serde_json::Value::as_str) == Some(code)))
@@ -4648,21 +4408,11 @@ pub async fn set_project_firm_brand(
     let project_id =
         crate::projects::surfaces::resolve_project_id(&base, &token, project_code).await?;
     let firm_id = resolve_firm(&base, &token, firm_name, Some(brand)).await?;
-    let response = reqwest::Client::new()
+    let request = reqwest::Client::new()
         .patch(format!("{base}/app/api/projects/{project_id}"))
-        .bearer_auth(&token)
-        .json(&serde_json::json!({ "firm_id": firm_id, "brand": brand }))
-        .send()
-        .await
-        .context("PATCH /app/api/projects/{id}")?;
-    let status = response.status();
-    let body = response.text().await.unwrap_or_default();
-    if !status.is_success() {
-        return Err(anyhow::anyhow!(
-            "set Project Firm and brand failed: {status}: {}",
-            body.lines().next().unwrap_or_default().trim()
-        ));
-    }
+        .json(&serde_json::json!({ "firm_id": firm_id, "brand": brand }));
+    let action = "set Project Firm and brand";
+    send_for_body(request, &token, "PATCH /app/api/projects/{id}", action).await?;
     Ok(())
 }
 
@@ -5014,22 +4764,11 @@ async fn prefill_from_saved_answers(
         let mut fields = saved_step_fields(&question, value)
             .with_context(|| format!("read saved answer for `{}`", question.code))?;
         fields.push(("_nav_question_code".to_string(), question.code.clone()));
-        let resp = client
+        let request = client
             .post(format!("{base}/app/lawyer/notations/{notation_id}/step"))
-            .bearer_auth(token)
-            .form(&fields)
-            .send()
-            .await
-            .context("POST step")?;
-        let status = resp.status();
-        if !status.is_success() && !status.is_redirection() {
-            let body = resp.text().await.unwrap_or_default();
-            return Err(anyhow!(
-                "prefilling `{}` failed: {}",
-                question.code,
-                server_error(status, &body),
-            ));
-        }
+            .form(&fields);
+        let action = format!("prefilling `{}`", question.code);
+        send_notation(request, token, "POST step", &action, true).await?;
         println!(
             "{} {}",
             palette::dim("prefilled"),
@@ -5282,21 +5021,14 @@ async fn fetch_notation_board(
         "{}/app/api/projects/{}/notation-inventory",
         client.base, client.project_id
     );
-    let response = client
-        .client
-        .get(&url)
-        .bearer_auth(&client.token)
-        .send()
-        .await
-        .with_context(|| format!("GET {url}"))?;
-    let status = response.status();
-    let body = response.text().await.unwrap_or_default();
-    if !status.is_success() {
-        return Err(anyhow!(
-            "list notation inventory failed: {}",
-            server_error(status, &body)
-        ));
-    }
+    let body = send_notation(
+        client.client.get(&url),
+        &client.token,
+        &format!("GET {url}"),
+        "list notation inventory",
+        false,
+    )
+    .await?;
     serde_json::from_str(&body).context("parse notation inventory")
 }
 
@@ -5340,21 +5072,11 @@ async fn notation_envelope_in(
     run(async {
         let (base, token, client) = envelope_transport(&host, project_code.as_deref()).await?;
         let url = format!("{base}/app/api/notations/{notation_id}/signature");
-        let response = client
+        let request = client
             .post(&url)
-            .bearer_auth(&token)
-            .json(&serde_json::json!({ "prepare": prepare }))
-            .send()
-            .await
-            .with_context(|| format!("POST {url}"))?;
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        if !status.is_success() {
-            return Err(anyhow!(
-                "notation envelope failed: {}",
-                server_error(status, &body)
-            ));
-        }
+            .json(&serde_json::json!({ "prepare": prepare }));
+        let call = format!("POST {url}");
+        let body = send_notation(request, &token, &call, "notation envelope", false).await?;
         let envelope: NotationEnvelope =
             serde_json::from_str(&body).with_context(|| format!("parse {url} response"))?;
         if prepare {
@@ -5520,20 +5242,9 @@ async fn notation_envelope_status_in(
     run(async {
         let (base, token, client) = envelope_transport(&host, project_code.as_deref()).await?;
         let url = format!("{base}/app/api/notations/{notation_id}/signature");
-        let response = client
-            .get(&url)
-            .bearer_auth(&token)
-            .send()
-            .await
-            .with_context(|| format!("GET {url}"))?;
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        if !status.is_success() {
-            return Err(anyhow!(
-                "notation envelope status failed: {}",
-                server_error(status, &body)
-            ));
-        }
+        let call = format!("GET {url}");
+        let action = "notation envelope status";
+        let body = send_notation(client.get(&url), &token, &call, action, false).await?;
         let envelope: NotationSignatureStatus =
             serde_json::from_str(&body).with_context(|| format!("parse {url} response"))?;
         let (Some(request_id), Some(state)) = (&envelope.signature_request_id, &envelope.state)
@@ -5887,20 +5598,9 @@ pub async fn notation_answers(
     run(async {
         let (base, token) = resolve(host)?;
         let url = format!("{base}/app/api/notations/{notation_id}/answers");
-        let response = reqwest::Client::new()
-            .get(&url)
-            .bearer_auth(&token)
-            .send()
-            .await
-            .with_context(|| format!("GET {url}"))?;
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        if !status.is_success() {
-            return Err(anyhow!(
-                "read notation answers failed: {}",
-                server_error(status, &body)
-            ));
-        }
+        let request = reqwest::Client::new().get(&url);
+        let call = format!("GET {url}");
+        let body = send_notation(request, &token, &call, "read notation answers", false).await?;
         let answers: Vec<NotationAnswer> =
             serde_json::from_str(&body).context("parse notation answers")?;
         if json {
@@ -5945,23 +5645,15 @@ pub async fn notation_answers(
 pub async fn notation_approve(host: Option<&str>, notation_id: Uuid) -> ExitCode {
     run(async {
         let (base, token) = resolve(host)?;
-        let resp = reqwest::Client::new()
+        let request = reqwest::Client::new()
             .post(format!(
                 "{base}/app/lawyer/notations/{notation_id}/approve-send"
             ))
-            .bearer_auth(&token)
             // `Content-Length: 0` — the LB rejects an empty body without an
             // explicit length.
             .header(reqwest::header::CONTENT_LENGTH, "0")
-            .body(Vec::<u8>::new())
-            .send()
-            .await
-            .context("POST approve-send")?;
-        let status = resp.status();
-        if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            return Err(anyhow!("approve failed: {}", server_error(status, &body)));
-        }
+            .body(Vec::<u8>::new());
+        send_notation(request, &token, "POST approve-send", "approve", false).await?;
         let st = fetch_status(&base, &token, notation_id).await?;
         println!(
             "{} {} — state {} (document_ready {})",
@@ -6006,26 +5698,20 @@ pub async fn notation_adopt_envelope(
         let (base, token) = resolve(host)?;
         let project_id =
             crate::projects::surfaces::resolve_project_id(&base, &token, project).await?;
-        let response = reqwest::Client::new()
+        let request = reqwest::Client::new()
             .post(format!(
                 "{base}/app/api/projects/{project_id}/envelope-adoptions"
             ))
-            .bearer_auth(token)
             .json(&serde_json::json!({
                 "envelope_id": envelope_id,
                 "template_code": template_code,
                 "source": published.source,
                 "commit_sha": published.commit_sha,
-            }))
-            .send()
-            .await
-            .context("POST envelope adoption")?;
-        let status = response.status();
-        if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
-            return Err(anyhow!("adoption failed: {}", server_error(status, &body)));
-        }
-        let result: serde_json::Value = response.json().await.context("read adopted envelope")?;
+            }));
+        let call = "POST envelope adoption";
+        let body = send_notation(request, &token, call, "adoption", false).await?;
+        let result: serde_json::Value =
+            serde_json::from_str(&body).context("read adopted envelope")?;
         println!("{}", serde_json::to_string_pretty(&result)?);
         Ok(())
     })
@@ -6036,19 +5722,13 @@ pub async fn notation_adopt_envelope(
 pub async fn notation_send(host: Option<&str>, notation_id: Uuid) -> ExitCode {
     run(async {
         let (base, token) = resolve(host)?;
-        let response = reqwest::Client::new()
+        let request = reqwest::Client::new()
             .post(format!("{base}/app/api/notations/{notation_id}/signature"))
-            .bearer_auth(&token)
-            .body(Vec::<u8>::new())
-            .send()
-            .await
-            .context("POST notation signature")?;
-        let status = response.status();
-        if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
-            return Err(anyhow!("send failed: {}", server_error(status, &body)));
-        }
-        let result: NotationStatus = response.json().await.context("read signature response")?;
+            .body(Vec::<u8>::new());
+        let call = "POST notation signature";
+        let body = send_notation(request, &token, call, "send", false).await?;
+        let result: NotationStatus =
+            serde_json::from_str(&body).context("read signature response")?;
         let request_id = result
             .signature_request_id
             .context("signature response has no request ID")?;
@@ -6089,23 +5769,13 @@ pub async fn notation_request_changes(
         if let Some(note) = note {
             form.push(("note".to_string(), note.to_string()));
         }
-        let resp = no_redirect_client()?
+        let request = no_redirect_client()?
             .post(format!(
                 "{base}/app/lawyer/notations/{notation_id}/request-changes"
             ))
-            .bearer_auth(&token)
-            .form(&form)
-            .send()
-            .await
-            .context("POST request-changes")?;
-        let status = resp.status();
-        if !(status.is_success() || status.is_redirection()) {
-            let body = resp.text().await.unwrap_or_default();
-            return Err(anyhow!(
-                "request-changes failed: {}",
-                server_error(status, &body)
-            ));
-        }
+            .form(&form);
+        let call = "POST request-changes";
+        send_notation(request, &token, call, "request-changes", true).await?;
         println!(
             "{} {} — flagged {} for re-collection",
             palette::dim("sent back for changes — notation"),
@@ -6142,18 +5812,10 @@ pub async fn notation_update(
             form.push((format!("a:{code}"), value.to_string()));
         }
         let (base, token) = resolve(host)?;
-        let resp = no_redirect_client()?
+        let request = no_redirect_client()?
             .post(format!("{base}/app/lawyer/notations/{notation_id}/reask"))
-            .bearer_auth(&token)
-            .form(&form)
-            .send()
-            .await
-            .context("POST reask")?;
-        let status = resp.status();
-        if !(status.is_success() || status.is_redirection()) {
-            let body = resp.text().await.unwrap_or_default();
-            return Err(anyhow!("update failed: {}", server_error(status, &body)));
-        }
+            .form(&form);
+        send_notation(request, &token, "POST reask", "update", true).await?;
         let st = fetch_status(&base, &token, notation_id).await?;
         println!(
             "{} {} — state {}",
@@ -6415,6 +6077,11 @@ fn integrity_failure(
         ),
         Err(error) => error.to_string(),
     }
+}
+
+/// Decode a document door's JSON answer.
+fn document_json(text: &str, verb: &str) -> Result<serde_json::Value> {
+    serde_json::from_str(text).with_context(|| format!("parse document {verb} response"))
 }
 
 fn first_line(body: &str) -> String {

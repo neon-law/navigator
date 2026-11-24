@@ -168,27 +168,77 @@ pub(super) fn run_opening(open_browser: bool) -> Result<()> {
     if std::env::var("NAVIGATOR_ENVIRONMENT").as_deref() != Ok("dev") {
         bail!("dev serve requires NAVIGATOR_ENVIRONMENT=dev");
     }
-    let url = std::env::var("NAV_BASE_URL").unwrap_or_else(|_| {
+    let url = preview_url(
+        std::env::var("NAV_BASE_URL").ok(),
+        std::env::var("PORT").ok(),
+    )?;
+    tokio::runtime::Runtime::new()?.block_on(async {
+        tokio::select! {
+            result = watch(&root, &url, open_browser) => result,
+            () = portal::hosting::shutdown_signal() => Ok(()),
+        }
+    })
+}
+
+/// The loopback origin the preview answers on: `NAV_BASE_URL`, else `PORT` on localhost.
+fn preview_url(base: Option<String>, port: Option<String>) -> Result<String> {
+    let url = base.unwrap_or_else(|| {
         format!(
             "http://localhost:{}",
-            std::env::var("PORT").unwrap_or_else(|_| "3001".to_string())
+            port.unwrap_or_else(|| "3001".to_string())
         )
     });
     let parsed = reqwest::Url::parse(&url)?;
     if !matches!(parsed.host_str(), Some("localhost" | "127.0.0.1")) {
         bail!("dev serve requires a loopback NAV_BASE_URL");
     }
-    tokio::runtime::Runtime::new()?.block_on(async {
-        tokio::select! {
-            result = watch(&root, url.trim_end_matches('/'), open_browser) => result,
-            () = portal::hosting::shutdown_signal() => Ok(()),
-        }
-    })
+    Ok(url.trim_end_matches('/').to_owned())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_preview_only_answers_on_a_loopback_origin() {
+        assert_eq!(preview_url(None, None).unwrap(), "http://localhost:3001");
+        assert_eq!(
+            preview_url(None, Some("3107".to_owned())).unwrap(),
+            "http://localhost:3107"
+        );
+        assert_eq!(
+            preview_url(
+                Some("http://127.0.0.1:3004/".to_owned()),
+                Some("9".to_owned())
+            )
+            .unwrap(),
+            "http://127.0.0.1:3004"
+        );
+        assert_eq!(
+            preview_url(Some("https://www.example.com".to_owned()), None)
+                .unwrap_err()
+                .to_string(),
+            "dev serve requires a loopback NAV_BASE_URL"
+        );
+        assert!(preview_url(Some("localhost".to_owned()), None).is_err());
+    }
+
+    #[test]
+    fn each_revision_stamp_is_newer_so_open_browsers_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(revision(dir.path()).is_err(), "no worktree environment");
+        std::fs::create_dir(dir.path().join(".devx")).unwrap();
+        let stamp = || -> u128 {
+            revision(dir.path()).unwrap();
+            std::fs::read_to_string(dir.path().join(".devx/revision"))
+                .unwrap()
+                .parse()
+                .unwrap()
+        };
+        let first = stamp();
+        std::thread::sleep(Duration::from_millis(2));
+        assert!(stamp() > first);
+    }
 
     #[test]
     fn snapshots_separate_assets_and_detect_deletes_without_watching_build_outputs() {

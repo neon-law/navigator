@@ -17,45 +17,11 @@
 //! shared [`workflows::start_workflow`] helper attaches the header only when
 //! the token is present and non-empty, so the same binary works in both.
 
-use anyhow::{Context, Result};
-
 #[tokio::main]
-async fn main() -> Result<()> {
-    let _ = dotenvy::dotenv();
-    let _ = dotenvy::from_path(".devx/env");
-    let _telemetry = telemetry::init("navigator-notation-reset-trigger");
-
-    // The DBOS engine's standalone schedule owns this job when its switch
-    // is on: there is no worker ingress route to submit to, so the CronJob
-    // exits without submitting and the engine fires the workflow itself.
-    // With the switch off this binary drives the Restate submit.
-    if workflows::trigger::dbos_owns_schedule("NAVIGATOR_DBOS_NOTATION_RESET_ENABLED", |name| {
-        std::env::var(name).ok()
-    })
-    .context("read NAVIGATOR_DBOS_NOTATION_RESET_ENABLED")?
-    {
-        tracing::info!("DBOS engine owns the NotationReset schedule; skipping the Restate submit");
-        println!("DBOS engine owns NotationReset; Restate submit skipped");
-        return Ok(());
-    }
-
-    let ingress = std::env::var("RESTATE_INGRESS_URL")
-        .context("RESTATE_INGRESS_URL must be set (the Restate ingress endpoint)")?;
-    let auth_token = std::env::var("RESTATE_AUTH_TOKEN").ok();
-    let run_id = workflows_service::notation_reset::run_key(chrono::Utc::now());
-    let _response = workflows::start_workflow(
-        &ingress,
-        auth_token.as_deref(),
-        "NotationReset",
-        &run_id,
-        "run",
-        &serde_json::json!({}),
-        true,
+async fn main() -> anyhow::Result<()> {
+    workflows::trigger::run_cron_trigger(
+        "navigator-notation-reset-trigger",
+        workflows_service::cron_triggers::notation_reset(chrono::Utc::now()),
     )
     .await
-    .context("triggering NotationReset workflow")?;
-
-    tracing::info!(%run_id, "notation reset triggered");
-    println!("triggered NotationReset/{run_id}");
-    Ok(())
 }

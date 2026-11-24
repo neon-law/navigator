@@ -1564,6 +1564,93 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn the_command_exits_by_drift_and_by_whether_the_report_could_be_produced() {
+        use super::run;
+        use crate::projects::test_login::{answer, site};
+        use std::process::ExitCode;
+        let inventory = serde_json::json!([
+            {"id": uuid::Uuid::new_v4(), "code": "acme", "status": "open"},
+            {"id": uuid::Uuid::new_v4(), "code": "gamma", "status": "pitch"},
+        ]);
+        let (server, _login) = site(inventory).await;
+        let host = server.uri();
+        let host = Some(host.as_str());
+        let root = tempfile::tempdir().unwrap();
+        checkout(root.path(), "acme", Some("project: acme\n"));
+        let drift = |all, json, parity| run(host, root.path(), all, json, parity);
+
+        assert_eq!(drift(false, false, false).await, ExitCode::from(2));
+        let codes = |codes: &[&str]| serde_json::json!({"project_codes": codes});
+        let door = "/app/api/project-repositories";
+        {
+            let _live = Mock::given(method("GET"))
+                .and(path(door))
+                .respond_with(ResponseTemplate::new(200).set_body_json(codes(&["acme", "gamma"])))
+                .mount_as_scoped(&server)
+                .await;
+            // `gamma` is active with no checkout, in the table and as JSON.
+            assert_eq!(drift(false, false, false).await, ExitCode::from(1));
+            assert_eq!(drift(true, true, true).await, ExitCode::from(1));
+            let missing = root.path().join("absent");
+            assert_eq!(
+                run(host, &missing, false, false, false).await,
+                ExitCode::from(2)
+            );
+            let signed_out = Some("signed-out.example.test");
+            assert_eq!(
+                run(signed_out, root.path(), false, false, false).await,
+                ExitCode::from(2)
+            );
+        }
+
+        checkout(root.path(), "gamma", Some("project: gamma\n"));
+        checkout(
+            root.path(),
+            "beta",
+            Some("project: beta\nno_live_row: the matter closed\n"),
+        );
+        answer(&server, "GET", door, 200, codes(&["acme", "gamma"])).await;
+        for (all, json) in [(false, false), (true, false), (false, true)] {
+            assert_eq!(drift(all, json, false).await, ExitCode::SUCCESS);
+        }
+        // Neither checkout has an origin to compare with its mirror.
+        assert_eq!(drift(true, false, true).await, ExitCode::from(1));
+
+        let _unlisted = Mock::given(method("GET"))
+            .and(path("/app/api/projects"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("not an inventory"))
+            .with_priority(1)
+            .mount_as_scoped(&server)
+            .await;
+        assert_eq!(drift(false, false, false).await, ExitCode::from(2));
+    }
+
+    #[test]
+    fn the_json_report_carries_each_findings_severity_and_sentence() {
+        let report = analyze(
+            &[
+                repository("acme"),
+                declared_rowless("beta"),
+                declaring("gamma", "delta"),
+            ],
+            &live(&["acme"]),
+        );
+        let value = as_json(&report, "/srv/checkouts");
+        assert_eq!(value["scan_root"], "/srv/checkouts");
+        assert_eq!(value["repositories"], 3);
+        assert_eq!(value["reconciled"], false);
+        let findings = value["findings"].as_array().unwrap();
+        let severities: Vec<_> = findings
+            .iter()
+            .map(|finding| finding["severity"].as_str().unwrap())
+            .collect();
+        assert!(severities.contains(&"ok") && severities.contains(&"fail"));
+        for (finding, source) in findings.iter().zip(&report.findings) {
+            assert_eq!(finding["detail"], source.detail());
+        }
+    }
+
     #[test]
     fn the_scan_reads_each_checkouts_declared_code_and_reason() {
         let root = tempfile::tempdir().unwrap();

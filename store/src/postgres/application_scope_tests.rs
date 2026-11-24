@@ -401,4 +401,6 @@ async fn voice_assignments_and_triage_keep_billing_in_the_owning_application_poo
     .await;
 }
 
+mod docusign_completion_tests;
+mod firm_esign_tests;
 mod wrapper_tests;

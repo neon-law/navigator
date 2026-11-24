@@ -179,113 +179,104 @@ fn fmt_duration(secs: i64) -> String {
 
 /// Run the doctor against a namespace: shell `kubectl`, parse, classify, print.
 pub fn run(namespace: &str) -> Result<()> {
-    let now = Utc::now();
-    let waiting = pod_waiting_reasons(namespace)?;
-    let jobs = observe_jobs(namespace, now, &waiting)?;
-    let workloads = observe_workloads(namespace)?;
-
-    let findings = diagnose(namespace, &jobs, &workloads);
-    let crit = findings
-        .iter()
-        .filter(|f| f.severity == Severity::Critical)
-        .count();
-
-    println!("hudson ops doctor — namespace {namespace}");
-    println!(
-        "  {} job(s), {} workload(s) inspected\n",
-        jobs.len(),
-        workloads.len()
-    );
-    for f in &findings {
-        println!("[{}] {}: {}", f.severity.marker(), f.subject, f.detail);
-        if let Some(remedy) = &f.remedy {
-            println!("       ↳ {remedy}");
-        }
-    }
-    println!(
-        "\nRestate ingress/registration is a separate axis: a 401 (stale RESTATE_AUTH_TOKEN) or \
-         404 (service not re-registered) shows in the Restate Cloud console → Invocations, not \
-         here. See docs/observability.md and docs/durable-workflows.md."
-    );
+    let waiting = pod_waiting_reasons(&kubectl_json(namespace, "pods")?);
+    let jobs = observe_jobs(&kubectl_json(namespace, "jobs")?, Utc::now(), &waiting);
+    let workloads = observe_workloads(&kubectl_json(namespace, "deployments")?);
+    let (report, crit) = report(namespace, &jobs, &workloads);
+    println!("{report}");
     if crit > 0 {
         anyhow::bail!("{crit} critical finding(s)");
     }
     Ok(())
 }
 
-/// `job name -> container waiting reason` for pods in the namespace.
-fn pod_waiting_reasons(namespace: &str) -> Result<Vec<(String, String)>> {
-    let json = kubectl_json(namespace, "pods")?;
+/// The printed diagnosis and its count of critical findings.
+fn report(namespace: &str, jobs: &[JobObs], workloads: &[WorkloadObs]) -> (String, usize) {
+    use std::fmt::Write as _;
+    let findings = diagnose(namespace, jobs, workloads);
+    let mut out = format!(
+        "hudson ops doctor — namespace {namespace}\n  {} job(s), {} workload(s) inspected\n\n",
+        jobs.len(),
+        workloads.len()
+    );
+    for f in &findings {
+        let _ = writeln!(out, "[{}] {}: {}", f.severity.marker(), f.subject, f.detail);
+        if let Some(remedy) = &f.remedy {
+            let _ = writeln!(out, "       ↳ {remedy}");
+        }
+    }
+    out +=
+        "\nRestate ingress/registration is a separate axis: a 401 (stale RESTATE_AUTH_TOKEN) or \
+            404 (service not re-registered) shows in the Restate Cloud console → Invocations, not \
+            here. See docs/observability.md and docs/durable-workflows.md.";
+    let crit = findings
+        .iter()
+        .filter(|f| f.severity == Severity::Critical)
+        .count();
+    (out, crit)
+}
+
+/// `job name -> container waiting reason` for the pods in `kubectl get pods`.
+fn pod_waiting_reasons(pods: &Value) -> Vec<(String, String)> {
     let mut out = Vec::new();
-    for pod in items(&json) {
+    for pod in items(pods) {
         let owner = pod["metadata"]["ownerReferences"]
             .as_array()
             .and_then(|refs| refs.iter().find(|r| r["kind"] == "Job"))
             .and_then(|r| r["name"].as_str());
         let Some(owner) = owner else { continue };
-        let statuses = ["containerStatuses", "initContainerStatuses"];
-        for key in statuses {
-            if let Some(arr) = pod["status"][key].as_array() {
-                for cs in arr {
-                    if let Some(reason) = cs["state"]["waiting"]["reason"].as_str() {
-                        out.push((owner.to_string(), reason.to_string()));
-                    }
+        for key in ["containerStatuses", "initContainerStatuses"] {
+            for cs in pod["status"][key].as_array().into_iter().flatten() {
+                if let Some(reason) = cs["state"]["waiting"]["reason"].as_str() {
+                    out.push((owner.to_string(), reason.to_string()));
                 }
             }
         }
     }
-    Ok(out)
+    out
 }
 
-fn observe_jobs(
-    namespace: &str,
-    now: DateTime<Utc>,
-    waiting: &[(String, String)],
-) -> Result<Vec<JobObs>> {
-    let json = kubectl_json(namespace, "jobs")?;
-    let mut out = Vec::new();
-    for job in items(&json) {
-        let name = job["metadata"]["name"]
-            .as_str()
-            .unwrap_or_default()
-            .to_string();
-        let age_secs = job["status"]["startTime"]
-            .as_str()
-            .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
-            .map(|t| (now - t.with_timezone(&Utc)).num_seconds());
-        let waiting_reason = waiting
-            .iter()
-            .find(|(j, _)| *j == name)
-            .map(|(_, r)| r.clone());
-        out.push(JobObs {
-            name,
-            active: job["status"]["active"].as_u64().unwrap_or(0),
-            failed: job["status"]["failed"].as_u64().unwrap_or(0),
-            age_secs,
-            waiting_reason,
-        });
-    }
-    Ok(out)
+fn observe_jobs(jobs: &Value, now: DateTime<Utc>, waiting: &[(String, String)]) -> Vec<JobObs> {
+    items(jobs)
+        .iter()
+        .map(|job| {
+            let name = job["metadata"]["name"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
+            JobObs {
+                active: job["status"]["active"].as_u64().unwrap_or(0),
+                failed: job["status"]["failed"].as_u64().unwrap_or(0),
+                age_secs: job["status"]["startTime"]
+                    .as_str()
+                    .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
+                    .map(|t| (now - t.with_timezone(&Utc)).num_seconds()),
+                waiting_reason: waiting
+                    .iter()
+                    .find(|(j, _)| *j == name)
+                    .map(|(_, r)| r.clone()),
+                name,
+            }
+        })
+        .collect()
 }
 
-fn observe_workloads(namespace: &str) -> Result<Vec<WorkloadObs>> {
-    let json = kubectl_json(namespace, "deployments")?;
-    let mut out = Vec::new();
-    for d in items(&json) {
-        out.push(WorkloadObs {
+fn observe_workloads(deployments: &Value) -> Vec<WorkloadObs> {
+    items(deployments)
+        .iter()
+        .map(|d| WorkloadObs {
             name: d["metadata"]["name"]
                 .as_str()
                 .unwrap_or_default()
                 .to_string(),
             ready: d["status"]["readyReplicas"].as_u64().unwrap_or(0),
             desired: d["spec"]["replicas"].as_u64().unwrap_or(0),
-        });
-    }
-    Ok(out)
+        })
+        .collect()
 }
 
-fn items(json: &Value) -> Vec<Value> {
-    json["items"].as_array().cloned().unwrap_or_default()
+fn items(json: &Value) -> &[Value] {
+    json["items"].as_array().map_or(&[], Vec::as_slice)
 }
 
 fn kubectl_json(namespace: &str, kind: &str) -> Result<Value> {
@@ -304,7 +295,10 @@ fn kubectl_json(namespace: &str, kind: &str) -> Result<Value> {
 
 #[cfg(test)]
 mod tests {
-    use super::{diagnose, fmt_duration, JobObs, Severity, WorkloadObs};
+    use super::{
+        diagnose, fmt_duration, observe_jobs, observe_workloads, pod_waiting_reasons, report,
+        JobObs, Severity, WorkloadObs,
+    };
 
     fn job(name: &str, active: u64, age: Option<i64>, waiting: Option<&str>) -> JobObs {
         JobObs {
@@ -393,5 +387,75 @@ mod tests {
         assert_eq!(fmt_duration(241_200), "2d19h");
         assert_eq!(fmt_duration(900), "15m");
         assert_eq!(fmt_duration(5_400), "1h30m");
+    }
+
+    #[test]
+    fn kubectl_output_becomes_observations_of_the_wedged_job_and_its_workload() {
+        let pods = serde_json::json!({"items": [
+            {"metadata": {"ownerReferences": [{"kind": "Job", "name": "trigger-1"}]},
+             "status": {"initContainerStatuses": [
+                 {"state": {"waiting": {"reason": "ImagePullBackOff"}}}]}},
+            {"metadata": {"ownerReferences": [{"kind": "ReplicaSet", "name": "web-1"}]},
+             "status": {"containerStatuses": [
+                 {"state": {"waiting": {"reason": "CrashLoopBackOff"}}}]}},
+            {"metadata": {"ownerReferences": [{"kind": "Job", "name": "trigger-2"}]},
+             "status": {"containerStatuses": [{"state": {"running": {}}}]}}
+        ]});
+        let waiting = pod_waiting_reasons(&pods);
+        assert_eq!(
+            waiting,
+            [("trigger-1".to_owned(), "ImagePullBackOff".to_owned())]
+        );
+
+        let now = chrono::DateTime::parse_from_rfc3339("2026-01-02T00:20:00Z")
+            .unwrap()
+            .to_utc();
+        let jobs = observe_jobs(
+            &serde_json::json!({"items": [
+                {"metadata": {"name": "trigger-1"},
+                 "status": {"active": 1, "startTime": "2026-01-02T00:00:00Z"}},
+                {"metadata": {"name": "trigger-2"}, "status": {"failed": 2}}
+            ]}),
+            now,
+            &waiting,
+        );
+        assert_eq!(
+            jobs,
+            [
+                job("trigger-1", 1, Some(1_200), Some("ImagePullBackOff")),
+                JobObs {
+                    failed: 2,
+                    ..job("trigger-2", 0, None, None)
+                },
+            ]
+        );
+        assert!(observe_jobs(&serde_json::json!({}), now, &waiting).is_empty());
+
+        let workloads = observe_workloads(&serde_json::json!({"items": [
+            {"metadata": {"name": "web"}, "spec": {"replicas": 2}, "status": {"readyReplicas": 1}}
+        ]}));
+        assert_eq!(
+            workloads,
+            [WorkloadObs {
+                name: "web".into(),
+                ready: 1,
+                desired: 2
+            }]
+        );
+
+        let (text, critical) = report("navigator", &jobs, &workloads);
+        assert!(critical >= 2, "{text}");
+        assert!(text.starts_with(
+            "hudson ops doctor — namespace navigator\n  2 job(s), 1 workload(s) inspected\n\n[CRIT] "
+        ));
+        assert!(text.contains("\n       ↳ kubectl "), "{text}");
+        assert!(text.ends_with("docs/durable-workflows.md."));
+    }
+
+    #[test]
+    fn a_healthy_namespace_reports_no_critical_finding() {
+        let (text, critical) = report("navigator", &[], &[]);
+        assert_eq!(critical, 0);
+        assert!(text.contains("0 job(s), 0 workload(s) inspected"));
     }
 }

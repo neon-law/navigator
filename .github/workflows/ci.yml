@@ -900,6 +900,7 @@ jobs:
           native_fi+=')$/)'
           # These cases share source files with compatibility tests but run with PostgreSQL or in memory only.
           calendar='(package(workflows-service) & test(/::(calendar_failure_still_posts_the_open_project_notice|the_daily_trigger_runs_at_0333_utc_in_every_manifest)$/))'
+          calendar+=' | (binary(=dbos) & test(/^(archives|billing_canary|billing_digest|ceo_digest|deadline_mirror|dri_digest|effects|executors|general_nag|heartbeat|manual_schedules|profit_digest|project_calendar|purchase_activation|retention_purge|schedules)::/))'
           cargo nextest run --workspace --no-fail-fast --profile ci \
               -E "($(cat /tmp/surreal-free/nextest-filter)) | ($native_fi) | ($calendar)" \
               2>&1 | tee /tmp/navigator-workspace-tests.log
@@ -979,7 +980,7 @@ jobs:
           # counter-file location into this shell only, so a later step would
           # not find the profile data.
           #
-          # The required floor is 90.0%, measured without SurrealDB. ENG-1375
+          # The required floor is 92.0%, measured without SurrealDB. ENG-1375
           # raises it to 95.0% as domains and tests move to PostgreSQL.
           #
           # Raising the floor means moving four constants together — the
@@ -1042,9 +1043,9 @@ jobs:
           # redacted `Debug`, cookie/state serialization, the driver command,
           # capability shape, port polling — stay counted in
           # `scraper/session.rs` with their tests.
-          # The floor is 90.0% (ENG-1375 raises it back to 95.0%). The per-file
+          # The floor is 92.0% (ENG-1375 raises it to 95.0%). The per-file
           # table this prints is the diagnostic when it trips.
-          cargo llvm-cov report --fail-under-lines 90.0 \
+          cargo llvm-cov report --fail-under-lines 92.0 \
               --ignore-filename-regex "(deploy/src/devx/(browser_e2e|chrome|e2e|seaweedfs|orchestrate|staging)|deploy/src/devx/forgejo/(cluster|oidc|smoke)|deploy/src/devx/email_summary_e2e/(harness|scenarios)|features/src/webdriver|deploy/src/scraper/browser)\\.rs\$|$(cat /tmp/surreal-free/coverage-ignore)"
       - name: stop covered PostgreSQL fixture
         if: always()

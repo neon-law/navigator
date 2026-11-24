@@ -14,6 +14,7 @@ billing.workspace = true
 chrono.workspace = true
 chrono-tz = { workspace = true, optional = true }
 cloud.workspace = true
+dotenvy.workspace = true
 # DBOS durable execution (`dbos_engine`), behind the `dbos` feature so only the
 # processes that host an executor — `portal` (the web process) and
 # `workflows-service` — compile the SDK.

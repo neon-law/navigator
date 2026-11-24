@@ -851,4 +851,94 @@ mod tests {
         );
         assert_eq!(code, ExitCode::SUCCESS);
     }
+
+    /// A draft on disk, the pull-request title that goes with it, and no range.
+    fn drafted(dir: &Path, body: &str, title: &str) -> Sources {
+        let file = dir.join("draft.md");
+        std::fs::write(&file, body).unwrap();
+        let pr_body_file = dir.join("pr-body.md");
+        std::fs::write(&pr_body_file, "Summary of the change.\n").unwrap();
+        Sources {
+            file: Some(file),
+            pr_title: Some(title.to_string()),
+            pr_body_file: Some(pr_body_file),
+            range: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_term_only_check_runs_offline_and_names_each_carrier() {
+        let dir = tempfile::tempdir().unwrap();
+        let terms = ["sample marker".to_string()];
+        let clean = drafted(
+            dir.path(),
+            "The template cites the wrong rule.\n",
+            "Fix rule",
+        );
+        assert_eq!(
+            run(clean, &terms, &[], false, None).await,
+            ExitCode::SUCCESS
+        );
+        let named = drafted(dir.path(), "sample marker reported it.\n", "Fix rule");
+        assert_eq!(
+            run(named, &terms, &[], false, None).await,
+            ExitCode::FAILURE
+        );
+        let titled = drafted(dir.path(), "Reported.\n", "Fix sample marker's letter");
+        assert_eq!(
+            run(titled, &terms, &[], false, None).await,
+            ExitCode::FAILURE
+        );
+        let unreadable = Sources {
+            file: Some(dir.path().join("absent.md")),
+            ..Sources::default()
+        };
+        assert_eq!(
+            run(unreadable, &terms, &[], false, None).await,
+            ExitCode::from(2)
+        );
+        let not_a_range = Sources {
+            range: Some("HEAD".to_string()),
+            ..Sources::default()
+        };
+        assert_eq!(
+            run(not_a_range, &terms, &[], false, None).await,
+            ExitCode::from(2)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_project_check_reads_private_terms_with_the_stored_login() {
+        use crate::projects::test_login::{answer, site};
+        let dir = tempfile::tempdir().unwrap();
+        let id = uuid::Uuid::new_v4();
+        let refused = uuid::Uuid::new_v4();
+        let (server, _login) = site(serde_json::json!([
+            {"id": id, "code": "cruller-estate"},
+            {"id": refused, "code": "beta"},
+        ]))
+        .await;
+        let host = server.uri();
+        let terms = serde_json::json!({
+            "code": "cruller-estate",
+            "name": "Cruller Estate",
+            "identifiers": [],
+            "participants": [{"name": "Harper Cruller", "email": "harper@crullers.example", "phone": null}],
+        });
+        let door = format!("/app/api/projects/{id}/private-terms");
+        answer(&server, "GET", &door, 200, terms).await;
+        let one = ["cruller-estate".to_string()];
+        let draft = |body: &str| drafted(dir.path(), body, "Fix rule");
+        let here = Some(host.as_str());
+        let clean = run(draft("Wrong rule.\n"), &[], &one, false, here).await;
+        assert_eq!(clean, ExitCode::SUCCESS);
+        let named = run(draft("Harper Cruller wrote.\n"), &[], &one, false, here).await;
+        assert_eq!(named, ExitCode::FAILURE);
+        // `beta` refuses its terms, so an all-Projects scan is incomplete.
+        let partial = run(draft("Wrong rule.\n"), &[], &[], true, here).await;
+        assert_eq!(partial, ExitCode::from(2));
+        let elsewhere = Some("signed-out.example.test");
+        let signed_out = run(draft("Wrong rule.\n"), &[], &one, false, elsewhere).await;
+        assert_eq!(signed_out, ExitCode::from(2));
+    }
 }

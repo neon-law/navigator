@@ -662,6 +662,182 @@ mod tests {
         std::fs::read_to_string(path.join("SKILL.md")).unwrap()
     }
 
+    /// A checkout bound to `host` and `firm`, or one naming neither.
+    fn hosted(root: &Path, code: &str, binding: Option<(&str, Option<&str>)>) {
+        let dir = root.join(code);
+        std::fs::create_dir_all(&dir).unwrap();
+        let manifest = match binding {
+            Some((host, Some(firm))) => {
+                format!("project:\n  name: {code}\n  host: {host}\n  firm: {firm}\n")
+            }
+            Some((host, None)) => format!("project:\n  name: {code}\n  host: {host}\n"),
+            None => format!("project: {code}\n"),
+        };
+        std::fs::write(dir.join("navigator.yaml"), manifest).unwrap();
+        std::fs::write(dir.join(".gitignore"), ".claude/skills/\n").unwrap();
+    }
+
+    #[tokio::test]
+    async fn sync_names_what_each_firm_or_host_is_missing_and_a_dry_run_writes_nothing() {
+        use crate::projects::test_login::{answer, site};
+        let (server, _login) = site(serde_json::json!([])).await;
+        let host = server.uri();
+        let libraries = serde_json::json!([
+            {"slug": "sample-firm", "repository_url": "https://forge.example.test/sample-firm/library"},
+            {"slug": "bare-firm", "repository_url": null},
+            {"slug": "invalid slug", "repository_url": null},
+        ]);
+        answer(&server, "GET", "/app/api/firm-libraries", 200, libraries).await;
+        let root = tempfile::tempdir().unwrap();
+        let here = host.as_str();
+        hosted(root.path(), "alpha", Some((here, Some("sample-firm"))));
+        hosted(root.path(), "beta", Some((here, Some("unlisted-firm"))));
+        hosted(root.path(), "gamma", Some((here, None)));
+        hosted(root.path(), "delta", Some((here, Some("bare-firm"))));
+        hosted(root.path(), "epsilon", Some((here, Some("invalid slug"))));
+        hosted(root.path(), "eta", None);
+        let elsewhere = ("signed-out.example.test", Some("sample-firm"));
+        hosted(root.path(), "zeta", Some(elsewhere));
+
+        let report = sync(root.path(), &host, true).await.unwrap();
+        report.print(true);
+        for expected in [
+            "could not read https://signed-out.example.test: ".to_string(),
+            format!("beta: Firm `unlisted-firm` is not one of your Firms on {host}"),
+            format!("gamma: navigator.yaml names no `firm` and {host} lists 3 Firms for you"),
+            format!("eta: navigator.yaml names no `firm` and {host} lists 3 Firms for you"),
+            "Firm `bare-firm` has no Firm Library repository on its host".to_string(),
+            "Firm slug `invalid slug` is not a valid folder name".to_string(),
+        ] {
+            assert!(
+                report
+                    .missing
+                    .iter()
+                    .any(|line| line.starts_with(&expected)),
+                "missing `{expected}` in {:?}",
+                report.missing
+            );
+        }
+        assert!(!report.changes.is_empty());
+        assert!(!root.path().join("AGENTS.md").exists());
+        assert!(!root.path().join(FIRM_DIRECTORY).exists());
+    }
+
+    #[tokio::test]
+    async fn a_firm_library_is_cloned_fast_forwarded_and_removed_only_without_local_edits() {
+        use crate::projects::lifecycle::git_text;
+        use crate::projects::test_login::{jj_stand_in, site};
+        use wiremock::matchers::{method, path};
+        let _jj = jj_stand_in();
+        let temp = tempfile::tempdir().unwrap();
+        let bare = temp.path().join("library.git");
+        let seed = temp.path().join("seed");
+        let skill = seed.join("skills/intake/SKILL.md");
+        std::fs::create_dir_all(skill.parent().unwrap()).unwrap();
+        let publish = |body: &str| {
+            std::fs::write(&skill, body).unwrap();
+            git_text(&seed, &["add", "--all"]).unwrap();
+            let commit = [
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "--no-gpg-sign",
+                "--quiet",
+                "-m",
+                "Library",
+            ];
+            git_text(&seed, &commit).unwrap();
+            git_text(&seed, &["push", "--quiet", bare.to_str().unwrap(), "main"]).unwrap();
+        };
+        git_text(temp.path(), &["init", "--quiet", "--bare", "library.git"]).unwrap();
+        git_text(&seed, &["init", "--quiet", "--initial-branch=main"]).unwrap();
+        publish("---\nname: intake\n---\nFirst.\n");
+        // Git reads the hosted library URL from the local bare repository.
+        let url = "https://forge.example.test/sample-firm/library";
+        std::env::set_var("GIT_CONFIG_COUNT", "1");
+        std::env::set_var(
+            "GIT_CONFIG_KEY_0",
+            format!("url.{}.insteadOf", bare.display()),
+        );
+        std::env::set_var("GIT_CONFIG_VALUE_0", url);
+
+        let (server, _login) = site(serde_json::json!([])).await;
+        let host = server.uri();
+        let root = temp.path().join("checkouts");
+        hosted(&root, "alpha", None);
+        let library = root.join(FIRM_DIRECTORY).join("sample-firm");
+        let linked = root.join("alpha").join(CLAUDE_SKILLS).join("intake");
+        {
+            let listed = serde_json::json!([{"slug": "sample-firm", "repository_url": url}]);
+            let _libraries = wiremock::Mock::given(method("GET"))
+                .and(path("/app/api/firm-libraries"))
+                .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(listed))
+                .mount_as_scoped(&server)
+                .await;
+            let report = sync(&root, &host, false).await.unwrap();
+            assert!(report.missing.is_empty(), "{:?}", report.missing);
+            assert!(skill_text(&linked).ends_with("First.\n"));
+
+            publish("---\nname: intake\n---\nSecond.\n");
+            sync(&root, &host, false).await.unwrap();
+            assert!(skill_text(&linked).ends_with("Second.\n"));
+
+            std::fs::write(library.join(".jj/diff"), "M skills/intake/SKILL.md\n").unwrap();
+            let report = sync(&root, &host, false).await.unwrap();
+            assert_eq!(
+                report.missing,
+                vec![format!(
+                    "Firm `sample-firm` library {url}: has local edits; land them through a \
+                     reviewed change, then sync again"
+                )]
+            );
+        }
+
+        // The host lists no Firm now, so the library backs no checkout.
+        let none = serde_json::json!([]);
+        crate::projects::test_login::answer(&server, "GET", "/app/api/firm-libraries", 200, none)
+            .await;
+        let kept = sync(&root, &host, false).await.unwrap();
+        assert!(kept.notes.iter().any(|note| note.contains("left in place")));
+        assert!(library.is_dir());
+        std::fs::remove_file(library.join(".jj/diff")).unwrap();
+        let planned = sync(&root, &host, true).await.unwrap();
+        let removal = format!("remove {FIRM_DIRECTORY}/sample-firm: no checkout uses this Firm");
+        assert!(planned.changes.contains(&removal), "{:?}", planned.changes);
+        assert!(library.is_dir());
+        let removed = sync(&root, &host, false).await.unwrap();
+        assert!(removed.changes.contains(&removal));
+        assert!(!library.exists());
+    }
+
+    #[tokio::test]
+    async fn the_sole_firm_backs_an_unnamed_checkout_and_an_unreachable_library_is_reported() {
+        use crate::projects::test_login::{answer, site};
+        let (server, _login) = site(serde_json::json!([])).await;
+        let host = server.uri();
+        let libraries =
+            serde_json::json!([{"slug": "sample-firm", "repository_url": "/srv/git/library"}]);
+        answer(&server, "GET", "/app/api/firm-libraries", 200, libraries).await;
+        let root = tempfile::tempdir().unwrap();
+        hosted(root.path(), "alpha", None);
+        let stale = root.path().join(FIRM_DIRECTORY).join("former-firm");
+        std::fs::create_dir_all(&stale).unwrap();
+
+        let report = sync(root.path(), &host, false).await.unwrap();
+        report.print(false);
+        assert_eq!(
+            report.missing,
+            vec!["Firm `sample-firm` library /srv/git/library: unsupported repository transport"]
+        );
+        assert!(report.notes.contains(&format!(
+            "{FIRM_DIRECTORY}/former-firm backs no checkout but has local edits; left in place"
+        )));
+        assert!(stale.is_dir());
+        assert!(root.path().join("AGENTS.md").is_file());
+    }
+
     #[test]
     fn an_empty_root_gets_agents_skills_and_relative_claude_links() {
         let root = tempfile::tempdir().unwrap();

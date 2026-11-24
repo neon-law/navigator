@@ -140,7 +140,11 @@ fn render(
         )
     })?;
 
-    let fields = match forms::fill_values(&code, &answer_map(answers)) {
+    // Answers reach an `AcroForm` verbatim, keyed by question code: the
+    // Markdown-safe `**…**` wrapping the body renderer applies is for
+    // typeset prose, and a form field is not prose.
+    let answers: BTreeMap<String, String> = answers.iter().cloned().collect();
+    let fields = match forms::fill_values(&code, &answers) {
         Ok(Some(fields)) => fields,
         Ok(None) => BTreeMap::new(),
         Err(e) => return Err(format!("mapping answers onto the `{code}` fields: {e}")),
@@ -154,15 +158,6 @@ fn render(
     // to the walk's post-`lawyer_review` step, not to a local render.
     std::fs::write(out, &output).map_err(|e| format!("write {}: {e}", out.display()))?;
     Ok(filled)
-}
-
-/// Raw answer values keyed by question code — the shape
-/// `forms::fill_values` resolves against the form's re-authored
-/// `.fields` manifest. Answers reach an `AcroForm` verbatim: the
-/// Markdown-safe `**…**` wrapping the body renderer applies is for
-/// typeset prose, and a form field is not prose.
-fn answer_map(answers: &[(String, String)]) -> BTreeMap<String, String> {
-    answers.iter().cloned().collect()
 }
 
 /// Resolve the pinned blank bytes: vendored working copy, then local
@@ -249,27 +244,10 @@ fn workspace_root(file: &Path) -> Option<PathBuf> {
 /// re-vendored blank, misses and re-verifies rather than serving stale
 /// bytes.
 fn cache_path(origin_url: &str, pin: &str) -> Option<PathBuf> {
-    if let Some(path) = std::env::var_os(CACHE_ROOT_ENV) {
-        if !path.is_empty() {
-            return Some(PathBuf::from(path).join(cache_key(origin_url, pin)));
-        }
-    }
-    let base = std::env::var_os("XDG_CACHE_HOME")
-        .filter(|p| !p.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))?;
+    let key = forms::sha256_hex(format!("{origin_url}\n{pin}").as_bytes());
     Some(
-        base.join("navigator")
-            .join("forms")
-            .join(cache_key(origin_url, pin)),
+        crate::rendering_letterhead::cache_dir(CACHE_ROOT_ENV, "forms")?.join(format!("{key}.pdf")),
     )
-}
-
-fn cache_key(origin_url: &str, pin: &str) -> PathBuf {
-    PathBuf::from(format!(
-        "{}.pdf",
-        forms::sha256_hex(format!("{origin_url}\n{pin}").as_bytes())
-    ))
 }
 
 fn cache_get(origin_url: &str, pin: &str) -> Option<Vec<u8>> {

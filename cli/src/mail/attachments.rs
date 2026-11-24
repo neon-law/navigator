@@ -280,6 +280,7 @@ pub(super) async fn run(
     dir: &Path,
     only: Option<&str>,
     include_inline: bool,
+    connect: super::Connect<'_>,
 ) -> Result<()> {
     let reports = attachments_command(
         reference,
@@ -288,7 +289,7 @@ pub(super) async fn run(
             only,
             include_inline,
         },
-        super::client,
+        connect,
     )
     .await?;
     if reports.is_empty() {

@@ -42,7 +42,12 @@ pub(super) fn build(root: &Path) -> Result<PathBuf> {
             String::from_utf8_lossy(&metadata.stderr).trim()
         );
     }
-    let target = serde_json::from_slice::<serde_json::Value>(&metadata.stdout)?
+    built_binary(&metadata.stdout)
+}
+
+/// The debug worker binary under the target directory `cargo metadata` reports.
+fn built_binary(metadata: &[u8]) -> Result<PathBuf> {
+    let target = serde_json::from_slice::<serde_json::Value>(metadata)?
         .get("target_directory")
         .and_then(serde_json::Value::as_str)
         .map(PathBuf::from)
@@ -87,8 +92,58 @@ pub(super) fn service(root: &Path, slot: u16, binary: PathBuf) -> Service {
 
 #[cfg(test)]
 mod tests {
-    use super::{ports, service};
+    use super::{built_binary, ports, service};
     use std::path::PathBuf;
+
+    #[test]
+    fn the_built_worker_is_found_in_the_reported_target_directory_or_named_missing() {
+        let target = tempfile::tempdir().unwrap();
+        let metadata = serde_json::json!({ "target_directory": target.path() }).to_string();
+        let binary = target.path().join("debug/workflows-service");
+        assert_eq!(
+            built_binary(metadata.as_bytes()).unwrap_err().to_string(),
+            format!(
+                "cargo built workflows-service, but {} is missing",
+                binary.display()
+            )
+        );
+        std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        std::fs::write(&binary, "").unwrap();
+        assert_eq!(built_binary(metadata.as_bytes()).unwrap(), binary);
+        assert_eq!(
+            built_binary(b"{}").unwrap_err().to_string(),
+            "cargo metadata returned no target directory"
+        );
+        assert!(built_binary(b"not json").is_err());
+    }
+
+    #[test]
+    fn the_worker_inherits_the_worktree_environment_except_its_own_listeners() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join(".devx")).unwrap();
+        std::fs::write(
+            root.path().join(".devx/env"),
+            "NAV_BASE_URL=http://localhost:3001\nWORKFLOWS_SERVICE_LISTEN=stale\n",
+        )
+        .unwrap();
+        let service = service(root.path(), 2, PathBuf::from("/bin/workflows-service"));
+        let listen = format!("127.0.0.1:{}", ports(2).listen);
+        assert_eq!(
+            service.env,
+            [
+                (
+                    "NAV_BASE_URL".to_owned(),
+                    "http://localhost:3001".to_owned()
+                ),
+                ("WORKFLOWS_SERVICE_LISTEN".to_owned(), listen),
+                (
+                    "WORKFLOWS_SERVICE_HEALTH_LISTEN".to_owned(),
+                    format!("127.0.0.1:{}", ports(2).health)
+                ),
+            ]
+        );
+        assert_eq!(service.cwd, root.path());
+    }
 
     #[test]
     fn worker_service_carries_worktree_specific_listener_environment() {

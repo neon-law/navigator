@@ -1,5 +1,18 @@
 use clap::error::ErrorKind;
 
+#[path = "application_commands/billing.rs"]
+mod billing;
+#[path = "application_commands/documents.rs"]
+mod documents;
+#[path = "application_commands/firm.rs"]
+mod firm;
+#[path = "application_commands/relationship.rs"]
+mod relationship;
+#[path = "application_commands/setup.rs"]
+mod setup;
+#[path = "application_commands/site.rs"]
+mod site;
+
 #[test]
 fn application_commands_are_in_navigator_without_operator_access() {
     let command = cli::navigator_command();

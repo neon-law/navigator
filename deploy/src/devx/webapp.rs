@@ -68,21 +68,25 @@ pub fn build(release: bool) -> Result<()> {
         .join("target/dx/webapp")
         .join(profile)
         .join("web/public");
+    let dest = root.join("server/public/dioxus");
+    stage_bundle(&bundle, &dest)?;
+    eprintln!("==> staged Dioxus client bundle -> {}", dest.display());
+    Ok(())
+}
+
+/// Replace whatever is staged at `dest` with the bundle `dx` left at `bundle`.
+pub(super) fn stage_bundle(bundle: &Path, dest: &Path) -> Result<()> {
     if !bundle.join("index.html").is_file() {
         anyhow::bail!(
             "dx did not produce a bundle at {} (no index.html)",
             bundle.display()
         );
     }
-
-    let dest = root.join("server/public/dioxus");
     if dest.exists() {
-        fs::remove_dir_all(&dest)
+        fs::remove_dir_all(dest)
             .with_context(|| format!("clearing stale bundle at {}", dest.display()))?;
     }
-    copy_dir_all(&bundle, &dest)?;
-    eprintln!("==> staged Dioxus client bundle -> {}", dest.display());
-    Ok(())
+    copy_dir_all(bundle, dest)
 }
 
 fn build_command(root: &Path, release: bool) -> Command {
@@ -118,7 +122,7 @@ fn build_command(root: &Path, release: bool) -> Command {
 }
 
 /// Recursively copy `src` into `dst`, creating `dst` and any parents.
-pub(super) fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
+fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
     fs::create_dir_all(dst).with_context(|| format!("creating {}", dst.display()))?;
     for entry in fs::read_dir(src).with_context(|| format!("reading {}", src.display()))? {
         let entry = entry?;
@@ -151,6 +155,32 @@ mod tests {
         ] {
             assert!(!pinned_cli_version(incompatible));
         }
+    }
+
+    #[test]
+    fn staging_replaces_the_previous_bundle_and_refuses_a_build_without_an_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let (bundle, dest) = (dir.path().join("out"), dir.path().join("public/dioxus"));
+        fs::create_dir_all(bundle.join("assets/wasm")).unwrap();
+        fs::write(bundle.join("assets/wasm/app.wasm"), "module").unwrap();
+        fs::create_dir_all(&dest).unwrap();
+        fs::write(dest.join("stale.js"), "previous build").unwrap();
+
+        let refused = stage_bundle(&bundle, &dest).unwrap_err().to_string();
+        assert!(refused.contains("no index.html"), "{refused}");
+        assert!(dest.join("stale.js").is_file(), "a refusal stages nothing");
+
+        fs::write(bundle.join("index.html"), "<html>").unwrap();
+        stage_bundle(&bundle, &dest).unwrap();
+        assert_eq!(
+            fs::read_to_string(dest.join("index.html")).unwrap(),
+            "<html>"
+        );
+        assert_eq!(
+            fs::read_to_string(dest.join("assets/wasm/app.wasm")).unwrap(),
+            "module"
+        );
+        assert!(!dest.join("stale.js").exists());
     }
 
     #[test]

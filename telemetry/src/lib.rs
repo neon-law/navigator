@@ -572,32 +572,22 @@ pub fn init(default_service_name: &str) -> TelemetryGuard {
 
     let config = match export_config {
         Ok(Some(config)) => config,
-        Ok(None) => {
+        stdout_only => {
             tracing::subscriber::set_global_default(SanitizingSubscriber::new(
                 tracing_subscriber::registry()
                     .with(env_filter)
                     .with(fmt_layer),
             ))
             .expect("install telemetry subscriber");
-            tracing::info!(
-                service = %service_name,
-                release = %release.as_deref().unwrap_or("unknown"),
-                "telemetry initialized (stdout only)"
-            );
-            return TelemetryGuard {
-                tracer: None,
-                meter: None,
-                logger: None,
-            };
-        }
-        Err(error) => {
-            tracing::subscriber::set_global_default(SanitizingSubscriber::new(
-                tracing_subscriber::registry()
-                    .with(env_filter)
-                    .with(fmt_layer),
-            ))
-            .expect("install telemetry subscriber");
-            tracing::warn!(%error, "telemetry initialized (stdout only)");
+            if let Err(error) = stdout_only {
+                tracing::warn!(%error, "telemetry initialized (stdout only)");
+            } else {
+                tracing::info!(
+                    service = %service_name,
+                    release = %release.as_deref().unwrap_or("unknown"),
+                    "telemetry initialized (stdout only)"
+                );
+            }
             return TelemetryGuard {
                 tracer: None,
                 meter: None,
@@ -1659,6 +1649,103 @@ pub fn set_span_parent(span: &tracing::Span, traceparent: Option<&str>, tracesta
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn init_without_a_collector_installs_the_subscriber_and_exports_nothing() {
+        if std::env::var_os("OTEL_EXPORTER_OTLP_ENDPOINT").is_some() {
+            return;
+        }
+        let guard = super::init("navigator-synthetic");
+        assert!(tracing::dispatcher::has_been_set());
+        assert!(guard.tracer.is_none() && guard.meter.is_none() && guard.logger.is_none());
+        assert!(super::current_trace_context_headers().is_empty());
+        guard.shutdown();
+    }
+
+    /// Every public recorder writes through the process-wide meter, so this
+    /// is the one test that installs it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn the_public_recorders_emit_their_declared_series_through_the_global_meter() {
+        use opentelemetry_sdk::metrics::{InMemoryMetricExporter, SdkMeterProvider};
+        let exporter = InMemoryMetricExporter::default();
+        let provider = SdkMeterProvider::builder()
+            .with_periodic_exporter(exporter.clone())
+            .build();
+        opentelemetry::global::set_meter_provider(provider.clone());
+
+        super::record_trigger_fired("Archives", super::outcome::ACCEPTED);
+        super::record_mcp_tool_called("create_person", super::mcp_outcome::ERROR);
+        super::record_web_visit("/services", "US", "newsletter", "es", "2xx");
+        super::record_email_stage(
+            "synthetic-receipt",
+            super::EmailStage::Archive,
+            super::EmailOutcome::Retry,
+            std::time::Duration::from_millis(250),
+        );
+        super::record_email_delivery_latency(-3.0);
+        super::record_funnel_step(super::funnel_step::SENT);
+        super::register_nightly_project_update();
+        super::record_nightly_project_update(&[]);
+        super::register_archives();
+        super::record_archives_run(3, false);
+        super::register_forgejo_controller();
+        super::record_forgejo_tick("ok", 2);
+        super::record_forgejo_repository("example/sample", 12.5, true);
+        super::record_forgejo_run_finished(&super::ForgejoRunFinished {
+            repository: "example/sample",
+            workflow: "ci",
+            event: "push",
+            outcome: "success",
+            queue_seconds: Some(1.0),
+            duration_seconds: Some(2.0),
+        });
+        super::record_auth_sign_in(super::AuthProvider::Apple, super::auth_outcome::REFUSED);
+        provider.force_flush().expect("metric flush");
+
+        let finished = exporter.get_finished_metrics().expect("metric export");
+        let series: std::collections::BTreeMap<String, String> = finished
+            .iter()
+            .flat_map(opentelemetry_sdk::metrics::data::ResourceMetrics::scope_metrics)
+            .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
+            .map(|metric| (metric.name().to_owned(), format!("{:?}", metric.data())))
+            .collect();
+        let labelled = |name: &str, values: &[&str]| {
+            let rendered = series
+                .get(name)
+                .unwrap_or_else(|| panic!("{name} was not exported: {:?}", series.keys()));
+            for value in values {
+                assert!(rendered.contains(value), "{name} lacks {value}: {rendered}");
+            }
+        };
+        labelled(super::TRIGGER_FIRED, &["service", "Archives", "accepted"]);
+        labelled(super::MCP_TOOL_CALLED, &["tool", "create_person", "error"]);
+        labelled(super::WEB_VISIT_COUNT, super::WEB_VISIT_ATTRIBUTE_KEYS);
+        labelled(
+            super::WEB_VISIT_COUNT,
+            &["/services", "US", "newsletter", "es", "2xx"],
+        );
+        labelled("navigator.email.stage.completed", &["archive", "retry"]);
+        labelled("navigator.email.stage.duration", &["0.25"]);
+        // Clock skew never records a negative delivery latency.
+        labelled("navigator.email.delivery.latency", &["sum: 0.0"]);
+        assert!(!series["navigator.email.delivery.latency"].contains("-3"));
+        labelled(super::FUNNEL_STEP, &["funnel.sent"]);
+        // Registration starts every outcome at zero, so the first run after a
+        // restart is an increase.
+        labelled(super::NIGHTLY_PROJECT_UPDATE_RUN, &["clean", "degraded"]);
+        labelled(super::ARCHIVES_RUN, &["clean", "failed"]);
+        labelled(super::ARCHIVES_TABLE_WRITTEN, &["value: 3"]);
+        labelled(super::FORGEJO_CONTROLLER_TICK, &["ok", "error"]);
+        labelled(super::FORGEJO_RUNNER_ORPHAN_CLEANED, &["value: 2"]);
+        labelled(
+            super::FORGEJO_RUN_OLDEST_WAITING,
+            &["example/sample", "12.5"],
+        );
+        labelled(super::FORGEJO_CD_MISSED, &["value: 1"]);
+        labelled(super::FORGEJO_RUN_FINISHED, &["success"]);
+        labelled(super::AUTH_SIGN_IN, &["apple", "refused"]);
+        provider.shutdown().expect("metric provider shuts down");
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn a_finished_forgejo_run_carries_only_the_bounded_keys() {

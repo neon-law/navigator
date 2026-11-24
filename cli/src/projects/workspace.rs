@@ -203,19 +203,7 @@ pub(super) async fn inspect(status: &serde_json::Value) -> serde_json::Value {
             Err("unverified: source check timed out"),
             Err("unverified: mirror check timed out"),
         ));
-        let matching = match (&refs.0, &refs.1) {
-            (Ok(Some(source)), Ok(Some(mirror))) if source == mirror => "matches source main",
-            (Ok(Some(_)), Ok(Some(_))) => "differs from source main; rerun setup",
-            (_, Ok(None)) => "main is empty; rerun setup",
-            (_, Err(detail)) => detail,
-            (Err(_) | Ok(None), Ok(Some(_))) => "unverified: source main is unavailable",
-        };
-        let source = match refs.0 {
-            Ok(Some(_)) => "main is present",
-            Ok(None) => "main is empty; rerun setup",
-            Err(detail) => detail,
-        };
-        (source, matching)
+        describe(&refs.0, &refs.1)
     } else {
         (
             "repository is not linked; rerun setup",
@@ -235,10 +223,26 @@ pub(super) async fn inspect(status: &serde_json::Value) -> serde_json::Value {
     })
 }
 
-async fn observed_main(
-    cwd: &Path,
-    remote: &str,
-) -> std::result::Result<Option<String>, &'static str> {
+type Observed<'a> = std::result::Result<Option<String>, &'a str>;
+
+/// Word the source and mirror state from what each remote's main answered.
+fn describe<'a>(source: &Observed<'a>, mirror: &Observed<'a>) -> (&'a str, &'a str) {
+    let matching = match (source, mirror) {
+        (Ok(Some(source)), Ok(Some(mirror))) if source == mirror => "matches source main",
+        (Ok(Some(_)), Ok(Some(_))) => "differs from source main; rerun setup",
+        (_, Ok(None)) => "main is empty; rerun setup",
+        (_, Err(detail)) => detail,
+        (Err(_) | Ok(None), Ok(Some(_))) => "unverified: source main is unavailable",
+    };
+    let source = match source {
+        Ok(Some(_)) => "main is present",
+        Ok(None) => "main is empty; rerun setup",
+        Err(detail) => detail,
+    };
+    (source, matching)
+}
+
+async fn observed_main(cwd: &Path, remote: &str) -> Observed<'static> {
     validate_transport(remote).map_err(|_| "unverified: unsupported repository transport")?;
     main_ref(cwd, remote)
         .await
@@ -557,6 +561,213 @@ mod tests {
         assert!(sync_mirror(root, source, mirror).await.is_err());
         assert_eq!(main_ref(root, mirror).await?, divergent);
         assert_eq!(main_ref(root, source).await?, main);
+        let error = sync_mirror(root, source, source).await.unwrap_err();
+        assert!(error.to_string().contains("must be a separate repository"));
         Ok(())
+    }
+
+    #[test]
+    fn source_and_mirror_state_is_worded_from_each_remotes_main() {
+        let sha = |value: &str| Ok(Some(value.to_owned()));
+        for (source, mirror, expected) in [
+            (
+                sha("a"),
+                sha("a"),
+                ("main is present", "matches source main"),
+            ),
+            (
+                sha("a"),
+                sha("b"),
+                ("main is present", "differs from source main; rerun setup"),
+            ),
+            (
+                sha("a"),
+                Ok(None),
+                ("main is present", "main is empty; rerun setup"),
+            ),
+            (sha("a"), Err("missing"), ("main is present", "missing")),
+            (
+                Ok(None),
+                sha("b"),
+                (
+                    "main is empty; rerun setup",
+                    "unverified: source main is unavailable",
+                ),
+            ),
+            (
+                Err("unverified: repository could not be read"),
+                sha("b"),
+                (
+                    "unverified: repository could not be read",
+                    "unverified: source main is unavailable",
+                ),
+            ),
+        ] {
+            assert_eq!(describe(&source, &mirror), expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn inspection_reports_an_unlinked_or_unreadable_source_without_writing() {
+        let unlinked = inspect(&serde_json::json!({"repository_remotes": {}})).await;
+        assert_eq!(unlinked["source"], "repository is not linked; rerun setup");
+        assert_eq!(unlinked["mirror"], "waiting for the source repository");
+        assert_eq!(unlinked["checkout"], "missing or incomplete; rerun setup");
+
+        let unsupported = inspect(&serde_json::json!({"repository_remotes": {
+            "origin": "ftp://forge.example.test/firm/matter",
+            "forgejo_status": "missing",
+        }}))
+        .await;
+        assert_eq!(
+            unsupported["source"],
+            "unverified: unsupported repository transport"
+        );
+        assert_eq!(unsupported["mirror"], "missing");
+    }
+
+    #[test]
+    fn only_secure_or_loopback_transports_are_supported() {
+        for remote in [
+            "https://forge.example.test/firm/matter",
+            "ssh://git@forge.example.test/firm/matter",
+            "git@forge.example.test:firm/matter",
+            "http://localhost:3000/firm/matter",
+            "http://127.0.0.1:3000/firm/matter",
+        ] {
+            assert!(validate_transport(remote).is_ok(), "{remote}");
+        }
+        for remote in [
+            "http://forge.example.test/firm/matter",
+            "/srv/git/matter",
+            "file:///srv/git/matter",
+        ] {
+            assert!(validate_transport(remote).is_err(), "{remote}");
+        }
+    }
+
+    const BASE: &str = "https://site.example.test";
+    const PINNED: &str =
+        "version: 26.9.14\nproject:\n  host: site.example.test\n  name: sample-matter\n";
+
+    /// A bare source repository whose main holds `manifest`, with a scratch
+    /// directory to verify it from.
+    async fn source(manifest: Option<&str>) -> Result<(tempfile::TempDir, String, String)> {
+        let fixture = tempfile::tempdir()?;
+        let root = fixture.path();
+        git(root, &["init", "--bare", "source"]).await?;
+        let origin = root.join("source").to_str().unwrap().to_owned();
+        let seed = root.join("seed");
+        std::fs::create_dir(&seed)?;
+        std::fs::create_dir(root.join("verify"))?;
+        git(&seed, &["init", "--initial-branch=main"]).await?;
+        if let Some(manifest) = manifest {
+            std::fs::write(seed.join("navigator.yaml"), manifest)?;
+            git(&seed, &["add", "navigator.yaml"]).await?;
+        }
+        git(
+            &seed,
+            &[
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "--no-gpg-sign",
+                "--allow-empty",
+                "-m",
+                "Initial source",
+            ],
+        )
+        .await?;
+        git(&seed, &["push", "--", &origin, "main"]).await?;
+        let main = main_ref(&seed, &origin).await?.context("pushed main")?;
+        Ok((fixture, origin, main))
+    }
+
+    #[tokio::test]
+    async fn authoritative_main_must_carry_this_projects_pinned_manifest() -> Result<()> {
+        let (fixture, origin, main) = source(Some(PINNED)).await?;
+        let dir = fixture.path().join("verify");
+        let manifest = verify_project_main(&dir, &origin, &main, BASE, "sample-matter").await?;
+        assert_eq!(manifest.version.as_deref(), Some("26.9.14"));
+        for (base, code) in [
+            (BASE, "another-matter"),
+            ("https://other.example.test", "sample-matter"),
+        ] {
+            let error = verify_project_main(&dir, &origin, &main, base, code)
+                .await
+                .err()
+                .unwrap();
+            assert!(error
+                .to_string()
+                .contains("names a different Project or deployment"));
+        }
+
+        let unpinned = PINNED.replace("version: 26.9.14\n", "");
+        for (manifest, expected) in [
+            (Some(unpinned.as_str()), "no pinned Navigator version"),
+            (None, "no canonical Project manifest"),
+        ] {
+            let (fixture, origin, main) = source(manifest).await?;
+            let dir = fixture.path().join("verify");
+            let error = verify_project_main(&dir, &origin, &main, BASE, "sample-matter")
+                .await
+                .err()
+                .unwrap();
+            assert!(error.to_string().contains(expected), "{error:#}");
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn setup_stops_before_any_repository_work_when_the_project_is_not_ready() {
+        use crate::projects::test_login::answer;
+        let server = wiremock::MockServer::start().await;
+        let base = server.uri();
+        let project = |code: &str, status: &str, origin: serde_json::Value| {
+            serde_json::json!({
+                "code": code, "status": status, "firm_id": null, "brand": "sample",
+                "repository_remotes": {"origin": origin, "forgejo": null, "forgejo_status": "missing"},
+            })
+        };
+        let null = serde_json::Value::Null;
+        for (body, expected) in [
+            (
+                project("another-matter", "open", null.clone()),
+                Err("Project identity changed; retry setup"),
+            ),
+            (project("sample-matter", "closed", null.clone()), Ok(false)),
+            (
+                project("sample-matter", "open", null),
+                Err("source repository is not linked"),
+            ),
+            (
+                project(
+                    "sample-matter",
+                    "pitch",
+                    "ftp://forge.example.test/m".into(),
+                ),
+                Err("workspace requires a supported repository transport"),
+            ),
+        ] {
+            let id = Uuid::new_v4();
+            answer(
+                &server,
+                "GET",
+                &format!("/app/api/projects/{id}"),
+                200,
+                body,
+            )
+            .await;
+            let finished = finish(&base, "t", id, "sample-matter")
+                .await
+                .map_err(|error| error.to_string());
+            assert_eq!(finished, expected.map_err(str::to_owned));
+        }
+        let error = finish(&base, "t", Uuid::new_v4(), "sample-matter")
+            .await
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("read the Project's repository inventory"));
     }
 }

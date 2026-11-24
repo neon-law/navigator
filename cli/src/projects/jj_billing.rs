@@ -202,6 +202,155 @@ async fn stage_changes(dir: &Path, changes: &[JujutsuChange], explicit: bool) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::projects::test_login::{answer, site};
+    use serde_json::json;
+
+    const ROW: &str = "Billing-Time: 0.2 2026-11-20 00000000-0000-4000-8000-000000000001";
+
+    fn authored(author: &str, description: &str) -> JujutsuChange {
+        JujutsuChange {
+            commit_id: "commit-one".into(),
+            change_id: "change-one".into(),
+            description: description.into(),
+            author: author.into(),
+            signed: true,
+            conflict: false,
+            divergent: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn staging_posts_the_signed_in_authors_trailer_to_project_billing() {
+        use wiremock::matchers::{body_json, method, path};
+        let id = Uuid::new_v4();
+        let (server, _login) = site(json!([{"id": id, "code": "sample-matter"}])).await;
+        let host = server.uri();
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = dir.path().join("navigator.yaml");
+        let mine = || vec![authored("lawyer@example.com", &format!("Subject\n\n{ROW}"))];
+        let root = dir.path();
+        let stage = |changes| async move {
+            stage_outgoing(root, changes)
+                .await
+                .map_err(|error| error.to_string())
+        };
+
+        assert_eq!(stage(Vec::new()).await, Ok(()));
+        assert_eq!(
+            stage(vec![authored("lawyer@example.com", "No trailer")]).await,
+            Ok(())
+        );
+        assert_eq!(
+            stage(mine()).await,
+            Err("missing Project manifest".to_string())
+        );
+        let elsewhere = "project:\n  name: sample-matter\n  host: signed-out.example.test\n";
+        std::fs::write(&manifest, elsewhere).unwrap();
+        assert_eq!(
+            stage(mine()).await,
+            Err("sign in to the host in navigator.yaml before staging time".to_string())
+        );
+
+        std::fs::write(
+            &manifest,
+            elsewhere.replace("signed-out.example.test", &host),
+        )
+        .unwrap();
+        let whoami = "/auth/cli/whoami";
+        {
+            let anonymous = json!({"role": "lawyer", "exp": 4_102_444_800_i64});
+            let _whoami = wiremock::Mock::given(method("GET"))
+                .and(path(whoami))
+                .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(anonymous))
+                .mount_as_scoped(&server)
+                .await;
+            assert_eq!(
+                stage(mine()).await,
+                Err("the signed-in timekeeper needs a session email".to_string())
+            );
+        }
+        let lawyer =
+            json!({"email": "Lawyer@example.com", "role": "lawyer", "exp": 4_102_444_800_i64});
+        answer(&server, "GET", whoami, 200, lawyer).await;
+        assert_eq!(
+            stage(vec![authored(
+                "other@example.com",
+                &format!("Subject\n\n{ROW}")
+            )])
+            .await,
+            Ok(())
+        );
+        assert_eq!(
+            stage(mine()).await,
+            Err("staging change change-one refused (404 Not Found)".to_string())
+        );
+        wiremock::Mock::given(method("POST"))
+            .and(path(format!("/app/api/projects/{id}/billing-annotations")))
+            .and(body_json(json!({
+                "id": "00000000-0000-4000-8000-000000000001",
+                "change_id": "change-one",
+                "commit_id": "commit-one",
+                "tenths": 2,
+                "performed_on": "2026-11-20",
+            })))
+            .respond_with(wiremock::ResponseTemplate::new(201))
+            .expect(1)
+            .mount(&server)
+            .await;
+        assert_eq!(stage(mine()).await, Ok(()));
+    }
+
+    #[tokio::test]
+    async fn changes_are_read_only_from_a_jujutsu_checkout_root() {
+        let _jj = crate::projects::test_login::jj_stand_in();
+        let dir = tempfile::tempdir().unwrap();
+        let error = stage_in(dir.path(), "@").await.unwrap_err();
+        assert_eq!(error.to_string(), "run from a Jujutsu checkout root");
+
+        let store = dir.path().join(".jj");
+        std::fs::create_dir(&store).unwrap();
+        let record = json!({
+            "commit_id": "commit-one", "change_id": "change-one", "description": "Subject\n",
+            "author": "lawyer@example.com", "signed": true, "conflict": false, "divergent": false,
+        });
+        std::fs::write(store.join("log"), format!("{record}\n")).unwrap();
+        let selected = change(dir.path(), "@").unwrap();
+        assert_eq!(selected.change_id, "change-one");
+        assert!(selected.signed && !selected.conflict && !selected.divergent);
+
+        std::fs::write(store.join("log"), format!("{record}\n{record}\n")).unwrap();
+        let error = change(dir.path(), "@-::@").err().unwrap();
+        assert_eq!(error.to_string(), "select exactly one Jujutsu change");
+        std::fs::write(store.join("log"), "not a record\n").unwrap();
+        let error = change(dir.path(), "@").err().unwrap();
+        assert_eq!(error.to_string(), "decode Jujutsu change");
+    }
+
+    #[test]
+    fn a_conflicted_change_or_a_reused_annotation_is_refused() {
+        let description = format!("Subject\n\n{ROW}");
+        let conflicted = JujutsuChange {
+            conflict: true,
+            ..authored("lawyer@example.com", &description)
+        };
+        let error = annotations(&[conflicted], "lawyer@example.com", true)
+            .err()
+            .unwrap();
+        assert_eq!(error.to_string(), "resolve the change before staging time");
+        let twice = [
+            authored("lawyer@example.com", &description),
+            authored("lawyer@example.com", &description),
+        ];
+        let error = annotations(&twice, "lawyer@example.com", true)
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("reused on multiple changes"));
+        let untagged = [authored("lawyer@example.com", "Subject")];
+        let error = annotations(&untagged, "lawyer@example.com", true)
+            .err()
+            .unwrap();
+        assert!(format!("{error:#}").contains("read billing trailer on change change-one"));
+    }
 
     #[test]
     fn automatic_staging_attributes_only_the_authenticated_authors_changes() {

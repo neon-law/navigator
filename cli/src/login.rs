@@ -108,30 +108,24 @@ async fn login_inner(host: &str, no_browser: bool) -> Result<String> {
 #[must_use]
 pub fn run_logout(host: Option<&str>) -> ExitCode {
     let path = default_credentials_path();
-    let mut creds = match credentials::load(&path) {
-        Ok(c) => c,
+    let forgotten = credentials::load(&path).and_then(|mut creds| {
+        let base = resolve_base(host, &creds)?;
+        if creds.remove(&base).is_none() {
+            return Ok(format!("no stored login for {base}"));
+        }
+        credentials::save(&path, &creds)?;
+        Ok(format!("logged out of {base}"))
+    });
+    match forgotten {
+        Ok(outcome) => {
+            println!("{}", palette::dim(outcome));
+            ExitCode::SUCCESS
+        }
         Err(e) => {
             eprintln!("navigator site logout: {e:#}");
-            return ExitCode::from(2);
+            ExitCode::from(2)
         }
-    };
-    let base = match resolve_base(host, &creds) {
-        Ok(b) => b,
-        Err(e) => {
-            eprintln!("navigator site logout: {e:#}");
-            return ExitCode::from(2);
-        }
-    };
-    if creds.remove(&base).is_some() {
-        if let Err(e) = credentials::save(&path, &creds) {
-            eprintln!("navigator site logout: {e:#}");
-            return ExitCode::from(2);
-        }
-        println!("{}", palette::dim(format!("logged out of {base}")));
-    } else {
-        println!("{}", palette::dim(format!("no stored login for {base}")));
     }
-    ExitCode::SUCCESS
 }
 
 /// `navigator site whoami [--host <h>]` — print the stored identity + how long
@@ -139,17 +133,15 @@ pub fn run_logout(host: Option<&str>) -> ExitCode {
 #[must_use]
 pub fn run_whoami(host: Option<&str>) -> ExitCode {
     let path = default_credentials_path();
-    let creds = match credentials::load(&path) {
-        Ok(c) => c,
+    let resolved = credentials::load(&path).and_then(|creds| {
+        let base = resolve_base(host, &creds)
+            .map_err(|e| anyhow!("{e:#} — checked {}", path.display()))?;
+        Ok((creds, base))
+    });
+    let (creds, base) = match resolved {
+        Ok(resolved) => resolved,
         Err(e) => {
             eprintln!("navigator site whoami: {e:#}");
-            return ExitCode::from(2);
-        }
-    };
-    let base = match resolve_base(host, &creds) {
-        Ok(b) => b,
-        Err(e) => {
-            eprintln!("navigator site whoami: {e:#} — checked {}", path.display());
             return ExitCode::from(2);
         }
     };
@@ -399,28 +391,11 @@ fn now_secs() -> i64 {
 /// Build the `/auth/cli/start` URL the browser is sent to. The query separator
 /// remains literal; only the parameter values are percent-encoded.
 fn build_start_url(base: &str, redirect_uri: &str, state: &str) -> String {
-    format!(
-        "{base}/auth/cli/start?redirect={}&state={}",
-        urlencode(redirect_uri),
-        urlencode(state),
-    )
-}
-
-/// Minimal percent-encoder for the query values we build.
-fn urlencode(s: &str) -> String {
-    use std::fmt::Write;
-    let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char);
-            }
-            _ => {
-                let _ = write!(out, "%{b:02X}");
-            }
-        }
-    }
-    out
+    let query = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("redirect", redirect_uri)
+        .append_pair("state", state)
+        .finish();
+    format!("{base}/auth/cli/start?{query}")
 }
 
 #[cfg(test)]
@@ -429,14 +404,130 @@ mod tests {
     use std::net::SocketAddr;
 
     async fn drive_a_callback(addr: SocketAddr, query: &str) {
+        send(
+            addr,
+            &format!("GET {query} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"),
+        )
+        .await;
+    }
+
+    /// Send `request` to the loopback listener and read its whole answer.
+    async fn send(addr: SocketAddr, request: &str) -> String {
         let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
-        let line = format!("GET {query} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
-        s.write_all(line.as_bytes()).await.unwrap();
-        let mut buf = [0u8; 1024];
-        let _ = s.read(&mut buf).await;
+        s.write_all(request.as_bytes()).await.unwrap();
+        s.shutdown().await.unwrap();
+        let mut answer = String::new();
+        let _ = s.read_to_string(&mut answer).await;
+        answer
     }
 
     const TEST_BASE: &str = "https://staging.neonlaw.com";
+
+    #[tokio::test]
+    async fn a_callback_that_is_not_the_minted_redirect_is_refused() {
+        for (request, reason) in [
+            (
+                "GET /cb?token=sess.blob HTTP/1.1\r\n\r\n",
+                "callback missing `state`",
+            ),
+            (
+                "GET /cb?state=the-nonce&scope=1 HTTP/1.1\r\n\r\n",
+                "callback missing `token`",
+            ),
+            ("GET\r\n\r\n", "malformed request line: GET"),
+            ("", "empty callback request"),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let server =
+                tokio::spawn(async move { wait_for_token(listener, "the-nonce", TEST_BASE).await });
+            send(addr, request).await;
+            let err = server.await.unwrap().unwrap_err();
+            assert_eq!(err.to_string(), reason);
+        }
+    }
+
+    #[tokio::test]
+    async fn the_browser_is_told_whether_the_login_landed() {
+        for (query, status, page) in [
+            (
+                "/cb?token=sess.blob&state=the-nonce",
+                "HTTP/1.1 200 OK",
+                "Login successful",
+            ),
+            (
+                "/cb?error=%3Cb%3Edenied&state=the-nonce",
+                "HTTP/1.1 400 Bad Request",
+                "&lt;b&gt;denied",
+            ),
+            (
+                "/cb?token=sess.blob&state=tampered",
+                "HTTP/1.1 400 Bad Request",
+                "state mismatch",
+            ),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let server =
+                tokio::spawn(async move { wait_for_token(listener, "the-nonce", TEST_BASE).await });
+            let answer = send(addr, &format!("GET {query} HTTP/1.1\r\n\r\n")).await;
+            let _ = server.await.unwrap();
+            assert!(answer.starts_with(status));
+            assert!(answer.contains(page));
+        }
+    }
+
+    #[tokio::test]
+    async fn whoami_reads_the_identity_a_minted_token_resolves_to() {
+        use wiremock::matchers::{header, method, path};
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(method("GET"))
+            .and(path("/auth/cli/whoami"))
+            .and(header("authorization", "Bearer minted"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "email": "lawyer@example.com", "role": "lawyer", "exp": 4_102_444_800_i64
+                })),
+            )
+            .mount(&server)
+            .await;
+        let who = fetch_whoami(&server.uri(), "minted").await.unwrap();
+        assert_eq!(who.email.as_deref(), Some("lawyer@example.com"));
+        assert_eq!((who.role.as_str(), who.exp), ("lawyer", 4_102_444_800));
+
+        let refused = fetch_whoami(&server.uri(), "forged").await.unwrap_err();
+        assert_eq!(
+            refused.to_string(),
+            "whoami check failed: 404 Not Found (the minted token was not accepted)"
+        );
+        let plaintext = fetch_whoami("http://deployment.example.com", "minted").await;
+        assert!(plaintext.is_err(), "a remote plaintext origin is refused");
+    }
+
+    #[test]
+    fn a_login_is_chosen_by_host_or_by_being_the_only_one() {
+        let mut creds = credentials::Credentials::default();
+        let none = resolve_base(None, &creds).unwrap_err().to_string();
+        assert!(none.contains("no stored logins"), "{none}");
+        assert_eq!(
+            resolve_base(Some("deployment.example.com/"), &creds).unwrap(),
+            "https://deployment.example.com"
+        );
+        let stored = |token: &str| HostCredential {
+            token: token.to_string(),
+            person_email: None,
+            role: None,
+            expires_at: 0,
+        };
+        creds.set("https://one.example.com", stored("one"));
+        assert_eq!(
+            resolve_base(None, &creds).unwrap(),
+            "https://one.example.com"
+        );
+        creds.set("https://two.example.com", stored("two"));
+        let several = resolve_base(None, &creds).unwrap_err().to_string();
+        assert!(several.contains("pass --host to choose one"), "{several}");
+    }
 
     #[tokio::test]
     async fn callback_returns_token_on_state_match() {

@@ -138,6 +138,34 @@ impl World {
             .await;
     }
 
+    fn client(&self) -> DocumentClient {
+        DocumentClient::for_check_tests(self.server.uri(), self.project_id)
+    }
+
+    /// Answer `verb` on the Project door `suffix` with `status` and `body`.
+    async fn answer(&self, verb: &str, suffix: &str, status: u16, body: serde_json::Value) {
+        Mock::given(method(verb))
+            .and(path(format!(
+                "/app/api/projects/{}/{suffix}",
+                self.project_id
+            )))
+            .respond_with(ResponseTemplate::new(status).set_body_json(body))
+            .mount(&self.server)
+            .await;
+    }
+
+    /// The JSON bodies of every `verb` request the deployment received.
+    async fn sent(&self, verb: &str) -> Vec<serde_json::Value> {
+        self.server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|request| request.method.as_str() == verb)
+            .map(|request| serde_json::from_slice(&request.body).unwrap())
+            .collect()
+    }
+
     async fn uploads(&self) -> usize {
         self.server
             .received_requests()
@@ -170,10 +198,9 @@ impl World {
             answers: answers.chars().collect(),
             asked: Arc::clone(&asked),
         };
-        let client = DocumentClient::for_check_tests(self.server.uri(), self.project_id);
         let result = reconcile_project(
             self.root.path(),
-            &client,
+            &self.client(),
             SyncMode {
                 dry_run: false,
                 approval: Approval::Ask(Box::new(script)),
@@ -493,4 +520,183 @@ async fn yes_delete_answers_a_deletion_without_asking() {
     assert!(result.is_ok(), "{result:?}");
     assert!(asked.is_empty());
     assert_eq!(deletes(&w).await, 1);
+}
+
+/// LAW-241: the committed pointer's `folder:` moves the live row to agree,
+/// an absent one clears it, and a refused refile fails the run.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_pointers_folder_refiles_the_live_row() {
+    let cases = [
+        (Some("Discovery"), None, 200, true),
+        (None, Some("Discovery"), 200, true),
+        (Some("Discovery"), None, 500, false),
+    ];
+    for (committed, live_folder, status, reconciled) in cases {
+        let id = Uuid::now_v7();
+        let mut row = live(id, FILED, "a/one.pdf");
+        row["folder"] = live_folder.into();
+        let w = world(vec![row]).await;
+        let mut value: serde_json::Value =
+            serde_yaml::from_str(&pointer(id, FILED, 1, None)).unwrap();
+        if let Some(folder) = committed {
+            value["folder"] = folder.into();
+        }
+        put(
+            w.root.path(),
+            "blobs/a/one.pdf.yaml",
+            serde_yaml::to_string(&value).unwrap(),
+        );
+        w.serve(id, FILED).await;
+        w.answer(
+            "PATCH",
+            &format!("documents/{id}"),
+            status,
+            serde_json::json!({}),
+        )
+        .await;
+
+        let (result, _) = w.run("").await;
+
+        assert_eq!(result.is_ok(), reconciled, "{committed:?}: {result:?}");
+        assert_eq!(
+            w.sent("PATCH").await,
+            [serde_json::json!({ "folder": committed })],
+            "{committed:?}"
+        );
+        assert_eq!(w.read("a/one.pdf"), FILED);
+    }
+}
+
+/// An Authority copy is written only when the archive's bytes match the
+/// pointer's digest and size; a refused archive read is reported, not empty.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_authority_copy_that_cannot_be_verified_is_not_written() {
+    let w = world(Vec::new()).await;
+    let (short, refused) = (Uuid::now_v7(), Uuid::now_v7());
+    for (name, authority, size) in [("short", short, 3), ("refused", refused, FILED.len())] {
+        let mut value: serde_json::Value =
+            serde_yaml::from_str(&pointer(Uuid::now_v7(), FILED, 1, None)).unwrap();
+        value["kind"] = "".into();
+        value["authority_id"] = authority.to_string().into();
+        value["current_version"]["size_bytes"] = size.into();
+        put(
+            w.root.path(),
+            &format!("blobs/cases/{name}.html.yaml"),
+            serde_yaml::to_string(&value).unwrap(),
+        );
+    }
+    Mock::given(method("GET"))
+        .and(path(format!("/app/api/authorities/{short}/archive")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(FILED.to_vec()))
+        .mount(&w.server)
+        .await;
+
+    let (result, _) = w.run("").await;
+
+    let error = result.unwrap_err().to_string();
+    assert!(
+        error.contains("2 document(s) could not be reconciled"),
+        "{error}"
+    );
+    assert!(!w.root.path().join("documents/cases/short.html").exists());
+    assert!(!w.root.path().join("documents/cases/refused.html").exists());
+}
+
+/// The manifest's `pages:` and `matter:` blocks are stored with the Project;
+/// a dry run sends nothing, and an empty `matter:` clears the stored caption.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_manifests_pages_and_matter_are_stored_with_the_project() {
+    let w = world(Vec::new()).await;
+    let (root, client) = (w.root.path(), w.client());
+    let caption = serde_json::json!({ "matter": { "case_number": "00CV000000" } });
+    Mock::given(method("PUT"))
+        .and(path(format!("/app/api/projects/{}/matter", w.project_id)))
+        .respond_with(ResponseTemplate::new(200).set_body_json(caption))
+        .up_to_n_times(1)
+        .mount(&w.server)
+        .await;
+    let cleared = serde_json::json!({ "matter": null });
+    w.answer("PUT", "matter", 200, cleared.clone()).await;
+    w.answer("PUT", "pages", 200, serde_json::json!({ "pages": [{}] }))
+        .await;
+    put(
+        root,
+        "navigator.yaml",
+        "project: acme\npages:\n  - slug: authorities\n    kind: authority_library\n    \
+         title: Authorities\nmatter:\n  case_number: 00CV000000\n  parties:\n    - name: A CORP\n      \
+         role: Plaintiff\n",
+    );
+
+    super::sync_pages(root, &client, true).await.unwrap();
+    super::sync_matter(root, &client, true).await.unwrap();
+    assert!(w.sent("PUT").await.is_empty(), "a dry run stores nothing");
+
+    super::sync_pages(root, &client, false).await.unwrap();
+    super::sync_matter(root, &client, false).await.unwrap();
+    put(root, "navigator.yaml", "project: acme\nmatter: {}\n");
+    super::sync_pages(root, &client, false).await.unwrap();
+    super::sync_matter(root, &client, true).await.unwrap();
+    super::sync_matter(root, &client, false).await.unwrap();
+
+    let sent = w.sent("PUT").await;
+    assert_eq!(sent.len(), 3, "{sent:?}");
+    assert_eq!(sent[0]["pages"][0]["slug"], "authorities");
+    assert_eq!(sent[1]["matter"]["case_number"], "00CV000000");
+    assert_eq!(sent[1]["matter"]["parties"][0]["name"], "A CORP");
+    assert_eq!(sent[2], cleared);
+}
+
+/// The Case Timeline records follow the live docket: a missing record is
+/// written from its Docket Entry, and a record no entry names is removed only
+/// with `--yes-delete`. A lawyer's own note in the folder is left alone.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_case_timeline_follows_the_live_docket() {
+    let w = world(Vec::new()).await;
+    let (root, client) = (w.root.path(), w.client());
+    let entry = serde_json::json!({
+        "id": "0190c2a0-0000-7000-8000-000000000009",
+        "entry_number": "4",
+        "kind": "hearing",
+        "title": "Notice of Hearing",
+        "party": "Court",
+        "filed_or_served_on": "2026-03-05",
+        "scheduled_on": "2026-04-01T16:00:00Z",
+        "supersedes": null,
+        "document_asset_id": null
+    });
+    w.answer(
+        "GET",
+        "docket",
+        200,
+        serde_json::json!({ "entries": [entry] }),
+    )
+    .await;
+    let record = root.join("documents/Case Timeline/DKT 0004 - Notice of Hearing.yaml");
+    let withdrawn = root.join("documents/Case Timeline/DKT 0009 - Withdrawn.yaml");
+    put(
+        root,
+        "documents/Case Timeline/DKT 0009 - Withdrawn.yaml",
+        "number: '9'\n",
+    );
+    put(root, "documents/Case Timeline/note.txt", "call the clerk");
+
+    super::sync_case_timeline(root, &client, "acme", true, true)
+        .await
+        .unwrap();
+    assert!(!record.exists(), "a dry run writes nothing");
+    assert!(withdrawn.exists(), "a dry run removes nothing");
+
+    super::sync_case_timeline(root, &client, "acme", false, false)
+        .await
+        .unwrap();
+    let written = std::fs::read_to_string(&record).unwrap();
+    assert!(written.contains("Notice of Hearing"), "{written}");
+    assert!(withdrawn.exists(), "a removal waits for --yes-delete");
+
+    super::sync_case_timeline(root, &client, "acme", false, true)
+        .await
+        .unwrap();
+    assert!(!withdrawn.exists());
+    assert_eq!(std::fs::read_to_string(&record).unwrap(), written);
+    assert!(root.join("documents/Case Timeline/note.txt").exists());
 }

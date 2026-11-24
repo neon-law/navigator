@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::Context;
-use cloud::{GcsStorage, GcsStorageConfig, StorageService};
+use cloud::StorageService;
 use views::lsp::{lsp_binary_key, LSP_TARGETS};
 
 /// `Cache-Control` stamped on every uploaded binary. The download path
@@ -35,59 +35,28 @@ const LSP_CACHE_CONTROL: &str = "public, max-age=3600";
 /// `NAVIGATOR_ASSETS_BUCKET` env var — the public `<project>-assets`
 /// bucket. `dir` is the cross-build output root (`<dir>/<triple>/<binary_name>`).
 pub fn run_publish(dir: &Path, bucket: Option<String>) -> ExitCode {
-    let bucket = match bucket.or_else(|| std::env::var("NAVIGATOR_ASSETS_BUCKET").ok()) {
-        Some(b) if !b.trim().is_empty() => b,
-        _ => {
-            eprintln!(
-                "navigator: lsp publish: no bucket — pass --bucket or set NAVIGATOR_ASSETS_BUCKET"
+    // This operator command targets real GCS through ADC.
+    crate::assets::with_bucket(
+        "lsp publish",
+        bucket,
+        crate::assets::ASSETS_BUCKET_ENV,
+        None,
+        |storage, bucket| async move {
+            let (uploaded, missing) = publish(&storage, dir).await?;
+            println!("navigator: lsp publish: {uploaded} binary(ies) → gs://{bucket}/lsp");
+            for triple in &missing {
+                println!(
+                    "  (skipped {triple} — no binary under {dir}/{triple})",
+                    dir = dir.display()
+                );
+            }
+            anyhow::ensure!(
+                uploaded > 0,
+                "nothing uploaded — build the binaries first (see docs/lsp/README.md)"
             );
-            return ExitCode::from(2);
-        }
-    };
-    let runtime = match tokio::runtime::Runtime::new() {
-        Ok(rt) => rt,
-        Err(e) => {
-            eprintln!("navigator: lsp publish: tokio runtime: {e}");
-            return ExitCode::from(2);
-        }
-    };
-    runtime.block_on(async move {
-        // This operator command targets real GCS through ADC.
-        let cfg = GcsStorageConfig {
-            bucket: bucket.clone(),
-            endpoint: None,
-        };
-        let storage = match GcsStorage::new_from_config(cfg).await {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("navigator: lsp publish: open bucket `{bucket}`: {e}");
-                return ExitCode::from(2);
-            }
-        };
-        match publish(&storage, dir).await {
-            Ok((uploaded, missing)) => {
-                println!("navigator: lsp publish: {uploaded} binary(ies) → gs://{bucket}/lsp");
-                for triple in &missing {
-                    println!(
-                        "  (skipped {triple} — no binary under {dir}/{triple})",
-                        dir = dir.display()
-                    );
-                }
-                if uploaded == 0 {
-                    eprintln!(
-                        "navigator: lsp publish: nothing uploaded — build the binaries first \
-                         (see docs/lsp/README.md)"
-                    );
-                    return ExitCode::from(2);
-                }
-                ExitCode::SUCCESS
-            }
-            Err(e) => {
-                eprintln!("navigator: lsp publish: {e:#}");
-                ExitCode::from(2)
-            }
-        }
-    })
+            Ok(())
+        },
+    )
 }
 
 /// Upload every registry target whose binary is present under
@@ -153,6 +122,15 @@ mod tests {
             .await
             .expect("uploaded binary present at key");
         assert_eq!(obj.bytes, b"#!/bin/echo fake\n");
+    }
+
+    #[test]
+    fn a_blank_bucket_is_refused_before_any_storage_client_is_built() {
+        let tmp = TempDir::new().expect("tempdir");
+        assert_eq!(
+            super::run_publish(tmp.path(), Some("  ".to_owned())),
+            std::process::ExitCode::from(2)
+        );
     }
 
     #[tokio::test]

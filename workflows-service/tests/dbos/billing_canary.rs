@@ -9,7 +9,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use tokio::sync::Notify;
 use workflows::billing_canary::{BillingCanaryProvider, CanaryProviderError};
 use workflows::dbos_engine;
-use workflows::dbos_engine::billing_canary::{self, BillingCanaryError, Context, ENABLED_ENV};
+use workflows::dbos_engine::billing_canary::{self, BillingCanaryError, Context};
 use workflows::{CapturingEmail, EmailError, EmailService, OutboundEmail, SendReceipt};
 
 use crate::support::{database, APP_VERSION, DEADLINE};
@@ -286,15 +286,4 @@ async fn a_provider_effect_before_its_checkpoint_repeats_with_the_same_contact_k
     assert!(report.idempotent);
     assert_eq!(provider.provider.calls.load(Ordering::SeqCst), 4);
     assert_eq!(email.captured().len(), 1);
-}
-
-#[test]
-fn the_schedule_flag_is_default_off_and_rejects_malformed_values() {
-    assert!(!billing_canary::enabled(|_| None).expect("unset means off"));
-    assert!(!billing_canary::enabled(|_| Some("false".into())).expect("false means off"));
-    assert!(billing_canary::enabled(|_| Some("true".into())).expect("true opts in"));
-    assert_eq!(
-        billing_canary::enabled(|_| Some("yes".into())).unwrap_err(),
-        dbos_engine::SettingsError::Invalid(ENABLED_ENV)
-    );
 }

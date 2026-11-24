@@ -718,7 +718,7 @@ mod tests {
         }
         let temp = tempfile::tempdir()?;
         let dir = temp.path().canonicalize()?;
-        let (project, origin, mirror) = seed_checkout_forges(&dir).await?;
+        let (project, origin, mirror) = seed_checkout_forges(&dir, "site.example.test").await?;
         let origin = origin.to_str().unwrap();
         let checkout = dir.join("matter");
         let sync =
@@ -746,7 +746,7 @@ mod tests {
         }
         let temp = tempfile::tempdir()?;
         let dir = temp.path().canonicalize()?;
-        let (project, origin, mirror) = seed_checkout_forges(&dir).await?;
+        let (project, origin, mirror) = seed_checkout_forges(&dir, "site.example.test").await?;
         let sync = || {
             super::update_checkout(
                 &dir,
@@ -849,7 +849,7 @@ mod tests {
     const SKILL_PATH: &str = ".agents/skills/fixture/SKILL.md";
     const SKILL_BYTES: &[u8] = b"# Fixture skill\n";
 
-    async fn seed_checkout_forges(dir: &Path) -> Result<(Project, PathBuf, PathBuf)> {
+    async fn seed_checkout_forges(dir: &Path, host: &str) -> Result<(Project, PathBuf, PathBuf)> {
         let origin = dir.join("origin.git");
         let mirror = dir.join("mirror.git");
         let seed = dir.join("seed");
@@ -878,7 +878,7 @@ mod tests {
         command(&seed, "git", &["config", "commit.gpgsign", "false"]).await?;
         std::fs::write(
             seed.join("navigator.yaml"),
-            "project:\n  name: matter\n  host: site.example.test\n",
+            format!("project:\n  name: matter\n  host: {host}\n"),
         )?;
         std::fs::create_dir_all(seed.join(".agents/skills/fixture"))?;
         std::fs::write(seed.join(SKILL_PATH), SKILL_BYTES)?;
@@ -975,6 +975,239 @@ mod tests {
         assert!(!root.join("missing").exists());
         assert_eq!(std::fs::read(root.join("occupied"))?, b"local work");
         Ok(())
+    }
+
+    use crate::projects::test_login::{answer, checkout, site};
+    use serde_json::json;
+
+    const GITHUB: &str = "https://github.com/sample-firm/sample-matter";
+    const MIRROR: &str = "https://forge.example.test/sample-firm/sample-matter";
+    const SITE: &str = "https://site.example.test";
+    const MANIFEST: &str = "project:\n  name: sample-matter\n  host: site.example.test\n";
+
+    fn listed(code: &str, url: Option<&str>) -> Project {
+        Project {
+            id: Uuid::new_v4(),
+            code: code.into(),
+            status: "open".into(),
+            repository_url: url.map(str::to_owned),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_checkout_is_refused_before_any_clone_when_its_inventory_is_unsafe() {
+        let server = MockServer::start().await;
+        let base = server.uri();
+        let dir = tempfile::tempdir().unwrap();
+        let sync = |project: Project| {
+            let base = base.clone();
+            let dir = dir.path().to_path_buf();
+            async move {
+                sync_checkout(&dir, &project, &base, "t")
+                    .await
+                    .unwrap_err()
+                    .to_string()
+            }
+        };
+        assert_eq!(
+            sync(listed("Not A Code", Some(GITHUB))).await,
+            "invalid Project code"
+        );
+        assert_eq!(
+            sync(listed("sample-matter", None)).await,
+            "no repository URL is visible"
+        );
+        assert_eq!(
+            sync(listed("sample-matter", Some("/srv/git/matter"))).await,
+            "unsupported repository transport"
+        );
+        for (remotes, expected) in [
+            (
+                json!({"origin": MIRROR}),
+                "repository inventory changed; retry sync",
+            ),
+            (
+                json!({"origin": GITHUB, "forgejo": GITHUB, "forgejo_status": "verified"}),
+                "verified Forgejo mirror has no distinct URL; retry sync",
+            ),
+        ] {
+            let project = listed("sample-matter", Some(GITHUB));
+            let door = format!("/app/api/projects/{}", project.id);
+            let status = json!({"repository_remotes": remotes});
+            answer(&server, "GET", &door, 200, status).await;
+            assert_eq!(sync(project).await, expected);
+        }
+        assert!(!dir.path().join("sample-matter").exists());
+    }
+
+    #[tokio::test]
+    async fn an_existing_checkout_must_be_this_projects_clean_git_checkout() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let dir = temp.path().canonicalize()?;
+        let project = listed("sample-matter", Some(GITHUB));
+        let place = |manifest: &str, origin: &str| -> Result<PathBuf> {
+            let root = dir.join("sample-matter");
+            if root.exists() {
+                std::fs::remove_dir_all(&root)?;
+            }
+            let fixture = checkout(manifest, Some(origin));
+            std::fs::rename(fixture.path(), &root)?;
+            Ok(root)
+        };
+        let update = || async {
+            update_checkout(&dir, &project, GITHUB, FetchRemotes::Origin, SITE)
+                .await
+                .unwrap_err()
+                .to_string()
+        };
+        place(&MANIFEST.replace("site.", "other."), GITHUB)?;
+        assert_eq!(
+            update().await,
+            "local manifest names a different Navigator host"
+        );
+        place(&MANIFEST.replace("sample-matter", "another-matter"), GITHUB)?;
+        assert_eq!(update().await, "local manifest names a different Project");
+        place(MANIFEST, MIRROR)?;
+        assert_eq!(
+            update().await,
+            "local origin differs from the Project repository"
+        );
+        let root = place(MANIFEST, GITHUB)?;
+        assert_eq!(update().await, "checkout has local work; skipped");
+        std::fs::write(root.join(".jj"), "not a store")?;
+        assert_eq!(update().await, "jj metadata is not a directory");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_mirror_is_added_to_origin_pushes_only_when_no_other_destination_is_set() -> Result<()>
+    {
+        let fixture = checkout(MANIFEST, Some(GITHUB));
+        let root = fixture.path();
+        let push_urls = || check_push_destinations(root, &[GITHUB, MIRROR]);
+        assert_eq!(push_urls()?, "");
+        for _ in 0..2 {
+            configure_mirror(root, GITHUB, MIRROR).await?;
+            assert_eq!(
+                push_urls()?.lines().collect::<Vec<_>>(),
+                vec![GITHUB, MIRROR]
+            );
+        }
+        let error = check_push_destinations(root, &[GITHUB]).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("origin has an unexpected push destination"));
+        let other = "https://forge.example.test/other/sample-matter";
+        let error = configure_mirror(root, GITHUB, other).await.unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("configured Forgejo remote differs from the Project"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn sync_processes_every_active_project_and_reports_the_ones_needing_attention() {
+        let inventory = json!([
+            {"id": Uuid::new_v4(), "code": "closed-matter", "status": "closed"},
+            {"id": Uuid::new_v4(), "code": "sample-matter", "status": "open"},
+        ]);
+        let (server, _login) = site(inventory).await;
+        let host = server.uri();
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("checkouts");
+
+        assert_eq!(run_sync(&host, Some(&root), true).await, ExitCode::SUCCESS);
+        assert!(!root.exists(), "a dry run writes nothing");
+        assert_eq!(
+            active_codes(&host, "test-token").await.unwrap(),
+            vec!["sample-matter"]
+        );
+
+        std::fs::create_dir_all(root.join("closed-matter")).unwrap();
+        let error = sync_once(&host, None, &root).await.unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "some checkouts need attention; other Projects were still processed"
+        );
+        assert!(root.join("AGENTS.md").is_file());
+        assert!(root.join("closed-matter").is_dir());
+        assert_eq!(run_sync(&host, Some(&root), false).await, ExitCode::FAILURE);
+        assert_eq!(run_sync(&host, Some(&root), true).await, ExitCode::SUCCESS);
+
+        let error = sync_project(Some(&host), "closed-matter", Some(&root))
+            .await
+            .unwrap_err();
+        assert!(format!("{error:#}")
+            .contains("opened Project is absent from the active participation inventory"));
+
+        poll(&root, Some(&host), &mut HashMap::new()).await.unwrap();
+
+        let link = temp.path().join("link");
+        std::os::unix::fs::symlink(&root, &link).unwrap();
+        let error = sync_once(&host, None, &link).await.unwrap_err();
+        assert_eq!(error.to_string(), "checkout root is a symlink");
+
+        let signed_out = Some("signed-out.example.test");
+        assert_eq!(run(Some(&root), signed_out).await, ExitCode::from(2));
+        assert_eq!(
+            run_sync("signed-out.example.test", Some(&root), true).await,
+            ExitCode::from(2)
+        );
+    }
+
+    #[tokio::test]
+    async fn sync_clones_an_active_project_then_leaves_its_local_work_alone() -> Result<()> {
+        let _jj = crate::projects::test_login::jj_stand_in();
+        let url = "https://forge.example.test/sample-firm/matter";
+        let id = Uuid::new_v4();
+        let inventory =
+            json!([{"id": id, "code": "matter", "status": "open", "repository_url": url}]);
+        let (server, _login) = site(inventory).await;
+        let host = server.uri();
+        let door = format!("/app/api/projects/{id}");
+        let status = json!({"repository_remotes": {"origin": url}});
+        answer(&server, "GET", &door, 200, status).await;
+        let temp = tempfile::tempdir()?;
+        let forges = temp.path().join("forges");
+        std::fs::create_dir(&forges)?;
+        let (_, origin, _) = seed_checkout_forges(&forges, &host).await?;
+        // Git reads the hosted source URL from the local bare repository.
+        std::env::set_var("GIT_CONFIG_COUNT", "1");
+        let rewrite = format!("url.{}.insteadOf", origin.display());
+        std::env::set_var("GIT_CONFIG_KEY_0", rewrite);
+        std::env::set_var("GIT_CONFIG_VALUE_0", url);
+
+        let root = temp.path().join("checkouts");
+        assert_eq!(run_sync(&host, Some(&root), false).await, ExitCode::SUCCESS);
+        let checkout = root.join("matter");
+        assert!(checkout.join(".jj").is_dir());
+        assert_eq!(std::fs::read(checkout.join(SKILL_PATH))?, SKILL_BYTES);
+        let configured = command(&checkout, "git", &["config", "--get", "remote.origin.url"]);
+        assert_eq!(configured.await?.trim(), url);
+
+        sync_project(Some(&host), "matter", Some(&root)).await?;
+        poll(&root.canonicalize()?, Some(&host), &mut HashMap::new()).await?;
+
+        std::fs::write(checkout.join("local.txt"), "unfinished work")?;
+        assert_eq!(run_sync(&host, Some(&root), false).await, ExitCode::FAILURE);
+        assert_eq!(
+            std::fs::read_to_string(checkout.join("local.txt"))?,
+            "unfinished work"
+        );
+
+        // The watch reports that checkout on each pass and keeps running.
+        let watching = tokio::time::timeout(Duration::from_millis(500), watch(&root, Some(&host)));
+        assert!(watching.await.is_err(), "the watch runs until interrupted");
+        Ok(())
+    }
+
+    #[test]
+    fn a_checkout_root_that_is_a_file_cannot_be_previewed() {
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("occupied");
+        std::fs::write(&file, b"local work").unwrap();
+        let error = checkout_preview(&file, Vec::new()).err().unwrap();
+        assert_eq!(error.to_string(), "checkout root is not a directory");
     }
 
     #[tokio::test]

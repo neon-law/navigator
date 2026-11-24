@@ -40,6 +40,10 @@ fn repository() -> tempfile::TempDir {
 
 fn track(root: &Path, path: &str, text: &str) {
     std::fs::write(root.join(path), text).unwrap();
+    track_existing(root, path);
+}
+
+fn track_existing(root: &Path, path: &str) {
     assert!(Command::new("git")
         .args(["add", "--", path])
         .current_dir(root)
@@ -238,6 +242,202 @@ async fn empty_exception_reasons_are_refused_before_network_access() {
     )
     .unwrap();
     assert!(audit_tree(repo.path(), "http://127.0.0.1:1").await.is_err());
+}
+
+#[test]
+fn the_analyzer_must_be_a_plain_loopback_origin() {
+    for refused in [
+        "not a url",
+        "http://localhost:3000",
+        "https://127.0.0.1:3000",
+        "http://scanner@127.0.0.1:3000",
+        "http://127.0.0.1:3000/analyze",
+        "http://127.0.0.1:3000/?language=en",
+        "http://127.0.0.1:3000/#fragment",
+    ] {
+        assert!(endpoint(refused).is_err(), "{refused}");
+    }
+    for local in ["http://127.0.0.1:3000", "http://[::1]:3000/"] {
+        assert_eq!(endpoint(local).unwrap().path(), "/", "{local}");
+    }
+}
+
+#[tokio::test]
+async fn text_the_allowlist_or_the_file_type_excludes_never_reaches_the_analyzer() {
+    let repo = repository();
+    std::fs::write(
+        repo.path().join(".github/pii/allowlist.toml"),
+        "[[paths]]\nreason = 'Vendored code'\nvalues = ['third_party/*']\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(repo.path().join("third_party")).unwrap();
+    track(repo.path(), "third_party/credits.md", "Zelda Quillstone\n");
+    track(repo.path(), "logo.svg", "Zelda Quillstone\n");
+    track(
+        repo.path(),
+        "reviewed.md",
+        "Zelda Quillstone <!-- pii-scan: allow -->\nshort\nno candidate on this line\n",
+    );
+    std::fs::write(repo.path().join("scan.bin.md"), [0xff, 0xfe, 0x40]).unwrap();
+    track_existing(repo.path(), "scan.bin.md");
+    let server = analyzer(serde_json::json!([
+        {"entity_type":"PERSON", "start":0, "end":16, "score":0.85}
+    ]))
+    .await;
+
+    let found = audit_tree(repo.path(), &server.uri()).await.unwrap();
+
+    assert!(found.is_empty(), "{found:?}");
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 2, "only the recognizer checks are sent");
+}
+
+#[tokio::test]
+async fn weak_or_implausible_detections_are_not_findings() {
+    let repo = repository();
+    track(repo.path(), "sample.md", "Zelda Quillstone wrote this.\n");
+    let server = analyzer(serde_json::json!([
+        {"entity_type":"PERSON", "start":0, "end":16, "score":0.2},
+        {"entity_type":"PERSON", "start":0, "end":5, "score":0.9},
+        {"entity_type":"US_SSN", "start":0, "end":5, "score":0.9},
+        {"entity_type":"PHONE_NUMBER", "start":0, "end":5, "score":0.9},
+        {"entity_type":"IBAN_CODE", "start":17, "end":22, "score":0.9}
+    ]))
+    .await;
+    let found = audit_tree(repo.path(), &server.uri()).await.unwrap();
+    assert_eq!(
+        found,
+        vec![Finding {
+            path: "sample.md".into(),
+            line: 1,
+            entity: "IBAN_CODE".into()
+        }]
+    );
+}
+
+#[tokio::test]
+async fn inputs_the_scan_cannot_bound_fail_closed() {
+    let oversized = "@".repeat(MAX_LINE_CHARS + 1);
+    let repo = repository();
+    track(repo.path(), "sample.md", &oversized);
+    let server = analyzer(serde_json::json!([])).await;
+    let error = audit_tree(repo.path(), &server.uri()).await.unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "PII input line exceeds the analyzer limit"
+    );
+
+    let repo = repository();
+    std::os::unix::fs::symlink("sample.md", repo.path().join("link.md")).unwrap();
+    track_existing(repo.path(), "link.md");
+    let error = audit_tree(repo.path(), &server.uri()).await.unwrap_err();
+    assert_eq!(error.to_string(), "PII input cannot be a symlink");
+
+    let outside_git = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(outside_git.path().join(".github/pii")).unwrap();
+    std::fs::write(outside_git.path().join(ALLOWLIST), "").unwrap();
+    let error = audit_tree(outside_git.path(), &server.uri())
+        .await
+        .unwrap_err();
+    assert_eq!(error.to_string(), "PII scan requires a Git checkout");
+
+    Mock::given(method("POST"))
+        .and(path("/analyze"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![b' '; MAX_RESPONSE_BYTES + 1]))
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    let error = audit_tree(repo.path(), &server.uri()).await.unwrap_err();
+    assert_eq!(error.to_string(), "PII analyzer response exceeds its limit");
+}
+
+#[test]
+fn only_plausible_values_of_each_category_count() {
+    let patterns = Patterns::new().unwrap();
+    for (entity, value, plausible) in [
+        ("EMAIL_ADDRESS", "sample@contact.example", true),
+        ("EMAIL_ADDRESS", "{user}@contact.example", false),
+        ("EMAIL_ADDRESS", "git@contact.example/path", false),
+        ("PHONE_NUMBER", "(702) 555-0100", true),
+        ("PHONE_NUMBER", "+44 20 5550 0100", true), // pii-scan: allow — synthetic fixture
+        ("PHONE_NUMBER", "2099-01-02", false),
+        ("US_SSN", "000-00-0000", true), // pii-scan: allow — synthetic fixture
+        ("US_ITIN", "000 00 0000", true), // pii-scan: allow — synthetic fixture
+        ("US_SSN", "000000000", false),
+        ("PERSON", "Zelda Quillstone", true),
+        ("PERSON", "Zelda", false),
+        ("PERSON", "zelda quillstone", false),
+        ("CREDIT_CARD", "0000", true),
+    ] {
+        assert_eq!(patterns.plausible(entity, value), plausible, "{value}");
+    }
+}
+
+#[test]
+fn only_prose_strings_and_comments_of_a_source_line_are_scanned() {
+    let patterns = Patterns::new().unwrap();
+    for (path, line, text) in [
+        (
+            "docs/letter.md",
+            "Dear Sample Client,",
+            "Dear Sample Client,",
+        ),
+        ("NOTICE", "Copyright the authors", "Copyright the authors"),
+        ("mark.png", "Sample Client", ""),
+        (
+            "src/lib.rs",
+            r#"let name = "Sample Client"; // signed by counsel"#,
+            "Sample Client  signed by counsel",
+        ),
+        (
+            "src/lib.rs",
+            r#""a wrapped string // with slashes""#,
+            "a wrapped string // with slashes",
+        ),
+        ("schema.sql", "-- owner note", "owner note"),
+        ("run.sh", "echo ok # owner note", "owner note"),
+        ("src/lib.rs", "let count = 3;", ""),
+    ] {
+        assert_eq!(patterns.human_text(path, line), text, "{path}: {line}");
+    }
+}
+
+#[test]
+fn reviewed_exceptions_cover_paths_values_and_names() {
+    let patterns = Patterns::new().unwrap();
+    let allow = Allowlist::parse(concat!(
+        "[[paths]]\nreason = 'Vendored'\nvalues = ['vendor/*', 'notice', 'fixtures/?.json']\n",
+        "[[values]]\nreason = 'Reviewed'\nvalues = ['fixture-value']\n",
+        "[[name_tokens]]\nreason = 'Synthetic'\nvalues = ['sample', 'client']\n",
+        "[[non_name_words]]\nreason = 'A typeface'\nvalues = ['serif']\n",
+    ))
+    .unwrap();
+    for (path, skipped) in [
+        ("Vendor/pkg/lib.rs", true),
+        ("NOTICE", true),
+        ("fixtures/a.json", true),
+        ("fixtures/ab.json", false),
+        ("src/vendor/lib.rs", false),
+    ] {
+        assert_eq!(allow.skips(path).unwrap(), skipped, "{path}");
+    }
+    for (entity, value, allowed) in [
+        ("CREDIT_CARD", " FIXTURE-VALUE ", true),
+        ("CREDIT_CARD", "0000", false),
+        ("PERSON", "Sample Client's", true),
+        ("PERSON", "Sample Quillstone", false), // pii-scan: allow — synthetic fixture
+        ("PERSON", "Quillstone Serif", true),
+        ("PHONE_NUMBER", "(702) 555-0100", true),
+    ] {
+        assert_eq!(allow.allows(entity, value, &patterns), allowed, "{value}");
+    }
+    for malformed in [
+        "[[names]]\nreason = 'No values'\nvalues = []\n",
+        "[[names]]\nreason = 'Blank value'\nvalues = [' ']\n",
+        "[[names]]\nreason = 'Unknown key'\nvalues = ['Fixture Person']\nowner = 'x'\n",
+    ] {
+        assert!(Allowlist::parse(malformed).is_err(), "{malformed}");
+    }
 }
 
 #[test]

@@ -26,24 +26,25 @@ pub(in crate::devx) fn run(
         println!("Governed squash auto-merge accepted for PR {number}");
     } else {
         let drift = runtime.block_on(forgejo.reconcile(repository, context, dry_run))?;
-        if drift.is_empty() {
-            println!("Readable merge controls already match");
-        } else {
-            println!(
-                "{}: {}",
-                if dry_run {
-                    "Would reconcile"
-                } else {
-                    "Reconciled and verified readable controls"
-                },
-                drift.join(", ")
-            );
-        }
-        if !dry_run {
-            println!("Manual-merge controls written off; the API cannot verify their state");
-        }
+        println!("{}", reconciliation_report(&drift, dry_run));
     }
     Ok(())
+}
+
+/// What a reconcile pass tells the operator about the controls it found drifted.
+fn reconciliation_report(drift: &[String], dry_run: bool) -> String {
+    let mut report = match (drift.is_empty(), dry_run) {
+        (true, _) => "Readable merge controls already match".to_owned(),
+        (false, true) => format!("Would reconcile: {}", drift.join(", ")),
+        (false, false) => format!(
+            "Reconciled and verified readable controls: {}",
+            drift.join(", ")
+        ),
+    };
+    if !dry_run {
+        report += "\nManual-merge controls written off; the API cannot verify their state";
+    }
+    report
 }
 
 pub(in crate::devx) mod scheduler {
@@ -64,6 +65,26 @@ pub(in crate::devx) mod scheduler {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_reconcile_names_its_drift_and_only_a_real_run_claims_a_write() {
+        let drift = ["required checks".to_owned(), "merge style".to_owned()];
+        assert_eq!(
+            super::reconciliation_report(&drift, true),
+            "Would reconcile: required checks, merge style"
+        );
+        assert_eq!(
+            super::reconciliation_report(&drift, false),
+            "Reconciled and verified readable controls: required checks, merge style\n\
+             Manual-merge controls written off; the API cannot verify their state"
+        );
+        assert_eq!(
+            super::reconciliation_report(&[], true),
+            "Readable merge controls already match"
+        );
+        assert!(super::reconciliation_report(&[], false)
+            .starts_with("Readable merge controls already match\nManual-merge"));
+    }
+
     #[test]
     fn the_shared_required_context_is_what_the_gate_workflow_posts_on_a_pull_request() {
         assert_eq!(

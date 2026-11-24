@@ -127,19 +127,10 @@ async fn call(request: reqwest::RequestBuilder, action: &str) -> Result<Value> {
 }
 
 fn finish(command: &str, result: Result<Value>) -> ExitCode {
-    match result {
-        Ok(value) => {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&value).unwrap_or_default()
-            );
-            ExitCode::SUCCESS
-        }
-        Err(error) => {
-            eprintln!("navigator {command}: {error:#}");
-            ExitCode::FAILURE
-        }
-    }
+    crate::billing::finish(
+        command,
+        result.map(|value| serde_json::to_string_pretty(&value).unwrap_or_default()),
+    )
 }
 
 pub async fn run(firm: String, host: Option<String>, action: LegalPlansCmd) -> ExitCode {

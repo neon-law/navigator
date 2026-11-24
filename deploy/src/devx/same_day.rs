@@ -19,7 +19,7 @@ use std::process::Command;
 use anyhow::{Context, Result};
 
 use super::orchestrate::{require_tools, run, workspace_root};
-use super::webapp::copy_dir_all;
+use super::webapp::stage_bundle;
 
 /// Build the `same-day-preview` wasm bundle and stage it under
 /// `server/public/same-day`. `release` selects an optimized build (the
@@ -44,8 +44,20 @@ pub fn build(release: bool) -> Result<()> {
         "==> dx build --platform web{} (from same-day-preview/)",
         if release { " --release" } else { "" }
     );
+    run(&mut build_command(&crate_dir, release))?;
+
+    let dest = staging_dir(&root);
+    stage_bundle(&bundle_dir(&root, release), &dest)?;
+    eprintln!(
+        "==> staged Same Day Legal preview bundle -> {}",
+        dest.display()
+    );
+    Ok(())
+}
+
+fn build_command(crate_dir: &Path, release: bool) -> Command {
     let mut cmd = Command::new("dx");
-    cmd.current_dir(&crate_dir)
+    cmd.current_dir(crate_dir)
         .arg("build")
         .arg("--platform")
         .arg("web");
@@ -59,27 +71,7 @@ pub fn build(release: bool) -> Result<()> {
         // the public.
         cmd.arg("--release").arg("--debug-symbols").arg("false");
     }
-    run(&mut cmd)?;
-
-    let bundle = bundle_dir(&root, release);
-    if !bundle.join("index.html").is_file() {
-        anyhow::bail!(
-            "dx did not produce a bundle at {} (no index.html)",
-            bundle.display()
-        );
-    }
-
-    let dest = staging_dir(&root);
-    if dest.exists() {
-        std::fs::remove_dir_all(&dest)
-            .with_context(|| format!("clearing stale bundle at {}", dest.display()))?;
-    }
-    copy_dir_all(&bundle, &dest)?;
-    eprintln!(
-        "==> staged Same Day Legal preview bundle -> {}",
-        dest.display()
-    );
-    Ok(())
+    cmd
 }
 
 /// The environment variable overriding where the staged Same Day Legal bundle is
@@ -120,7 +112,32 @@ fn staging_dir(root: &Path) -> PathBuf {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{bundle_dir, staging_dir};
+    use super::{build_command, bundle_dir, staging_dir};
+
+    #[test]
+    fn dx_builds_from_the_crate_workspace_and_strips_symbols_only_for_release() {
+        let crate_dir = Path::new("/checkout/same-day-preview");
+        let debug = build_command(crate_dir, false);
+        assert_eq!(debug.get_program(), "dx");
+        assert_eq!(debug.get_current_dir(), Some(crate_dir));
+        assert_eq!(
+            debug.get_args().collect::<Vec<_>>(),
+            ["build", "--platform", "web"]
+        );
+        assert_eq!(
+            build_command(crate_dir, true)
+                .get_args()
+                .collect::<Vec<_>>(),
+            [
+                "build",
+                "--platform",
+                "web",
+                "--release",
+                "--debug-symbols",
+                "false"
+            ]
+        );
+    }
 
     #[test]
     fn the_bundle_path_follows_the_dx_layout_for_the_crate_workspace() {
