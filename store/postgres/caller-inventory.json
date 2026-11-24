@@ -5934,6 +5934,7 @@
       "portal/src/openapi.rs",
       "portal/src/pleading.rs",
       "portal/src/project_documents.rs",
+      "portal/src/retainer_walk.rs",
       "portal/src/start_door.rs",
       "portal/src/template_gallery.rs",
       "portal/src/webhook_auth.rs",
