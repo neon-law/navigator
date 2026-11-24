@@ -70,6 +70,9 @@ impl MirrorOutcome {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MirrorReport {
     pub outcome: MirrorOutcome,
+    /// Provider verification detail for a recorded calendar.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calendar_problem: Option<String>,
     /// The pass reported a plan instead of writing it.
     pub dry_run: bool,
     /// The pass would create or adopt the Project's calendar before writing.
@@ -137,16 +140,16 @@ pub async fn reconcile(
     let recorded = recorded_calendar_id(&project);
     if dry_run {
         return if let Some(calendar_id) = recorded {
-            if calendar
-                .recorded_calendar_matches(&project.code, &calendar_id)
+            if let Some(problem) = calendar
+                .recorded_calendar_problem(&project.code, &calendar_id)
                 .await?
             {
-                reconcile_rows(surreal, calendar, &calendar_id, &project, base_url, dry_run).await
+                Ok(MirrorReport {
+                    calendar_problem: Some(problem.into()),
+                    ..MirrorReport::empty(MirrorOutcome::RecordedResourceMissing, dry_run)
+                })
             } else {
-                Ok(MirrorReport::empty(
-                    MirrorOutcome::RecordedResourceMissing,
-                    dry_run,
-                ))
+                reconcile_rows(surreal, calendar, &calendar_id, &project, base_url, dry_run).await
             }
         } else {
             // No calendar yet: a first pass would create one and insert
@@ -328,6 +331,7 @@ impl MirrorReport {
     fn empty(outcome: MirrorOutcome, dry_run: bool) -> Self {
         Self {
             outcome,
+            calendar_problem: None,
             dry_run,
             creates_calendar: false,
             upserted: Vec::new(),
@@ -349,6 +353,9 @@ pub fn report_line(report: &MirrorReport) -> String {
         report.in_sync,
         report.deleted.len(),
     );
+    if let Some(problem) = &report.calendar_problem {
+        let _ = write!(line, " {problem}");
+    }
     if !report.failures.is_empty() {
         let _ = write!(line, " failed={}", report.failures.len());
     }

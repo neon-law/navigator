@@ -11,8 +11,9 @@ repository records the same id as `navigator.yaml` `project.calendar_id`.
 
 `navigator project setup` creates or adopts the named calendar and records its id. A new calendar starts with only its
 owner. Setup, the Deadline mirror, and closing check the recorded id against the expected name and delegated owner. A
-missing or mismatched calendar returns `recorded_resource_missing`. Verify the intended calendar and use `navigator
-project set --calendar <id>` to correct the link. A rerun reuses the verified calendar.
+missing or mismatched calendar returns `recorded_resource_missing`. Run `navigator project deadline sync --dry-run` to
+check the delegated owner, Project name, and deployment. Preserve the recorded ID while investigating visibility. Use
+`navigator project set --calendar <id>` after verifying the intended replacement. A rerun reuses the verified calendar.
 
 When the Firm has a [Workspace calendar owner](firm-calendar-settings.md), DBOS checks assignments on its recorded
 calendars every six hours on the [DBOS schedule](../dbos-durability.md#project-calendar-membership). It also provisions
@@ -29,8 +30,8 @@ Closing the Project makes writers readers and clears the [Booking Link](booking-
 links to the shared calendar under Resources until [Project Calendar Retirement](project-calendar-retirement.md)
 completes. The event backups remain available after the live calendar is deleted.
 
-Create, update, complete, and cancel [Deadlines](deadline.md) in Navigator. Cancelling a Deadline removes its mirrored event. The mirror reads its own calendar events to
-reconcile changes and preserves unrelated events.
+Create, update, complete, and cancel [Deadlines](deadline.md) in Navigator. Cancelling a Deadline removes its mirrored event. The mirror reads
+its own calendar events to reconcile changes and preserves unrelated events.
 
 Run `navigator project calendar` in the Project checkout or give it `--project <code>`. It lists event IDs, summaries,
 and times for the next 24 hours by default. Use `--start` and `--end` for an RFC 3339 window of up to 31 days. The
