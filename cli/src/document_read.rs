@@ -94,11 +94,6 @@ fn pointer_yaml_path(root: &Path, pointer: &Path) -> Result<PathBuf> {
         .unwrap_or(written))
 }
 
-/// Resolve `(Project code, login host)` from `<root>/navigator.yaml`.
-fn manifest_at(root: &Path) -> Result<(String, Option<String>)> {
-    read_manifest(root)
-}
-
 /// The check `log` and `get` reuse — one implementation for the drift those
 /// reads report:
 ///
@@ -169,26 +164,38 @@ pub fn check_pointer_drift(
     Ok(())
 }
 
+/// The live chain of the document `pointer` names, the committed pointer it
+/// was checked against, and the client that read it.
+struct Chain {
+    slug: String,
+    live: RevisionsResponse,
+    local: Option<DocumentPointer>,
+    client: DocumentClient,
+}
+
 /// Fetch the live chain and check it against the local pointer, if one is
-/// committed. Shared by `log` and `get` so both fail identically on drift.
-async fn revisions_for(
-    root: &Path,
-    pointer: &Path,
-) -> Result<(String, RevisionsResponse, Option<DocumentPointer>)> {
-    let (project_code, host) = manifest_at(root)?;
+/// committed. Shared by `log`, `get`, and `diff` so all fail identically on
+/// drift.
+async fn revisions_for(root: &Path, pointer: &Path) -> Result<Chain> {
+    let (project_code, host) = read_manifest(root)?;
     let slug = slug_from_pointer(root, pointer)?;
     let client = DocumentClient::connect(host.as_deref(), &project_code).await?;
     let live = client.list_revisions(&slug).await?;
     let local = read_pointer(&pointer_yaml_path(root, pointer)?)?;
     check_pointer_drift(local.as_ref(), &live.revisions)?;
-    Ok((slug, live, local))
+    Ok(Chain {
+        slug,
+        live,
+        local,
+        client,
+    })
 }
 
 /// `navigator site document log <pointer>`.
 pub async fn log(pointer: &Path) -> ExitCode {
     run(async {
         let root = Path::new(".");
-        let (slug, live, _local) = revisions_for(root, pointer).await?;
+        let Chain { slug, live, .. } = revisions_for(root, pointer).await?;
         if live.revisions.is_empty() {
             println!("no revision of `{slug}` is visible under your lens");
             return Ok(());
@@ -314,7 +321,12 @@ pub async fn get(pointer: &Path, version: Option<usize>, out: &Path) -> ExitCode
     run(async {
         let root = Path::new(".");
         refuse_destination_in_documents(root, pointer, out)?;
-        let (_slug, live, local) = revisions_for(root, pointer).await?;
+        let Chain {
+            live,
+            local,
+            client,
+            ..
+        } = revisions_for(root, pointer).await?;
         let target = select_version(&live, version)?.clone();
 
         if lexical(root, out).starts_with(lexical(root, Path::new("documents")))
@@ -328,8 +340,6 @@ pub async fn get(pointer: &Path, version: Option<usize>, out: &Path) -> ExitCode
             ));
         }
 
-        let (project_code, host) = manifest_at(root)?;
-        let client = DocumentClient::connect(host.as_deref(), &project_code).await?;
         let bytes = client.download_revision(target.asset_id).await?;
 
         // The pointer's own `sha256` is the one guarantee that does not depend
@@ -470,12 +480,10 @@ fn line_diff(left: &str, right: &str) -> Result<String> {
 pub async fn diff(pointer: &Path, a: usize, b: usize) -> ExitCode {
     run(async {
         let root = Path::new(".");
-        let (_slug, live, _local) = revisions_for(root, pointer).await?;
+        let Chain { live, client, .. } = revisions_for(root, pointer).await?;
         let rev_a = select_version(&live, Some(a))?.clone();
         let rev_b = select_version(&live, Some(b))?.clone();
 
-        let (project_code, host) = manifest_at(root)?;
-        let client = DocumentClient::connect(host.as_deref(), &project_code).await?;
         let bytes_a = client.download_revision(rev_a.asset_id).await?;
         let bytes_b = client.download_revision(rev_b.asset_id).await?;
         let text_a = extract_text(&rev_a.filename, &bytes_a)?;
@@ -611,7 +619,7 @@ pub async fn validate_live_pointers(root: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        check_pointer_drift, discover_pointers, extract_text, lexical, line_diff, manifest_at,
+        check_pointer_drift, discover_pointers, extract_text, lexical, line_diff,
         pointer_yaml_path, refuse_destination_in_documents, select_version, slug_from_pointer,
     };
     use crate::remote::{RevisionSummary, RevisionsResponse};
@@ -696,21 +704,6 @@ mod tests {
     fn slug_refuses_a_path_outside_documents() {
         let root = Path::new("/repo");
         assert!(slug_from_pointer(root, Path::new("templates/foo.md")).is_err());
-    }
-
-    #[test]
-    fn manifest_at_resolves_project_and_host_from_a_v2_manifest() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join("navigator.yaml"),
-            "version: \"1.0.0\"\nproject:\n  host: staging.neonlaw.com\n  name: acme\n",
-        )
-        .unwrap();
-
-        let (project, host) = manifest_at(dir.path()).unwrap();
-
-        assert_eq!(project, "acme");
-        assert_eq!(host, Some("staging.neonlaw.com".to_string()));
     }
 
     #[test]
@@ -1052,6 +1045,64 @@ mod tests {
     #[test]
     fn plain_text_extracts_verbatim() {
         assert_eq!(extract_text("notice.txt", b"hello").unwrap(), "hello");
+    }
+
+    #[test]
+    fn text_extraction_names_what_it_cannot_read() {
+        let cases: [(&str, &[u8], &str); 4] = [
+            ("scan.pdf", b"not a pdf", "is a PDF `diff` could not read"),
+            ("notes.txt", &[0xff, 0xfe], "is not valid UTF-8"),
+            ("photo.png", b"", "`.png` is unsupported for `diff`"),
+            ("README", b"", "has no extension `diff` can classify"),
+        ];
+        for (filename, bytes, reason) in cases {
+            let error = extract_text(filename, bytes).unwrap_err().to_string();
+            assert!(error.contains(reason), "{filename}: {error}");
+        }
+    }
+
+    #[test]
+    fn line_diff_reports_the_lines_only_one_side_ends_with_and_refuses_an_oversized_side() {
+        assert_eq!(line_diff("a\nb\n", "a\n").unwrap(), "  a\n- b\n");
+        assert_eq!(line_diff("a\n", "a\nb\n").unwrap(), "  a\n+ b\n");
+        let oversized = "line\n".repeat(super::MAX_DIFF_LINES + 1);
+        let error = line_diff(&oversized, "line\n").unwrap_err().to_string();
+        assert!(error.contains("more than 20000 lines"), "{error}");
+    }
+
+    #[test]
+    fn a_chain_with_no_operative_revision_is_drift_and_selects_nothing() {
+        let stale = revision(1, Uuid::max(), false);
+        let pointer: store::document_pointers::DocumentPointer =
+            serde_json::from_value(serde_json::json!({
+                "kind": "agreement",
+                "visibility": "internal",
+                "current_version": {
+                    "version": 1,
+                    "asset_id": stale.asset_id,
+                    "created_at": stale.created_at,
+                    "sha256": stale.sha256,
+                    "size_bytes": stale.size_bytes,
+                },
+            }))
+            .unwrap();
+        let live = RevisionsResponse {
+            kind: "agreement".to_string(),
+            revisions: vec![stale],
+        };
+
+        let drift = check_pointer_drift(Some(&pointer), &live.revisions).unwrap_err();
+        assert!(
+            drift.to_string().contains("names no operative revision"),
+            "{drift}"
+        );
+        let none = select_version(&live, None).unwrap_err();
+        assert!(none.to_string().contains("no revision is visible"));
+        let expunged = check_pointer_drift(Some(&pointer), &[]).unwrap_err();
+        assert!(
+            expunged.to_string().contains("(live revisions: none)"),
+            "{expunged}"
+        );
     }
 
     #[test]

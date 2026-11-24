@@ -10,6 +10,7 @@ use std::process::ExitCode;
 use anyhow::{anyhow, Context, Result};
 use base64::Engine as _;
 use clap::Subcommand;
+use futures::future::{BoxFuture, FutureExt as _};
 use reqwest::{Method, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -1849,6 +1850,10 @@ fn refresh_form<'a>(
     form
 }
 
+/// How a verb reaches Gmail: `client` in the binary, a client on a mock
+/// server in tests. A verb connects only after its local refusals.
+type Connect<'a> = &'a (dyn Fn() -> BoxFuture<'static, Result<GmailClient>> + Sync);
+
 async fn client() -> Result<GmailClient> {
     let (account, client_id) = configured_setup()?;
     let refresh_token = keychain_refresh_token(&account).with_context(|| {
@@ -1857,22 +1862,25 @@ async fn client() -> Result<GmailClient> {
         )
     })?;
     let client_secret = keychain_read(CLIENT_SECRET_SERVICE, &client_id)?;
+    let form = refresh_form(&client_id, client_secret.as_deref(), &refresh_token);
+    GmailClient::new(access_token(GOOGLE_TOKEN_API, &account, &form).await?)
+}
+
+/// Redeems the refresh token at `token_api` for an access token carrying
+/// exactly the two scopes; a broader grant deletes the stored refresh token.
+async fn access_token(token_api: &str, account: &str, form: &[(&str, &str)]) -> Result<String> {
     let response = reqwest::Client::new()
-        .post(GOOGLE_TOKEN_API)
-        .form(&refresh_form(
-            &client_id,
-            client_secret.as_deref(),
-            &refresh_token,
-        ))
+        .post(token_api)
+        .form(form)
         .timeout(std::time::Duration::from_secs(30))
         .send()
         .await
         .context("refresh Gmail access token")?;
     let token = login::token_response(response).await?;
     if let Err(error) = login::check_granted_scopes(token.scope.as_deref()) {
-        return Err(login::refuse_stored_token(&account, error));
+        return Err(login::refuse_stored_token(account, error));
     }
-    GmailClient::new(token.access_token)
+    Ok(token.access_token)
 }
 
 fn keychain_refresh_token(account: &str) -> Result<String> {
@@ -1951,7 +1959,7 @@ fn finish(result: Result<()>) -> ExitCode {
 }
 
 pub async fn run(action: MailAction) -> ExitCode {
-    finish(run_inner(action).await)
+    finish(run_inner(action, &|| client().boxed()).await)
 }
 
 /// The label `inbox process --apply` removes to archive a Gmail copy.
@@ -1977,7 +1985,7 @@ pub async fn archive(reference: &str) -> Result<()> {
 }
 
 #[allow(clippy::too_many_lines)] // one dispatch arm per verb; each arm delegates
-async fn run_inner(action: MailAction) -> Result<()> {
+async fn run_inner(action: MailAction, connect: Connect<'_>) -> Result<()> {
     match action {
         MailAction::Search {
             query,
@@ -1990,7 +1998,7 @@ async fn run_inner(action: MailAction) -> Result<()> {
                 SearchScope::from_manifest()
             };
             let scoped = scoped_query(&query, &scope);
-            let threads = client().await?.search(&scoped, all).await?;
+            let threads = connect().await?.search(&scoped, all).await?;
             if threads.is_empty() && scoped != query {
                 eprintln!(
                     "navigator mail: no threads matched within this Project's scope (its client \
@@ -2004,7 +2012,7 @@ async fn run_inner(action: MailAction) -> Result<()> {
         }
         MailAction::InboxPreview { limit } => {
             let limit = limit.map_or(usize::MAX, NonZeroUsize::get);
-            for thread in client().await?.inbox_preview(limit).await? {
+            for thread in connect().await?.inbox_preview(limit).await? {
                 println!("{}", serde_json::to_string(&thread)?);
             }
             Ok(())
@@ -2012,7 +2020,7 @@ async fn run_inner(action: MailAction) -> Result<()> {
         MailAction::Read { thread } => {
             let (project, contact) = current_project_context();
             let thread = read_project_thread(
-                &client().await?,
+                &connect().await?,
                 &thread,
                 project.as_deref(),
                 contact.as_deref(),
@@ -2037,15 +2045,6 @@ async fn run_inner(action: MailAction) -> Result<()> {
                 (None, Some(path)) => (path, true),
                 (None, None) => return Err(anyhow!("pass --body-file or --html-body-file")),
             };
-            // The signature resolves before any Gmail contact: the runtime
-            // source is the deployment's stored row for the sending
-            // account's Person, the env var is the announced offline
-            // fallback, and neither yielding a block refuses below.
-            let env_signature = std::env::var("NAVIGATOR_GMAIL_SIGNATURE").ok();
-            let sending_account = configured_setup().ok().map(|(account, _)| account);
-            let resolved =
-                resolve_draft_signature(env_signature.as_deref(), sending_account.as_deref()).await;
-            announce_signature_resolution(&resolved);
             let request = DraftRequest {
                 to,
                 cc,
@@ -2056,9 +2055,9 @@ async fn run_inner(action: MailAction) -> Result<()> {
                 thread,
                 draft_id,
                 attach,
-                configured_signature: resolved.signature_body(),
+                configured_signature: announced_signature().await,
             };
-            let saved = save_draft_command(request, client).await?;
+            let saved = save_draft_command(request, connect).await?;
             println!(
                 "Draft saved unsent with {} attachment(s). Gmail Drafts mailbox: https://mail.google.com/mail/#drafts (choose account {}). Gmail API draft ID: {}.",
                 saved.attachments, saved.account, saved.id
@@ -2095,11 +2094,6 @@ async fn run_inner(action: MailAction) -> Result<()> {
             }
             let body = tempfile::NamedTempFile::new().context("create the job sheet file")?;
             std::fs::write(body.path(), job.sheet()).context("write the job sheet")?;
-            let env_signature = std::env::var("NAVIGATOR_GMAIL_SIGNATURE").ok();
-            let sending_account = configured_setup().ok().map(|(account, _)| account);
-            let resolved =
-                resolve_draft_signature(env_signature.as_deref(), sending_account.as_deref()).await;
-            announce_signature_resolution(&resolved);
             let saved = save_draft_command(
                 DraftRequest {
                     to: vec![job.vendor.clone()],
@@ -2111,9 +2105,9 @@ async fn run_inner(action: MailAction) -> Result<()> {
                     thread: None,
                     draft_id: None,
                     attach: job.pdfs.clone(),
-                    configured_signature: resolved.signature_body(),
+                    configured_signature: announced_signature().await,
                 },
-                client,
+                connect,
             )
             .await?;
             println!(
@@ -2144,7 +2138,7 @@ async fn run_inner(action: MailAction) -> Result<()> {
             dir,
             only,
             include_inline,
-        } => attachments::run(&reference, &dir, only.as_deref(), include_inline).await,
+        } => attachments::run(&reference, &dir, only.as_deref(), include_inline, connect).await,
         MailAction::Sync {
             project,
             host,
@@ -2152,14 +2146,8 @@ async fn run_inner(action: MailAction) -> Result<()> {
             kind,
             watch,
         } => {
-            sync_mail(
-                project.as_deref(),
-                host.as_deref(),
-                label.as_deref(),
-                &kind,
-                watch,
-            )
-            .await
+            let target = (project.as_deref(), host.as_deref());
+            sync_mail(target, label.as_deref(), &kind, watch, connect).await
         }
         MailAction::File {
             thread,
@@ -2167,13 +2155,8 @@ async fn run_inner(action: MailAction) -> Result<()> {
             host,
             kind,
         } => {
-            file_thread(
-                &thread,
-                project.as_deref(),
-                host.as_deref(),
-                kind.as_deref(),
-            )
-            .await
+            let target = (project.as_deref(), host.as_deref());
+            file_thread(&thread, target, kind.as_deref(), connect).await
         }
         MailAction::Parse {
             visibility,
@@ -2185,11 +2168,11 @@ async fn run_inner(action: MailAction) -> Result<()> {
         } => {
             parse_command(
                 &reference,
-                project.as_deref(),
-                host.as_deref(),
+                (project.as_deref(), host.as_deref()),
                 kind.as_deref(),
                 visibility.as_deref(),
                 gmail_thread_id.as_deref(),
+                connect,
             )
             .await
         }
@@ -2197,27 +2180,25 @@ async fn run_inner(action: MailAction) -> Result<()> {
             reference,
             dir,
             name,
-        } => save_message_command(&reference, dir.as_deref(), name.as_deref()).await,
+        } => save_message_command(&reference, dir.as_deref(), name.as_deref(), connect).await,
         MailAction::ImportInbox {
             reference,
             thread,
             mailbox,
             apply,
             host,
-        } => import_inbox(&reference, thread, &mailbox, apply, host.as_deref()).await,
+        } => {
+            let host = host.as_deref();
+            import_inbox(&reference, thread, &mailbox, apply, host, connect).await
+        }
         MailAction::Ingest {
             path,
             project,
             host,
             provider_account,
         } => {
-            ingest_provider_message(
-                &path,
-                project.as_deref(),
-                host.as_deref(),
-                provider_account.as_deref(),
-            )
-            .await
+            let target = (project.as_deref(), host.as_deref());
+            ingest_provider_message(&path, target, provider_account.as_deref()).await
         }
     }
 }
@@ -2295,6 +2276,18 @@ fn announce_signature_resolution(resolved: &ResolvedSignature) {
         }
         ResolvedSignature::Neither(reason) => eprintln!("{reason}"),
     }
+}
+
+/// The signature block a draft verb signs with, announced on stderr. It
+/// resolves before any Gmail contact; `None` leaves the Gmail account's
+/// default signature to sign, and a blank one refuses in `save_draft_command`.
+async fn announced_signature() -> Option<String> {
+    let env_signature = std::env::var("NAVIGATOR_GMAIL_SIGNATURE").ok();
+    let sending_account = configured_setup().ok().map(|(account, _)| account);
+    let resolved =
+        resolve_draft_signature(env_signature.as_deref(), sending_account.as_deref()).await;
+    announce_signature_resolution(&resolved);
+    resolved.signature_body()
 }
 
 /// Resolve the signature a draft wears: the deployment's stored row for the
@@ -2690,10 +2683,11 @@ async fn import_inbox(
     mailbox: &str,
     apply: bool,
     host: Option<&str>,
+    connect: Connect<'_>,
 ) -> Result<()> {
     if thread {
         let id = import_inbox_thread_id(reference)?;
-        let gmail = client().await?;
+        let gmail = connect().await?;
         let account = verify_gmail_import_mailbox(&gmail, mailbox).await?;
         if !apply {
             println!("Would import the Gmail thread into the Inbox for individual review.");
@@ -2712,7 +2706,7 @@ async fn import_inbox(
         return Ok(());
     }
     let id = import_inbox_message_id(reference)?;
-    let gmail = client().await?;
+    let gmail = connect().await?;
     let Some((account, raw)) = gmail_inbox_import_source(&gmail, &id, mailbox, apply).await? else {
         println!("Would import one Gmail Message into the Inbox.");
         return Ok(());
@@ -2728,31 +2722,21 @@ async fn import_inbox(
 /// the message does not carry.
 async fn ingest_provider_message(
     path: &Path,
-    project_code: Option<&str>,
-    host: Option<&str>,
+    flags: ProjectFlags<'_>,
     provider_account: Option<&str>,
 ) -> Result<()> {
     let raw = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
-    let local = crate::projects::manifest::read(Path::new("."));
-    let project_code = project_code
-        .or_else(|| {
-            local
-                .as_ref()
-                .and_then(|manifest| manifest.project.as_deref())
-        })
-        .ok_or_else(|| anyhow!("pass --project or run from a Project checkout"))?;
-    let host = host.or_else(|| local.as_ref().and_then(|manifest| manifest.host.as_deref()));
-    let (base, navigator_token) = crate::remote::resolve(host)?;
-    let project_id =
-        crate::projects::surfaces::resolve_project_id(&base, &navigator_token, project_code)
-            .await?;
+    let project = FilingProject::resolve(flags).await?;
     let body = json!({
         "raw": base64::engine::general_purpose::STANDARD.encode(&raw),
         "provider_account": provider_account,
     });
     let response = reqwest::Client::new()
-        .post(format!("{base}/app/api/projects/{project_id}/inbox-ingest"))
-        .bearer_auth(navigator_token)
+        .post(format!(
+            "{}/app/api/projects/{}/inbox-ingest",
+            project.base, project.id
+        ))
+        .bearer_auth(project.token)
         .timeout(std::time::Duration::from_secs(30))
         .json(&body)
         .send()
@@ -2778,11 +2762,11 @@ fn matter_label_query(label: &str) -> Result<String> {
 }
 
 async fn sync_mail(
-    project: Option<&str>,
-    host: Option<&str>,
+    (project, host): ProjectFlags<'_>,
     label: Option<&str>,
     kind: &str,
     watch: bool,
+    connect: Connect<'_>,
 ) -> Result<()> {
     let local = crate::projects::manifest::read(Path::new("."));
     let project = project
@@ -2791,13 +2775,12 @@ async fn sync_mail(
     let host = host.or_else(|| local.as_ref().and_then(|m| m.host.as_deref()));
     let query = matter_label_query(label.unwrap_or(project))?;
     // Verify the target before fetching any mailbox content.
-    let (base, token) = crate::remote::resolve(host)?;
-    crate::projects::surfaces::resolve_project_id(&base, &token, project).await?;
+    FilingProject::resolve((Some(project), host)).await?;
     loop {
-        let gmail = client().await?;
+        let gmail = connect().await?;
         let threads = gmail.search(&query, true).await?;
         for thread in threads {
-            file_thread(&thread.id, Some(project), host, Some(kind)).await?;
+            file_thread(&thread.id, (Some(project), host), Some(kind), connect).await?;
         }
         if !watch {
             return Ok(());
@@ -2809,48 +2792,77 @@ async fn sync_mail(
     }
 }
 
-async fn file_thread(
-    thread_id: &str,
-    project_code: Option<&str>,
-    host: Option<&str>,
-    kind: Option<&str>,
-) -> Result<()> {
-    let kind = kind.unwrap_or(DEFAULT_PARSE_UPLOAD_KIND);
-    let local = crate::projects::manifest::read(Path::new("."));
-    let project_code = project_code
-        .or_else(|| {
-            local
-                .as_ref()
-                .and_then(|manifest| manifest.project.as_deref())
+/// The `--project` and `--host` flags of a filing verb.
+type ProjectFlags<'a> = (Option<&'a str>, Option<&'a str>);
+
+/// The Project a filing verb writes to, verified on the deployment before
+/// any mailbox content is fetched.
+struct FilingProject {
+    local: Option<crate::projects::manifest::Manifest>,
+    code: String,
+    base: String,
+    token: String,
+    id: Uuid,
+}
+
+impl FilingProject {
+    /// The flags win; the checkout's manifest fills what they leave out.
+    async fn resolve((project, host): ProjectFlags<'_>) -> Result<Self> {
+        let local = crate::projects::manifest::read(Path::new("."));
+        let code = project
+            .or_else(|| local.as_ref().and_then(|m| m.project.as_deref()))
+            .ok_or_else(|| anyhow!("pass --project or run from a Project checkout"))?
+            .to_owned();
+        let host = host.or_else(|| local.as_ref().and_then(|m| m.host.as_deref()));
+        let (base, token) = crate::remote::resolve(host)?;
+        let id = crate::projects::surfaces::resolve_project_id(&base, &token, &code).await?;
+        Ok(Self {
+            local,
+            code,
+            base,
+            token,
+            id,
         })
-        .ok_or_else(|| anyhow!("pass --project or run from a Project checkout"))?;
-    let host = host.or_else(|| local.as_ref().and_then(|manifest| manifest.host.as_deref()));
-    let (base, navigator_token) = crate::remote::resolve(host)?;
-    let project_id =
-        crate::projects::surfaces::resolve_project_id(&base, &navigator_token, project_code)
-            .await?;
-    let gmail = client().await?;
-    let profile = gmail.profile().await?;
-    let expected_contact = local.as_ref().and_then(|manifest| {
+    }
+
+    /// The client contact the checkout declares for this Project.
+    fn contact(&self) -> Option<String> {
+        let manifest = self.local.as_ref()?;
         manifest_project_contact(
-            Some(project_code),
+            Some(&self.code),
             manifest.project.as_deref(),
             manifest.client_dri.as_deref(),
         )
-    });
+    }
+
+    fn target<'a>(&'a self, mailbox: &'a str) -> FileTarget<'a> {
+        FileTarget {
+            base: &self.base,
+            navigator_token: &self.token,
+            project_id: self.id,
+            mailbox,
+        }
+    }
+}
+
+async fn file_thread(
+    thread_id: &str,
+    flags: ProjectFlags<'_>,
+    kind: Option<&str>,
+    connect: Connect<'_>,
+) -> Result<()> {
+    let kind = kind.unwrap_or(DEFAULT_PARSE_UPLOAD_KIND);
+    let project = FilingProject::resolve(flags).await?;
+    let gmail = connect().await?;
+    let profile = gmail.profile().await?;
     let thread = read_project_thread(
         &gmail,
         thread_id,
-        Some(project_code),
-        expected_contact.as_deref(),
+        Some(&project.code),
+        project.contact().as_deref(),
     )
     .await?;
-    let target = FileTarget {
-        base: &base,
-        navigator_token: &navigator_token,
-        project_id,
-        mailbox: &profile.email_address,
-    };
+    let target = project.target(&profile.email_address);
     let (messages_filed, attachments_filed) =
         file_thread_messages(&gmail, &target, &thread, kind).await?;
     println!(
@@ -2925,11 +2937,11 @@ struct FileTarget<'a> {
 /// the existing `navigator document upload` lane as a document.
 async fn parse_command(
     reference: &str,
-    project: Option<&str>,
-    host: Option<&str>,
+    flags: ProjectFlags<'_>,
     kind: Option<&str>,
     visibility: Option<&str>,
     thread_id: Option<&str>,
+    connect: Connect<'_>,
 ) -> Result<()> {
     let path = Path::new(reference);
     if (visibility.is_some() || thread_id.is_some())
@@ -2941,15 +2953,8 @@ async fn parse_command(
         anyhow::bail!("--visibility and --gmail-thread-id apply only to a local .eml");
     }
     if path.exists() {
-        return parse_local_file(
-            reference,
-            project,
-            host,
-            kind,
-            visibility.unwrap_or("internal"),
-            thread_id,
-        )
-        .await;
+        let visibility = visibility.unwrap_or("internal");
+        return parse_local_file(reference, flags, kind, visibility, thread_id).await;
     }
     let message_id = gmail_message_id(reference).ok_or_else(|| {
         unresolved_reference_or(
@@ -2958,7 +2963,7 @@ async fn parse_command(
         )
     })?;
     let names_conversation = reference_names_conversation(reference);
-    parse_gmail_message(&message_id, names_conversation, project, host, kind).await
+    parse_gmail_message(&message_id, names_conversation, flags, kind, connect).await
 }
 
 /// Whether a reference names a whole conversation rather than one message:
@@ -2984,21 +2989,13 @@ fn web_id_kind(token: &str) -> Option<String> {
 async fn parse_gmail_message(
     message_id: &str,
     names_conversation: bool,
-    project: Option<&str>,
-    host: Option<&str>,
+    flags: ProjectFlags<'_>,
     kind: Option<&str>,
+    connect: Connect<'_>,
 ) -> Result<()> {
     let kind = kind.unwrap_or(DEFAULT_PARSE_UPLOAD_KIND);
-    let local = crate::projects::manifest::read(Path::new("."));
-    let project_code = project
-        .or_else(|| local.as_ref().and_then(|m| m.project.as_deref()))
-        .ok_or_else(|| anyhow!("pass --project or run from a Project checkout"))?;
-    let host = host.or_else(|| local.as_ref().and_then(|m| m.host.as_deref()));
-    let (base, navigator_token) = crate::remote::resolve(host)?;
-    let project_id =
-        crate::projects::surfaces::resolve_project_id(&base, &navigator_token, project_code)
-            .await?;
-    let gmail = client().await?;
+    let project = FilingProject::resolve(flags).await?;
+    let gmail = connect().await?;
     let profile = gmail.profile().await?;
     // A conversation link names the thread, whose id is its first message.
     // The lawyer means the message in front of them: the newest one.
@@ -3037,26 +3034,14 @@ async fn parse_gmail_message(
         .ok_or_else(|| {
             anyhow!("message {message_id} has no supported text body; nothing was filed")
         })?;
-    let expected_contact = local.as_ref().and_then(|manifest| {
-        manifest_project_contact(
-            Some(project_code),
-            manifest.project.as_deref(),
-            manifest.client_dri.as_deref(),
-        )
-    });
-    if let Some(contact) = expected_contact {
+    if let Some(contact) = project.contact() {
         if !message_mentions_contact(&message, &contact) {
             eprintln!(
                 "warning: message does not appear to belong to this Project's client contact"
             );
         }
     }
-    let target = FileTarget {
-        base: &base,
-        navigator_token: &navigator_token,
-        project_id,
-        mailbox: &profile.email_address,
-    };
+    let target = project.target(&profile.email_address);
     if names.is_empty() {
         file_message(&target, &message, &body).await?;
         println!("Filed the message as a Communication");
@@ -3079,8 +3064,7 @@ async fn parse_gmail_message(
 
 async fn parse_local_file(
     reference: &str,
-    project: Option<&str>,
-    host: Option<&str>,
+    (project, host): ProjectFlags<'_>,
     kind: Option<&str>,
     visibility: &str,
     thread_id: Option<&str>,
@@ -3232,20 +3216,7 @@ async fn upload_and_file_eml(
         "text_body": parsed.body,
         "occurred_at": parsed.occurred_at,
     });
-    let base = client.base();
-    let project_id = client.project_id();
-    let response = reqwest::Client::new()
-        .post(format!("{base}/app/api/projects/{project_id}/mail/eml"))
-        .bearer_auth(client.token())
-        .json(&request)
-        .timeout(std::time::Duration::from_secs(30))
-        .send()
-        .await
-        .context("file the .eml through the mail/eml door")?;
-    if !response.status().is_success() {
-        return Err(refused("file the .eml", response).await);
-    }
-    let filed = response.json().await.context("read the door's response")?;
+    let filed = post_eml(client.base(), client.token(), client.project_id(), &request).await?;
     if let Some(root) = source.checkout {
         let path =
             crate::document_sync::write_uploaded_pointer(root, &source_slug, &source_pointer)?;
@@ -3431,10 +3402,21 @@ async fn post_eml_with_source(
     if let Some(mailbox) = mailbox {
         request["mailbox"] = json!(mailbox);
     }
+    post_eml(base, navigator_token, project_id, &request).await
+}
+
+/// POST one filing request to the Project's `mail/eml` door and read its
+/// answer; a refusal carries the door's own reason.
+async fn post_eml(
+    base: &str,
+    token: &str,
+    project_id: Uuid,
+    request: &serde_json::Value,
+) -> Result<serde_json::Value> {
     let response = reqwest::Client::new()
         .post(format!("{base}/app/api/projects/{project_id}/mail/eml"))
-        .bearer_auth(navigator_token)
-        .json(&request)
+        .bearer_auth(token)
+        .json(request)
         .timeout(std::time::Duration::from_secs(30))
         .send()
         .await
@@ -3554,12 +3536,13 @@ async fn save_message_command(
     reference: &str,
     dir: Option<&Path>,
     name: Option<&str>,
+    connect: Connect<'_>,
 ) -> Result<()> {
     let message_id = gmail_message_id(reference).ok_or_else(|| unresolved_reference(reference))?;
     if let Some(name) = name {
         check_mail_save_name(name)?;
     }
-    let gmail = client().await?;
+    let gmail = connect().await?;
     let raw_field = gmail.raw_message(&message_id).await?;
     let raw = decode_gmail_raw(
         raw_field
@@ -5939,11 +5922,11 @@ see docs/mail-cli.md#provision-gmail-for-navigator-mail."
     async fn parse_save_and_file_references_are_named_when_unusable() {
         let error = parse_command(
             "definitely-absent-reference.txt",
-            Some("p"),
+            (Some("p"), None),
             None,
             None,
             None,
-            None,
+            &no_gmail,
         )
         .await
         .unwrap_err();
@@ -5954,7 +5937,7 @@ see docs/mail-cli.md#provision-gmail-for-navigator-mail."
             "{error}"
         );
 
-        let error = save_message_command("definitely-absent-reference.txt", None, None)
+        let error = save_message_command("definitely-absent-reference.txt", None, None, &no_gmail)
             .await
             .unwrap_err();
         assert!(
@@ -5964,8 +5947,15 @@ see docs/mail-cli.md#provision-gmail-for-navigator-mail."
             "{error}"
         );
 
-        let error = file_thread("thread-1", None, None, None).await.unwrap_err();
+        let error = file_thread("thread-1", (None, None), None, &no_gmail)
+            .await
+            .unwrap_err();
         assert!(error.to_string().contains("pass --project"), "{error}");
+    }
+
+    /// A `connect` for verbs that refuse before they reach Gmail.
+    fn no_gmail() -> BoxFuture<'static, Result<GmailClient>> {
+        async { Err(anyhow!("Gmail was contacted")) }.boxed()
     }
 
     #[tokio::test]
@@ -6831,27 +6821,26 @@ Can I sign electronically?\r\n\
     #[tokio::test]
     async fn local_commands_refuse_unusable_inputs_before_any_network_call() {
         let directory = tempfile::tempdir().unwrap();
-        let error = ingest_provider_message(&directory.path().join("absent.eml"), None, None, None)
+        let none = (None, None);
+        let error = ingest_provider_message(&directory.path().join("absent.eml"), none, None)
             .await
             .unwrap_err();
         assert!(error.to_string().starts_with("read "), "{error}");
 
         let eml = directory.path().join("2026.10.30_Question.eml");
         std::fs::write(&eml, "Subject: x\r\n\r\nbody").unwrap();
-        let error = ingest_provider_message(&eml, None, None, None)
-            .await
-            .unwrap_err();
+        let error = ingest_provider_message(&eml, none, None).await.unwrap_err();
         assert!(error.to_string().contains("pass --project"), "{error}");
 
         let pdf = directory.path().join("letter.pdf");
         std::fs::write(&pdf, b"%PDF-1.4").unwrap();
         for path in [&eml, &pdf] {
-            let error = parse_command(path.to_str().unwrap(), None, None, None, None, None)
+            let error = parse_command(path.to_str().unwrap(), none, None, None, None, &no_gmail)
                 .await
                 .unwrap_err();
             assert!(error.to_string().contains("pass --project"), "{error}");
         }
-        let error = parse_gmail_message("18fa3bc2d4e5f6a7", false, None, None, None)
+        let error = parse_gmail_message("18fa3bc2d4e5f6a7", false, none, None, &no_gmail)
             .await
             .unwrap_err();
         assert!(error.to_string().contains("pass --project"), "{error}");
@@ -6863,7 +6852,7 @@ Can I sign electronically?\r\n\
                 .contains("cannot resolve a Gmail message id"),
             "{error}"
         );
-        let error = save_message_command("18fa3bc2d4e5f6a7", None, Some("Question.eml"))
+        let error = save_message_command("18fa3bc2d4e5f6a7", None, Some("Question.eml"), &no_gmail)
             .await
             .unwrap_err();
         assert!(
@@ -7209,5 +7198,712 @@ Can I sign electronically?\r\n\
             serde_json::json!([INBOX_LABEL]),
             "the archive is the INBOX label write, never a delete or a send"
         );
+    }
+
+    /// Each verb through the dispatch. One mock server answers as Gmail and
+    /// as the Navigator site, and the site session is a file in a tempdir.
+    mod verbs {
+        use super::*;
+        use clap::Parser as _;
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer, Request, ResponseTemplate};
+
+        const LAWYER: &str = "lawyer@example.test";
+        const PROJECT: &str = "sample-litigation";
+        const FOLLOW_UP: &[u8] = b"From: lawyer@example.test\r\nTo: client@example.test\r\n\
+Date: Fri, 30 Oct 2026 14:03:00 +0000\r\nSubject: Follow-up\r\n\r\nOwn message.";
+
+        /// `NAVIGATOR_CREDENTIALS_FILE` is process-wide; one desk at a time.
+        static SESSION: std::sync::LazyLock<tokio::sync::Mutex<()>> =
+            std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
+
+        #[derive(clap::Parser)]
+        struct Cli {
+            #[command(subcommand)]
+            action: MailAction,
+        }
+
+        struct Desk {
+            server: MockServer,
+            project: Uuid,
+            dir: tempfile::TempDir,
+            previous: Option<String>,
+            _session: tokio::sync::MutexGuard<'static, ()>,
+        }
+
+        impl Desk {
+            /// A signed-in lawyer whose mailbox is `LAWYER` and who sees one
+            /// Project, `PROJECT`.
+            async fn open() -> Self {
+                let session = SESSION.lock().await;
+                let server = MockServer::start().await;
+                let dir = tempfile::tempdir().unwrap();
+                let file = dir.path().join("navigator.json");
+                let mut credentials = crate::credentials::Credentials::default();
+                credentials.set(
+                    server.uri(),
+                    crate::credentials::HostCredential {
+                        token: "site-token".into(),
+                        person_email: None,
+                        role: None,
+                        expires_at: chrono::Utc::now().timestamp() + 3600,
+                    },
+                );
+                crate::credentials::save(&file, &credentials).unwrap();
+                let previous = std::env::var("NAVIGATOR_CREDENTIALS_FILE").ok();
+                std::env::set_var("NAVIGATOR_CREDENTIALS_FILE", &file);
+                let desk = Self {
+                    server,
+                    project: Uuid::now_v7(),
+                    dir,
+                    previous,
+                    _session: session,
+                };
+                let projects = json!([{ "id": desk.project, "code": PROJECT }]);
+                desk.answer("GET", "/app/api/projects", projects).await;
+                let profile = json!({ "emailAddress": LAWYER });
+                desk.answer("GET", "/users/me/profile", profile).await;
+                desk
+            }
+
+            async fn answer(&self, verb: &str, at: &str, body: serde_json::Value) {
+                Mock::given(method(verb))
+                    .and(path(at))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(body))
+                    .mount(&self.server)
+                    .await;
+            }
+
+            /// One Gmail message in `format`: `full` JSON or its `raw` copy.
+            async fn message(&self, id: &str, format: &str, body: serde_json::Value) {
+                Mock::given(method("GET"))
+                    .and(path(format!("/users/me/messages/{id}")))
+                    .and(query_param("format", format))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(body))
+                    .mount(&self.server)
+                    .await;
+            }
+
+            fn door(&self, name: &str) -> String {
+                format!("/app/api/projects/{}/{name}", self.project)
+            }
+
+            async fn run(&self, arguments: &[&str]) -> Result<()> {
+                let line = std::iter::once("mail").chain(arguments.iter().copied());
+                self.dispatch(Cli::try_parse_from(line).unwrap().action)
+                    .await
+            }
+
+            async fn dispatch(&self, action: MailAction) -> Result<()> {
+                let base = Url::parse(&self.server.uri()).unwrap();
+                run_inner(action, &move || {
+                    let gmail = GmailClient::with_base_url("gmail-token".into(), base.clone());
+                    async move { Ok(gmail) }.boxed()
+                })
+                .await
+            }
+
+            /// The requests the server received for `verb` on `at`, in order.
+            async fn sent(&self, verb: &str, at: &str) -> Vec<Request> {
+                let mut requests = self.server.received_requests().await.unwrap();
+                requests
+                    .retain(|request| request.method.as_str() == verb && request.url.path() == at);
+                requests
+            }
+
+            async fn bodies(&self, at: &str) -> Vec<serde_json::Value> {
+                let posts = self.sent("POST", at).await;
+                posts
+                    .iter()
+                    .map(|request| serde_json::from_slice(&request.body).unwrap())
+                    .collect()
+            }
+        }
+
+        impl Drop for Desk {
+            fn drop(&mut self) {
+                match self.previous.take() {
+                    Some(file) => std::env::set_var("NAVIGATOR_CREDENTIALS_FILE", file),
+                    None => std::env::remove_var("NAVIGATOR_CREDENTIALS_FILE"),
+                }
+            }
+        }
+
+        fn query_value(request: &Request, name: &str) -> String {
+            let mut pairs = request.url.query_pairs();
+            pairs
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value.into_owned())
+                .unwrap_or_default()
+        }
+
+        fn text_message(id: &str, labels: &[&str]) -> serde_json::Value {
+            json!({
+                "id": id,
+                "labelIds": labels,
+                "internalDate": "1760000000000",
+                "payload": {
+                    "mimeType": "text/plain",
+                    "headers": [
+                        { "name": "From", "value": "Client <client@example.test>" },
+                        { "name": "To", "value": LAWYER },
+                        { "name": "Subject", "value": "Signing question" }
+                    ],
+                    "body": { "data": encoded(b"Can I sign electronically?") }
+                }
+            })
+        }
+
+        #[tokio::test]
+        async fn search_preview_and_read_reach_gmail_through_the_connected_client() {
+            let desk = Desk::open().await;
+            let threads = json!({ "threads": [{ "id": "thread-01", "snippet": "Retainer" }] });
+            desk.answer("GET", "/users/me/threads", threads).await;
+            let thread = json!({
+                "id": "thread-01",
+                "messages": [text_message("message-01", &["INBOX"])]
+            });
+            desk.answer("GET", "/users/me/threads/thread-01", thread)
+                .await;
+
+            desk.run(&["search", "from:client", "--all"]).await.unwrap();
+            desk.run(&["inbox-preview", "--limit", "1"]).await.unwrap();
+            desk.run(&["read", "thread-01"]).await.unwrap();
+
+            let searches = desk.sent("GET", "/users/me/threads").await;
+            let queries: Vec<String> = searches
+                .iter()
+                .map(|request| query_value(request, "q"))
+                .collect();
+            assert_eq!(queries, ["from:client", "in:inbox"]);
+            let reads = desk.sent("GET", "/users/me/threads/thread-01").await;
+            assert_eq!(reads.len(), 2, "one preview read and one thread read");
+        }
+
+        #[tokio::test]
+        async fn draft_signs_with_the_stored_signature_and_saves_unsent() {
+            let desk = Desk::open().await;
+            store_setup(&setup_path(), LAWYER, "client-id").unwrap();
+            let stored = json!({
+                "person_id": Uuid::now_v7(), "body": CONFIGURED_SIGNATURE, "updated_at": null
+            });
+            desk.answer("GET", "/app/api/mail-signature", stored).await;
+            desk.answer("POST", "/users/me/drafts", json!({ "id": "draft-01" }))
+                .await;
+            let plain = write_file(desk.dir.path(), "body.txt", b"Please review.");
+            let html = write_file(
+                desk.dir.path(),
+                "body.html",
+                b"<p>Please <b>review</b>.</p>",
+            );
+            let to = ["--to", "client@example.test", "--subject", "Review"];
+            for body in [
+                ["--body-file", plain.to_str().unwrap()],
+                ["--html-body-file", html.to_str().unwrap()],
+            ] {
+                desk.run(&[&["draft"][..], &to, &body].concat())
+                    .await
+                    .unwrap();
+            }
+
+            let drafts = desk.sent("POST", "/users/me/drafts").await;
+            assert_eq!(drafts.len(), 2);
+            let (_, raw) = decoded_draft(&drafts[0]);
+            let text = parsed(&raw).body_text(0).unwrap().replace("\r\n", "\n");
+            assert!(
+                text.starts_with(&format!("Please review.\n\n-- \n{CONFIGURED_SIGNATURE}")),
+                "{text}"
+            );
+            let (_, raw) = decoded_draft(&drafts[1]);
+            assert!(parsed(&raw).body_html(0).unwrap().contains("<b>review</b>"));
+            let asked = desk.sent("GET", "/app/api/mail-signature").await;
+            assert_eq!(asked.len(), 2, "each draft resolves its signature first");
+
+            let neither = MailAction::Draft {
+                to: vec!["client@example.test".into()],
+                cc: Vec::new(),
+                bcc: Vec::new(),
+                subject: None,
+                body_file: None,
+                html_body_file: None,
+                thread: None,
+                draft_id: None,
+                attach: Vec::new(),
+            };
+            let error = desk.dispatch(neither).await.unwrap_err();
+            assert!(error.to_string().contains("pass --body-file"), "{error}");
+        }
+
+        #[tokio::test]
+        async fn packet_prints_a_dry_run_and_drafts_the_job_sheet_to_the_vendor() {
+            let desk = Desk::open().await;
+            let send_as = json!({ "signature": "<div>Example Attorney</div>" });
+            desk.answer(
+                "GET",
+                &format!("/users/me/settings/sendAs/{LAWYER}"),
+                send_as,
+            )
+            .await;
+            desk.answer("POST", "/users/me/drafts", json!({ "id": "draft-01" }))
+                .await;
+            let signed = pdf::render_document_with_options(
+                "Signed reply.\n",
+                pdf::OutputFormat::Plain,
+                &pdf::Letterhead::default(),
+                &pdf::RenderOptions::default(),
+            )
+            .unwrap();
+            let packet = write_file(desk.dir.path(), "2026.11.12_reply.pdf", &signed);
+            let job = [
+                "packet",
+                packet.to_str().unwrap(),
+                "--vendor",
+                "jobs@mail-center.example",
+                "--recipient",
+                "Sample Client",
+                "--recipient",
+                "Sampleton, UT 84000",
+                "--mail-by",
+                "2026-12-01",
+            ];
+
+            desk.run(&[&job[..], &["--dry-run"]].concat())
+                .await
+                .unwrap();
+            assert!(desk.sent("POST", "/users/me/drafts").await.is_empty());
+
+            desk.run(&job).await.unwrap();
+            let drafts = desk.sent("POST", "/users/me/drafts").await;
+            let (_, raw) = decoded_draft(&drafts[0]);
+            let message = parsed(&raw);
+            assert_eq!(
+                message.subject(),
+                Some("Mail job: USPS Certified Mail to Sample Client by December 1, 2026")
+            );
+            let attached = attachment_summary(&message);
+            assert_eq!(attached.len(), 1);
+            assert_eq!(attached[0].0, "2026.11.12_reply.pdf");
+            assert_eq!(attached[0].2, signed);
+        }
+
+        #[tokio::test]
+        async fn file_and_sync_file_each_non_draft_thread_message_through_the_eml_door() {
+            let desk = Desk::open().await;
+            let threads = json!({ "threads": [{ "id": "thread-01" }] });
+            desk.answer("GET", "/users/me/threads", threads).await;
+            let thread = json!({ "id": "thread-01", "messages": [
+                { "id": "message-01", "labelIds": ["SENT"] },
+                { "id": "draft-0001", "labelIds": ["DRAFT"] }
+            ]});
+            desk.answer("GET", "/users/me/threads/thread-01", thread)
+                .await;
+            desk.message("message-01", "raw", json!({ "raw": encoded(FOLLOW_UP) }))
+                .await;
+            let filed = json!({
+                "source_ref": "eml:follow-up", "deduped": false,
+                "filed": [{ "slug": "mail/follow-up/0.png" }],
+                "skipped": [{ "filename": "b.exe", "reason": "unsupported_type" }]
+            });
+            desk.answer("POST", &desk.door("mail/eml"), filed).await;
+
+            let target = ["--project", PROJECT, "--kind", "exhibit"];
+            desk.run(&[&["file", "thread-01"][..], &target].concat())
+                .await
+                .unwrap();
+            desk.run(&[&["sync"][..], &target].concat()).await.unwrap();
+
+            let posts = desk.bodies(&desk.door("mail/eml")).await;
+            assert_eq!(posts.len(), 2, "the draft is never filed");
+            for post in &posts {
+                assert_eq!(post["gmail_message_id"], "message-01");
+                assert_eq!(post["gmail_sent"], true);
+                assert_eq!(post["mailbox"], LAWYER);
+                assert_eq!(post["kind"], "exhibit");
+            }
+            let searches = desk.sent("GET", "/users/me/threads").await;
+            assert_eq!(
+                query_value(&searches[0], "q"),
+                "label:\"sample-litigation\" -in:drafts"
+            );
+
+            let error = desk
+                .run(&[&["sync", "--label", "a\"b"][..], &target].concat())
+                .await
+                .unwrap_err();
+            assert!(
+                error.to_string().contains("nonempty Gmail label"),
+                "{error}"
+            );
+            assert_eq!(desk.sent("GET", "/users/me/threads").await.len(), 1);
+        }
+
+        #[tokio::test]
+        async fn parse_files_a_gmail_message_as_a_communication_or_with_its_attachments() {
+            let desk = Desk::open().await;
+            desk.message("message-01", "full", text_message("message-01", &["INBOX"]))
+                .await;
+            let mut with_attachment = text_message("message-02", &["INBOX"]);
+            with_attachment["payload"] = json!({ "mimeType": "multipart/mixed", "parts": [
+                { "mimeType": "text/plain", "body": { "data": encoded(b"Screenshot attached.") } },
+                { "mimeType": "image/png", "filename": "a.png", "body": {} }
+            ]});
+            desk.message("message-02", "full", with_attachment).await;
+            desk.message("message-02", "raw", json!({ "raw": encoded(FOLLOW_UP) }))
+                .await;
+            desk.message("message-03", "full", text_message("message-03", &["DRAFT"]))
+                .await;
+            let conversation = json!({ "id": "thread-02", "messages": [
+                { "id": "message-00" }, { "id": "message-01", "internalDate": "1760000000000" }
+            ]});
+            desk.answer("GET", "/users/me/threads/thread-02", conversation)
+                .await;
+            desk.answer("POST", &desk.door("communications"), json!({}))
+                .await;
+            let filed = json!({ "source_ref": "eml:a", "deduped": true, "filed": [{}] });
+            desk.answer("POST", &desk.door("mail/eml"), filed).await;
+
+            let target = ["--project", PROJECT, "--kind", "exhibit"];
+            for reference in [
+                "message-01",
+                "https://mail.google.com/mail/u/0/#inbox/thread-02",
+                "message-02",
+            ] {
+                desk.run(&[&["parse", reference][..], &target].concat())
+                    .await
+                    .unwrap();
+            }
+            let communications = desk.bodies(&desk.door("communications")).await;
+            assert_eq!(communications.len(), 2, "the link files its latest message");
+            for communication in &communications {
+                assert_eq!(
+                    communication["source_ref"],
+                    "gmail:lawyer@example.test:message-01"
+                );
+                assert_eq!(communication["body"], "Can I sign electronically?");
+            }
+            let eml = desk.bodies(&desk.door("mail/eml")).await;
+            assert_eq!(eml.len(), 1);
+            assert_eq!(eml[0]["gmail_message_id"], "message-02");
+            assert_eq!(eml[0]["kind"], "exhibit");
+
+            let draft = desk
+                .run(&[&["parse", "message-03"][..], &target].concat())
+                .await
+                .unwrap_err();
+            assert!(
+                draft.to_string().contains("drafts are not filed"),
+                "{draft}"
+            );
+            let flags = desk
+                .run(&["parse", "message-01", "--visibility", "client"])
+                .await
+                .unwrap_err();
+            assert!(
+                flags.to_string().contains("only to a local .eml"),
+                "{flags}"
+            );
+        }
+
+        #[tokio::test]
+        async fn parse_files_a_local_eml_by_reference_under_the_named_thread() {
+            let desk = Desk::open().await;
+            let letter = write_file(desk.dir.path(), "2025.10.09_letter.pdf", b"%PDF-1.4");
+            let upload = ["parse", letter.to_str().unwrap(), "--project"];
+            let unseen = [&upload[..], &["sample-estate"]].concat();
+            let error = desk.run(&unseen).await.unwrap_err();
+            assert_eq!(error.to_string(), "document upload failed");
+            let revision = json!({
+                "asset_id": Uuid::now_v7(), "version": 1, "created_at": "2026-11-20T12:00:00Z",
+                "sha256": model::documents::sha256_hex(SIGNING_QUESTION),
+                "size_bytes": SIGNING_QUESTION.len()
+            });
+            let pointer =
+                json!({ "kind": "letter", "visibility": "internal", "current_version": revision });
+            let mut head = revision;
+            head["filename"] = json!("message.eml");
+            head["operative"] = json!(true);
+            let documents = desk.door("documents");
+            let revisions = json!({ "kind": "letter", "revisions": [head] });
+            desk.answer("GET", &format!("{documents}/revisions"), revisions)
+                .await;
+            desk.answer("GET", &documents, json!([])).await;
+            Mock::given(method("PATCH"))
+                .respond_with(ResponseTemplate::new(200))
+                .mount(&desk.server)
+                .await;
+            desk.answer("POST", &documents, pointer).await;
+            let filed = json!({ "source_ref": "eml:signing-1@example.test", "deduped": false });
+            desk.answer("POST", &desk.door("mail/eml"), filed).await;
+            let saved = write_file(
+                desk.dir.path(),
+                "2025.10.09_Signing question.eml",
+                SIGNING_QUESTION,
+            );
+
+            let reference = saved.to_str().unwrap();
+            desk.run(&[
+                "parse",
+                reference,
+                "--project",
+                PROJECT,
+                "--gmail-thread-id",
+                "abc123",
+            ])
+            .await
+            .unwrap();
+
+            let uploads = desk.bodies(&documents).await;
+            assert_eq!(uploads.len(), 2, "the message and its one attachment");
+            assert!(uploads
+                .iter()
+                .any(|upload| upload["evidence"]["source"] == "Gmail thread abc123"));
+            let filing = desk.bodies(&desk.door("mail/eml")).await;
+            assert_reference_filing_body(&filing[0]);
+
+            // Any other local file rides the document lane, never the door.
+            desk.run(&[&upload[..], &[PROJECT]].concat()).await.unwrap();
+            assert_eq!(desk.bodies(&documents).await.len(), 3);
+            assert_eq!(desk.bodies(&desk.door("mail/eml")).await.len(), 1);
+        }
+
+        #[tokio::test]
+        async fn save_writes_the_raw_copy_once_with_its_thread_receipt() {
+            let desk = Desk::open().await;
+            let raw = json!({ "raw": encoded(FOLLOW_UP), "threadId": "thread-01" });
+            desk.message("message-01", "raw", raw).await;
+            let undated = json!({ "raw": encoded(b"Subject: No date\r\n\r\nBody.") });
+            desk.message("message-02", "raw", undated).await;
+            let dir = desk.dir.path().join("mail");
+
+            let save = ["save", "message-01", "--dir", dir.to_str().unwrap()];
+            desk.run(&save).await.unwrap();
+            desk.run(&save).await.unwrap();
+            let saved = dir.join(conventional_mail_name("2026.10.30", "Follow-up"));
+            assert_eq!(std::fs::read(&saved).unwrap(), FOLLOW_UP);
+            let receipt = source::thread_receipt(&saved, &model::documents::sha256_hex(FOLLOW_UP));
+            assert_eq!(std::fs::read_to_string(receipt).unwrap(), "thread-01");
+            assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
+
+            let error = desk
+                .run(&["save", "message-02", "--dir", dir.to_str().unwrap()])
+                .await
+                .unwrap_err();
+            assert!(error.to_string().contains("pass --name"), "{error}");
+        }
+
+        #[tokio::test]
+        async fn attachments_writes_only_the_selected_files() {
+            let desk = Desk::open().await;
+            let raw = json!({ "raw": encoded(SIGNING_QUESTION) });
+            desk.message("message-01", "raw", raw).await;
+            let dir = desk.dir.path().join("attachments");
+            let all = ["attachments", "message-01", "--dir", dir.to_str().unwrap()];
+
+            desk.run(&[&all[..], &["--only", "*.png"]].concat())
+                .await
+                .unwrap();
+            assert!(!dir.join("retainer.pdf").exists());
+            desk.run(&all).await.unwrap();
+            assert!(dir.join("retainer.pdf").is_file());
+        }
+
+        #[tokio::test]
+        async fn import_inbox_copies_messages_only_when_applied_to_the_verified_mailbox() {
+            const IMPORT: &str = "/app/api/inbox/import";
+            let desk = Desk::open().await;
+            let thread = json!({ "messages": [
+                { "id": "message-02", "labelIds": ["SENT"], "internalDate": "1760000002000" },
+                { "id": "draft-0001", "labelIds": ["DRAFT"], "internalDate": "1760000003000" },
+                { "id": "message-01", "labelIds": ["INBOX"], "internalDate": "1760000001000" }
+            ]});
+            desk.answer("GET", "/users/me/threads/thread-01", thread)
+                .await;
+            for id in ["message-01", "message-02"] {
+                desk.message(id, "raw", json!({ "raw": encoded(FOLLOW_UP) }))
+                    .await;
+            }
+            let imported = json!({ "archived_key": "inbox/key", "imported": [{
+                "message_id": Uuid::now_v7(), "conversation_id": Uuid::now_v7(),
+                "deduped": false, "direction": "inbound"
+            }]});
+            desk.answer("POST", IMPORT, imported).await;
+            let message = ["import-inbox", "message-01", "--mailbox", LAWYER];
+            let thread = ["import-inbox", "thread-01", "--thread", "--mailbox", LAWYER];
+
+            desk.run(&message).await.unwrap();
+            desk.run(&thread).await.unwrap();
+            assert!(
+                desk.sent("POST", IMPORT).await.is_empty(),
+                "a preview imports nothing"
+            );
+
+            desk.run(&[&message[..], &["--apply"]].concat())
+                .await
+                .unwrap();
+            desk.run(&[&thread[..], &["--apply"]].concat())
+                .await
+                .unwrap();
+            let imports = desk.bodies(IMPORT).await;
+            assert_eq!(imports.len(), 3, "one message, then the thread's two");
+            assert!(imports[0]["gmail_thread_id"].is_null());
+            for import in &imports[1..] {
+                assert_eq!(import["gmail_thread_id"], "thread-01");
+                assert_eq!(import["mailbox"], LAWYER);
+            }
+            let received = desk.server.received_requests().await.unwrap();
+            let raw_reads: Vec<&str> = received
+                .iter()
+                .map(|request| request.url.path())
+                .filter(|at| at.starts_with("/users/me/messages/"))
+                .collect();
+            assert_eq!(
+                raw_reads[1..],
+                [
+                    "/users/me/messages/message-01",
+                    "/users/me/messages/message-02"
+                ],
+                "the thread imports oldest first and skips the draft"
+            );
+
+            let other = [
+                "import-inbox",
+                "message-01",
+                "--mailbox",
+                "other@example.test",
+            ];
+            let error = desk.run(&other).await.unwrap_err();
+            assert!(error.to_string().contains("expected mailbox"), "{error}");
+        }
+
+        #[tokio::test]
+        async fn ingest_posts_the_saved_message_and_names_the_doors_refusal() {
+            let desk = Desk::open().await;
+            Mock::given(method("POST"))
+                .and(path(desk.door("inbox-ingest")))
+                .respond_with(
+                    ResponseTemplate::new(422).set_body_json(json!({ "error": "no_date" })),
+                )
+                .up_to_n_times(1)
+                .mount(&desk.server)
+                .await;
+            desk.answer(
+                "POST",
+                &desk.door("inbox-ingest"),
+                json!({ "deduped": false }),
+            )
+            .await;
+            let saved = write_file(desk.dir.path(), "2026.10.30_Follow-up.eml", FOLLOW_UP);
+            let ingest = [
+                "ingest",
+                saved.to_str().unwrap(),
+                "--project",
+                PROJECT,
+                "--provider-account",
+                LAWYER,
+            ];
+
+            let refused = desk.run(&ingest).await.unwrap_err().to_string();
+            assert!(refused.starts_with("ingest refused: 422"), "{refused}");
+            assert!(refused.contains("requires a Date header"), "{refused}");
+            desk.run(&ingest).await.unwrap();
+            let posts = desk.bodies(&desk.door("inbox-ingest")).await;
+            assert_eq!(posts[1]["provider_account"], LAWYER);
+            assert_eq!(
+                posts[1]["raw"],
+                base64::engine::general_purpose::STANDARD.encode(FOLLOW_UP)
+            );
+        }
+
+        #[tokio::test]
+        async fn login_leaves_cloud_provisioning_to_hudson() {
+            let desk = Desk::open().await;
+            let error = desk
+                .run(&["login", "--project", "example-mail"])
+                .await
+                .unwrap_err();
+            assert!(
+                error.to_string().contains("hudson ops gmail-client"),
+                "{error}"
+            );
+        }
+
+        #[tokio::test]
+        async fn a_refresh_yields_an_access_token_only_for_the_two_scopes() {
+            let server = MockServer::start().await;
+            let grant = |scope: String| {
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({ "access_token": "access", "scope": scope }))
+            };
+            let two = login::GMAIL_SCOPES.join(" ");
+            let denied =
+                ResponseTemplate::new(400).set_body_json(json!({ "error": "invalid_grant" }));
+            for (route, response) in [
+                ("/token", grant(two.clone())),
+                ("/broad", grant(format!("{two} https://mail.google.com/"))),
+                ("/denied", denied),
+            ] {
+                Mock::given(method("POST"))
+                    .and(path(route))
+                    .respond_with(response)
+                    .mount(&server)
+                    .await;
+            }
+            let form = refresh_form("client-id", Some("shh"), "refresh");
+            let api = |route: &str| format!("{}{route}", server.uri());
+
+            let token = access_token(&api("/token"), LAWYER, &form).await;
+            assert_eq!(token.unwrap(), "access");
+            let sent = &server.received_requests().await.unwrap()[0];
+            let body = String::from_utf8_lossy(&sent.body);
+            assert!(body.contains("grant_type=refresh_token"), "{body}");
+            assert!(body.contains("client_secret=shh"), "{body}");
+
+            let denied = access_token(&api("/denied"), LAWYER, &form).await;
+            let denied = format!("{:#}", denied.unwrap_err());
+            assert!(denied.contains("invalid_grant"), "{denied}");
+
+            // A broader grant deletes the stored refresh token, which on
+            // macOS is the real Keychain; elsewhere the stub refuses.
+            if cfg!(not(target_os = "macos")) {
+                let broad = access_token(&api("/broad"), LAWYER, &form).await;
+                let broad = format!("{:#}", broad.unwrap_err());
+                assert!(broad.contains("scopes beyond"), "{broad}");
+            }
+        }
+
+        /// Without a Keychain (anywhere but macOS, where these verbs would
+        /// reach the real one) setup, login, and every Gmail verb stop at the
+        /// missing token, after the settings are saved.
+        #[tokio::test]
+        async fn setup_and_login_stop_at_the_keychain_where_there_is_none() {
+            if cfg!(target_os = "macos") {
+                return;
+            }
+            let desk = Desk::open().await;
+            let setup = ["setup", "--account", LAWYER, "--client-id", "client-id"];
+            let error = desk
+                .run(&[&setup[..], &["--project", "example-mail"]].concat())
+                .await
+                .unwrap_err();
+            assert!(error.to_string().contains("setup is incomplete"), "{error}");
+            let saved = load_setup(&setup_path()).unwrap();
+            assert_eq!(saved.account.as_deref(), Some(LAWYER));
+            assert_eq!(saved.gcp_project.as_deref(), Some("example-mail"));
+
+            let secret = write_file(
+                desk.dir.path(),
+                "client_secret.json",
+                br#"{"installed":{"client_id":"client-id","client_secret":"shh"}}"#,
+            );
+            let error = desk
+                .run(&["login", "--client-secret-file", secret.to_str().unwrap()])
+                .await
+                .unwrap_err();
+            assert!(format!("{error:#}").contains("only on macOS"), "{error:#}");
+            let preview = MailAction::InboxPreview { limit: None };
+            assert_eq!(run(preview).await, ExitCode::FAILURE);
+            assert!(archive("message-01").await.is_err());
+            assert!(provision_oauth_client_secret("client-id", "shh").is_err());
+        }
     }
 }

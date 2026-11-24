@@ -159,11 +159,7 @@ fn authority_sidecar_path(path: &Path) -> PathBuf {
 /// [`authority_class_belongs_in_folder`] enforces the split against the
 /// sidecar's own declared `class`.
 fn authority_capture_folder(relative: &Path) -> Option<&'static str> {
-    match relative
-        .components()
-        .next()
-        .and_then(|part| part.as_os_str().to_str())
-    {
+    match top_folder(relative) {
         Some("cases") => Some("cases"),
         Some("rules") => Some("rules"),
         _ => None,
@@ -188,11 +184,16 @@ fn authority_class_belongs_in_folder(class: &str, folder: &str) -> bool {
 /// Whether `relative` is a `documents/invoices/**` staged file.
 #[must_use]
 pub fn is_invoice_capture(relative: &Path) -> bool {
+    top_folder(relative) == Some("invoices")
+}
+
+/// The first component of `relative`, the folder convention every
+/// path-below-`documents/` rule reads.
+fn top_folder(relative: &Path) -> Option<&str> {
     relative
         .components()
         .next()
         .and_then(|part| part.as_os_str().to_str())
-        == Some("invoices")
 }
 
 /// The synthetic invoice-number filename shape this workspace's fixtures use:
@@ -271,11 +272,7 @@ pub fn link_envelope_to_pointer(
         if relative.components().count() < 2 {
             continue;
         }
-        let folder = relative
-            .components()
-            .next()
-            .and_then(|part| part.as_os_str().to_str());
-        if folder != Some(template_kind) {
+        if top_folder(relative) != Some(template_kind) {
             continue;
         }
         let Some(pointer) = read_pointer(entry.path())? else {
@@ -292,10 +289,7 @@ pub fn link_envelope_to_pointer(
         // The gate names the *source* document (`retainer_signed.pdf`), not
         // the pointer (`retainer_signed.pdf.yaml`) — strip the pointer
         // extension the way `validate_folder_pointer_keys` reads the slug.
-        let source_name = filename
-            .strip_suffix(".yaml")
-            .or_else(|| filename.strip_suffix(".yml"))
-            .unwrap_or(filename);
+        let source_name = strip_pointer_extension(filename).unwrap_or(filename);
         if SIGNED_ENGAGEMENT_FOLDERS.contains(&template_kind)
             && !is_signed_pdf_filename(source_name)
         {
@@ -324,11 +318,7 @@ pub fn link_envelope_to_pointer(
 /// Whether `relative` (a path relative to `documents/`) is staged under one
 /// of [`SIGNED_ENGAGEMENT_FOLDERS`].
 fn is_signed_engagement_folder(relative: &Path) -> bool {
-    relative
-        .components()
-        .next()
-        .and_then(|part| part.as_os_str().to_str())
-        .is_some_and(|folder| SIGNED_ENGAGEMENT_FOLDERS.contains(&folder))
+    top_folder(relative).is_some_and(|folder| SIGNED_ENGAGEMENT_FOLDERS.contains(&folder))
 }
 
 /// Whether `filename` carries the signed-copy suffix: `_signed.pdf` with a
@@ -869,11 +859,16 @@ fn folder_dry_run_note(plan: &ProjectSyncPlan) -> Option<String> {
 
 /// The local file at `path`, hashed, or `None` when it does not exist.
 fn read_local_copy(path: &Path) -> Result<Option<LocalCopy>> {
+    Ok(read_if_present(path)?.map(|bytes| LocalCopy {
+        sha256: model::documents::sha256_hex(&bytes),
+        size: bytes.len(),
+    }))
+}
+
+/// The bytes at `path`, or `None` when no file is there.
+fn read_if_present(path: &Path) -> Result<Option<Vec<u8>>> {
     match std::fs::read(path) {
-        Ok(bytes) => Ok(Some(LocalCopy {
-            sha256: model::documents::sha256_hex(&bytes),
-            size: bytes.len(),
-        })),
+        Ok(bytes) => Ok(Some(bytes)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error).with_context(|| format!("read {}", path.display())),
     }
@@ -894,13 +889,7 @@ fn inventory_filename(document: &crate::remote::LiveDocumentSummary) -> Result<S
 fn inventory_relative_path(document: &crate::remote::LiveDocumentSummary) -> Result<PathBuf> {
     if let Some(slug) = document.slug.as_deref() {
         let relative = PathBuf::from(slug);
-        if relative.as_os_str().is_empty()
-            || relative.is_absolute()
-            || relative
-                .components()
-                .any(|part| !matches!(part, std::path::Component::Normal(_)))
-            || relative.file_name().is_none()
-        {
+        if !is_safe_slug(&relative) {
             return Err(anyhow!("document {} has unsafe slug `{slug}`", document.id));
         }
         return Ok(relative);
@@ -908,6 +897,15 @@ fn inventory_relative_path(document: &crate::remote::LiveDocumentSummary) -> Res
     Ok(PathBuf::from("unclassified")
         .join(document.id.to_string())
         .join(inventory_filename(document)?))
+}
+
+/// Whether `relative` is a slug that stays below the root it is joined to:
+/// non-empty, relative, and made only of ordinary components.
+fn is_safe_slug(relative: &Path) -> bool {
+    relative.file_name().is_some()
+        && relative
+            .components()
+            .all(|part| matches!(part, std::path::Component::Normal(_)))
 }
 
 fn pointer_target_for_document(root: &Path, relative: &Path) -> Result<PathBuf> {
@@ -959,13 +957,7 @@ pub fn write_uploaded_pointer(
     pointer: &model::document_pointers::DocumentPointer,
 ) -> Result<PathBuf> {
     let relative = PathBuf::from(slug);
-    if relative.as_os_str().is_empty()
-        || relative.is_absolute()
-        || relative
-            .components()
-            .any(|part| !matches!(part, std::path::Component::Normal(_)))
-        || relative.file_name().is_none()
-    {
+    if !is_safe_slug(&relative) {
         return Err(anyhow!("document has unsafe slug `{slug}`"));
     }
     let blobs = root.join(POINTER_DIRECTORY);
@@ -1005,17 +997,6 @@ pub fn raw_document_is_git_ignored(root: &Path, target: &Path) -> Result<()> {
 pub fn ensure_managed_copy_target(root: &Path, target: &Path) -> Result<()> {
     ensure_document_path_is_safe(root, target, true, false)?;
     raw_document_is_git_ignored(root, target)
-}
-
-fn current_pointer_matches(
-    path: &Path,
-    pointer: &model::document_pointers::DocumentPointer,
-) -> Result<bool> {
-    match std::fs::read_to_string(path) {
-        Ok(raw) => Ok(model::document_pointers::DocumentPointer::from_yaml(&raw)? == *pointer),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(error).with_context(|| format!("read {}", path.display())),
-    }
 }
 
 /// The path of every committed pointer, by the asset id its current revision
@@ -1162,7 +1143,7 @@ fn project_sync_plans_scoped(
         pointer
             .validate()
             .map_err(|error| anyhow!("invalid live pointer for {}: {error}", relative.display()))?;
-        let pointer_changed = !current_pointer_matches(&pointer_target, &pointer)?;
+        let pointer_changed = committed.as_ref() != Some(&pointer);
         let document_target = crate::document_layout::document_path(root, &relative, &pointer);
         let previous_document_target = committed
             .as_ref()
@@ -1972,17 +1953,24 @@ pub fn ensure_documents_ignored(root: &Path) -> Result<()> {
     std::fs::create_dir_all(&documents)
         .with_context(|| format!("create {}", documents.display()))?;
     ensure_documents_tree_is_safe(&documents)?;
-    let ignore = root.join(".gitignore");
-    if !ignore.exists() {
-        std::fs::write(&ignore, crate::projects::repository::ROOT_GITIGNORE)
-            .with_context(|| format!("write {}", ignore.display()))?;
-    }
+    let ignore = ensure_root_gitignore(root)?;
     raw_document_is_git_ignored(root, &documents.join(".navigator-ignore-probe")).map_err(|_| {
         anyhow!(
             "{} does not ignore {DOCUMENT_DIRECTORY}/; run `navigator project gate` to restore the canonical root .gitignore",
             ignore.display()
         )
     })
+}
+
+/// Give a checkout with no root `.gitignore` the canonical one, and return
+/// its path; one the checkout already has is never rewritten.
+fn ensure_root_gitignore(root: &Path) -> Result<PathBuf> {
+    let ignore = root.join(".gitignore");
+    if !ignore.exists() {
+        std::fs::write(&ignore, crate::projects::repository::ROOT_GITIGNORE)
+            .with_context(|| format!("write {}", ignore.display()))?;
+    }
+    Ok(ignore)
 }
 
 /// A pointer the pre-`blobs/` layout committed beside its bytes, and the
@@ -2076,13 +2064,7 @@ pub fn migrate_legacy_layout(root: &Path) -> Result<usize> {
     // the guard stays until `navigator project repository sync-skills` adds
     // the line.
     if let Some(guard) = guard {
-        // A checkout with no root `.gitignore` gets the canonical one, as
-        // `project sync` gives it; one it already has is never rewritten.
-        let ignore = root.join(".gitignore");
-        if !ignore.exists() {
-            std::fs::write(&ignore, crate::projects::repository::ROOT_GITIGNORE)
-                .with_context(|| format!("write {}", ignore.display()))?;
-        }
+        ensure_root_gitignore(root)?;
         if root_ignores_documents(root) {
             std::fs::remove_file(&guard).with_context(|| format!("remove {}", guard.display()))?;
         } else {
@@ -2175,15 +2157,22 @@ fn report_dry_run_plans(
             println!("  {}", file.label);
         }
     }
-    for orphan in &local.orphan_pointers {
-        println!(
-            "cannot reconcile {orphan}: the pointer names a document the live Project does not list"
-        );
-    }
-    for notice in &local.notices {
-        println!("skip {notice}");
-    }
+    local.report_unreconciled();
     println!("{added} added, {updated} updated, {skipped} skipped");
+}
+
+impl LocalOnly {
+    /// Name what stays as it is: each orphan pointer and each skipped file.
+    fn report_unreconciled(&self) {
+        for orphan in &self.orphan_pointers {
+            println!(
+                "cannot reconcile {orphan}: the pointer names a document the live Project does not list"
+            );
+        }
+        for notice in &self.notices {
+            println!("skip {notice}");
+        }
+    }
 }
 
 /// What `project sync` did, for the closing report.
@@ -2332,14 +2321,7 @@ pub async fn reconcile_project(root: &Path, client: &DocumentClient, mode: SyncM
     } else if upload_new == Resolution::Decline && !local.new_files.is_empty() {
         tally.declined += local.new_files.len();
     }
-    for orphan in &local.orphan_pointers {
-        println!(
-            "cannot reconcile {orphan}: the pointer names a document the live Project does not list"
-        );
-    }
-    for notice in &local.notices {
-        println!("skip {notice}");
-    }
+    local.report_unreconciled();
     for (plan, _) in steps
         .iter()
         .filter(|(plan, step)| matches!(step, Step::Fetch) && !plan.dropped_keys.is_empty())
@@ -2538,11 +2520,8 @@ pub fn pull_target(root: &Path, pointer_relative: &Path) -> Result<PathBuf> {
 /// Whether the file at `path` already carries `expected_sha256` — a missing
 /// file never matches, so a fresh clone always pulls.
 fn matches_digest(path: &Path, expected_sha256: &str) -> Result<bool> {
-    match std::fs::read(path) {
-        Ok(bytes) => Ok(model::documents::sha256_hex(&bytes) == expected_sha256),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(error).with_context(|| format!("read {}", path.display())),
-    }
+    Ok(read_if_present(path)?
+        .is_some_and(|bytes| model::documents::sha256_hex(&bytes) == expected_sha256))
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -3242,11 +3221,7 @@ fn discover(documents: &Path) -> Result<Vec<PathBuf>> {
 }
 
 fn inferred_kind(relative: &Path) -> &'static str {
-    match relative
-        .components()
-        .next()
-        .and_then(|part| part.as_os_str().to_str())
-    {
+    match top_folder(relative) {
         Some("pleadings") => "filing",
         Some("exhibits") => "exhibit",
         Some("agreements") => "agreement",
@@ -4266,6 +4241,183 @@ mod tests {
         assert_eq!(std::fs::read(&first_target).unwrap(), b"before first");
         assert_eq!(std::fs::read(&second_target).unwrap(), b"before second");
         assert!(!transaction.exists());
+    }
+
+    /// A committed pointer of an ordinary document, optionally stamped.
+    fn memo_yaml(envelope: Option<Uuid>) -> String {
+        let stamp = envelope.map_or_else(String::new, |id| format!("docusign_envelope_id: {id}\n"));
+        format!(
+            "kind: memo\nvisibility: internal\ncurrent_version:\n  version: 1\n  \
+             asset_id: 00000000-0000-0000-0000-000000000001\n  \
+             created_at: '2026-01-01T00:00:00Z'\n  sha256: {}\n  size_bytes: 1\n{stamp}",
+            "a".repeat(64)
+        )
+    }
+
+    fn write_under(root: &Path, relative: &str, contents: &str) -> std::path::PathBuf {
+        let path = root.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, contents).unwrap();
+        path
+    }
+
+    /// LAW-270: the envelope id lands on the unstamped signed copy under the
+    /// notation's own folder, and on nothing when no pointer qualifies.
+    #[test]
+    fn an_envelope_is_stamped_on_the_signed_copy_in_its_notations_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let envelope = Uuid::now_v7();
+        let link = |kind: &str| super::link_envelope_to_pointer(root, kind, envelope).unwrap();
+        assert_eq!(link("onboarding"), None, "a checkout with no blobs/");
+
+        write_under(root, "blobs/onboarding/letter.pdf.yaml", &memo_yaml(None));
+        write_under(root, "blobs/top_signed.pdf.yaml", &memo_yaml(None));
+        write_under(
+            root,
+            "blobs/offboarding/closing_signed.pdf.yaml",
+            &memo_yaml(None),
+        );
+        write_under(
+            root,
+            "blobs/onboarding/earlier_signed.pdf.yaml",
+            &memo_yaml(Some(Uuid::now_v7())),
+        );
+        assert_eq!(
+            link("onboarding"),
+            None,
+            "an engagement folder takes only an unstamped `_signed.pdf` pointer"
+        );
+
+        let signed = write_under(
+            root,
+            "blobs/onboarding/letter_signed.pdf.yml",
+            &memo_yaml(None),
+        );
+        assert_eq!(link("onboarding"), Some(signed.clone()));
+        let stamped = super::read_pointer(&signed).unwrap().unwrap();
+        assert_eq!(stamped.docusign_envelope_id, Some(envelope));
+        assert_eq!(
+            link("onboarding"),
+            None,
+            "a stamped pointer is not restamped"
+        );
+
+        write_under(root, "blobs/agreements/a.pdf.yaml", &memo_yaml(None));
+        let preferred = write_under(root, "blobs/agreements/z_signed.pdf.yaml", &memo_yaml(None));
+        assert_eq!(link("agreements"), Some(preferred), "the signed name wins");
+    }
+
+    #[test]
+    fn only_scopes_to_one_document_or_folder_below_documents_or_blobs() {
+        let dir = tempfile::tempdir().unwrap();
+        let parse = |only: &str| super::DocumentScope::parse(dir.path(), Some(Path::new(only)));
+        for (only, reason) in [
+            ("/documents/a.pdf", "without traversal"),
+            (
+                "templates/a.md",
+                "must name a path below documents/ or blobs/",
+            ),
+            ("documents/Work Product", "not the whole folder"),
+        ] {
+            let error = parse(only).unwrap_err().to_string();
+            assert!(error.contains(reason), "{only}: {error}");
+        }
+        let everything = parse("blobs").unwrap();
+        assert!(everything.includes(Path::new("cases/roe.html")));
+        for only in [
+            "blobs/cases/roe.html.yaml",
+            "blobs/cases",
+            "documents/cases",
+        ] {
+            let scope = parse(only).unwrap();
+            assert!(scope.includes(Path::new("cases/roe.html")), "{only}");
+            assert!(!scope.includes(Path::new("cases-old/roe.html")), "{only}");
+        }
+        let filed = parse("documents/Work Product/memo.pdf").unwrap();
+        assert!(filed.includes(Path::new("memo.pdf")));
+    }
+
+    #[test]
+    fn a_live_row_names_its_checkout_path_by_slug_or_by_its_own_id() {
+        let mut row = live_signed_letter(Uuid::now_v7());
+        row.slug = None;
+        assert_eq!(
+            super::inventory_relative_path(&row).unwrap(),
+            Path::new("unclassified")
+                .join(row.id.to_string())
+                .join("letter_signed.pdf")
+        );
+        row.filename = Some("../letter.pdf".into());
+        let error = super::inventory_relative_path(&row).unwrap_err();
+        assert!(
+            error.to_string().contains("has no safe filename"),
+            "{error}"
+        );
+        row.slug = Some("../escape.pdf".into());
+        let error = super::inventory_relative_path(&row).unwrap_err();
+        assert!(error.to_string().contains("has unsafe slug"), "{error}");
+
+        let dir = tempfile::tempdir().unwrap();
+        write_under(dir.path(), "blobs/memo.pdf.yml", &memo_yaml(None));
+        let error =
+            super::pointer_target_for_document(dir.path(), Path::new("memo.pdf")).unwrap_err();
+        assert!(
+            error.to_string().contains("uses a retired pointer suffix"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn an_upload_receipt_must_describe_the_bytes_that_were_sent() {
+        let mut pointer =
+            store::document_pointers::DocumentPointer::from_yaml(&memo_yaml(None)).unwrap();
+        pointer.current_version.sha256 = store::documents::sha256_hex(b"sent");
+        pointer.current_version.size_bytes = 4;
+        super::validate_upload_receipt(&pointer, b"sent").unwrap();
+
+        let error = super::validate_upload_receipt(&pointer, b"other").unwrap_err();
+        assert!(error.to_string().contains("sha256 mismatch"), "{error}");
+        pointer.current_version.size_bytes = 5;
+        let error = super::validate_upload_receipt(&pointer, b"sent").unwrap_err();
+        assert!(error.to_string().contains("byte count mismatch"), "{error}");
+        pointer.visibility = "everyone".into();
+        pointer.current_version.sha256 = "not-a-digest".into();
+        let error = super::validate_upload_receipt(&pointer, b"sent").unwrap_err();
+        assert!(
+            error.to_string().contains("invalid upload pointer"),
+            "{error}"
+        );
+    }
+
+    /// The source is re-read around the pointer write: bytes that changed, or
+    /// a path that stopped being a regular file, take the pointer back to
+    /// what it was.
+    #[test]
+    fn a_source_that_changed_during_upload_restores_the_previous_pointer() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = write_under(dir.path(), "documents/memo.pdf", "sent");
+        super::ensure_source_is_unchanged(&source, b"sent").unwrap();
+        let cases: [(&Path, &str); 3] = [
+            (&source, "source changed during upload"),
+            (dir.path(), "is not a regular file"),
+            (&dir.path().join("absent.pdf"), "inspect source"),
+        ];
+        for (path, reason) in cases {
+            let error = super::ensure_source_is_unchanged(path, b"edited").unwrap_err();
+            assert!(format!("{error:#}").contains(reason), "{error:#}");
+        }
+        let link = dir.path().join("documents/link.pdf");
+        std::os::unix::fs::symlink(&source, &link).unwrap();
+        let error = super::ensure_source_is_unchanged(&link, b"sent").unwrap_err();
+        assert!(error.to_string().contains("is now a symlink"), "{error}");
+
+        let pointer = write_under(dir.path(), "blobs/memo.pdf.yaml", "new");
+        super::restore_pointer_after_source_change(&pointer, Some("previous"), true).unwrap();
+        assert_eq!(std::fs::read_to_string(&pointer).unwrap(), "previous");
+        assert!(super::restore_pointer_after_source_change(&pointer, None, true).is_err());
+        super::restore_pointer_after_source_change(&pointer, None, false).unwrap();
+        assert!(!pointer.exists());
     }
 }
 

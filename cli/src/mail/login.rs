@@ -764,6 +764,27 @@ mod tests {
         assert_eq!(waiter.await.unwrap().unwrap(), "late");
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn waiting_for_the_redirect_gives_up_after_the_callback_timeout() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let error = wait_for_code(&listener, "nonce").await.unwrap_err();
+        assert!(format!("{error}").contains("timed out"));
+    }
+
+    #[test]
+    fn the_flow_redeems_revokes_and_reads_only_at_googles_hosts_over_https() {
+        let endpoints = GoogleEndpoints::production().unwrap();
+        for (url, host) in [
+            (endpoints.token.as_str(), "oauth2.googleapis.com"),
+            (endpoints.revoke.as_str(), "oauth2.googleapis.com"),
+            (endpoints.gmail.as_str(), "gmail.googleapis.com"),
+        ] {
+            let url = Url::parse(url).unwrap();
+            assert_eq!(url.scheme(), "https");
+            assert_eq!(url.host_str(), Some(host));
+        }
+    }
+
     #[tokio::test]
     async fn token_errors_without_a_json_code_name_only_the_status() {
         let server = MockServer::start().await;

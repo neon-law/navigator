@@ -285,7 +285,7 @@ struct AnalyzeRequest<'a> {
 
 /// Permit only explicit loopback IPs, without credentials, paths or query data.
 fn endpoint(value: &str) -> Result<reqwest::Url> {
-    let mut url = reqwest::Url::parse(value).context("invalid analyzer URL")?;
+    let url = reqwest::Url::parse(value).context("invalid analyzer URL")?;
     let local = match url.host() {
         Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
         Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
@@ -303,7 +303,6 @@ fn endpoint(value: &str) -> Result<reqwest::Url> {
             && url.path() == "/",
         "analyzer must be a plain local origin"
     );
-    url.set_path("/");
     Ok(url)
 }
 

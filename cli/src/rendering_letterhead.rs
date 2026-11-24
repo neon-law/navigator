@@ -212,18 +212,21 @@ pub fn frame_from_row(resolved: &BrandLetterhead, mark: pdf::LetterheadMark) -> 
 /// key. A row re-pointed at a different deployment, or read for another
 /// Brand, misses and re-reads rather than serving another Brand's frame.
 fn cache_path(api_base: &str, key: &str) -> Option<PathBuf> {
-    if let Some(path) = std::env::var_os(CACHE_ROOT_ENV).filter(|p| !p.is_empty()) {
-        return Some(PathBuf::from(path).join(cache_key(api_base, key)));
+    Some(cache_dir(CACHE_ROOT_ENV, "letterhead")?.join(cache_key(api_base, key)))
+}
+
+/// The directory pinned render inputs of one `kind` are cached in: the
+/// directory `override_env` names, else `navigator/<kind>` under
+/// `XDG_CACHE_HOME` or the home directory's `.cache`.
+pub(crate) fn cache_dir(override_env: &str, kind: &str) -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os(override_env).filter(|p| !p.is_empty()) {
+        return Some(PathBuf::from(path));
     }
     let base = std::env::var_os("XDG_CACHE_HOME")
         .filter(|p| !p.is_empty())
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))?;
-    Some(
-        base.join("navigator")
-            .join("letterhead")
-            .join(cache_key(api_base, key)),
-    )
+    Some(base.join("navigator").join(kind))
 }
 
 fn cache_key(api_base: &str, key: &str) -> PathBuf {
