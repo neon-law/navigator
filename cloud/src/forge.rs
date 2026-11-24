@@ -680,7 +680,7 @@ impl GitHubForge {
         Ok(Self::new(config.organization, token, &api_base))
     }
 
-    async fn authorization_token(&self) -> Result<String, ForgeError> {
+    pub(crate) async fn authorization_token(&self) -> Result<String, ForgeError> {
         let ForgeAuth::App {
             app_id,
             installation_id,
@@ -741,6 +741,45 @@ impl GitHubForge {
         Ok(value)
     }
 
+    /// Read a file at a specific revision, or use the existing default when omitted.
+    pub async fn read_file_at(
+        &self,
+        project_code: &str,
+        path: &str,
+        revision: Option<&str>,
+    ) -> Result<Option<String>, ForgeError> {
+        let action = "reading repository file";
+        let token = self.authorization_token().await?;
+        let url = format!(
+            "{}/contents/{}",
+            self.repos_url(project_code),
+            path.trim_start_matches('/')
+        );
+        // `raw` returns the file body itself, so a manifest arrives as the
+        // text committed, not a base64 envelope to unwrap.
+        let mut request = self.http.get(url);
+        if let Some(revision) = revision {
+            request = request.query(&[("ref", revision)]);
+        }
+        let response = request
+            .bearer_auth(token)
+            .header(reqwest::header::USER_AGENT, USER_AGENT)
+            .header(reqwest::header::ACCEPT, "application/vnd.github.raw+json")
+            .header("X-GitHub-Api-Version", API_VERSION)
+            .timeout(REQUEST_TIMEOUT)
+            .send()
+            .await;
+        let response = match response {
+            Ok(response) if response.status().as_u16() == 404 => return Ok(None),
+            other => Self::checked(other, action)?,
+        };
+        response
+            .text()
+            .await
+            .map(Some)
+            .map_err(|source| ForgeError::Response { action, source })
+    }
+
     fn repos_url(&self, project_code: &str) -> String {
         format!(
             "{}/repos/{}/{project_code}",
@@ -771,7 +810,8 @@ impl GitHubForge {
         &self,
         project_code: &str,
     ) -> Result<Option<ForgeRepository>, ForgeError> {
-        self.get_repository_checked(project_code, false).await
+        self.get_repository_checked(project_code, false, false)
+            .await
     }
 
     /// [`Self::get_repository`], optionally failing closed when the live
@@ -784,6 +824,7 @@ impl GitHubForge {
         &self,
         project_code: &str,
         verify_private: bool,
+        active_only: bool,
     ) -> Result<Option<ForgeRepository>, ForgeError> {
         let token = self.authorization_token().await?;
         let response = self
@@ -801,7 +842,7 @@ impl GitHubForge {
             other => Self::checked(other, "finding repository")?,
         };
         Ok(Some(
-            parse_repository(response, "finding repository", verify_private).await?,
+            parse_repository(response, "finding repository", verify_private, active_only).await?,
         ))
     }
 
@@ -830,7 +871,7 @@ impl GitHubForge {
             // Still verify visibility — adopting a repository that is not
             // private is the same failure a fresh create must catch.
             return self
-                .get_repository_checked(project_code, true)
+                .get_repository_checked(project_code, true, false)
                 .await?
                 .ok_or(ForgeError::Api {
                     action: "creating repository",
@@ -843,7 +884,76 @@ impl GitHubForge {
         // similar org default flipping) can land a repository public even
         // though `private: true` was requested, and that is exactly the
         // failure worth catching before anything else configures it.
-        parse_repository(response, "creating repository", true).await
+        parse_repository(response, "creating repository", true, false).await
+    }
+
+    /// The canonical HTTPS Git URL for a repository in this deployment's organization.
+    #[cfg(feature = "forge-sync")]
+    pub fn canonical_git_url(&self, code: &str) -> String {
+        format!("https://github.com/{}/{code}.git", self.organization)
+    }
+
+    /// Read main only after the recorded GitHub source and the private API result
+    /// both identify the repository configured for this deployment.
+    pub async fn private_main_sha(
+        &self,
+        project_code: &str,
+        recorded_url: &str,
+    ) -> Result<Option<String>, ForgeError> {
+        #[derive(Deserialize)]
+        struct Reference {
+            object: CommitBody,
+        }
+        let path = format!("{}/{project_code}", self.organization);
+        let canonical = format!("https://github.com/{path}");
+        let recorded = recorded_url.trim_end_matches('/').trim_end_matches(".git");
+        if !model::projects::is_valid_code(project_code)
+            || ![
+                canonical.clone(),
+                format!("git@github.com:{path}"),
+                format!("ssh://git@github.com/{path}"),
+                format!("ssh://git@ssh.github.com:443/{path}"),
+            ]
+            .iter()
+            .any(|url| url.eq_ignore_ascii_case(recorded))
+        {
+            return Err(ForgeError::ForeignRepository {
+                name: project_code.to_owned(),
+            });
+        }
+        let Some(repository) = self
+            .get_repository_checked(project_code, true, true)
+            .await?
+        else {
+            return Ok(None);
+        };
+        if !repository.url.eq_ignore_ascii_case(&canonical)
+            || !repository.name.eq_ignore_ascii_case(project_code)
+        {
+            return Err(ForgeError::ForeignRepository {
+                name: project_code.to_owned(),
+            });
+        }
+        let action = "reading private main ref";
+        let response = self
+            .http
+            .get(format!(
+                "{}/git/ref/heads/main",
+                self.repos_url(project_code)
+            ))
+            .bearer_auth(self.authorization_token().await?)
+            .header(reqwest::header::USER_AGENT, USER_AGENT)
+            .timeout(REQUEST_TIMEOUT)
+            .send()
+            .await;
+        if matches!(&response, Ok(r) if r.status().as_u16() == 404) {
+            return Ok(None);
+        }
+        let reference = Self::checked(response, action)?
+            .json::<Reference>()
+            .await
+            .map_err(|source| ForgeError::Response { action, source })?;
+        Ok(Some(reference.object.sha))
     }
 
     /// The commit at the tip of the repository's default branch — the shared
@@ -910,6 +1020,7 @@ struct CreateRepository<'a> {
 
 #[derive(Deserialize)]
 struct RepositoryBody {
+    archived: Option<bool>,
     html_url: Option<String>,
     name: Option<String>,
     #[serde(default)]
@@ -944,6 +1055,7 @@ async fn parse_repository(
     response: reqwest::Response,
     action: &'static str,
     verify_private: bool,
+    active_only: bool,
 ) -> Result<ForgeRepository, ForgeError> {
     let body = response
         .json::<RepositoryBody>()
@@ -951,6 +1063,11 @@ async fn parse_repository(
         .map_err(|source| ForgeError::Response { action, source })?;
     let url = body.html_url.ok_or(ForgeError::MissingUrl { action })?;
     let name = body.name.ok_or(ForgeError::MissingUrl { action })?;
+    if active_only && body.archived != Some(false) {
+        return Err(ForgeError::Unsupported(
+            "maintenance requires an active repository",
+        ));
+    }
     if verify_private && body.private != Some(true) {
         return Err(ForgeError::NotPrivate { name });
     }
@@ -967,7 +1084,10 @@ impl ForgeService for GitHubForge {
     }
 
     async fn ensure_repository(&self, project_code: &str) -> Result<ForgeRepository, ForgeError> {
-        if let Some(existing) = self.get_repository_checked(project_code, true).await? {
+        if let Some(existing) = self
+            .get_repository_checked(project_code, true, false)
+            .await?
+        {
             tracing::info!(
                 project_code,
                 repository_url = existing.url.as_str(),
@@ -1026,34 +1146,7 @@ impl ForgeService for GitHubForge {
         project_code: &str,
         path: &str,
     ) -> Result<Option<String>, ForgeError> {
-        let action = "reading repository file";
-        let token = self.authorization_token().await?;
-        let url = format!(
-            "{}/contents/{}",
-            self.repos_url(project_code),
-            path.trim_start_matches('/')
-        );
-        // `raw` returns the file body itself, so a manifest arrives as the
-        // text committed, not a base64 envelope to unwrap.
-        let response = self
-            .http
-            .get(url)
-            .bearer_auth(token)
-            .header(reqwest::header::USER_AGENT, USER_AGENT)
-            .header(reqwest::header::ACCEPT, "application/vnd.github.raw+json")
-            .header("X-GitHub-Api-Version", API_VERSION)
-            .timeout(REQUEST_TIMEOUT)
-            .send()
-            .await;
-        let response = match response {
-            Ok(response) if response.status().as_u16() == 404 => return Ok(None),
-            other => Self::checked(other, action)?,
-        };
-        response
-            .text()
-            .await
-            .map(Some)
-            .map_err(|source| ForgeError::Response { action, source })
+        self.read_file_at(project_code, path, None).await
     }
 }
 

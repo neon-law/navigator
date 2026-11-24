@@ -1,7 +1,7 @@
 # Scheduled jobs (CronJobs)
 
-How Neon Law Navigator runs anything on a clock. Every scheduled job is a **Kubernetes `CronJob`** in the `navigator`
-namespace. **Kubernetes owns the clock.**
+Kubernetes runs the CronJobs listed below in the `navigator` namespace. The native DBOS executor separately owns the
+daily Project forge maintenance schedule.
 
 Which jobs ship is the `resources:` list in `examples/deploy/k8s/exports/kustomization.yaml`, which is the same list
 that `kubectl kustomize` resolves when `ops ship` reconciles a cluster. A manifest sitting in that directory and named
@@ -10,13 +10,22 @@ bound to it by a test: read the kustomization itself, or the lawyer console at `
 table from that list. What this page explains is how a job gets onto it.
 
 GitHub Actions is **not** a scheduler here. CI/CD on GitHub does exactly one thing for the runtime: build and push
-images. Anything that runs on a schedule is a k8s `CronJob` in the cluster — never a GitHub `schedule:` trigger — so the
-clock lives next to the workload it drives, with the same secrets, network, and Restate ingress.
+images. The cluster runs its batch jobs near the secrets and services they use.
 
 A k8s `CronJob` is the right scheduler because it is **stateless and self-healing**: it fires every period regardless of
 what happened last time, so a failed or missed run never breaks the next one. (A self-rescheduling timer inside an app
 is a chain — one broken link and it silently stops forever.) See
 [durable-workflows.md](durable-workflows.md#where-the-schedule-lives) for the full "why k8s, not Restate" reasoning.
+
+## Daily Project forge maintenance
+
+DBOS runs `daily-project-forge-parity` at **4:44 a.m. America/New_York**. For each open or pitch Project, it verifies
+both private repositories and their main revisions. It can fast-forward the mirror from the recorded primary. Divergent
+branches, unverified destinations and missing credentials are recorded for investigation.
+
+After parity is verified, the schedule compares the manifest at that revision with published stable releases. It queues
+the next release in order. Each Project, release and starting revision identifies one durable job. See the [maintenance
+worker setup](../scripts/project-maintenance/README.md) for the CLI and Vertex repair queues.
 
 ## Two flavors — pick by what the job does
 

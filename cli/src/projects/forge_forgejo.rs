@@ -413,11 +413,20 @@ impl super::release_review::ReleaseForge for ForgejoForge {
 impl Forge for ForgejoForge {
     async fn identity(&self) -> Result<String> {
         #[derive(Deserialize)]
-        struct User {
-            login: String,
+        struct RepositoryAccess {
+            full_name: String,
+            permissions: PushPermission,
         }
-        let user: User = self.request(Method::GET, "user", None).await?;
-        Ok(user.login)
+        #[derive(Deserialize)]
+        struct PushPermission {
+            push: bool,
+        }
+        let access: RepositoryAccess = self.get("").await?;
+        ensure!(
+            access.full_name == self.repository && access.permissions.push,
+            "Forgejo credential needs push access to the selected repository"
+        );
+        Ok(format!("repository credential for {}", access.full_name))
     }
 
     async fn remote_reachable(&self) -> Result<()> {
@@ -851,7 +860,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_forge_names_its_identity_and_refuses_a_primary_without_actions() {
+    async fn scoped_preflight_refuses_wrong_repository_or_read_only_access() {
+        for (full_name, push) in [(REPOSITORY, false), ("other/repository", true)] {
+            let server = MockServer::start().await;
+            let forge = ForgejoForge::new(&server.uri(), REPOSITORY, "t".into()).unwrap();
+            answer(
+                &server,
+                "GET",
+                &format!("repos/{REPOSITORY}/"),
+                json!({
+                    "full_name": full_name, "permissions": {"push": push}
+                }),
+            )
+            .await;
+            assert!(forge.identity().await.is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn repository_scoped_access_needs_no_user_lookup_and_still_checks_actions() {
         let server = MockServer::start().await;
         let forge = ForgejoForge::new(&server.uri(), REPOSITORY, "t".into()).unwrap();
         let error = forge.identity().await.unwrap_err();
@@ -859,10 +886,20 @@ mod tests {
         assert!(forge.remote_reachable().await.is_err());
         assert!(forge.find_merged_review("change", "head").await.is_err());
 
-        answer(&server, "GET", "user", json!({"login": "lawyer"})).await;
-        assert_eq!(forge.identity().await.unwrap(), "lawyer");
         let repository = format!("repos/{REPOSITORY}/");
-        answer(&server, "GET", &repository, json!({})).await;
+        answer(
+            &server,
+            "GET",
+            &repository,
+            json!({
+                "full_name": REPOSITORY, "permissions": {"push": true}
+            }),
+        )
+        .await;
+        assert_eq!(
+            forge.identity().await.unwrap(),
+            format!("repository credential for {REPOSITORY}")
+        );
         forge.remote_reachable().await.unwrap();
         let primary = format!("repos/{REPOSITORY}");
         answer(&server, "GET", &primary, json!({"has_actions": false})).await;

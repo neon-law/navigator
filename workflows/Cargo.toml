@@ -44,7 +44,7 @@ uuid.workspace = true
 views.workspace = true
 
 [features]
-dbos = ["dep:chrono-tz", "dep:dbos", "dep:tokio", "dep:url"]
+dbos = ["cloud/forge-sync", "dep:chrono-tz", "dep:dbos", "dep:tokio", "dep:url"]
 
 [dev-dependencies]
 sqlx.workspace = true

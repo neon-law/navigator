@@ -67,6 +67,7 @@ struct CreateRepository<'a> {
 
 #[derive(Deserialize)]
 struct RepositoryBody {
+    archived: Option<bool>,
     html_url: Option<String>,
     name: Option<String>,
     private: Option<bool>,
@@ -212,6 +213,45 @@ impl ForgejoForge {
         &self.owner
     }
 
+    #[cfg(feature = "forge-sync")]
+    pub(crate) fn git_access(&self, code: &str) -> Result<(String, String), ForgeError> {
+        self.repo_url(code)?;
+        let url = format!("{}{}/{code}.git", self.root, self.owner);
+        Ok((url, self.token.clone()))
+    }
+
+    /// Read a file at a specific revision, or use the existing default when omitted.
+    pub async fn read_file_at(
+        &self,
+        project_code: &str,
+        path: &str,
+        revision: Option<&str>,
+    ) -> Result<Option<String>, ForgeError> {
+        let action = "reading repository file";
+        let url = format!(
+            "{}/raw/{}",
+            self.repo_url(project_code)?,
+            path.trim_start_matches('/')
+        );
+        let response = self
+            .request(
+                self.http
+                    .get(url)
+                    .query(&[("ref", revision.unwrap_or(DEFAULT_BRANCH))]),
+            )
+            .send()
+            .await;
+        let response = match response {
+            Ok(response) if response.status().as_u16() == 404 => return Ok(None),
+            other => Self::checked(other, action)?,
+        };
+        response
+            .text()
+            .await
+            .map(Some)
+            .map_err(|source| ForgeError::Response { action, source })
+    }
+
     /// Checks that the verified repository's public URL uses this forge's
     /// configured root, including its path prefix, and this Project's path.
     #[must_use]
@@ -268,6 +308,7 @@ impl ForgejoForge {
         project_code: &str,
         response: reqwest::Response,
         action: &'static str,
+        active_only: bool,
     ) -> Result<ForgeRepository, ForgeError> {
         let body = response
             .json::<RepositoryBody>()
@@ -279,10 +320,34 @@ impl ForgejoForge {
         if name != project_code || owner.as_deref() != Some(self.owner.as_str()) {
             return Err(ForgeError::ForeignRepository { name });
         }
+        if active_only && body.archived != Some(false) {
+            return Err(ForgeError::Unsupported(
+                "maintenance requires an active repository",
+            ));
+        }
         if body.private != Some(true) {
             return Err(ForgeError::NotPrivate { name });
         }
         Ok(ForgeRepository { url, name })
+    }
+
+    pub async fn lookup(
+        &self,
+        project_code: &str,
+        active_only: bool,
+    ) -> Result<Option<ForgeRepository>, ForgeError> {
+        let action = "finding repository";
+        let response = self
+            .request(self.http.get(self.repo_url(project_code)?))
+            .send()
+            .await;
+        let response = match response {
+            Ok(response) if response.status().as_u16() == 404 => return Ok(None),
+            other => Self::checked(other, action)?,
+        };
+        self.verified(project_code, response, action, active_only)
+            .await
+            .map(Some)
     }
 
     async fn branch(&self, project_code: &str) -> Result<Option<BranchCommit>, ForgeError> {
@@ -436,18 +501,7 @@ impl ForgeService for ForgejoForge {
         &self,
         project_code: &str,
     ) -> Result<Option<ForgeRepository>, ForgeError> {
-        let action = "finding repository";
-        let response = self
-            .request(self.http.get(self.repo_url(project_code)?))
-            .send()
-            .await;
-        let response = match response {
-            Ok(response) if response.status().as_u16() == 404 => return Ok(None),
-            other => Self::checked(other, action)?,
-        };
-        self.verified(project_code, response, action)
-            .await
-            .map(Some)
+        self.lookup(project_code, false).await
     }
 
     async fn ensure_repository(&self, project_code: &str) -> Result<ForgeRepository, ForgeError> {
@@ -487,7 +541,7 @@ impl ForgeService for ForgejoForge {
                 });
         }
         let response = Self::checked(created, action)?;
-        let repository = self.verified(project_code, response, action).await?;
+        let repository = self.verified(project_code, response, action, false).await?;
         tracing::info!(
             project_code,
             outcome = "created",
@@ -524,22 +578,7 @@ impl ForgeService for ForgejoForge {
         project_code: &str,
         path: &str,
     ) -> Result<Option<String>, ForgeError> {
-        let action = "reading repository file";
-        let url = format!(
-            "{}/raw/{}?ref={DEFAULT_BRANCH}",
-            self.repo_url(project_code)?,
-            path.trim_start_matches('/')
-        );
-        let response = self.request(self.http.get(url)).send().await;
-        let response = match response {
-            Ok(response) if response.status().as_u16() == 404 => return Ok(None),
-            other => Self::checked(other, action)?,
-        };
-        response
-            .text()
-            .await
-            .map(Some)
-            .map_err(|source| ForgeError::Response { action, source })
+        self.read_file_at(project_code, path, None).await
     }
 
     async fn initialize_source(
@@ -648,6 +687,21 @@ mod tests {
 
     fn forge(server: &MockServer, firm: &str) -> ForgejoForge {
         ForgejoForge::new(&server.uri(), firm, "synthetic-token").unwrap()
+    }
+
+    #[cfg(feature = "forge-sync")]
+    #[tokio::test]
+    async fn scoped_git_access_is_bound_to_the_project_without_an_account_lookup() {
+        let server = MockServer::start().await;
+        let source = forge(&server, "sample-firm");
+        let (url, token) = source.git_access("sample-project").unwrap();
+        assert_eq!(
+            url,
+            format!("{}/sample-firm/sample-project.git", server.uri())
+        );
+        assert_eq!(token, "synthetic-token");
+        assert!(source.git_access("../elsewhere").is_err());
+        assert!(server.received_requests().await.unwrap().is_empty());
     }
 
     #[test]

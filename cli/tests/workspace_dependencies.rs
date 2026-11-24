@@ -66,6 +66,7 @@ const WORKSPACE_DEPENDENCIES: &[&str] = &[
     "futures",
     "gateway",
     "geotime",
+    "git2",
     "google-cloud-auth",
     "google-cloud-storage",
     "google-cloud-token",

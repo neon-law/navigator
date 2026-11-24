@@ -29,6 +29,7 @@ pub mod daily;
 /// The nightly Deadline-mirror reconcile schedule.
 pub mod deadline_mirror;
 pub mod dri_digest;
+mod forge_parity;
 pub mod gcp_cost_daily;
 pub mod general_nag;
 pub mod heartbeat;
@@ -39,6 +40,7 @@ pub mod profit_digest;
 pub mod project_calendar;
 pub mod project_recovery;
 pub mod purchase_activation;
+pub mod release_maintenance;
 pub mod retention_purge;
 pub mod source_imports;
 
@@ -206,6 +208,7 @@ fn valid_executor_id(value: &str) -> bool {
 /// The optional schedules a host enables beside the always-on Heartbeat.
 #[derive(Default)]
 pub struct Schedules {
+    pub forge_parity: bool,
     pub daily_cost_export: Option<billing::gcp_cost_daily::ExportTable>,
     pub linear_backlog: Option<linear_backlog::Context>,
     pub general_nag: Option<general_nag::Context>,
@@ -231,6 +234,7 @@ impl Schedules {
     pub fn with_application_schedules(self, application: Self) -> Self {
         Self {
             daily_cost_export: application.daily_cost_export,
+            forge_parity: self.forge_parity,
             general_nag: self.general_nag,
             dri_digest: self.dri_digest,
             billing_canary: self.billing_canary,
@@ -257,6 +261,20 @@ fn register_optional<C, W>(
     register: fn(&dbos::DBOS, C) -> dbos::Result<W>,
 ) -> dbos::Result<Option<W>> {
     context.map(|context| register(dbos, context)).transpose()
+}
+
+/// Register the optional parity workflow before launch and install its schedule
+/// only after the host can accept work.
+async fn launch_with_parity(dbos: &dbos::DBOS, enabled: bool) -> dbos::Result<()> {
+    let schedule = enabled.then(|| forge_parity::register(dbos)).transpose()?;
+    dbos.launch().await?;
+    if let Some(schedule) = schedule {
+        if let Err(error) = dbos.apply_schedules(&[schedule]).await {
+            dbos.shutdown().await;
+            return Err(error);
+        }
+    }
+    Ok(())
 }
 
 /// A schedule loop registered by a crate outside `workflows`.
@@ -538,7 +556,7 @@ impl Executor {
                 .chain(retainers)
                 .chain(calendar)
                 .chain(register_external(&dbos)?);
-        dbos.launch().await?;
+        launch_with_parity(&dbos, schedules.forge_parity).await?;
         tracing::info!(app_name = APP_NAME, "DBOS launched");
         let stop = dbos::CancellationToken::new();
         let mut loops = vec![tokio::spawn(heartbeat::schedule(beat, clock, stop.clone()))];
