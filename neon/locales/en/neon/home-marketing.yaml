@@ -54,8 +54,10 @@ bands:
             - text: ChatGPT Plugins
               href: https://chatgpt.com/plugins
             - text: >-
-                , select +, then Add custom MCP server. Name it Navigator and describe it as a public legal template catalog.
-                If the option is missing, ask your workspace administrator to enable custom plugins.
+                , select +, then Add custom MCP server. Name it Navigator and
+                describe it as a public legal template catalog. If the option is
+                missing, ask your workspace administrator to enable custom
+                plugins.
       - title: Connect to the public catalog
         body:
           - - text: "Enter "
@@ -89,3 +91,6 @@ bands:
     body: >-
       Navigator is open source under MIT OR Apache-2.0. Browse the catalog, connect it in chat, or write to us.
     email: "{firm_email}"
+    action:
+      href: /legal-aid
+      label: Legal Aid

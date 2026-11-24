@@ -149,6 +149,7 @@ const FIRM_NAV: &[NavLink] = &[
 /// connected Project; and Legal Aid. The shared footer row still links Navigator
 /// and Notations for every brand.
 const NEON_NAV: &[NavLink] = &[
+    NavLink::leaf("Lawyers", "/lawyers"),
     NavLink::leaf("Notations", "/notations"),
     NavLink::leaf("Lawyers", "/lawyers"),
     NavLink::leaf("Legal Aid", "/legal-aid"),

@@ -213,7 +213,7 @@ async fn no_firm_page_still_markets_the_retired_consumer_plan() {
 }
 
 #[tokio::test]
-async fn the_home_presents_navigator_and_links_to_its_page() {
+async fn the_home_presents_agentic_lawyering_for_everyone() {
     let app = site_app().await;
     let resp = anon_get(&app, "/").await;
     let status = resp.status();
@@ -225,6 +225,7 @@ async fn the_home_presents_navigator_and_links_to_its_page() {
         body.len()
     );
     for text in [
+        "Agentic lawyering for everyone",
         "Exacting Agentic Lawyering",
         "representing yourself",
         r#"href="/notations""#,
@@ -507,7 +508,15 @@ fn publishes_a_fee(body: &str) -> bool {
 async fn supporting_pages_do_not_publish_separate_fees() {
     let app = site_app().await;
 
-    for unpriced in ["/notations", "/contact", "/blog", "/privacy", "/terms"] {
+    for unpriced in [
+        "/",
+        "/lawyers",
+        "/notations",
+        "/contact",
+        "/blog",
+        "/privacy",
+        "/terms",
+    ] {
         let body = body_string(anon_get(&app, unpriced).await).await;
         assert!(
             !publishes_a_fee(&body),
@@ -518,7 +527,7 @@ async fn supporting_pages_do_not_publish_separate_fees() {
 
 /// The home offers MCP setup so anyone can connect Navigator in chat.
 #[tokio::test]
-async fn the_home_explains_the_mcp_setup_and_the_quickstart() {
+async fn the_home_explains_the_mcp_setup() {
     let app = site_app().await;
     let body = body_string(anon_get(&app, "/").await).await;
     for expected in [
@@ -546,10 +555,22 @@ async fn the_home_explains_the_mcp_setup_and_the_quickstart() {
 
 /// `/lawyers` maps the Project's connected work around Navigator.
 #[tokio::test]
-async fn the_home_maps_a_connected_project() {
+async fn the_lawyers_page_maps_a_connected_project() {
     let app = site_app().await;
     let body = body_string(anon_get(&app, "/lawyers").await).await;
 
+    assert!(
+        body.contains("Navigator for lawyers") && body.contains("Exacting Agentic Lawyering"),
+        "the lawyers page keeps the product heading and the protected tagline: {body}"
+    );
+    assert!(
+        body.contains("Navigator is open source under MIT OR Apache-2.0."),
+        "the lawyers page names the licence: {body}"
+    );
+    assert!(
+        body.contains(r#"id="video""#),
+        "the lawyers page publishes the presentation: {body}"
+    );
     assert!(
         body.contains(r#"class="fm-project-network""#)
             && body.contains(r#"src="/public/navigator-wheel.svg""#),
@@ -656,7 +677,7 @@ async fn the_home_maps_a_connected_project() {
 /// the page prints is the string both archives are fetched at — a page
 /// naming one release and linking another is worse than one naming none.
 #[tokio::test]
-async fn the_home_publishes_the_cli_at_the_release_it_runs() {
+async fn the_lawyers_page_publishes_the_cli_at_the_release_it_runs() {
     const DOWNLOAD_BASE: &str = "https://github.com/neon-law/navigator/releases/download/";
 
     let app = site_app().await;

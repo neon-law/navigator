@@ -41,7 +41,7 @@ pub const DEFAULT_LOCALE: &str = "en";
 /// `gateway-delete-your-debt` is the first of a family: a Neon-only practice
 /// gateway, published solely under `neon/locales/en/neon/` and never shipped
 /// by another `BrandKey` (see [`crate::brand::BrandKey::catalog_pages`]). Each
-/// gateway page still deserializes as [`MarketingPageCopy`] like `navigator`
+/// gateway page still deserializes as [`MarketingPageCopy`] like `lawyers`
 /// does; only the stem is new.
 pub const KNOWN_PAGES: &[&str] = &[
     "fractional-gc",
@@ -751,6 +751,7 @@ pub fn locale_page_kind(stem: &str) -> Option<LocalePageKind> {
         | "immigration-removal-defense"
         | "immigration-uscis-notices"
         | "home-marketing"
+        | "lawyers"
         | "mobile-app" => Some(LocalePageKind::Marketing),
         shared::SHARED_CATALOG_STEM => Some(LocalePageKind::Shared),
         services::SERVICES_CATALOG_STEM => Some(LocalePageKind::ServicesCatalog),

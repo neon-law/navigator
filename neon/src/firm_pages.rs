@@ -1671,7 +1671,7 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
         services_copy,
     ));
     // `/delete-your-debt` — Neon's own gateway to the DeleteYourDebt.com
-    // practice. Neon-only, like `/navigator`: no `with_branded` injection,
+    // practice. Neon-only, like `/legal-aid`: no `with_branded` injection,
     // because `views::brand::BrandKey::publishes_firm_path`'s Neon arm
     // already admits this path (it is not one of the three retired-page
     // exclusions) while every other brand's arm is its own finite allow-list
@@ -2002,7 +2002,8 @@ fn resolve_world_content(branding: &views::brand::Branding) -> webapp::world_pag
 /// Brand-safe like [`resolve_firm_contact_content`]: the `<title>` names the
 /// mounted brand, resolved at router-build time.
 ///
-/// Neon’s home uses the shared marketing bands to present Navigator.
+/// Neon’s home offers agentic lawyering to anyone. The connected Project
+/// lives on `/lawyers`.
 /// Other house brands resolve their own home catalogs.
 pub(crate) fn resolve_firm_home_content(
     branding: &views::brand::Branding,
