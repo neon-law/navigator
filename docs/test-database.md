@@ -17,7 +17,7 @@ PostgreSQL for covered journal tests` step in `.github/workflows/ci.yml`):
 ```bash
 docker run -d --name test-postgres --shm-size=256m -p 127.0.0.1:25432:5432 \
   -e POSTGRES_PASSWORD=synthetic -e POSTGRES_DB=smoke \
-  ghcr.io/neon-law/navigator/postgres@sha256:a988825deb90fdadd2505e6047a474f202cc195de4916550492ba6865800aa2e
+  ghcr.io/neon-law/navigator/postgres@sha256:b5c0694f8d012e697738b573f97f83e0f4e156b9dc977df8a99f0eaa32130df3
 docker exec -i test-postgres psql -U postgres -d smoke -v ON_ERROR_STOP=1 < store/postgres/schema.sql
 ```
 

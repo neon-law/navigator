@@ -36,7 +36,12 @@ async fn mount(server: &MockServer, project_id: Uuid, deadline_id: Uuid) -> Stor
     Mock::given(method("POST"))
         .and(path(format!("/app/api/projects/{project_id}/deadlines")))
         .and(header("authorization", "Bearer test-token"))
-        .and(body_json(json!({
+        .and(|request: &wiremock::Request| {
+            request.body_json::<Value>().ok().and_then(|mut body| {
+                let key = body.as_object_mut()?.remove("replay_key")?;
+                Uuid::parse_str(key.as_str()?).ok()?;
+                Some(body)
+            }) == Some(json!({
             "title": "Answer to the complaint",
             "due_at": "2026-11-02T17:00:00-08:00",
             "authority_kind": "statute",
@@ -44,7 +49,8 @@ async fn mount(server: &MockServer, project_id: Uuid, deadline_id: Uuid) -> Stor
             "calendar_role": "firm",
             "internal_lead_days": 14,
             "client_lead_days": 7
-        })))
+            }))
+        })
         .respond_with(ResponseTemplate::new(201).set_body_json(&created))
         .expect(1)
         .mount(server)

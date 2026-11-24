@@ -323,8 +323,7 @@ impl GitHubForge {
             jobs,
         }))
     }
-    async fn merge_ready(&self, review: &ReviewRef, base: &str) -> Result<ArmOutcome> {
-        // A direct merge must prove every live required context on the pinned head.
+    async fn required_checks(&self, review: &ReviewRef, base: &str) -> Result<bool> {
         let rules: Vec<serde_json::Value> = self
             .get_json(&self.repo_path(&format!("rules/branches/{base}")))
             .await?;
@@ -333,13 +332,13 @@ impl GitHubForge {
             .filter(|rule| rule["type"] == "required_status_checks")
             .filter_map(|rule| rule["parameters"]["required_status_checks"].as_array())
             .flatten()
-            .filter_map(|check| check["context"].as_str())
             .collect();
-        anyhow::ensure!(
-            !contexts.is_empty(),
-            "base branch has no required check; refusing an ungated merge"
-        );
-        for context in contexts {
+        anyhow::ensure!(!contexts.is_empty(), "base branch has no required check");
+        let mut passed = true;
+        for check in contexts {
+            let context = check["context"]
+                .as_str()
+                .context("required check needs a name")?;
             let query: String = url::form_urlencoded::Serializer::new(String::new())
                 .append_pair("check_name", context)
                 .append_pair("filter", "latest")
@@ -349,13 +348,36 @@ impl GitHubForge {
                     &self.repo_path(&format!("commits/{}/check-runs?{query}", review.head_sha)),
                 )
                 .await?;
-            anyhow::ensure!(
-                runs.check_runs.iter().any(|run| run.status == "completed"
-                    && run.name == context
-                    && run.conclusion.as_deref() == Some("success")),
-                "required check {context} has not passed on the reviewed head"
-            );
+            let latest = runs
+                .check_runs
+                .iter()
+                .filter(|run| {
+                    run.name == context
+                        && run.head_sha.as_deref() == Some(&review.head_sha)
+                        && check["integration_id"]
+                            .as_i64()
+                            .filter(|id| *id > 0)
+                            .is_none_or(|id| run.app.as_ref().is_some_and(|app| app.id == id))
+                })
+                .max_by_key(|run| run.id);
+            match latest {
+                Some(run) if run.status == "completed" => {
+                    anyhow::ensure!(
+                        run.conclusion.as_deref() == Some("success"),
+                        "required check {context} did not pass"
+                    );
+                }
+                _ => passed = false,
+            }
         }
+        Ok(passed)
+    }
+
+    async fn merge_ready(&self, review: &ReviewRef, base: &str) -> Result<ArmOutcome> {
+        anyhow::ensure!(
+            self.required_checks(review, base).await?,
+            "required checks have not passed on the reviewed head"
+        );
         let (status, body) = self
             .write_json(
                 reqwest::Method::PUT,
@@ -419,7 +441,15 @@ struct Pull {
 
 #[derive(Debug, Deserialize)]
 struct PullHead {
+    #[serde(rename = "ref")]
+    branch: Option<String>,
+    repo: Option<HeadRepo>,
     sha: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct HeadRepo {
+    full_name: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -434,7 +464,15 @@ struct User {
 }
 
 #[derive(Debug, Deserialize)]
+struct CheckApp {
+    id: i64,
+}
+
+#[derive(Debug, Deserialize)]
 struct CheckRun {
+    id: Option<u64>,
+    app: Option<CheckApp>,
+    head_sha: Option<String>,
     name: String,
     #[serde(default)]
     status: String,
@@ -482,21 +520,8 @@ fn verdict(mergeable_state: &str, runs: &[CheckRun]) -> CheckVerdict {
     }
 }
 
-#[async_trait]
-impl Forge for GitHubForge {
-    async fn identity(&self) -> Result<String> {
-        let user: User = self.get_json("/user").await?;
-        Ok(user.login)
-    }
-
-    async fn remote_reachable(&self) -> Result<()> {
-        self.get_json::<serde_json::Value>(&self.repo_path(""))
-            .await
-            .with_context(|| format!("reach {}/{} on GitHub", self.owner, self.name))?;
-        Ok(())
-    }
-
-    async fn open_review(&self, request: ReviewRequest) -> Result<ReviewRef> {
+impl GitHubForge {
+    async fn open(&self, request: ReviewRequest, draft: bool) -> Result<(ReviewRef, bool)> {
         let existing: Vec<Pull> = self
             .get_json(&self.repo_path(&format!(
                 "pulls?head={}:{}&state=open",
@@ -508,14 +533,20 @@ impl Forge for GitHubForge {
             .find(|pull| pull.base.git_ref == request.base_branch)
         {
             anyhow::ensure!(
-                !pull.draft,
+                draft || !pull.draft,
                 "the existing review request is a draft; mark it ready before continuing"
             );
-            return Ok(ReviewRef {
-                number: pull.number,
-                head_sha: pull.head.sha.clone(),
-                url: pull.html_url.clone(),
-            });
+            if draft {
+                self.verify_release_source(pull, &request)?;
+            }
+            return Ok((
+                ReviewRef {
+                    number: pull.number,
+                    head_sha: pull.head.sha.clone(),
+                    url: pull.html_url.clone(),
+                },
+                pull.draft,
+            ));
         }
         if let Some(pull) = existing.first() {
             bail!(
@@ -535,7 +566,7 @@ impl Forge for GitHubForge {
                     "head": request.head_branch,
                     "base": request.base_branch,
                     "body": request.body,
-                    "draft": false,
+                    "draft": draft,
                 }),
             )
             .await
@@ -550,11 +581,73 @@ impl Forge for GitHubForge {
             })
             .and_then(|body| serde_json::from_str(&body).context("decode the review request"))
             .context("open the review request")?;
-        Ok(ReviewRef {
-            number: created.number,
-            head_sha: created.head.sha,
-            url: created.html_url,
-        })
+        if draft {
+            self.verify_release_source(&created, &request)?;
+            anyhow::ensure!(created.draft, "forge did not create a draft");
+        }
+        Ok((
+            ReviewRef {
+                number: created.number,
+                head_sha: created.head.sha,
+                url: created.html_url,
+            },
+            created.draft,
+        ))
+    }
+
+    fn verify_release_source(&self, pull: &Pull, request: &ReviewRequest) -> Result<()> {
+        anyhow::ensure!(
+            pull.base.git_ref == request.base_branch
+                && pull.head.branch.as_ref() == Some(&request.head_branch)
+                && pull.head.repo.as_ref().is_some_and(|repo| repo
+                    .full_name
+                    .eq_ignore_ascii_case(&format!("{}/{}", self.owner, self.name))),
+            "review differs from the requested repository or branches"
+        );
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl super::release_review::ReleaseForge for GitHubForge {
+    async fn source(&self) -> Result<super::release_review::Source> {
+        let source: super::release_review::Source = self.get_json(&self.repo_path("")).await?;
+        source.verify(&format!("{}/{}", self.owner, self.name))?;
+        Ok(source)
+    }
+
+    async fn checks(&self, review: &ReviewRef, base: &str) -> Result<bool> {
+        let pull: Pull = self
+            .get_json(&self.repo_path(&format!("pulls/{}", review.number)))
+            .await?;
+        anyhow::ensure!(
+            pull.head.sha == review.head_sha && pull.base.git_ref == base,
+            "review revision changed"
+        );
+        self.required_checks(review, base).await
+    }
+
+    async fn draft(&self, request: ReviewRequest) -> Result<(ReviewRef, bool)> {
+        self.open(request, true).await
+    }
+}
+
+#[async_trait]
+impl Forge for GitHubForge {
+    async fn identity(&self) -> Result<String> {
+        let user: User = self.get_json("/user").await?;
+        Ok(user.login)
+    }
+
+    async fn remote_reachable(&self) -> Result<()> {
+        self.get_json::<serde_json::Value>(&self.repo_path(""))
+            .await
+            .with_context(|| format!("reach {}/{} on GitHub", self.owner, self.name))?;
+        Ok(())
+    }
+
+    async fn open_review(&self, request: ReviewRequest) -> Result<ReviewRef> {
+        self.open(request, false).await.map(|(review, _)| review)
     }
 
     async fn find_merged_review(&self, branch: &str, sha: &str) -> Result<Option<ReviewRef>> {
@@ -1055,7 +1148,7 @@ mod tests {
             .and(path("/repos/acme/nav/commits/abc123/check-runs"))
             .and(query_param("check_name", "ci / ci"))
             .respond_with(ResponseTemplate::new(200).set_body_json(
-                json!({"check_runs": [{"name": "ci / ci", "status": "completed", "conclusion": "success"}]}),
+                json!({"check_runs": [{"name": "ci / ci", "head_sha":"abc123", "status": "completed", "conclusion": "success"}]}),
             ))
             .expect(1)
             .mount(&server)
@@ -1114,7 +1207,9 @@ mod tests {
         let forge = GitHubForge::new(&server.uri(), "acme", "nav", "t").unwrap();
         let error = forge.arm_merge(&review(7, "abc123")).await.unwrap_err();
         assert!(
-            error.to_string().contains("refusing an ungated merge"),
+            error
+                .to_string()
+                .contains("base branch has no required check"),
             "{error:#}"
         );
     }

@@ -53,30 +53,39 @@ pub struct Checkout {
     pub firm: Option<String>,
 }
 
+/// Immediate visible directories with a Project manifest, in stable order.
+pub(super) fn project_directories(root: &Path) -> std::io::Result<Vec<PathBuf>> {
+    let mut paths = Vec::new();
+    for entry in std::fs::read_dir(root)?.flatten() {
+        if !entry.file_name().to_string_lossy().starts_with('.')
+            && entry.file_type().is_ok_and(|kind| kind.is_dir())
+            && entry.path().join(manifest::FILE).is_file()
+        {
+            paths.push(entry.path());
+        }
+    }
+    paths.sort();
+    Ok(paths)
+}
+
 /// Every child folder carrying a readable `navigator.yaml`.
 #[must_use]
 pub fn checkouts(root: &Path) -> Vec<Checkout> {
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return Vec::new();
-    };
-    let mut found: Vec<Checkout> = entries
-        .flatten()
-        .filter(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
-        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
-        .filter_map(|entry| {
-            let dir = entry.path();
+    project_directories(root)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|dir| {
+            let code = dir.file_name()?.to_string_lossy().into_owned();
             let manifest = manifest::read(&dir)?;
             Some(Checkout {
-                code: entry.file_name().to_string_lossy().into_owned(),
+                dir,
+                code,
                 host: manifest::non_empty(manifest.host.as_deref())
                     .map(|host| crate::credentials::base_url(&host)),
                 firm: manifest::non_empty(manifest.firm.as_deref()),
-                dir,
             })
         })
-        .collect();
-    found.sort_by(|a, b| a.code.cmp(&b.code));
-    found
+        .collect()
 }
 
 /// What one sync pass did, or in a dry run would do.
@@ -841,19 +850,23 @@ mod tests {
     #[test]
     fn an_empty_root_gets_agents_skills_and_relative_claude_links() {
         let root = tempfile::tempdir().unwrap();
-        let report = materialize(root.path(), GENERIC, &BTreeMap::new(), false).unwrap();
+        let catalog = project_scaffold::WORKSPACE_SKILLS;
+        let report = materialize(root.path(), catalog, &BTreeMap::new(), false).unwrap();
         assert_eq!(
             std::fs::read_to_string(root.path().join("AGENTS.md")).unwrap(),
             WORKSPACE_AGENTS
         );
-        let link = root.path().join(CLAUDE_SKILLS).join("records-subpoena");
+        let link = root.path().join(CLAUDE_SKILLS).join("today");
         assert_eq!(
             std::fs::read_link(&link).unwrap(),
-            Path::new("../../.agents/skills/records-subpoena")
+            Path::new("../../.agents/skills/today")
         );
-        assert_eq!(skill_text(&link), GENERIC[0].1);
+        assert_eq!(
+            skill_text(&link),
+            skill_text(&root.path().join(SKILLS).join("today"))
+        );
         assert!(report.missing.is_empty(), "{:?}", report.missing);
-        let again = materialize(root.path(), GENERIC, &BTreeMap::new(), false).unwrap();
+        let again = materialize(root.path(), catalog, &BTreeMap::new(), false).unwrap();
         assert!(again.changes.is_empty(), "{:?}", again.changes);
     }
 

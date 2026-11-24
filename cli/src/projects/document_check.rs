@@ -59,7 +59,7 @@ pub fn check_timeline_records(dir: &Path, rows: &[serde_json::Value]) -> Result<
 
 /// One live-record failure. `location` is the pointer path, or the asset id
 /// when the row has no slug.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct CheckFailure {
     pub location: String,
     pub message: String,
@@ -67,7 +67,7 @@ pub struct CheckFailure {
 
 /// One checkout edit the check made, or would make when it is not allowed to
 /// write.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct CheckFix {
     pub path: String,
     pub action: String,

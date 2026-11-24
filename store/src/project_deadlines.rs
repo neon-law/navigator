@@ -559,10 +559,26 @@ pub async fn create(surreal: &SurrealDb, new: &NewDeadline) -> Result<Deadline, 
             .await;
         }
     }
+    // Two first attempts may both miss the replay lookup. Address the same
+    // row even on a compatibility store without the PostgreSQL unique index.
+    let id = normalized
+        .replay_key
+        .as_deref()
+        .map_or_else(Uuid::now_v7, |key| {
+            use sha2::{Digest, Sha256};
+            let hash = Sha256::new()
+                .chain_update(b"navigator/deadline-replay/v1")
+                .chain_update(new.project_id.as_bytes())
+                .chain_update(key.as_bytes())
+                .finalize();
+            let mut bytes = [0; 16];
+            bytes.copy_from_slice(&hash[..16]);
+            uuid::Builder::from_custom_bytes(bytes).into_uuid()
+        });
     let inserted_at = chrono::Utc::now().to_rfc3339();
     persist(
         surreal,
-        Uuid::now_v7(),
+        id,
         new.project_id,
         &StoredDeadline {
             normalized: &normalized,
@@ -1136,15 +1152,26 @@ mod tests {
 
     #[tokio::test]
     async fn replay_key_updates_the_same_row() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal).await;
-        let mut input = sample(project_id);
-        input.replay_key = Some("notice-1".into());
-        let first = create(&surreal, &input).await.unwrap();
-        input.due_at = "2026-12-15T12:00:00Z".into();
-        let second = create(&surreal, &input).await.unwrap();
-        assert_eq!(first.id, second.id);
-        assert_eq!(list(&surreal, project_id).await.unwrap().len(), 1);
+        crate::postgres_mirror::from_source(async {
+            let surreal = mem_surreal().await;
+            let project_id = project(&surreal).await;
+            let mut input = sample(project_id);
+            input.replay_key = Some("notice-1".into());
+            let (first, second) = tokio::join!(create(&surreal, &input), create(&surreal, &input));
+            let rows = list(&surreal, project_id).await.unwrap();
+            assert_eq!(rows.len(), 1);
+            // A transaction conflict can require one more read-back.
+            assert!(first.is_ok() || second.is_ok());
+            for row in [first, second].into_iter().flatten() {
+                assert_eq!(row.id, rows[0].id);
+            }
+            input.due_at = "2026-12-15T12:00:00+00:00".into();
+            let updated = create(&surreal, &input).await.unwrap();
+            assert_eq!(updated.id, rows[0].id);
+            assert_eq!(updated.due_at, input.due_at);
+            assert_eq!(list(&surreal, project_id).await.unwrap(), vec![updated]);
+        })
+        .await;
     }
 
     #[tokio::test]

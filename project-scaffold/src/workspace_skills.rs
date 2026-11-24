@@ -106,6 +106,7 @@ pub const WORKSPACE_SKILLS: &[(&str, &str)] = &[
         "texas-entity-lookup",
         include_str!("../../.agents/skills/texas-entity-lookup/SKILL.md"),
     ),
+    ("today", include_str!("../../.agents/skills/today/SKILL.md")),
     (
         "triage-email",
         include_str!("../../.agents/skills/triage-email/SKILL.md"),

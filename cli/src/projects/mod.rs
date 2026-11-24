@@ -48,6 +48,8 @@ pub mod participant;
 pub mod pinned_gate;
 pub mod push;
 pub mod reference;
+pub(crate) mod release_preflight;
+pub(crate) mod release_review;
 pub mod repository;
 mod reviews;
 pub mod scaffold;
