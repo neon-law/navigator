@@ -107,20 +107,23 @@ impl ForgejoOidc {
     /// Partial configuration disables the Forgejo token exchange.
     #[must_use]
     pub fn from_env() -> Self {
+        Self::from_variables(|name| std::env::var(name).ok())
+    }
+
+    fn from_variables(variable: impl Fn(&str) -> Option<String>) -> Self {
         let names = [
             "NAVIGATOR_FORGEJO_ACTIONS_OIDC_ISSUER",
             "NAVIGATOR_FORGEJO_ACTIONS_OIDC_AUDIENCE",
             "NAVIGATOR_FORGEJO_ACTIONS_OIDC_WORKFLOW",
         ];
         // Optional: without it no Forgejo run can mint the seed-write session.
-        let cd_workflow_path = std::env::var("NAVIGATOR_FORGEJO_ACTIONS_OIDC_CD_WORKFLOW")
-            .ok()
+        let cd_workflow_path = variable("NAVIGATOR_FORGEJO_ACTIONS_OIDC_CD_WORKFLOW")
             .filter(|path| !path.trim().is_empty());
-        let config = names.map(std::env::var);
-        if config.iter().all(Result::is_err) {
+        let config = names.map(&variable);
+        if config.iter().all(Option::is_none) {
             return Self::rejecting();
         }
-        let [Ok(issuer), Ok(audience), Ok(workflow_path)] = config else {
+        let [Some(issuer), Some(audience), Some(workflow_path)] = config else {
             tracing::error!("partial Forgejo Actions OIDC trust configuration; rejecting tokens");
             return Self::rejecting();
         };
@@ -415,16 +418,7 @@ impl ForgejoOidc {
     /// no `jti`; the SHA-256 token digest distinguishes legitimate renewed
     /// tokens issued in the same run and attempt.
     pub fn spend_token(&self, token: &str, exp: i64) -> Result<(), ForgejoOidcError> {
-        const HEX: &[u8; 16] = b"0123456789abcdef";
-        let digest = Sha256::digest(token.as_bytes())
-            .iter()
-            .flat_map(|byte| {
-                [
-                    char::from(HEX[usize::from(byte >> 4)]),
-                    char::from(HEX[usize::from(byte & 0x0f)]),
-                ]
-            })
-            .collect::<String>();
+        let digest = hex::encode(Sha256::digest(token.as_bytes()));
         let now = now_unix_secs();
         let mut spent = self
             .spent_token_digests
@@ -694,3 +688,7 @@ mod tests {
         assert!(ForgejoOidc::rejecting().verify("synthetic").await.is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "forgejo_oidc_tests.rs"]
+mod trust_tests;

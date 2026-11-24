@@ -91,3 +91,7 @@ pub(crate) async fn submit(
     cookies.add(cookie);
     Redirect::to("/auth/signup").into_response()
 }
+
+#[cfg(test)]
+#[path = "signup_age_tests.rs"]
+mod tests;

@@ -52,3 +52,66 @@ pub fn document<T: Serialize>(
         "meta": { "page": { "size": params.size } },
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{document, parse};
+    use crate::api::ApiError;
+    use store::listing::{ListError, ListSpec, Page};
+
+    const SPEC: ListSpec = ListSpec {
+        filters: &["name"],
+        sorts: &["name", "email"],
+        default_sort: &[("name", false)],
+    };
+
+    #[test]
+    fn an_unadvertised_filter_or_an_out_of_range_page_is_refused() {
+        for (query, expected) in [
+            (
+                "filter[role]=owner",
+                ListError::UnknownFilter("role".into()),
+            ),
+            ("sort=role", ListError::UnknownSort("role".into())),
+            ("page[size]=0", ListError::PageSize),
+            ("page[after]=stale", ListError::Cursor),
+        ] {
+            match parse(Some(query), &SPEC) {
+                Err(ApiError::ListInvalid(error)) => assert_eq!(error, expected, "{query}"),
+                other => panic!("{query} must be refused, got {:?}", other.map(|_| ())),
+            }
+        }
+        assert!(parse(None, &SPEC).unwrap().filters.is_empty());
+    }
+
+    #[test]
+    fn every_link_repeats_the_request_and_only_existing_neighbours_are_linked() {
+        let params = parse(Some("filter[name]=Ada+L&sort=-email&page[size]=2"), &SPEC).unwrap();
+        let middle = Page {
+            items: vec!["a", "b"],
+            next: Some("n1".into()),
+            prev: Some("p1".into()),
+        };
+        let body = document("/app/api/people", &params, &middle).0;
+        let repeated = "/app/api/people?filter%5Bname%5D=Ada+L&sort=-email&page%5Bsize%5D=2";
+        assert_eq!(body["data"], serde_json::json!(["a", "b"]));
+        assert_eq!(body["meta"]["page"]["size"], 2);
+        assert_eq!(body["links"]["self"], repeated);
+        assert_eq!(
+            body["links"]["next"],
+            format!("{repeated}&page%5Bafter%5D=n1")
+        );
+        assert_eq!(
+            body["links"]["prev"],
+            format!("{repeated}&page%5Bbefore%5D=p1")
+        );
+
+        let only = Page::<&str> {
+            items: Vec::new(),
+            next: None,
+            prev: None,
+        };
+        let links = &document("/app/api/people", &params, &only).0["links"];
+        assert_eq!(links.as_object().unwrap().len(), 1, "{links}");
+    }
+}

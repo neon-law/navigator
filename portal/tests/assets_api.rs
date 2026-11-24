@@ -12,9 +12,8 @@ use base64::Engine as _;
 use cloud::{StorageError, StorageService, StoredObject};
 use portal::api::ApiState;
 use serde_json::{json, Value};
-use store::persons::{NewPerson, Role};
+use store::persons::Role;
 use store::surreal::SurrealDb;
-use store::test_support::{ensure_person, mem_surreal};
 use tower::ServiceExt;
 
 /// A storage backend that always fails. Standing in for `ApiState::storage`
@@ -72,18 +71,10 @@ async fn fresh_assets_bucket() -> Arc<dyn StorageService> {
 /// Build a fixture, optionally overriding `ApiState::storage` (the private
 /// documents bucket, unused by this door) so a test can prove the door
 /// never reaches it.
-async fn fixture_on(db: SurrealDb, documents_storage: Option<Arc<dyn StorageService>>) -> Fixture {
-    let admin = ensure_person(
-        &db,
-        &NewPerson {
-            name: "Synthetic Admin".into(),
-            email: "synthetic-admin@example.com".into(),
-            role: Role::Admin,
-            ..Default::default()
-        },
-    )
-    .await;
-    let state = portal::test_support::app_state(db).await;
+async fn fixture_on(documents_storage: Option<Arc<dyn StorageService>>) -> Fixture {
+    // The door authorizes from the session alone and writes only object
+    // storage, so it is driven without any database behind the handle.
+    let state = portal::test_support::app_state(SurrealDb::uninitialized()).await;
     let assets_storage = fresh_assets_bucket().await;
     let api_state = ApiState {
         jev: None,
@@ -103,7 +94,7 @@ async fn fixture_on(db: SurrealDb, documents_storage: Option<Arc<dyn StorageServ
         canonical_base_url: None,
     };
     let session = portal::SessionData {
-        person_id: Some(admin.id),
+        person_id: Some(uuid::Uuid::new_v4()),
         ..portal::SessionData::fresh("synthetic-admin-sub", Role::Admin)
     };
     Fixture {
@@ -114,7 +105,7 @@ async fn fixture_on(db: SurrealDb, documents_storage: Option<Arc<dyn StorageServ
 }
 
 async fn fixture() -> Fixture {
-    fixture_on(mem_surreal().await, None).await
+    fixture_on(None).await
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -181,7 +172,7 @@ async fn an_admin_uploads_an_asset_and_it_is_stored_and_read_back() {
 
 #[tokio::test]
 async fn an_owner_may_also_upload() {
-    let fixture = fixture_on(mem_surreal().await, None).await;
+    let fixture = fixture_on(None).await;
     let owner_session = portal::SessionData::fresh("synthetic-owner-sub", Role::Owner);
     let (status, _) = post(
         &fixture.app,
@@ -435,11 +426,7 @@ async fn an_ofl_license_file_is_accepted() {
 async fn the_door_never_writes_to_the_documents_bucket() {
     // `storage` (the documents bucket) always fails; the door must still
     // succeed because it writes `assets_storage` exclusively.
-    let failing = fixture_on(
-        mem_surreal().await,
-        Some(Arc::new(FailingStorage) as Arc<dyn StorageService>),
-    )
-    .await;
+    let failing = fixture_on(Some(Arc::new(FailingStorage) as Arc<dyn StorageService>)).await;
     let (status, body) = post(
         &failing.app,
         Some(&failing.admin_session),
