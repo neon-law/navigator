@@ -11,7 +11,12 @@ use crate::{
     remote,
 };
 
-pub async fn run(host: Option<&str>, project: Option<&str>, json: bool) -> ExitCode {
+mod readiness;
+
+pub async fn run(host: Option<&str>, project: Option<&str>, json: bool, all: bool) -> ExitCode {
+    if all {
+        return readiness::run(host, json).await;
+    }
     match read(host, project).await {
         Ok(mut value) => {
             if matches!(value["project_status"].as_str(), Some("pitch" | "open")) {
@@ -80,7 +85,7 @@ async fn read_envelopes(
     Ok(value)
 }
 
-async fn read(host: Option<&str>, project: Option<&str>) -> Result<serde_json::Value> {
+pub(super) async fn read(host: Option<&str>, project: Option<&str>) -> Result<serde_json::Value> {
     let local = manifest::read(Path::new("."));
     let project = project
         .or_else(|| local.as_ref().and_then(|m| m.project.as_deref()))

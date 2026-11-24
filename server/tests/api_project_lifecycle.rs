@@ -524,6 +524,29 @@ async fn deadline_inventory_matches_dashboard_firm_scope_and_open_projects() {
     codes.sort_unstable();
     assert_eq!(codes, ["synthetic-no-checkout", "synthetic-onboarding"]);
 
+    sqlx::query("UPDATE project SET status='pitch' WHERE id=$1")
+        .bind(sibling)
+        .execute(pool)
+        .await
+        .unwrap();
+    let rows = json(
+        fx.get(
+            "/app/api/lawyer/deadline-projects?include_pitch=true",
+            Some(Role::Lawyer),
+            Some(fx.lawyer),
+        )
+        .await,
+    )
+    .await;
+    let mut codes = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["code"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    codes.sort_unstable();
+    assert_eq!(codes, ["synthetic-no-checkout", "synthetic-onboarding"]);
+
     sqlx::query("DELETE FROM firm_brand WHERE firm_id=$1 AND brand_key='neon'")
         .bind(current_firm)
         .execute(pool)

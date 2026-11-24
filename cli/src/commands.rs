@@ -965,6 +965,9 @@ pub enum ProjectsCmd {
     Status {
         /// Project code. Defaults to project.name in navigator.yaml.
         project_code: Option<String>,
+        /// Report readiness across participating open and pitch Projects on this host.
+        #[arg(long, conflicts_with = "project_code")]
+        all: bool,
         /// Emit the complete live status as JSON.
         #[arg(long)]
         json: bool,
@@ -3107,7 +3110,8 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
             host,
             project_code,
             json,
-        } => projects::status::run(host.host.as_deref(), project_code.as_deref(), json).await,
+            all,
+        } => projects::status::run(host.host.as_deref(), project_code.as_deref(), json, all).await,
         ProjectsCmd::Lifecycle {
             host,
             project_code,

@@ -281,7 +281,7 @@ async fn register(host: Option<&str>, calendar_id: Option<&str>, freebusy: bool)
     finish("navigator calendar register", result, false)
 }
 
-async fn post(base: &str, token: &str, path: &str, body: Value) -> Result<Value> {
+pub(super) async fn post(base: &str, token: &str, path: &str, body: Value) -> Result<Value> {
     let response = remote::authenticated_client_builder(base)?
         .build()?
         .post(format!("{base}{path}"))

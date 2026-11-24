@@ -18,7 +18,7 @@ use uuid::Uuid;
 
 use crate::remote;
 
-const INVENTORY_PATH: &str = "/app/api/lawyer/deadline-projects";
+pub(super) const INVENTORY_PATH: &str = "/app/api/lawyer/deadline-projects";
 pub(super) const READ_CONCURRENCY: usize = 8;
 const LOCAL_FORMAT: &str = "%Y-%m-%d %H:%M %:z";
 const BANDS: [&str; 4] = ["Overdue", "Today", "Next 7 days", "Next 30 days"];
@@ -205,7 +205,7 @@ fn deadline_value(base: &str, project: &Project, row: &Deadline, zone: Tz) -> Va
     })
 }
 
-async fn list<T: for<'de> Deserialize<'de>>(
+pub(super) async fn list<T: for<'de> Deserialize<'de>>(
     client: &reqwest::Client,
     url: String,
     token: &str,
@@ -236,11 +236,8 @@ async fn gather(
     let reads = stream::iter(projects.into_iter().map(|project| {
         let client = client.clone();
         let token = token.to_owned();
-        let url = format!("{base}/app/api/projects/{}/deadlines", project.id);
         async move {
-            let result = list::<Vec<Deadline>>(&client, url, &token)
-                .await
-                .and_then(validate_deadlines);
+            let result = project_deadlines(&client, base, &token, project.id).await;
             (project, result)
         }
     }))
@@ -248,6 +245,49 @@ async fn gather(
     .collect::<Vec<_>>()
     .await;
     partition_reads(reads)
+}
+
+async fn project_deadlines(
+    client: &reqwest::Client,
+    base: &str,
+    token: &str,
+    id: Uuid,
+) -> Result<Vec<Deadline>> {
+    list(
+        client,
+        format!("{base}/app/api/projects/{id}/deadlines"),
+        token,
+    )
+    .await
+    .and_then(validate_deadlines)
+}
+
+pub(super) async fn open_for_project(
+    client: &reqwest::Client,
+    base: &str,
+    token: &str,
+    id: Uuid,
+    code: &str,
+    name: &str,
+    now: DateTime<Utc>,
+) -> Result<Vec<Value>> {
+    let mut rows = project_deadlines(client, base, token, id).await?;
+    rows.retain(|row| row.status == "open");
+    rows.sort_by_key(|row| (due_utc(row), row.id));
+    let project = Project {
+        id,
+        code: code.into(),
+        name: name.into(),
+        status: "open".into(),
+    };
+    Ok(rows
+        .iter()
+        .map(|row| {
+            let mut value = deadline_value(base, &project, row, chrono_tz::UTC);
+            value["overdue"] = json!(due_utc(row).is_some_and(|due| due < now));
+            value
+        })
+        .collect())
 }
 
 struct ReportRows {
