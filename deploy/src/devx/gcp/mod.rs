@@ -119,8 +119,7 @@ pub const TELEMETRY_BUCKET_SUFFIX: &str = "-telemetry";
 pub const ARCHIVED_PROJECTS_BUCKET_SUFFIX: &str = "-archived-projects";
 /// Archive buckets are `neon-law-archives-<deployment>`, a PREFIX rather than the
 /// suffix every other lane uses. The archive of a project is named for the
-/// archive family first and the deployment second, matching the existing
-/// `neon-law-archives-neon-law-420305`.
+/// archive family first and the deployment second.
 pub const ARCHIVES_BUCKET_PREFIX: &str = "neon-law-archives-";
 /// The offsite Iceberg archive bucket, `<deployment>-archives-offsite`, created
 /// in a different GCP project than the deployment and carrying a locked 25-year

@@ -110,10 +110,11 @@ mod tests {
     use crate::tools::ToolError;
     use serde_json::json;
     use store::projects::{create, NewProject};
-    use store::test_support::{mem_surreal, seed_entity};
+    use store::test_support::seed_entity;
     use uuid::Uuid;
 
     async fn project(surreal: &store::surreal::SurrealDb) -> Uuid {
+        crate::test_fixtures::seed_brands(surreal).await;
         let id = create(
             surreal,
             &NewProject {
@@ -127,17 +128,18 @@ mod tests {
         .await
         .expect("create project")
         .id;
-        let mut response = surreal
-            .query(
-                "CREATE $asset SET project_id = $project_id, storage_key = 'test', \
-                 content_type = 'application/pdf', byte_size = 1, sha256_hex = 'test', \
-                 kind = 'offboarding', visibility = 'internal', metadata = NONE",
-            )
-            .bind(("asset", store::surreal::record_id("asset", Uuid::now_v7())))
-            .bind(("project_id", store::surreal::record_id("project", id)))
-            .await
-            .expect("offboarding asset");
-        let _: Option<serde_json::Value> = response.take(0).expect("asset result");
+        let pg = store::postgres::PostgresDb::application().await.unwrap();
+        sqlx::query(
+            "INSERT INTO asset(id,project_id,storage_key,content_type,byte_size,sha256_hex,kind,visibility) \
+             VALUES ($1,$2,$3,'application/pdf',1,$4,'offboarding','internal')",
+        )
+        .bind(Uuid::new_v4())
+        .bind(id)
+        .bind(format!("projects/{id}/documents/test"))
+        .bind(store::assets::sha256_hex(format!("synthetic-{id}").as_bytes()))
+        .execute(pg.pool())
+        .await
+        .expect("offboarding asset");
         id
     }
 
@@ -158,38 +160,42 @@ mod tests {
 
     #[tokio::test]
     async fn closes_project_and_stamps_date() {
-        let surreal = mem_surreal().await;
-        let id = project(&surreal).await;
-        let effective_at = chrono::Utc::now();
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let id = project(&surreal).await;
+            let effective_at = chrono::Utc::now();
 
-        let result = call(
-            &surreal,
-            &json!({
-                "project_id": id,
-                "attestation": true,
-                "reason": "pitch_declined",
-                "effective_at": effective_at,
-            }),
-        )
-        .await
-        .expect("close project");
+            let result = call(
+                &surreal,
+                &json!({
+                    "project_id": id,
+                    "attestation": true,
+                    "reason": "pitch_declined",
+                    "effective_at": effective_at,
+                }),
+            )
+            .await
+            .expect("close project");
 
-        assert_eq!(result["structuredContent"]["status"], "closed");
-        assert_eq!(
-            result["structuredContent"]["closure_reason"],
-            "pitch_declined"
-        );
-        let closed_at: chrono::DateTime<chrono::Utc> = result["structuredContent"]["closed_at"]
-            .as_str()
-            .expect("close time")
-            .parse()
-            .expect("RFC 3339 close time");
-        assert_eq!(closed_at, effective_at);
+            assert_eq!(result["structuredContent"]["status"], "closed");
+            assert_eq!(
+                result["structuredContent"]["closure_reason"],
+                "pitch_declined"
+            );
+            let closed_at: chrono::DateTime<chrono::Utc> = result["structuredContent"]["closed_at"]
+                .as_str()
+                .expect("close time")
+                .parse()
+                .expect("RFC 3339 close time");
+            assert_eq!(closed_at, effective_at);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn requires_attestation_and_rejects_unknown_fields() {
-        let surreal = mem_surreal().await;
+        store::test_support::with_postgres(async {
+        let surreal = crate::test_fixtures::handle();
         let id = project(&surreal).await;
 
         let error = call(&surreal, &json!({"project_id": id}))
@@ -204,5 +210,6 @@ mod tests {
         .await
         .expect_err("unknown fields must be rejected");
         assert!(matches!(error, ToolError::InvalidArguments(_)));
+    }).await;
     }
 }

@@ -302,12 +302,6 @@ mod tests {
     use uuid::Uuid;
     use workflows::InMemoryRuntime;
 
-    use store::test_support::mem_surreal;
-    async fn db() -> store::surreal::SurrealDb {
-        let surreal = mem_surreal().await;
-        surreal
-    }
-
     /// Seed the template these tests open, declaring `kind`.
     ///
     /// The code stays `onboarding__letter` because its questionnaire is
@@ -410,6 +404,7 @@ mod tests {
         client_dri: Uuid,
         lawyer_dri: Option<Uuid>,
     ) -> Uuid {
+        crate::test_fixtures::seed_brands(surreal).await;
         let project = store::projects::create(
             surreal,
             &store::projects::NewProject {
@@ -484,296 +479,331 @@ mod tests {
 
     #[tokio::test]
     async fn creates_a_notation_on_an_explicit_project() {
-        // The lawyer names the matter; Navigator MCP opens no Project of its own.
-        let surreal = db().await;
-        seed_template(&surreal, "onboarding").await;
-        let client = seed_person(&surreal, "libra@example.com").await;
-        let project_id = seed_project(&surreal, client, None).await;
-        let runtime = InMemoryRuntime::new();
-        let storage = storage().await;
+        store::test_support::with_postgres(async {
+            // The lawyer names the matter; Navigator MCP opens no Project of its own.
+            let surreal = crate::test_fixtures::handle();
+            seed_template(&surreal, "onboarding").await;
+            let client = seed_person(&surreal, "libra@example.com").await;
+            let project_id = seed_project(&surreal, client, None).await;
+            let runtime = InMemoryRuntime::new();
+            let storage = storage().await;
 
-        let out = call(
-            &surreal,
-            &runtime,
-            Some(&storage),
-            None,
-            &json!({
-                "template_code": "onboarding__letter",
-                "project_id": project_id,
-            }),
-        )
-        .await
-        .unwrap();
+            let out = call(
+                &surreal,
+                &runtime,
+                Some(&storage),
+                None,
+                &json!({
+                    "template_code": "onboarding__letter",
+                    "project_id": project_id,
+                }),
+            )
+            .await
+            .unwrap();
 
-        assert_eq!(out["structuredContent"]["status"], "needs_answer");
-        assert!(out["structuredContent"]["notation_id"].is_string());
-        assert_eq!(out["structuredContent"]["next_question"]["code"], "entity");
+            assert_eq!(out["structuredContent"]["status"], "needs_answer");
+            assert!(out["structuredContent"]["notation_id"].is_string());
+            assert_eq!(out["structuredContent"]["next_question"]["code"], "entity");
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_filing_may_open_a_matter_through_mcp() {
-        // Navigator MCP is lawyer-directed and opens the notation through the
-        // policy-free primitive, so the engagement-first rule that governs
-        // the `web`/CLI create path does not apply here: a filing on a
-        // fresh matter is the agent's ordinary use, not an error.
-        let surreal = db().await;
-        seed_template(&surreal, "filing").await;
-        let client = seed_person(&surreal, "libra@example.com").await;
-        let project_id = seed_project(&surreal, client, None).await;
-        let runtime = InMemoryRuntime::new();
-        let storage = storage().await;
+        store::test_support::with_postgres(async {
+            // Navigator MCP is lawyer-directed and opens the notation through the
+            // policy-free primitive, so the engagement-first rule that governs
+            // the `web`/CLI create path does not apply here: a filing on a
+            // fresh matter is the agent's ordinary use, not an error.
+            let surreal = crate::test_fixtures::handle();
+            seed_template(&surreal, "filing").await;
+            let client = seed_person(&surreal, "libra@example.com").await;
+            let project_id = seed_project(&surreal, client, None).await;
+            let runtime = InMemoryRuntime::new();
+            let storage = storage().await;
 
-        let out = call(
-            &surreal,
-            &runtime,
-            Some(&storage),
-            None,
-            &json!({
-                "template_code": "onboarding__letter",
-                "project_id": project_id,
-            }),
-        )
-        .await
-        .unwrap();
-        assert_eq!(out["structuredContent"]["status"], "needs_answer");
+            let out = call(
+                &surreal,
+                &runtime,
+                Some(&storage),
+                None,
+                &json!({
+                    "template_code": "onboarding__letter",
+                    "project_id": project_id,
+                }),
+            )
+            .await
+            .unwrap();
+            assert_eq!(out["structuredContent"]["status"], "needs_answer");
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn authenticated_lawyer_acts_for_the_projects_client_dri() {
-        // A `Role::Lawyer` actor is in scope through the disclosed lawyer-DRI
-        // participation — not admin, so the scope check admits this call.
-        let surreal = db().await;
-        seed_template(&surreal, "onboarding").await;
-        let client = seed_person(&surreal, "libra@example.com").await;
-        let lawyer = seed_lawyer(&surreal, "dri@example.com").await;
-        let project_id = seed_project(&surreal, client, Some(lawyer)).await;
-        link_lawyer_dri(&surreal, lawyer, project_id).await;
-        let runtime = InMemoryRuntime::new();
-        let principal = Principal::new("dri@example.com");
-        let storage = storage().await;
+        store::test_support::with_postgres(async {
+            // A `Role::Lawyer` actor is in scope through the disclosed lawyer-DRI
+            // participation — not admin, so the scope check admits this call.
+            let surreal = crate::test_fixtures::handle();
+            seed_template(&surreal, "onboarding").await;
+            let client = seed_person(&surreal, "libra@example.com").await;
+            let lawyer = seed_lawyer(&surreal, "dri@example.com").await;
+            let project_id = seed_project(&surreal, client, Some(lawyer)).await;
+            link_lawyer_dri(&surreal, lawyer, project_id).await;
+            let runtime = InMemoryRuntime::new();
+            let principal = Principal::new("dri@example.com");
+            let storage = storage().await;
 
-        let out = call(
-            &surreal,
-            &runtime,
-            Some(&storage),
-            Some(&principal),
-            &json!({
-                "template_code": "onboarding__letter",
-                "project_id": project_id,
-            }),
-        )
-        .await
-        .unwrap();
-        assert_eq!(out["structuredContent"]["status"], "needs_answer");
+            let out = call(
+                &surreal,
+                &runtime,
+                Some(&storage),
+                Some(&principal),
+                &json!({
+                    "template_code": "onboarding__letter",
+                    "project_id": project_id,
+                }),
+            )
+            .await
+            .unwrap();
+            assert_eq!(out["structuredContent"]["status"], "needs_answer");
 
-        // The authenticated lawyer is the actor, not the respondent.
-        let row = store::notations::find_by_id(
-            &surreal,
-            serde_json::from_value::<Uuid>(out["structuredContent"]["notation_id"].clone())
-                .unwrap(),
-        )
-        .await
-        .unwrap()
-        .unwrap();
-        assert_eq!(row.person_id, client);
+            // The authenticated lawyer is the actor, not the respondent.
+            let row = store::notations::find_by_id(
+                &surreal,
+                serde_json::from_value::<Uuid>(out["structuredContent"]["notation_id"].clone())
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert_eq!(row.person_id, client);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn authenticated_principal_with_unknown_email_is_not_found() {
-        let surreal = db().await;
-        seed_template(&surreal, "onboarding").await;
-        let client = seed_person(&surreal, "libra@example.com").await;
-        let project_id = seed_project(&surreal, client, None).await;
-        let runtime = InMemoryRuntime::new();
-        let principal = Principal::new("ghost@example.com");
-        let storage = storage().await;
-        let err = call(
-            &surreal,
-            &runtime,
-            Some(&storage),
-            Some(&principal),
-            &json!({ "template_code": "onboarding__letter", "project_id": project_id }),
-        )
-        .await
-        .unwrap_err();
-        match err {
-            ToolError::NotFound(m) => assert!(m.contains("person")),
-            other => panic!("expected NotFound, got {other:?}"),
-        }
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            seed_template(&surreal, "onboarding").await;
+            let client = seed_person(&surreal, "libra@example.com").await;
+            let project_id = seed_project(&surreal, client, None).await;
+            let runtime = InMemoryRuntime::new();
+            let principal = Principal::new("ghost@example.com");
+            let storage = storage().await;
+            let err = call(
+                &surreal,
+                &runtime,
+                Some(&storage),
+                Some(&principal),
+                &json!({ "template_code": "onboarding__letter", "project_id": project_id }),
+            )
+            .await
+            .unwrap_err();
+            match err {
+                ToolError::NotFound(m) => assert!(m.contains("person")),
+                other => panic!("expected NotFound, got {other:?}"),
+            }
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn authenticated_lawyer_outside_project_scope_is_forbidden() {
-        // The actor is `Role::Lawyer` and the matter is someone else's: not
-        // has no firm-side participation row. Seeding an admin here would
-        // prove nothing — admin bypasses scoping entirely.
-        let surreal = db().await;
-        seed_template(&surreal, "onboarding").await;
-        let client = seed_person(&surreal, "libra@example.com").await;
-        let dri = seed_lawyer(&surreal, "dri@example.com").await;
-        let _outsider = seed_lawyer(&surreal, "outsider@example.com").await;
-        let project_id = seed_project(&surreal, client, Some(dri)).await;
-        let runtime = InMemoryRuntime::new();
-        let storage = storage().await;
-        let err = call(
-            &surreal,
-            &runtime,
-            Some(&storage),
-            Some(&Principal::new("outsider@example.com")),
-            &json!({
-                "template_code": "onboarding__letter",
-                "project_id": project_id,
-            }),
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(err, ToolError::Forbidden(_)));
+        store::test_support::with_postgres(async {
+            // The actor is `Role::Lawyer` and the matter is someone else's: not
+            // has no firm-side participation row. Seeding an admin here would
+            // prove nothing — admin bypasses scoping entirely.
+            let surreal = crate::test_fixtures::handle();
+            seed_template(&surreal, "onboarding").await;
+            let client = seed_person(&surreal, "libra@example.com").await;
+            let dri = seed_lawyer(&surreal, "dri@example.com").await;
+            let _outsider = seed_lawyer(&surreal, "outsider@example.com").await;
+            let project_id = seed_project(&surreal, client, Some(dri)).await;
+            let runtime = InMemoryRuntime::new();
+            let storage = storage().await;
+            let err = call(
+                &surreal,
+                &runtime,
+                Some(&storage),
+                Some(&Principal::new("outsider@example.com")),
+                &json!({
+                    "template_code": "onboarding__letter",
+                    "project_id": project_id,
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(err, ToolError::Forbidden(_)));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn an_admin_acts_on_a_matter_they_have_no_participation_on() {
-        // Admin deliberately bypasses project scoping (see
-        // `docs/access-model.md`); the matter names a different lawyer DRI
-        // and the admin still opens the notation.
-        let surreal = db().await;
-        seed_template(&surreal, "onboarding").await;
-        let client = seed_person(&surreal, "libra@example.com").await;
-        let dri = seed_lawyer(&surreal, "dri@example.com").await;
-        let _admin = seed_admin(&surreal).await;
-        let project_id = seed_project(&surreal, client, Some(dri)).await;
-        let runtime = InMemoryRuntime::new();
-        let storage = storage().await;
+        store::test_support::with_postgres(async {
+            // Admin deliberately bypasses project scoping (see
+            // `docs/access-model.md`); the matter names a different lawyer DRI
+            // and the admin still opens the notation.
+            let surreal = crate::test_fixtures::handle();
+            seed_template(&surreal, "onboarding").await;
+            let client = seed_person(&surreal, "libra@example.com").await;
+            let dri = seed_lawyer(&surreal, "dri@example.com").await;
+            let admin = seed_admin(&surreal).await;
+            let project_id = seed_project(&surreal, client, Some(dri)).await;
+            store::test_support::grant_project_firm_admin(&surreal, project_id, admin).await;
+            let runtime = InMemoryRuntime::new();
+            let storage = storage().await;
 
-        let out = call(
-            &surreal,
-            &runtime,
-            Some(&storage),
-            Some(&Principal::new("principal@example.com")),
-            &json!({
-                "template_code": "onboarding__letter",
-                "project_id": project_id,
-            }),
-        )
-        .await
-        .unwrap();
-        assert_eq!(out["structuredContent"]["status"], "needs_answer");
+            let out = call(
+                &surreal,
+                &runtime,
+                Some(&storage),
+                Some(&Principal::new("principal@example.com")),
+                &json!({
+                    "template_code": "onboarding__letter",
+                    "project_id": project_id,
+                }),
+            )
+            .await
+            .unwrap();
+            assert_eq!(out["structuredContent"]["status"], "needs_answer");
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn project_must_exist() {
-        let surreal = db().await;
-        seed_template(&surreal, "onboarding").await;
-        let runtime = InMemoryRuntime::new();
-        let err = call(
-            &surreal,
-            &runtime,
-            None,
-            None,
-            &json!({
-                "template_code": "onboarding__letter",
-                "project_id": Uuid::nil(),
-            }),
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(err, ToolError::NotFound(_)));
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            seed_template(&surreal, "onboarding").await;
+            let runtime = InMemoryRuntime::new();
+            let err = call(
+                &surreal,
+                &runtime,
+                None,
+                None,
+                &json!({
+                    "template_code": "onboarding__letter",
+                    "project_id": Uuid::nil(),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(err, ToolError::NotFound(_)));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn unknown_template_is_not_found() {
-        let surreal = db().await;
-        let client = seed_person(&surreal, "libra@example.com").await;
-        let project_id = seed_project(&surreal, client, None).await;
-        let runtime = InMemoryRuntime::new();
-        let storage = storage().await;
-        let err = call(
-            &surreal,
-            &runtime,
-            Some(&storage),
-            None,
-            &json!({
-                "template_code": "does_not_exist",
-                "project_id": project_id,
-            }),
-        )
-        .await
-        .unwrap_err();
-        match err {
-            ToolError::NotFound(m) => assert!(m.contains("template")),
-            other => panic!("expected NotFound, got {other:?}"),
-        }
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let client = seed_person(&surreal, "libra@example.com").await;
+            let project_id = seed_project(&surreal, client, None).await;
+            let runtime = InMemoryRuntime::new();
+            let storage = storage().await;
+            let err = call(
+                &surreal,
+                &runtime,
+                Some(&storage),
+                None,
+                &json!({
+                    "template_code": "does_not_exist",
+                    "project_id": project_id,
+                }),
+            )
+            .await
+            .unwrap_err();
+            match err {
+                ToolError::NotFound(m) => assert!(m.contains("template")),
+                other => panic!("expected NotFound, got {other:?}"),
+            }
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn project_without_client_dri_is_rejected() {
-        let surreal = db().await;
-        seed_template(&surreal, "onboarding").await;
-        let entity_id = store::test_support::seed_entity(&surreal).await;
-        let project_id = store::projects::create(
-            &surreal,
-            &store::projects::NewProject {
-                code: format!("unassigned-matter-{}", Uuid::now_v7()),
-                name: "Unassigned matter".into(),
-                status: "open".into(),
-                entity_id,
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap()
-        .id;
-        let runtime = InMemoryRuntime::new();
-        let err = call(
-            &surreal,
-            &runtime,
-            None,
-            None,
-            &json!({
-                "template_code": "onboarding__letter",
-                "project_id": project_id,
-            }),
-        )
-        .await
-        .unwrap_err();
-        match err {
-            ToolError::InvalidArguments(m) => assert!(m.contains("client-side DRI")),
-            other => panic!("expected InvalidArguments, got {other:?}"),
-        }
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            seed_template(&surreal, "onboarding").await;
+            let entity_id = store::test_support::seed_entity(&surreal).await;
+            crate::test_fixtures::seed_brands(&surreal).await;
+            let project_id = store::projects::create(
+                &surreal,
+                &store::projects::NewProject {
+                    code: format!("unassigned-matter-{}", Uuid::now_v7()),
+                    name: "Unassigned matter".into(),
+                    status: "open".into(),
+                    entity_id,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .id;
+            let runtime = InMemoryRuntime::new();
+            let err = call(
+                &surreal,
+                &runtime,
+                None,
+                None,
+                &json!({
+                    "template_code": "onboarding__letter",
+                    "project_id": project_id,
+                }),
+            )
+            .await
+            .unwrap_err();
+            match err {
+                ToolError::InvalidArguments(m) => assert!(m.contains("client-side DRI")),
+                other => panic!("expected InvalidArguments, got {other:?}"),
+            }
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn missing_project_id_is_invalid_arguments() {
-        let surreal = db().await;
-        let runtime = InMemoryRuntime::new();
-        let err = call(
-            &surreal,
-            &runtime,
-            None,
-            None,
-            &json!({ "template_code": "onboarding__letter" }),
-        )
-        .await
-        .unwrap_err();
-        match err {
-            ToolError::InvalidArguments(m) => assert!(m.contains("project_id")),
-            other => panic!("expected InvalidArguments, got {other:?}"),
-        }
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let runtime = InMemoryRuntime::new();
+            let err = call(
+                &surreal,
+                &runtime,
+                None,
+                None,
+                &json!({ "template_code": "onboarding__letter" }),
+            )
+            .await
+            .unwrap_err();
+            match err {
+                ToolError::InvalidArguments(m) => assert!(m.contains("project_id")),
+                other => panic!("expected InvalidArguments, got {other:?}"),
+            }
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn blank_template_code_is_invalid_arguments() {
-        let surreal = db().await;
-        let runtime = InMemoryRuntime::new();
-        let err = call(
-            &surreal,
-            &runtime,
-            None,
-            None,
-            &json!({ "template_code": "  ", "project_id": Uuid::nil() }),
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(err, ToolError::InvalidArguments(_)));
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let runtime = InMemoryRuntime::new();
+            let err = call(
+                &surreal,
+                &runtime,
+                None,
+                None,
+                &json!({ "template_code": "  ", "project_id": Uuid::nil() }),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(err, ToolError::InvalidArguments(_)));
+        })
+        .await;
     }
 
     /// `inputSchema` and `decode_args` accept the same objects. A string that
@@ -1131,57 +1161,60 @@ mod tests {
 
     #[tokio::test]
     async fn code_spellings_match_the_schema_and_write_only_when_exactly_one_is_valid() {
-        let surreal = db().await;
-        seed_template(&surreal, "onboarding").await;
-        let client = seed_person(&surreal, "libra@example.com").await;
-        let lawyer = seed_lawyer(&surreal, "dri@example.com").await;
-        let project_id = seed_project(&surreal, client, Some(lawyer)).await;
-        link_lawyer_dri(&surreal, lawyer, project_id).await;
-        let runtime = InMemoryRuntime::new();
-        let storage = storage().await;
-        let principal = Principal::new("dri@example.com");
-        let schema = descriptor()["inputSchema"].clone();
-        let catalog = crate::tools::list_tools()
-            .into_iter()
-            .find(|tool| tool["name"] == "create_notation")
-            .expect("full catalog publishes create_notation");
-        assert_eq!(catalog["inputSchema"], schema);
-        let mut state = crate::server::McpState::new(
-            surreal.clone(),
-            std::sync::Arc::new(InMemoryRuntime::new()),
-        );
-        state.storage = Some(storage.clone());
-
-        let mut created = Vec::new();
-        for (label, mut arguments, expect) in code_cases() {
-            arguments
-                .as_object_mut()
-                .unwrap()
-                .insert("project_id".into(), json!(project_id));
-            created.extend(
-                record_code_case(
-                    &CodeCase {
-                        surreal: &surreal,
-                        runtime: &runtime,
-                        storage: &storage,
-                        state: &state,
-                        principal: &principal,
-                        schema: &schema,
-                        project_id,
-                    },
-                    label,
-                    &arguments,
-                    expect,
-                )
-                .await,
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            seed_template(&surreal, "onboarding").await;
+            let client = seed_person(&surreal, "libra@example.com").await;
+            let lawyer = seed_lawyer(&surreal, "dri@example.com").await;
+            let project_id = seed_project(&surreal, client, Some(lawyer)).await;
+            link_lawyer_dri(&surreal, lawyer, project_id).await;
+            let runtime = InMemoryRuntime::new();
+            let storage = storage().await;
+            let principal = Principal::new("dri@example.com");
+            let schema = descriptor()["inputSchema"].clone();
+            let catalog = crate::tools::list_tools()
+                .into_iter()
+                .find(|tool| tool["name"] == "create_notation")
+                .expect("full catalog publishes create_notation");
+            assert_eq!(catalog["inputSchema"], schema);
+            let mut state = crate::server::McpState::new(
+                surreal.clone(),
+                std::sync::Arc::new(InMemoryRuntime::new()),
             );
-        }
-        let template_id = created[0].template_id;
-        assert!(created.iter().all(|row| row.template_id == template_id));
-        let ids: std::collections::BTreeSet<_> = created.iter().map(|row| row.id).collect();
-        assert_eq!(ids.len(), created.len());
+            state.storage = Some(storage.clone());
 
-        refuse_unauthorized_spellings(&surreal, &state, project_id).await;
-        refuse_unsupervised_mcp(&surreal, project_id).await;
+            let mut created = Vec::new();
+            for (label, mut arguments, expect) in code_cases() {
+                arguments
+                    .as_object_mut()
+                    .unwrap()
+                    .insert("project_id".into(), json!(project_id));
+                created.extend(
+                    record_code_case(
+                        &CodeCase {
+                            surreal: &surreal,
+                            runtime: &runtime,
+                            storage: &storage,
+                            state: &state,
+                            principal: &principal,
+                            schema: &schema,
+                            project_id,
+                        },
+                        label,
+                        &arguments,
+                        expect,
+                    )
+                    .await,
+                );
+            }
+            let template_id = created[0].template_id;
+            assert!(created.iter().all(|row| row.template_id == template_id));
+            let ids: std::collections::BTreeSet<_> = created.iter().map(|row| row.id).collect();
+            assert_eq!(ids.len(), created.len());
+
+            refuse_unauthorized_spellings(&surreal, &state, project_id).await;
+            refuse_unsupervised_mcp(&surreal, project_id).await;
+        })
+        .await;
     }
 }

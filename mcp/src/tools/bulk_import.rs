@@ -150,9 +150,8 @@ mod tests {
     use crate::tools::ToolError;
     use serde_json::json;
 
-    use store::test_support::mem_surreal;
     async fn db_with_refs() -> store::surreal::SurrealDb {
-        let surreal = mem_surreal().await;
+        let surreal = crate::test_fixtures::handle();
         store::entity_types::create(&surreal, "501(c)(3) Non-Profit")
             .await
             .unwrap();
@@ -205,110 +204,125 @@ mod tests {
 
     #[tokio::test]
     async fn lawyer_caller_imports_and_canonicalizes() {
-        let surreal = db_with_refs().await;
-        seed_lawyer(&surreal, "lawyer@neonlaw.com").await;
-        let principal = Principal::new("lawyer@neonlaw.com");
+        store::test_support::with_postgres(async {
+            let surreal = db_with_refs().await;
+            seed_lawyer(&surreal, "lawyer@neonlaw.com").await;
+            let principal = Principal::new("lawyer@neonlaw.com");
 
-        let result = call(&surreal, Some(&principal), &payload()).await.unwrap();
-        assert_eq!(
-            result["structuredContent"]["organizations"][0]["status"],
-            "created"
-        );
-        assert_eq!(
-            result["structuredContent"]["people"][0]["status"],
-            "created"
-        );
+            let result = call(&surreal, Some(&principal), &payload()).await.unwrap();
+            assert_eq!(
+                result["structuredContent"]["organizations"][0]["status"],
+                "created"
+            );
+            assert_eq!(
+                result["structuredContent"]["people"][0]["status"],
+                "created"
+            );
 
-        // The org landed with a canonicalized URL, and the link exists.
-        let ejp = store::entities::find_by_name(&surreal, "Example Justice Project")
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(ejp.url.as_deref(), Some("https://justice.example"));
-        let links = store::entity_roles::all(&surreal).await.unwrap();
-        assert_eq!(links.len(), 1);
-        assert_eq!(links[0].role, "client_contact");
+            // The org landed with a canonicalized URL, and the link exists.
+            let ejp = store::entities::find_by_name(&surreal, "Example Justice Project")
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(ejp.url.as_deref(), Some("https://justice.example"));
+            let links = store::entity_roles::all(&surreal).await.unwrap();
+            assert_eq!(links.len(), 1);
+            assert_eq!(links[0].role, "client_contact");
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn validation_reject_explains_why_in_the_text_content() {
-        // The silent-failure case the user hit: a structurally invalid
-        // payload (unsupported version) writes nothing. The tally alone
-        // would read as a message-less non-result; the text Part must
-        // carry the diagnostic so a text-only client (Gemini Enterprise)
-        // surfaces the reason.
-        let surreal = db_with_refs().await;
-        seed_lawyer(&surreal, "lawyer@neonlaw.com").await;
-        let principal = Principal::new("lawyer@neonlaw.com");
-        let mut bad = payload();
-        bad["version"] = json!(2);
+        store::test_support::with_postgres(async {
+            // The silent-failure case the user hit: a structurally invalid
+            // payload (unsupported version) writes nothing. The tally alone
+            // would read as a message-less non-result; the text Part must
+            // carry the diagnostic so a text-only client (Gemini Enterprise)
+            // surfaces the reason.
+            let surreal = db_with_refs().await;
+            seed_lawyer(&surreal, "lawyer@neonlaw.com").await;
+            let principal = Principal::new("lawyer@neonlaw.com");
+            let mut bad = payload();
+            bad["version"] = json!(2);
 
-        let result = call(&surreal, Some(&principal), &bad).await.unwrap();
-        let text = result["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("Problems:"), "no problems block: {text}");
-        assert!(
-            text.contains("unsupported contract version"),
-            "diagnostic not surfaced: {text}"
-        );
+            let result = call(&surreal, Some(&principal), &bad).await.unwrap();
+            let text = result["content"][0]["text"].as_str().unwrap();
+            assert!(text.contains("Problems:"), "no problems block: {text}");
+            assert!(
+                text.contains("unsupported contract version"),
+                "diagnostic not surfaced: {text}"
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn failed_row_reason_reaches_the_text_content() {
-        // An unknown jurisdiction passes structural validation (ZZ is
-        // two letters) but fails at apply time as a per-row failure. The
-        // reason must reach the rendered text, not just structuredContent.
-        let surreal = db_with_refs().await;
-        seed_lawyer(&surreal, "lawyer@neonlaw.com").await;
-        let principal = Principal::new("lawyer@neonlaw.com");
-        let bad = json!({
-            "version": 1,
-            "organizations": [
-                { "key": "ejp", "name": "Example Justice Project",
-                  "entity_type": "501(c)(3) Non-Profit", "jurisdiction": "ZZ" }
-            ],
-            "people": [
-                { "key": "ada", "name": "Ada Counsel",
-                  "email": "acounsel@justice.example", "organization": "ejp" }
-            ]
-        });
+        store::test_support::with_postgres(async {
+            // An unknown jurisdiction passes structural validation (ZZ is
+            // two letters) but fails at apply time as a per-row failure. The
+            // reason must reach the rendered text, not just structuredContent.
+            let surreal = db_with_refs().await;
+            seed_lawyer(&surreal, "lawyer@neonlaw.com").await;
+            let principal = Principal::new("lawyer@neonlaw.com");
+            let bad = json!({
+                "version": 1,
+                "organizations": [
+                    { "key": "ejp", "name": "Example Justice Project",
+                      "entity_type": "501(c)(3) Non-Profit", "jurisdiction": "ZZ" }
+                ],
+                "people": [
+                    { "key": "ada", "name": "Ada Counsel",
+                      "email": "acounsel@justice.example", "organization": "ejp" }
+                ]
+            });
 
-        let result = call(&surreal, Some(&principal), &bad).await.unwrap();
-        let text = result["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("Problems:"), "no problems block: {text}");
-        assert!(
-            text.contains("unknown jurisdiction"),
-            "row failure reason not surfaced: {text}"
-        );
-        // The structured detail is still there for programmatic clients.
-        assert_eq!(
-            result["structuredContent"]["organizations"][0]["status"],
-            "failed"
-        );
+            let result = call(&surreal, Some(&principal), &bad).await.unwrap();
+            let text = result["content"][0]["text"].as_str().unwrap();
+            assert!(text.contains("Problems:"), "no problems block: {text}");
+            assert!(
+                text.contains("unknown jurisdiction"),
+                "row failure reason not surfaced: {text}"
+            );
+            // The structured detail is still there for programmatic clients.
+            assert_eq!(
+                result["structuredContent"]["organizations"][0]["status"],
+                "failed"
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn anonymous_caller_is_forbidden() {
-        let surreal = db_with_refs().await;
-        let err = call(&surreal, None, &payload()).await.unwrap_err();
-        assert!(matches!(err, ToolError::Forbidden(_)));
-        // Nothing was written.
-        assert!(store::entities::all(&surreal).await.unwrap().is_empty());
+        store::test_support::with_postgres(async {
+            let surreal = db_with_refs().await;
+            let err = call(&surreal, None, &payload()).await.unwrap_err();
+            assert!(matches!(err, ToolError::Forbidden(_)));
+            // Nothing was written.
+            assert!(store::entities::all(&surreal).await.unwrap().is_empty());
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn client_tier_caller_is_forbidden() {
-        let surreal = db_with_refs().await;
-        // A client-tier person (the default role) may not bulk-import.
-        store::persons::create(
-            &surreal,
-            &store::persons::NewPerson::new("Aries", "aries@example.com"),
-        )
-        .await
-        .unwrap();
-        let principal = Principal::new("aries@example.com");
-        let err = call(&surreal, Some(&principal), &payload())
+        store::test_support::with_postgres(async {
+            let surreal = db_with_refs().await;
+            // A client-tier person (the default role) may not bulk-import.
+            store::persons::create(
+                &surreal,
+                &store::persons::NewPerson::new("Aries", "aries@example.com"),
+            )
             .await
-            .unwrap_err();
-        assert!(matches!(err, ToolError::Forbidden(_)));
+            .unwrap();
+            let principal = Principal::new("aries@example.com");
+            let err = call(&surreal, Some(&principal), &payload())
+                .await
+                .unwrap_err();
+            assert!(matches!(err, ToolError::Forbidden(_)));
+        })
+        .await;
     }
 }

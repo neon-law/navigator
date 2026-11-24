@@ -370,17 +370,17 @@ async fn transition(
 mod tests {
     use super::*;
     use store::persons::{NewPerson, Role};
-    use store::test_support::mem_surreal;
     use uuid::Uuid;
 
     async fn project(surreal: &store::surreal::SurrealDb) -> Uuid {
+        crate::test_fixtures::seed_brands(surreal).await;
         store::projects::create(
             surreal,
             &store::projects::NewProject {
                 code: format!("deadline-{}", Uuid::now_v7()),
                 name: "Deadline matter".into(),
                 status: "open".into(),
-                entity_id: Uuid::now_v7(),
+                entity_id: store::test_support::seed_entity(surreal).await,
                 ..Default::default()
             },
         )
@@ -431,118 +431,127 @@ mod tests {
 
     #[tokio::test]
     async fn create_list_update_and_complete_round_trip() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal).await;
-        let person_id = lawyer(&surreal, Some(project_id)).await;
-        let created = create_call(
-            &surreal,
-            person_id,
-            Role::Lawyer,
-            &create_args(project_id, "15 U.S.C. § 1"),
-        )
-        .await
-        .unwrap();
-        let deadline_id = created["structuredContent"]["deadline"]["id"]
-            .as_str()
-            .unwrap()
-            .to_string();
-        assert_eq!(created["structuredContent"]["deadline"]["status"], "open");
-        let listed = list_call(
-            &surreal,
-            person_id,
-            Role::Lawyer,
-            &json!({ "project_id": project_id }),
-        )
-        .await
-        .unwrap();
-        assert_eq!(listed["structuredContent"]["count"], 1);
-        let updated = update_call(
-            &surreal,
-            person_id,
-            Role::Lawyer,
-            &json!({
-                "project_id": project_id,
-                "deadline_id": deadline_id,
-                "calendar_role": "hearing"
-            }),
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            updated["structuredContent"]["deadline"]["calendar_role"],
-            "hearing"
-        );
-        let completed = complete_call(
-            &surreal,
-            person_id,
-            Role::Lawyer,
-            &json!({ "project_id": project_id, "deadline_id": deadline_id }),
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            completed["structuredContent"]["deadline"]["status"],
-            "complete"
-        );
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let project_id = project(&surreal).await;
+            let person_id = lawyer(&surreal, Some(project_id)).await;
+            let created = create_call(
+                &surreal,
+                person_id,
+                Role::Lawyer,
+                &create_args(project_id, "15 U.S.C. § 1"),
+            )
+            .await
+            .unwrap();
+            let deadline_id = created["structuredContent"]["deadline"]["id"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            assert_eq!(created["structuredContent"]["deadline"]["status"], "open");
+            let listed = list_call(
+                &surreal,
+                person_id,
+                Role::Lawyer,
+                &json!({ "project_id": project_id }),
+            )
+            .await
+            .unwrap();
+            assert_eq!(listed["structuredContent"]["count"], 1);
+            let updated = update_call(
+                &surreal,
+                person_id,
+                Role::Lawyer,
+                &json!({
+                    "project_id": project_id,
+                    "deadline_id": deadline_id,
+                    "calendar_role": "hearing"
+                }),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                updated["structuredContent"]["deadline"]["calendar_role"],
+                "hearing"
+            );
+            let completed = complete_call(
+                &surreal,
+                person_id,
+                Role::Lawyer,
+                &json!({ "project_id": project_id, "deadline_id": deadline_id }),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                completed["structuredContent"]["deadline"]["status"],
+                "complete"
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_title_is_stored_and_changed() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal).await;
-        let person_id = lawyer(&surreal, Some(project_id)).await;
-        let mut args = create_args(project_id, "15 U.S.C. § 1");
-        args["title"] = json!("Answer to the complaint");
-        let created = create_call(&surreal, person_id, Role::Lawyer, &args)
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let project_id = project(&surreal).await;
+            let person_id = lawyer(&surreal, Some(project_id)).await;
+            let mut args = create_args(project_id, "15 U.S.C. § 1");
+            args["title"] = json!("Answer to the complaint");
+            let created = create_call(&surreal, person_id, Role::Lawyer, &args)
+                .await
+                .unwrap();
+            let deadline = &created["structuredContent"]["deadline"];
+            assert_eq!(deadline["title"], "Answer to the complaint");
+            let updated = update_call(
+                &surreal,
+                person_id,
+                Role::Lawyer,
+                &json!({
+                    "project_id": project_id,
+                    "deadline_id": deadline["id"],
+                    "title": "Reply brief"
+                }),
+            )
             .await
             .unwrap();
-        let deadline = &created["structuredContent"]["deadline"];
-        assert_eq!(deadline["title"], "Answer to the complaint");
-        let updated = update_call(
-            &surreal,
-            person_id,
-            Role::Lawyer,
-            &json!({
-                "project_id": project_id,
-                "deadline_id": deadline["id"],
-                "title": "Reply brief"
-            }),
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            updated["structuredContent"]["deadline"]["title"],
-            "Reply brief"
-        );
+            assert_eq!(
+                updated["structuredContent"]["deadline"]["title"],
+                "Reply brief"
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_cancelled_deadline_can_be_reopened() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal).await;
-        let person_id = lawyer(&surreal, Some(project_id)).await;
-        let created = create_call(
-            &surreal,
-            person_id,
-            Role::Lawyer,
-            &create_args(project_id, "15 U.S.C. § 1"),
-        )
-        .await
-        .unwrap();
-        let deadline_id = created["structuredContent"]["deadline"]["id"].clone();
-        let ids = json!({ "project_id": project_id, "deadline_id": deadline_id });
-        let cancelled = cancel_call(&surreal, person_id, Role::Lawyer, &ids)
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let project_id = project(&surreal).await;
+            let person_id = lawyer(&surreal, Some(project_id)).await;
+            let created = create_call(
+                &surreal,
+                person_id,
+                Role::Lawyer,
+                &create_args(project_id, "15 U.S.C. § 1"),
+            )
             .await
             .unwrap();
-        assert_eq!(
-            cancelled["structuredContent"]["deadline"]["status"],
-            "cancelled"
-        );
-        let reopened = reopen_call(&surreal, person_id, Role::Lawyer, &ids)
-            .await
-            .unwrap();
-        assert_eq!(reopened["structuredContent"]["deadline"]["status"], "open");
-        assert_eq!(reopened["structuredContent"]["deadline"]["id"], deadline_id);
+            let deadline_id = created["structuredContent"]["deadline"]["id"].clone();
+            let ids = json!({ "project_id": project_id, "deadline_id": deadline_id });
+            let cancelled = cancel_call(&surreal, person_id, Role::Lawyer, &ids)
+                .await
+                .unwrap();
+            assert_eq!(
+                cancelled["structuredContent"]["deadline"]["status"],
+                "cancelled"
+            );
+            let reopened = reopen_call(&surreal, person_id, Role::Lawyer, &ids)
+                .await
+                .unwrap();
+            assert_eq!(reopened["structuredContent"]["deadline"]["status"], "open");
+            assert_eq!(reopened["structuredContent"]["deadline"]["id"], deadline_id);
+        })
+        .await;
     }
 
     #[test]
@@ -558,33 +567,39 @@ mod tests {
 
     #[tokio::test]
     async fn a_statute_without_a_citation_is_refused() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal).await;
-        let person_id = lawyer(&surreal, Some(project_id)).await;
-        let error = create_call(
-            &surreal,
-            person_id,
-            Role::Lawyer,
-            &create_args(project_id, "  "),
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(error, ToolError::InvalidArguments(_)), "{error}");
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let project_id = project(&surreal).await;
+            let person_id = lawyer(&surreal, Some(project_id)).await;
+            let error = create_call(
+                &surreal,
+                person_id,
+                Role::Lawyer,
+                &create_args(project_id, "  "),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(error, ToolError::InvalidArguments(_)), "{error}");
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_non_participant_is_refused() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal).await;
-        let person_id = lawyer(&surreal, None).await;
-        let error = create_call(
-            &surreal,
-            person_id,
-            Role::Lawyer,
-            &create_args(project_id, "15 U.S.C. § 1"),
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(error, ToolError::NotFound(_)), "{error}");
+        store::test_support::with_postgres(async {
+            let surreal = crate::test_fixtures::handle();
+            let project_id = project(&surreal).await;
+            let person_id = lawyer(&surreal, None).await;
+            let error = create_call(
+                &surreal,
+                person_id,
+                Role::Lawyer,
+                &create_args(project_id, "15 U.S.C. § 1"),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(error, ToolError::NotFound(_)), "{error}");
+        })
+        .await;
     }
 }
