@@ -84,7 +84,7 @@ pub struct DocumentPointer {
     /// (ENG-863) resolves it against the Firm's Xero org.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub xero_invoice_id: Option<Uuid>,
-    /// How this executed document was signed: `{ method: wet_ink | docusign,
+    /// How this executed document was signed: `{ method: wet_ink | docusign | dropbox_sign,
     /// signed_on: YYYY-MM-DD }`. Optional on every pointer, including a
     /// `_signed` one; no gate requires it.
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -184,12 +184,12 @@ says so, so a lawyer who drops a file somewhere the conventions do not name is n
 failure. A file staged under `documents/invoices/` must match the filename pattern `INV-<digits>.<ext>` (for example
 `INV-1.pdf`) or `project sync` reports it and uploads nothing.
 
-**An executed document can record how it was signed.** The optional pointer block `signing: { method: wet_ink |
-docusign, signed_on: YYYY-MM-DD }` says whether a filed original was signed in wet ink or through DocuSign, and when.
-`navigator site document upload --signing-method <method> --signed-on <date>` records it on the filed revision (the two
-flags travel together), and the server writes it into the returned pointer. `navigator project gate --check` and
-`navigator project sync` write the live revision's record into the pointer, and keep a block recorded by hand on the
-committed pointer while the live revision has none. No gate requires it, including on a `_signed` filename.
+**An executed document can record how it was signed.** The optional `signing` block records the method and date. Methods
+are `wet_ink`, `docusign`, and `dropbox_sign`. `navigator site document upload --signing-method <method> --signed-on
+<date>` records it on the filed revision (the two flags travel together), and the server writes it into the returned
+pointer. `navigator project gate --check` and `navigator project sync` write the live revision's record into the
+pointer, and keep a block recorded by hand on the committed pointer while the live revision has none. No gate requires
+it, including on a `_signed` filename.
 
 **An executed document can record its notarizations.** The optional pointer list `notarization` holds one entry per
 acknowledgment in the packet. Each entry carries `method` (`in_person` or `remote_online`), `acknowledged_on`, `state`

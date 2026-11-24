@@ -130,10 +130,18 @@ pub struct ConflictFindingView {
 /// A participating Project's onboarding agreement and its existing review or document page.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct AgreementLink {
-    pub project: String,
     pub title: String,
     pub state: String,
     pub href: String,
+}
+
+/// One participating Project, including matters without an agreement record.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
+pub struct RetainerRow {
+    pub code: String,
+    pub name: String,
+    pub methods: Vec<String>,
+    pub agreements: Vec<AgreementLink>,
 }
 
 /// The whole rendered dashboard.
@@ -148,7 +156,7 @@ pub struct DashboardView {
     /// The current page of the status-filtered list.
     pub rows: Vec<ProjectLink>,
     #[serde(default)]
-    pub agreements: Vec<AgreementLink>,
+    pub retainers: Vec<RetainerRow>,
     /// `open` or `closed` — which tab is active.
     pub status: String,
     pub page: u64,
@@ -228,16 +236,14 @@ pub async fn get_lawyer_dashboard() -> Result<DashboardView, ServerFnError> {
     // The pie splits the same three states the matter-row lifecycle pill uses.
     // Archived matters stay out of the chart; an open matter is pitch until
     // the onboarding DocuSign envelope UUID is verified as completed.
-    let has_engagement = store::projects::onboarding_official_sets(&surreal, &projects)
+    let project_ids: Vec<_> = projects.iter().map(|project| project.id).collect();
+    let pg = store::postgres::PostgresDb::application()
         .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "dashboard: matter_lifecycle_sets failed");
-            dioxus_fullstack_core::FullstackContext::commit_http_status(
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                None,
-            );
-            ServerFnError::new(e.clone())
-        })?;
+        .map_err(crate::lawyer_project_detail::server_error)?;
+    let mut verified = store::onboarding::verified_providers(&pg, &project_ids)
+        .await
+        .map_err(crate::lawyer_project_detail::server_error)?;
+    let has_engagement = verified.keys().copied().collect();
     let (pitch_projects, active_projects, closed_projects) =
         kpi_lifecycle_counts(&projects, &has_engagement);
 
@@ -293,34 +299,51 @@ pub async fn get_lawyer_dashboard() -> Result<DashboardView, ServerFnError> {
         })
         .collect();
 
-    let project_ids = projects
-        .iter()
-        .map(|project| project.id)
-        .collect::<Vec<_>>();
-    let pg = store::postgres::PostgresDb::from_env()
+    let mut filed = store::onboarding::filed_signing_methods(&pg, &project_ids)
         .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
-    let agreements = store::onboarding::agreements(&pg, &project_ids)
+        .map_err(crate::lawyer_project_detail::server_error)?;
+    let mut agreements = std::collections::HashMap::<_, Vec<_>>::new();
+    for row in store::onboarding::agreements(&pg, &project_ids)
         .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?
-        .into_iter()
-        .filter_map(|row| {
-            let href = if let Some(id) = row.notation_id {
-                format!("/app/lawyer/notations/{id}/review")
-            } else {
-                format!(
-                    "/app/projects/{}/documents/{}",
-                    row.project, row.document_id?
-                )
-            };
-            Some(AgreementLink {
-                project: row.project,
+        .map_err(crate::lawyer_project_detail::server_error)?
+    {
+        let href = match (row.notation_id, row.document_id) {
+            (Some(id), _) => format!("/app/lawyer/notations/{id}/review"),
+            (_, Some(id)) => format!("/app/projects/{}/documents/{id}", row.project),
+            _ => continue,
+        };
+        agreements
+            .entry(row.project)
+            .or_default()
+            .push(AgreementLink {
                 title: row.title,
                 state: row.state,
                 href,
-            })
+            });
+    }
+    let mut retainers: Vec<_> = projects
+        .iter()
+        .map(|project| {
+            let confirmed = verified.remove(&project.id).unwrap_or_default();
+            let recorded = filed.remove(&project.id).unwrap_or_default();
+            let methods = confirmed
+                .iter()
+                .map(|method| format!("{} · provider confirmed", method.signed_how()))
+                .chain(
+                    recorded
+                        .difference(&confirmed)
+                        .map(|method| format!("{} · filed copy", method.signed_how())),
+                )
+                .collect();
+            RetainerRow {
+                code: project.code.clone(),
+                name: project.name.clone(),
+                methods,
+                agreements: agreements.remove(&project.code).unwrap_or_default(),
+            }
         })
         .collect();
+    retainers.sort_by(|left, right| left.code.cmp(&right.code));
     let calendar_events = calendar_events_for_projects(&surreal, &projects).await?;
     let conflict_findings = conflict_findings_for_projects(&surreal, &projects).await?;
     let pipeline =
@@ -335,7 +358,7 @@ pub async fn get_lawyer_dashboard() -> Result<DashboardView, ServerFnError> {
         active_projects,
         closed_projects,
         rows,
-        agreements,
+        retainers,
         status: status.to_string(),
         page: u64::try_from(page).unwrap_or(u64::MAX),
         total_pages: u64::try_from(total_pages).unwrap_or(u64::MAX),
@@ -692,26 +715,17 @@ fn lawyer_dashboard_body(view: &DashboardView) -> Element {
                     a { class: "nav-btn nav-btn--primary", href: crate::inbox::INBOX_PATH, "Open Inbox" }
                 }
             }
-            details { id: "onboarding-agreements",
-                summary { "Onboarding agreements ({view.agreements.len()})" }
-                if view.agreements.is_empty() {
-                    p { "No onboarding agreements on your Projects." }
+            ProjectKpiOverview { view: view.clone() }
+            section { id: "onboarding-agreements", aria_labelledby: "retainer-heading",
+                h2 { id: "retainer-heading", "Onboarding retainers" }
+                if view.retainers.is_empty() {
+                    p { "No participating Projects." }
                 } else {
-                    table { class: "admin-table", aria_label: "Onboarding agreements",
-                        thead { tr { th { scope: "col", "Project" } th { scope: "col", "Agreement" } th { scope: "col", "Status" } } }
-                        tbody {
-                            for agreement in &view.agreements {
-                                tr {
-                                    td { "{agreement.project}" }
-                                    td { a { href: "{agreement.href}", "{agreement.title}" } }
-                                    td { "{agreement.state}" }
-                                }
-                            }
-                        }
+                    for (signed, label) in [(false, "No signed retainer recorded"), (true, "Signed retainer recorded")] {
+                        { retainer_group(&view.retainers, signed, label) }
                     }
                 }
             }
-            ProjectKpiOverview { view: view.clone() }
             deadlines::WorkbenchDeadlines { entries: view.deadlines.clone(), now: view.deadlines_now }
             crate::projected_cash::PipelineCard { view: view.pipeline.clone() }
             // The workbench calendar spans every matter the caller can see, and
@@ -730,6 +744,45 @@ fn lawyer_dashboard_body(view: &DashboardView) -> Element {
             }
             ConflictsSection { findings: view.conflict_findings.clone() }
             DashboardDetails { role }
+        }
+    }
+}
+
+fn retainer_group(rows: &[RetainerRow], signed: bool, label: &str) -> Element {
+    let projects: Vec<_> = rows
+        .iter()
+        .filter(|row| row.methods.is_empty() != signed)
+        .collect();
+    rsx! {
+        details { class: "nav-table-wrap",
+            summary { "{label} ({projects.len()})" }
+            if projects.is_empty() {
+                p { "No Projects in this group." }
+            } else {
+                table { class: "nav-table", aria_label: label,
+                    thead { tr { th { scope: "col", "Project" } th { scope: "col", "Retainer" } } }
+                    tbody {
+                        for project in projects {
+                            tr { key: "{project.code}",
+                                th { scope: "row",
+                                    a { href: crate::sections::page::MatterTab::Onboarding.href(&project.code), "{project.name} ({project.code})" }
+                                }
+                                td {
+                                    for method in &project.methods {
+                                        div { "{method}" }
+                                    }
+                                    if project.agreements.is_empty() && project.methods.is_empty() {
+                                        "No onboarding agreement recorded"
+                                    }
+                                    for agreement in &project.agreements {
+                                        div { a { href: "{agreement.href}", "{agreement.title}" } " · {agreement.state}" }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -1044,18 +1097,37 @@ mod tests {
     fn agreement_list_opens_the_existing_review_page() {
         let mut fixture = view();
         let review = "/app/lawyer/notations/01941f80-0000-7000-8000-000000000001/review";
-        fixture.agreements.push(AgreementLink {
-            project: "sample-estate".into(),
-            title: "Engagement letter".into(),
-            state: "requested".into(),
-            href: review.into(),
-        });
+        fixture.retainers = vec![
+            RetainerRow {
+                code: "example-awaiting-signature".into(),
+                name: "Pending example".into(),
+                methods: vec![],
+                agreements: vec![AgreementLink {
+                    title: "Engagement letter".into(),
+                    state: "requested".into(),
+                    href: review.into(),
+                }],
+            },
+            RetainerRow {
+                code: "example-no-agreement".into(),
+                ..Default::default()
+            },
+            RetainerRow {
+                code: "example-filed-agreement".into(),
+                methods: vec!["Signed in wet ink".into()],
+                ..Default::default()
+            },
+        ];
         let html = dioxus_ssr::render_element(lawyer_dashboard_body(&fixture));
-        assert!(html.contains("Onboarding agreements (1)"));
+        assert!(html.contains("No signed retainer recorded (2)"));
+        assert!(html.contains("Signed retainer recorded (1)"));
+        assert!(html.contains("Signed in wet ink"));
+        assert!(html.contains("No onboarding agreement recorded"));
+        assert!(html.contains("/app/projects/example-no-agreement/onboarding"));
         assert!(html.contains(&format!("href=\"{review}\"")));
         assert!(
             html.contains("Engagement letter")
-                && html.contains("sample-estate")
+                && html.contains("example-awaiting-signature")
                 && html.contains("requested")
         );
     }
@@ -1064,7 +1136,7 @@ mod tests {
         DashboardView {
             tokens_href: String::new(),
             firm_name: "Neon Law".to_string(),
-            agreements: vec![],
+            retainers: vec![],
             total_projects: 3,
             pitch_projects: 1,
             active_projects: 1,

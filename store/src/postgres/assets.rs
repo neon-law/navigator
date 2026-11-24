@@ -499,6 +499,9 @@ pub(crate) async fn file_revision(
         let evidence = crate::assets::verified_onboarding_envelope(identity.metadata.as_ref());
         if head.deleted_at.is_none()
             && head.sha256_hex == sha
+            && identity
+                .signing
+                .is_none_or(|signing| head.signing == Some(signing))
             && crate::documents::matches_provider_filing(args, &identity, head)
             && (args.kind != "onboarding"
                 || evidence.is_none()
