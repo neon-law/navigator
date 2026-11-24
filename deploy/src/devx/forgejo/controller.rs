@@ -8,9 +8,9 @@
 //!    `forgejo-job-*` registrations with no Job for two ticks in a row;
 //! 2. lists waiting jobs installation-wide through the admin API, mirrors the
 //!    release each one pins into Forgejo's package registry, and
-//! 3. launches exactly enough runners: per repository, the waiting jobs minus
-//!    this process's runners that have not picked a job up yet, under one
-//!    global cap.
+//! 3. launches runners for repositories whose pinned releases are ready,
+//!    subtracting runners that have not picked a job up yet and enforcing
+//!    the global cap.
 //!
 //! Every launch is the same code `runner-once` runs ([`runner::execute`]):
 //! a per-Job service account without an API token, a read-only root
@@ -538,12 +538,14 @@ impl Controller {
         idle
     }
 
-    /// Mirror the release each waiting run of `repository` pins.
-    fn mirror_pinned(&mut self, repository: &str) {
+    /// Mirror the release each waiting run of `repository` pins and report
+    /// whether the identified releases are ready for the runners.
+    fn mirror_pinned(&mut self, repository: &str) -> bool {
         let runs = self
             .runtime
             .block_on(self.forgejo.runs(repository, Some("waiting")))
             .unwrap_or_default();
+        let mut ready = true;
         for run in runs {
             let Ok(run) = serde_json::from_value::<Run>(run) else {
                 continue;
@@ -562,10 +564,12 @@ impl Controller {
                     self.mirrored.insert(version);
                 }
                 Err(error) => {
-                    tracing::warn!(target: "forgejo", event = "forgejo.release.mirror_failed", version = %version, error = %error, "release mirror failed; the job will report it");
+                    ready = false;
+                    tracing::warn!(target: "forgejo", event = "forgejo.release.mirror_failed", forgejo.repository = repository, version = %version, error = %error, "release mirror failed; runner launch deferred");
                 }
             }
         }
+        ready
     }
 
     /// The installation's repositories, refreshed every ten minutes, and
@@ -737,10 +741,11 @@ impl Controller {
             };
             waiting.insert(repository, count);
         }
-        for repository in waiting.keys() {
-            self.mirror_pinned(repository);
+        let waiting_count = waiting.values().sum();
+        waiting.retain(|repository, _| {
             self.observer.watched.insert(repository.clone());
-        }
+            self.mirror_pinned(repository)
+        });
         let ips = runner::egress_destinations(&self.egress_ip, &self.egress_host)?;
         let in_flight = self.in_flight().0.len();
         let launches = plan(&waiting, &self.idle(), in_flight, self.max_runners);
@@ -749,7 +754,7 @@ impl Controller {
         }
         self.observe();
         Ok(TickReport {
-            waiting: waiting.values().sum(),
+            waiting: waiting_count,
             launched: launches.len(),
             orphans_cleaned,
         })
@@ -1297,7 +1302,7 @@ mod tests {
     /// reports the repository's runs and its missed CD once each.
     #[test]
     #[allow(clippy::too_many_lines)]
-    fn a_tick_runs_each_waiting_job_once_and_reports_the_repository() {
+    fn a_tick_waits_for_the_release_then_runs_each_waiting_job_once() {
         use wiremock::matchers::{method, path, path_regex, query_param};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -1351,6 +1356,15 @@ mod tests {
                 .and(path("/api/v1/repos/o/a/raw/navigator.yaml"))
                 .and(query_param("ref", "abc123"))
                 .respond_with(ResponseTemplate::new(200).set_body_string("version: 26.11.5\n"))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path_regex(
+                    "^/api/packages/navigator/generic/navigator/26.11.5/",
+                ))
+                .respond_with(ResponseTemplate::new(503))
+                .with_priority(1)
+                .up_to_n_times(1)
                 .mount(&server)
                 .await;
             Mock::given(method("GET"))
@@ -1430,6 +1444,12 @@ mod tests {
                 .build()
                 .unwrap(),
         };
+
+        let blocked = controller.tick().unwrap();
+        assert_eq!(blocked.waiting, 1);
+        assert_eq!(blocked.launched, 0);
+        assert!(cluster.created.lock().unwrap().is_empty());
+        assert!(!controller.mirrored.contains("26.11.5"));
 
         let report = controller.tick().unwrap();
         assert_eq!(

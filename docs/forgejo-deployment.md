@@ -412,7 +412,8 @@ credential in the controller's application namespace. Every 20 seconds it:
 2. **Reads the queue.** `GET /api/v1/admin/actions/runners/jobs?labels=self-hosted` lists waiting jobs
    installation-wide.
 3. **Mirrors releases.** It mirrors the release each waiting run's `navigator.yaml` pins into the package registry, if
-   it is not there yet.
+   it is not there yet. If a mirror attempt fails, that repository's queued jobs wait while the controller retries on
+   the next tick.
 4. **Launches.** For each repository it starts one runner per waiting job, minus its own runners that have not picked
    a job up yet. So two ticks never start two runners for one job. `--max-runners` (default 4) caps the total.
 
