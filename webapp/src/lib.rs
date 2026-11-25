@@ -86,6 +86,7 @@ pub mod free_resources;
 pub mod glossary_page;
 pub mod gov_forms;
 pub mod graph_views;
+#[cfg(feature = "server")]
 pub mod guieb_shook;
 pub mod harvard_outline;
 pub mod home;
