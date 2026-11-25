@@ -1421,6 +1421,20 @@
         "accessible": true
       },
       {
+        "action": "export",
+        "schema": "public",
+        "name": "project_label",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "project_label_assignment",
+        "kind": "table",
+        "accessible": true
+      },
+      {
         "action": "derived",
         "relation": {
           "schema": "public",

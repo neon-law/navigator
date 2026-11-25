@@ -3295,6 +3295,25 @@ fn canonical_document(base: &str) -> Value {
             "responses": { "201": { "description": "The recorded outcome row", "content": { "application/json": { "schema": { "type": "object" } } } }, "401": { "description": "Authenticated session required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "403": { "description": "Lawyer tier required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "404": { "description": "No such Project, or the caller is not a firm-side participant", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "409": { "description": "The matter already has an outcome, or a correction names no outcome to correct", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "422": { "description": "An amount is negative, or the reason or allocation reference is not valid", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } } }
           }
         },
+        "/app/api/projects/{id}/labels": {
+          "get": {
+            "summary": "Read the Firm label catalog and the Project's assignments",
+            "description": "Returns active and retired labels with their stable key, name, category, and whether this Project carries them. Requires firm-side participation.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "responses": { "200": { "description": "The Firm's labels", "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } } }, "401": { "description": "Authenticated session required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "403": { "description": "Lawyer tier required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "404": { "description": "Project unavailable" } }
+          },
+          "post": {
+            "summary": "Manage the Firm's labels or change the Project's assignments",
+            "description": "Create a label with key, name and category. Retire or restore by key. Add or remove assignments atomically by keys. Catalog changes require Firm administration. All actions require firm-side participation.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "requestBody": { "required": true, "content": { "application/json": { "schema": { "oneOf": [
+              { "type": "object", "required": ["action", "key", "name", "category"], "properties": { "action": { "const": "create" }, "key": { "type": "string" }, "name": { "type": "string" }, "category": { "type": "string" } } },
+              { "type": "object", "required": ["action", "key"], "properties": { "action": { "enum": ["retire", "restore"] }, "key": { "type": "string" } } },
+              { "type": "object", "required": ["action", "keys"], "properties": { "action": { "enum": ["add", "remove"] }, "keys": { "type": "array", "items": { "type": "string" }, "minItems": 1, "maxItems": 100 } } }
+            ] } } } },
+            "responses": { "200": { "description": "The Firm's labels with the current assignments", "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } } }, "401": { "description": "Authenticated session required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "403": { "description": "Lawyer tier required. Catalog changes also require Firm administration.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "404": { "description": "Project or label unavailable" }, "409": { "description": "The key belongs to a different label" }, "422": { "description": "Invalid key, name, category, or batch size" } }
+          }
+        },
         "/app/api/projects/{id}/stages": {
           "get": {
             "summary": "Read a matter's stage",

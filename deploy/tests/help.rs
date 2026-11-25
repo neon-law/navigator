@@ -250,6 +250,7 @@ fn projects_help_lists_the_project_workspace_verbs() {
             "gate",
             "import-source",
             "invite",
+            "labels",
             "lifecycle",
             "migrate-letter",
             "notations",

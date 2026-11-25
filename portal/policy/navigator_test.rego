@@ -3646,3 +3646,19 @@ test_forgejo_citation_uses_the_project_review_gate if {
 test_ci_cannot_read_court_date_review_even_with_admin_tier if {
 	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "court-date-proposals"], "method": "GET", "session": {"role": "admin", "source": "ci"}}
 }
+
+test_project_labels_require_lawyer_tier if {
+    every method in {"GET", "POST"} {
+        authz.allow with input as {"path": ["app", "api", "projects", "p1", "labels"], "method": method, "session": lawyer_session}
+        not authz.allow with input as {"path": ["app", "api", "projects", "p1", "labels"], "method": method, "session": client_session}
+        not authz.allow with input as {"path": ["app", "api", "projects", "p1", "labels"], "method": method, "session": clerk_session}
+    }
+}
+
+
+test_project_labels_deny_a_scoped_ci_owner if {
+    ci_session := {"role": "owner", "source": "ci", "scope": {"project_id": "p1"}}
+    every method in {"GET", "POST"} {
+        not authz.allow with input as {"path": ["app", "api", "projects", "p1", "labels"], "method": method, "session": ci_session}
+    }
+}

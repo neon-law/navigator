@@ -85,6 +85,8 @@ pub const POSTGRES_TABLES: &[&str] = &[
     "project_slack_delivery",
     "project_slack_delivery_reconciliation",
     "project",
+    "project_label",
+    "project_label_assignment",
     "project_calendar_event_backup",
     "project_calendar_grant",
     "project_calendar_retirement",

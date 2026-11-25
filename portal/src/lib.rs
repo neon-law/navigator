@@ -114,6 +114,7 @@ mod private_chart;
 pub(crate) mod project_billing_api;
 pub(crate) mod project_billing_forms;
 pub(crate) mod project_costs_api;
+pub(crate) mod project_labels_api;
 pub(crate) mod project_stage_forms;
 pub(crate) mod project_stages_api;
 pub(crate) mod project_tasks_api;

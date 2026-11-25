@@ -37,6 +37,7 @@ pub mod jj;
 pub mod jj_billing;
 pub mod jj_commands;
 pub mod jj_log;
+pub mod labels;
 pub mod lifecycle;
 pub mod lifecycle_read;
 pub mod local_bytes;

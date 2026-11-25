@@ -1758,6 +1758,7 @@ mod tests {
             ("20261124150200_deadline_proposals.sql", include_str!("../postgres/migrations/20261124150200_deadline_proposals.sql")),
             ("20261124150300_deadline_proposal_source_receipts.sql", include_str!("../postgres/migrations/20261124150300_deadline_proposal_source_receipts.sql")),
             ("20261124180000_firm_namespace_provider_source.sql", include_str!("../postgres/migrations/20261124180000_firm_namespace_provider_source.sql")),
+            ("20261124210000_create_project_labels.sql", include_str!("../postgres/migrations/20261124210000_create_project_labels.sql")),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());
