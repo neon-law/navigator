@@ -41,6 +41,7 @@
   --paper: #faf7f1;
   --stone: #ebe4d6;
   --bronze: #85714f;
+  --bronze-text: #75613f;
   --sand: #d9c6a2;
   --ink: #092039;
   --ink-muted: rgba(9,32,57,0.8);
@@ -138,7 +139,7 @@ h1,h2,.h1 {
   font-size: 13px;
   letter-spacing: 0.32em;
   text-transform: uppercase;
-  color: var(--bronze);
+  color: var(--bronze-text);
   margin: 0 0 18px;
 }
 
@@ -1846,12 +1847,12 @@ h2.split span:first-child {
   border-bottom: 0;
 }
 
-.side-list a:hover {
-  color: var(--bronze);
+.side-list a:hover,
+.side-list a.is-current {
+  color: var(--bronze-text);
 }
 
 .side-list a.is-current {
-  color: var(--bronze);
   font-weight: 600;
 }
 
