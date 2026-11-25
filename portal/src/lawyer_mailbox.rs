@@ -183,7 +183,7 @@ async fn ingest_for_config(
 
 #[cfg(test)]
 mod tests {
-    use super::{Config, ingest_for_config};
+    use super::{ingest_for_config, Config};
     use crate::inbound_email::{InboundAttachment, InboundEmail, SmtpEnvelope};
     use store::persons::{NewPerson, Role};
     use store::test_support::{ensure_person, with_required_postgres};
@@ -224,26 +224,22 @@ mod tests {
         };
         assert!(Config::from_lookup(env).is_some());
         assert!(Config::from_lookup(|_| None).is_none());
-        assert!(
-            Config::from_lookup(|key| {
-                if key == "NAVIGATOR_LAWYER_MAILBOXES" {
-                    Some("nick@neonlaw.com".to_string())
-                } else {
-                    None
-                }
-            })
-            .is_none()
-        );
-        assert!(
-            Config::from_lookup(|key| {
-                if key == "NAVIGATOR_INBOX_FIRM_ID" {
-                    Some(firm_id.to_string())
-                } else {
-                    None
-                }
-            })
-            .is_none()
-        );
+        assert!(Config::from_lookup(|key| {
+            if key == "NAVIGATOR_LAWYER_MAILBOXES" {
+                Some("nick@neonlaw.com".to_string())
+            } else {
+                None
+            }
+        })
+        .is_none());
+        assert!(Config::from_lookup(|key| {
+            if key == "NAVIGATOR_INBOX_FIRM_ID" {
+                Some(firm_id.to_string())
+            } else {
+                None
+            }
+        })
+        .is_none());
     }
 
     #[test]

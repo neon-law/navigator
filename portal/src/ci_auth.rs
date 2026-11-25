@@ -17,21 +17,21 @@
 //! Forgejo run is refused.
 
 use axum::extract::State;
-use axum::http::{HeaderMap, StatusCode, header};
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use store::seed::SeedModel;
-use views::brand::{BrandKey, admitted_brand_key, held_out_host};
+use views::brand::{admitted_brand_key, held_out_host, BrandKey};
 
-use crate::CanonicalHost;
-use crate::forgejo_oidc::{ForgejoOidc, ForgejoRun, repository_matches_issuer};
+use crate::forgejo_oidc::{repository_matches_issuer, ForgejoOidc, ForgejoRun};
 use crate::github_oidc::{GitHubActionsClaims, GitHubOidc};
 use crate::session::{
-    CI_SESSION_TTL_SECS, DocumentScope, SeedScope, SessionData, SessionScope, SessionSource,
-    SessionStore, now_unix_secs, random_token_32,
+    now_unix_secs, random_token_32, DocumentScope, SeedScope, SessionData, SessionScope,
+    SessionSource, SessionStore, CI_SESSION_TTL_SECS,
 };
+use crate::CanonicalHost;
 
 /// Shared state for the CI mint door.
 #[derive(Clone)]
@@ -526,12 +526,12 @@ pub fn github_repository_from_url(url: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CiAuthState, authorize_github_run, github_repository_from_url, routes};
-    use crate::CanonicalHost;
+    use super::{authorize_github_run, github_repository_from_url, routes, CiAuthState};
     use crate::forgejo_oidc::ForgejoOidc;
     use crate::github_oidc::{GitHubActionsClaims, GitHubOidc};
-    use crate::session::{SessionStore, now_unix_secs};
-    use axum::body::{Body, to_bytes};
+    use crate::session::{now_unix_secs, SessionStore};
+    use crate::CanonicalHost;
+    use axum::body::{to_bytes, Body};
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
 
@@ -915,8 +915,8 @@ mod tests {
     }
 
     async fn check_github_mint_brand() {
-        use crate::test_support::{TEST_OIDC_KID, sign_rs256_claims, test_oidc_jwks_rsa};
-        use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
+        use crate::test_support::{sign_rs256_claims, test_oidc_jwks_rsa, TEST_OIDC_KID};
+        use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
 
         let db = store::surreal::SurrealDb::uninitialized();
         store::test_support::seed_firm_with_new_brand(&db, "iep-defenders").await;
