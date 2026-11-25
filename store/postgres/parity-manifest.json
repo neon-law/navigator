@@ -695,6 +695,20 @@
     },
     {
       "extra_column": null,
+      "extra_table": "project_label",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "project_label_assignment",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
       "extra_table": "project_pull_request_notice",
       "missing_column": null,
       "missing_table": null,
@@ -2289,7 +2303,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 195,
+    "table_count": 197,
     "tables": {
       "address": {
         "columns": {
@@ -6023,6 +6037,48 @@
         "name": "project_handoff_acknowledgment",
         "references": [
           "project_handoff"
+        ]
+      },
+      "project_label": {
+        "columns": {
+          "category": "TEXT",
+          "firm_id": "UUID",
+          "id": "UUID",
+          "key": "TEXT",
+          "name": "TEXT",
+          "retired_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "firm_id",
+            "firm"
+          ]
+        ],
+        "name": "project_label",
+        "references": [
+          "firm"
+        ]
+      },
+      "project_label_assignment": {
+        "columns": {
+          "assigned_at": "TIMESTAMPTZ",
+          "label_id": "UUID",
+          "project_id": "UUID"
+        },
+        "foreign_keys": [
+          [
+            "label_id",
+            "project_label"
+          ],
+          [
+            "project_id",
+            "project"
+          ]
+        ],
+        "name": "project_label_assignment",
+        "references": [
+          "project",
+          "project_label"
         ]
       },
       "project_module": {
