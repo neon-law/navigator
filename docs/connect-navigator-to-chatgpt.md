@@ -48,8 +48,9 @@ curl --fail-with-body --silent --show-error https://www.neonlaw.com/app/mcp \
   --data '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_templates","arguments":{}}}'
 ```
 
-Look for `nv__llc_formation` in the returned templates. To check the web handoff, open the questionnaire in a private
-browser window. It should take you to Navigator sign-in with a return path to intake.
+Look for `nv__llc_formation` in the returned templates. Ask the plugin for Neon Law's public pages to receive
+`https://www.neonlaw.com/` and `https://www.neonlaw.com/lawyers`. To check the web handoff, open the questionnaire in a
+private browser window. It should take you to Navigator sign-in with a return path to intake.
 
 ## Publish in the ChatGPT directory
 

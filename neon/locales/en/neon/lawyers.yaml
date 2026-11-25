@@ -4,7 +4,7 @@ meta_description: >-
   email, Drive, MCP, and the CLI. Download it or connect it to your tools.
 og_description: >-
   Navigator for lawyers: one connected Project, the CLI, and the tools around
-  the work. Open source under MIT OR Apache-2.0.
+  the work. Download Navigator and run it yourself.
 title: Navigator for lawyers
 hero_mark: helm
 tagline: One connected Project
@@ -35,13 +35,13 @@ bands:
         detail: Lawyer and client dashboards declared in navigator.yaml.
     right:
       - label: Shared Slack
-        detail: Client collaboration when the Project uses it.
+        detail: Discuss a matter with your client in a shared channel.
       - label: Per-Project Inbox
         detail: Project email intake and conversation.
       - label: Google Drive folder
         detail: Large document intake
       - label: Shared Notion
-        detail: Client collaboration when the Project uses it.
+        detail: Share working pages and notes with a client.
     mcp_tools:
       - Court Listener
       - Descrybe

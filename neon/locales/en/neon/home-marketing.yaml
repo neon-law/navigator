@@ -1,18 +1,16 @@
-head_title: "{site_name} | Navigator, Exacting Agentic Lawyering for Everyone"
+head_title: "{site_name} | Agentic Lawyering for Everyone"
 meta_description: >-
-  Navigator is open source legal software for anyone, including people
-  representing themselves. Connect it to chat, find a public template, and
-  keep lawyer review when you want it.
+  Public legal templates and chat-based guidance for individuals and business
+  owners, with optional lawyer review when you want it.
 og_description: >-
-  Neon Law Navigator: exacting agentic lawyering for everyone, including
-  people representing themselves. Open source. Connect it in chat.
+  Start legal paperwork with a public template, then decide whether to ask a
+  lawyer for review.
 title: Navigator
 hero_mark: helm
 tagline: Exacting Agentic Lawyering
 hero_lead: >-
-  Use Navigator to prepare legal paperwork, whether you have a lawyer or you
-  are representing yourself. Connect it to chat, pick a template, and review
-  what you file or send. A lawyer can review your work when you ask.
+  Prepare legal paperwork with Navigator. Work through a template, review each
+  answer, and choose whether to ask a lawyer for help.
 hero_cta:
   label: Find a template
   href: /notations
@@ -33,12 +31,12 @@ bands:
         href_label: Browse templates
       - title: Talk to a lawyer
         body:
-          - - text: Ask for review of a document or start a matter. Legal work begins under a written engagement.
+          - - text: Ask about representation or a separate document review. A written engagement sets the scope.
         href: /contact
         href_label: Contact the firm
       - title: For lawyers
         body:
-          - - text: Run Navigator as the center of a Project, with the CLI, MCP, and connected tools.
+          - - text: See how firms connect matter work, documents, and tools around a Project.
         href: /lawyers
         href_label: Navigator for lawyers
   - kind: steps
@@ -46,7 +44,7 @@ bands:
     overline: Navigator MCP
     heading: Connect Navigator to ChatGPT
     description: >-
-      Ask in chat for a template. You review what you file or send.
+      Connect the public catalog once, then ask for a template when a legal question comes up.
     items:
       - title: Add Navigator to ChatGPT
         body:
@@ -54,8 +52,10 @@ bands:
             - text: ChatGPT Plugins
               href: https://chatgpt.com/plugins
             - text: >-
-                , select +, then Add custom MCP server. Name it Navigator and describe it as a public legal template catalog.
-                If the option is missing, ask your workspace administrator to enable custom plugins.
+                , select +, then Add custom MCP server. Name it Navigator and
+                describe it as a public legal template catalog. If the option is
+                missing, ask your workspace administrator to enable custom
+                plugins.
       - title: Connect to the public catalog
         body:
           - - text: "Enter "
@@ -85,7 +85,10 @@ bands:
               href: /app/projects
             - text: "."
   - kind: cta
-    heading: Start with a public template
+    heading: Considering Legal Aid?
     body: >-
-      Navigator is open source under MIT OR Apache-2.0. Browse the catalog, connect it in chat, or write to us.
+      Check eligibility and see which services the firm offers through its Legal Aid program.
     email: "{firm_email}"
+    action:
+      href: /legal-aid
+      label: Legal Aid

@@ -33,6 +33,12 @@
         "test_cases": {
           "positive": [
             {
+              "description": "Share Neon Law public pages",
+              "prompt": "What public pages does Neon Law publish?",
+              "tools_triggered": "list_public_pages",
+              "expected_behavior": "Share https://www.neonlaw.com/ for everyone and https://www.neonlaw.com/lawyers for lawyers."
+            },
+            {
               "description": "Start LLC formation",
               "prompt": "Help me form a Nevada LLC.",
               "tools_triggered": "list_templates",

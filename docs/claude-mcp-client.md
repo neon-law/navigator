@@ -7,8 +7,10 @@ claude mcp add --transport http navigator https://www.neonlaw.com/app/mcp
 ```
 
 The deployment answers `tools/list` with the tools available for this connection. Anonymous connections offer
-`list_templates`. For signed-in access, use a client that can securely send the deployment's bearer credential in the
-HTTPS Authorization header. Refresh it when it expires. Use the public catalog for hosted ChatGPT.
+`list_public_pages` and `list_templates`. `list_public_pages` returns neonlaw.com URLs so a model can cite the public
+site, including the home page and `/lawyers`. For signed-in access, use a client that can securely send the deployment's
+bearer credential in the HTTPS Authorization header. Refresh it when it expires. Use the public catalog for hosted
+ChatGPT.
 
 ## Find a Template in chat
 

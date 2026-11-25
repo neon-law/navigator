@@ -213,7 +213,7 @@ async fn no_firm_page_still_markets_the_retired_consumer_plan() {
 }
 
 #[tokio::test]
-async fn the_home_presents_navigator_and_links_to_its_page() {
+async fn the_home_presents_agentic_lawyering_for_everyone() {
     let app = site_app().await;
     let resp = anon_get(&app, "/").await;
     let status = resp.status();
@@ -225,12 +225,13 @@ async fn the_home_presents_navigator_and_links_to_its_page() {
         body.len()
     );
     for text in [
+        "Agentic lawyering is for anyone",
         "Exacting Agentic Lawyering",
-        "representing yourself",
+        "Represent yourself",
         r#"href="/notations""#,
         r#"href="/lawyers""#,
         r#"href="/legal-aid""#,
-        "<title>Neon Law | Navigator, Exacting Agentic Lawyering for Everyone</title>",
+        "<title>Neon Law | Agentic Lawyering for Everyone</title>",
     ] {
         assert!(body.contains(text), "missing {text}: {body}");
     }
@@ -507,7 +508,15 @@ fn publishes_a_fee(body: &str) -> bool {
 async fn supporting_pages_do_not_publish_separate_fees() {
     let app = site_app().await;
 
-    for unpriced in ["/notations", "/contact", "/blog", "/privacy", "/terms"] {
+    for unpriced in [
+        "/",
+        "/lawyers",
+        "/notations",
+        "/contact",
+        "/blog",
+        "/privacy",
+        "/terms",
+    ] {
         let body = body_string(anon_get(&app, unpriced).await).await;
         assert!(
             !publishes_a_fee(&body),
@@ -518,7 +527,7 @@ async fn supporting_pages_do_not_publish_separate_fees() {
 
 /// The home offers MCP setup so anyone can connect Navigator in chat.
 #[tokio::test]
-async fn the_home_explains_the_mcp_setup_and_the_quickstart() {
+async fn the_home_explains_the_mcp_setup() {
     let app = site_app().await;
     let body = body_string(anon_get(&app, "/").await).await;
     for expected in [
@@ -546,16 +555,16 @@ async fn the_home_explains_the_mcp_setup_and_the_quickstart() {
 
 /// `/lawyers` maps the Project's connected work around Navigator.
 #[tokio::test]
-async fn the_home_maps_a_connected_project() {
+async fn the_lawyers_page_maps_a_connected_project() {
     let app = site_app().await;
     let body = body_string(anon_get(&app, "/lawyers").await).await;
-
-    assert!(
-        body.contains(r#"class="fm-project-network""#)
-            && body.contains(r#"src="/public/navigator-wheel.svg""#),
-        "the connected-Project diagram renders the Navigator wheel: {body}"
-    );
-    for label in [
+    for text in [
+        "Navigator for lawyers",
+        "One connected Project",
+        "Navigator is open source under MIT OR Apache-2.0.",
+        r#"id="video""#,
+        r#"class="fm-project-network""#,
+        r#"src="/public/navigator-wheel.svg""#,
         "Internal Slack",
         "Internal Notion",
         "Project repository",
@@ -585,57 +594,29 @@ async fn the_home_maps_a_connected_project() {
         "Mercury",
         "Twilio",
         "Xero",
+        "Git history of pages, Drafts, and document pointers.",
+        "Large document intake",
+        "Discuss a matter with your client in a shared channel.",
+        "Share working pages and notes with a client.",
+        "A Project can include one or more cases, companies, filings, and more",
+        "related to the best interest of our clients.",
     ] {
-        assert!(body.contains(label), "the diagram names {label}: {body}");
+        assert!(body.contains(text), "missing {text}: {body}");
     }
-    assert!(
-        !body.contains("separate from protected Project documents"),
-        "the removed public-site node detail is absent: {body}"
-    );
-    assert!(
-        !body.contains("Highlight"),
-        "the removed software vendor is absent from the diagram: {body}"
-    );
-    assert!(
-        !body.contains("Chatwoot"),
-        "the removed support-chat vendor is absent from the diagram: {body}"
-    );
-    assert!(
-        !body.contains("Navigator keeps the Project in view while each connected service retains its own access controls."),
-        "the removed access-controls sentence is absent: {body}"
-    );
-    assert!(
-        !body.contains("The firms we serve work on it too."),
-        "the removed co-counsel-network paragraph is absent: {body}"
-    );
-    assert!(
-        !body.contains("Navigator Web"),
-        "the center names Navigator rather than its prior web-only label: {body}"
-    );
-    assert!(
-        body.contains("Git history of pages, Drafts, and document pointers."),
-        "the repository node describes the Project source contract: {body}"
-    );
+    for retired in [
+        "separate from protected Project documents",
+        "Highlight",
+        "Chatwoot",
+        "Navigator keeps the Project in view while each connected service retains its own access controls.",
+        "The firms we serve work on it too.",
+        "Navigator Web",
+        "Navigator is a website, MCP, and CLI that helps us rapidly create documents, ground sources and truth claims, organize files and folders, and reuse the glossary and ontology.",
+    ] {
+        assert!(!body.contains(retired), "retired copy survives: {body}");
+    }
     assert!(
         !body.to_lowercase().contains("vibe"),
         "Matter Pages are declared, not vibe coded: {body}"
-    );
-    assert!(
-        body.contains("Large document intake"),
-        "the Google Drive node describes its intake role: {body}"
-    );
-    assert!(
-        body.contains("Client collaboration when the Project uses it."),
-        "the Shared Notion node describes its collaboration role: {body}"
-    );
-    assert!(
-        body.contains("A Project can include one or more cases, companies, filings, and more")
-            && body.contains("related to the best interest of our clients."),
-        "the Project description explains how related work belongs together: {body}"
-    );
-    assert!(
-        !body.contains("Navigator is a website, MCP, and CLI that helps us rapidly create documents, ground sources and truth claims, organize files and folders, and reuse the glossary and ontology."),
-        "the removed Navigator summary is absent: {body}"
     );
 }
 
@@ -656,7 +637,7 @@ async fn the_home_maps_a_connected_project() {
 /// the page prints is the string both archives are fetched at — a page
 /// naming one release and linking another is worse than one naming none.
 #[tokio::test]
-async fn the_home_publishes_the_cli_at_the_release_it_runs() {
+async fn the_lawyers_page_publishes_the_cli_at_the_release_it_runs() {
     const DOWNLOAD_BASE: &str = "https://github.com/neon-law/navigator/releases/download/";
 
     let app = site_app().await;
@@ -827,8 +808,8 @@ async fn home_metadata_describes_navigator_at_the_root_url() {
     let app = site_app().await;
     let body = body_string(anon_get(&app, "/").await).await;
     assert!(
-        body.contains("Navigator, Exacting Agentic Lawyering for Everyone")
-            && body.contains("exacting agentic lawyering for everyone"),
+        body.contains("Agentic Lawyering for Everyone")
+            && body.contains("Start legal paperwork with a public template"),
         "{body}"
     );
     assert!(

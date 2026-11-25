@@ -289,9 +289,9 @@ and link nowhere until the apps are published. Its CTA opens a three-step public
 signed-in page exposes the configured enrollment booking link. Legal work begins under a written engagement with Lex
 Tecnica, Ltd. Neon's `/same-day-legal` and retired `/nautilus` paths answer a 301 to the Same Day Legal host.
 
-Neon’s home at `/` presents Navigator with the heading **Exacting Agentic Lawyering**. It is for anyone, including
+Neon’s home at `/` presents Navigator with the tagline **Exacting Agentic Lawyering**. It is for anyone, including
 people representing themselves. It links to the public template catalog, a way to contact a lawyer, and `/lawyers` for
-the connected Project. The tab title names Navigator and the heading. Using the public catalog does not create an
+the connected Project. The tab title names agentic lawyering. Using the public catalog does not create an
 attorney-client relationship. `/navigator` answers a 301 to `/`.
 
 The header links to Notations at `/notations` , Lawyers at `/lawyers` , and Legal Aid at `/legal-aid` . The shared

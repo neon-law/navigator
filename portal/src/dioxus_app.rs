@@ -506,7 +506,7 @@ fn is_public_page(html: &str) -> bool {
 /// public pages keep the firm-branded icon selected by
 /// [`webapp::components::SiteHeader`].
 fn is_navigator_page(path: &str) -> bool {
-    ["/navigator", "/app"]
+    ["/lawyers", "/navigator", "/app"]
         .iter()
         .any(|prefix| path == *prefix || path.starts_with(&format!("{prefix}/")))
 }
@@ -1074,8 +1074,9 @@ fn stamp_html_lang(html: &str, lang: &str) -> String {
 /// retaining a mounted firm's mark on its public pages.
 ///
 /// The root is the one named exception: it is the firm's home, not an empty
-/// path. `/app` is Navigator itself rather than a word readers need to see, so
-/// its descendants begin with `Navigator`.
+/// path. Neon's home names agentic lawyering in the tab so a shared link
+/// carries the keywords. `/app` is Navigator itself rather than a word
+/// readers need to see, so its descendants begin with `Navigator`.
 fn title_for_path_with_firm(path: &str, firm_name: &str) -> String {
     let mut segments = path
         .trim_matches('/')
@@ -1083,6 +1084,9 @@ fn title_for_path_with_firm(path: &str, firm_name: &str) -> String {
         .filter(|segment| !segment.is_empty());
 
     let Some(first) = segments.next() else {
+        if firm_name == "Neon Law" {
+            return format!("{firm_name} | Agentic Lawyering");
+        }
         return format!("{firm_name} | Home");
     };
 
@@ -3558,8 +3562,13 @@ pub fn marketing_page_router(
         ))
 }
 
-/// The retired platform page's path, which now answers a 301 to the home.
+/// Published `/navigator` links, including the GitHub website URL, which
+/// answer a 301 to `/`, the consumer Navigator homepage.
 pub const FIRM_NAVIGATOR_PATH: &str = "/navigator";
+
+/// Navigator for lawyers: the connected Project, the presentation, and the
+/// download.
+pub const FIRM_LAWYERS_PATH: &str = "/lawyers";
 
 /// The retired consumer-plan path, kept only so its inbound links resolve.
 ///
@@ -6346,6 +6355,7 @@ mod tests {
     #[test]
     fn only_navigator_paths_select_the_wheel_favicon() {
         for path in [
+            "/lawyers",
             "/navigator",
             "/app",
             "/app/projects",
@@ -6462,7 +6472,8 @@ mod tests {
     #[test]
     fn browser_titles_follow_the_url_hierarchy() {
         let cases = [
-            ("/", "Neon Law | Home"),
+            ("/", "Neon Law | Agentic Lawyering"),
+            ("/lawyers", "Neon Law | Lawyers"),
             ("/navigator", "Neon Law | Navigator"),
             ("/lawyers", "Neon Law | Lawyers"),
             ("/app", "Navigator"),
@@ -6535,14 +6546,12 @@ mod tests {
         );
 
         let neon_home = stamp_document_title(
-            "<html><head><title>Neon Law | Navigator, Exacting Agentic Lawyering for Everyone</title></head><body></body></html>",
+            "<html><head><title>Neon Law | Agentic Lawyering for Everyone</title></head><body></body></html>",
             "/",
             "Neon Law",
         );
         assert!(
-            neon_home.contains(
-                "<title>Neon Law | Navigator, Exacting Agentic Lawyering for Everyone</title>"
-            ),
+            neon_home.contains("<title>Neon Law | Agentic Lawyering for Everyone</title>"),
             "{neon_home}"
         );
     }

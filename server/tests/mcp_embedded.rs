@@ -70,7 +70,7 @@ async fn mcp_initialize_round_trips_when_auth_disabled() {
 }
 
 #[tokio::test]
-async fn public_mcp_exposes_only_template_discovery_without_bearer() {
+async fn public_mcp_exposes_page_and_template_discovery_without_bearer() {
     let state = state_with(AuthConfig::new(false, Some("test-secret"))).await;
     let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
     let mut browser_request = mcp_request_at(
@@ -95,6 +95,10 @@ async fn public_mcp_exposes_only_template_discovery_without_bearer() {
                 "name": "list_templates",
                 "arguments": { "intent": "create a work in progress" }
             }),
+        ),
+        (
+            "tools/call",
+            json!({ "name": "list_public_pages", "arguments": {} }),
         ),
         ("tools/call", json!({ "name": "list_projects" })),
         ("tools/call", json!({ "name": "create_notation" })),
@@ -125,13 +129,21 @@ async fn public_mcp_exposes_only_template_discovery_without_bearer() {
             "initialize" => assert_eq!(body["result"]["protocolVersion"], "2025-06-18"),
             "tools/list" => {
                 let tools = body["result"]["tools"].as_array().unwrap();
-                assert_eq!(tools.len(), 1);
-                assert_eq!(tools[0]["name"], "list_templates");
+                let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
+                assert_eq!(names, ["list_public_pages", "list_templates"]);
             }
             _ if params["name"] == "list_templates" => assert_eq!(
                 body["result"]["structuredContent"]["clarification"],
                 "Do you want a Work In Progress summary for a matter, or do you want to record time or a cost?"
             ),
+            _ if params["name"] == "list_public_pages" => {
+                let pages = body["result"]["structuredContent"]["pages"]
+                    .as_array()
+                    .expect("public pages");
+                assert!(pages.iter().any(|page| page["path"] == "/"));
+                assert!(pages.iter().any(|page| page["path"] == "/lawyers"));
+                assert!(pages.iter().all(|page| page["path"] != "/navigator"));
+            }
             _ => assert_eq!(body["result"]["isError"], true),
         }
     }
