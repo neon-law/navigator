@@ -442,11 +442,11 @@ fn render(bytes: Vec<u8>, page_number: u32) -> Result<Vec<u8>, &'static str> {
             page,
             &hayro::RenderCache::new(),
             &settings,
-            &hayro::RenderSettings {
+            &hayro::RenderSettings::default(),
+            &hayro::PixmapSettings {
                 x_scale: scale,
                 y_scale: scale,
                 bg_color: hayro::vello_cpu::color::palette::css::WHITE,
-                ..Default::default()
             },
         );
         if warned.load(Ordering::Relaxed) {
