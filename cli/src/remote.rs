@@ -2678,6 +2678,7 @@ async fn file_upload_target(
     }
     // The matter folder the bytes are kept in: `--folder`, else the one
     // `--file` already sits in (LAW-189).
+    let requested_folder = folder;
     let folder = folder.or_else(|| {
         let documents =
             std::fs::canonicalize(root.join(crate::document_sync::DOCUMENT_DIRECTORY)).ok()?;
@@ -2704,6 +2705,14 @@ async fn file_upload_target(
         .await?;
     if let Some(folder) = folder {
         pointer.folder = crate::document_layout::recorded_folder(&pointer.kind, folder);
+    }
+    // Identical bytes file no new revision, so the upload alone leaves the
+    // live row's folder as it was. An explicit `--folder` is the lawyer's
+    // word for where the document belongs: set it on the row (LAW-527).
+    if let Some(folder) = requested_folder {
+        client
+            .set_folder(pointer.current_version.asset_id, Some(folder.as_str()))
+            .await?;
     }
     if let Some(notice) = visibility_mismatch_notice(
         visibility,
@@ -7545,6 +7554,17 @@ mod tests {
                     "size_bytes": 13
                 }
             })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        // LAW-527: the explicit folder also lands on the live row, which an
+        // identical-bytes upload would otherwise leave untouched.
+        Mock::given(method("PATCH"))
+            .and(path(format!(
+                "/app/api/projects/{project_id}/documents/{document_id}"
+            )))
+            .and(body_json(serde_json::json!({ "folder": "Discovery" })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
             .expect(1)
             .mount(&server)
             .await;
