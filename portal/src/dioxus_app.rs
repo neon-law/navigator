@@ -6260,9 +6260,21 @@ mod tests {
         let plain = csp_with_nonce(nonce, None, false, false, false, None);
         assert!(!plain.contains("clax.dev"), "off by default: {plain}");
         let csp = csp_with_nonce(nonce, None, false, false, false, Some("https://clax.dev"));
-        assert!(csp.contains("connect-src 'self' https://clax.dev"), "got: {csp}");
-        let script = csp.split("script-src").nth(1).unwrap().split(';').next().unwrap();
-        assert!(!script.contains("clax.dev"), "script-src stays same-origin: {script}");
+        assert!(
+            csp.contains("connect-src 'self' https://clax.dev"),
+            "got: {csp}"
+        );
+        let script = csp
+            .split("script-src")
+            .nth(1)
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap();
+        assert!(
+            !script.contains("clax.dev"),
+            "script-src stays same-origin: {script}"
+        );
     }
 
     #[test]

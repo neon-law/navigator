@@ -58,10 +58,7 @@ fn is_overlay_asset(path: &str) -> bool {
 
 /// Serves the overlay's files only when the flag is on. With it off the
 /// LGPL overlay and its loader answer 404, so nothing of it reaches a browser.
-pub async fn gate(
-    req: axum::extract::Request,
-    next: axum::middleware::Next,
-) -> Response {
+pub async fn gate(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
     if is_overlay_asset(req.uri().path()) && !enabled() {
         return StatusCode::NOT_FOUND.into_response();
     }
@@ -98,7 +95,13 @@ impl ClaxConfig {
         )
     }
 
-    fn parse(instance: &str, queue: &str, page_origin: &str, token: &str, key: &str) -> Option<Self> {
+    fn parse(
+        instance: &str,
+        queue: &str,
+        page_origin: &str,
+        token: &str,
+        key: &str,
+    ) -> Option<Self> {
         let instance = instance.trim().trim_end_matches('/');
         if !instance.starts_with("https://") && !instance.starts_with("http://localhost") {
             return None;
@@ -142,7 +145,10 @@ impl ClaxConfig {
         ]
         .join("\n");
         let signed = self.key.sign(canonical.as_bytes());
-        format!("t={now}, n={nonce}, s={}", URL_SAFE_NO_PAD.encode(signed.to_bytes()))
+        format!(
+            "t={now}, n={nonce}, s={}",
+            URL_SAFE_NO_PAD.encode(signed.to_bytes())
+        )
     }
 }
 
@@ -212,7 +218,10 @@ async fn mint_token(
     let signature = config.signature(&path, chrono::Utc::now().timestamp(), &nonce, &body);
     let sent = reqwest::Client::new()
         .post(format!("{}{path}", config.instance))
-        .header(header::AUTHORIZATION, format!("Clax-Queue {}", config.token))
+        .header(
+            header::AUTHORIZATION,
+            format!("Clax-Queue {}", config.token),
+        )
         .header("clax-signature", signature)
         .header(header::CONTENT_TYPE, "application/json")
         .body(body)
@@ -261,7 +270,9 @@ pub fn routes<S: Clone + Send + Sync + 'static>() -> Router<S> {
 #[must_use]
 pub fn loader_tag(session: &SessionData) -> Option<String> {
     let config = ClaxConfig::from_env()?;
-    let person_id = session.person_id.filter(|_| session.role.is_lawyer_tier())?;
+    let person_id = session
+        .person_id
+        .filter(|_| session.role.is_lawyer_tier())?;
     Some(format!(
         "<script src=\"{LOADER_SRC}\" defer data-instance=\"{}\" data-queue=\"{}\" \
          data-user=\"{person_id}\" data-csrf=\"{}\"></script>",
@@ -305,9 +316,15 @@ mod tests {
     fn a_signature_verifies_over_the_documented_canonical_lines() {
         let c = config();
         let body = br#"{"reporter_id":"p"}"#;
-        let header = c.signature("/api/queues/Q1/reporter-tokens", 1_700_000_000, "AAAAAAAAAAAAAAAAAAAAAA", body);
+        let header = c.signature(
+            "/api/queues/Q1/reporter-tokens",
+            1_700_000_000,
+            "AAAAAAAAAAAAAAAAAAAAAA",
+            body,
+        );
         let s = header.rsplit("s=").next().unwrap();
-        let sig = ed25519_dalek::Signature::from_slice(&URL_SAFE_NO_PAD.decode(s).unwrap()).unwrap();
+        let sig =
+            ed25519_dalek::Signature::from_slice(&URL_SAFE_NO_PAD.decode(s).unwrap()).unwrap();
         let hex = |b: &[u8]| hex_lower(&Sha256::digest(b));
         let canonical = format!(
             "clax-ed25519 v2\nPOST\n/api/queues/Q1/reporter-tokens\nclax.dev\n1700000000\nAAAAAAAAAAAAAAAAAAAAAA\n{}\n{}\n{}",
@@ -315,7 +332,10 @@ mod tests {
             hex(b"cxq_token"),
             hex(b"-\n-\n-\n-\n-\n"),
         );
-        c.key.verifying_key().verify(canonical.as_bytes(), &sig).unwrap();
+        c.key
+            .verifying_key()
+            .verify(canonical.as_bytes(), &sig)
+            .unwrap();
         assert!(header.starts_with("t=1700000000, n=AAAAAAAAAAAAAAAAAAAAAA, s="));
     }
 
@@ -325,20 +345,48 @@ mod tests {
         use axum::http::Request;
         use tower::ServiceExt;
         let app = Router::new()
-            .route("/public/vendor/clax/overlay.js", axum::routing::get(|| async { "x" }))
+            .route(
+                "/public/vendor/clax/overlay.js",
+                axum::routing::get(|| async { "x" }),
+            )
             .route("/public/js/other.js", axum::routing::get(|| async { "y" }))
             .layer(axum::middleware::from_fn(gate));
-        let get = |path: &str| Request::builder().uri(path.to_string()).body(Body::empty()).unwrap();
+        let get = |path: &str| {
+            Request::builder()
+                .uri(path.to_string())
+                .body(Body::empty())
+                .unwrap()
+        };
         // The flag is unset in tests; the overlay and loader are withheld, nothing else is.
-        assert_eq!(app.clone().oneshot(get("/public/vendor/clax/overlay.js")).await.unwrap().status(), 404);
-        assert_eq!(app.clone().oneshot(get(LOADER_SRC)).await.unwrap().status(), 404);
-        assert_eq!(app.oneshot(get("/public/js/other.js")).await.unwrap().status(), 200);
+        assert_eq!(
+            app.clone()
+                .oneshot(get("/public/vendor/clax/overlay.js"))
+                .await
+                .unwrap()
+                .status(),
+            404
+        );
+        assert_eq!(
+            app.clone().oneshot(get(LOADER_SRC)).await.unwrap().status(),
+            404
+        );
+        assert_eq!(
+            app.oneshot(get("/public/js/other.js"))
+                .await
+                .unwrap()
+                .status(),
+            200
+        );
     }
 
     #[test]
     fn an_unusable_grant_turns_the_feature_off() {
-        assert!(ClaxConfig::parse("https://clax.dev", "Q1", "https://x", "t", "not-a-key").is_none());
-        assert!(ClaxConfig::parse("http://clax.dev", "Q1", "https://x", "t", &key_b64(1)).is_none());
+        assert!(
+            ClaxConfig::parse("https://clax.dev", "Q1", "https://x", "t", "not-a-key").is_none()
+        );
+        assert!(
+            ClaxConfig::parse("http://clax.dev", "Q1", "https://x", "t", &key_b64(1)).is_none()
+        );
     }
 
     #[test]
