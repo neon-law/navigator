@@ -604,7 +604,7 @@ mod firm_copy_tests {
         assert_eq!(diagram.1[2].detail, "Large document intake");
         assert_eq!(
             diagram.1[3].detail,
-            "Client collaboration when the Project uses it."
+            "Share working pages and notes with a client."
         );
         let mcp_tools: Vec<&str> = diagram.2.iter().map(String::as_str).collect();
         assert_eq!(

@@ -35,7 +35,7 @@ struct PublicPage {
 fn pages(site: &str) -> Vec<PublicPage> {
     [
         (
-            "Agentic lawyering for everyone",
+            "Agentic Lawyering for Everyone",
             "/",
             "Public templates, self-help, or work with a lawyer. Representing yourself is \
              self-help, not legal advice.",

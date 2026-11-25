@@ -10806,7 +10806,7 @@ const LIVE_HOME_CONTRACTS: &[(views::brand::BrandKey, LiveHomeContract)] = &[
     (
         views::brand::BrandKey::Neon,
         LiveHomeContract {
-            title: "<title>Neon Law | Navigator, Exacting Agentic Lawyering for Everyone</title>",
+            title: "<title>Neon Law | Agentic Lawyering for Everyone</title>",
             copy: "Exacting Agentic Lawyering",
         },
     ),
@@ -11200,9 +11200,7 @@ async fn the_delete_your_data_host_renders_its_own_home_catalog() {
         "{neon_body}"
     );
     assert!(
-        neon_body.contains(
-            "<title>Neon Law | Navigator, Exacting Agentic Lawyering for Everyone</title>"
-        ),
+        neon_body.contains("<title>Neon Law | Agentic Lawyering for Everyone</title>"),
         "{neon_body}"
     );
 

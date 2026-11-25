@@ -225,13 +225,13 @@ async fn the_home_presents_agentic_lawyering_for_everyone() {
         body.len()
     );
     for text in [
-        "Agentic lawyering for everyone",
+        "Agentic lawyering is for anyone",
         "Exacting Agentic Lawyering",
-        "representing yourself",
+        "Represent yourself",
         r#"href="/notations""#,
         r#"href="/lawyers""#,
         r#"href="/legal-aid""#,
-        "<title>Neon Law | Navigator, Exacting Agentic Lawyering for Everyone</title>",
+        "<title>Neon Law | Agentic Lawyering for Everyone</title>",
     ] {
         assert!(body.contains(text), "missing {text}: {body}");
     }
@@ -560,7 +560,7 @@ async fn the_lawyers_page_maps_a_connected_project() {
     let body = body_string(anon_get(&app, "/lawyers").await).await;
     for text in [
         "Navigator for lawyers",
-        "Exacting Agentic Lawyering",
+        "One connected Project",
         "Navigator is open source under MIT OR Apache-2.0.",
         r#"id="video""#,
         r#"class="fm-project-network""#,
@@ -596,7 +596,8 @@ async fn the_lawyers_page_maps_a_connected_project() {
         "Xero",
         "Git history of pages, Drafts, and document pointers.",
         "Large document intake",
-        "Client collaboration when the Project uses it.",
+        "Discuss a matter with your client in a shared channel.",
+        "Share working pages and notes with a client.",
         "A Project can include one or more cases, companies, filings, and more",
         "related to the best interest of our clients.",
     ] {
@@ -807,8 +808,8 @@ async fn home_metadata_describes_navigator_at_the_root_url() {
     let app = site_app().await;
     let body = body_string(anon_get(&app, "/").await).await;
     assert!(
-        body.contains("Navigator, Exacting Agentic Lawyering for Everyone")
-            && body.contains("exacting agentic lawyering for everyone"),
+        body.contains("Agentic Lawyering for Everyone")
+            && body.contains("Start legal paperwork with a public template"),
         "{body}"
     );
     assert!(

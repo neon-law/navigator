@@ -3563,7 +3563,7 @@ pub fn marketing_page_router(
 }
 
 /// Published `/navigator` links, including the GitHub website URL, which
-/// answer a 301 to [`FIRM_LAWYERS_PATH`].
+/// answer a 301 to `/`, the consumer Navigator homepage.
 pub const FIRM_NAVIGATOR_PATH: &str = "/navigator";
 
 /// Navigator for lawyers: the connected Project, the presentation, and the
@@ -6546,14 +6546,12 @@ mod tests {
         );
 
         let neon_home = stamp_document_title(
-            "<html><head><title>Neon Law | Navigator, Exacting Agentic Lawyering for Everyone</title></head><body></body></html>",
+            "<html><head><title>Neon Law | Agentic Lawyering for Everyone</title></head><body></body></html>",
             "/",
             "Neon Law",
         );
         assert!(
-            neon_home.contains(
-                "<title>Neon Law | Navigator, Exacting Agentic Lawyering for Everyone</title>"
-            ),
+            neon_home.contains("<title>Neon Law | Agentic Lawyering for Everyone</title>"),
             "{neon_home}"
         );
     }
