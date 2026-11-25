@@ -43,3 +43,435 @@ practices:
       letter to send. We price the task before we start, so you know the
       cost in advance.
     href: /services
+
+website:
+  practice:
+  - path: /practice/dispute-resolution.html
+    title: Dispute Resolution
+    description: Resolving conflicts efficiently, in negotiation or in court.
+    summary: Resolving conflicts efficiently, in negotiation or in court.
+    photo: practice/dispute-resolution.jpg
+    alt: ''
+    lead: Resolving conflicts efficiently, in negotiation or in court.
+    body: |-
+      Most disputes are best resolved early and on clear terms. We start by understanding what you need from the outcome, then choose the path most likely to get you there: a demand letter, a negotiated settlement, mediation or arbitration, or litigation in state or federal court.
+
+      When a case goes to court, we handle it from the first pleading through discovery, motions and trial preparation. You will know where the matter stands, what comes next and what it is likely to cost.
+
+      ## What we handle
+
+      - Breach of contract and other commercial disputes
+      - Disputes among business owners, partners and shareholders
+      - Fraud and misrepresentation claims
+      - Pre-suit demands and settlement negotiations
+      - Mediation and arbitration
+      - Enforcing and collecting judgments
+
+      ## Who we represent
+
+      Individuals, founders and businesses, as plaintiffs or defendants.
+  - path: /practice/business-litigation.html
+    title: Business Litigation
+    description: Litigating complex commercial and securities disputes for companies, shareholders and investors
+      in state and federal court.
+    summary: Litigating complex commercial and securities disputes for companies, shareholders and investors in
+      state and federal court.
+    photo: practice/securities-litigation.jpg
+    alt: ''
+    lead: Litigating complex commercial and securities disputes for companies, shareholders and investors in state
+      and federal court.
+    body: |-
+      When a business dispute has to be litigated, we represent companies, their owners and their investors in state and federal court, including in complex cases with multiple parties, related proceedings in other courts and expert valuation of securities. We handle each case from the first pleading through discovery, motions and settlement or trial.
+
+      Our work spans commercial disputes over contracts, partnerships and business torts, and securities disputes between companies and the people who invest in them: fraud or misrepresentation in the sale of securities, financing disputes, and shareholder claims.
+
+      Many securities disputes turn on information: what a company disclosed, what an investor was told, or what others publish about a company and its leadership. When false statements about a company’s stock are spread to move the price, the matter can involve defamation and market manipulation as well as securities claims.
+
+      ## What we handle
+
+      - Commercial disputes, including breach of contract and business torts
+      - Shareholder and partnership disputes, including claims by and against shareholders
+      - Securities fraud and misrepresentation in the sale of securities
+      - Financing disputes with investment funds and institutional lenders
+      - False statements about a company’s stock, including defamation by online publishers
+      - Market manipulation, including short-and-distort schemes
+      - Injunctions and other emergency relief
+
+      ## Who we represent
+
+      Public and private companies and their boards and officers, business owners, shareholders and investors.
+  - path: /practice/corporate-governance.html
+    title: Corporate & Governance
+    description: Formation, governance, shareholder agreements and ongoing general counsel.
+    summary: Formation, governance, shareholder agreements and ongoing general counsel.
+    photo: practice/business-corporate.jpg
+    alt: ''
+    lead: Formation, governance, shareholder agreements and ongoing general counsel.
+    body: |-
+      A business runs best on clear foundations: the right entity, agreements that say what the owners actually intend, and records that stay in order as the company grows.
+
+      We set those foundations, then stay on as outside general counsel, so there is one firm that already knows the company when a question, a deal or a dispute comes up.
+
+      ## What we handle
+
+      - Entity formation and choice of entity
+      - Operating, partnership and shareholder agreements
+      - Board and shareholder governance
+      - Ongoing outside general counsel
+      - Buying, selling or restructuring a business
+      - Corporate records and compliance
+
+      ## Who we represent
+
+      Owner-led businesses, closely held companies and their owners.
+  - path: /practice/startups-venture.html
+    title: Startups & Venture
+    description: Entity structuring, equity, fundraising and investor documents.
+    summary: Entity structuring, equity, fundraising and investor documents.
+    photo: practice/startups-venture.jpg
+    alt: ''
+    lead: Entity structuring, equity, fundraising and investor documents.
+    body: |-
+      Early decisions about structure and equity are hard to undo later. We help founders get them right from the start, in plain terms and at a pace that fits a company that is still finding its footing.
+
+      When it is time to raise money, we prepare and negotiate the documents, keep the capitalization table accurate and explain what each term means for control and ownership.
+
+      ## What we handle
+
+      - Formation and founder agreements
+      - Equity, vesting and option plans
+      - SAFEs, convertible notes and priced rounds
+      - Investor documents and capitalization tables
+      - Intellectual property assignment and contractor agreements
+      - Advisor agreements
+
+      ## Who we represent
+
+      Founders and early-stage companies.
+  - path: /practice/contracts-commercial.html
+    title: Contracts & Commercial
+    description: Drafting and negotiating the agreements your business runs on.
+    summary: Drafting and negotiating the agreements your business runs on.
+    photo: practice/contracts-commercial.jpg
+    alt: ''
+    lead: Drafting and negotiating the agreements your business runs on.
+    body: |-
+      Contracts are where a business sets its risks and its promises. We draft agreements that are clear enough to follow and specific enough to rely on if something goes wrong.
+
+      We also review and negotiate the other side’s paper, flagging the terms that matter and proposing practical changes rather than a wall of edits.
+
+      ## What we handle
+
+      - Customer, vendor and services agreements
+      - Software, SaaS and technology agreements
+      - Licensing agreements
+      - Nondisclosure agreements
+      - Contract review and negotiation
+      - Disputes over contract terms
+
+      ## Who we represent
+
+      Businesses of every size, and the individuals who sign on their behalf.
+  - path: /practice/estate-planning-trusts.html
+    title: Estate Planning & Trusts
+    description: Wills, trusts and succession planning for families and business owners.
+    summary: Wills, trusts and succession planning for families and business owners.
+    photo: practice/estate-planning-trusts.jpg
+    alt: ''
+    lead: Wills, trusts and succession planning for families and business owners.
+    body: |-
+      A good plan protects the people you care about and spares them uncertainty later. We listen first, then put in place the documents that carry out your wishes.
+
+      For business owners, we coordinate the estate plan with the company’s own agreements, so ownership passes the way you intend.
+
+      ## What we handle
+
+      - Wills
+      - Revocable and irrevocable trusts
+      - Powers of attorney and health care directives
+      - Guardian nominations for children
+      - Business succession planning
+      - Reviewing and updating existing plans
+
+      ## Who we represent
+
+      Individuals, families and business owners.
+  - path: /practice/real-estate.html
+    title: Real Estate
+    description: Residential and commercial transactions, leasing and title matters.
+    summary: Residential and commercial transactions, leasing and title matters.
+    photo: practice/real-estate.jpg
+    alt: ''
+    lead: Residential and commercial transactions, leasing and title matters.
+    body: |-
+      Whether you are buying a home or leasing space for a business, we review the documents, explain the obligations and see the transaction through to closing.
+
+      We work with brokers, lenders and title companies so the deal stays on schedule and nothing is left unexamined.
+
+      ## What we handle
+
+      - Residential purchases and sales
+      - Commercial purchases and sales
+      - Commercial and residential leases
+      - Title review
+      - Holding real estate through an entity
+
+      ## Who we represent
+
+      Buyers, sellers, landlords and tenants, individual and commercial.
+  - path: /practice/privacy-data-protection.html
+    title: Privacy & Data Protection
+    description: Privacy policies, data compliance and guidance when personal information is at risk.
+    summary: Privacy policies, data compliance and guidance when personal information is at risk.
+    photo: practice/privacy-data-protection.jpg
+    alt: ''
+    lead: Privacy policies, data compliance and guidance when personal information is at risk.
+    body: |-
+      Privacy laws now reach most businesses that collect personal information. We help you understand which rules apply, then put policies and practices in place that match what the business actually does.
+
+      When personal information is exposed, we help you work out your obligations and respond in an orderly way.
+
+      ## What we handle
+
+      - Privacy policies and terms of service
+      - Compliance with state privacy laws
+      - Data processing and vendor agreements
+      - Data breach response
+      - Privacy review of new products and features
+
+      ## Who we represent
+
+      Businesses that collect or handle personal information.
+  attorneys:
+  - path: /attorneys/waleed-amer.html
+    title: Waleed Amer
+    description: Waleed Amer, Founding Partner, Guieb & Shook P.C. Business and securities litigator representing
+      companies and shareholders in commercial disputes.
+    role: Founding Partner
+    portrait: portraits/waleed-amer.jpg
+    body: |-
+      ## Overview
+
+      Waleed Amer is a business and securities litigator. He represents companies and shareholders in commercial and securities disputes in federal and state court, and advises businesses on contracts, business practices and avoiding disputes before they start. He also holds a Legal Engineer Certificate from Harvey Academy.
+
+      Before founding Guieb & Shook, Waleed was a senior associate at a New York litigation firm, where he was the lead attorney for Nasdaq- and NYSE-listed companies in complex, multimillion-dollar commercial and securities litigation, including disputes with institutional funds over the terms of their financing. His cases involved claims under the Securities Act of 1933 and the Securities Exchange Act of 1934, securities fraud, RICO and business torts.
+
+      He has led hearings and argued motions to dismiss, for summary judgment and for injunctions in the Southern District of New York, the District of Delaware, the District of Colorado and New York State Supreme Court. He has also taken and defended depositions, worked with valuation experts and negotiated settlements, and he works alongside in-house counsel and executives to keep each case aligned with the client’s business goals.
+
+      Earlier, as an associate at an insurance defense firm, he defended tort cases for insurance carriers from the start of a case through discovery. As a law graduate, he did pro bono work with Brooklyn Legal Services, for tenants displaced by a building fire, and with the Courtroom Advocates Project of Sanctuary for Families, helping survivors of domestic violence obtain orders of protection. He was a fellow at the Center for Business and Financial Law at New York Law School.
+
+      Outside the office, Waleed is an avid runner and a member of the Staten Island Athletic Club.
+
+      ## Representative experience
+
+      Before founding Guieb & Shook, Waleed:
+
+      - Obtained a ruling in the Southern District of New York permitting service of process on foreign defendants through a Form 8-K filed on EDGAR, social media posts and notices in U.S. and international newspapers, followed by a default judgment requiring the defendants to retract defamatory articles about a publicly traded client and permanently enjoining further publication.
+      - Obtained partial dismissal of a securities fraud action against a public company and its executives in the District of Colorado, including dismissal of civil conspiracy and Colorado Consumer Protection Act claims.
+      - Obtained a stay of New York Supreme Court proceedings pending a related action in the District of Delaware, for a publicly traded holding company in litigation with an investment fund.
+      - Drafted the opening motion in a tort action that ended in summary judgment dismissing all claims against a religious institution and a high school, on the ground that they owed the plaintiff no duty.
+    facts:
+    - label: Practice areas
+      entries:
+      - text: Dispute Resolution
+        href: /practice/dispute-resolution.html
+      - text: Business Litigation
+        href: /practice/business-litigation.html
+      - text: Contracts & Commercial
+        href: /practice/contracts-commercial.html
+      - text: Corporate & Governance
+        href: /practice/corporate-governance.html
+      - text: Startups & Venture
+        href: /practice/startups-venture.html
+    - label: Bar admissions
+      entries:
+      - text: New York
+    - label: Court admissions
+      entries:
+      - text: U.S. District Court for the Southern District of New York
+      - text: U.S. District Court for the Eastern District of New York
+      - text: U.S. District Court for the District of Colorado
+    - label: Education
+      entries:
+      - text: J.D., New York Law School
+      - text: B.S., City University of New York
+    email: waleed@guiebshook.com
+  - path: /attorneys/nicholas-shook.html
+    title: Nicholas Shook
+    description: Nicholas Shook, Founding Partner, Guieb & Shook P.C. Business litigator and former software engineer
+      at Apple.
+    role: Founding Partner
+    portrait: portraits/nick-shook.jpg
+    body: |-
+      ## Overview
+
+      Nicholas Shook is a business litigator whose practice also covers privacy, technology and estate planning. He represents businesses across the full range of commercial disputes, including disputes involving cryptocurrency, and has argued appeals and handled hearings. He has also been involved in more than $100 million in mergers and acquisitions.
+
+      During five years as a software engineer at Apple, he helped Apple’s finance organization comply with the GDPR, China’s Personal Information Protection Law and the California Consumer Privacy Act, and migrated 20 petabytes of financial data to the cloud. Earlier, he built an accounts receivable system used by a national bank.
+
+      That engineering background lets him work fluently with technical teams and spot privacy risks early, and it shapes the systems the firm uses to run its matters.
+
+      ## Representative experience
+
+      Before founding Guieb & Shook, Nicholas:
+
+      - Won an appeal in Nevada in a civil rights action under [42 U.S.C. § 1983](https://uscode.house.gov/us/usc/119-118/t42/s1983/) alleging [Eighth Amendment](https://www.archives.gov/founding-docs/bill-of-rights-transcript) violations arising from the abuse of an incarcerated person.
+      - Obtained cannabis business licenses for clients in Nevada and Illinois.
+      - Litigated business disputes involving cryptocurrency.
+    facts:
+    - label: Practice areas
+      entries:
+      - text: Business Litigation
+        href: /practice/business-litigation.html
+      - text: Corporate & Governance
+        href: /practice/corporate-governance.html
+      - text: Startups & Venture
+        href: /practice/startups-venture.html
+      - text: Privacy & Data Protection
+        href: /practice/privacy-data-protection.html
+      - text: Estate Planning & Trusts
+        href: /practice/estate-planning-trusts.html
+    - label: Bar admissions
+      entries:
+      - text: New York
+      - text: California
+      - text: Nevada
+      - text: Washington
+    - label: Court admissions
+      entries:
+      - text: U.S. District Court for the District of Nevada
+    - label: Education
+      entries:
+      - text: J.D., William S. Boyd School of Law, UNLV # pii-scan: allow the official name of a law school
+      - text: B.A., Rhetoric, University of California, Berkeley
+    offset: true
+    email: nick@guiebshook.com
+  legal:
+  - path: /legal/attorney-advertising.html
+    title: Attorney Advertising
+    description: Attorney advertising notice for the Guieb & Shook P.C. website.
+    lead: This website is attorney advertising. It is labeled “Attorney Advertising” under the New York Rules of
+      Professional Conduct, and it may be considered advertising under the rules of the other states where the firm’s
+      attorneys are admitted.
+    body: |-
+      ## Responsible attorneys
+
+      Guieb & Shook P.C. is responsible for the content of this website. Attorneys responsible for this website: Waleed Amer and Nicholas Shook, Guieb & Shook P.C., 5150 Mae Anne Ave, Ste 405-9002, Reno, NV 89523.
+
+      ## Prior results
+
+      Prior results do not guarantee a similar outcome. Every matter turns on its own facts and the law that applies to it.
+
+      ## Admissions
+
+      Waleed Amer is admitted to practice law in New York. Nicholas Shook is admitted to practice law in New York, California, Nevada and Washington. No attorney at the firm practices in a jurisdiction where that attorney is not admitted, except as the rules of that jurisdiction allow.
+  - path: /legal/disclaimer.html
+    title: Disclaimer
+    description: Disclaimer for the Guieb & Shook P.C. website.
+    lead: Please read this notice before using this website.
+    body: |-
+      ## Not legal advice
+
+      The information on this website is for general informational purposes only. It is not legal advice, and it may not reflect the most current legal developments. Do not act or refrain from acting on anything on this site without advice from a lawyer about your own situation.
+
+      ## No attorney–client relationship
+
+      Viewing this website, or contacting the firm by email, phone or otherwise, does not create an attorney–client relationship. The firm represents a client only after it has checked for conflicts of interest and the client has signed an engagement letter.
+
+      ## Confidential information
+
+      Please do not send confidential or time-sensitive information until the firm has confirmed in writing that it will represent you. Information you send before then may not be treated as confidential or privileged, and it may not reach the right attorney in time.
+
+      ## Jurisdictions
+
+      The firm’s attorneys are admitted to practice only in the jurisdictions listed on the [Attorney Advertising](/legal/attorney-advertising.html) page. The firm does not seek to represent anyone in a jurisdiction where this website does not comply with local rules.
+  - path: /legal/privacy-policy.html
+    title: Privacy Policy
+    description: How Guieb & Shook P.C. handles information from visitors to its website.
+    lead: This policy explains what information the firm collects through this website and with whom it may be shared.
+      It covers this website only; information about clients and their matters is governed by the firm’s professional
+      obligations of confidentiality.
+    body: |-
+      ## Information you send us
+
+      The firm receives the name, contact details, and message you submit through this website. If you sign in, Navigator processes the information needed to authenticate and provide access to your account. The [Navigator privacy policy](/privacy) describes how the platform handles this information, including texting terms.
+  - path: /legal/accessibility.html
+    title: Accessibility
+    description: Accessibility statement for the Guieb & Shook P.C. website.
+    lead: Guieb & Shook P.C. wants everyone to be able to use this website, including people who use assistive technology.
+    body: |-
+      ## Our approach
+
+      The firm aims to meet the Web Content Accessibility Guidelines (WCAG) 2.2 at Level AA.
+
+      ## Help and feedback
+
+      If any part of this website is hard to use, or you need information in another format, please contact the firm at [info@guiebshook.com](mailto:info@guiebshook.com) or [(510) 800-2090](tel:+15108002090). The firm will work with you to provide the information you need.
+  story:
+    description: How Guieb & Shook P.C. took shape across three New York boroughs, and the family names it carries.
+    intro: The firm took shape over a season of conversations that moved across New York City, from Manhattan to
+      Brooklyn and Staten Island.
+    boroughs:
+    - id: manhattan
+      name: Manhattan
+      photo: manhattan-1.jpg
+      alt: Red-brick loft buildings and water towers in Tribeca
+      caption: Tribeca
+      copy: Where a legal engineers meetup sparked the first conversations about the firm, and where we kept building
+        the systems behind it.
+    - id: brooklyn
+      name: Brooklyn
+      photo: brooklyn-bridge-autumn-street.jpg
+      alt: The stone tower of the Brooklyn Bridge seen from a street in DUMBO, red autumn leaves in front
+      caption: DUMBO
+      copy: 'Where the practice found its rhythm: long working sessions, conversations with fellow practitioners,
+        live matters on the table, and the systems to support them taking shape alongside.'
+    - id: staten-island
+      name: Staten Island
+      photo: staten-island-richmondtown.jpg
+      alt: A leaf-covered lane past a red maple and historic buildings at Historic Richmond Town, Staten Island
+      caption: Historic Richmond Town
+      copy: Where hikes on La Tourette Trail and working sessions over coffee in Historic Richmond Town shaped the
+        firm’s direction.
+    names:
+    - name: Guieb
+      paragraphs:
+      - Guieb is the family name of Waleed Amer’s mother. Her father practiced law in Manila, Philippines.
+      - The firm carries his name to honor him and her, and the tradition of counsel they passed down.
+    - name: Shook
+      paragraphs:
+      - Nicholas Shook’s parents grew up half a world apart and met by chance.
+      - 'The firm carries the Shook name in that same spirit: bridging the distance between people, places and ideas.'
+  home:
+    description: Guieb & Shook P.C. — a New York firm with West Coast roots, serving individuals, families, founders
+      and businesses.
+    slides:
+    - video: hero-1-williamsburg
+      eyebrow: Attorneys at law
+      heading:
+      - Modern tools.
+      - Timeless counsel.
+    - video: hero-2-golden-gate
+      eyebrow: New York · California · Nevada · Washington
+      heading:
+      - Two coasts.
+      - One practice.
+    - video: hero-3-brooklyn
+      eyebrow: New York business litigation
+      heading:
+      - Advocacy that
+      - carries weight.
+    - video: hero-4-bay-bridge
+      eyebrow: West Coast engineering
+      heading:
+      - Bridging law
+      - and technology.
+    about: |-
+      Guieb & Shook brings innovation to advocacy. We combine the rigor of New York litigation with the systems thinking of West Coast engineering in every matter.
+
+      Waleed Amer brings a background in complex business and securities litigation, representing public companies and shareholders in multimillion-dollar disputes.
+
+      Nicholas Shook brings a practice in business litigation, privacy and estate planning, and five years as a software engineer at Apple that gave him a builder’s discipline for clear systems.
+
+      That discipline runs through [Navigator](https://www.neonlaw.com/lawyers), the practice-management system we built in-house. It takes on the routine work behind every matter, so clients get quicker turnaround and clearer updates, and our attorneys give their time to the judgment and strategy that clients hire us for.
+    practice_intro: Handled personally by the firm’s attorneys, for individuals, families, founders and businesses.

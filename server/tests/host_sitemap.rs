@@ -398,7 +398,14 @@ async fn the_guieb_shook_sitemap_lists_only_that_brands_pages_under_its_host() {
             path.to_string()
         })
         .collect();
-    for required in ["/", "/privacy", "/terms", "/llms.txt"] {
+    for required in [
+        "/",
+        "/contact",
+        "/our-story.html",
+        "/privacy",
+        "/terms",
+        "/llms.txt",
+    ] {
         assert!(
             paths.iter().any(|path| path == required),
             "missing {required}: {paths:?}"
@@ -410,7 +417,7 @@ async fn the_guieb_shook_sitemap_lists_only_that_brands_pages_under_its_host() {
             "missing {required_team}: {paths:?}"
         );
     }
-    for absent in ["/services", "/contact", "/disputes"] {
+    for absent in ["/services", "/disputes"] {
         assert!(
             !paths.iter().any(|path| path == absent),
             "must not advertise {absent}: {paths:?}"

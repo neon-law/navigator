@@ -347,11 +347,12 @@ pub(crate) async fn dioxus_document_head(req: Request, next: Next) -> Response {
         ""
     };
     let brand_fonts = font_head(views::brand::brand_key());
-    // The footer wordmark is EB Garamond on every brand, so a page whose own
-    // face is something else still has the face to measure that name with.
-    let font_head = if brand_fonts.contains("EB Garamond") {
+    let font_head = if rendered.contains(r#"id="guieb-shook-website""#) {
+        String::new()
+    } else if brand_fonts.contains("EB Garamond") {
         brand_fonts.to_string()
     } else {
+        // The shared footer sets its wordmark in EB Garamond.
         format!("{brand_fonts}{}", GUIEB_SHOOK_HEAD.as_str())
     };
     let html = stamp_html_lang(&rendered, lang);
@@ -508,7 +509,7 @@ fn page_analytics(
 /// public marketing pages that need page-view analytics, so
 /// [`page_analytics`] widens to include them.
 fn is_brand_landing_page(html: &str) -> bool {
-    ["summons-page", "cyber-page"]
+    ["summons-page", "cyber-page", "guieb-shook-website"]
         .iter()
         .any(|root| html.contains(&format!("<div class=\"{root}\"")))
 }
@@ -5335,6 +5336,57 @@ pub fn testimonials_router(path: &str, surreal: store::surreal::SurrealDb) -> Ro
         ))
 }
 
+/// Serve one Guieb & Shook public page with the normal SSR head and session links.
+pub fn guieb_shook_page_router(
+    path: &str,
+    site: std::sync::Arc<webapp::guieb_shook::Website>,
+    page: webapp::guieb_shook::Page,
+    phone: String,
+    consent: String,
+    sessions: Option<(crate::SessionStore, bool)>,
+) -> Router {
+    let method = get(render_handler)
+        .layer(from_fn(dioxus_document_head))
+        .layer(from_fn(inject_public_utility));
+    let method = if let Some(sessions) = sessions {
+        method.layer(from_fn_with_state(
+            sessions,
+            crate::lead_capture::inject_page_context,
+        ))
+    } else {
+        method
+    };
+    Router::<FullstackState>::new()
+        .route(path, method)
+        .with_state(fullstack_state(ServeConfig::new(), move || {
+            webapp::guieb_shook::WebsiteEntry(webapp::guieb_shook::WebsiteEntryProps {
+                site: site.clone(),
+                page,
+                phone: phone.clone(),
+                consent: consent.clone(),
+            })
+        }))
+}
+
+/// Use the brand's public page where multiple brands share the same URL.
+pub async fn guieb_shook_public_override(
+    axum::extract::State(alternate): axum::extract::State<Router>,
+    req: Request,
+    next: Next,
+) -> Response {
+    use tower::ServiceExt as _;
+    if req.extensions().get::<views::brand::BrandKey>() == Some(&views::brand::BrandKey::GuiebShook)
+        && matches!(req.uri().path(), "/" | "/contact" | "/contact/sent")
+    {
+        match alternate.oneshot(req).await {
+            Ok(response) => response,
+            Err(error) => match error {},
+        }
+    } else {
+        next.run(req).await
+    }
+}
+
 /// The firm home page (`/`) — the Dioxus SSR port (#641 / #730 PR6). Static
 /// copy (`content`) is resolved brand-safely by the caller; approved
 /// testimonials are read per request from the injected store handle.
@@ -6398,7 +6450,7 @@ mod tests {
 
     #[test]
     fn campaign_landing_pages_are_counted_but_are_not_public_shells() {
-        for root in ["summons-page", "cyber-page"] {
+        for root in ["summons-page", "cyber-page", "guieb-shook-website"] {
             let html = format!(r#"<div class="{root}">"#);
             assert!(is_brand_landing_page(&html), "{root}");
             assert!(!is_public_page(&html), "{root}");

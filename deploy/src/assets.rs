@@ -647,6 +647,12 @@ fn reachable_image_keys(content_root: &Path) -> anyhow::Result<BTreeSet<String>>
     keys.insert(views::assets::GUIEB_SHOOK_HOME_PHOTO_KEY.to_owned());
     keys.insert(views::assets::GUIEB_SHOOK_GVC_BADGE_KEY.to_owned());
     keys.extend(
+        views::assets::GUIEB_SHOOK_WEBSITE_ASSETS
+            .iter()
+            .copied()
+            .map(str::to_owned),
+    );
+    keys.extend(
         views::assets::ARCHITECTURE_PHOTOS
             .iter()
             .map(|key| (*key).to_owned()),
@@ -1138,6 +1144,12 @@ pub(crate) fn embedded_asset_refs() -> BTreeSet<String> {
     refs.insert(views::assets::GUIEB_SHOOK_HOME_PHOTO_KEY.to_owned());
     refs.insert(views::assets::GUIEB_SHOOK_GVC_BADGE_KEY.to_owned());
     refs.extend(
+        views::assets::GUIEB_SHOOK_WEBSITE_ASSETS
+            .iter()
+            .copied()
+            .map(str::to_owned),
+    );
+    refs.extend(
         views::assets::ARCHITECTURE_PHOTOS
             .iter()
             .map(|key| (*key).to_owned()),
@@ -1552,6 +1564,7 @@ fn placeholder_bytes_for(rel: &str) -> anyhow::Result<Vec<u8>> {
             Ok(bytes)
         }
         "png" => Ok(STUB_PNG.to_vec()),
+        "svg" => Ok(br#"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>"#.to_vec()),
         "webp" => {
             let encoded = webp::Encoder::from_rgb(&[0xee, 0xee, 0xee], 1, 1).encode(WEBP_QUALITY);
             Ok(encoded.to_vec())

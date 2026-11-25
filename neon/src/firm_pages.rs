@@ -1410,10 +1410,17 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
         webapp::notation_preview::NotationPreviewMode::Published,
         Some(state.surreal.clone()),
     ));
+    let alternate = crate::guieb_shook::shared_routes(branding, state);
+    let with_guieb_shook = |router: Router| {
+        router.layer(from_fn_with_state(
+            alternate.clone(),
+            dioxus_app::guieb_shook_public_override,
+        ))
+    };
     let contact_copy = branded_map(branding, "/contact", |resolved| {
         webapp::contact_page::InjectedContact(resolve_firm_contact_content(resolved))
     });
-    routers.push(with_branded(
+    routers.push(with_guieb_shook(with_branded(
         dioxus_app::contact_router(
             "/contact",
             resolve_firm_contact_content(branding),
@@ -1421,13 +1428,13 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
             portal::secure_cookies(state),
         ),
         contact_copy,
-    ));
-    routers.push(with_branded(
+    )));
+    routers.push(with_guieb_shook(with_branded(
         dioxus_app::contact_sent_router("/contact/sent", resolve_firm_contact_content(branding)),
         branded_map(branding, "/contact/sent", |resolved| {
             webapp::contact_page::InjectedContact(resolve_firm_contact_content(resolved))
         }),
-    ));
+    )));
     // The team's public copy is a small static catalog on Guieb & Shook; the
     // public roster never reads person records or client data. Other hosts
     // 404 the path and link the directory on this host.
@@ -1489,7 +1496,7 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
         lead_capture: Some(home_lead_capture(resolved)),
         brand_key: resolved.brand_key.as_str().to_string(),
     });
-    routers.push(with_branded(
+    routers.push(with_guieb_shook(with_branded(
         dioxus_app::home_router(
             "/",
             home,
@@ -1499,7 +1506,7 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
             portal::secure_cookies(state),
         ),
         home_copy,
-    ));
+    )));
     routers.push(dioxus_app::marketing_page_router(
         views::brand::SAME_DAY_LEGAL_APP_PATH,
         locales::same_day_legal_app(),
@@ -1826,6 +1833,7 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
         services_catalog,
         notation_start_offers(),
     ));
+    routers.push(crate::guieb_shook::new_routes(branding, state));
     routers
         .into_iter()
         .map(|router| router.layer(from_fn(reject_unpublished_firm_path)))

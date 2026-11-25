@@ -9,6 +9,15 @@
 fn main() {
     #[cfg(all(feature = "web", target_arch = "wasm32"))]
     {
+        // This public site uses ordinary links and forms, with a standalone
+        // script for its interactive presentation.
+        if web_sys::window()
+            .and_then(|window| window.document())
+            .and_then(|document| document.get_element_by_id("guieb-shook-website"))
+            .is_some()
+        {
+            return;
+        }
         // Hydration must launch the same root used by the server's home router.
         let is_design = web_sys::window()
             .and_then(|window| window.document())

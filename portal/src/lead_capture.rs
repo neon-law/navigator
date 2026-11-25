@@ -36,6 +36,8 @@ struct LeadForm {
     #[serde(default)]
     call_consent: Option<String>,
     #[serde(default)]
+    name: String,
+    #[serde(default)]
     district: String,
     #[serde(default)]
     relationship: String,
@@ -73,10 +75,28 @@ impl LeadForm {
         };
         Some(store::leads::LeadIntake {
             submission_key: store::assets::sha256_hex(self.csrf_token.as_bytes()),
-            district,
-            relationship,
             concern,
-            next_date,
+            details: store::leads::LeadIntakeDetails::Iep {
+                district,
+                relationship,
+                next_date,
+            },
+        })
+    }
+
+    fn contact_answers(&self) -> Option<store::leads::LeadIntake<'_>> {
+        let name = self.name.trim();
+        let concern = self.concern.trim();
+        if [(name, 120), (concern, 600)]
+            .iter()
+            .any(|(value, limit)| value.is_empty() || value.chars().count() > *limit)
+        {
+            return None;
+        }
+        Some(store::leads::LeadIntake {
+            submission_key: store::assets::sha256_hex(self.csrf_token.as_bytes()),
+            concern,
+            details: store::leads::LeadIntakeDetails::Contact { name },
         })
     }
 }
@@ -133,6 +153,7 @@ async fn submit(
 
     let source_path = safe_source_path(brand, &form.source_path);
     let iep_intake = brand == BrandKey::IepDefenders && source_path == "/contact";
+    let contact_intake = brand == BrandKey::GuiebShook && source_path == "/contact";
     if let Some(response) = reject_invalid_submission(
         &state,
         brand,
@@ -140,7 +161,7 @@ async fn submit(
         &headers,
         &form,
         &source_path,
-        iep_intake,
+        iep_intake || contact_intake,
     )
     .await
     {
@@ -180,6 +201,15 @@ async fn submit(
             return (
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "Please go back and check the school, relationship, concern, and date fields.",
+            )
+                .into_response();
+        };
+        store::leads::record_intake(&new_lead, &consent_event, &answers).await
+    } else if contact_intake {
+        let Some(answers) = form.contact_answers() else {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "Please go back and check your name and inquiry.",
             )
                 .into_response();
         };
@@ -248,11 +278,11 @@ async fn reject_invalid_submission(
     headers: &axum::http::HeaderMap,
     form: &LeadForm,
     source_path: &str,
-    iep_intake: bool,
+    show_validation: bool,
 ) -> Option<Response> {
     let reject = |reason: &str, message: &'static str| {
         audit(brand, source_path, "none", reason);
-        if iep_intake {
+        if show_validation {
             (StatusCode::UNPROCESSABLE_ENTITY, message).into_response()
         } else {
             neutral_redirect()

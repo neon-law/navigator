@@ -22,6 +22,7 @@
 // composition entry points below, so the site's copy is not API.
 mod firm_copy;
 mod firm_pages;
+mod guieb_shook;
 mod locales;
 
 use portal::hosting::{BrandSeed, PublicRouter, Site};
@@ -111,6 +112,12 @@ pub const PUBLIC_PATHS: &[&str] = &[
     "/notations/about",
     "/notations/{slug}",
     "/contact",
+    "/contact.html",
+    "/index.html",
+    "/our-story.html",
+    "/practice/{slug}",
+    "/attorneys/{slug}",
+    "/legal/{slug}",
     "/contact/sent",
     "/leads",
     "/leads/confirm",
@@ -204,9 +211,20 @@ pub fn sitemap_for(
             .iter()
             .map(|path| (*path).to_string())
             .collect(),
-        BrandKey::GuiebShook => ["/", "/testimonials", "/team", "/team/nick", "/team/waleed"]
-            .iter()
-            .map(|path| (*path).to_string())
+        BrandKey::GuiebShook => guieb_shook::public_pages()
+            .map(|(path, _)| path.to_string())
+            .chain(
+                [
+                    "/",
+                    "/contact",
+                    "/testimonials",
+                    "/team",
+                    "/team/nick",
+                    "/team/waleed",
+                ]
+                .into_iter()
+                .map(str::to_string),
+            )
             .collect(),
         BrandKey::Neon => {
             let mut paths: std::collections::BTreeSet<String> = [

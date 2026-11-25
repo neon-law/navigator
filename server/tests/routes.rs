@@ -11523,13 +11523,11 @@ async fn host_brand_path_matrix_resolves_every_combination() {
 
     // Marketing path: 200 on every registered host with its own
     // `og:site_name`; the unknown host's redirect target renders the
-    // default brand's chrome, not merely a 301. Guieb & Shook renders
-    // its authored homepage on `/`; `/contact` is unpublished
-    // and 404s.
+    // default brand's chrome, not merely a 301.
     for (host, path, brand) in [
         (default_host, "/contact", "Neon Law"),
         (delete_your_data_host, "/contact", "DeleteYourData.com"),
-        (holding_host, "/", "Guieb & Shook"),
+        (holding_host, "/contact", "Guieb & Shook"),
     ] {
         let resp = get_on_host(&app, path, host).await;
         assert_eq!(resp.status(), StatusCode::OK, "{host} {path}");
@@ -11642,6 +11640,7 @@ async fn assert_brand_home_lead_capture(
         views::brand::BrandKey::IepDefenders
             | views::brand::BrandKey::LexTecnica
             | views::brand::BrandKey::Neon
+            | views::brand::BrandKey::GuiebShook
     ) {
         let host = brand.canonical_host();
         let response = get_on_host(app, "/", host).await;

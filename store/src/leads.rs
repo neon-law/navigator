@@ -284,13 +284,23 @@ pub async fn record(db: &SurrealDb, new: &NewLead) -> Result<Lead, LeadError> {
     Ok(lead)
 }
 
-/// Answers submitted by a family before opening an IEP account.
+/// Answers submitted with a public contact request.
 pub struct LeadIntake<'a> {
     pub submission_key: String,
-    pub district: &'a str,
-    pub relationship: &'a str,
     pub concern: &'a str,
-    pub next_date: Option<chrono::NaiveDate>,
+    pub details: LeadIntakeDetails<'a>,
+}
+
+/// Additional answers collected by the contact page.
+pub enum LeadIntakeDetails<'a> {
+    Iep {
+        district: &'a str,
+        relationship: &'a str,
+        next_date: Option<chrono::NaiveDate>,
+    },
+    Contact {
+        name: &'a str,
+    },
 }
 
 /// Save the submitted answers, contact details and consent together under the receiving Firm.
@@ -318,8 +328,10 @@ pub async fn intake_history(
         return Ok(Vec::new());
     };
     sqlx::query_scalar("SELECT concat_ws(E'\\n', submitted_at::date::text,
-        'School or district: ' || school_district, 'Relationship: ' || relationship,
-        'Concern: ' || concern, 'Upcoming date: ' || coalesce(next_date::text, 'None given'))
+        CASE WHEN contact_name IS NULL THEN concat_ws(E'\\n',
+            'School or district: ' || school_district, 'Relationship: ' || relationship,
+            'Concern: ' || concern, 'Upcoming date: ' || coalesce(next_date::text, 'None given'))
+        ELSE concat_ws(E'\\n', 'Name: ' || contact_name, 'Inquiry: ' || concern) END)
         FROM lead_intake i WHERE lead_id=$1 AND ($2 OR EXISTS (
         SELECT 1 FROM person_firm_role m WHERE m.person_id=$3 AND m.firm_id=i.firm_id AND m.membership='admin'
     )) ORDER BY submitted_at DESC, i.id DESC")
@@ -714,10 +726,12 @@ mod tests {
             };
             let mut answers = super::LeadIntake {
                 submission_key: "first".into(),
-                district: "Example District",
-                relationship: "Parent",
                 concern: "Evaluation",
-                next_date: None,
+                details: super::LeadIntakeDetails::Iep {
+                    district: "Example District",
+                    relationship: "Parent",
+                    next_date: None,
+                },
             };
             let first = super::record_intake(&lead, &event, &answers).await.unwrap();
             let retry = super::record_intake(&lead, &event, &answers).await.unwrap();
@@ -731,6 +745,17 @@ mod tests {
                 .unwrap();
             assert_eq!(rows.len(), 2);
             assert!(rows[0].contains("Missed services") && rows[1].contains("Evaluation"));
+            answers.submission_key = "contact".into();
+            answers.concern = "Review a business agreement";
+            answers.details = super::LeadIntakeDetails::Contact {
+                name: "Example Visitor",
+            };
+            super::record_intake(&lead, &event, &answers).await.unwrap();
+            let history = super::intake_history(first.id, admin, Role::Admin)
+                .await
+                .unwrap();
+            assert!(history[0].contains("Name: Example Visitor"));
+            assert!(history[0].contains("Inquiry: Review a business agreement"));
             assert!(super::intake_history(first.id, Uuid::now_v7(), Role::Admin)
                 .await
                 .unwrap()
