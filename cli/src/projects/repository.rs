@@ -2221,6 +2221,26 @@ fn root_licence_file(relative: &str) -> bool {
         .any(|prefix| name.starts_with(prefix))
 }
 
+/// Remove the untracked root licence files [`LICENCE_FILE_CODE`] refuses, from
+/// a checkout with an empty source, and name each one removed. Nothing is
+/// tracked there, so these are scaffold remnants and not the matter's record.
+pub fn remove_root_licence_files(root: &Path) -> anyhow::Result<Vec<String>> {
+    anyhow::ensure!(
+        is_empty_source(root),
+        "only an empty-source checkout has remnants to remove"
+    );
+    let mut removed = Vec::new();
+    for entry in std::fs::read_dir(root)?.filter_map(Result::ok) {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if entry.file_type().is_ok_and(|kind| kind.is_file()) && root_licence_file(&name) {
+            std::fs::remove_file(entry.path())?;
+            removed.push(name);
+        }
+    }
+    removed.sort();
+    Ok(removed)
+}
+
 /// Whether `relative` (slash-separated) may be committed at all.
 fn tracked_file_admitted(relative: &str) -> bool {
     if CANONICAL_TRACKED_FILES
@@ -3269,6 +3289,66 @@ pub fn emit_synced_skills(root: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// A checkout whose repository was opened with an empty source: a `.git` with
+/// nothing tracked, and neither a README nor a manifest. A version bump cannot
+/// repair it; the scaffold resume can.
+#[must_use]
+pub fn is_empty_source(root: &Path) -> bool {
+    let has_readme = std::fs::read_dir(root).is_ok_and(|entries| {
+        entries
+            .filter_map(Result::ok)
+            .any(|entry| entry.file_name().to_string_lossy().starts_with("README"))
+    });
+    root.join(".git").exists()
+        && !root.join(PROJECT_MANIFEST).exists()
+        && !has_readme
+        && super::lifecycle::git(root, &["ls-files", "--cached"])
+            .is_ok_and(|output| output.status.success() && output.stdout.is_empty())
+}
+
+/// The refusal for an empty-source checkout, naming the exact command that
+/// finishes it, or `None` when the checkout is not one. The code is the last
+/// segment of `origin` (the forge path is `<firm>/<code>`), else the
+/// directory's name; a placeholder stands in when neither is a Project code.
+#[must_use]
+pub fn needs_scaffold_resume(root: &Path) -> Option<String> {
+    if !is_empty_source(root) {
+        return None;
+    }
+    let from_origin =
+        super::lifecycle::git_text(root, &["config", "--local", "--get", "remote.origin.url"])
+            .ok()
+            .and_then(|url| {
+                url.trim_end_matches('/')
+                    .rsplit(['/', ':'])
+                    .next()
+                    .map(|segment| segment.trim_end_matches(".git").to_owned())
+            });
+    let from_directory = root
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned());
+    let code = [from_origin, from_directory]
+        .into_iter()
+        .flatten()
+        .find(|code| model::projects::is_valid_code(code))
+        .unwrap_or_else(|| "<project-code>".to_owned());
+    let path = root.display().to_string();
+    let path = if path
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || "/._-~+@:=,".contains(c))
+    {
+        path
+    } else {
+        format!("'{}'", path.replace('\'', "'\\''"))
+    };
+    Some(format!(
+        "{} needs scaffold resume: its repository was opened with an empty source (nothing tracked, no \
+         README or navigator.yaml). Run `navigator project scaffold --resume {code} --dir {path}` \
+         to emit the scaffold and import the source, then retry",
+        root.display()
+    ))
+}
+
 /// Require an existing Project checkout before the skills repair command can
 /// write. The Navigator source root and arbitrary folders are refused.
 ///
@@ -3299,6 +3379,9 @@ pub fn repair_skills_for(
         root.join(".git").exists(),
         "not an existing Project repository: missing .git"
     );
+    if let Some(message) = needs_scaffold_resume(&root) {
+        anyhow::bail!("{message}");
+    }
     anyhow::ensure!(
         root.join("README.md").is_file(),
         "not an existing Project repository: missing README.md"
@@ -7092,5 +7175,129 @@ mod forgejo_gate_tests {
         // A GitHub-backed scaffold never carries the gate.
         let github = scaffold(ForgeBackend::GitHub);
         assert!(!github.path().join(FORGEJO_GATE_WORKFLOW).exists());
+    }
+}
+
+#[cfg(test)]
+mod empty_source_tests {
+    use super::*;
+
+    fn git(dir: &Path, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?}");
+    }
+
+    /// A pitch Project's repository opened with an empty source: a `.git`
+    /// with nothing tracked and scaffold remnants such as a root LICENSE.
+    fn half_opened(origin: Option<&str>) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        git(dir.path(), &["init", "--quiet"]);
+        std::fs::write(dir.path().join("LICENSE"), "licence\n").unwrap();
+        if let Some(origin) = origin {
+            git(dir.path(), &["remote", "add", "origin", origin]);
+        }
+        dir
+    }
+
+    #[test]
+    fn a_git_checkout_with_nothing_tracked_and_no_readme_or_manifest_is_an_empty_source() {
+        let dir = half_opened(None);
+        assert!(is_empty_source(dir.path()));
+
+        // Tracked content, a README, or a manifest is a different problem.
+        let tracked = half_opened(None);
+        git(tracked.path(), &["add", "LICENSE"]);
+        assert!(!is_empty_source(tracked.path()), "tracked files");
+        let readme = half_opened(None);
+        std::fs::write(readme.path().join("README.md"), "# readme\n").unwrap();
+        assert!(!is_empty_source(readme.path()), "a README");
+        let manifest = half_opened(None);
+        std::fs::write(manifest.path().join(PROJECT_MANIFEST), "project: acme\n").unwrap();
+        assert!(!is_empty_source(manifest.path()), "a manifest");
+        let plain = tempfile::tempdir().unwrap();
+        std::fs::write(plain.path().join("LICENSE"), "licence\n").unwrap();
+        assert!(!is_empty_source(plain.path()), "not a git checkout");
+    }
+
+    #[test]
+    fn the_report_names_the_resume_command_with_the_code_from_the_origin() {
+        let dir = half_opened(Some(
+            "https://forge.example.test/sample-firm/pitch-acme.git",
+        ));
+        let message = needs_scaffold_resume(dir.path()).unwrap();
+        assert!(message.contains("needs scaffold resume"), "{message}");
+        assert!(
+            message.contains(&format!(
+                "`navigator project scaffold --resume pitch-acme --dir {}`",
+                dir.path().display()
+            )),
+            "{message}"
+        );
+        assert!(needs_scaffold_resume(tempfile::tempdir().unwrap().path()).is_none());
+    }
+
+    #[test]
+    fn without_a_usable_origin_the_code_falls_back_to_the_directory_then_a_placeholder() {
+        let parent = tempfile::tempdir().unwrap();
+        let named = parent.path().join("pitch-acme");
+        std::fs::create_dir(&named).unwrap();
+        git(&named, &["init", "--quiet"]);
+        let message = needs_scaffold_resume(&named).unwrap();
+        assert!(message.contains("--resume pitch-acme "), "{message}");
+
+        let odd = parent.path().join("Not A Code");
+        std::fs::create_dir(&odd).unwrap();
+        git(&odd, &["init", "--quiet"]);
+        let message = needs_scaffold_resume(&odd).unwrap();
+        assert!(message.contains("--resume <project-code> "), "{message}");
+        assert!(
+            message.contains("'"),
+            "a path with spaces is quoted: {message}"
+        );
+    }
+
+    #[test]
+    fn only_untracked_root_licence_files_of_an_empty_source_are_removed() {
+        let dir = half_opened(None);
+        std::fs::write(dir.path().join("copying.txt"), "x\n").unwrap();
+        std::fs::write(dir.path().join("NOTES.md"), "keep\n").unwrap();
+        std::fs::create_dir(dir.path().join("docs")).unwrap();
+        std::fs::write(dir.path().join("docs").join("LICENSE"), "keep\n").unwrap();
+        assert_eq!(
+            remove_root_licence_files(dir.path()).unwrap(),
+            ["LICENSE", "copying.txt"]
+        );
+        assert!(dir.path().join("NOTES.md").exists());
+        assert!(dir.path().join("docs").join("LICENSE").exists());
+
+        let tracked = half_opened(None);
+        git(tracked.path(), &["add", "LICENSE"]);
+        assert!(remove_root_licence_files(tracked.path()).is_err());
+        assert!(
+            tracked.path().join("LICENSE").exists(),
+            "tracked content is never removed"
+        );
+    }
+
+    #[test]
+    fn sync_skills_reports_an_empty_source_as_needing_a_resume_not_a_missing_readme() {
+        let dir = half_opened(Some("https://forge.example.test/sample-firm/pitch-acme"));
+        let error = repair_skills_for(dir.path(), model::forge::ForgeBackend::Forgejo)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("needs scaffold resume"), "{error}");
+        assert!(error.contains("--resume pitch-acme"), "{error}");
+
+        // A checkout that merely lost its README keeps the plain refusal.
+        let lost = half_opened(None);
+        git(lost.path(), &["add", "LICENSE"]);
+        let error = repair_skills_for(lost.path(), model::forge::ForgeBackend::Forgejo)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("missing README.md"), "{error}");
     }
 }

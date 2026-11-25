@@ -4407,6 +4407,9 @@ pub fn gate_root() -> Result<PathBuf, String> {
     // A worktree's `.git` is a file holding a pointer, not a directory, so this
     // asks whether the entry exists at all rather than what shape it is.
     let git = root.join(".git").exists();
+    if let Some(message) = projects::repository::needs_scaffold_resume(&root) {
+        return Err(message);
+    }
     let missing = match (readme, git) {
         (true, true) => return Ok(root),
         (false, false) => "no README and no .git",
