@@ -9118,6 +9118,7 @@ dependencies = [
  "dioxus-core",
  "dioxus-server",
  "dotenvy",
+ "ed25519-dalek 3.0.0",
  "ephemeris",
  "flate2",
  "forms",

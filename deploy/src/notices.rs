@@ -271,6 +271,9 @@ pub fn render(notices: &Notices) -> String {
          Font licensing is separate from this notice: the GORP Serif web font is documented in\n\
          server/public/fonts/gorp-serif/LICENSE.txt, and the Tinos face is governed by\n\
          pdf/assets/fonts/Tinos/OFL.txt.\n\n\
+         The CLax report overlay under server/public/vendor/clax/ is licensed LGPL-2.1-only; its\n\
+         licence is server/public/vendor/clax/LICENSE. It is served only when a deployment sets\n\
+         CLAX_FEEDBACK_ENABLED=true.\n\n\
          Names and marks. The licence above covers this project's source and templates. It does\n\
          not cover anyone's names or marks, and nothing here grants a right to use one.\n\
          \n\

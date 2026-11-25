@@ -164,3 +164,23 @@ version = "6.16.0"
 upstream_url = "https://cdn.jsdelivr.net/npm/maplibre-gl@6.16.0/LICENSE.txt"
 served_path = "vendor/maplibre/LICENSE.txt"
 sha256 = "ee5fc05a0677eaf69601d2c7db0d9ecd6cc27c3abc1d0733bc9ed34707cf8ef2"
+
+# CLax report overlay: the in-app Report button for lawyer-tier `/app` pages.
+# Served same-origin so `script-src` never names clax.dev (only `connect-src`
+# does, and only when a queue is configured). LGPL-2.1-only, with its license
+# beside it. The portal answers 404 for it unless `CLAX_FEEDBACK_ENABLED=true`.
+# Fetched unmodified from the instance's own `/_clax/overlay.js`; replacing the
+# file with a modified build is how a deployment exercises LGPL section 6.
+[[asset]]
+name = "CLax report overlay"
+version = "clax.dev 2026-11-25"
+upstream_url = "https://clax.dev/_clax/overlay.js"
+served_path = "vendor/clax/overlay.js"
+sha256 = "5a832db93cb1413d74bcb3c7e3fe79a87a662eba252caef3ba15b66b35370e4e"
+
+[[asset]]
+name = "CLax report overlay LGPL-2.1 license"
+version = "2.1"
+upstream_url = "https://www.gnu.org/licenses/old-licenses/lgpl-2.1.txt"
+served_path = "vendor/clax/LICENSE"
+sha256 = "20e50fe7aae3e56378ebf0417d9de904f55a0e61e4df315333e632a4d3555d95"

@@ -309,6 +309,9 @@ pub(crate) async fn dioxus_document_head(req: Request, next: Next) -> Response {
         .extensions()
         .get::<crate::plausible::PlausibleSite>()
         .copied();
+    // CLax report overlay: only on an authenticated `/app` page, only for a
+    // lawyer-tier session, only when the queue is configured.
+    let clax_tag = clax_loader_tag(&req, &path);
     let response = next.run(req).await;
 
     let is_html = response
@@ -399,6 +402,8 @@ pub(crate) async fn dioxus_document_head(req: Request, next: Next) -> Response {
     let html = attach_copy_code_script(&html);
     let html = attach_mermaid_script(&html);
 
+    let (html, clax_origin) = attach_clax_overlay(html, clax_tag.as_deref());
+
     let captcha = renders_hcaptcha(&html);
     let tiles = renders_astro_island(&html);
     let policy = csp_with_nonce(
@@ -407,6 +412,7 @@ pub(crate) async fn dioxus_document_head(req: Request, next: Next) -> Response {
         analytics.is_some(),
         captcha,
         tiles,
+        clax_origin.as_deref(),
     );
     if let Ok(csp) = HeaderValue::from_str(&purchase_form_policy(&path, policy)) {
         parts.headers.insert(header::CONTENT_SECURITY_POLICY, csp);
@@ -414,6 +420,28 @@ pub(crate) async fn dioxus_document_head(req: Request, next: Next) -> Response {
     // The body length changed; drop any stale content-length so axum recomputes.
     parts.headers.remove(header::CONTENT_LENGTH);
     Response::from_parts(parts, Body::from(html))
+}
+
+/// The CLax overlay's loader tag for this request: an authenticated `/app`
+/// page, a lawyer-tier session, and a configured queue.
+fn clax_loader_tag(req: &Request, path: &str) -> Option<String> {
+    if !is_navigator_page(path) {
+        return None;
+    }
+    req.extensions()
+        .get::<crate::session::SessionData>()
+        .and_then(crate::clax_feedback::loader_tag)
+}
+
+/// Add the loader tag to the page and name the CLax origin its `connect-src`
+/// must admit; both are absent when the page carries no overlay.
+fn attach_clax_overlay(html: String, tag: Option<&str>) -> (String, Option<String>) {
+    let Some(tag) = tag else {
+        return (html, None);
+    };
+    let origin = crate::clax_feedback::ClaxConfig::from_env()
+        .map(|config| config.connect_origin().to_string());
+    (close_with_script(&html, tag), origin)
 }
 
 /// Browsers apply form-action to payment redirects as well as the initial
@@ -807,6 +835,7 @@ fn csp_with_nonce(
     analytics: bool,
     captcha: bool,
     tiles: bool,
+    clax_origin: Option<&str>,
 ) -> String {
     let asset_extra = asset_origin
         .map(|origin| format!(" {origin}"))
@@ -829,8 +858,9 @@ fn csp_with_nonce(
     // `connect-src` is named only when a third party needs it, so a page
     // without one emits exactly the policy it emitted before analytics existed
     // rather than a directive restating `default-src`.
-    let connect_directive = if analytics || captcha || tiles {
-        format!("; connect-src 'self'{analytics_extra}{captcha_extra}{tiles_extra}")
+    let clax_extra = clax_origin.map(|o| format!(" {o}")).unwrap_or_default();
+    let connect_directive = if analytics || captcha || tiles || clax_origin.is_some() {
+        format!("; connect-src 'self'{analytics_extra}{captcha_extra}{tiles_extra}{clax_extra}")
     } else {
         String::new()
     };
@@ -5838,7 +5868,7 @@ mod tests {
     #[test]
     fn purchase_form_redirects_admit_only_payment_hosts_on_the_purchase_document() {
         let nonce = uuid::Uuid::new_v4().simple().to_string();
-        let base = super::csp_with_nonce(&nonce, None, false, false, false);
+        let base = super::csp_with_nonce(&nonce, None, false, false, false, None);
         let purchase = super::purchase_form_policy("/purchases", base.clone());
         assert!(
             purchase.contains("form-action 'self' https://checkout.stripe.com https://in.xero.com")
@@ -6021,7 +6051,7 @@ mod tests {
         // whatever `generate_nonce` produced for this response.
         let nonce = generate_nonce();
 
-        let same_origin = csp_with_nonce(&nonce, None, false, false, false);
+        let same_origin = csp_with_nonce(&nonce, None, false, false, false, None);
         assert!(same_origin.contains("font-src 'self';"), "{same_origin}");
         assert!(same_origin.contains("media-src 'self';"), "{same_origin}");
         assert!(
@@ -6035,6 +6065,7 @@ mod tests {
             false,
             false,
             false,
+            None,
         );
         assert!(
             cdn.contains("font-src 'self' https://storage.example.test;"),
@@ -6065,7 +6096,7 @@ mod tests {
     #[test]
     fn without_analytics_the_policy_names_no_third_party_origin() {
         let nonce = generate_nonce();
-        let csp = csp_with_nonce(&nonce, None, false, false, false);
+        let csp = csp_with_nonce(&nonce, None, false, false, false, None);
         assert_eq!(
             csp,
             format!(
@@ -6153,11 +6184,11 @@ mod tests {
     #[test]
     fn only_a_page_with_the_hcaptcha_widget_admits_hcaptcha() {
         let nonce = generate_nonce();
-        let plain = csp_with_nonce(&nonce, None, false, false, false);
+        let plain = csp_with_nonce(&nonce, None, false, false, false, None);
         assert!(!plain.contains("hcaptcha"), "{plain}");
         assert!(!plain.contains("frame-src"), "{plain}");
 
-        let csp = csp_with_nonce(&nonce, None, false, true, false);
+        let csp = csp_with_nonce(&nonce, None, false, true, false, None);
         for directive in ["script-src", "style-src", "connect-src", "frame-src"] {
             let at = csp
                 .find(directive)
@@ -6187,14 +6218,14 @@ mod tests {
         let nonce = generate_nonce();
         let tile_origin = webapp::astrocartography::TILE_ORIGIN;
 
-        let plain = csp_with_nonce(&nonce, None, false, false, false);
+        let plain = csp_with_nonce(&nonce, None, false, false, false, None);
         assert!(
             !plain.contains("tile.openstreetmap.org"),
             "no tile origin without the island: {plain}"
         );
         assert!(!plain.contains("connect-src"), "{plain}");
 
-        let csp = csp_with_nonce(&nonce, None, false, false, true);
+        let csp = csp_with_nonce(&nonce, None, false, false, true, None);
         assert!(
             csp.contains(&format!("img-src 'self' data: {tile_origin};")),
             "{csp}"
@@ -6224,9 +6255,20 @@ mod tests {
     }
 
     #[test]
+    fn clax_widens_connect_src_only_never_script_src() {
+        let nonce = "n";
+        let plain = csp_with_nonce(nonce, None, false, false, false, None);
+        assert!(!plain.contains("clax.dev"), "off by default: {plain}");
+        let csp = csp_with_nonce(nonce, None, false, false, false, Some("https://clax.dev"));
+        assert!(csp.contains("connect-src 'self' https://clax.dev"), "got: {csp}");
+        let script = csp.split("script-src").nth(1).unwrap().split(';').next().unwrap();
+        assert!(!script.contains("clax.dev"), "script-src stays same-origin: {script}");
+    }
+
+    #[test]
     fn analytics_admit_plausible_on_script_and_connect_only() {
         let nonce = generate_nonce();
-        let csp = csp_with_nonce(&nonce, None, true, false, false);
+        let csp = csp_with_nonce(&nonce, None, true, false, false, None);
         assert!(
             csp.contains(&format!(
                 "script-src 'self' 'nonce-{nonce}' 'wasm-unsafe-eval' https://plausible.io;"
@@ -6761,7 +6803,7 @@ mod tests {
         assert!(!nonce.is_empty());
         assert_eq!(
             csp,
-            csp_with_nonce(&nonce, crate::asset_csp_origin(), false, false, false)
+            csp_with_nonce(&nonce, crate::asset_csp_origin(), false, false, false, None)
         );
         assert!(
             csp.contains("script-src 'self' 'nonce-") && csp.contains("'wasm-unsafe-eval'"),

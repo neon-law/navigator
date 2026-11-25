@@ -131,6 +131,7 @@ pub use billing;
 pub use billing::xero_auth;
 pub mod admin_contract_reviews;
 pub mod admin_playbooks;
+pub mod clax_feedback;
 pub(crate) mod attorney_calendars_api;
 /// The nightly Deadline mirror's host-side source.
 pub(crate) mod calendar_mirror;
@@ -913,6 +914,7 @@ fn shared_human_routes() -> Router<AppState> {
     Router::new()
         .route("/app/api/templates/{*path}", get(api_template_raw))
         .route("/app/api/drafts/{*path}", get(api_template_raw))
+        .merge(clax_feedback::routes())
 }
 
 /// The reusable host bootstrap. `portal` owns the authenticated application and
@@ -2088,6 +2090,7 @@ pub fn bootstrap_with_forgejo_oidc(
             state.clone(),
             brand_tokens::intercept,
         ))
+        .layer(axum::middleware::from_fn(clax_feedback::gate))
         .with_state(state)
         .merge(api)
         .merge(api_docs)
