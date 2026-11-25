@@ -1768,6 +1768,12 @@ mod tests {
     }
 
     #[test]
+    fn canonical_schema_admits_contact_lead_intake() {
+        let schema = parse_schema(canonical_schema()).expect("canonical SQL parses");
+        assert_eq!(schema["lead_intake"].columns["contact_name"], "TEXT");
+    }
+
+    #[test]
     fn inbox_conversation_persists_the_sender_person() {
         let schema = parse_schema(canonical_schema()).expect("canonical SQL parses");
         let conversation = schema
