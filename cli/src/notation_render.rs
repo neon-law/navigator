@@ -224,7 +224,7 @@ pub fn run_render(
     // read, one Brand resolution — and the letterhead and the body's
     // `{{firm.legal_name}}` are two consumers of that one answer, so the
     // two surfaces cannot disagree.
-    let Ok(identity) = resolve_firm_identity(file, answers, &format, ci)
+    let Ok(identity) = resolve_firm_identity(file, &contents, answers, &format, ci)
         .map_err(|message| eprintln!("navigator: {message}"))
     else {
         return ExitCode::from(2);
@@ -536,6 +536,7 @@ fn compiled_legal_name(letterhead: &pdf::Letterhead) -> Option<String> {
 /// not resolve, or whose letterhead row cannot be read under `--ci`.
 fn resolve_firm_identity(
     file: &Path,
+    contents: &str,
     answers: &[(String, String)],
     format: &pdf::OutputFormat,
     ci: bool,
@@ -558,7 +559,15 @@ fn resolve_firm_identity(
             let key =
                 letterhead::resolve_brand(manifest.brand.as_deref(), manifest.host.as_deref())
                     .map_err(|error| error.to_string())?;
-            let rendered = attempt_runtime_letterhead(key, ci)?;
+            let mut rendered = attempt_runtime_letterhead(key, ci)?;
+            if key == views::brand::BrandKey::GuiebShook {
+                let template_jurisdiction = projects::matter::jurisdiction_of(contents);
+                let jurisdiction = manifest
+                    .jurisdiction
+                    .as_deref()
+                    .unwrap_or(&template_jurisdiction);
+                letterhead::address_guieb_shook_letterhead(&mut rendered.letterhead, jurisdiction);
+            }
             FirmIdentity {
                 legal_name: compiled_legal_name(&rendered.letterhead),
                 letterhead: rendered.letterhead,
@@ -699,7 +708,7 @@ async fn runtime_letterhead(
     let mark = match runtime.letterhead.mark {
         pdf::LetterheadMark::Png(_) => "logo",
         pdf::LetterheadMark::Wordmark => "wordmark",
-        pdf::LetterheadMark::Compiled => "compiled",
+        pdf::LetterheadMark::Compiled | pdf::LetterheadMark::GuiebShook => "compiled",
     };
     let revision = runtime
         .revision
@@ -724,7 +733,7 @@ async fn runtime_letterhead(
 fn compiled_letterhead(key: views::brand::BrandKey) -> Result<ProjectLetterhead, String> {
     let compiled = letterhead::for_brand(key).map_err(|error| error.to_string())?;
     let mark = match compiled.mark {
-        pdf::LetterheadMark::Compiled => "compiled",
+        pdf::LetterheadMark::Compiled | pdf::LetterheadMark::GuiebShook => "compiled",
         _ => "wordmark",
     };
     Ok(ProjectLetterhead {
@@ -902,9 +911,11 @@ fn render_notation_artifact(
                 web: &letterhead.web,
                 postal_address: &letterhead.postal_address,
                 font_family: &letterhead.font_family,
+                wide_wordmark: letterhead.mark == pdf::LetterheadMark::GuiebShook,
                 logo_png: match &letterhead.mark {
                     pdf::LetterheadMark::Png(bytes) => bytes.as_slice(),
                     pdf::LetterheadMark::Compiled => pdf::firm_logo_png(),
+                    pdf::LetterheadMark::GuiebShook => pdf::guieb_shook_wordmark_png(),
                     pdf::LetterheadMark::Wordmark => &[],
                 },
             });

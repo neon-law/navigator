@@ -26,6 +26,8 @@ pub struct RenderLetterhead<'a> {
     /// The mark heading the page; empty draws none, so a Brand without a
     /// mark opens on its wordmark.
     pub logo_png: &'a [u8],
+    /// Use the horizontal wordmark and Guieb & Shook's print colors.
+    pub wide_wordmark: bool,
 }
 
 /// Stable metadata recorded in a generated Word package.
@@ -149,7 +151,7 @@ pub fn render_notation(
         .zip(paper.as_ref().and_then(|paper| paper.caption.as_ref()))
         .map(|(frame, caption)| caption_xml(frame, caption))
         .unwrap_or_default();
-    let document = document_xml(&blocks, letterhead.is_some(), pleading, &caption);
+    let document = document_xml(&blocks, letterhead, pleading, &caption);
     let core = core_xml(options.source_revision);
     let mut archive = zip::ZipWriter::new(Cursor::new(Vec::new()));
     let file_options = SimpleFileOptions::default();
@@ -666,7 +668,7 @@ fn heading_style(level: HeadingLevel) -> &'static str {
 
 fn document_xml(
     blocks: &[Block],
-    has_letterhead: bool,
+    letterhead: Option<&RenderLetterhead<'_>>,
     pleading: Option<&PleadingFrame>,
     caption: &str,
 ) -> String {
@@ -674,6 +676,12 @@ fn document_xml(
         PAGE_WIDTH_TWIPS - frame.left_margin_twips - frame.right_margin_twips
     });
     let mut body = String::from(caption);
+    let has_letterhead = letterhead.is_some();
+    let signature_rule_border = if letterhead.is_some_and(|head| head.wide_wordmark) {
+        BRONZE_RULE
+    } else {
+        SIGNATURE_RULE_BORDER
+    };
     for (index, block) in blocks.iter().enumerate() {
         let paragraph = match block {
             Block::Paragraph(paragraph) => paragraph,
@@ -703,7 +711,7 @@ fn document_xml(
             if paragraph.signature_rule {
                 let _ = write!(
                     body,
-                    "{SIGNATURE_RULE_BORDER}<w:ind w:right=\"{}\"/>",
+                    "{signature_rule_border}<w:ind w:right=\"{}\"/>",
                     text_width.saturating_sub(SIGNATURE_RULE_TWIPS)
                 );
             }
@@ -1282,6 +1290,8 @@ fn field(instruction: &str) -> String {
 
 /// The letterhead's rule, a bottom border on the mark's last paragraph.
 const RULE: &str = r#"<w:pBdr><w:bottom w:val="single" w:sz="8" w:color="06B6D4"/></w:pBdr>"#;
+const BRONZE_RULE: &str =
+    r#"<w:pBdr><w:bottom w:val="single" w:sz="6" w:color="85714F"/></w:pBdr>"#;
 
 /// The run properties every header run carries: the letterhead font when
 /// the Brand named one, then the run's own emphasis. Word walks its font
@@ -1304,10 +1314,22 @@ fn first_header_xml(letterhead: &RenderLetterhead<'_>) -> String {
         .filter(|value| !value.is_empty())
         .collect::<Vec<_>>()
         .join(" · ");
-    let logo = if letterhead.logo_png.is_empty() {
-        ""
+    let (width, height) = if letterhead.wide_wordmark {
+        (2_423_160, 342_984)
     } else {
-        r#"<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:drawing><wp:inline><wp:extent cx="329184" cy="329184"/><wp:docPr id="1" name="Brand mark"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="1" name="letterhead-mark.png"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rId1"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="329184" cy="329184"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"#
+        (329_184, 329_184)
+    };
+    let logo = if letterhead.logo_png.is_empty() {
+        String::new()
+    } else {
+        format!(
+            r#"<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:drawing><wp:inline><wp:extent cx="{width}" cy="{height}"/><wp:docPr id="1" name="Brand mark"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="1" name="letterhead-mark.png"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rId1"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{width}" cy="{height}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"#
+        )
+    };
+    let rule = if letterhead.wide_wordmark {
+        BRONZE_RULE
+    } else {
+        RULE
     };
     // The rule sits under the last line of the mark: beneath the Firm's
     // name when the letterhead carries one, else beneath the wordmark.
@@ -1317,13 +1339,13 @@ fn first_header_xml(letterhead: &RenderLetterhead<'_>) -> String {
         (
             "",
             format!(
-                r#"<w:p><w:pPr><w:jc w:val="center"/>{RULE}</w:pPr>{}<w:t>{}</w:t></w:r></w:p>"#,
+                r#"<w:p><w:pPr><w:jc w:val="center"/>{rule}</w:pPr><w:r>{}<w:t>{}</w:t></w:r></w:p>"#,
                 run_properties(letterhead.font_family, r#"<w:sz w:val="16"/>"#),
                 xml(entity)
             ),
         )
     } else {
-        (RULE, String::new())
+        (rule, String::new())
     };
     // The postal address prints one centred line per stored row beneath
     // the contact line; a Brand whose admin set none leaves no trace.
@@ -1335,19 +1357,29 @@ fn first_header_xml(letterhead: &RenderLetterhead<'_>) -> String {
         .fold(String::new(), |mut paragraphs, line| {
             let _ = write!(
                 paragraphs,
-                r#"<w:p><w:pPr><w:jc w:val="center"/></w:pPr>{}<w:t>{}</w:t></w:r></w:p>"#,
+                r#"<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r>{}<w:t>{}</w:t></w:r></w:p>"#,
                 run_properties(letterhead.font_family, ""),
                 xml(line)
             );
             paragraphs
         });
+    let wordmark = if letterhead.wide_wordmark && !letterhead.logo_png.is_empty() {
+        String::new()
+    } else {
+        let color = if letterhead.wide_wordmark {
+            "092039"
+        } else {
+            "06B6D4"
+        };
+        let emphasis = format!(r#"<w:b/><w:color w:val="{color}"/><w:spacing w:val="80"/>"#);
+        format!(
+            r#"<w:p><w:pPr><w:jc w:val="center"/>{wordmark_rule}</w:pPr><w:r>{}<w:t>{}</w:t></w:r></w:p>"#,
+            run_properties(letterhead.font_family, &emphasis),
+            xml(&letterhead.name.to_uppercase())
+        )
+    };
     format!(
-        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">{logo}<w:p><w:pPr><w:jc w:val="center"/>{wordmark_rule}</w:pPr><w:r>{}<w:t>{}</w:t></w:r></w:p>{entity}<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r>{}<w:t>{}</w:t></w:r></w:p>{postal}</w:hdr>"#,
-        run_properties(
-            letterhead.font_family,
-            r#"<w:b/><w:color w:val="06B6D4"/><w:spacing w:val="80"/>"#
-        ),
-        xml(&letterhead.name.to_uppercase()),
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">{logo}{wordmark}{entity}<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r>{}<w:t>{}</w:t></w:r></w:p>{postal}</w:hdr>"#,
         run_properties(letterhead.font_family, ""),
         xml(&contact)
     )
@@ -1879,6 +1911,7 @@ mod tests {
                 web: "www.neonlaw.com",
                 postal_address: "",
                 font_family: "",
+                wide_wordmark: false,
                 logo_png: b"png",
             }),
             &RenderOptions {
@@ -1923,6 +1956,7 @@ mod tests {
                 web: "examplefirm.test",
                 postal_address: "",
                 font_family: "",
+                wide_wordmark: false,
                 logo_png: &[],
             }),
             &RenderOptions::default(),

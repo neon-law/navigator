@@ -372,6 +372,7 @@ mod tests {
             web: "neonlaw.com",
             postal_address: "",
             font_family: "",
+            wide_wordmark: false,
             logo_png: &[],
         };
         let bytes = render_notation(

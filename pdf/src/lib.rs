@@ -125,6 +125,17 @@ pub fn firm_logo_png() -> &'static [u8] {
 /// Typst markup — kept in one place so [`format`] and [`render`] agree.
 pub(crate) const LOGO_PATH: &str = "logo-neon-law.png";
 
+pub(crate) const GUIEB_SHOOK_WORDMARK_PATH: &str = "guieb-shook-wordmark.svg";
+const GUIEB_SHOOK_WORDMARK: &[u8] = include_bytes!("../assets/brand/guieb-shook-wordmark.svg");
+const INSTRUMENT_SANS: &[u8] =
+    include_bytes!("../assets/fonts/InstrumentSans/InstrumentSans-Latin-VF.ttf");
+
+/// The navy letterhead wordmark for renderers that consume PNG.
+#[must_use]
+pub fn guieb_shook_wordmark_png() -> &'static [u8] {
+    include_bytes!("../assets/brand/guieb-shook-wordmark.png")
+}
+
 /// The virtual path a Brand's own uploaded mark rides into the engine at
 /// — registered only when the letterhead's mark carries bytes, so a
 /// letterhead that does not draw one never pays for it.
@@ -305,7 +316,11 @@ fn render_with_options_and_assets(
     // on the host; the searcher adds the host's installed fonts and any
     // `FONT_DIR_ENV` directory, which is where the licensed GORP Serif
     // desktop faces come from.
-    let with_font = format!("{}{source}", *FONT_PREAMBLE);
+    let with_font = format!(
+        "{}#let navigator-signature-stroke = 0.5pt + black\n\
+         #let navigator-signature-caption(body) = text(size: 9pt, body)\n{source}",
+        *FONT_PREAMBLE
+    );
     let engine = TypstEngine::builder()
         .main_file(with_font)
         .fonts([
@@ -315,9 +330,15 @@ fn render_with_options_and_assets(
             TINOS_ITALIC,
             TINOS_BOLD,
             TINOS_BOLD_ITALIC,
+            INSTRUMENT_SANS,
         ])
         .with_static_file_resolver(
-            std::iter::once((LOGO_PATH, FIRM_LOGO)).chain(assets.iter().copied()),
+            [
+                (LOGO_PATH, FIRM_LOGO),
+                (GUIEB_SHOOK_WORDMARK_PATH, GUIEB_SHOOK_WORDMARK),
+            ]
+            .into_iter()
+            .chain(assets.iter().copied()),
         )
         .search_fonts_with(font_search_options())
         .build();

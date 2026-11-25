@@ -310,3 +310,33 @@ fn an_ordinary_render_carries_no_privileged_marking() {
         0
     );
 }
+
+#[test]
+fn branded_letter_keeps_each_e_signature_anchor_and_prints_the_jurisdiction() {
+    let letterhead = Letterhead {
+        name: "Example Firm".into(),
+        entity: "Example Firm PC".into(),
+        email: "office@example.test".into(),
+        phone: String::new(),
+        web: "example.test".into(),
+        postal_address: "Example Street\nAlbany, NY 12201".into(),
+        font_family: "Instrument Sans".into(),
+        mark: pdf::LetterheadMark::GuiebShook,
+    };
+    let body = word::paper::mark_signing_lines(
+        "Please sign the enclosed letter.\n\n{{firm.signature}}\n\n{{firm.date}}",
+    );
+    let document = pdf::render_document(
+        &body,
+        OutputFormat::Letter(LetterBlocks::default()),
+        &letterhead,
+    )
+    .expect("the branded letter renders");
+    for text in [
+        "Albany, NY 12201",
+        "nlsig-firm-signature-1",
+        "nlsig-firm-date-1",
+    ] {
+        assert_eq!(pdf::occurrence_count(&document, text).unwrap(), 1, "{text}");
+    }
+}

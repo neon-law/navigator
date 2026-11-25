@@ -81,8 +81,8 @@ fn render_block(
     let label = pdf::escape_typst_markup(&block_label(signer, kind, firm_legal_name));
     let anchor = anchor.replace('_', "\\_");
     format!(
-        "#box(stroke: (bottom: 0.5pt), width: {width}, height: 1.4em)\
-         [#text(fill: white, size: 4pt)[{anchor}]] \\\n#text(size: 9pt)[{label}]"
+        "#box(stroke: (bottom: navigator-signature-stroke), width: {width}, height: 1.4em)\
+         [#text(fill: white, size: 4pt)[{anchor}]] \\\n#navigator-signature-caption[{label}]"
     )
 }
 

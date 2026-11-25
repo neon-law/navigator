@@ -2102,7 +2102,10 @@ async fn approval_document_payload(
         )
         .await?
     } else {
-        typst_body_from_template(&body, &keys, &labels, template.kind.as_deref())
+        let format = template_output(template.kind.as_deref());
+        let letterhead =
+            project_letterhead(deps.surreal, notation.project_id, &body, &format).await?;
+        typst_body_with_letterhead(&body, &keys, &labels, &format, &letterhead)
     };
     let (typst_source, fields) = crate::signature_render::expand_signatures_for_firm(
         &source,
@@ -3108,14 +3111,17 @@ async fn drive_closing_workflow(
     // threads the closing letter's Typst source + storage key; the
     // worker renders and persists the PDF on entering
     // `generate_pdf__closing_letter`.
+    let format = template_output(template_row.kind.as_deref());
+    let letterhead = project_letterhead(
+        deps.surreal,
+        notation_row.project_id,
+        &template_body,
+        &format,
+    )
+    .await?;
     let document_payload = serde_json::to_string(&workflows::DocumentPayload::Typst {
         storage_key: closing_letter_storage_key(notation_id),
-        typst_source: typst_body_from_template(
-            &template_body,
-            &keys,
-            &ctx,
-            template_row.kind.as_deref(),
-        ),
+        typst_source: typst_body_with_letterhead(&template_body, &keys, &ctx, &format, &letterhead),
     })
     .map_err(WorkflowDriveError::Payload)?;
     let s = signal_workflow(
@@ -3152,45 +3158,81 @@ pub(crate) fn substitute_template_body(
     views::notation::fill_with_display(body, keys, labels)
 }
 
-/// Assemble a notation template body into compilable Typst: substitute the
-/// answer `ctx`, convert the Markdown body to Typst markup via
-/// [`pdf::to_typst`], and frame it in the format `kind` derives
-/// ([`rules::Kind::default_output`], the same derivation `cli::run_render`
-/// applies to a preview render — see ENG-99) so a `kind: letter` notation
-/// reaches object storage on the firm's letterhead instead of falling back
-/// to `OutputFormat::Plain`. `kind` is the template's declared `kind:`
-/// frontmatter (`store::templates::Template::kind`); an unset or
-/// unrecognized kind renders plain, same as a preview render of a
-/// kind-less template. The firm's identity is pinned to source
-/// ([`pdf::Letterhead::default`]), so a rendered, binding document reads
-/// identically regardless of which brand bundle happens to be mounted. It
-/// is the default Brand's letterhead; `cli::run_render` instead frames a
-/// Project's letter with the Project's Brand (`cli::letterhead`), and this
-/// preview does not yet (ENG-1148).
-///
-/// Notation bodies are authored in Markdown, so the [`pdf::to_typst`]
-/// conversion is what escapes the prose sigils Typst reads as syntax — most
-/// importantly a bare `@` (an email like `support@neonlaw.com` is otherwise
-/// parsed as a Typst label reference and fails to compile), as well as
-/// `#`/`$`/`*`. Signature placeholders (`{{client.signature}}`) survive the
-/// conversion verbatim so [`crate::signature_render::expand_signatures`] can
-/// expand them into anchored blocks afterward.
+/// Assemble a notation template with the default letterhead when the caller
+/// only needs the body and signature placeholders.
 pub(crate) fn typst_body_from_template(
     body: &str,
     keys: &BTreeMap<String, String>,
     labels: &BTreeMap<String, String>,
     kind: Option<&str>,
 ) -> String {
+    typst_body_with_letterhead(
+        body,
+        keys,
+        labels,
+        &template_output(kind),
+        &pdf::Letterhead::default(),
+    )
+}
+
+fn template_output(kind: Option<&str>) -> pdf::OutputFormat {
+    kind.and_then(rules::Kind::parse)
+        .and_then(|kind| pdf::OutputFormat::parse(kind.default_output()))
+        .unwrap_or_default()
+}
+
+fn typst_body_with_letterhead(
+    body: &str,
+    keys: &BTreeMap<String, String>,
+    labels: &BTreeMap<String, String>,
+    format: &pdf::OutputFormat,
+    letterhead: &pdf::Letterhead,
+) -> String {
     let body = rules::frontmatter::split(body).map_or(body, |(_, body)| body);
-    let format = kind
-        .and_then(rules::Kind::parse)
-        .and_then(|k| pdf::OutputFormat::parse(k.default_output()))
-        .unwrap_or_default();
     format!(
         "{}{}",
-        format.preamble(&pdf::Letterhead::default()),
+        format.preamble(letterhead),
         pdf::to_typst(&substitute_template_body(body, keys, labels))
     )
+}
+
+async fn project_letterhead(
+    surreal: &store::surreal::SurrealDb,
+    project_id: Uuid,
+    template: &str,
+    format: &pdf::OutputFormat,
+) -> Result<pdf::Letterhead, WorkflowDriveError> {
+    if !matches!(format, pdf::OutputFormat::Letter(_)) {
+        return Ok(pdf::Letterhead::default());
+    }
+    let project = store::projects::find_by_id(surreal, project_id)
+        .await
+        .map_err(|error| WorkflowDriveError::Db(error.to_string()))?;
+    let Some(project) =
+        project.filter(|project| project.brand == views::brand::BrandKey::GuiebShook.as_str())
+    else {
+        return Ok(pdf::Letterhead::default());
+    };
+    let template_jurisdiction = rules::frontmatter::extract(template)
+        .and_then(|frontmatter| rules::frontmatter::field(frontmatter, "jurisdiction"));
+    let jurisdiction = project
+        .onboarding_jurisdiction
+        .as_deref()
+        .or(template_jurisdiction.as_deref())
+        .unwrap_or_default();
+    let brand = &views::brand::GUIEB_SHOOK_BRANDING;
+    Ok(pdf::Letterhead {
+        name: brand.firm.site_name.into(),
+        entity: brand.firm.legal_entity.into(),
+        email: brand.firm_email.into(),
+        phone: brand.published_phone().into(),
+        web: views::brand::BrandKey::GuiebShook.canonical_host().into(),
+        postal_address: views::brand::guieb_shook_letterhead_office(jurisdiction)
+            .map(|office| office.address_lines().join("\n"))
+            .unwrap_or_default(),
+        font_family: "Instrument Sans".into(),
+        mark: pdf::LetterheadMark::GuiebShook,
+    })
 }
 
 /// The captive `clientUserId` for the client recipient of `notation_id`.

@@ -603,6 +603,7 @@ async fn the_word_render_matches_the_store_resolve_byte_for_byte() {
             web: &frame.web,
             postal_address: &frame.postal_address,
             font_family: &frame.font_family,
+            wide_wordmark: false,
             logo_png: &[],
         }),
         &word::RenderOptions {

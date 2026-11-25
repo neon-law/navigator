@@ -49,12 +49,23 @@ pub fn for_brand(key: BrandKey) -> Result<pdf::Letterhead, LetterheadError> {
     )
     .map_err(|_| LetterheadError::InvalidBrandHost(key))?;
     letterhead.entity = branding.firm.legal_entity.to_string();
-    letterhead.mark = if key == BrandKey::Neon {
-        pdf::LetterheadMark::Compiled
-    } else {
-        pdf::LetterheadMark::Wordmark
+    letterhead.mark = match key {
+        BrandKey::Neon => pdf::LetterheadMark::Compiled,
+        BrandKey::GuiebShook => {
+            letterhead.email = branding.firm_email.into();
+            letterhead.font_family = "Instrument Sans".into();
+            address_guieb_shook_letterhead(&mut letterhead, "");
+            pdf::LetterheadMark::GuiebShook
+        }
+        _ => pdf::LetterheadMark::Wordmark,
     };
     Ok(letterhead)
+}
+
+pub(crate) fn address_guieb_shook_letterhead(letterhead: &mut pdf::Letterhead, jurisdiction: &str) {
+    if let Some(office) = views::brand::guieb_shook_letterhead_office(jurisdiction) {
+        letterhead.postal_address = office.address_lines().join("\n");
+    }
 }
 
 /// The letterhead for a Project declaring `brand` and `host`.
@@ -110,23 +121,32 @@ pub async fn for_brand_runtime(
     else {
         return Ok(None);
     };
-    let (mark, warnings) = match resolved.mark {
-        StoreMark::Wordmark => (pdf::LetterheadMark::Wordmark, Vec::new()),
-        StoreMark::Logo => match fetch_png(api_base, resolved.logo_object_key.as_deref()).await {
-            Ok(bytes) => (pdf::LetterheadMark::Png(bytes), Vec::new()),
-            Err(reason) => (
-                pdf::LetterheadMark::Wordmark,
-                vec![format!(
-                    "the Brand's uploaded mark could not be drawn ({reason}); the letter \
+    let (mark, warnings) = match (key, resolved.mark) {
+        (BrandKey::GuiebShook, _) => (pdf::LetterheadMark::GuiebShook, Vec::new()),
+        (_, StoreMark::Wordmark) => (pdf::LetterheadMark::Wordmark, Vec::new()),
+        (_, StoreMark::Logo) => {
+            match fetch_png(api_base, resolved.logo_object_key.as_deref()).await {
+                Ok(bytes) => (pdf::LetterheadMark::Png(bytes), Vec::new()),
+                Err(reason) => (
+                    pdf::LetterheadMark::Wordmark,
+                    vec![format!(
+                        "the Brand's uploaded mark could not be drawn ({reason}); the letter \
                      opens on its wordmark"
-                )],
-            ),
-        },
+                    )],
+                ),
+            }
+        }
     };
+    let mut letterhead = frame_from_row(&resolved, mark);
+    if key == BrandKey::GuiebShook {
+        letterhead.email = key.resolve_branding(&DEFAULT_BRANDING).firm_email.into();
+        letterhead.font_family = "Instrument Sans".into();
+        address_guieb_shook_letterhead(&mut letterhead, "");
+    }
     Ok(Some(RuntimeLetterhead {
         revision: resolved.updated_at.clone(),
         font_object_key: resolved.font_object_key.clone(),
-        letterhead: frame_from_row(&resolved, mark),
+        letterhead,
         warnings,
     }))
 }
