@@ -23,6 +23,7 @@ pub struct Pending {
     pub id: Uuid,
     pub attorney_id: Uuid,
     pub change_id: String,
+    pub commit_id: String,
     pub tenths: i32,
     pub performed_on: NaiveDate,
 }
@@ -66,7 +67,7 @@ pub async fn stage(
 
 pub async fn pending(pg: &PostgresDb, project: Uuid) -> Result<Vec<Pending>, sqlx::Error> {
     let rows = sqlx::query(
-        "SELECT id,attorney_id,change_id,tenths,performed_on FROM billing_annotation
+        "SELECT id,attorney_id,change_id,commit_id,tenths,performed_on FROM billing_annotation
         WHERE project_id=$1 AND reviewed_at IS NULL ORDER BY performed_on,staged_at,id",
     )
     .bind(project)
@@ -78,6 +79,7 @@ pub async fn pending(pg: &PostgresDb, project: Uuid) -> Result<Vec<Pending>, sql
             id: r.get("id"),
             attorney_id: r.get("attorney_id"),
             change_id: r.get("change_id"),
+            commit_id: r.get("commit_id"),
             tenths: r.get("tenths"),
             performed_on: r.get("performed_on"),
         })

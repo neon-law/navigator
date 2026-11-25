@@ -37,20 +37,29 @@ pub struct AttorneyRate {
 pub enum FeeStructureError {
     #[error("invalid Fee Structure: {0}")]
     Invalid(&'static str),
+    #[error("an Attorney Rate already exists for this scope and effective date")]
+    Conflict,
     #[error("database operation failed")]
     Database(#[from] sqlx::Error),
     #[error("PostgreSQL is unavailable")]
     Postgres(#[from] crate::postgres::PostgresError),
 }
 
-/// The inputs to `set_hourly_rate`. A row for the same attorney, scope, and
-/// effective date replaces the prior one; any other date appends.
+/// The inputs to `set_hourly_rate`. Every row is new history; a duplicate
+/// attorney, scope, and effective date is refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewAttorneyRate {
     pub person_id: Uuid,
     pub project_id: Option<Uuid>,
     pub hourly_rate_cents: i32,
     pub effective_on: NaiveDate,
+}
+
+/// Counts from reconciling an `AttorneyRate.yaml` document to one matter.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SeedRateReport {
+    pub created: usize,
+    pub unchanged: usize,
 }
 
 impl NewAttorneyRate {
@@ -62,25 +71,14 @@ impl NewAttorneyRate {
     }
 }
 
-/// Record (or replace, for the same effective date) an attorney's hourly
-/// rate. The rate rows are append-only by date: captured Time Entries are
-/// immune to this and every later edit because they snapshot at creation.
+/// Record an attorney's hourly rate. The rows are insert-only: a duplicate
+/// scope and effective date is refused, and captured Time Entries are immune
+/// to later rows because they snapshot at creation.
 pub async fn set_hourly_rate(
     pg: &PostgresDb,
     input: NewAttorneyRate,
 ) -> Result<AttorneyRate, FeeStructureError> {
     input.validate()?;
-    let mut tx = pg.0.begin().await?;
-    // Replace only the exact effective date; every other date is history.
-    sqlx::query(
-        "DELETE FROM attorney_rate WHERE person_id=$1 \
-         AND project_id IS NOT DISTINCT FROM $2 AND effective_on=$3",
-    )
-    .bind(input.person_id)
-    .bind(input.project_id)
-    .bind(input.effective_on)
-    .execute(&mut *tx)
-    .await?;
     let rate = sqlx::query(
         "INSERT INTO attorney_rate (person_id,project_id,hourly_rate_cents,effective_on) \
          VALUES ($1,$2,$3,$4) RETURNING id,person_id,project_id,hourly_rate_cents,effective_on",
@@ -89,9 +87,19 @@ pub async fn set_hourly_rate(
     .bind(input.project_id)
     .bind(input.hourly_rate_cents)
     .bind(input.effective_on)
-    .fetch_one(&mut *tx)
-    .await?;
-    tx.commit().await?;
+    .fetch_one(&pg.0)
+    .await
+    .map_err(|error| {
+        if error
+            .as_database_error()
+            .and_then(|database| database.code())
+            .is_some_and(|code| code == "23505")
+        {
+            FeeStructureError::Conflict
+        } else {
+            FeeStructureError::Database(error)
+        }
+    })?;
     Ok(AttorneyRate {
         id: rate.get(0),
         person_id: rate.get(1),
@@ -199,6 +207,85 @@ pub async fn rates_for_person(
         })
     })
     .collect()
+}
+
+/// Import insert-only Attorney Rates for one Project. A matching row makes a
+/// repository re-import a no-op; different terms for the same effective date
+/// are refused instead of replacing the historical row.
+pub async fn import_project_seed(
+    pg: &PostgresDb,
+    project_id: Uuid,
+    yaml: &str,
+    dry_run: bool,
+) -> Result<SeedRateReport, FeeStructureError> {
+    use model::seed::{parse_seed, validate_yaml, OperatorAttorneyRateRec, SeedModel};
+
+    validate_yaml(SeedModel::AttorneyRate, yaml)
+        .map_err(|_| FeeStructureError::Invalid("attorney_rate seed"))?;
+    let records = parse_seed::<OperatorAttorneyRateRec>(
+        yaml,
+        SeedModel::AttorneyRate,
+        &["person.email", "effective_on"],
+    )
+    .map_err(|_| FeeStructureError::Invalid("attorney_rate seed"))?;
+    let mut tx = pg.0.begin().await?;
+    let mut report = SeedRateReport::default();
+    for record in records {
+        let person_id = sqlx::query_scalar::<_, Uuid>(
+            "SELECT p.id FROM person p JOIN person_project_role r ON r.person_id=p.id \
+             WHERE lower(p.email)=lower($1) AND p.role='lawyer' AND r.project_id=$2 \
+             AND r.participation NOT IN ('client','counterparty') AND NOT r.is_client_dri",
+        )
+        .bind(record.person.email.trim())
+        .bind(project_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(FeeStructureError::Invalid("project attorney"))?;
+        let existing = sqlx::query_scalar::<_, i32>(
+            "SELECT hourly_rate_cents FROM attorney_rate \
+             WHERE person_id=$1 AND project_id=$2 AND effective_on=$3",
+        )
+        .bind(person_id)
+        .bind(project_id)
+        .bind(record.effective_on)
+        .fetch_optional(&mut *tx)
+        .await?;
+        match existing {
+            Some(cents) if cents == record.hourly_rate_cents => report.unchanged += 1,
+            Some(_) => return Err(FeeStructureError::Conflict),
+            None => {
+                report.created += 1;
+                if !dry_run {
+                    if let Err(error) = sqlx::query(
+                        "INSERT INTO attorney_rate (person_id,project_id,hourly_rate_cents,effective_on) \
+                         VALUES ($1,$2,$3,$4)",
+                    )
+                    .bind(person_id)
+                    .bind(project_id)
+                    .bind(record.hourly_rate_cents)
+                    .bind(record.effective_on)
+                    .execute(&mut *tx)
+                    .await
+                    {
+                        if error
+                            .as_database_error()
+                            .and_then(|database| database.code())
+                            .is_some_and(|code| code == "23505")
+                        {
+                            return Err(FeeStructureError::Conflict);
+                        }
+                        return Err(FeeStructureError::Database(error));
+                    }
+                }
+            }
+        }
+    }
+    if dry_run {
+        tx.rollback().await?;
+    } else {
+        tx.commit().await?;
+    }
+    Ok(report)
 }
 
 #[cfg(test)]
@@ -333,6 +420,12 @@ mod tests {
             set_hourly_rate(&pg, rate(seed.attorney, None, 25_000, on))
                 .await
                 .unwrap();
+            assert!(
+                set_hourly_rate(&pg, rate(seed.attorney, None, 30_000, on))
+                    .await
+                    .is_err(),
+                "an existing effective date is history and cannot be replaced"
+            );
             assert_eq!(
                 resolve_hourly_rate_cents(&pg, seed.attorney, seed.project_id, on)
                     .await
@@ -465,6 +558,14 @@ mod tests {
             assert!(
                 refused.is_err(),
                 "rate rows are effective-dated, never edited"
+            );
+            let refused = sqlx::query("DELETE FROM attorney_rate WHERE id=$1")
+                .bind(existing)
+                .execute(pg.pool())
+                .await;
+            assert!(
+                refused.is_err(),
+                "rate rows are effective-dated history and cannot be deleted"
             );
         }
 

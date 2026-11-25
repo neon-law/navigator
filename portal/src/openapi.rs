@@ -3239,15 +3239,15 @@ fn canonical_document(base: &str) -> Value {
         "/app/api/attorney-rates": {
           "get": {
             "summary": "List an attorney's rates",
-            "description": "Returns the firm's hourly-rate history for one attorney — firm defaults and matter overrides together, newest effective date first. Authorization: lawyer tier.",
-            "parameters": [{ "name": "person_id", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "description": "Returns the hourly-rate history for one attorney. With project_id, includes only that matter's overrides and the firm defaults and requires firm-side Project participation. Without project_id, returns firm defaults and requires Firm administration.",
+            "parameters": [{ "name": "person_id", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "name": "project_id", "in": "query", "required": false, "schema": { "type": "string", "format": "uuid" } }],
             "responses": { "200": { "description": "The rate history", "content": { "application/json": { "schema": { "type": "object" } } } }, "401": { "description": "Authenticated session required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "403": { "description": "Lawyer tier required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } } }
           },
           "post": {
             "summary": "Record an attorney's hourly rate",
-            "description": "Records an attorney's hourly rate in integer cents, either the firm default (project_id null) or a matter override. Rows are effective-dated and never edited: a row for the same scope and effective date replaces the prior one, any other date appends to the history. Authorization: lawyer tier.",
+            "description": "Records an attorney's hourly rate in integer cents, either the firm default (project_id null) or a matter override. Rows are effective-dated and insert-only; a duplicate scope and effective date returns 409. Matter overrides require firm-side Project participation; firm defaults require Firm administration.",
             "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["person_id", "hourly_rate_cents", "effective_on"], "properties": { "person_id": { "type": "string", "format": "uuid" }, "project_id": { "type": "string", "format": "uuid", "nullable": true }, "hourly_rate_cents": { "type": "integer" }, "effective_on": { "type": "string", "format": "date" } } } } } },
-            "responses": { "401": { "description": "Authenticated session required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "403": { "description": "Lawyer tier required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "404": { "description": "No such attorney or matter", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "201": { "description": "The stored rate", "content": { "application/json": { "schema": { "type": "object" } } } }, "422": { "description": "The rate is not valid", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } } }
+            "responses": { "401": { "description": "Authenticated session required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "403": { "description": "Lawyer tier required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "404": { "description": "No such attorney or matter", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "201": { "description": "The stored rate", "content": { "application/json": { "schema": { "type": "object" } } } }, "409": { "description": "A rate already exists for this scope and effective date", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "422": { "description": "The rate is not valid", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } } }
           }
         },
         "/app/api/projects/{id}/contingency-terms": {
@@ -6463,12 +6463,12 @@ fn canonical_document(base: &str) -> Value {
             "type": "object",
             "required": ["model", "yaml"],
             "properties": {
-              "model": { "type": "string", "description": "Supported singular glossary term: `person`, `entity`, `person_project_role`, `person_entity_role`, `address`, `relationship_log`, or `project_reference`." },
+              "model": { "type": "string", "description": "Supported singular glossary term, including `attorney_rate` for an effective-dated matter override." },
               "yaml": { "type": "string", "description": "Seed YAML with `lookup_fields` and `records`." },
               "overwrite": { "type": "boolean", "default": false },
               "dry_run": { "type": "boolean", "default": false, "description": "Return the reconciliation plan without writing." },
               "as_ci": { "type": "boolean", "default": false, "description": "Apply the scoped-session rules a CI-minted session carries, so the plan answers whether CI could perform the same write. Requires `dry_run` without `overwrite`, and `project`; anything else is refused as `403 scope_violation`." },
-              "project": { "type": "string", "description": "With `as_ci`: the Project code CI would be scoped to." }
+              "project": { "type": "string", "description": "The Project code for a Project-owned seed model; `attorney_rate` requires a Project scope and cannot set a firm-wide default. With `as_ci`, names the Project CI would be scoped to." }
             }
           },
           "SeedReport": {

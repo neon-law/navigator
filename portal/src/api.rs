@@ -4094,7 +4094,67 @@ async fn reconcile_seed(
             .as_ref()
             .and_then(SessionScope::as_seed)
             .map(|scope| scope.project_code.as_str());
-        store::seed::reconcile_yaml(
+        if model == store::seed::SeedModel::AttorneyRate {
+            if input.overwrite {
+                anyhow::bail!("Attorney Rate history is insert-only");
+            }
+            let project_code = session_scope
+                .or(as_ci_scope)
+                .or(input.project.as_deref())
+                .map(str::trim)
+                .filter(|code| !code.is_empty())
+                .ok_or_else(|| anyhow::anyhow!("attorney_rate import requires a Project scope"))?;
+            if let Some(scoped) = session_scope {
+                if !scoped.eq_ignore_ascii_case(project_code) {
+                    return Err(anyhow::Error::new(
+                        store::seed::ScopeViolation::CrossProject,
+                    ));
+                }
+            }
+            let project = store::projects::find_by_code(&state.surreal, project_code)
+                .await?
+                .ok_or_else(|| {
+                    anyhow::Error::new(store::seed::ScopeViolation::UnknownProject(
+                        project_code.to_string(),
+                    ))
+                })?;
+            if !input.as_ci {
+                let viewer = store::access::matter_viewer(
+                    &state.surreal,
+                    session.person_id,
+                    session.role,
+                    project.id,
+                )
+                .await
+                .map_err(anyhow::Error::msg)?;
+                if !viewer.is_some_and(store::access::MatterViewer::is_firm_side) {
+                    return Err(anyhow::Error::new(
+                        store::seed::ScopeViolation::CrossProject,
+                    ));
+                }
+            }
+            let pg = crate::time_tracking_api::prepared_store(
+                &state.surreal,
+                "import_attorney_rates",
+                project.id,
+            )
+            .await
+            .map_err(|_| anyhow::anyhow!("PostgreSQL is unavailable"))?;
+            let report = store::attorney_rates::import_project_seed(
+                &pg,
+                project.id,
+                &input.yaml,
+                input.dry_run,
+            )
+            .await?;
+            return Ok(serde_json::json!({
+                "model": model.term(),
+                "created": report.created,
+                "updated": 0,
+                "unchanged": report.unchanged,
+            }));
+        }
+        let report = store::seed::reconcile_yaml(
             &state.surreal,
             model,
             &input.yaml,
@@ -4109,7 +4169,8 @@ async fn reconcile_seed(
                 actor_person_id: session.person_id,
             },
         )
-        .await
+        .await?;
+        Ok(serde_json::to_value(report)?)
     }
     .await;
     match outcome {

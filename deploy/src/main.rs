@@ -3211,10 +3211,15 @@ fn run() -> ExitCode {
                 } else {
                     None
                 };
+                let project = as_ci_project.clone().or_else(|| {
+                    cli::projects::manifest::read(Path::new("."))
+                        .and_then(|manifest| manifest.project)
+                });
                 let options = remote::SeedOptions {
                     overwrite,
                     dry_run,
                     as_ci_project: as_ci_project.as_deref(),
+                    project: project.as_deref(),
                 };
                 match (model_name, seed_file) {
                     (Some(model_name), Some(seed_file)) => runtime().block_on(remote::seed(

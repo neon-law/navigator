@@ -141,6 +141,104 @@ pub(crate) struct LogTimeForm {
 }
 
 #[derive(Deserialize)]
+pub(crate) struct SetRateForm {
+    hourly_rate: String,
+    effective_on: String,
+}
+
+/// Parse a decimal-dollar field into integer cents without floating point.
+fn hourly_rate_cents(raw: &str) -> Option<i32> {
+    let raw = raw.trim();
+    let (dollars, cents) = raw.split_once('.').unwrap_or((raw, ""));
+    if dollars.is_empty()
+        || !dollars.bytes().all(|byte| byte.is_ascii_digit())
+        || !cents.bytes().all(|byte| byte.is_ascii_digit())
+        || cents.len() > 2
+    {
+        return None;
+    }
+    let dollars = dollars.parse::<i64>().ok()?;
+    let cents = format!("{cents:0<2}").parse::<i64>().ok()?;
+    i32::try_from(dollars.checked_mul(100)?.checked_add(cents)?).ok()
+}
+
+/// `POST /app/projects/{code}/rates` — add a matter-scoped Attorney Rate for
+/// the current lawyer; the date and amount are validated before insertion.
+pub(crate) async fn set_matter_rate(
+    State(surreal): State<store::surreal::SurrealDb>,
+    session: Option<Extension<SessionData>>,
+    Path(code): Path<String>,
+    Form(input): Form<SetRateForm>,
+) -> Response {
+    let Some(session) = session else {
+        return not_found_response();
+    };
+    if session.viewing_as_dri.is_some() {
+        return not_found_response();
+    }
+    let Some(person_id) = session.person_id else {
+        return not_found_response();
+    };
+    let Some(project) = store::projects::find_by_code(&surreal, &code)
+        .await
+        .ok()
+        .flatten()
+    else {
+        return not_found_response();
+    };
+    if !firm_side_viewer(&surreal, &session, project.id).await {
+        return not_found_response();
+    }
+    let Some(hourly_rate_cents) = hourly_rate_cents(&input.hourly_rate) else {
+        return back_to_billing(
+            &code,
+            None,
+            Some("Enter a non-negative hourly rate in dollars."),
+        );
+    };
+    let Ok(effective_on) = chrono::NaiveDate::parse_from_str(input.effective_on.trim(), "%Y-%m-%d")
+    else {
+        return back_to_billing(
+            &code,
+            None,
+            Some("Give the date this hourly rate takes effect."),
+        );
+    };
+    let Ok(pg) =
+        crate::time_tracking_api::prepared_store(&surreal, "set_matter_rate", project.id).await
+    else {
+        return back_to_billing(
+            &code,
+            None,
+            Some("Billing is unavailable. Try again shortly."),
+        );
+    };
+    match store::attorney_rates::set_hourly_rate(
+        &pg,
+        store::attorney_rates::NewAttorneyRate {
+            person_id,
+            project_id: Some(project.id),
+            hourly_rate_cents,
+            effective_on,
+        },
+    )
+    .await
+    {
+        Ok(_) => back_to_billing(&code, Some("Matter rate added to history."), None),
+        Err(store::attorney_rates::FeeStructureError::Conflict) => back_to_billing(
+            &code,
+            None,
+            Some("A rate already exists for that date. Add a rate with a new effective date."),
+        ),
+        Err(_) => back_to_billing(
+            &code,
+            None,
+            Some("Billing is unavailable. Try again shortly."),
+        ),
+    }
+}
+
+#[derive(Deserialize)]
 pub(crate) struct DailyBillingForm {
     project: String,
     description: String,
@@ -726,7 +824,7 @@ fn flash_for_timer(error: &store::timers::TimerError) -> String {
 mod tests {
     use super::{
         back_to_billing, discard_timer, flash_for_entry, flash_for_invoice, flash_for_timer,
-        generate_invoice, log_time, raise_confirmation, start_timer, stop_timer,
+        generate_invoice, hourly_rate_cents, log_time, raise_confirmation, start_timer, stop_timer,
         GenerateInvoiceForm, LogTimeForm, TimerStartForm, TimerStopForm,
     };
     use crate::session::{DriView, SessionData};
@@ -737,6 +835,16 @@ mod tests {
     use store::time_entries::TimeEntryError;
     use store::timers::TimerError;
     use uuid::Uuid;
+
+    #[test]
+    fn hourly_rate_form_uses_exact_integer_cents() {
+        assert_eq!(hourly_rate_cents("500"), Some(50_000));
+        assert_eq!(hourly_rate_cents("100.5"), Some(10_050));
+        assert_eq!(hourly_rate_cents("0"), Some(0));
+        assert_eq!(hourly_rate_cents("-1"), None);
+        assert_eq!(hourly_rate_cents("1.001"), None);
+        assert_eq!(hourly_rate_cents("21474836.48"), None);
+    }
 
     /// A handle with no engine behind it — the documented outage posture
     /// (`portal/src/lead_capture.rs`). Every store call errors, so the doors

@@ -48,6 +48,8 @@ pub struct TimeEntryRow {
 pub struct AnnotationRow {
     pub id: String,
     pub change_id: String,
+    /// Repository URL for the staged commit, when the Project has a forge link.
+    pub change_url: Option<String>,
     pub attorney: String,
     pub hours: String,
     pub date: String,
@@ -97,9 +99,19 @@ pub struct FeeStructureView {
     /// is on file (new billable time cannot be priced) or the deployment has
     /// no PostgreSQL configured.
     pub hourly_rate: Option<String>,
+    /// The viewer's firm default and this matter's override history.
+    pub rate_history: Vec<RateHistoryRow>,
     /// The matter's current agreed flat fee, server-formatted. `None` when
     /// none is agreed — the matter bills hourly.
     pub flat_fee: Option<String>,
+}
+
+/// One dated Attorney Rate visible from this matter's Fee structure section.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RateHistoryRow {
+    pub scope: String,
+    pub effective_on: String,
+    pub hourly_rate: String,
 }
 
 /// The calling attorney's open Timer — the durable row, recovered from
@@ -354,11 +366,67 @@ pub fn BillingTab(
     today: String,
 ) -> Element {
     let error_shown = error.is_some();
+    let rate_error = error.as_deref().is_some_and(|message| {
+        message.contains("hourly rate") || message.contains("rate for this matter")
+    });
     rsx! {
         section { class: "lawyer-detail__section lawyer-detail__billing",
             h2 { "Billing" }
             if let Some(error) = error {
-                p { class: "nav-form-error", role: "alert", "{error}" }
+                p { class: "nav-form-error", role: "alert", "{error}"
+                    if rate_error {
+                        " " a { href: "#fee-structure", "Go to Fee structure" }
+                    }
+                }
+            }
+            section { id: "fee-structure", class: "lawyer-detail__subsection matter-billing-fees",
+                h3 { "Fee structure" }
+                if let Some(rate) = fees.hourly_rate.clone() {
+                    p { class: "matter-billing-current-rate", "Effective today, your hourly rate is " strong { "{rate} per hour" } "." }
+                } else {
+                    p { class: "nav-callout matter-billing-current-rate", role: "status",
+                        "No hourly rate is on file for you on this matter — new billable time cannot be priced until one is recorded."
+                    }
+                }
+                p { class: "nav-muted",
+                    "A matter override takes effect on its effective date. Otherwise, your firm-wide rate applies. New rates never change Time Entries already recorded."
+                }
+                form { class: "lawyer-detail__inline-form", method: "post", action: "/app/projects/{code}/rates",
+                    input { r#type: "hidden", name: "_csrf", value: "{csrf}" }
+                    label { class: "nav-label", "Hourly rate"
+                        input { class: "nav-input", name: "hourly_rate", r#type: "number", min: "0", step: "0.01", required: true }
+                    }
+                    label { class: "nav-label", "Effective on"
+                        input { class: "nav-input", name: "effective_on", r#type: "date", value: "{today}", required: true }
+                    }
+                    button { class: "nav-btn", r#type: "submit", "Add matter override" }
+                }
+                if !fees.rate_history.is_empty() {
+                    h4 { "Rate history" }
+                    div { class: "nav-table-wrap",
+                        table { class: "nav-table matter-billing-rate-history",
+                            thead { tr {
+                                th { scope: "col", "Scope" }
+                                th { scope: "col", "Effective on" }
+                                th { scope: "col", "Hourly rate" }
+                            } }
+                            tbody {
+                                for row in fees.rate_history.iter() {
+                                    tr {
+                                        td { "{row.scope}" }
+                                        td { "{row.effective_on}" }
+                                        td { "{row.hourly_rate}" }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if let Some(fee) = fees.flat_fee.clone() {
+                    p { "Flat fee agreed: {fee} — billed as one line covering the matter's unbilled time." }
+                } else {
+                    p { class: "nav-muted", "No flat fee is recorded. The signed engagement governs hourly and contingent fees." }
+                }
             }
 
             section { class: "lawyer-detail__subsection matter-billing-review",
@@ -373,7 +441,14 @@ pub fn BillingTab(
                         input { r#type: "hidden", name: "_csrf", value: "{csrf}" }
                         fieldset {
                             legend { "{row.hours} hours · {row.attorney} · {row.date}" }
-                            p { "Jujutsu change " code { "{row.change_id}" } }
+                            p { "Jujutsu change "
+                                if let Some(url) = row.change_url.as_ref() {
+                                    a { href: "{url}", target: "_blank", rel: "noopener noreferrer", code { "{row.change_id}" } }
+                                } else {
+                                    code { "{row.change_id}" }
+                                }
+                                " · review the patch before approving time."
+                            }
                             label { class: "nav-label", "Invoice description or reason for denial"
                                 input { class: "nav-input", name: "note", required: true, maxlength: "2000" }
                             }
@@ -463,27 +538,6 @@ pub fn BillingTab(
                             }
                         }
                     }
-                }
-            }
-
-            section { class: "lawyer-detail__subsection matter-billing-fees",
-                h3 { "Fee structure" }
-                if let Some(rate) = fees.hourly_rate.clone() {
-                    p { "Your hourly rate on this matter: {rate} per hour." }
-                } else {
-                    p { class: "nav-muted",
-                        "No hourly rate is on file for you on this matter — new billable time cannot \
-                         be priced until one is recorded."
-                    }
-                }
-                if let Some(fee) = fees.flat_fee.clone() {
-                    p { "Flat fee agreed: {fee} — billed as one line covering the matter's unbilled time." }
-                } else {
-                    p { class: "nav-muted", "No flat fee is recorded. The signed engagement governs hourly and contingent fees." }
-                }
-                p { class: "nav-muted",
-                    "Captured time always keeps the rate it was created with; a later rate change \
-                     never reprices it."
                 }
             }
 
@@ -819,16 +873,44 @@ pub(crate) async fn read_billing(
         }
         None => None,
     };
+    let rate_history = match viewer_person_id {
+        Some(person_id) => store::attorney_rates::rates_for_person(pg, person_id)
+            .await
+            .map_err(crate::lawyer_project_detail::server_error)?
+            .into_iter()
+            .filter(|rate| rate.project_id.is_none() || rate.project_id == Some(project_id))
+            .map(|rate| RateHistoryRow {
+                scope: if rate.project_id.is_some() {
+                    "Matter override".to_owned()
+                } else {
+                    "Firm default".to_owned()
+                },
+                effective_on: rate.effective_on.to_string(),
+                hourly_rate: crate::portal_project_detail::format_usd(i64::from(
+                    rate.hourly_rate_cents,
+                )),
+            })
+            .collect(),
+        None => Vec::new(),
+    };
     let flat_fee = store::attorney_rates::flat_fee_cents(pg, project_id)
         .await
         .map_err(crate::lawyer_project_detail::server_error)?
         .map(crate::portal_project_detail::format_usd);
 
+    let repository_url = store::projects::find_by_id(surreal, project_id)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|project| project.repository_url);
     let annotations = pending
         .into_iter()
         .map(|row| AnnotationRow {
             id: row.id.to_string(),
             change_id: row.change_id,
+            change_url: repository_url
+                .as_deref()
+                .and_then(|url| commit_url(url, &row.commit_id)),
             attorney: names
                 .get(&row.attorney_id)
                 .cloned()
@@ -844,9 +926,26 @@ pub(crate) async fn read_billing(
         expense_rows,
         fees: FeeStructureView {
             hourly_rate,
+            rate_history,
             flat_fee,
         },
     })
+}
+
+#[cfg(feature = "server")]
+fn commit_url(repository: &str, commit_id: &str) -> Option<String> {
+    if !matches!(commit_id.len(), 40 | 64)
+        || !commit_id.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return None;
+    }
+    let mut url = url::Url::parse(repository).ok()?;
+    if !matches!(url.scheme(), "https" | "http") || url.host_str().is_none() {
+        return None;
+    }
+    let path = url.path().trim_end_matches('/').trim_end_matches(".git");
+    url.set_path(&format!("{path}/commit/{commit_id}"));
+    Some(url.to_string())
 }
 
 /// The matter's invoices as the tab renders them, mapped straight from the
@@ -1303,6 +1402,7 @@ mod tests {
                 entries,
                 fees: FeeStructureView {
                     hourly_rate: hourly_rate.map(String::from),
+                    rate_history: Vec::new(),
                     flat_fee: None,
                 },
                 invoices,
@@ -1423,6 +1523,7 @@ mod tests {
                 entries: Vec::new(),
                 fees: FeeStructureView {
                     hourly_rate: Some("$325.00".to_string()),
+                    rate_history: Vec::new(),
                     flat_fee: Some("$5,000.00".to_string()),
                 },
                 invoices: Vec::new(),
@@ -1438,6 +1539,78 @@ mod tests {
             html.contains("Flat fee agreed"),
             "missing [Flat fee agreed]"
         );
+    }
+
+    #[test]
+    fn missing_rate_review_error_links_to_fee_structure() {
+        let html = dioxus_ssr::render_element(rsx! {
+            BillingTab {
+                code: "acme".to_string(),
+                csrf: "token".to_string(),
+                error: Some("Set the hourly rate for the date of service before approving billable time.".to_string()),
+                timer: None,
+                entries: Vec::new(),
+                fees: FeeStructureView::default(),
+                invoices: Vec::new(),
+                expenses: Vec::new(),
+                trust: TrustView::default(),
+                generate: GenerateInvoiceView::default(),
+                today: "2026-11-25".to_string(),
+            }
+        });
+        assert!(html.contains("href=\"#fee-structure\""));
+        assert!(html.contains("id=\"fee-structure\""));
+    }
+
+    #[test]
+    fn fee_structure_explains_precedence_and_lists_visible_rate_changes() {
+        let html = dioxus_ssr::render_element(rsx! {
+            BillingTab {
+                code: "acme".to_string(),
+                csrf: "token".to_string(),
+                timer: None,
+                entries: Vec::new(),
+                fees: FeeStructureView {
+                    hourly_rate: Some("$100.00".to_string()),
+                    rate_history: vec![RateHistoryRow {
+                        scope: "Matter override".to_string(),
+                        effective_on: "2026-11-01".to_string(),
+                        hourly_rate: "$100.00".to_string(),
+                    }],
+                    flat_fee: None,
+                },
+                invoices: Vec::new(),
+                expenses: Vec::new(),
+                trust: TrustView::default(),
+                generate: GenerateInvoiceView::default(),
+                today: "2026-11-25".to_string(),
+            }
+        });
+        assert!(html.contains("matter override takes effect"));
+        assert!(html.contains("firm-wide rate applies"));
+        assert!(html.contains("Rate history"));
+        assert!(html.contains("2026-11-01"));
+        assert!(html.contains("/app/projects/acme/rates"));
+    }
+
+    #[test]
+    #[cfg(feature = "server")]
+    fn staged_change_links_to_its_repository_commit() {
+        assert_eq!(
+            commit_url(
+                "https://forge.example/firm/matter.git",
+                "0123456789abcdef0123456789abcdef01234567",
+            )
+            .as_deref(),
+            Some(
+                "https://forge.example/firm/matter/commit/0123456789abcdef0123456789abcdef01234567"
+            )
+        );
+        assert!(commit_url(
+            "javascript:alert(1)",
+            "0123456789abcdef0123456789abcdef01234567"
+        )
+        .is_none());
     }
 
     #[test]

@@ -90,6 +90,8 @@ pub struct SeedOptions<'a> {
     /// dry run answers whether CI could perform the same write. The server
     /// refuses it on anything but a plain dry run.
     pub as_ci_project: Option<&'a str>,
+    /// Scope Project-owned seed models to the checked-out Project.
+    pub project: Option<&'a str>,
 }
 
 /// The Project code `--as-ci` scopes a dry run to: the checkout's own
@@ -519,6 +521,8 @@ async fn send_seed(
     });
     if let Some(project) = options.as_ci_project {
         body["as_ci"] = serde_json::json!(true);
+        body["project"] = serde_json::json!(project);
+    } else if let Some(project) = options.project {
         body["project"] = serde_json::json!(project);
     }
     let response = reqwest::Client::new()
@@ -6649,6 +6653,7 @@ mod tests {
                     overwrite: true,
                     dry_run: true,
                     as_ci_project: None,
+                    project: None,
                 },
             )
             .await,
@@ -12848,6 +12853,7 @@ mod tests {
                 overwrite: false,
                 dry_run: true,
                 as_ci_project: Some("acme"),
+                project: None,
             },
         )
         .await

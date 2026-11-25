@@ -75,6 +75,11 @@ enum Command {
         #[command(subcommand)]
         action: crate::legal_plans::LegalPlansCmd,
     },
+    /// Set a Firm-wide Attorney Rate or review its history.
+    Firm {
+        #[command(subcommand)]
+        action: FirmCmd,
+    },
     /// Manage the Firm's operating assumptions through the site API.
     #[command(hide = true)]
     Assumptions {
@@ -619,6 +624,9 @@ fn run() -> ExitCode {
         Command::LegalPlans { firm, host, action } => {
             runtime().block_on(crate::legal_plans::run(firm, host, action))
         }
+        Command::Firm {
+            action: FirmCmd::Rate { host, action },
+        } => runtime().block_on(crate::attorney_rates::firm(host.host.as_deref(), action)),
         Command::Assumptions { firm, host, action } => {
             runtime().block_on(crate::assumptions::run(firm, host, action))
         }
@@ -715,10 +723,13 @@ fn run_site(action: SiteCmd) -> ExitCode {
             } else {
                 None
             };
+            let project = crate::projects::manifest::read(Path::new("."))
+                .and_then(|manifest| manifest.project);
             let options = remote::SeedOptions {
                 overwrite,
                 dry_run,
                 as_ci_project: as_ci_project.as_deref(),
+                project: project.as_deref(),
             };
             match (model_name, seed_file) {
                 (Some(model_name), Some(seed_file)) => {
@@ -915,6 +926,17 @@ pub enum FinanceCmd {
 
 #[derive(Subcommand)]
 pub enum ProjectsCmd {
+    /// Set this Project's Attorney Rate override or review rate history.
+    Rate {
+        /// Project code. Defaults to the checkout.
+        #[arg(long, global = true)]
+        project: Option<String>,
+        /// Navigator site. Defaults to the active session or checkout.
+        #[arg(long, global = true)]
+        host: Option<String>,
+        #[command(subcommand)]
+        action: crate::attorney_rates::RateAction,
+    },
     /// Register and refresh `DocuSign` envelopes recorded on this matter.
     Envelope {
         #[command(subcommand)]
@@ -1568,6 +1590,17 @@ pub enum ProjectsCmd {
     Surfaces {
         #[command(subcommand)]
         action: SurfacesCmd,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum FirmCmd {
+    /// Set or review a Firm-wide Attorney Rate.
+    Rate {
+        #[command(flatten)]
+        host: HostOpt,
+        #[command(subcommand)]
+        action: crate::attorney_rates::RateAction,
     },
 }
 
@@ -2658,6 +2691,11 @@ impl ClosureReasonArg {
 #[allow(clippy::too_many_lines)]
 pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
     match action {
+        ProjectsCmd::Rate {
+            host,
+            project,
+            action,
+        } => crate::attorney_rates::project(host.as_deref(), project.as_deref(), action).await,
         ProjectsCmd::Envelope { action } => match action {
             ProjectEnvelopeCmd::Register {
                 envelope_id,
@@ -5655,6 +5693,58 @@ pub fn print_error_recap(errors: &[GateError]) {
 mod gate_helpers_tests {
     use super::*;
     use std::fmt::Write as _;
+
+    #[test]
+    fn attorney_rate_commands_parse_both_scopes() {
+        assert!(Cli::try_parse_from([
+            "navigator",
+            "project",
+            "rate",
+            "set",
+            "--project",
+            "sample",
+            "--attorney",
+            "lawyer@example.test",
+            "--cents-per-hour",
+            "50000",
+            "--effective-on",
+            "2026-11-25"
+        ])
+        .is_ok());
+        assert!(Cli::try_parse_from([
+            "navigator",
+            "firm",
+            "rate",
+            "set",
+            "--attorney",
+            "lawyer@example.test",
+            "--cents-per-hour",
+            "50000",
+            "--effective-on",
+            "2026-11-25"
+        ])
+        .is_ok());
+        assert!(Cli::try_parse_from([
+            "navigator",
+            "project",
+            "rate",
+            "list",
+            "--project",
+            "sample",
+            "--attorney",
+            "lawyer@example.test"
+        ])
+        .is_ok());
+        assert!(Cli::try_parse_from([
+            "navigator",
+            "firm",
+            "rate",
+            "list",
+            "--attorney",
+            "lawyer@example.test"
+        ])
+        .is_ok());
+    }
 
     #[test]
     fn sync_can_apply_or_preview_the_same_active_inventory() {

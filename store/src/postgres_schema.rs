@@ -1759,6 +1759,8 @@ mod tests {
             ("20261124150300_deadline_proposal_source_receipts.sql", include_str!("../postgres/migrations/20261124150300_deadline_proposal_source_receipts.sql")),
             ("20261124180000_firm_namespace_provider_source.sql", include_str!("../postgres/migrations/20261124180000_firm_namespace_provider_source.sql")),
             ("20261124210000_create_project_labels.sql", include_str!("../postgres/migrations/20261124210000_create_project_labels.sql")),
+            ("20261125010000_make_attorney_rates_insert_only.sql", include_str!("../postgres/migrations/20261125010000_make_attorney_rates_insert_only.sql")),
+            ("20261125020000_index_upcoming_project_deadlines.sql", include_str!("../postgres/migrations/20261125020000_index_upcoming_project_deadlines.sql")),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

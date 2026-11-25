@@ -5910,3 +5910,27 @@ CREATE TABLE project_label_assignment (
 );
 
 CREATE INDEX project_label_assignment_label ON project_label_assignment (label_id, project_id);
+
+-- Migration: 20261125010000_make_attorney_rates_insert_only.sql
+-- Attorney Rate rows are the effective-dated price history for captured work.
+-- Keep rows immutable, including deletes cascaded from their references.
+
+CREATE FUNCTION reject_attorney_rate_delete() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'Attorney rates are effective-dated history and cannot be deleted';
+END;
+$$;
+
+CREATE TRIGGER attorney_rate_delete_immutable
+    BEFORE DELETE ON attorney_rate
+    FOR EACH ROW EXECUTE FUNCTION reject_attorney_rate_delete();
+
+-- Migration: 20261125020000_index_upcoming_project_deadlines.sql
+CREATE INDEX project_deadlines_open_due_date
+    ON project_deadlines (
+        project_id,
+        (COALESCE((due_on->>'date')::date, (due_at AT TIME ZONE 'UTC')::date)),
+        due_at,
+        id
+    )
+    WHERE status = 'open';
