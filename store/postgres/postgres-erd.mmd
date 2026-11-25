@@ -1853,6 +1853,19 @@ erDiagram
         uuid handoff_id
         string manifest_sha256
     }
+    project_label {
+        string category
+        uuid firm_id
+        uuid id
+        string key
+        string name
+        datetime retired_at
+    }
+    project_label_assignment {
+        datetime assigned_at
+        uuid label_id
+        uuid project_id
+    }
     project_module {
         datetime enabled_at
         uuid enabled_by_person_id
@@ -2510,6 +2523,9 @@ erDiagram
     project }o--|| project_folder : references
     project_folder }o--|| project_folder : references
     project_handoff }o--|| project_handoff_acknowledgment : references
+    firm }o--|| project_label : references
+    project }o--|| project_label_assignment : references
+    project_label }o--|| project_label_assignment : references
     person }o--|| project_module : references
     project }o--|| project_module : references
     entity }o--|| project_reference : references

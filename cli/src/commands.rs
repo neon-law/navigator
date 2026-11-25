@@ -973,6 +973,11 @@ pub enum ProjectsCmd {
         #[command(subcommand)]
         action: AdverseCmd,
     },
+    /// List, manage, or assign Firm-defined Project Labels.
+    Labels {
+        #[command(flatten)]
+        args: projects::labels::Args,
+    },
     /// List, create, update, complete, or cancel a Project deadline.
     Deadline {
         #[command(subcommand)]
@@ -2937,6 +2942,7 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
                 .await
             }
         },
+        ProjectsCmd::Labels { args } => projects::labels::run(args).await,
         ProjectsCmd::Deadline { action } => match action {
             DeadlineCmd::Review {
                 action,

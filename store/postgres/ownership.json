@@ -769,6 +769,20 @@
     "scope": "project",
     "through": "project_id -> Project.firm_id"
   },
+  "project_label": {
+    "migration_slice": "project-classification",
+    "parity_scenario": "stable Firm keys and reversible label retirement",
+    "scope": "firm",
+    "target_only": true,
+    "through": "firm_id"
+  },
+  "project_label_assignment": {
+    "migration_slice": "project-classification",
+    "parity_scenario": "atomic, unique assignments visible to the Project's current Firm",
+    "scope": "project",
+    "target_only": true,
+    "through": "project_id and label_id in the same Firm"
+  },
   "project_reference": {
     "migration_slice": "graph-storage",
     "parity_scenario": "same-Project round trip; cross-Project and cross-Firm refusal",

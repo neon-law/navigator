@@ -16,7 +16,7 @@ ci_matter_content_denied if {
     input.path[0] == "app"
     input.path[1] == "api"
     input.path[2] == "projects"
-    input.path[4] in {"docket", "deadlines", "documents", "matter", "astrology-chart"}
+    input.path[4] in {"docket", "deadlines", "documents", "matter", "astrology-chart", "labels"}
     count(input.path) == 5
 }
 
@@ -501,6 +501,17 @@ route_allow if {
     input.path[1] == "api"
     input.path[2] == "projects"
     input.path[4] in {"time-entries", "timer", "flat-fee"}
+    count(input.path) == 5
+    input.method in {"GET", "POST"}
+    is_lawyer(input.session)
+}
+
+# Project Labels are private firm-side metadata.
+route_allow if {
+    input.path[0] == "app"
+    input.path[1] == "api"
+    input.path[2] == "projects"
+    input.path[4] == "labels"
     count(input.path) == 5
     input.method in {"GET", "POST"}
     is_lawyer(input.session)
@@ -1365,6 +1376,7 @@ route_allow if {
     count(input.path) <= 5
     not project_claims_path
     not billing_report_path
+    not input.path[4] == "labels"
     is_authenticated(input.session)
 }
 

@@ -112,6 +112,7 @@ pub mod disclosures;
 pub mod document_comments;
 pub mod docusign_completion;
 pub mod evidence_shares;
+pub mod project_labels;
 /// Canonical export section selection for buffered capture and streaming verification.
 pub(crate) use model::source_capture as export_filter;
 pub mod project_envelopes;

@@ -45,6 +45,14 @@ pub struct BrandFacet {
     pub name: String,
 }
 
+/// One active label offered by a visible Project.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct LabelFacet {
+    pub category: String,
+    pub name: String,
+    pub id: String,
+}
+
 /// One matter row, in a wasm-safe shape (plain fields — no `store` types cross
 /// to the client build).
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -53,6 +61,8 @@ pub struct ProjectRow {
     pub name: String,
     /// The Brand's display name, or the raw key when no `brand` row matches.
     pub brand_name: String,
+    #[serde(default)]
+    pub labels: Vec<LabelFacet>,
     /// `store::projects::MatterLifecycle::class()` — the pill's CSS class.
     pub lifecycle_class: String,
     /// `store::projects::MatterLifecycle::label()` — the status the filter
@@ -79,6 +89,10 @@ pub struct ProjectListView {
     /// viewer's matters, with its resolved display name.
     #[serde(default)]
     pub brand_facets: Vec<BrandFacet>,
+    #[serde(default)]
+    pub label_facets: Vec<LabelFacet>,
+    #[serde(default)]
+    pub labels: Vec<String>,
     /// The deploy's brand mark for the navbar.
     #[serde(default)]
     pub logo: Option<crate::components::AppLogo>,
@@ -102,6 +116,8 @@ pub struct ProjectListQuery {
     pub status: Option<String>,
     #[serde(default)]
     pub brand: Option<String>,
+    #[serde(default)]
+    pub label: Option<String>,
     #[serde(default)]
     pub error: Option<String>,
 }
@@ -146,11 +162,9 @@ fn status_query(selected: &[String]) -> Vec<(String, String)> {
     }
 }
 
-/// The brand keys a `?brand=` value selects, lowercased and deduplicated.
-/// Absent or empty means every brand shows; a key no facet offers selects
-/// nothing, which the empty state recovers from.
+/// Parse the selected keys of a comma-separated filter.
 #[must_use]
-pub fn selected_brands(raw: Option<&str>) -> Vec<String> {
+pub fn selected_filter_keys(raw: Option<&str>) -> Vec<String> {
     let mut selected: Vec<String> = Vec::new();
     for value in raw.unwrap_or_default().split(',') {
         let key = value.trim().to_lowercase();
@@ -162,7 +176,7 @@ pub fn selected_brands(raw: Option<&str>) -> Vec<String> {
 }
 
 /// `selected` with `key` added or removed.
-fn toggle_brand(selected: &[String], key: &str) -> Vec<String> {
+fn toggle_key(selected: &[String], key: &str) -> Vec<String> {
     let mut next = selected.to_vec();
     match next.iter().position(|candidate| candidate == key) {
         Some(position) => {
@@ -182,11 +196,17 @@ fn brand_query(selected: &[String]) -> Vec<(String, String)> {
     }
 }
 
-/// The query pairs carrying both filters — what sort links and each chip's
-/// href preserve so a toggle never drops the other filter.
-fn filters_query(statuses: &[String], brands: &[String]) -> Vec<(String, String)> {
+/// Filter query pairs preserved by sort links and filter toggles.
+fn filters_query(
+    statuses: &[String],
+    brands: &[String],
+    labels: &[String],
+) -> Vec<(String, String)> {
     let mut pairs = status_query(statuses);
     pairs.extend(brand_query(brands));
+    if !labels.is_empty() {
+        pairs.push(("label".to_string(), labels.join(",")));
+    }
     pairs
 }
 
@@ -257,6 +277,7 @@ fn project_row(
     m: store::projects::Project,
     has_engagement: bool,
     has_closing: bool,
+    labels: Vec<LabelFacet>,
 ) -> ProjectRow {
     let status = if m.status.eq_ignore_ascii_case("archived") {
         "closed"
@@ -273,6 +294,7 @@ fn project_row(
     );
     ProjectRow {
         brand_name,
+        labels,
         code: m.code,
         name: m.name,
         lifecycle_class: lifecycle.class().to_string(),
@@ -385,7 +407,8 @@ pub async fn get_project_list() -> Result<ProjectListView, ServerFnError> {
     .await?;
     let sort = query.sort.unwrap_or_default();
     let statuses = selected_statuses(query.status.as_deref());
-    let brand_keys = selected_brands(query.brand.as_deref());
+    let brand_keys = selected_filter_keys(query.brand.as_deref());
+    let label_ids = selected_filter_keys(query.label.as_deref());
     let store_role = match role {
         ViewerRole::Owner => store::persons::Role::Owner,
         ViewerRole::Admin => store::persons::Role::Admin,
@@ -417,6 +440,11 @@ pub async fn get_project_list() -> Result<ProjectListView, ServerFnError> {
     // Brand facets come from the viewer's matters before the brand filter is
     // applied, so a chip never offers a value that would select nothing here.
     let brand_facets = brand_facets_from(&matters, &brands);
+    let (mut project_labels, label_facets) = active_label_facets(&matters).await?;
+    let selected_labels: Vec<_> = label_facets
+        .iter()
+        .filter(|label| label_ids.contains(&label.id))
+        .collect();
 
     let mut rows: Vec<ProjectRow> = matters
         .into_iter()
@@ -436,11 +464,18 @@ pub async fn get_project_list() -> Result<ProjectListView, ServerFnError> {
                 .to_string();
             let has_eng = has_engagement.contains(&m.id);
             let has_close = has_closing.contains(&m.id);
-            project_row(brand_name, m, has_eng, has_close)
+            let labels = project_labels.remove(&m.id).unwrap_or_default();
+            project_row(brand_name, m, has_eng, has_close, labels)
         })
-        .filter(|row| statuses.contains(&row.lifecycle_label))
+        .filter(|row| {
+            statuses.contains(&row.lifecycle_label) && labels_match(&row.labels, &selected_labels)
+        })
         .collect();
     sort_rows(&mut rows, &parse_sort(&sort));
+    let labels = selected_labels
+        .into_iter()
+        .map(|label| label.id.clone())
+        .collect();
 
     Ok(ProjectListView {
         firm_name: crate::app_chrome::firm_name_from_context().await,
@@ -450,9 +485,61 @@ pub async fn get_project_list() -> Result<ProjectListView, ServerFnError> {
         statuses,
         brands: brand_keys,
         brand_facets,
+        label_facets,
+        labels,
         logo: crate::app_chrome::app_logo_from_context().await,
         tokens_href: crate::app_chrome::app_tokens_href_from_context().await,
         error: query.error.filter(|message| !message.is_empty()),
+    })
+}
+
+#[cfg(feature = "server")]
+async fn active_label_facets(
+    matters: &[store::projects::Project],
+) -> Result<
+    (
+        std::collections::HashMap<uuid::Uuid, Vec<LabelFacet>>,
+        Vec<LabelFacet>,
+    ),
+    ServerFnError,
+> {
+    let project_ids: Vec<_> = matters.iter().map(|matter| matter.id).collect();
+    let pg = store::postgres::PostgresDb::application()
+        .await
+        .map_err(loader_error)?;
+    let labels = store::project_labels::active_for_projects(&pg, &project_ids)
+        .await
+        .map_err(loader_error)?;
+    let project_labels: std::collections::HashMap<_, Vec<_>> = labels
+        .into_iter()
+        .map(|(id, labels)| (id, labels.iter().map(label_facet).collect()))
+        .collect();
+    let facets = project_labels
+        .values()
+        .flatten()
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    Ok((project_labels, facets))
+}
+
+#[cfg(feature = "server")]
+fn label_facet(label: &store::project_labels::Label) -> LabelFacet {
+    LabelFacet {
+        id: label.id.to_string(),
+        name: label.name.clone(),
+        category: label.category.clone(),
+    }
+}
+
+#[cfg(any(feature = "server", test))]
+fn labels_match(labels: &[LabelFacet], selected: &[&LabelFacet]) -> bool {
+    selected.iter().all(|selection| {
+        selected.iter().any(|candidate| {
+            candidate.category == selection.category
+                && labels.iter().any(|label| label.id == candidate.id)
+        })
     })
 }
 
@@ -477,7 +564,11 @@ fn status_chip_row(view: &ProjectListView) -> Vec<FilterChip> {
                 selected,
                 href: list_href(
                     &view.sort,
-                    &filters_query(&toggle_status(&view.statuses, status), &view.brands),
+                    &filters_query(
+                        &toggle_status(&view.statuses, status),
+                        &view.brands,
+                        &view.labels,
+                    ),
                 ),
             }
         })
@@ -500,9 +591,38 @@ fn brand_chip_row(view: &ProjectListView) -> Vec<FilterChip> {
                 selected,
                 href: list_href(
                     &view.sort,
-                    &filters_query(&view.statuses, &toggle_brand(&view.brands, &facet.key)),
+                    &filters_query(
+                        &view.statuses,
+                        &toggle_key(&view.brands, &facet.key),
+                        &view.labels,
+                    ),
                 ),
             }
+        })
+        .collect()
+}
+
+fn label_groups(view: &ProjectListView) -> Vec<(&str, Vec<FilterChip>)> {
+    view.label_facets
+        .chunk_by(|left, right| left.category == right.category)
+        .map(|group| {
+            let chips = group
+                .iter()
+                .map(|label| FilterChip {
+                    key: label.id.clone(),
+                    label: label.name.clone(),
+                    selected: view.labels.contains(&label.id),
+                    href: list_href(
+                        &view.sort,
+                        &filters_query(
+                            &view.statuses,
+                            &view.brands,
+                            &toggle_key(&view.labels, &label.id),
+                        ),
+                    ),
+                })
+                .collect();
+            (group[0].category.as_str(), chips)
         })
         .collect()
 }
@@ -565,16 +685,21 @@ pub fn LawyerProjects() -> Element {
     };
 
     let sort = SortState::parse(Some(&view.sort));
-    let extra_query = filters_query(&view.statuses, &view.brands);
+    let extra_query = filters_query(&view.statuses, &view.brands, &view.labels);
     let status_chips = status_chip_row(&view);
     let brand_chips = brand_chip_row(&view);
     let filters_active = !extra_query.is_empty();
-    let columns = vec![
+    let mut columns = vec![
         Column::sortable("code", "Code"),
         Column::sortable("name", "Name"),
         Column::sortable("brand", "Brand"),
         Column::sortable("status", "Status"),
     ];
+    let show_labels = !view.label_facets.is_empty();
+    if show_labels {
+        columns.push(Column::fixed("labels", "Labels"));
+    }
+    let label_groups = label_groups(&view);
     let error = view.error.clone();
     let is_empty = view.rows.is_empty();
 
@@ -594,6 +719,12 @@ pub fn LawyerProjects() -> Element {
             { filter_row("Project status", &status_chips) }
             if !brand_chips.is_empty() {
                 { filter_row("Project brand", &brand_chips) }
+            }
+            for (category, chips) in label_groups.iter() {
+                div { key: "{category}",
+                    span { "{category}" }
+                    { filter_row(category, chips) }
+                }
             }
             if let Some(error) = error.as_ref() {
                 p { class: "nav-form-error", role: "alert", "{error}" }
@@ -626,6 +757,11 @@ pub fn LawyerProjects() -> Element {
                                     "{row.lifecycle_label}"
                                 }
                             }
+                            if show_labels {
+                                td { class: "project-labels",
+                                    { row.labels.iter().map(|label| label.name.as_str()).collect::<Vec<_>>().join(", ") }
+                                }
+                            }
                         }
                     }
                 }
@@ -640,6 +776,34 @@ mod tests {
 
     fn owned(statuses: &[&str]) -> Vec<String> {
         statuses.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    #[test]
+    fn label_filters_match_any_value_within_a_category_and_every_category() {
+        let divorce = LabelFacet {
+            category: "Matter type".into(),
+            name: "Divorce".into(),
+            id: "a".into(),
+        };
+        let annulment = LabelFacet {
+            category: "Matter type".into(),
+            name: "Annulment".into(),
+            id: "b".into(),
+        };
+        let filed = LabelFacet {
+            category: "Court filing".into(),
+            name: "Filed".into(),
+            id: "c".into(),
+        };
+        let selected = [&divorce, &annulment, &filed];
+        assert!(labels_match(&[divorce.clone(), filed.clone()], &selected));
+        assert!(labels_match(&[annulment.clone(), filed.clone()], &selected));
+        assert!(!labels_match(
+            &[divorce.clone(), annulment.clone()],
+            &selected
+        ));
+        assert!(!labels_match(std::slice::from_ref(&filed), &selected));
+        assert!(labels_match(&[], &[]));
     }
 
     #[test]
@@ -672,25 +836,25 @@ mod tests {
 
     #[test]
     fn brand_filter_is_case_insensitive_deduplicated_and_absent_means_all() {
-        assert!(selected_brands(None).is_empty());
-        assert!(selected_brands(Some("")).is_empty());
+        assert!(selected_filter_keys(None).is_empty());
+        assert!(selected_filter_keys(Some("")).is_empty());
         assert_eq!(
-            selected_brands(Some(" Neon , neon,delete-your-data")),
+            selected_filter_keys(Some(" Neon , neon,delete-your-data")),
             owned(&["neon", "delete-your-data"])
         );
     }
 
     #[test]
     fn brand_toggling_round_trips_through_the_query() {
-        let with_neon = toggle_brand(&[], "neon");
+        let with_neon = toggle_key(&[], "neon");
         assert_eq!(with_neon, owned(&["neon"]));
-        let with_both = toggle_brand(&with_neon, "Vesta");
+        let with_both = toggle_key(&with_neon, "Vesta");
         assert_eq!(
             brand_query(&with_both),
             vec![("brand".to_string(), "neon,vesta".to_string())]
         );
-        assert_eq!(toggle_brand(&with_both, "vesta"), with_neon);
-        assert!(brand_query(&toggle_brand(&with_neon, "neon")).is_empty());
+        assert_eq!(toggle_key(&with_both, "vesta"), with_neon);
+        assert!(brand_query(&toggle_key(&with_neon, "neon")).is_empty());
     }
 
     #[test]
@@ -698,7 +862,7 @@ mod tests {
         let statuses = owned(&["pitch", "closed"]);
         let brands = owned(&["neon"]);
         assert_eq!(
-            list_href("name", &filters_query(&statuses, &brands)),
+            list_href("name", &filters_query(&statuses, &brands, &[])),
             "/app/projects?brand=neon&status=pitch,closed&sort=name"
         );
         assert_eq!(list_href("name", &[]), "/app/projects?sort=name");
