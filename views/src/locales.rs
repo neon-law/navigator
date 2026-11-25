@@ -751,7 +751,6 @@ pub fn locale_page_kind(stem: &str) -> Option<LocalePageKind> {
         | "immigration-removal-defense"
         | "immigration-uscis-notices"
         | "home-marketing"
-        | "lawyers"
         | "mobile-app" => Some(LocalePageKind::Marketing),
         shared::SHARED_CATALOG_STEM => Some(LocalePageKind::Shared),
         services::SERVICES_CATALOG_STEM => Some(LocalePageKind::ServicesCatalog),

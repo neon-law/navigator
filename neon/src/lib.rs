@@ -63,7 +63,6 @@ pub const PUBLIC_PATHS: &[&str] = &[
     // Answers a 301 to `/`, the canonical Navigator homepage. Published
     // product links keep resolving.
     "/navigator",
-    "/lawyers",
     "/legal-aid",
     "/lawyers",
     // The Neon-hosted gateway to the DeleteYourDebt.com practice. Neon-only —
@@ -212,7 +211,6 @@ pub fn sitemap_for(
         BrandKey::Neon => {
             let mut paths: std::collections::BTreeSet<String> = [
                 "/",
-                "/lawyers",
                 "/legal-aid",
                 "/lawyers",
                 "/delete-your-debt",
