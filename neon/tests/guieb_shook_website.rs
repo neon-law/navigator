@@ -56,7 +56,7 @@ async fn the_new_site_publish_routes_and_navigator_entry_points_are_brand_scoped
             assert!(html.contains(r#"name="concern""#));
             assert!(html.contains(r#"name="csrf_token""#));
             assert!(html.contains(r#"for="cf-email""#));
-            assert!(html.contains(r#"type="email""#));
+            assert!(html.contains(r#"name="email""#));
             assert!(html.contains(r#"autocomplete="email""#));
         }
     }
