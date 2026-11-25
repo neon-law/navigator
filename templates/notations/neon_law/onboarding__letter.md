@@ -236,7 +236,6 @@ Sincerely,
 {{firm.legal_name}}
 
 By: {{firm.signature}}\
-Nick Shook, Attorney at Law\
 Date: {{firm.date}}
 
 **Agreed and accepted:**

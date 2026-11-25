@@ -79,7 +79,12 @@ async fn sent_loop() -> SentLoop {
     // Exercise the real provider's draft, status read and dispatch calls.
     let docusign = MockServer::start().await;
     let envelope_path = format!("/v2.1/accounts/acct-guid/envelopes/{ENVELOPE_ID}");
-    let draft = serde_json::json!({"envelopeId": ENVELOPE_ID, "status": "created"});
+    let draft = serde_json::json!({
+        "envelopeId": ENVELOPE_ID,
+        "status": "created",
+        "emailSubject": "Onboarding retainer for signature",
+        "emailBlurb": "Please sign the onboarding retainer in order for us to represent you.",
+    });
     Mock::given(method("POST"))
         .and(path("/v2.1/accounts/acct-guid/envelopes"))
         .and(wiremock::matchers::body_string_contains(
@@ -92,7 +97,18 @@ async fn sent_loop() -> SentLoop {
     Mock::given(method("GET"))
         .and(path(envelope_path.clone()))
         .respond_with(ResponseTemplate::new(200).set_body_json(draft))
-        .expect(1)
+        .expect(3)
+        .mount(&docusign)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("{envelope_path}/recipients")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "signers": [
+                {"recipientId": "1", "routingOrder": "1", "name": "Libra", "email": "libra@example.com"},
+                {"recipientId": "2", "routingOrder": "2", "name": "Signer", "email": "signer@example.com"},
+            ],
+        })))
+        .expect(2)
         .mount(&docusign)
         .await;
     Mock::given(method("PUT"))
@@ -395,6 +411,16 @@ async fn check_signature_loop_reaches_end_through_real_provider_and_webhook() {
     assert!(
         posted.contains("nlsig-firm-signature-1"),
         "firm countersignature anchor must reach DocuSign"
+    );
+    let posted: serde_json::Value = serde_json::from_slice(&envelope_post.body).unwrap();
+    assert_eq!(posted["recipients"]["signers"][1]["name"], "Signer");
+    assert_eq!(
+        posted["recipients"]["signers"][1]["email"],
+        "signer@example.com"
+    );
+    assert_eq!(
+        posted["emailBlurb"],
+        "Please sign the onboarding retainer in order for us to represent you."
     );
 
     // 3. Provider posts a validly-signed completion callback → END.

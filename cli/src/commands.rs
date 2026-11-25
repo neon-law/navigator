@@ -1640,6 +1640,9 @@ pub enum ProjectEnvelopeCmd {
         /// Read status without registering the envelope or filing documents.
         #[arg(long)]
         envelope_id: Option<uuid::Uuid>,
+        /// Emit JSON (the default for envelope status).
+        #[arg(long)]
+        json: bool,
         #[command(flatten)]
         host: HostOpt,
     },
@@ -2709,6 +2712,7 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
             ProjectEnvelopeCmd::Status {
                 project_code,
                 envelope_id,
+                json: _,
                 host,
             } => {
                 projects::status::refresh_envelopes(
@@ -5742,6 +5746,19 @@ mod gate_helpers_tests {
             "list",
             "--attorney",
             "lawyer@example.test"
+        ])
+        .is_ok());
+    }
+
+    #[test]
+    fn project_envelope_status_accepts_an_explicit_json_flag() {
+        assert!(Cli::try_parse_from([
+            "navigator",
+            "project",
+            "envelope",
+            "status",
+            "sample-estate",
+            "--json"
         ])
         .is_ok());
     }

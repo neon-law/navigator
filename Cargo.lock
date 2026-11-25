@@ -11781,6 +11781,7 @@ dependencies = [
 name = "store"
 version = "26.11.25"
 dependencies = [
+ "addr",
  "anyhow",
  "async-trait",
  "base64 0.23.1",

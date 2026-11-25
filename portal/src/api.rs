@@ -2800,13 +2800,20 @@ async fn stored_project_envelopes(
             envelopes.push(entry.clone());
             adopted_envelopes.push(entry);
         } else {
-            let signature = crate::signature_status::status_for_notation(
+            let mut signature = crate::signature_status::status_for_notation(
                 &state.surreal,
                 &state.storage,
                 &notation,
             )
             .await;
             if signature.signature_request_id.is_some() {
+                crate::signature_status::read_signer_identities(
+                    &mut signature,
+                    &state.surreal,
+                    notation.project_id,
+                    state.signature_provider.as_ref(),
+                )
+                .await;
                 envelopes.push(serde_json::json!({
                     "notation_id": notation.id,
                     "envelope": {
@@ -2814,7 +2821,10 @@ async fn stored_project_envelopes(
                         "status": signature.state,
                         "updatedAt": signature.updated_at,
                         "signers": signature.signers.iter().map(|signer| serde_json::json!({
-                            "name": signer.role, "status": if signer.signed { "completed" } else { "pending" }
+                            "role": signer.role,
+                            "name": signer.name.as_deref().unwrap_or(&signer.role),
+                            "email": signer.email,
+                            "status": if signer.signed { "completed" } else { "pending" }
                         })).collect::<Vec<_>>()
                     }
                 }));
@@ -5480,14 +5490,29 @@ async fn lookup_project_envelope(
     if !participates_as_firm(&state, &lawyer, id).await {
         return Err(ApiError::NotFound);
     }
-    Ok(Json(read_project_envelope(&state, id, envelope_id).await?).into_response())
+    let (envelope, notation) = read_project_envelope(&state, id, envelope_id).await?;
+    let envelope = crate::signature_status::project_envelope_json(
+        &state.surreal,
+        &state.storage,
+        notation.as_ref(),
+        &envelope,
+    )
+    .await
+    .map_err(crate::signature_adoption::internal)?;
+    Ok(Json(envelope).into_response())
 }
 
 async fn read_project_envelope(
     state: &ApiState,
     id: Uuid,
     envelope_id: Uuid,
-) -> Result<crate::signature::ExternalEnvelope, ApiError> {
+) -> Result<
+    (
+        crate::signature::ExternalEnvelope,
+        Option<store::notations::Notation>,
+    ),
+    ApiError,
+> {
     use crate::signature::SignatureProvider as _;
     use crate::signature_adoption::internal;
     let db = &state.surreal;
@@ -5520,19 +5545,20 @@ async fn read_project_envelope(
     )
     .await
     .map_err(internal)?;
-    if let Some(signature) = &signature {
-        if store::notations::find_by_id(db, signature.notation_id)
-            .await?
-            .is_none_or(|notation| notation.project_id != id)
-        {
-            return Err(ApiError::NotFound);
-        }
-    }
+    let notation = match signature {
+        Some(signature) => Some(
+            store::notations::find_by_id(db, signature.notation_id)
+                .await?
+                .filter(|notation| notation.project_id == id)
+                .ok_or(ApiError::NotFound)?,
+        ),
+        None => None,
+    };
     let envelope = provider
         .read_external_envelope(envelope_id)
         .await
         .map_err(|_| ApiError::NotFound)?;
-    if signature.is_none() {
+    if notation.is_none() {
         let (fields, names) = provider
             .envelope_project_hints(envelope_id)
             .await
@@ -5545,7 +5571,7 @@ async fn read_project_envelope(
             return Err(ApiError::NotFound);
         }
     }
-    Ok(envelope)
+    Ok((envelope, notation))
 }
 
 /// Refresh only envelopes already correlated to this participating Project.
@@ -5619,6 +5645,14 @@ async fn refresh_project_envelopes(
                 .await
                 .map_err(internal)?;
         }
+        let envelope = crate::signature_status::project_envelope_json(
+            &state.surreal,
+            &state.storage,
+            Some(&notation),
+            &envelope,
+        )
+        .await
+        .map_err(internal)?;
         refreshed.push(serde_json::json!({"notation_id": notation.id, "envelope": envelope}));
     }
     if let Some((pg, firm, account)) = &account {
@@ -5634,7 +5668,7 @@ async fn refresh_project_envelopes(
                 continue;
             }
             let started = chrono::Utc::now();
-            let envelope = read_project_envelope(&state, id, previous.envelope_id).await?;
+            let (envelope, _) = read_project_envelope(&state, id, previous.envelope_id).await?;
             store::project_envelopes::observe(pg, *firm, *account, id, started, &envelope)
                 .await
                 .map_err(internal)?;
@@ -6456,9 +6490,16 @@ async fn status_notation_signature(
     Path(id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
     let notation = lawyer_scoped_notation(&state, &lawyer, id).await?;
-    let report =
+    let mut report =
         crate::signature_status::status_for_notation(&state.surreal, &state.storage, &notation)
             .await;
+    crate::signature_status::read_signer_identities(
+        &mut report,
+        &state.surreal,
+        notation.project_id,
+        state.signature_provider.as_ref(),
+    )
+    .await;
     Ok((
         StatusCode::OK,
         Json(NotationSignatureStatusResponse {
@@ -10886,7 +10927,7 @@ impl From<crate::contract_review_walk::ContractReviewError> for ApiError {
     }
 }
 
-fn signature_workflow_response(error: &crate::signature::SignatureError) -> Response {
+pub(crate) fn signature_workflow_response(error: &crate::signature::SignatureError) -> Response {
     use crate::signature::SignatureError as S;
     let (status, code, message) = match error {
         S::AnchorValidation(_) | S::TabValidation(_) => (
@@ -10901,6 +10942,8 @@ fn signature_workflow_response(error: &crate::signature::SignatureError) -> Resp
         ),
         S::Authentication(reason) => (StatusCode::BAD_GATEWAY, "signature_authentication", reason.as_str()),
         S::Unreachable => (StatusCode::BAD_GATEWAY, "signature_unreachable", "Navigator could not reach DocuSign."),
+        S::FirmSigner => (StatusCode::UNPROCESSABLE_ENTITY, "firm_signer", "The Firm signer must match the Project’s lawyer DRI or the configured signing lawyer when no DRI is assigned."),
+        S::OnboardingMessage => (StatusCode::UNPROCESSABLE_ENTITY, "onboarding_message", "The onboarding draft does not have the required client message."),
         S::Provider(_) => (
             StatusCode::BAD_GATEWAY,
             "signature_provider",

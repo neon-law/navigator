@@ -519,6 +519,81 @@ async fn the_status_door_gates_like_the_send_door() {
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 
+async fn prepare_and_check_onboarding_draft(
+    harness: &Harness,
+    lawyer: &str,
+    notation_id: uuid::Uuid,
+) -> serde_json::Value {
+    let prepare = harness
+        .app
+        .clone()
+        .oneshot(
+            Request::post(format!("/app/api/notations/{notation_id}/signature"))
+                .header("authorization", lawyer)
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"prepare":true}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(prepare.status(), StatusCode::OK);
+    let body = prepare.into_body().collect().await.unwrap().to_bytes();
+    let prepared: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let envelopes = harness.signature_provider.envelopes().unwrap();
+    assert_eq!(envelopes.len(), 1);
+    assert_eq!(
+        envelopes[0].status,
+        portal::signature::EnvelopeStatus::Prepared
+    );
+    let envelope = &envelopes[0];
+    let firm = envelope
+        .recipients
+        .iter()
+        .find(|recipient| recipient.role == "firm")
+        .unwrap();
+    assert_eq!(firm.name, "Ada Example");
+    assert_eq!(firm.email, "ada@example.com");
+    assert_eq!(
+        envelope.email_blurb.as_deref(),
+        Some("Please sign the onboarding retainer in order for us to represent you.")
+    );
+
+    let fixture = harness
+        .signature_provider
+        .root()
+        .join(format!("{}.json", envelope.id));
+    let mut edited = envelope.clone();
+    edited.email_blurb = Some(format!("Please sign {notation_id}"));
+    std::fs::write(&fixture, serde_json::to_vec(&edited).unwrap()).unwrap();
+    let refused = post(&harness.app, Some(lawyer), notation_id, "signature").await;
+    assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = refused.into_body().collect().await.unwrap().to_bytes();
+    assert!(String::from_utf8_lossy(&body).contains("onboarding_message"));
+    assert_eq!(
+        harness.signature_provider.envelopes().unwrap()[0].status,
+        portal::signature::EnvelopeStatus::Prepared
+    );
+    std::fs::write(fixture, serde_json::to_vec(envelope).unwrap()).unwrap();
+    prepared
+}
+
+async fn designate_onboarding_signer(harness: &Harness, project_id: uuid::Uuid) {
+    let dri = store::persons::create(
+        &harness.surreal,
+        &store::persons::NewPerson::with_role("Ada Example", "ada@example.com", Role::Lawyer),
+    )
+    .await
+    .unwrap();
+    store::projects::designate_dri_in_surreal(
+        &harness.surreal,
+        project_id,
+        dri.id,
+        store::projects::DriSide::Lawyer,
+    )
+    .await
+    .unwrap();
+}
+
 /// LAW-326: after a real dispatch through the shared send flow, the
 /// status door reports the envelope, the provider, and each declared
 /// signer's own step — and the webhook's per-role receipts
@@ -527,6 +602,7 @@ async fn the_status_door_gates_like_the_send_door() {
 async fn status_reports_the_sent_envelope_and_the_webhooks_receipts() {
     let h = build_app().await;
     let project = open_project(&h.surreal).await;
+    designate_onboarding_signer(&h, project.id).await;
     let notation_id = seed_lawyer_review_notation(&h, project.id).await;
     let lawyer = bearer_new_person(
         &h.surreal,
@@ -538,27 +614,7 @@ async fn status_reports_the_sent_envelope_and_the_webhooks_receipts() {
 
     let approve = post(&h.app, Some(&lawyer), notation_id, "approval").await;
     assert_eq!(approve.status(), StatusCode::OK, "approval renders the PDF");
-    let prepare = h
-        .app
-        .clone()
-        .oneshot(
-            Request::post(format!("/app/api/notations/{notation_id}/signature"))
-                .header("authorization", &lawyer)
-                .header("content-type", "application/json")
-                .body(Body::from(r#"{"prepare":true}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(prepare.status(), StatusCode::OK);
-    let body = prepare.into_body().collect().await.unwrap().to_bytes();
-    let prepared: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    let envelopes = h.signature_provider.envelopes().unwrap();
-    assert_eq!(envelopes.len(), 1);
-    assert_eq!(
-        envelopes[0].status,
-        portal::signature::EnvelopeStatus::Prepared
-    );
+    let prepared = prepare_and_check_onboarding_draft(&h, &lawyer, notation_id).await;
 
     let sent = post(&h.app, Some(&lawyer), notation_id, "signature").await;
     assert_eq!(sent.status(), StatusCode::OK);
@@ -583,6 +639,12 @@ async fn status_reports_the_sent_envelope_and_the_webhooks_receipts() {
         "the provider is named: {json}"
     );
     let signers = json["signers"].as_array().expect("per-signer state");
+    let firm = signers
+        .iter()
+        .find(|signer| signer["role"] == "firm")
+        .unwrap();
+    assert_eq!(firm["name"], "Ada Example");
+    assert_eq!(firm["email"], "ada@example.com");
     assert!(
         signers
             .iter()

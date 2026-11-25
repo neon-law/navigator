@@ -149,11 +149,9 @@ Four boot-required keys are in neither file. `NAVIGATOR_CLAMD_ADDR`, `NAVIGATOR_
 `NAVIGATOR_EMAIL_BACKEND`, and `GOOGLE_OAUTH_CLIENT_IDS` ship as inline Deployment env — `ship::INLINE_ENV_WEB_KEYS`
 records that, and the parity gate reads the same list, so the two cannot drift.
 
-Not everything on the Secret rail is boot-required, and the ones that are not are the ones worth checking by hand. A key
-absent from `WEB_REQUIREMENTS` fails no gate, so if the pod reads it with a default, the loss is silent rather than
-loud. `DOCUSIGN_SIGNER_EMAIL` is the worked example: unset, `portal::retainer_walk` falls back to `support@<deployment>`
-and envelopes keep going out addressed to the firm's shared mailbox rather than the deployment's signer. It is projected
-for that reason, not because any invariant demands it.
+`DOCUSIGN_SIGNER_EMAIL` is required when `DOCUSIGN_BASE_URL` declares a DocuSign integration. The deployment secret
+preflight requires one mailbox with a DNS domain and reports an invalid key without printing its value. Keep the signing
+lawyer's address in the deployment's own configuration, not in the public repository.
 
 ## Provision a deployment's key
 

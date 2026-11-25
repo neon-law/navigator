@@ -1728,13 +1728,14 @@ async fn record_payloads(
             Source::Encrypted => record_value(client, project, object).await?,
             Source::Coordinate => {
                 let value = deployment.coordinates[object].clone();
+                validate_payload(object, &value)?;
                 gcp::secret_manager::ensure_secret(client, project, object).await?;
                 gcp::secret_manager::add_version(client, project, object, value.as_bytes()).await?;
                 eprintln!("wrote a new version of {object}");
                 value
             }
         };
-        ensure!(!value.is_empty(), "{object} resolved to an empty value");
+        validate_payload(object, &value)?;
         payloads.insert(object.clone(), value);
     }
     Ok(payloads)
@@ -1879,12 +1880,20 @@ fn resolve_payloads(
             Source::Encrypted => decrypted.get(object).cloned(),
             Source::Coordinate => deployment.coordinates.get(object).cloned(),
         };
-        let value = value
-            .filter(|value| !value.is_empty())
-            .with_context(|| format!("{object} resolved to an empty value"))?;
+        let value = value.unwrap_or_default();
+        validate_payload(object, &value)?;
         payloads.insert(object.clone(), value);
     }
     Ok(payloads)
+}
+
+pub(super) fn validate_payload(object: &str, value: &str) -> Result<()> {
+    ensure!(!value.is_empty(), "{object} resolved to an empty value");
+    ensure!(
+        object != "DOCUSIGN_SIGNER_EMAIL" || store::deployment::is_signer_mailbox(value),
+        "DOCUSIGN_SIGNER_EMAIL must contain one valid signing lawyer email address"
+    );
+    Ok(())
 }
 
 /// One object's drift status against one comparison target. The four values
@@ -4062,6 +4071,33 @@ sops:
             error.to_string().contains("NAVIGATOR_OTHER_HOST"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn signer_email_preflight_rejects_malformed_values_without_echoing_them() {
+        let key = "DOCUSIGN_SIGNER_EMAIL";
+        let deployment = deployment(&[(PROJECT_ID, "example-project")], &[key]);
+        let plan = BTreeMap::from([(key.to_owned(), Source::Encrypted)]);
+        for value in [
+            "ada.example.com",
+            "ada@@example.com",
+            "Ada <ada@example.com>",
+            concat!("ada", "@", "example..com"),
+            concat!("ada", "@", "example"),
+            "ada@example.com,bo@example.com",
+            "ada@example.com\n",
+        ] {
+            let error = resolve_payloads(
+                &deployment,
+                &plan,
+                &BTreeMap::from([(key.to_owned(), value.to_owned())]),
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(error.contains(key) && !error.contains(value), "{error}");
+        }
+        let good = BTreeMap::from([(key.to_owned(), "ada+signing@example.com".into())]);
+        assert_eq!(resolve_payloads(&deployment, &plan, &good).unwrap(), good);
     }
 
     #[test]

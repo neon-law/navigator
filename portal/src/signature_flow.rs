@@ -15,6 +15,7 @@ use uuid::Uuid;
 use workflows::{StateMachineRuntime, StateName};
 
 use crate::retainer_walk::WorkflowDriveError;
+use crate::signature::{SignatureError, SignatureProvider, SignatureRecipient};
 
 pub use crate::signature::SendMode;
 
@@ -100,7 +101,12 @@ pub(crate) async fn send_notation_for_signature(
     } else if current_state.prefix() == "sent_for_signature" {
         // A prior send may have reached DocuSign before the HTTP response
         // was lost. Reconcile the recorded envelope by ID.
-        let id = existing.ok_or(WorkflowDriveError::DispatchNeedsReconciliation)?;
+        let existing = existing.ok_or(WorkflowDriveError::DispatchNeedsReconciliation)?;
+        let (id, firm, onboarding) =
+            record_signature_draft(ctx, &notation_row, provider, Some(existing)).await?;
+        provider
+            .dispatch_notation_draft(&id, firm.as_ref(), onboarding)
+            .await?;
         if notation_row.state == "lawyer_review" || notation_row.state.starts_with("generate_pdf") {
             store::notations::reconcile_state(
                 ctx.surreal,
@@ -110,7 +116,6 @@ pub(crate) async fn send_notation_for_signature(
             )
             .await?;
         }
-        provider.dispatch_prepared(&id).await?;
         return Ok((current_state, id));
     }
 
@@ -120,8 +125,12 @@ pub(crate) async fn send_notation_for_signature(
         return Err(WorkflowDriveError::DocumentNotReady(notation_id));
     }
 
-    let id = record_signature_draft(ctx, &notation_row, provider, existing).await?;
+    let (id, firm, onboarding) =
+        record_signature_draft(ctx, &notation_row, provider, existing).await?;
     if mode == SendMode::Send {
+        provider
+            .verify_notation_draft(&id, firm.as_ref(), onboarding)
+            .await?;
         let next = crate::retainer_walk::signal_workflow(
             ctx.runtime,
             notation_id,
@@ -131,7 +140,9 @@ pub(crate) async fn send_notation_for_signature(
         )
         .await?;
         crate::retainer_walk::sync_notation_state(ctx.surreal, notation_id, next.as_str()).await?;
-        provider.dispatch_prepared(&id).await?;
+        provider
+            .dispatch_notation_draft(&id, firm.as_ref(), onboarding)
+            .await?;
         let notation_id = notation_id.to_string();
         let project_id = notation_row.project_id.to_string();
         telemetry::record_funnel_event(telemetry::FunnelEvent::Sent {
@@ -150,7 +161,14 @@ async fn record_signature_draft(
     notation_row: &store::notations::Notation,
     provider: &dyn crate::signature::SignatureProvider,
     existing: Option<crate::signature::SignatureRequestId>,
-) -> Result<crate::signature::SignatureRequestId, WorkflowDriveError> {
+) -> Result<
+    (
+        crate::signature::SignatureRequestId,
+        Option<SignatureRecipient>,
+        bool,
+    ),
+    WorkflowDriveError,
+> {
     let notation_id = notation_row.id;
     // Resolve the template + its clauses before advancing. The manifest's
     // recipients and placed signature fields are built from them below, and
@@ -210,6 +228,25 @@ async fn record_signature_draft(
         ),
     );
 
+    let set = signer_set(&template_row.code, &raw_template_body)?;
+    let firm = resolve_firm_recipient(
+        ctx.surreal,
+        notation_row.project_id,
+        provider,
+        firm_routing_order(
+            &set,
+            signature_fields.is_empty(),
+            signature_fields
+                .iter()
+                .any(|field| field.recipient_role == "firm"),
+        ),
+    )
+    .await?;
+    let onboarding = template_row.kind.as_deref() == Some("onboarding");
+    if let Some(id) = existing {
+        return Ok((id, firm, onboarding));
+    }
+
     // Read the PDF the worker persisted back from storage so the bytes
     // sent are exactly the bytes stored (one renderer, no second
     // in-process copy to drift).
@@ -224,23 +261,140 @@ async fn record_signature_draft(
     // embedded-signing recipient. Read off the notation so the single send
     // path serves both without a second route.
     let captive = notation_row.delivery != store::notations::DELIVERY_EMAILED;
-    let manifest = build_signature_manifest(
+    let manifest = assemble_signature_manifest(
         notation_id,
         &signature_fields,
         &answer_ctx,
         client.as_ref(),
         captive,
-        &template_row.code,
-        &raw_template_body,
+        &set,
+        firm.as_ref(),
     )?;
-    if let Some(id) = existing {
-        return Ok(id);
-    }
-    let id = provider
-        .send_for_signature(notation_id, &pdf_bytes, &manifest, SendMode::Prepare)
-        .await?;
+    let id = if onboarding {
+        provider
+            .prepare_onboarding(notation_id, &pdf_bytes, &manifest)
+            .await?
+    } else {
+        provider
+            .send_for_signature(notation_id, &pdf_bytes, &manifest, SendMode::Prepare)
+            .await?
+    };
     persist_signature_request_id(ctx.surreal, notation_id, &id.0).await?;
-    Ok(id)
+    Ok((id, firm, onboarding))
+}
+
+fn firm_routing_order(set: &rules::SignerSet, no_fields: bool, firm_field: bool) -> Option<u32> {
+    if no_fields && !set.explicit {
+        return Some(1);
+    }
+    set.signers
+        .iter()
+        .find(|signer| signer.role == "firm" && (set.explicit || firm_field))
+        .map(|signer| signer.routing_order)
+}
+
+async fn resolve_firm_recipient(
+    db: &store::surreal::SurrealDb,
+    project_id: Uuid,
+    provider: &dyn SignatureProvider,
+    order: Option<u32>,
+) -> Result<Option<SignatureRecipient>, WorkflowDriveError> {
+    let Some(order) = order else { return Ok(None) };
+    let dri = store::projects::lawyer_dri_people(db, project_id)
+        .await
+        .map_err(|error| WorkflowDriveError::Db(error.to_string()))?
+        .into_iter()
+        .next();
+    let configured = if dri.is_none() {
+        let (name, email) = provider
+            .configured_signer()
+            .ok_or(SignatureError::FirmSigner)?;
+        if name.trim().is_empty() {
+            let person = store::persons::find_by_email_ci(db, email)
+                .await?
+                .filter(|person| person.role.is_lawyer_tier())
+                .ok_or(SignatureError::FirmSigner)?;
+            Some((person.name, person.email))
+        } else {
+            Some((name.to_owned(), email.to_owned()))
+        }
+    } else {
+        None
+    };
+    let project = store::projects::find_by_id(db, project_id)
+        .await
+        .map_err(|error| WorkflowDriveError::Db(error.to_string()))?
+        .ok_or(SignatureError::FirmSigner)?;
+    let mut trade_names = Vec::new();
+    if let Some(brand) = store::brands::find_by_key(db, &project.brand)
+        .await
+        .map_err(|error| WorkflowDriveError::Db(error.to_string()))?
+    {
+        trade_names.push(brand.name);
+        trade_names.extend(brand.legal_entity);
+    }
+    if let Some(firm_id) = project.firm_id {
+        if let Some(firm) = store::firms::find_by_id(db, firm_id)
+            .await
+            .map_err(|error| WorkflowDriveError::Db(error.to_string()))?
+        {
+            trade_names.push(firm.name);
+            if let Some(entity_id) = firm.entity_id {
+                let entity = store::entities::find_by_id(db, entity_id)
+                    .await
+                    .map_err(|error| WorkflowDriveError::Db(error.to_string()))?;
+                trade_names.extend(entity.map(|entity| entity.name));
+            }
+        }
+        for brand in store::brands::for_firm(db, firm_id)
+            .await
+            .map_err(|error| WorkflowDriveError::Db(error.to_string()))?
+        {
+            trade_names.push(brand.name);
+            trade_names.extend(brand.legal_entity);
+        }
+    }
+    choose_firm_recipient(dri.as_ref(), configured, &trade_names, order)
+        .map(Some)
+        .map_err(Into::into)
+}
+
+fn choose_firm_recipient(
+    dri: Option<&store::persons::Person>,
+    configured: Option<(String, String)>,
+    trade_names: &[String],
+    routing_order: u32,
+) -> Result<SignatureRecipient, SignatureError> {
+    let (name, email) = match dri {
+        Some(person) if person.role.is_lawyer_tier() => (person.name.clone(), person.email.clone()),
+        Some(_) => return Err(SignatureError::FirmSigner),
+        None => configured.ok_or(SignatureError::FirmSigner)?,
+    };
+    let normalized = |value: &str| {
+        value
+            .chars()
+            .filter(|character| character.is_alphanumeric())
+            .flat_map(char::to_lowercase)
+            .collect::<String>()
+    };
+    let name_key = normalized(&name);
+    if name_key.is_empty()
+        || name.contains('@')
+        || name.chars().any(char::is_control)
+        || trade_names
+            .iter()
+            .any(|trade_name| normalized(trade_name) == name_key)
+        || !store::deployment::is_signer_mailbox(&email)
+    {
+        return Err(SignatureError::FirmSigner);
+    }
+    Ok(SignatureRecipient {
+        role: "firm".into(),
+        name,
+        email,
+        routing_order,
+        client_user_id: None,
+    })
 }
 
 /// Whether the worker has rendered + persisted the notation's document
@@ -263,11 +417,11 @@ pub(crate) async fn document_pdf_ready(
 /// template's declared signer set. Recipients fan out one per declared
 /// role, in the set's routing order — declaration order unless the
 /// template spells `routing_order` out. `client` resolves from
-/// questionnaire answers or the bound Person; `firm` from
-/// `DOCUSIGN_SIGNER_*`; any other role from its declared `name`/`email`
+/// questionnaire answers or the bound Person; `firm` from the Project's
+/// lawyer DRI or configured signing lawyer; other roles from declared `name`/`email`
 /// answer-key bindings, falling back to `person__<role>.name` /
-/// `.email`. Templates with no declared signers and no fields use the
-/// provider's single-signer fallback. Explicit signers require placed fields
+/// `.email`. Templates with no declared signers and no fields route only to
+/// the Firm signer. Explicit signers require placed fields
 /// and resolved identities.
 ///
 /// Resolve the signer set for a template from the bytes the send path
@@ -300,6 +454,12 @@ pub(crate) fn signer_set_for_template(
     }
 }
 
+fn signer_set(code: &str, source: &str) -> Result<rules::SignerSet, WorkflowDriveError> {
+    signer_set_for_template(code, source)
+        .map_err(|message| WorkflowDriveError::UnresolvedSigner { role: message })
+}
+
+#[cfg(test)]
 pub(crate) fn build_signature_manifest(
     notation_id: Uuid,
     fields: &[crate::signature::SignatureField],
@@ -309,19 +469,46 @@ pub(crate) fn build_signature_manifest(
     template_code: &str,
     template_source: &str,
 ) -> Result<crate::signature::SignatureManifest, WorkflowDriveError> {
+    let set = signer_set(template_code, template_source)?;
+    let firm = set
+        .signers
+        .iter()
+        .find(|signer| signer.role == "firm")
+        .map(|signer| SignatureRecipient {
+            role: "firm".into(),
+            name: "Example Signing Lawyer".into(),
+            email: "firm-signer@example.com".into(),
+            routing_order: signer.routing_order,
+            client_user_id: None,
+        });
+    assemble_signature_manifest(
+        notation_id,
+        fields,
+        ctx,
+        client,
+        captive,
+        &set,
+        firm.as_ref(),
+    )
+}
+
+fn assemble_signature_manifest(
+    notation_id: Uuid,
+    fields: &[crate::signature::SignatureField],
+    ctx: &BTreeMap<String, String>,
+    client: Option<&store::persons::Person>,
+    captive: bool,
+    set: &rules::SignerSet,
+    firm: Option<&SignatureRecipient>,
+) -> Result<crate::signature::SignatureManifest, WorkflowDriveError> {
     use crate::signature::{SignatureManifest, SignatureRecipient};
-    let set = signer_set_for_template(template_code, template_source)
-        .map_err(|message| WorkflowDriveError::UnresolvedSigner { role: message })?;
     if fields.is_empty() && !set.explicit {
-        return Ok(SignatureManifest::default());
+        return Ok(SignatureManifest {
+            recipients: firm.cloned().into_iter().collect(),
+            fields: Vec::new(),
+        });
     }
     let role_present = |role: &str| fields.iter().any(|f| f.recipient_role == role);
-    let env = |k: &str, default: &str| {
-        std::env::var(k)
-            .ok()
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| default.to_string())
-    };
     let answered = |key: &str| signer_answer(ctx, key);
 
     let mut recipients = Vec::new();
@@ -348,11 +535,10 @@ pub(crate) fn build_signature_manifest(
                 );
                 (c.name, c.email, c.client_user_id)
             }
-            "firm" => (
-                env("DOCUSIGN_SIGNER_NAME", "Neon Law"),
-                env("DOCUSIGN_SIGNER_EMAIL", "support@neonlaw.com"),
-                None,
-            ),
+            "firm" => {
+                recipients.push(firm.cloned().ok_or(SignatureError::FirmSigner)?);
+                continue;
+            }
             other => {
                 // The template's declared bindings win; the person-state
                 // defaults back them up. Non-client roles are always

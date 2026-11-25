@@ -2333,6 +2333,10 @@ pub async fn send_post(
             )
                 .into_response()
         }
+        Err(WorkflowDriveError::Signature(
+            error @ (crate::signature::SignatureError::FirmSigner
+            | crate::signature::SignatureError::OnboardingMessage),
+        )) => crate::api::signature_workflow_response(&error),
         Err(WorkflowDriveError::UnresolvedSigner { ref role }) => {
             tracing::info!(%notation_id, %role, "send: refused — a declared signer is unresolved");
             (
