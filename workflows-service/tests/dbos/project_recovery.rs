@@ -304,97 +304,105 @@ async fn an_unreadable_queue_fails_the_slot_without_advancing_anything() {
 async fn the_store_source_drives_a_recorded_generation_to_commit() {
     store::test_support::with_postgres(async {
         let pg = store::postgres::PostgresDb::application().await.unwrap();
-        let surreal = store::surreal::SurrealDb::uninitialized();
-        let (project, admin) = native_project::matter(&surreal).await;
-        let firm = project
-            .firm_id
-            .expect("synthetic Project belongs to the Firm");
-        let documents: Arc<dyn cloud::StorageService> =
-            Arc::new(store::test_support::MemoryStorage::default());
-        let archive: Arc<dyn cloud::StorageService> =
-            Arc::new(store::test_support::MemoryStorage::default());
-        let source = StoreRecoverySource::new(
-            surreal.clone(),
-            pg.clone(),
-            Arc::clone(&documents),
-            Arc::clone(&archive),
-            None,
-        );
-        assert!(source
-            .unfinished()
-            .await
-            .expect("read the queue")
-            .is_empty());
-
-        let authority =
-            store::project_archives::authorize(&surreal, store::persons::Role::Admin, admin, firm)
+        store::postgres::PostgresDb::with_application_db(pg.clone(), async {
+            let surreal = store::surreal::SurrealDb::uninitialized();
+            let (project, admin) = native_project::matter(&surreal).await;
+            let firm = project
+                .firm_id
+                .expect("synthetic Project belongs to the Firm");
+            let documents: Arc<dyn cloud::StorageService> =
+                Arc::new(store::test_support::MemoryStorage::default());
+            let archive: Arc<dyn cloud::StorageService> =
+                Arc::new(store::test_support::MemoryStorage::default());
+            let source = StoreRecoverySource::new(
+                surreal.clone(),
+                pg.clone(),
+                Arc::clone(&documents),
+                Arc::clone(&archive),
+                None,
+            );
+            assert!(source
+                .unfinished()
                 .await
-                .expect("the Firm admin may archive");
-        let stores = store::project_archives::ArchiveStores {
-            surreal: &surreal,
-            pg: &pg,
-            documents: &documents,
-            archive: &archive,
-            source_backups: None,
-        };
-        let generation = store::project_archives::request(
-            &stores,
-            &authority,
-            project.id,
-            "scheduled-recovery",
-            None,
-            Utc::now(),
-        )
+                .expect("read the queue")
+                .is_empty());
+
+            let authority = store::project_archives::authorize(
+                &surreal,
+                store::persons::Role::Admin,
+                admin,
+                firm,
+            )
+            .await
+            .expect("the Firm admin may archive");
+            let stores = store::project_archives::ArchiveStores {
+                surreal: &surreal,
+                pg: &pg,
+                documents: &documents,
+                archive: &archive,
+                source_backups: None,
+            };
+            let generation = store::project_archives::request(
+                &stores,
+                &authority,
+                project.id,
+                "scheduled-recovery",
+                None,
+                Utc::now(),
+            )
+            .await
+            .expect("record a generation");
+            assert_eq!(source.unfinished().await.unwrap(), vec![generation.id]);
+            let before = source
+                .coverage()
+                .await
+                .expect("read coverage")
+                .expect("the store source judges the inventory");
+            assert!(before.uncovered.contains(&Uncovered {
+                project_id: project.id,
+                coverage: Coverage::Missing,
+                pending: true,
+            }));
+            source
+                .advance(generation.id)
+                .await
+                .expect("advance the generation to commit");
+            assert!(source.unfinished().await.unwrap().is_empty());
+            let committed = store::project_archives::latest_committed(&pg, project.id)
+                .await
+                .unwrap()
+                .expect("a committed generation");
+            assert_eq!(committed.id, generation.id);
+            let after = source.coverage().await.unwrap().unwrap();
+            assert!(
+                after
+                    .uncovered
+                    .iter()
+                    .all(|entry| entry.project_id != project.id),
+                "a freshly committed generation covers its Project"
+            );
+
+            // An unknown generation stops with a reason, never a panic.
+            assert!(source.advance(Uuid::now_v7()).await.is_err());
+            let summary = source
+                .archive_soft_deleted()
+                .await
+                .expect("nothing soft-deleted is still a report");
+            assert_eq!(
+                summary,
+                "archived 0, active copies removed 0, without Firm 0, stalled 0"
+            );
+
+            // A lost database is a queue error, not an empty queue.
+            pg.pool().close().await;
+            assert!(matches!(
+                source.unfinished().await,
+                Err(RecoveryError::Queue)
+            ));
+            assert!(source.coverage().await.is_err());
+        })
         .await
-        .expect("record a generation");
-        assert_eq!(source.unfinished().await.unwrap(), vec![generation.id]);
-        let before = source
-            .coverage()
-            .await
-            .expect("read coverage")
-            .expect("the store source judges the inventory");
-        assert!(before.uncovered.contains(&Uncovered {
-            project_id: project.id,
-            coverage: Coverage::Missing,
-            pending: true,
-        }));
-        source
-            .advance(generation.id)
-            .await
-            .expect("advance the generation to commit");
-        assert!(source.unfinished().await.unwrap().is_empty());
-        let committed = store::project_archives::latest_committed(&pg, project.id)
-            .await
-            .unwrap()
-            .expect("a committed generation");
-        assert_eq!(committed.id, generation.id);
-        let after = source.coverage().await.unwrap().unwrap();
-        assert!(
-            after
-                .uncovered
-                .iter()
-                .all(|entry| entry.project_id != project.id),
-            "a freshly committed generation covers its Project"
-        );
-
-        // An unknown generation stops with a reason, never a panic.
-        assert!(source.advance(Uuid::now_v7()).await.is_err());
-        let summary = source
-            .archive_soft_deleted()
-            .await
-            .expect("nothing soft-deleted is still a report");
-        assert_eq!(
-            summary,
-            "archived 0, active copies removed 0, without Firm 0, stalled 0"
-        );
-
-        // A lost database is a queue error, not an empty queue.
-        pg.pool().close().await;
-        assert!(matches!(
-            source.unfinished().await,
-            Err(RecoveryError::Queue)
-        ));
-        assert!(source.coverage().await.is_err());
+        .unwrap();
     })
     .await;
 }
