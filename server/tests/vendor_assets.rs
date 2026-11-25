@@ -154,7 +154,18 @@ fn only_approved_browser_distributions_are_vendored() {
                         "vendor/maplibre/LICENSE.txt"
                     )
             );
-            !(swagger || mermaid || pdfjs || graph || maplibre)
+            // The CLax report overlay (LGPL-2.1-only), served only when a
+            // deployment sets `CLAX_FEEDBACK_ENABLED=true`: the pinned bundle
+            // and its license text.
+            let clax = matches!(
+                (asset.name.as_str(), asset.served_path.as_str()),
+                ("CLax report overlay", "vendor/clax/overlay.js")
+                    | (
+                        "CLax report overlay LGPL-2.1 license",
+                        "vendor/clax/LICENSE"
+                    )
+            );
+            !(swagger || mermaid || pdfjs || graph || maplibre || clax)
         })
         .map(|asset| format!("{} ({})", asset.name, asset.served_path))
         .collect::<Vec<_>>();

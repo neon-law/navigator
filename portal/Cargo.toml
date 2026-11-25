@@ -28,6 +28,7 @@ billing.workspace = true
 chrono.workspace = true
 cloud.workspace = true
 dioxus-core.workspace = true
+ed25519-dalek.workspace = true
 dioxus-server.workspace = true
 model.workspace = true
 dbos.workspace = true

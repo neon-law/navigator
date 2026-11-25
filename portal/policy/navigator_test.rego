@@ -2575,6 +2575,20 @@ test_lawyer_denied_unmigrated_api_write if {
 	not authz.allow with input as {"path": ["app", "api", "jurisdictions"], "method": "POST", "session": lawyer_session}
 }
 
+# ---------- CLax report token (POST /app/api/clax/token) ----------
+
+test_lawyer_can_mint_clax_token if {
+	authz.allow with input as {"path": ["app", "api", "clax", "token"], "method": "POST", "session": lawyer_session}
+}
+
+test_client_denied_clax_token if {
+	not authz.allow with input as {"path": ["app", "api", "clax", "token"], "method": "POST", "session": client_session}
+}
+
+test_anonymous_denied_clax_token if {
+	not authz.allow with input as {"path": ["app", "api", "clax", "token"], "method": "POST", "session": null}
+}
+
 # ---------- stateless Template markdown validator (POST /app/api/templates/validate) ----------
 # Linting Template markdown is a lawyer authoring activity — the same
 # lawyer-tier gate as every other /app/api/* write/command. The canonical

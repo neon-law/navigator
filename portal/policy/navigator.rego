@@ -1464,6 +1464,14 @@ route_allow if {
     is_lawyer(input.session)
 }
 
+# CLax report overlay: POST /app/api/clax/token mints a reporter token for
+# the signed-in person. Lawyer tier only; the handler re-checks the tier.
+route_allow if {
+    input.path == ["app", "api", "clax", "token"]
+    input.method == "POST"
+    is_lawyer(input.session)
+}
+
 # People command resource: create/update/delete and the welcome-send
 # command move through POST/PATCH/DELETE /app/api/people*. These are the
 # REST command boundary for both the browser lawyer forms (cookie +
