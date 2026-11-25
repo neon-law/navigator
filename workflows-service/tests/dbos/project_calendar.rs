@@ -41,8 +41,6 @@ impl Source for CalendarSource {
         Ok(vec![ParticipantSync {
             person_id: self.after,
             access: "verified".into(),
-            calendar_invitation: "notification_requested".into(),
-            event_responses: std::collections::BTreeMap::new(),
         }])
     }
 }

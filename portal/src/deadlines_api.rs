@@ -10,6 +10,9 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Deserialize;
 use store::persons::Role;
+use store::project_deadlines::{
+    AuthorityKind, CalendarRole, Category, DeadlineIdentity, DueOnInput, Hearing,
+};
 use uuid::Uuid;
 
 use crate::api::{ApiError, ApiState, LawyerSession};
@@ -19,16 +22,22 @@ use crate::api::{ApiError, ApiState, LawyerSession};
 pub(crate) struct CreateDeadlineRequest {
     title: Option<String>,
     description: Option<String>,
-    due_at: String,
-    authority_kind: String,
+    due_at: Option<String>,
+    due_on: Option<DueOnInput>,
+    hearing: Option<Hearing>,
+    authority_kind: AuthorityKind,
     #[serde(default)]
     authority: String,
     #[serde(default)]
     source: String,
     source_document_id: Option<Uuid>,
     owner_person_id: Option<Uuid>,
-    calendar_role: String,
-    category: Option<String>,
+    calendar_role: CalendarRole,
+    #[serde(
+        default,
+        deserialize_with = "store::project_deadlines::optional_category"
+    )]
+    category: Option<Category>,
     internal_lead_days: Option<i64>,
     client_lead_days: Option<i64>,
     replay_key: Option<String>,
@@ -42,6 +51,8 @@ pub(crate) struct UpdateDeadlineRequest {
     title: Option<String>,
     description: Option<String>,
     due_at: Option<String>,
+    due_on: Option<DueOnInput>,
+    hearing: Option<Hearing>,
     authority_kind: Option<String>,
     authority: Option<String>,
     source: Option<String>,
@@ -128,20 +139,41 @@ pub(crate) async fn create_deadline(
     Json(input): Json<CreateDeadlineRequest>,
 ) -> Result<Response, ApiError> {
     require_participant(&state, session.person_id, session.role, id).await?;
+    if model::project_deadlines::requires_court_review(
+        &input.calendar_role.to_string(),
+        &input.authority_kind.to_string(),
+        input
+            .category
+            .map(|category| category.to_string())
+            .as_deref(),
+    ) {
+        return Err(ApiError::DeadlineInvalid("Queue this court date with navigator project deadline review queue and confirm its evidence in Navigator.".into()));
+    }
+    let (due_at, due_on) = store::project_deadlines::resolve_due(
+        &state.surreal,
+        id,
+        DeadlineIdentity::Replay(input.replay_key.as_deref()),
+        input.due_at.as_deref(),
+        input.due_on,
+    )
+    .await
+    .map_err(map_deadline)?;
     let row = store::project_deadlines::create(
         &state.surreal,
         &store::project_deadlines::NewDeadline {
             project_id: id,
             title: input.title,
             description: input.description,
-            due_at: input.due_at,
-            authority_kind: input.authority_kind,
+            due_on,
+            hearing: input.hearing,
+            due_at,
+            authority_kind: input.authority_kind.to_string(),
             authority: input.authority,
             source: input.source,
             source_document_id: input.source_document_id,
             owner_person_id: input.owner_person_id,
-            calendar_role: input.calendar_role,
-            category: input.category,
+            calendar_role: input.calendar_role.to_string(),
+            category: input.category.map(|category| category.to_string()),
             internal_lead_days: input.internal_lead_days,
             client_lead_days: input.client_lead_days,
             replay_key: input.replay_key,
@@ -161,6 +193,20 @@ pub(crate) async fn update_deadline(
     Json(input): Json<UpdateDeadlineRequest>,
 ) -> Result<Response, ApiError> {
     require_participant(&state, session.person_id, session.role, id).await?;
+    let (due_at, due_on) = if input.due_at.is_some() || input.due_on.is_some() {
+        let (at, on) = store::project_deadlines::resolve_due(
+            &state.surreal,
+            id,
+            DeadlineIdentity::Id(deadline_id),
+            input.due_at.as_deref(),
+            input.due_on,
+        )
+        .await
+        .map_err(map_deadline)?;
+        (Some(at), on)
+    } else {
+        (None, None)
+    };
     let row = store::project_deadlines::update(
         &state.surreal,
         id,
@@ -168,7 +214,9 @@ pub(crate) async fn update_deadline(
         &store::project_deadlines::DeadlinePatch {
             title: input.title.map(Some),
             description: input.description.map(Some),
-            due_at: input.due_at,
+            due_at,
+            due_on,
+            hearing: input.hearing,
             authority_kind: input.authority_kind,
             authority: input.authority,
             source: input.source,

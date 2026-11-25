@@ -33,7 +33,10 @@ pub struct Calendar<'a> {
 /// Deadline is a missed reminder.
 pub fn render(calendar: &Calendar<'_>, rows: &[Value]) -> Result<String, String> {
     let mut events = Vec::with_capacity(rows.len());
-    for row in rows {
+    for row in rows
+        .iter()
+        .filter(|row| row["calendar_review_pending"] != true)
+    {
         events.push(Event::from_row(row)?);
     }
     events.sort_by(|a, b| (a.due, &a.id).cmp(&(b.due, &b.id)));
@@ -41,7 +44,7 @@ pub fn render(calendar: &Calendar<'_>, rows: &[Value]) -> Result<String, String>
     let mut zones: BTreeMap<i32, String> = BTreeMap::new();
     for event in &events {
         let offset = event.due.offset().local_minus_utc();
-        if offset != 0 {
+        if event.due_on.is_none() && offset != 0 {
             zones.entry(offset).or_insert_with(|| zone_name(offset));
         }
     }
@@ -68,6 +71,9 @@ struct Event {
     description: String,
     location: Option<String>,
     due: DateTime<FixedOffset>,
+    due_on: Option<model::project_deadlines::DueOn>,
+    hearing: Option<model::project_deadlines::Hearing>,
+    category: Option<model::project_deadlines::Category>,
     stamp: DateTime<Utc>,
     sequence: i64,
     status: String,
@@ -112,6 +118,13 @@ impl Event {
             description: text("description"),
             location: row["location"].as_str().map(str::to_string),
             due,
+            hearing: serde_json::from_value(row["hearing"].clone())
+                .map_err(|error| format!("invalid hearing: {error}"))?,
+            due_on: serde_json::from_value(row["due_on"].clone())
+                .map_err(|error| format!("invalid civil date: {error}"))?,
+            category: row["category"]
+                .as_str()
+                .and_then(|value| value.parse().ok()),
             stamp,
             sequence,
             status: text("status"),
@@ -124,25 +137,14 @@ impl Event {
     }
 
     fn summary(&self, project_code: &str) -> String {
-        let action = if !self.title.is_empty() {
-            self.title.clone()
-        } else if self.calendar_role == "hearing" {
-            "Hearing".to_string()
-        } else {
-            let kind = match self.authority_kind.as_str() {
-                "statute" => "Statutory deadline",
-                "court_rule" => "Court rule deadline",
-                "court_order" => "Court order deadline",
-                "contract" => "Contract deadline",
-                _ => "Internal deadline",
-            };
-            if self.calendar_role == "opponent" {
-                format!("{kind} (opponent)")
-            } else {
-                kind.to_string()
-            }
-        };
-        format!("{action} - {project_code}")
+        model::project_deadlines::calendar_summary(
+            project_code,
+            &self.title,
+            &self.calendar_role,
+            &self.authority_kind,
+            self.category,
+            &self.status,
+        )
     }
 }
 
@@ -218,7 +220,9 @@ impl Out {
         self.line(&format!("DTSTAMP:{}", event.stamp.format("%Y%m%dT%H%M%SZ")));
         self.line(&format!("SEQUENCE:{}", event.sequence));
         let offset = event.due.offset().local_minus_utc();
-        if offset == 0 {
+        if let Some(day) = &event.due_on {
+            self.line(&format!("DTSTART;VALUE=DATE:{}", day.date.format("%Y%m%d")));
+        } else if offset == 0 {
             self.line(&format!(
                 "DTSTART:{}",
                 event.due.with_timezone(&Utc).format("%Y%m%dT%H%M%SZ")
@@ -230,13 +234,34 @@ impl Out {
                 event.due.format("%Y%m%dT%H%M%S")
             ));
         }
+        let hearing = event.calendar_role == "hearing"
+            || event.category == Some(model::project_deadlines::Category::Hearing);
+        if hearing {
+            let minutes = event
+                .hearing
+                .as_ref()
+                .map_or(60, model::project_deadlines::Hearing::minutes);
+            self.line(&format!("DURATION:PT{minutes}M"));
+        }
         self.line(&format!("SUMMARY:{}", escape(&summary)));
-        if let Some(location) = &event.location {
+        if let Some(location) = event.location.as_ref().or_else(|| {
+            event
+                .hearing
+                .as_ref()
+                .and_then(|details| details.location.as_ref())
+        }) {
             self.line(&format!("LOCATION:{}", escape(location)));
         }
         let mut description = event.description.clone();
         if !description.is_empty() {
             description.push('\n');
+        }
+        if let Some(cutoff) = event
+            .due_on
+            .as_ref()
+            .and_then(model::project_deadlines::DueOn::cutoff_description)
+        {
+            let _ = writeln!(description, "{cutoff}");
         }
         if !event.authority.is_empty() {
             let _ = writeln!(description, "Authority: {}", event.authority);
@@ -257,8 +282,16 @@ impl Out {
         } else {
             "STATUS:CONFIRMED"
         });
-        self.line("TRANSP:TRANSPARENT");
-        if let (true, Some(days)) = (event.status == "open", event.internal_lead_days) {
+        self.line(if hearing {
+            "TRANSP:OPAQUE"
+        } else {
+            "TRANSP:TRANSPARENT"
+        });
+        for days in model::project_deadlines::reminder_days(
+            &event.status,
+            event.category,
+            event.internal_lead_days,
+        ) {
             self.line("BEGIN:VALARM");
             self.line("ACTION:DISPLAY");
             self.line(&format!("DESCRIPTION:{}", escape(&summary)));
@@ -304,6 +337,38 @@ mod tests {
     }
 
     #[test]
+    fn civil_deadline_exports_on_its_local_day_with_court_reminders() {
+        let row = serde_json::json!({"id":"date-1","due_at":"2028-07-13T06:59:00Z","due_on":{"date":"2028-07-12","timezone":"America/Los_Angeles","cutoff":"23:59:00"},"title":"File response","category":"court","status":"open"});
+        let result = super::render(
+            &super::Calendar {
+                host: "example.test",
+                base_url: "https://example.test",
+                project_code: "sample",
+            },
+            &[row],
+        )
+        .unwrap();
+        assert!(result.contains("DTSTART;VALUE=DATE:20280712\r\n"));
+        assert!(result.contains("Cutoff: 23:59:00 America/Los_Angeles"));
+        assert!(result.contains("SUMMARY:sample: DEADLINE – File response"));
+        for lead in [7, 3, 1] {
+            assert!(result.contains(&format!("TRIGGER:-P{lead}D")));
+        }
+    }
+
+    #[test]
+    fn a_court_date_awaiting_review_never_reaches_the_ics_feed() {
+        let mut pending = row();
+        pending["calendar_review_pending"] = json!(true);
+        assert!(!render(&calendar(), &[pending])
+            .unwrap()
+            .contains("BEGIN:VEVENT"));
+        assert!(render(&calendar(), &[row()])
+            .unwrap()
+            .contains("BEGIN:VEVENT"));
+    }
+
+    #[test]
     fn renders_the_required_properties_for_one_deadline() {
         let text = render(&calendar(), &[row()]).unwrap();
         let all = lines(&text);
@@ -317,7 +382,7 @@ mod tests {
             "UID:0190a000-0000-7000-8000-000000000001@navigator.example.test",
             "DTSTAMP:20261006T000000Z",
             "DTSTART;TZID=\"UTC-08:00\":20261102T170000",
-            "SUMMARY:Court order deadline - acme",
+            "SUMMARY:acme: Court order deadline",
             "STATUS:CONFIRMED",
             "BEGIN:VALARM",
             "TRIGGER:-P7D",
@@ -333,16 +398,20 @@ mod tests {
     }
 
     #[test]
-    fn a_category_never_changes_the_ics_output() {
-        // The feed renders no color and no category: mirrored Google events
-        // carry it instead. Same bytes for a categoryless row, each mapped
-        // category, and an unknown one.
-        let without = render(&calendar(), &[row()]).unwrap();
-        for category in ["court", "hearing", "discovery", "internal", "filing"] {
-            let mut categorized = row();
-            categorized["category"] = json!(category);
-            assert_eq!(render(&calendar(), &[categorized]).unwrap(), without);
-        }
+    fn a_tickler_uses_its_classified_title_and_an_unknown_legacy_category_keeps_its_title() {
+        let mut tickler = row();
+        tickler["category"] = json!("tickler");
+        tickler["title"] = json!("Review response");
+        assert!(render(&calendar(), &[tickler])
+            .unwrap()
+            .contains("SUMMARY:acme: TICKLER – Review response\r\n"));
+
+        let mut legacy = row();
+        legacy["category"] = json!("filing");
+        assert_eq!(
+            render(&calendar(), &[legacy]).unwrap(),
+            render(&calendar(), &[row()]).unwrap()
+        );
     }
 
     #[test]
@@ -433,7 +502,7 @@ mod tests {
         let mut hearing = row();
         hearing["calendar_role"] = json!("hearing");
         let text = render(&calendar(), &[hearing]).unwrap();
-        assert!(text.contains("SUMMARY:Hearing - acme\r\n"));
+        assert!(text.contains("SUMMARY:acme: HEARING – Hearing\r\n"));
     }
 
     #[test]
@@ -441,11 +510,11 @@ mod tests {
         let mut titled = row();
         titled["title"] = json!("Answer to the complaint");
         let text = render(&calendar(), &[titled]).unwrap();
-        assert!(text.contains("SUMMARY:Answer to the complaint - acme\r\n"));
+        assert!(text.contains("SUMMARY:acme: Answer to the complaint\r\n"));
         let mut untitled = row();
         untitled["title"] = json!(null);
         let text = render(&calendar(), &[untitled]).unwrap();
-        assert!(text.contains("SUMMARY:Court order deadline - acme\r\n"));
+        assert!(text.contains("SUMMARY:acme: Court order deadline\r\n"));
     }
     #[test]
     fn persisted_sequences_version_same_second_edits_and_fit_rfc_integers() {

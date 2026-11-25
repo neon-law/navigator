@@ -56,13 +56,14 @@ async fn sandbox_credit_has_one_row_per_person_and_period() {
 
 #[tokio::test]
 async fn deadline_category_upgrade_recovers_defaults_without_guessing_or_overwriting() {
+    const RECOVERY: i64 = 20_261_106_120_000;
     let Some(db) = Database::new().await else {
         return;
     };
     let before_recovery = store::postgres::embedded_migrator()
         .iter()
         .map(|migration| migration.version)
-        .filter(|version| *version < 20_261_106_120_000)
+        .filter(|version| *version < RECOVERY)
         .max()
         .unwrap();
     db.pg.migrate_embedded(Some(before_recovery)).await.unwrap();
@@ -90,7 +91,7 @@ async fn deadline_category_upgrade_recovers_defaults_without_guessing_or_overwri
         ids.push((id, expected, preserved));
     }
     for _ in 0..2 {
-        db.pg.migrate_embedded(None).await.unwrap();
+        db.pg.migrate_embedded(Some(RECOVERY)).await.unwrap();
         sqlx::raw_sql(include_str!(
             "../postgres/migrations/20261106120000_backfill_deadline_category.sql"
         ))
@@ -121,7 +122,7 @@ async fn deadline_category_upgrade_recovers_defaults_without_guessing_or_overwri
             .fetch_one(&db.pool)
             .await
             .unwrap();
-    db.pg.migrate_embedded(None).await.unwrap();
+    db.pg.migrate_embedded(Some(RECOVERY)).await.unwrap();
     let after: serde_json::Value =
         sqlx::query_scalar("SELECT to_jsonb(d) FROM project_deadlines d WHERE id = $1")
             .bind(cleared_id)

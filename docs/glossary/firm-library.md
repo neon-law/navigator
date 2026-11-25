@@ -31,6 +31,10 @@ library repository, or one with no commits, behaves exactly as before.
 and links its skills into that Firm's checkouts only. A Firm skill replaces a generic workspace skill of the same name
 there. The host names the repository from the Firm's own Forgejo organization (`GET /app/api/firm-libraries`).
 
+A court-date proposal can cite an existing file in the Firm Library by its commit and path. Navigator verifies that it
+matches a filed Project record or archived Authority and preserves the cited page and highlights in the proposal
+revision. See [Review court dates](../deadline-proposals.md).
+
 **Not a [Project Skill](project-skill.md).** A Project Skill is a jurisdiction and practice-area playbook one matter
 chooses and pins in its own `navigator.yaml`. The Firm Library is not chosen per matter: it is what every matter of that
 Firm starts from, and a Project's own `drafts/` still overrides it code by code.

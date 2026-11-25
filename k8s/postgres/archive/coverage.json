@@ -501,6 +501,13 @@
       {
         "action": "export",
         "schema": "public",
+        "name": "deadline_proposal",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
         "name": "deployment_secret_change",
         "kind": "table",
         "accessible": true

@@ -331,6 +331,13 @@
     },
     {
       "extra_column": null,
+      "extra_table": "deadline_proposal",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
       "extra_table": "document_chain_archive",
       "missing_column": null,
       "missing_table": null,
@@ -1941,6 +1948,7 @@
         "booking_url": "option<string>",
         "brand": "string",
         "calendar_id": "option<string>",
+        "calendar_timezone": "option<string>",
         "client_dri_person_id": "option<record<person>>",
         "closed_at": "option<string>",
         "closure_reason": "option<string>",
@@ -1977,12 +1985,15 @@
       "project_deadlines": {
         "authority": "string",
         "authority_kind": "string",
+        "calendar_review_pending": "option<bool>",
         "calendar_role": "string",
         "calendar_sequence": "option<int>",
         "category": "option<string>",
         "client_lead_days": "option<int>",
         "description": "option<string>",
         "due_at": "string",
+        "due_on": "any",
+        "hearing": "any",
         "id": "record",
         "inserted_at": "string",
         "internal_lead_days": "option<int>",
@@ -2278,7 +2289,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 194,
+    "table_count": 195,
     "tables": {
       "address": {
         "columns": {
@@ -2983,6 +2994,48 @@
         "foreign_keys": [],
         "name": "dbos_workflow_request",
         "references": []
+      },
+      "deadline_proposal": {
+        "columns": {
+          "attempt": "INTEGER",
+          "deadline_id": "UUID",
+          "draft": "JSONB",
+          "id": "UUID",
+          "next_attempt_at": "TIMESTAMPTZ",
+          "project_id": "UUID",
+          "reason": "TEXT",
+          "reviewed_at": "TIMESTAMPTZ",
+          "reviewer_id": "UUID",
+          "revision": "BIGINT",
+          "source_receipts": "JSONB",
+          "status": "TEXT",
+          "target_deadline_id": "UUID",
+          "worker_settled": "BOOLEAN"
+        },
+        "foreign_keys": [
+          [
+            "deadline_id",
+            "project_deadlines"
+          ],
+          [
+            "project_id",
+            "project"
+          ],
+          [
+            "reviewer_id",
+            "person"
+          ],
+          [
+            "target_deadline_id",
+            "project_deadlines"
+          ]
+        ],
+        "name": "deadline_proposal",
+        "references": [
+          "person",
+          "project",
+          "project_deadlines"
+        ]
       },
       "deployment_secret_change": {
         "columns": {
@@ -5592,6 +5645,7 @@
           "booking_url": "TEXT",
           "brand": "TEXT",
           "calendar_id": "TEXT",
+          "calendar_timezone": "TEXT",
           "client_dri_person_id": "UUID",
           "closed_at": "TEXT",
           "closure_reason": "TEXT",
@@ -5844,12 +5898,15 @@
         "columns": {
           "authority": "TEXT",
           "authority_kind": "TEXT",
+          "calendar_review_pending": "BOOLEAN",
           "calendar_role": "TEXT",
           "calendar_sequence": "BIGINT",
           "category": "TEXT",
           "client_lead_days": "BIGINT",
           "description": "TEXT",
           "due_at": "TIMESTAMPTZ",
+          "due_on": "JSONB",
+          "hearing": "JSONB",
           "id": "UUID",
           "inserted_at": "TIMESTAMPTZ",
           "internal_lead_days": "BIGINT",

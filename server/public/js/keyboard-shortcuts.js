@@ -213,6 +213,13 @@
           window.location.assign(shortcut.href);
         }
         break;
+      case "court_date_review": {
+        var review = document.querySelector("court-date-review");
+        if (review && !event.repeat && !event.isComposing && shortcut.keys !== "Escape") {
+          review.dispatchEvent(new CustomEvent("review-shortcut", { detail: shortcut.keys }));
+        }
+        break;
+      }
       case "next": {
         var form = questionForm();
         if (form) {
@@ -586,7 +593,9 @@
       }
       return;
     }
-    if (event.defaultPrevented || MODIFIER_KEYS[event.key]) {
+    // A native page dialog owns its keyboard and restores focus on close.
+    if (document.querySelector("court-date-review dialog[open], nav-citation-highlight dialog[open]") || event.isComposing ||
+        event.defaultPrevented || MODIFIER_KEYS[event.key]) {
       return;
     }
     var editable = isEditable(event.target);

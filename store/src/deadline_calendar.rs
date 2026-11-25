@@ -208,9 +208,12 @@ async fn reconcile_rows(
         .iter()
         .filter(|row| row.status != project_deadlines::STATUS_CANCELLED)
     {
-        let sha = body_sha(deadline, &project.code, base_url);
         let id = deadline.id.to_string();
         live.insert(id.clone());
+        if deadline.calendar_review_pending {
+            continue;
+        }
+        let sha = body_sha(deadline, &project.code, base_url);
         let event = match deadline_event(deadline, &project.code, base_url) {
             Ok(event) => event,
             Err(error) => {
@@ -220,17 +223,21 @@ async fn reconcile_rows(
         };
         match by_deadline.get(&id) {
             Some(stored) => {
-                if stored
+                let source_unchanged = stored
                     .private_properties
                     .get(BODY_SHA_KEY)
-                    .is_some_and(|recorded| *recorded == sha)
-                {
+                    .is_some_and(|recorded| *recorded == sha);
+                if source_unchanged && (stored.can_write() || !stored.has_baseline()) {
                     report.in_sync += 1;
+                } else if !stored.can_write() {
+                    report.failures.push(format!(
+                        "event {}: {}",
+                        stored.id,
+                        CalendarError::UnverifiedEvent
+                    ));
                 } else if dry_run {
                     report.upserted.push(deadline.id);
-                } else if let Err(error) =
-                    calendar.patch_event(calendar_id, &stored.id, &event).await
-                {
+                } else if let Err(error) = calendar.patch_event(calendar_id, stored, &event).await {
                     report
                         .failures
                         .push(format!("deadline {}: {error}", deadline.id));
@@ -258,9 +265,15 @@ async fn reconcile_rows(
         if live.contains(deadline_id) {
             continue;
         }
-        if dry_run {
+        if !event.can_write() {
+            report.failures.push(format!(
+                "event {}: {}",
+                event.id,
+                CalendarError::UnverifiedEvent
+            ));
+        } else if dry_run {
             report.deleted.push(event.id.clone());
-        } else if let Err(error) = calendar.delete_event(calendar_id, &event.id).await {
+        } else if let Err(error) = calendar.delete_event(calendar_id, &event).await {
             report.failures.push(format!("event {}: {error}", event.id));
         } else {
             report.deleted.push(event.id.clone());
@@ -279,10 +292,9 @@ async fn plan_rows(
     let rows = project_deadlines::list(surreal, project.id)
         .await
         .map_err(|error| MirrorError::Db(error.to_string()))?;
-    for deadline in rows
-        .iter()
-        .filter(|row| row.status != project_deadlines::STATUS_CANCELLED)
-    {
+    for deadline in rows.iter().filter(|row| {
+        !row.calendar_review_pending && row.status != project_deadlines::STATUS_CANCELLED
+    }) {
         match deadline_event(deadline, &project.code, base_url) {
             Ok(_) => report.upserted.push(deadline.id),
             Err(error) => report.failures.push(error.to_string()),
@@ -371,10 +383,10 @@ pub fn report_line(report: &MirrorReport) -> String {
 #[must_use]
 pub fn category_color(category: Option<&str>) -> Option<&'static str> {
     match category {
-        Some("court") => Some("11"),    // Tomato.
-        Some("hearing") => Some("3"),   // Grape.
-        Some("discovery") => Some("5"), // Banana.
-        Some("internal") => Some("8"),  // Graphite.
+        Some("court") => Some("11"),               // Tomato.
+        Some("hearing") => Some("3"),              // Grape.
+        Some("discovery") => Some("5"),            // Banana.
+        Some("internal" | "tickler") => Some("8"), // Graphite.
         _ => None,
     }
 }
@@ -394,9 +406,26 @@ pub fn deadline_event(
     Ok(CalendarEvent {
         summary: event_summary(deadline, project_code),
         description: Some(event_description(deadline, project_code, base_url)),
-        location: None,
+        location: deadline
+            .hearing
+            .as_ref()
+            .and_then(|hearing| hearing.location.clone()),
         color_id: category_color(deadline.category.as_deref()).map(str::to_string),
         start,
+        timing: if let Some(day) = &deadline.due_on {
+            cloud::calendar::EventTiming::AllDay(day.date)
+        } else if deadline.calendar_role == "hearing"
+            || deadline.category.as_deref() == Some("hearing")
+        {
+            cloud::calendar::EventTiming::Hearing(
+                deadline
+                    .hearing
+                    .as_ref()
+                    .map_or(60, model::project_deadlines::Hearing::minutes),
+            )
+        } else {
+            cloud::calendar::EventTiming::Instant
+        },
         sequence: event_sequence(deadline)?,
         cancelled: deadline.status == project_deadlines::STATUS_CANCELLED,
         reminder_minutes: reminder_minutes(deadline)?,
@@ -412,29 +441,20 @@ pub fn deadline_event(
 }
 
 /// The summary the ICS feed renders: the title, or the fallback by calendar
-/// role and authority kind, then the Project code.
+/// role and authority kind, prefixed by the Project code.
 #[must_use]
 pub fn event_summary(deadline: &Deadline, project_code: &str) -> String {
-    let title = deadline.title.as_deref().map_or("", str::trim);
-    let action = if !title.is_empty() {
-        title.to_string()
-    } else if deadline.calendar_role == "hearing" {
-        "Hearing".to_string()
-    } else {
-        let kind = match deadline.authority_kind.as_str() {
-            "statute" => "Statutory deadline",
-            "court_rule" => "Court rule deadline",
-            "court_order" => "Court order deadline",
-            "contract" => "Contract deadline",
-            _ => "Internal deadline",
-        };
-        if deadline.calendar_role == "opponent" {
-            format!("{kind} (opponent)")
-        } else {
-            kind.to_string()
-        }
-    };
-    format!("{action} - {project_code}")
+    model::project_deadlines::calendar_summary(
+        project_code,
+        deadline.title.as_deref().unwrap_or_default(),
+        &deadline.calendar_role,
+        &deadline.authority_kind,
+        deadline
+            .category
+            .as_deref()
+            .and_then(|value| value.parse().ok()),
+        &deadline.status,
+    )
 }
 
 /// The description the ICS feed renders: the row's description, then the
@@ -446,6 +466,13 @@ pub fn event_description(
     base_url: Option<&str>,
 ) -> String {
     let mut description = deadline.description.clone().unwrap_or_default();
+    if let Some(cutoff) = deadline
+        .due_on
+        .as_ref()
+        .and_then(model::project_deadlines::DueOn::cutoff_description)
+    {
+        push_line(&mut description, &cutoff);
+    }
     if !deadline.authority.is_empty() {
         push_line(
             &mut description,
@@ -500,24 +527,23 @@ fn event_sequence(deadline: &Deadline) -> Result<i32, MirrorError> {
     })
 }
 
-/// The one reminder an open deadline carries: its internal lead days as a
-/// popup. A completed or cancelled deadline stays silent — a dead deadline
-/// is a missed reminder.
-fn reminder_minutes(deadline: &Deadline) -> Result<Option<i64>, MirrorError> {
-    if deadline.status != project_deadlines::STATUS_OPEN {
-        return Ok(None);
-    }
-    deadline
-        .internal_lead_days
-        .map(|days| {
-            days.checked_mul(24 * 60).ok_or_else(|| {
-                MirrorError::InvalidDeadline(
-                    deadline.id,
-                    format!("internal_lead_days {days} is too large for a reminder"),
-                )
-            })
+/// Court popup reminders and an open Deadline’s explicit internal lead.
+fn reminder_minutes(deadline: &Deadline) -> Result<Vec<i64>, MirrorError> {
+    model::project_deadlines::reminder_days(
+        &deadline.status,
+        deadline.category.as_deref().and_then(|s| s.parse().ok()),
+        deadline.internal_lead_days,
+    )
+    .into_iter()
+    .map(|days| {
+        days.checked_mul(24 * 60).ok_or_else(|| {
+            MirrorError::InvalidDeadline(
+                deadline.id,
+                format!("internal_lead_days {days} is too large for a reminder"),
+            )
         })
-        .transpose()
+    })
+    .collect()
 }
 
 /// The sha256 over the row content an event renders, hex-encoded. The
@@ -525,7 +551,7 @@ fn reminder_minutes(deadline: &Deadline) -> Result<Option<i64>, MirrorError> {
 /// stale cache.
 #[must_use]
 pub fn body_sha(deadline: &Deadline, project_code: &str, base_url: Option<&str>) -> String {
-    let payload = serde_json::json!({
+    let mut payload = serde_json::json!({
         "title": deadline.title,
         "description": deadline.description,
         "due_at": deadline.due_at,
@@ -539,6 +565,13 @@ pub fn body_sha(deadline: &Deadline, project_code: &str, base_url: Option<&str>)
         "project_code": project_code,
         "base_url": calendar_origin(base_url),
     });
+    // Reformatting a title alone must not trigger a full rewrite of existing Google events.
+    if let Some(date) = &deadline.due_on {
+        payload["due_on"] = serde_json::json!(date);
+    }
+    if let Some(hearing) = &deadline.hearing {
+        payload["hearing"] = serde_json::json!(hearing);
+    }
     let digest = Sha256::digest(payload.to_string().as_bytes());
     let mut hex = String::with_capacity(digest.len() * 2);
     for byte in &digest {
@@ -564,6 +597,8 @@ mod tests {
             project_id,
             title: Some("Answering brief due".into()),
             description: None,
+            hearing: None,
+            due_on: None,
             due_at: "2026-11-02T17:00:00-08:00".into(),
             authority_kind: "court_order".into(),
             authority: "Order setting briefing".into(),
@@ -576,6 +611,34 @@ mod tests {
             client_lead_days: None,
             replay_key: None,
         }
+    }
+
+    fn internal_task(project_id: Uuid) -> NewDeadline {
+        NewDeadline {
+            title: Some("Review the intake checklist".into()),
+            authority_kind: "internal".into(),
+            authority: "Matter work plan".into(),
+            category: Some("internal".into()),
+            ..sample(project_id)
+        }
+    }
+
+    /// A court date published before the review gate was introduced.
+    async fn previously_published(
+        db: &SurrealDb,
+        input: &NewDeadline,
+    ) -> project_deadlines::Deadline {
+        let row = project_deadlines::create(db, input).await.unwrap();
+        let pg = crate::postgres::PostgresDb::application().await.unwrap();
+        sqlx::query("UPDATE project_deadlines SET calendar_review_pending=false WHERE id=$1")
+            .bind(row.id)
+            .execute(pg.pool())
+            .await
+            .unwrap();
+        project_deadlines::find(db, row.project_id, row.id)
+            .await
+            .unwrap()
+            .unwrap()
     }
 
     async fn with_project(test: impl AsyncFnOnce(&SurrealDb, Uuid)) {
@@ -658,14 +721,12 @@ mod tests {
     #[tokio::test]
     async fn a_fresh_project_inserts_one_event_per_deadline() {
         with_project(async |db, project_id| {
-            let first = project_deadlines::create(db, &sample(project_id))
-                .await
-                .unwrap();
+            let first = previously_published(db, &sample(project_id)).await;
             let mut hearing = sample(project_id);
             hearing.title = None;
             hearing.calendar_role = "hearing".into();
             hearing.internal_lead_days = None;
-            let second = project_deadlines::create(db, &hearing).await.unwrap();
+            let second = previously_published(db, &hearing).await;
             let calendar = FakeCalendar::default();
             let report = reconcile(db, &calendar, project_id, Some("https://law.test"), false)
                 .await
@@ -692,11 +753,55 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_second_pass_finds_everything_in_sync() {
+    async fn a_pending_court_date_neither_creates_an_event_nor_deletes_a_previous_mirror() {
         with_project(async |db, project_id| {
-            project_deadlines::create(db, &sample(project_id))
+            let row = project_deadlines::create(db, &sample(project_id))
                 .await
                 .unwrap();
+            assert!(row.calendar_review_pending);
+            let calendar = FakeCalendar::default();
+            for dry_run in [true, false] {
+                let report = reconcile(db, &calendar, project_id, None, dry_run)
+                    .await
+                    .unwrap();
+                assert!(
+                    report.upserted.is_empty()
+                        && report.deleted.is_empty()
+                        && report.failures.is_empty()
+                );
+            }
+            let project = crate::projects::find_by_id(db, project_id)
+                .await
+                .unwrap()
+                .unwrap();
+            let calendar_id = project.calendar_id.unwrap();
+            assert!(calendar.events(&calendar_id).is_empty());
+            // Protect an already published provider copy during review even when its source changed.
+            let mut prior = deadline_event(&row, &project.code, None).unwrap();
+            prior.summary = "calendar-test: Previously published court date".into();
+            prior
+                .private_properties
+                .insert(BODY_SHA_KEY.into(), "prior-source-digest".into());
+            let previous = calendar.insert_event(&calendar_id, &prior).await.unwrap();
+            for dry_run in [true, false] {
+                let report = reconcile(db, &calendar, project_id, None, dry_run)
+                    .await
+                    .unwrap();
+                assert!(
+                    report.upserted.is_empty()
+                        && report.deleted.is_empty()
+                        && report.failures.is_empty()
+                );
+            }
+            assert_eq!(calendar.events(&calendar_id), [previous]);
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn a_second_pass_finds_everything_in_sync() {
+        with_project(async |db, project_id| {
+            previously_published(db, &sample(project_id)).await;
             let calendar = FakeCalendar::default();
             let first = reconcile(db, &calendar, project_id, None, false)
                 .await
@@ -716,7 +821,7 @@ mod tests {
     #[tokio::test]
     async fn an_edited_row_updates_its_event() {
         with_project(async |db, project_id| {
-            let created = project_deadlines::create(db, &sample(project_id))
+            let created = project_deadlines::create(db, &internal_task(project_id))
                 .await
                 .unwrap();
             let calendar = FakeCalendar::default();
@@ -744,15 +849,105 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn direct_calendar_edits_and_manual_meetings_survive_source_updates_and_cancellation() {
+        with_project(async |db, project_id| {
+            let row = project_deadlines::create(db, &internal_task(project_id))
+                .await
+                .unwrap();
+            let calendar = FakeCalendar::default();
+            reconcile(db, &calendar, project_id, None, false)
+                .await
+                .unwrap();
+            let project = crate::projects::find_by_id(db, project_id)
+                .await
+                .unwrap()
+                .unwrap();
+            let calendar_id = project.calendar_id.as_ref().unwrap();
+            let stored = calendar.events(calendar_id).pop().unwrap();
+            let mut direct = deadline_event(&row, &project.code, None).unwrap();
+            direct.private_properties = stored.private_properties.clone();
+            direct.description = Some("Recording and attorney notes".into());
+            calendar.put_event(calendar_id, &stored.id, direct.clone());
+            direct.private_properties.clear();
+            direct.summary = "calendar-test: Client call".into();
+            calendar.put_event(calendar_id, "manual-call", direct);
+            project_deadlines::update(
+                db,
+                project_id,
+                row.id,
+                &project_deadlines::DeadlinePatch {
+                    due_at: Some("2026-12-01T09:00:00-08:00".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+            for cancelled in [false, true] {
+                if cancelled {
+                    project_deadlines::cancel(db, project_id, row.id)
+                        .await
+                        .unwrap();
+                }
+                for dry_run in [true, false] {
+                    let report = reconcile(db, &calendar, project_id, None, dry_run)
+                        .await
+                        .unwrap();
+                    assert!(report.upserted.is_empty() && report.deleted.is_empty());
+                    assert_eq!(report.failures.len(), 1);
+                    assert!(report.failures[0].contains(&stored.id));
+                }
+                assert_eq!(calendar.events(calendar_id).len(), 2);
+                assert!(calendar
+                    .events(calendar_id)
+                    .iter()
+                    .any(|event| event.id == "manual-call"));
+            }
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn legacy_events_wait_for_review_when_the_source_changes() {
+        with_project(async |db, project_id| {
+            let row = previously_published(db, &sample(project_id)).await;
+            let calendar = FakeCalendar::default();
+            reconcile(db, &calendar, project_id, None, false)
+                .await
+                .unwrap();
+            let project = crate::projects::find_by_id(db, project_id)
+                .await
+                .unwrap()
+                .unwrap();
+            let calendar_id = project.calendar_id.as_ref().unwrap();
+            let id = calendar.events(calendar_id).pop().unwrap().id;
+            calendar.put_event(
+                calendar_id,
+                &id,
+                deadline_event(&row, &project.code, None).unwrap(),
+            );
+            let no_change = reconcile(db, &calendar, project_id, None, false)
+                .await
+                .unwrap();
+            assert!(no_change.failures.is_empty() && no_change.upserted.is_empty());
+            project_deadlines::cancel(db, project_id, row.id)
+                .await
+                .unwrap();
+            let changed = reconcile(db, &calendar, project_id, None, false)
+                .await
+                .unwrap();
+            assert_eq!(changed.failures.len(), 1);
+            assert!(changed.deleted.is_empty());
+            assert_eq!(calendar.events(calendar_id)[0].id, id);
+        })
+        .await;
+    }
+
+    #[tokio::test]
     async fn cancelled_deadlines_converge_before_and_after_publication() {
         with_project(async |db, project_id| {
             let calendar = FakeCalendar::default();
-            let open = project_deadlines::create(db, &sample(project_id))
-                .await
-                .unwrap();
-            let early = project_deadlines::create(db, &sample(project_id))
-                .await
-                .unwrap();
+            let open = previously_published(db, &sample(project_id)).await;
+            let early = previously_published(db, &sample(project_id)).await;
             project_deadlines::cancel(db, project_id, early.id)
                 .await
                 .unwrap();
@@ -788,9 +983,7 @@ mod tests {
     #[tokio::test]
     async fn a_row_deleted_from_the_store_deletes_its_event() {
         with_project(async |db, project_id| {
-            let created = project_deadlines::create(db, &sample(project_id))
-                .await
-                .unwrap();
+            let created = previously_published(db, &sample(project_id)).await;
             let calendar = FakeCalendar::default();
             reconcile(db, &calendar, project_id, None, false)
                 .await
@@ -817,9 +1010,7 @@ mod tests {
     #[tokio::test]
     async fn a_dry_run_plans_writes_and_writes_nothing() {
         with_project(async |db, project_id| {
-            let created = project_deadlines::create(db, &sample(project_id))
-                .await
-                .unwrap();
+            let created = previously_published(db, &sample(project_id)).await;
             let calendar = FakeCalendar::default();
             let report = reconcile(db, &calendar, project_id, None, true)
                 .await
@@ -838,7 +1029,7 @@ mod tests {
     #[tokio::test]
     async fn a_dry_run_over_an_existing_mirror_plans_the_same_diff() {
         with_project(async |db, project_id| {
-            let created = project_deadlines::create(db, &sample(project_id))
+            let created = project_deadlines::create(db, &internal_task(project_id))
                 .await
                 .unwrap();
             let calendar = FakeCalendar::default();
@@ -905,7 +1096,10 @@ mod tests {
                 .await
                 .unwrap();
             let calendar = FakeCalendar::default();
-            let created = calendar.create_calendar("mirror-dead").await.unwrap();
+            let created = calendar
+                .create_calendar("mirror-dead", "UTC")
+                .await
+                .unwrap();
             crate::projects::set_calendar_id(db, project_id, &created.id)
                 .await
                 .unwrap();
@@ -1011,7 +1205,7 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 event_summary(&titled, &project.code),
-                format!("Answering brief due - {}", project.code)
+                format!("{}: DEADLINE – Answering brief due", project.code)
             );
             let mut hearing = sample(project.id);
             hearing.title = None;
@@ -1019,7 +1213,7 @@ mod tests {
             let hearing = project_deadlines::create(db, &hearing).await.unwrap();
             assert_eq!(
                 event_summary(&hearing, &project.code),
-                format!("Hearing - {}", project.code)
+                format!("{}: HEARING – Hearing", project.code)
             );
             let mut opponent = sample(project.id);
             opponent.title = None;
@@ -1028,7 +1222,7 @@ mod tests {
             let opponent = project_deadlines::create(db, &opponent).await.unwrap();
             assert_eq!(
                 event_summary(&opponent, &project.code),
-                format!("Statutory deadline (opponent) - {}", project.code)
+                format!("{}: DEADLINE – Statutory deadline (opponent)", project.code)
             );
         })
         .await;
@@ -1041,7 +1235,7 @@ mod tests {
                 .await
                 .unwrap();
             let event = deadline_event(&created, "mirror-code", Some("https://law.test/")).unwrap();
-            assert_eq!(event.summary, "Answering brief due - mirror-code");
+            assert_eq!(event.summary, "mirror-code: DEADLINE – Answering brief due");
             assert_eq!(
                 event.start,
                 chrono::FixedOffset::east_opt(-8 * 3600)
@@ -1051,7 +1245,7 @@ mod tests {
             );
             assert_eq!(event.sequence, 0);
             assert!(!event.cancelled);
-            assert_eq!(event.reminder_minutes, Some(7 * 24 * 60));
+            assert_eq!(event.reminder_minutes, vec![10080, 4320, 1440]);
             assert_eq!(
                 event.description.as_deref(),
                 Some(format!(
@@ -1111,7 +1305,7 @@ mod tests {
         deadline.internal_lead_days = Some(7);
         let event = deadline_event(&deadline, "mirror-code", None).unwrap();
         assert!(event.cancelled);
-        assert_eq!(event.reminder_minutes, None);
+        assert!(event.reminder_minutes.is_empty());
     }
 
     #[test]
@@ -1120,7 +1314,8 @@ mod tests {
         deadline.status = project_deadlines::STATUS_COMPLETE.into();
         let event = deadline_event(&deadline, "mirror-code", None).unwrap();
         assert!(!event.cancelled);
-        assert_eq!(event.reminder_minutes, None);
+        assert!(event.summary.ends_with(" (complete)"));
+        assert!(event.reminder_minutes.is_empty());
     }
 
     /// A stored-shaped row: the store's own normalization applied to a
@@ -1132,6 +1327,8 @@ mod tests {
             title: deadline.title,
             description: deadline.description,
             due_at: deadline.due_at.clone(),
+            due_on: deadline.due_on.clone(),
+            hearing: deadline.hearing.clone(),
             authority_kind: deadline.authority_kind.clone(),
             authority: deadline.authority.clone(),
             source: deadline.source.clone(),
@@ -1146,6 +1343,7 @@ mod tests {
             inserted_at: "2026-10-30T00:00:00+00:00".into(),
             updated_at: "2026-10-30T00:00:00+00:00".into(),
             calendar_sequence: Some(0),
+            calendar_review_pending: false,
         }
     }
 
@@ -1229,6 +1427,7 @@ mod tests {
             private_notion_page_url: None,
             shared_notion_page_url: None,
             calendar_id: calendar_id.map(str::to_string),
+            calendar_timezone: None,
             booking_url: None,
             legal_plan_id: None,
             plan_member_id: None,
@@ -1289,14 +1488,14 @@ mod tests {
         let mut row = stored(sample(Uuid::now_v7()));
         row.internal_lead_days = Some(3);
         let event = super::deadline_event(&row, "ACME", None).unwrap();
-        assert_eq!(event.reminder_minutes, Some(3 * 24 * 60));
+        assert_eq!(event.reminder_minutes, vec![10080, 4320, 1440]);
 
         row.status = project_deadlines::STATUS_COMPLETE.into();
         assert_eq!(
             super::deadline_event(&row, "ACME", None)
                 .unwrap()
                 .reminder_minutes,
-            None
+            Vec::<i64>::new()
         );
 
         row.status = project_deadlines::STATUS_OPEN.into();

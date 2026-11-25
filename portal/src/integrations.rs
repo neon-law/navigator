@@ -171,6 +171,14 @@ fn secret_error(error: store::firm_secrets::SecretStoreError) -> IntegrationErro
 /// Build one Project's provider client from its Firm's stored credential.
 #[async_trait]
 pub trait IntegrationProviders: Send + Sync {
+    async fn forgejo(
+        &self,
+        _db: &SurrealDb,
+        _project: Uuid,
+    ) -> Result<cloud::ForgejoForge, IntegrationError> {
+        Err(IntegrationError::CredentialUnusable)
+    }
+
     async fn notion(
         &self,
         surreal: &SurrealDb,
@@ -361,6 +369,18 @@ impl FirmIntegrations {
 
 #[async_trait]
 impl IntegrationProviders for FirmIntegrations {
+    async fn forgejo(
+        &self,
+        db: &SurrealDb,
+        project: Uuid,
+    ) -> Result<cloud::ForgejoForge, IntegrationError> {
+        store::project_surfaces::forgejo_for_project(db, project, self.kms.as_ref(), |key| {
+            std::env::var(key).ok()
+        })
+        .await
+        .map_err(|_| IntegrationError::CredentialUnusable)
+    }
+
     async fn notion(
         &self,
         surreal: &SurrealDb,
@@ -443,6 +463,7 @@ pub async fn from_env() -> Arc<dyn IntegrationProviders> {
 /// test drives the door and then reads what the provider saw.
 #[derive(Debug, Default, Clone)]
 pub struct FakeIntegrations {
+    pub forgejo: Option<cloud::ForgejoForge>,
     pub notion: cloud::FakeNotion,
     pub slack: cloud::FakeSlack,
     pub calendar: cloud::FakeCalendar,
@@ -477,6 +498,16 @@ impl FakeIntegrations {
 
 #[async_trait]
 impl IntegrationProviders for FakeIntegrations {
+    async fn forgejo(
+        &self,
+        _db: &SurrealDb,
+        _project: Uuid,
+    ) -> Result<cloud::ForgejoForge, IntegrationError> {
+        self.forgejo
+            .clone()
+            .ok_or(IntegrationError::CredentialUnusable)
+    }
+
     async fn notion(
         &self,
         _surreal: &SurrealDb,

@@ -2013,6 +2013,7 @@ checksum = "a6139a8597ed92cf816dfb33f5dd6cf0bb93a6adc938f11039f371bc5bcd26c3"
 dependencies = [
  "chrono",
  "phf 0.12.1",
+ "serde",
 ]
 
 [[package]]
@@ -2196,6 +2197,7 @@ dependencies = [
  "gcloud-auth",
  "gcloud-storage",
  "git2",
+ "hex",
  "jsonwebtoken 12.0.0",
  "live-inquiry",
  "md-5 0.11.0",
@@ -2205,6 +2207,7 @@ dependencies = [
  "roxmltree 0.21.2",
  "serde",
  "serde_json",
+ "sha1 0.11.0",
  "sha2 0.11.1",
  "symphonia",
  "telemetry",
@@ -5459,6 +5462,7 @@ version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a14afde3344be69225fec4f6f44f6a219a3a492f9d8301eb25ef608fe4b7014c"
 dependencies = [
+ "brotli",
  "hayro-postscript",
 ]
 
@@ -7474,6 +7478,7 @@ dependencies = [
  "fake",
  "http-body-util",
  "import",
+ "model",
  "reqwest 0.13.5",
  "rules",
  "serde",
@@ -8990,6 +8995,7 @@ dependencies = [
  "forms",
  "futures",
  "gateway",
+ "hayro",
  "hex",
  "hmac 0.13.0",
  "http-body-util",
@@ -11013,7 +11019,9 @@ dependencies = [
  "clap",
  "cloud",
  "dbos",
+ "dioxus",
  "dioxus-server",
+ "dioxus-ssr",
  "dotenvy",
  "fantoccini",
  "features",

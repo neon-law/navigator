@@ -1,3 +1,19 @@
+/// Display a Project Calendar event under its exact Project code.
+#[must_use]
+pub fn calendar_event_title(code: &str, title: &str) -> String {
+    let prefix = format!("{code}:");
+    let title = title.trim();
+    let title = title.strip_prefix(&prefix).unwrap_or(title).trim_start();
+    let suffix = format!(" - {code}");
+    let title = title.strip_suffix(&suffix).unwrap_or(title);
+    let title = if title.is_empty() {
+        "Untitled event"
+    } else {
+        title
+    };
+    format!("{prefix} {title}")
+}
+
 /// An existing onboarding Notation or a separately filed onboarding document.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct OnboardingAgreement {

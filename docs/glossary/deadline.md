@@ -22,12 +22,10 @@ Deadline's visibility on the matter page and board.
 internal. Choosing `internal` clears the client lead. Choosing `client` requires an explicit client lead and its
 internal lead. Updates preserve visibility unless a new choice is supplied. No second visibility field is stored.
 
-**Authority.** Every deadline records *why the date binds*: a closed `authority_kind` vocabulary — `statute`,
-`court_rule`, `court_order`, `contract`, or `internal` — beside a free-text `authority` citation such as `15 U.S.C. §
-1681i(a)(1)` or a court-order reference. "Statutory" stays a queryable distinction rather than collapsing into a general
-bucket, and a deadline nobody can justify cannot be written: `statute` and `court_rule` both require a citation.
-Distinct from `source`, which records the *producing workflow* — or `lawyer` for a hand-entered date — not the
-authority.
+**Authority.** Each Deadline records why its date binds. The authority kinds are `statute`, `court_rule`, `case_law`,
+`court_order`, `contract`, and `internal`. The authority citation identifies the governing source. Court dates enter the
+[Deadline Proposal](deadline-proposal.md) queue with their filed evidence. The separate `source` field records the
+producing workflow or the lawyer who entered the date.
 
 **Stored, never derived.** The due date is written down, not recomputed at read time. A rule can change — a statute is
 amended, a court rule is revised — and recomputing would silently move a date the firm already docketed and relied on.
@@ -44,25 +42,31 @@ step updates its row instead of duplicating it. A hand-entered deadline leaves t
 pleadings sharing a kind and a trigger date stay two rows — an idempotency key, not a natural key that silently merges
 malpractice-relevant records.
 
-**Stored due instant.** `due_at` is the stored due date as an RFC 3339 timestamp with an explicit offset (`Z` or
-`±hh:mm`). A date with no offset is refused. The field is never a court-day count.
+**Due date and cutoff.** Use an RFC 3339 `--due-at` with an explicit offset for a timed obligation. For a civil due
+date, use `--due-on YYYY-MM-DD` to inherit the matter’s time zone, or override it with `--due-timezone Area/City`. Add
+`--cutoff HH:MM:SS` only when the source supplies a local cutoff. The API accepts the same facts in a `due_on` object
+with `date` and optional `timezone` and `cutoff`. A civil date appears as an all-day event in Google Calendar and ICS.
+The description includes any verified cutoff. Navigator uses the cutoff or the next local midnight for overdue checks.
+The civil date stays the same in every viewer's time zone. Existing timestamp-only records keep their recorded instant.
+A hearing requires a timed start. Save the notice’s duration with `--hearing-minutes` and its courtroom address with
+`--hearing-location`. When the duration is unknown, the calendar reserves one hour.
 
 **Whose date it is.** `calendar_role` is closed: `firm` (our obligation), `opponent` (the other side's deadline), or
 `hearing` (an appearance). A hearing is not our filing obligation.
 
 **What kind of date it is.** `category` is closed: `court` (a filing or response the court's rules or orders require),
 `hearing` (an appearance; the reminder for a scheduled hearing [Docket Entry](docket-entry.md)), `discovery` (a
-discovery request, response, disclosure, or cutoff), or `internal` (a firm preparation target). It answers a different
-question than `calendar_role` and `authority_kind` — not whose the date is or why it binds, but what kind it is — which
-is why a court deadline and a discovery deadline can both be `firm` plus `court_rule` yet sort differently. Creation
-defaults to `hearing` when the calendar role is `hearing` and `internal` when the authority kind is `internal`;
-otherwise it must be supplied rather than guessed, because `court` and `discovery` share authority kinds. The matter
-calendar colors each category from a fixed map — Tomato for `court`, Grape for `hearing`, Banana for `discovery`,
-Graphite for `internal` — so every matter calendar looks the same, and the map is Navigator's, never set per Project.
-The ICS feed renders no category; the color travels only with the mirrored Google Calendar event. The one-time migration
-recovers a missing category as `hearing` for a hearing role, then as `internal` for internal authority, without changing
-an explicit category or the Deadline's dates and revision. Later explicit clears remain unset. Rows whose category
-cannot be settled keep it unset.
+discovery request, response, disclosure, or cutoff), `internal` (a firm preparation target), or `tickler` (a follow-up
+reminder). It answers a different question than `calendar_role` and `authority_kind` — not whose the date is or why it
+binds, but what kind it is — which is why a court deadline and a discovery deadline can both be `firm` plus `court_rule`
+yet sort differently. Creation defaults to `hearing` when the calendar role is `hearing` and `internal` when the
+authority kind is `internal`; otherwise it must be supplied rather than guessed, because `court` and `discovery` share
+authority kinds. The matter calendar colors each category from a fixed map — Tomato for `court`, Grape for `hearing`,
+Banana for `discovery`, Graphite for `internal` and `tickler` — so every matter calendar looks the same, and the map is
+Navigator's, never set per Project. The ICS title includes the category label. The color appears on the mirrored Google
+Calendar event. The one-time migration recovers a missing category as `hearing` for a hearing role, then as `internal`
+for internal authority, without changing an explicit category or the Deadline's dates and revision. Later explicit
+clears remain unset. Rows whose category cannot be settled keep it unset.
 
 `navigator project deadline list` marks any unset category with `category_review_required: true`. After review, use
 `navigator project deadline update <id> --category <category>` to select the appropriate closed category.

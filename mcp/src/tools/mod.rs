@@ -62,6 +62,7 @@ pub fn list_tools() -> Vec<Value> {
         list_deadlines::descriptor(),
         project_deadlines::list_descriptor(),
         project_deadlines::create_descriptor(),
+        project_deadlines::queue_descriptor(),
         project_deadlines::update_descriptor(),
         project_deadlines::complete_descriptor(),
         project_deadlines::cancel_descriptor(),
@@ -222,6 +223,7 @@ const CONFIRMATION_EXEMPT_TOOLS: &[&str] = &[
     "link_person_project",
     "bulk_import",
     "create_deadline",
+    "queue_court_date",
     "update_deadline",
     "complete_deadline",
     "cancel_deadline",
@@ -368,32 +370,13 @@ async fn dispatch_tool(
         "list_deadlines" => list_deadlines::call(surreal, &scope, arguments).await,
         "list_project_deadlines"
         | "create_deadline"
+        | "queue_court_date"
         | "update_deadline"
         | "complete_deadline"
         | "cancel_deadline"
         | "reopen_deadline" => {
             let (person_id, role) = caller.deadline_actor()?;
-            match name {
-                "list_project_deadlines" => {
-                    project_deadlines::list_call(surreal, person_id, role, arguments).await
-                }
-                "create_deadline" => {
-                    project_deadlines::create_call(surreal, person_id, role, arguments).await
-                }
-                "update_deadline" => {
-                    project_deadlines::update_call(surreal, person_id, role, arguments).await
-                }
-                "complete_deadline" => {
-                    project_deadlines::complete_call(surreal, person_id, role, arguments).await
-                }
-                "cancel_deadline" => {
-                    project_deadlines::cancel_call(surreal, person_id, role, arguments).await
-                }
-                "reopen_deadline" => {
-                    project_deadlines::reopen_call(surreal, person_id, role, arguments).await
-                }
-                _ => Err(ToolError::Unknown(name.to_string())),
-            }
+            project_deadlines::dispatch(name, surreal, person_id, role, arguments).await
         }
         "list_projects" => list_projects::call(surreal, &scope, arguments).await,
         "project_status" => project_status::call(surreal, &scope, arguments).await,

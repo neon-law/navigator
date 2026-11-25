@@ -45,6 +45,8 @@ fn deadline(
         description: None,
         project_id,
         // Far enough out that the test never turns into an overdue one.
+        hearing: None,
+        due_on: None,
         due_at: "2099-11-02T17:00:00-08:00".into(),
         authority_kind: authority_kind.into(),
         authority: authority.into(),

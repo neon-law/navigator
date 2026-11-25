@@ -1,0 +1,208 @@
+# Country zones: IANA tzdb 2026f zone.tab, joined to ISO 3166-1 through geotime/data/countries.tsv.
+# US states: US DOT Uniform Time (https://www.transportation.gov/regulations/time-act).
+# Only a jurisdiction with one unambiguous civil time is listed. Columns: code, exact name, IANA zone.
+AFG	Afghanistan	Asia/Kabul
+AGO	Angola	Africa/Luanda
+AL	Alabama	America/Chicago
+ALB	Albania	Europe/Tirane
+AND	Andorra	Europe/Andorra
+AR	Arkansas	America/Chicago
+ARE	United Arab Emirates	Asia/Dubai
+ARM	Armenia	Asia/Yerevan
+ATG	Antigua and Barbuda	America/Antigua
+AUT	Austria	Europe/Vienna
+AZE	Azerbaijan	Asia/Baku
+BDI	Burundi	Africa/Bujumbura
+BEL	Belgium	Europe/Brussels
+BEN	Benin	Africa/Porto-Novo
+BFA	Burkina Faso	Africa/Ouagadougou
+BGD	Bangladesh	Asia/Dhaka
+BGR	Bulgaria	Europe/Sofia
+BHR	Bahrain	Asia/Bahrain
+BHS	Bahamas	America/Nassau
+BIH	Bosnia and Herzegovina	Europe/Sarajevo
+BLR	Belarus	Europe/Minsk
+BLZ	Belize	America/Belize
+BOL	Bolivia	America/La_Paz
+BRB	Barbados	America/Barbados
+BRN	Brunei Darussalam	Asia/Brunei
+BTN	Bhutan	Asia/Thimphu
+BWA	Botswana	Africa/Gaborone
+CA	California	America/Los_Angeles
+CAF	Central African Republic	Africa/Bangui
+CHE	Switzerland	Europe/Zurich
+CIV	Côte d'Ivoire	Africa/Abidjan
+CMR	Cameroon	Africa/Douala
+CO	Colorado	America/Denver
+COG	Congo	Africa/Brazzaville
+COL	Colombia	America/Bogota
+COM	Comoros	Indian/Comoro
+CPV	Cabo Verde	Atlantic/Cape_Verde
+CRI	Costa Rica	America/Costa_Rica
+CT	Connecticut	America/New_York
+CUB	Cuba	America/Havana
+CZE	Czechia	Europe/Prague
+DC	District of Columbia	America/New_York
+DE	Delaware	America/New_York
+DJI	Djibouti	Africa/Djibouti
+DMA	Dominica	America/Dominica
+DNK	Denmark	Europe/Copenhagen
+DOM	Dominican Republic	America/Santo_Domingo
+DZA	Algeria	Africa/Algiers
+EGY	Egypt	Africa/Cairo
+ERI	Eritrea	Africa/Asmara
+EST	Estonia	Europe/Tallinn
+ETH	Ethiopia	Africa/Addis_Ababa
+FIN	Finland	Europe/Helsinki
+FJI	Fiji	Pacific/Fiji
+FRA	France	Europe/Paris
+GA	Georgia	America/New_York
+GAB	Gabon	Africa/Libreville
+GBR	United Kingdom	Europe/London
+GEO	Georgia (country)	Asia/Tbilisi
+GHA	Ghana	Africa/Accra
+GIN	Guinea	Africa/Conakry
+GMB	Gambia	Africa/Banjul
+GNB	Guinea-Bissau	Africa/Bissau
+GNQ	Equatorial Guinea	Africa/Malabo
+GRC	Greece	Europe/Athens
+GRD	Grenada	America/Grenada
+GTM	Guatemala	America/Guatemala
+GUY	Guyana	America/Guyana
+HI	Hawaii	Pacific/Honolulu
+HND	Honduras	America/Tegucigalpa
+HRV	Croatia	Europe/Zagreb
+HTI	Haiti	America/Port-au-Prince
+HUN	Hungary	Europe/Budapest
+IA	Iowa	America/Chicago
+IL	Illinois	America/Chicago
+IND	India	Asia/Kolkata
+IRL	Ireland	Europe/Dublin
+IRN	Iran	Asia/Tehran
+IRQ	Iraq	Asia/Baghdad
+ISL	Iceland	Atlantic/Reykjavik
+ISR	Israel	Asia/Jerusalem
+ITA	Italy	Europe/Rome
+JAM	Jamaica	America/Jamaica
+JOR	Jordan	Asia/Amman
+JPN	Japan	Asia/Tokyo
+KEN	Kenya	Africa/Nairobi
+KGZ	Kyrgyzstan	Asia/Bishkek
+KHM	Cambodia	Asia/Phnom_Penh
+KNA	Saint Kitts and Nevis	America/St_Kitts
+KOR	Korea, South	Asia/Seoul
+KWT	Kuwait	Asia/Kuwait
+LA	Louisiana	America/Chicago
+LAO	Laos	Asia/Vientiane
+LBN	Lebanon	Asia/Beirut
+LBR	Liberia	Africa/Monrovia
+LBY	Libya	Africa/Tripoli
+LCA	Saint Lucia	America/St_Lucia
+LIE	Liechtenstein	Europe/Vaduz
+LKA	Sri Lanka	Asia/Colombo
+LSO	Lesotho	Africa/Maseru
+LTU	Lithuania	Europe/Vilnius
+LUX	Luxembourg	Europe/Luxembourg
+LVA	Latvia	Europe/Riga
+MA	Massachusetts	America/New_York
+MAR	Morocco	Africa/Casablanca
+MCO	Monaco	Europe/Monaco
+MD	Maryland	America/New_York
+MDA	Moldova	Europe/Chisinau
+MDG	Madagascar	Indian/Antananarivo
+MDV	Maldives	Indian/Maldives
+ME	Maine	America/New_York
+MKD	North Macedonia	Europe/Skopje
+MLI	Mali	Africa/Bamako
+MLT	Malta	Europe/Malta
+MMR	Myanmar	Asia/Yangon
+MN	Minnesota	America/Chicago
+MNE	Montenegro	Europe/Podgorica
+MO	Missouri	America/Chicago
+MOZ	Mozambique	Africa/Maputo
+MRT	Mauritania	Africa/Nouakchott
+MS	Mississippi	America/Chicago
+MT	Montana	America/Denver
+MUS	Mauritius	Indian/Mauritius
+MWI	Malawi	Africa/Blantyre
+NAM	Namibia	Africa/Windhoek
+NC	North Carolina	America/New_York
+NER	Niger	Africa/Niamey
+NGA	Nigeria	Africa/Lagos
+NH	New Hampshire	America/New_York
+NIC	Nicaragua	America/Managua
+NJ	New Jersey	America/New_York
+NLD	Netherlands	Europe/Amsterdam
+NM	New Mexico	America/Denver
+NOR	Norway	Europe/Oslo
+NPL	Nepal	Asia/Kathmandu
+NRU	Nauru	Pacific/Nauru
+NY	New York	America/New_York
+OH	Ohio	America/New_York
+OK	Oklahoma	America/Chicago
+OMN	Oman	Asia/Muscat
+PA	Pennsylvania	America/New_York
+PAK	Pakistan	Asia/Karachi
+PAN	Panama	America/Panama
+PER	Peru	America/Lima
+PHL	Philippines	Asia/Manila
+PLW	Palau	Pacific/Palau
+POL	Poland	Europe/Warsaw
+PRK	Korea, North	Asia/Pyongyang
+PRY	Paraguay	America/Asuncion
+QAT	Qatar	Asia/Qatar
+RI	Rhode Island	America/New_York
+ROU	Romania	Europe/Bucharest
+RWA	Rwanda	Africa/Kigali
+SAU	Saudi Arabia	Asia/Riyadh
+SC	South Carolina	America/New_York
+SDN	Sudan	Africa/Khartoum
+SEN	Senegal	Africa/Dakar
+SGP	Singapore	Asia/Singapore
+SLB	Solomon Islands	Pacific/Guadalcanal
+SLE	Sierra Leone	Africa/Freetown
+SLV	El Salvador	America/El_Salvador
+SMR	San Marino	Europe/San_Marino
+SOM	Somalia	Africa/Mogadishu
+SRB	Serbia	Europe/Belgrade
+SSD	South Sudan	Africa/Juba
+STP	Sao Tome and Principe	Africa/Sao_Tome
+SUR	Suriname	America/Paramaribo
+SVK	Slovakia	Europe/Bratislava
+SVN	Slovenia	Europe/Ljubljana
+SWE	Sweden	Europe/Stockholm
+SWZ	Eswatini	Africa/Mbabane
+SYC	Seychelles	Indian/Mahe
+SYR	Syria	Asia/Damascus
+TCD	Chad	Africa/Ndjamena
+TGO	Togo	Africa/Lome
+THA	Thailand	Asia/Bangkok
+TJK	Tajikistan	Asia/Dushanbe
+TKM	Turkmenistan	Asia/Ashgabat
+TLS	Timor-Leste	Asia/Dili
+TON	Tonga	Pacific/Tongatapu
+TTO	Trinidad and Tobago	America/Port_of_Spain
+TUN	Tunisia	Africa/Tunis
+TUR	Turkey	Europe/Istanbul
+TUV	Tuvalu	Pacific/Funafuti
+TWN	Taiwan	Asia/Taipei
+TZA	Tanzania	Africa/Dar_es_Salaam
+UGA	Uganda	Africa/Kampala
+URY	Uruguay	America/Montevideo
+UT	Utah	America/Denver
+VA	Virginia	America/New_York
+VAT	Holy See	Europe/Vatican
+VCT	Saint Vincent and the Grenadines	America/St_Vincent
+VEN	Venezuela	America/Caracas
+VNM	Vietnam	Asia/Ho_Chi_Minh
+VT	Vermont	America/New_York
+VUT	Vanuatu	Pacific/Efate
+WA	Washington	America/Los_Angeles
+WI	Wisconsin	America/Chicago
+WSM	Samoa	Pacific/Apia
+WV	West Virginia	America/New_York
+WY	Wyoming	America/Denver
+YEM	Yemen	Asia/Aden
+ZAF	South Africa	Africa/Johannesburg
+ZMB	Zambia	Africa/Lusaka
+ZWE	Zimbabwe	Africa/Harare

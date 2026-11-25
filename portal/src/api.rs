@@ -607,6 +607,41 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
         ),
         (
             "GET",
+            "/app/api/projects/{id}/court-date-proposals",
+            get(crate::court_dates_api::list),
+        ),
+        (
+            "POST",
+            "/app/api/projects/{id}/court-date-proposals",
+            post(crate::court_dates_api::stage),
+        ),
+        (
+            "PATCH",
+            "/app/api/projects/{id}/court-date-proposals/{proposal_id}",
+            patch(crate::court_dates_api::correct),
+        ),
+        (
+            "POST",
+            "/app/api/projects/{id}/court-date-proposals/{proposal_id}/confirm",
+            post(crate::court_dates_api::confirm),
+        ),
+        (
+            "POST",
+            "/app/api/projects/{id}/court-date-proposals/{proposal_id}/return",
+            post(crate::court_dates_api::return_for_correction),
+        ),
+        (
+            "GET",
+            "/app/api/projects/{id}/court-date-proposals/{proposal_id}/evidence/{index}",
+            get(crate::deadline_evidence::page),
+        ),
+        (
+            "GET",
+            "/app/api/projects/{id}/court-date-proposals/{proposal_id}/evidence/{index}/forgejo",
+            get(crate::deadline_evidence::forgejo_source),
+        ),
+        (
+            "GET",
             "/app/api/projects/{id}/deadlines",
             get(crate::deadlines_api::list_deadlines),
         ),
@@ -10617,6 +10652,9 @@ pub enum ApiError {
     /// A Deadline write the caller can correct: a missing citation, a due
     /// instant with no offset, or a lead time that is out of order.
     DeadlineInvalid(String),
+    /// The proposal or its evidence changed after the lawyer opened it.
+    CourtDateConflict,
+    CourtDateSourceUnavailable,
     /// An E-Filing Transaction report the caller can correct: an unknown
     /// status, a malformed date, or a filed date on a transaction that is
     /// not accepted.
@@ -11768,6 +11806,14 @@ impl IntoResponse for ApiError {
                 })),
             )
                 .into_response(),
+            Self::CourtDateSourceUnavailable => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({"error":"court_date_source_unavailable","message":"The owning Firm’s Forgejo could not verify the pinned source."})),
+            ).into_response(),
+            Self::CourtDateConflict => (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({"error":"stale_proposal","message":"Reload the court date and its sources before reviewing again."})),
+            ).into_response(),
             Self::DeadlineInvalid(message)
             | Self::EfilingInvalid(message)
             | Self::DocketInvalid(message)

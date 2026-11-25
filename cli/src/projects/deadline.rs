@@ -320,7 +320,24 @@ fn matches_create(row: &Value, project: Uuid, key: &str, body: &Value) -> bool {
                 let stored = &row[field];
                 match (field.as_str(), requested.as_str().map(str::trim)) {
                     ("due_at", _) => {
-                        timestamp(requested).is_some() && timestamp(requested) == timestamp(stored)
+                        row["due_on"].is_null()
+                            && timestamp(requested).is_some()
+                            && timestamp(requested) == timestamp(stored)
+                    }
+                    ("due_on", _) => {
+                        let Ok(saved) = serde_json::from_value::<model::project_deadlines::DueOn>(
+                            stored.clone(),
+                        ) else {
+                            return false;
+                        };
+                        serde_json::from_value::<model::project_deadlines::DueOnInput>(
+                            requested.clone(),
+                        )
+                        .is_ok_and(|input| {
+                            input.date == saved.date
+                                && input.cutoff == saved.cutoff
+                                && input.timezone.is_none_or(|zone| zone == saved.timezone)
+                        })
                     }
                     ("description", Some("")) => stored.is_null(),
                     ("source", Some("")) => stored == "lawyer",
@@ -380,6 +397,18 @@ async fn create_confirmed(
     )
 }
 
+pub(crate) fn hearing_details(
+    duration_minutes: Option<std::num::NonZeroU32>,
+    location: Option<String>,
+) -> Option<model::project_deadlines::Hearing> {
+    (duration_minutes.is_some() || location.is_some()).then_some(
+        model::project_deadlines::Hearing {
+            duration_minutes,
+            location,
+        },
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn create(
     host: Option<&str>,
@@ -387,7 +416,9 @@ pub async fn create(
     title: Option<String>,
     description: Option<String>,
     visibility: Option<String>,
-    due_at: String,
+    due_at: Option<String>,
+    due_on: Option<model::project_deadlines::DueOnInput>,
+    hearing: Option<model::project_deadlines::Hearing>,
     authority_kind: String,
     authority: Option<String>,
     source: Option<String>,
@@ -409,7 +440,9 @@ pub async fn create(
             let (base, token, id, code) = coordinates_with_code(host, project).await?;
             let mut body = serde_json::Map::new();
             let object = &mut body;
-            insert(object, "due_at", Some(due_at));
+            insert(object, "due_at", due_at);
+            insert(object, "due_on", due_on);
+            insert(object, "hearing", hearing);
             insert(object, "authority_kind", Some(authority_kind));
             insert(object, "calendar_role", Some(calendar_role));
             insert(object, "title", title);
@@ -453,6 +486,8 @@ pub async fn update(
     description: Option<String>,
     visibility: Option<String>,
     due_at: Option<String>,
+    due_on: Option<model::project_deadlines::DueOnInput>,
+    hearing: Option<model::project_deadlines::Hearing>,
     authority_kind: Option<String>,
     authority: Option<String>,
     source: Option<String>,
@@ -472,6 +507,8 @@ pub async fn update(
             let object = &mut body;
             insert(object, "title", title);
             insert(object, "due_at", due_at);
+            insert(object, "due_on", due_on);
+            insert(object, "hearing", hearing);
             insert(object, "authority_kind", authority_kind);
             insert(object, "authority", authority);
             insert(object, "source", source);
@@ -659,6 +696,20 @@ mod tests {
 
     const CODE: &str = "sample-matter";
 
+    #[test]
+    fn civil_date_recovery_accepts_the_inherited_zone_and_preserves_the_due_kind() {
+        let project = Uuid::now_v7();
+        let row = json!({"id":"saved", "project_id":project, "replay_key":"retry",
+            "due_at":"2030-07-17T04:00:00Z",
+            "due_on":{"date":"2030-07-16","timezone":"America/New_York"}});
+        let matches = |body| super::matches_create(&row, project, "retry", &body);
+        assert!(matches(json!({"due_on":{"date":"2030-07-16"}})));
+        assert!(!matches(
+            json!({"due_on":{"date":"2030-07-16","timezone":"America/Chicago"}})
+        ));
+        assert!(!matches(json!({"due_at":"2030-07-17T04:00:00Z"})));
+    }
+
     async fn matter() -> (MockServer, crate::projects::test_login::Login, String) {
         let id = Uuid::new_v4();
         let (server, login) = site(json!([{"id": id, "code": CODE}])).await;
@@ -800,12 +851,12 @@ mod tests {
             .and(path(door))
             .and(body_json(json!({
                 "due_at": "2026-11-02T17:00:00-08:00",
-                "authority_kind": "court_order",
+                "authority_kind": "contract",
                 "calendar_role": "firm",
                 "title": "Response",
                 "description": "Served by mail",
-                "category": "court",
-                "authority": "Scheduling order",
+                "category": "internal",
+                "authority": "Synthetic agreement",
                 "source": "lawyer",
                 "source_document_id": document,
                 "owner_person_id": owner,
@@ -829,9 +880,11 @@ mod tests {
                 title.map(str::to_owned),
                 Some("Served by mail".into()),
                 Some(visibility.into()),
-                "2026-11-02T17:00:00-08:00".into(),
-                "court_order".into(),
-                Some("Scheduling order".into()),
+                Some("2026-11-02T17:00:00-08:00".into()),
+                None,
+                None,
+                "contract".into(),
+                Some("Synthetic agreement".into()),
                 Some("lawyer".into()),
                 Some(document),
                 Some(owner),
@@ -845,7 +898,7 @@ mod tests {
             )
         };
         assert_eq!(
-            create(Some("  "), "court", "client").await,
+            create(Some("  "), "internal", "client").await,
             ExitCode::FAILURE
         );
         assert_eq!(
@@ -853,12 +906,12 @@ mod tests {
             ExitCode::FAILURE
         );
         assert_eq!(
-            create(Some("Response"), "court", "public").await,
+            create(Some("Response"), "internal", "public").await,
             ExitCode::FAILURE
         );
         assert!(!calendar.exists());
         assert_eq!(
-            create(Some("Response"), "court", "client").await,
+            create(Some("Response"), "internal", "client").await,
             ExitCode::SUCCESS
         );
         let exported = std::fs::read_to_string(&calendar).unwrap();
@@ -899,6 +952,8 @@ mod tests {
                 Some("Moved by stipulation".into()),
                 Some("internal".into()),
                 Some("2026-11-09T17:00:00-08:00".into()),
+                None,
+                None,
                 Some("rule".into()),
                 Some("Local rule 7".into()),
                 Some("lawyer".into()),

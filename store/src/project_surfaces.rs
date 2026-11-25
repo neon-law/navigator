@@ -1499,6 +1499,7 @@ mod tests {
             private_notion_page_url: None,
             shared_notion_page_url: None,
             calendar_id: None,
+            calendar_timezone: None,
             booking_url: None,
             onboarding_jurisdiction: None,
             legal_plan_id: None,

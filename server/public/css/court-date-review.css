@@ -1,0 +1,108 @@
+court-date-review {
+  display: block;
+  margin: 1.25rem 0;
+  max-width: 72rem;
+}
+.court-review__heading,
+.court-review__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+}
+.court-review__keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  font-size: 0.85rem;
+}
+.court-review__heading h2 {
+  font-size: 1.65rem;
+  margin: 0;
+}
+.court-review__heading .nav-status-strip {
+  margin: 0;
+}
+.court-review__grid {
+  display: grid;
+  grid-template-columns: minmax(12rem, 0.78fr) minmax(0, 2fr);
+  gap: 2rem;
+  margin-top: 1rem;
+}
+court-date-review [data-queue] {
+  align-self: start;
+  max-height: 65vh;
+  overflow: auto;
+  border-top: 1px solid var(--nav-color-border);
+}
+.court-review__row {
+  display: block;
+  width: 100%;
+  padding: 0.72rem 0.65rem;
+  text-align: left;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  border: 0;
+  border-bottom: 1px solid var(--nav-color-border);
+  cursor: pointer;
+}
+.court-review__row[aria-current="true"] {
+  background: var(--nav-color-surface-subtle);
+  box-shadow: inset 3px 0 var(--nav-color-primary);
+}
+.court-review__row strong {
+  display: block;
+}
+.court-review__date {
+  font-size: clamp(1.5rem, 3vw, 2.1rem);
+  line-height: 1.15;
+  margin: 0.3rem 0;
+}
+court-date-review [data-detail] > p {
+  margin: 0.4rem 0 0.8rem;
+}
+.court-review__source {
+  margin: 0.9rem 0;
+}
+.court-review__actions {
+  justify-content: flex-start;
+  margin-top: 1rem;
+}
+.court-review__calendar-note {
+  display: block;
+  margin-top: 0.35rem;
+}
+court-date-review button:focus-visible,
+court-date-review textarea:focus-visible {
+  outline: 3px solid var(--nav-color-primary);
+  outline-offset: 2px;
+}
+court-date-review dialog {
+  padding: 1rem;
+  margin: auto;
+  width: min(52rem, 94vw);
+  max-height: 90vh;
+  color: inherit;
+  border: 1px solid var(--nav-color-border);
+  background: var(--nav-color-surface, #fff);
+}
+court-date-review dialog::backdrop {
+  background: rgba(0, 0, 0, 0.4);
+}
+court-date-review dialog textarea {
+  display: block;
+  width: 100%;
+  min-height: 5rem;
+  margin: 0.5rem 0;
+}
+@media (max-width: 680px) {
+  .court-review__grid {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+  court-date-review [data-queue] {
+    max-height: 12rem;
+  }
+}

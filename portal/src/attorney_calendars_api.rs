@@ -9,7 +9,7 @@
 //! for other participants returns busy windows. Event details come from the
 //! signed-in Person's primary calendar or the authorized Project Calendar.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -98,7 +98,8 @@ struct CheckBody {
 
 #[derive(Serialize)]
 struct AccessCalendarBody {
-    calendar_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    calendar_id: Option<String>,
     kind: &'static str,
     readable: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -297,49 +298,28 @@ pub(crate) async fn access_door(
         request.personal,
     )
     .await?;
-    let pg = store::attorney_calendars::postgres()
-        .await
-        .map_err(calendar_store)?;
-    let ids: Vec<Uuid> = attorneys
-        .iter()
-        .map(|attorney| attorney.person.id)
-        .collect();
-    let recorded = store::attorney_calendars::listed(&pg, &ids)
-        .await
-        .map_err(calendar_store)?;
+    let calendars =
+        SchedulingCalendars::load(&state, &session, project.as_ref(), &attorneys).await?;
     let now = chrono::Utc::now().fixed_offset();
     let probe_end = now + TimeDelta::minutes(5);
     let mut bodies = Vec::new();
     for attorney in &attorneys {
-        let rows: Vec<&AttorneyCalendar> = recorded
-            .iter()
-            .filter(|row| row.person_id == attorney.person.id)
-            .collect();
-        if rows.is_empty() {
-            bodies.push(AccessAttorneyBody {
-                person_id: attorney.person.id,
-                email: attorney.person.email.clone(),
-                name: attorney.person.name.clone(),
-                role: attorney.role.clone(),
-                missing: Some("unrecorded"),
-                calendars: Vec::new(),
-            });
-            continue;
-        }
-        let ids: Vec<String> = rows.iter().map(|row| row.calendar_id.clone()).collect();
+        let ids = calendars.ids(attorney.person.id);
         let windows = read_free_busy(&state, &attorney.person.email, &ids, now, probe_end).await?;
-        let calendars = rows
-            .iter()
-            .map(|row| {
-                let missing = windows.iter().find_map(|window| {
-                    (window.calendar_id == row.calendar_id)
-                        .then_some(window.gap)
-                        .flatten()
-                        .map(gap_word)
+        let access = windows
+            .into_iter()
+            .map(|window| {
+                let missing = window.gap.map(gap_word);
+                let recorded = calendars.recorded.iter().find(|row| {
+                    row.person_id == attorney.person.id && row.calendar_id == window.calendar_id
                 });
+                let visible = session.person_id == Some(attorney.person.id)
+                    || project.as_ref().and_then(|p| p.calendar_id.as_ref())
+                        == Some(&window.calendar_id)
+                    || !calendars.is_shared(attorney.person.id, &window.calendar_id);
                 AccessCalendarBody {
-                    calendar_id: row.calendar_id.clone(),
-                    kind: row.kind.as_str(),
+                    calendar_id: visible.then_some(window.calendar_id),
+                    kind: recorded.map_or("freebusy", |row| row.kind.as_str()),
                     readable: missing.is_none(),
                     missing,
                 }
@@ -350,8 +330,8 @@ pub(crate) async fn access_door(
             email: attorney.person.email.clone(),
             name: attorney.person.name.clone(),
             role: attorney.role.clone(),
-            missing: None,
-            calendars,
+            missing: calendars.missing(attorney.person.id),
+            calendars: access,
         });
     }
     let project_calendar = if let Some(project) = project.as_ref() {
@@ -360,14 +340,14 @@ pub(crate) async fn access_door(
                 .await?
                 .is_ok();
             Some(AccessCalendarBody {
-                calendar_id,
+                calendar_id: Some(calendar_id),
                 kind: "project",
                 readable,
                 missing: (!readable).then_some("scope"),
             })
         } else {
             Some(AccessCalendarBody {
-                calendar_id: String::new(),
+                calendar_id: Some(String::new()),
                 kind: "project",
                 readable: false,
                 missing: Some("unrecorded"),
@@ -436,18 +416,9 @@ async fn read_report(
         request.personal,
     )
     .await?;
-    let pg = store::attorney_calendars::postgres()
-        .await
-        .map_err(calendar_store)?;
-    let ids: Vec<Uuid> = attorneys
-        .iter()
-        .map(|attorney| attorney.person.id)
-        .collect();
-    let recorded = store::attorney_calendars::listed(&pg, &ids)
-        .await
-        .map_err(calendar_store)?;
+    let calendars = SchedulingCalendars::load(state, session, project.as_ref(), &attorneys).await?;
     let (mut unreadable, mut blocks) =
-        attorney_busy(state, &attorneys, &recorded, request.start, request.end).await?;
+        attorney_busy(state, &attorneys, &calendars, request.start, request.end).await?;
     if let Some(project) = project.as_ref() {
         let (gaps, project_blocks) =
             project_busy(state, project, request.start, request.end).await?;
@@ -455,7 +426,14 @@ async fn read_report(
         blocks.extend(project_blocks);
     }
     let summaries = if duplicates {
-        signed_in_titles(state, session, &recorded, request, &mut unreadable).await?
+        signed_in_titles(
+            state,
+            session,
+            &calendars.recorded,
+            request,
+            &mut unreadable,
+        )
+        .await?
     } else {
         Vec::new()
     };
@@ -468,38 +446,133 @@ async fn read_report(
     ))
 }
 
+struct SchedulingCalendars {
+    recorded: Vec<AttorneyCalendar>,
+    shared: BTreeMap<Uuid, BTreeSet<String>>,
+    unverified: BTreeSet<Uuid>,
+}
+
+impl SchedulingCalendars {
+    async fn load(
+        state: &ApiState,
+        session: &crate::session::SessionData,
+        project: Option<&store::projects::Project>,
+        attorneys: &[Attorney],
+    ) -> Result<Self, ApiError> {
+        let pg = store::attorney_calendars::postgres()
+            .await
+            .map_err(calendar_store)?;
+        let ids: Vec<_> = attorneys
+            .iter()
+            .map(|attorney| attorney.person.id)
+            .collect();
+        let firms = match project.and_then(|p| p.firm_id) {
+            Some(firm) => vec![firm],
+            None => google_firms(state, session).await?,
+        };
+        let candidates = store::project_calendar::shared_freebusy_calendars(&pg, &firms, &ids)
+            .await
+            .map_err(|error| ApiError::Db(error.to_string()))?;
+        let recorded = store::attorney_calendars::listed(&pg, &ids)
+            .await
+            .map_err(calendar_store)?;
+        let mut result = Self {
+            recorded,
+            shared: BTreeMap::new(),
+            unverified: BTreeSet::new(),
+        };
+        for projects in candidates.values() {
+            if let Some(first) = projects.first() {
+                // One owner inventory per Firm also disambiguates equal calendar names.
+                let owner = state
+                    .integration_providers
+                    .calendar(&state.surreal, first.project_id)
+                    .await;
+                let calendar_codes = if let Ok(owner) = owner {
+                    owner.owned_calendar_codes().await.unwrap_or_default()
+                } else {
+                    BTreeMap::new()
+                };
+                for project in projects {
+                    result.include_verified(project, &calendar_codes);
+                }
+            }
+        }
+        Ok(result)
+    }
+
+    fn include_verified(
+        &mut self,
+        project: &store::project_calendar::SharedCalendar,
+        owned: &BTreeMap<String, String>,
+    ) {
+        let verified_id = project
+            .calendar_id
+            .as_ref()
+            .filter(|id| owned.get(*id) == Some(&project.code));
+        for person in &project.people {
+            if let Some(id) = verified_id {
+                self.shared.entry(*person).or_default().insert(id.clone());
+            } else {
+                self.unverified.insert(*person);
+            }
+        }
+    }
+
+    fn ids(&self, person: Uuid) -> Vec<String> {
+        let mut ids = self.shared.get(&person).cloned().unwrap_or_default();
+        ids.extend(
+            self.recorded
+                .iter()
+                .filter(|row| row.person_id == person)
+                .map(|row| row.calendar_id.clone()),
+        );
+        ids.into_iter().collect()
+    }
+
+    fn missing(&self, person: Uuid) -> Option<&'static str> {
+        if self.unverified.contains(&person) {
+            Some("unverified_project_calendar")
+        } else {
+            (!self.recorded.iter().any(|row| row.person_id == person)).then_some("unrecorded")
+        }
+    }
+
+    fn is_shared(&self, person: Uuid, id: &str) -> bool {
+        self.shared.get(&person).is_some_and(|ids| ids.contains(id))
+    }
+}
+
 async fn attorney_busy(
     state: &ApiState,
     attorneys: &[Attorney],
-    recorded: &[AttorneyCalendar],
+    calendars: &SchedulingCalendars,
     start: DateTime<FixedOffset>,
     end: DateTime<FixedOffset>,
 ) -> Result<(Vec<UnreadableCalendar>, Vec<SourceBlock>), ApiError> {
     let mut unreadable = Vec::new();
     let mut blocks = Vec::new();
     for attorney in attorneys {
-        let rows: Vec<&AttorneyCalendar> = recorded
-            .iter()
-            .filter(|row| row.person_id == attorney.person.id)
-            .collect();
-        if rows.is_empty() {
+        if let Some(missing) = calendars.missing(attorney.person.id) {
             unreadable.push(UnreadableCalendar {
                 email: attorney.person.email.clone(),
                 role: attorney.role.clone(),
                 calendar_id: None,
-                missing: "unrecorded",
+                missing,
             });
-            continue;
         }
-        let calendar_ids: Vec<String> = rows.iter().map(|row| row.calendar_id.clone()).collect();
+        let calendar_ids = calendars.ids(attorney.person.id);
         let windows =
             read_free_busy(state, &attorney.person.email, &calendar_ids, start, end).await?;
         for window in windows {
+            // Other Projects contribute busy windows only. Their IDs can identify a matter.
+            let visible_id = (!calendars.is_shared(attorney.person.id, &window.calendar_id))
+                .then_some(window.calendar_id);
             if let Some(gap) = window.gap {
                 unreadable.push(UnreadableCalendar {
                     email: attorney.person.email.clone(),
                     role: attorney.role.clone(),
-                    calendar_id: Some(window.calendar_id),
+                    calendar_id: visible_id,
                     missing: gap_word(gap),
                 });
                 continue;
@@ -508,7 +581,7 @@ async fn attorney_busy(
                 blocks.push(SourceBlock {
                     source: attorney.person.email.clone(),
                     role: attorney.role.clone(),
-                    calendar_id: Some(window.calendar_id.clone()),
+                    calendar_id: visible_id.clone(),
                     start: busy.start,
                     end: busy.end,
                 });
@@ -551,7 +624,12 @@ async fn project_busy(
         .await
         .map_err(|error| ApiError::Db(error.to_string()))?
     {
-        if deadline.status != store::project_deadlines::STATUS_OPEN {
+        if deadline.status != store::project_deadlines::STATUS_OPEN
+            || deadline
+                .due_on
+                .as_ref()
+                .is_some_and(|day| day.cutoff.is_none())
+        {
             continue;
         }
         let Ok(due) = DateTime::parse_from_rfc3339(deadline.due_at.trim()) else {
@@ -630,10 +708,17 @@ async fn read_free_busy(
         }
         Err(error) => return Err(provider_status(error)),
     };
-    reader
-        .free_busy(email, calendar_ids, start, end)
-        .await
-        .map_err(|_| provider_status(IntegrationError::Provider))
+    let mut windows = Vec::new();
+    // Google accepts at most 50 calendar IDs per freeBusy request.
+    for ids in calendar_ids.chunks(50) {
+        windows.extend(
+            reader
+                .free_busy(email, ids, start, end)
+                .await
+                .map_err(|_| provider_status(IntegrationError::Provider))?,
+        );
+    }
+    Ok(windows)
 }
 
 async fn project_events(
@@ -668,6 +753,9 @@ async fn project_events(
 fn event_bounds(
     event: &cloud::ProjectCalendarEvent,
 ) -> Option<(DateTime<FixedOffset>, DateTime<FixedOffset>)> {
+    if event.transparency.as_deref() == Some("transparent") {
+        return None;
+    }
     let start = instant(&event.start)?;
     let end = instant(&event.end).unwrap_or(start);
     Some((start, end))
@@ -911,4 +999,68 @@ fn provider_status(error: IntegrationError) -> ApiError {
 
 fn unavailable() -> Response {
     (StatusCode::BAD_GATEWAY, "calendar provider unavailable").into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_busy_project_event_blocks_time_without_a_guest_and_free_events_do_not() {
+        let mut event: cloud::ProjectCalendarEvent = serde_json::from_value(serde_json::json!({
+            "id":"event", "start":{"dateTime":"2026-01-01T12:00:00Z"},
+            "end":{"dateTime":"2026-01-01T13:00:00Z"}
+        }))
+        .unwrap();
+        let (start, end) = event_bounds(&event).unwrap();
+        assert_eq!(end - start, TimeDelta::hours(1));
+        event.transparency = Some("transparent".into());
+        assert!(event_bounds(&event).is_none());
+    }
+
+    #[test]
+    fn scheduling_deduplicates_a_shared_calendar_and_preserves_personal_registration() {
+        let person = Uuid::now_v7();
+        let mut calendars = SchedulingCalendars {
+            unverified: BTreeSet::new(),
+            recorded: vec![
+                AttorneyCalendar {
+                    person_id: person,
+                    calendar_id: "primary".into(),
+                    kind: CalendarKind::Primary,
+                },
+                AttorneyCalendar {
+                    person_id: person,
+                    calendar_id: "shared".into(),
+                    kind: CalendarKind::FreeBusy,
+                },
+            ],
+            shared: [(
+                person,
+                ["shared".into(), "second".into()].into_iter().collect(),
+            )]
+            .into_iter()
+            .collect(),
+        };
+        assert_eq!(calendars.ids(person), ["primary", "second", "shared"]);
+        assert!(calendars.is_shared(person, "shared"));
+        assert!(!calendars.is_shared(person, "primary"));
+        assert_eq!(calendars.missing(person), None);
+        assert!(calendars.ids(Uuid::nil()).is_empty());
+        let project = store::project_calendar::SharedCalendar {
+            project_id: Uuid::now_v7(),
+            code: "sample".into(),
+            calendar_id: Some("wrong".into()),
+            people: vec![person],
+        };
+        calendars.include_verified(
+            &project,
+            &[("wrong".into(), "different".into())].into_iter().collect(),
+        );
+        assert!(!calendars.ids(person).contains(&"wrong".into()));
+        assert_eq!(
+            calendars.missing(person),
+            Some("unverified_project_calendar")
+        );
+    }
 }

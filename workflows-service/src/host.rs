@@ -941,6 +941,7 @@ async fn run_host(
         let recovery_version = settings.config().app_version.ok_or_else(|| {
             anyhow::anyhow!("summary recovery requires the configured DBOS version")
         })?;
+        let review_postgres = postgres.clone();
         let dbos_ingress_for_registration = Arc::clone(&dbos_ingress);
         Some(
             dbos_engine::Executor::launch_hosting_with(
@@ -1197,6 +1198,17 @@ async fn run_host(
                                 filing: crate::inbound_triage::register_filing_dbos(dbos, service)?,
                             });
                     }
+                    let review =
+                        crate::dbos_deadline_proposal::register(dbos, review_postgres.clone())?;
+                    let review_engine = dbos.clone();
+                    launchers.push(Box::new(move |stop| {
+                        tokio::spawn(crate::dbos_deadline_proposal::schedule(
+                            review_engine,
+                            review_postgres,
+                            review,
+                            stop,
+                        ))
+                    }));
                     if let Some((db, storage, scanner)) = inbox_attachment_dbos {
                         let workflow = crate::inbox_attachment_filing::register_dbos(
                             dbos, db, storage, scanner,

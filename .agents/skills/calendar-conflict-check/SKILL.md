@@ -26,6 +26,10 @@ list confirms connector access only. On a scope error, tell the lawyer which rea
 reported. Ask them to reconnect it, start a fresh session so it picks up the grant, and repeat the probe. Keep other
 matter work moving while calendar access is being repaired.
 
+Eligible open Project Calendars contribute Busy intervals to Navigator availability through membership. Verify with an
+existing Busy event where the participant is absent from the guest list. For a Google booking page, also select the
+shared calendar in the appointment schedule's calendars to check for availability.
+
 ## Check a proposed time
 
 Before proposing or accepting a time, check the actual window with its UTC offset:

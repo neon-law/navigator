@@ -3617,3 +3617,32 @@ test_deadline_project_inventory_requires_a_lawyer_session if {
     }
     not authz.allow with input as {"path": path, "method": "POST", "session": lawyer_session}
 }
+
+test_browser_lawyer_confirms_a_court_date if {
+	authz.allow with input as {"path": ["app", "api", "projects", "p1", "court-date-proposals", "r1", "confirm"], "method": "POST", "session": {"role": "lawyer", "source": "browser"}}
+}
+
+test_api_lawyer_cannot_confirm_a_court_date if {
+	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "court-date-proposals", "r1", "confirm"], "method": "POST", "session": {"role": "lawyer", "source": "cli"}}
+}
+
+test_supervised_clerk_may_prepare_but_cannot_confirm_a_court_date if {
+	authz.allow with input as {"path": ["app", "api", "projects", "p1", "court-date-proposals"], "method": "POST", "session": clerk_session}
+	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "court-date-proposals", "r1", "confirm"], "method": "POST", "session": clerk_session}
+}
+
+test_client_cannot_read_a_court_date_source if {
+	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "court-date-proposals", "r1", "evidence", "0"], "method": "GET", "session": client_session}
+}
+
+test_forgejo_citation_uses_the_project_review_gate if {
+	path := ["app", "api", "projects", "p1", "court-date-proposals", "r1", "evidence", "0", "forgejo"]
+	authz.allow with input as {"path": path, "method": "GET", "session": clerk_session}
+	not authz.allow with input as {"path": path, "method": "GET", "session": client_session}
+	not authz.allow with input as {"path": path, "method": "GET", "session": {"role": "admin", "source": "ci"}}
+	not authz.allow with input as {"path": path, "method": "POST", "session": clerk_session}
+}
+
+test_ci_cannot_read_court_date_review_even_with_admin_tier if {
+	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "court-date-proposals"], "method": "GET", "session": {"role": "admin", "source": "ci"}}
+}

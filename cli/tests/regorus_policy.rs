@@ -532,9 +532,10 @@ fn regorus_matches_every_checked_in_policy_decision() {
     // Reading one Project envelope requires the lawyer tier.
     // The onboarding agreement list also denies CI sessions and other HTTP methods.
     // The dashboard's deadline inventory admits Lawyers only and denies CI and other methods.
+    // Court-date review covers browser confirmation, clerk preparation, client and CI denial, and the Forgejo source.
     assert_eq!(
         test_names.len(),
-        713,
+        719,
         "the policy decision inventory changed; review every new or removed rule"
     );
 

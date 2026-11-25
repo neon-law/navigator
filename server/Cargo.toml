@@ -63,6 +63,8 @@ workflows.workspace = true
 zip.workspace = true
 
 [dev-dependencies]
+dioxus.workspace = true
+dioxus-ssr.workspace = true
 base64.workspace = true
 dbos.workspace = true
 fantoccini.workspace = true

@@ -10,21 +10,16 @@ use uuid::Uuid;
 
 use crate::postgres::project_deadlines::{Normalized, StoredDeadline};
 use crate::surreal::{record_id, record_uuid, SurrealDb};
-pub use model::project_deadlines::CATEGORIES;
+pub use model::project_deadlines::{
+    optional_category, AuthorityKind, CalendarRole, Category, Due, DueOn, DueOnInput, Hearing,
+    AUTHORITY_KINDS, CALENDAR_ROLES, CATEGORIES,
+};
 
 pub const STATUS_OPEN: &str = "open";
 pub const STATUS_COMPLETE: &str = "complete";
 pub const STATUS_CANCELLED: &str = "cancelled";
 
-const AUTHORITY_KINDS: &[&str] = &[
-    "statute",
-    "court_rule",
-    "court_order",
-    "contract",
-    "internal",
-];
 pub const MAX_TITLE_CHARS: usize = 200;
-const CALENDAR_ROLES: &[&str] = &["firm", "opponent", "hearing"];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Deadline {
@@ -34,6 +29,8 @@ pub struct Deadline {
     pub title: Option<String>,
     pub description: Option<String>,
     pub due_at: String,
+    pub due_on: Option<DueOn>,
+    pub hearing: Option<Hearing>,
     pub authority_kind: String,
     pub authority: String,
     pub source: String,
@@ -51,6 +48,8 @@ pub struct Deadline {
     pub updated_at: String,
     /// Monotonic RFC 5545 revision; absent on historical rows.
     pub calendar_sequence: Option<i64>,
+    #[serde(default)]
+    pub calendar_review_pending: bool,
 }
 
 #[derive(SurrealValue)]
@@ -60,6 +59,8 @@ struct DeadlineRow {
     title: Option<String>,
     description: Option<String>,
     due_at: String,
+    due_on: Option<serde_json::Value>,
+    hearing: Option<serde_json::Value>,
     authority_kind: String,
     authority: String,
     source: String,
@@ -74,16 +75,27 @@ struct DeadlineRow {
     inserted_at: String,
     updated_at: String,
     calendar_sequence: Option<i64>,
+    calendar_review_pending: Option<bool>,
 }
 
 impl DeadlineRow {
-    fn into_deadline(self) -> Option<Deadline> {
-        Some(Deadline {
-            id: record_uuid(&self.id)?,
-            project_id: record_uuid(&self.project_id)?,
+    fn into_deadline(self) -> Result<Deadline, DeadlineError> {
+        Ok(Deadline {
+            id: record_uuid(&self.id).ok_or(DeadlineError::WriteReturnedNothing)?,
+            project_id: record_uuid(&self.project_id).ok_or(DeadlineError::WriteReturnedNothing)?,
             title: self.title,
             description: self.description,
             due_at: self.due_at,
+            due_on: self
+                .due_on
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(|error| DeadlineError::Invalid(format!("unreadable due_on: {error}")))?,
+            hearing: self
+                .hearing
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(|error| DeadlineError::Invalid(format!("unreadable hearing: {error}")))?,
             authority_kind: self.authority_kind,
             authority: self.authority,
             source: self.source,
@@ -98,17 +110,20 @@ impl DeadlineRow {
             inserted_at: self.inserted_at,
             updated_at: self.updated_at,
             calendar_sequence: self.calendar_sequence,
+            calendar_review_pending: self.calendar_review_pending.unwrap_or(false),
         })
     }
 }
 
 const SELECT: &str =
-    "id, project_id, title, description, due_at, authority_kind, authority, source, \
+    "id, project_id, title, description, due_at, due_on, hearing, authority_kind, authority, source, \
      source_document_id, owner_person_id, status, calendar_role, category, \
-     internal_lead_days, client_lead_days, replay_key, inserted_at, updated_at, calendar_sequence";
+     internal_lead_days, client_lead_days, replay_key, inserted_at, updated_at, calendar_sequence, calendar_review_pending";
 
 #[derive(Debug, thiserror::Error)]
 pub enum DeadlineError {
+    #[error(transparent)]
+    Project(#[from] crate::projects::ProjectStoreError),
     #[error(transparent)]
     Postgres(#[from] crate::postgres::matter::MatterAuthorityError),
     #[error("deadline changed concurrently; retry the operation")]
@@ -129,6 +144,8 @@ pub struct NewDeadline {
     pub title: Option<String>,
     pub description: Option<String>,
     pub due_at: String,
+    pub due_on: Option<DueOn>,
+    pub hearing: Option<Hearing>,
     pub authority_kind: String,
     pub authority: String,
     pub source: String,
@@ -149,6 +166,8 @@ pub struct DeadlinePatch {
     pub title: Option<Option<String>>,
     pub description: Option<Option<String>>,
     pub due_at: Option<String>,
+    pub due_on: Option<DueOn>,
+    pub hearing: Option<Hearing>,
     pub authority_kind: Option<String>,
     pub authority: Option<String>,
     pub source: Option<String>,
@@ -166,6 +185,8 @@ struct DeadlineInput<'a> {
     title: Option<&'a str>,
     description: Option<&'a str>,
     due_at: &'a str,
+    due_on: Option<&'a DueOn>,
+    hearing: Option<&'a Hearing>,
     authority_kind: &'a str,
     authority: &'a str,
     source: &'a str,
@@ -176,11 +197,55 @@ struct DeadlineInput<'a> {
     replay_key: Option<&'a str>,
 }
 
+fn normalized_time(
+    due_at: &str,
+    due_on: Option<&DueOn>,
+    hearing: Option<&Hearing>,
+    calendar_role: &str,
+    category: Option<&str>,
+) -> Result<DateTime<FixedOffset>, DeadlineError> {
+    let due_at = DateTime::<FixedOffset>::parse_from_rfc3339(due_at.trim()).map_err(|_| {
+        DeadlineError::Invalid(
+            "due_at must be an RFC 3339 timestamp with an explicit offset".into(),
+        )
+    })?;
+    let is_hearing = calendar_role == "hearing" || category.map(str::trim) == Some("hearing");
+    if hearing.is_some() && !is_hearing {
+        return Err(DeadlineError::Invalid(
+            "hearing details require a hearing role or category".into(),
+        ));
+    }
+    if let Some(details) = hearing {
+        let duration = chrono::Duration::minutes(i64::from(details.minutes()));
+        if due_at.checked_add_signed(duration).is_none() {
+            return Err(DeadlineError::Invalid(
+                "hearing end is outside the supported calendar range".into(),
+            ));
+        }
+    }
+    if let Some(date) = due_on {
+        let civil = date
+            .instant()
+            .map_err(|error| DeadlineError::Invalid(error.into()))?;
+        if civil != due_at {
+            return Err(DeadlineError::Invalid("due_at and due_on disagree".into()));
+        }
+        if is_hearing {
+            return Err(DeadlineError::Invalid(
+                "a hearing requires a scheduled start time".into(),
+            ));
+        }
+    }
+    Ok(due_at)
+}
+
 fn normalize(input: &DeadlineInput<'_>) -> Result<Normalized, DeadlineError> {
     let DeadlineInput {
         title,
         description,
         due_at,
+        due_on,
+        hearing,
         authority_kind,
         authority,
         source,
@@ -190,13 +255,7 @@ fn normalize(input: &DeadlineInput<'_>) -> Result<Normalized, DeadlineError> {
         client_lead_days,
         replay_key,
     } = *input;
-    let due_at = DateTime::<FixedOffset>::parse_from_rfc3339(due_at.trim())
-        .map(|instant| instant.to_rfc3339())
-        .map_err(|_| {
-            DeadlineError::Invalid(
-                "due_at must be an RFC 3339 timestamp with an explicit offset".into(),
-            )
-        })?;
+    let due_at = normalized_time(due_at, due_on, hearing, calendar_role, category)?;
     if !AUTHORITY_KINDS.contains(&authority_kind) {
         return Err(DeadlineError::Invalid(format!(
             "authority_kind must be one of {}",
@@ -204,7 +263,7 @@ fn normalize(input: &DeadlineInput<'_>) -> Result<Normalized, DeadlineError> {
         )));
     }
     let authority = authority.trim().to_string();
-    if matches!(authority_kind, "statute" | "court_rule") && authority.is_empty() {
+    if matches!(authority_kind, "statute" | "court_rule" | "case_law") && authority.is_empty() {
         return Err(DeadlineError::Invalid(
             "a statute or court_rule deadline requires an authority citation".into(),
         ));
@@ -265,7 +324,9 @@ fn normalize(input: &DeadlineInput<'_>) -> Result<Normalized, DeadlineError> {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(str::to_string),
-        due_at,
+        due_at: due_at.to_rfc3339(),
+        due_on: due_on.cloned(),
+        hearing: hearing.cloned(),
         authority_kind: authority_kind.to_string(),
         authority,
         source,
@@ -356,10 +417,7 @@ pub async fn list(surreal: &SurrealDb, project_id: Uuid) -> Result<Vec<Deadline>
         .await
         .and_then(surrealdb::IndexedResults::check)?;
     let rows: Vec<DeadlineRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(DeadlineRow::into_deadline)
-        .collect())
+    rows.into_iter().map(DeadlineRow::into_deadline).collect()
 }
 
 /// Open Deadlines across `project_ids`, earliest due instant first: one
@@ -405,7 +463,7 @@ pub async fn find(
         .await
         .and_then(surrealdb::IndexedResults::check)?;
     let row: Option<DeadlineRow> = response.take(0)?;
-    Ok(row.and_then(DeadlineRow::into_deadline))
+    row.map(DeadlineRow::into_deadline).transpose()
 }
 
 async fn find_replay(
@@ -432,7 +490,7 @@ async fn find_replay(
         .await
         .and_then(surrealdb::IndexedResults::check)?;
     let row: Option<DeadlineRow> = response.take(0)?;
-    Ok(row.and_then(DeadlineRow::into_deadline))
+    row.map(DeadlineRow::into_deadline).transpose()
 }
 
 async fn persist(
@@ -454,24 +512,42 @@ async fn persist(
         expected_updated_at: _,
         inserted_at,
     } = *stored;
+    let old = find(surreal, project_id, id).await?;
+    stored.check_revision(old.as_ref())?;
+    if old.is_some() && stored.expected_updated_at.is_none() {
+        return Err(DeadlineError::Conflict);
+    }
+    let same_due = old.as_ref().is_some_and(|row| {
+        DateTime::parse_from_rfc3339(&row.due_at).ok()
+            == DateTime::parse_from_rfc3339(&normalized.due_at).ok()
+    });
+    let pending =
+        crate::postgres::project_deadlines::review_pending(old.as_ref(), stored, same_due, false)?;
+    // UPDATE cannot resurrect a deleted row. A first writer only inserts if the
+    // deterministic replay id is still unused.
+    let operation = if old.is_some() { "UPDATE" } else { "UPSERT" };
     let now = chrono::Utc::now().to_rfc3339();
     let mut response = surreal
         .query(format!(
-            "UPSERT $id SET project_id = $project_id, title = $title, description = $description, due_at = $due_at, \
+            "{operation} $id SET project_id = $project_id, title = $title, description = $description, due_at = $due_at, due_on = $due_on, hearing = $hearing, \
              authority_kind = $authority_kind, authority = $authority, source = $source, \
              source_document_id = $source_document_id, owner_person_id = $owner_person_id, \
              status = $status, calendar_role = $calendar_role, category = $category, \
              internal_lead_days = $internal_lead_days, client_lead_days = $client_lead_days, \
-             replay_key = $replay_key, calendar_sequence = IF updated_at IS NONE THEN 0 ELSE \
+             replay_key = $replay_key, calendar_review_pending = $pending, calendar_sequence = IF updated_at IS NONE THEN 0 ELSE \
              (calendar_sequence ?? math::max([0, time::unix(<datetime>updated_at)])) + 1 END, \
-             inserted_at = $inserted_at, updated_at = $now \
+             inserted_at = $inserted_at, updated_at = $now WHERE updated_at = $observed \
              RETURN {SELECT}"
         ))
         .bind(("id", record_id("project_deadlines", id)))
         .bind(("project_id", record_id("project", project_id)))
+        .bind(("pending", pending))
+        .bind(("observed", old.map(|row| row.updated_at)))
         .bind(("title", normalized.title.clone()))
         .bind(("description", normalized.description.clone()))
         .bind(("due_at", normalized.due_at.clone()))
+        .bind(("due_on", normalized.due_on.as_ref().map(|date| serde_json::json!(date))))
+        .bind(("hearing", normalized.hearing.as_ref().map(|details| serde_json::json!(details))))
         .bind(("authority_kind", normalized.authority_kind.clone()))
         .bind(("authority", normalized.authority.clone()))
         .bind(("source", normalized.source.clone()))
@@ -495,14 +571,69 @@ async fn persist(
         .and_then(surrealdb::IndexedResults::check)?;
     let row: Option<DeadlineRow> = response.take(0)?;
     let deadline = row
-        .and_then(DeadlineRow::into_deadline)
-        .ok_or(DeadlineError::WriteReturnedNothing)?;
+        .map(DeadlineRow::into_deadline)
+        .transpose()?
+        .ok_or(DeadlineError::Conflict)?;
     crate::postgres_mirror::after_write(
         surreal,
         crate::postgres_mirror::MirrorKey::ProjectDeadline(deadline.id),
     )
     .await;
     Ok(deadline)
+}
+
+/// An existing Deadline whose calendar zone survives a retry or reschedule.
+#[derive(Clone, Copy, Debug)]
+pub enum DeadlineIdentity<'a> {
+    Id(Uuid),
+    Replay(Option<&'a str>),
+}
+
+/// Freeze the Project default into a civil Deadline at the time of a scheduling write.
+pub async fn resolve_due(
+    surreal: &SurrealDb,
+    project_id: Uuid,
+    identity: DeadlineIdentity<'_>,
+    at: Option<&str>,
+    on: Option<DueOnInput>,
+) -> Result<(String, Option<DueOn>), DeadlineError> {
+    let date = match on {
+        Some(input) if at.is_none() => {
+            let timezone = if let Some(zone) = input.timezone {
+                zone
+            } else {
+                let existing = match identity {
+                    DeadlineIdentity::Id(id) => find(surreal, project_id, id).await?,
+                    DeadlineIdentity::Replay(Some(key)) => {
+                        find_replay(surreal, project_id, key.trim()).await?
+                    }
+                    DeadlineIdentity::Replay(None) => None,
+                };
+                if let Some(saved) = existing.and_then(|row| row.due_on) {
+                    saved.timezone
+                } else {
+                    let project = crate::projects::find_by_id(surreal, project_id)
+                        .await?
+                        .ok_or(DeadlineError::NotFound)?;
+                    crate::projects::calendar_timezone(surreal, &project).await?
+                }
+            };
+            Some(DueOn {
+                date: input.date,
+                timezone,
+                cutoff: input.cutoff,
+            })
+        }
+        Some(_) => {
+            return Err(DeadlineError::Invalid(
+                "supply exactly one of due_at and due_on".into(),
+            ))
+        }
+        None => None,
+    };
+    Due::from_fields(at, date)
+        .and_then(Due::into_fields)
+        .map_err(|error| DeadlineError::Invalid(error.into()))
 }
 
 /// Create a Deadline and return the stored row. A `replay_key` that already
@@ -514,6 +645,8 @@ pub async fn create(surreal: &SurrealDb, new: &NewDeadline) -> Result<Deadline, 
         title: new.title.as_deref(),
         description: new.description.as_deref(),
         due_at: &new.due_at,
+        due_on: new.due_on.as_ref(),
+        hearing: new.hearing.as_ref(),
         authority_kind: &new.authority_kind,
         authority: &new.authority,
         source: &new.source,
@@ -593,6 +726,111 @@ pub async fn create(surreal: &SurrealDb, new: &NewDeadline) -> Result<Deadline, 
     .await
 }
 
+/// Persist the reviewed revision using the same normalization, identity, lifecycle and
+/// calendar sequence rules as an ordinary Deadline command. Its caller commits the receipt.
+pub(crate) async fn publish_reviewed(
+    conn: &mut sqlx::PgConnection,
+    proposal: &model::deadline_proposals::Proposal,
+    citations: &[String],
+) -> Result<Deadline, DeadlineError> {
+    use crate::postgres::matter::MatterAuthorityError as PgError;
+    use model::deadline_proposals::{Kind, Role};
+    let draft = &proposal.draft;
+    let (due_at, due_on) = draft
+        .reviewed_due()
+        .and_then(Due::into_fields)
+        .map_err(|e| DeadlineError::Invalid(e.into()))?;
+    let previous: Option<Deadline> = if let Some(target) = proposal.deadline_id {
+        let json = sqlx::query_scalar::<_, serde_json::Value>(
+            "SELECT to_jsonb(d) FROM project_deadlines d WHERE id=$1 AND project_id=$2 FOR UPDATE",
+        )
+        .bind(target)
+        .bind(proposal.project_id)
+        .fetch_optional(&mut *conn)
+        .await
+        .map_err(PgError::from)?
+        .ok_or(DeadlineError::NotFound)?;
+        Some(serde_json::from_value(json).map_err(PgError::from)?)
+    } else {
+        None
+    };
+    let prior = previous.as_ref();
+    if prior.is_some_and(|d| d.status != STATUS_OPEN) {
+        return Err(DeadlineError::Invalid(
+            "only an open Deadline can be amended".into(),
+        ));
+    }
+    let category =
+        draft
+            .category
+            .unwrap_or(if draft.calendar_role == Some(CalendarRole::Hearing) {
+                Category::Hearing
+            } else {
+                Category::Court
+            });
+    let category_text = category.to_string();
+    let role = draft
+        .calendar_role
+        .unwrap_or_else(|| {
+            if category == Category::Hearing {
+                CalendarRole::Hearing
+            } else if prior.is_some_and(|row| row.calendar_role == "opponent") {
+                CalendarRole::Opponent
+            } else {
+                CalendarRole::Firm
+            }
+        })
+        .to_string();
+    let kind = draft
+        .calculation
+        .as_ref()
+        .map_or(AuthorityKind::CourtOrder, |r| r.authority_kind)
+        .to_string();
+    let authority = citations.join("; ");
+    let source_role = if draft.kind == Kind::SignedOrder {
+        Role::SignedOrder
+    } else {
+        Role::Trigger
+    };
+    let source_document_id = draft
+        .evidence
+        .iter()
+        .find(|e| e.role == source_role)
+        .map(|e| e.id);
+    let normalized = normalize(&DeadlineInput {
+        due_at: &due_at,
+        due_on: due_on.as_ref(),
+        hearing: draft.hearing.as_ref(),
+        title: Some(&draft.title),
+        description: prior.and_then(|d| d.description.as_deref()),
+        source: prior.map_or("lawyer", |d| d.source.as_str()),
+        authority_kind: &kind,
+        authority: &authority,
+        calendar_role: &role,
+        category: Some(&category_text),
+        client_lead_days: prior.and_then(|d| d.client_lead_days),
+        internal_lead_days: prior.and_then(|d| d.internal_lead_days),
+        replay_key: prior.and_then(|d| d.replay_key.as_deref()),
+    })?;
+    let now = chrono::Utc::now().to_rfc3339();
+    crate::postgres::project_deadlines::persist_on(
+        conn,
+        proposal.deadline_id.unwrap_or_else(Uuid::now_v7),
+        proposal.project_id,
+        &StoredDeadline {
+            normalized: &normalized,
+            source_document_id,
+            owner_person_id: prior.and_then(|d| d.owner_person_id),
+            status: STATUS_OPEN,
+            expected_status: prior.map(|d| d.status.as_str()),
+            expected_updated_at: prior.map(|d| d.updated_at.as_str()),
+            inserted_at: &now,
+        },
+        true,
+    )
+    .await
+}
+
 /// Replace the named fields and return the stored row. Status stays put.
 pub async fn update(
     surreal: &SurrealDb,
@@ -605,6 +843,11 @@ pub async fn update(
         .ok_or(DeadlineError::NotFound)?;
     let title = patch.title.clone().unwrap_or(existing.title);
     let description = patch.description.clone().unwrap_or(existing.description);
+    let due_on = if patch.due_at.is_some() {
+        patch.due_on.clone()
+    } else {
+        patch.due_on.clone().or(existing.due_on)
+    };
     let due_at = patch.due_at.clone().unwrap_or(existing.due_at);
     let authority_kind = patch
         .authority_kind
@@ -617,6 +860,17 @@ pub async fn update(
         .clone()
         .unwrap_or(existing.calendar_role);
     let category = patch.category.clone().unwrap_or(existing.category);
+    let hearing = match (&patch.hearing, existing.hearing) {
+        (Some(changes), Some(current)) => Some(Hearing {
+            duration_minutes: changes.duration_minutes.or(current.duration_minutes),
+            location: changes.location.clone().or(current.location),
+        }),
+        (Some(changes), None) => Some(changes.clone()),
+        (None, current) if calendar_role == "hearing" || category.as_deref() == Some("hearing") => {
+            current
+        }
+        (None, _) => None,
+    };
     let internal_lead_days = patch
         .internal_lead_days
         .unwrap_or(existing.internal_lead_days);
@@ -629,6 +883,8 @@ pub async fn update(
         title: title.as_deref(),
         description: description.as_deref(),
         due_at: &due_at,
+        due_on: due_on.as_ref(),
+        hearing: hearing.as_ref(),
         authority_kind: &authority_kind,
         authority: &authority,
         source: &source,
@@ -681,6 +937,8 @@ async fn transition(
         title: existing.title.as_deref(),
         description: existing.description.as_deref(),
         due_at: &existing.due_at,
+        due_on: existing.due_on.as_ref(),
+        hearing: existing.hearing.as_ref(),
         authority_kind: &existing.authority_kind,
         authority: &existing.authority,
         source: &existing.source,
@@ -736,6 +994,7 @@ pub async fn reopen(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::postgres_mirror::from_source;
     use crate::projects::{create as create_project, NewProject};
     use crate::test_support::mem_surreal;
 
@@ -744,6 +1003,8 @@ mod tests {
             project_id,
             title: None,
             description: None,
+            hearing: None,
+            due_on: None,
             due_at: "2026-11-02T17:00:00-08:00".into(),
             authority_kind: "statute".into(),
             authority: "15 U.S.C. § 1681i(a)(1)".into(),
@@ -759,7 +1020,7 @@ mod tests {
     }
 
     async fn project(surreal: &SurrealDb) -> Uuid {
-        create_project(
+        from_source(create_project(
             surreal,
             &NewProject {
                 code: format!("deadline-{}", Uuid::now_v7()),
@@ -768,10 +1029,36 @@ mod tests {
                 entity_id: Uuid::now_v7(),
                 ..Default::default()
             },
-        )
+        ))
         .await
         .unwrap()
         .id
+    }
+
+    // Select the embedded Source for the same application commands used by callers.
+    async fn create(db: &SurrealDb, input: &NewDeadline) -> Result<Deadline, DeadlineError> {
+        from_source(super::create(db, input)).await
+    }
+
+    async fn update(
+        db: &SurrealDb,
+        project: Uuid,
+        id: Uuid,
+        patch: &DeadlinePatch,
+    ) -> Result<Deadline, DeadlineError> {
+        from_source(super::update(db, project, id, patch)).await
+    }
+
+    async fn find(
+        db: &SurrealDb,
+        project: Uuid,
+        id: Uuid,
+    ) -> Result<Option<Deadline>, DeadlineError> {
+        from_source(super::find(db, project, id)).await
+    }
+
+    async fn list(db: &SurrealDb, project: Uuid) -> Result<Vec<Deadline>, DeadlineError> {
+        from_source(super::list(db, project)).await
     }
 
     #[tokio::test]
@@ -800,7 +1087,9 @@ mod tests {
         assert_eq!(updated.calendar_role, "opponent");
         assert_eq!(updated.status, STATUS_OPEN);
         assert_eq!(updated.id, created.id);
-        let completed = complete(&surreal, project_id, created.id).await.unwrap();
+        let completed = from_source(complete(&surreal, project_id, created.id))
+            .await
+            .unwrap();
         assert_eq!(completed.status, STATUS_COMPLETE);
         assert_eq!(
             list(&surreal, project_id).await.unwrap()[0].status,
@@ -866,9 +1155,19 @@ mod tests {
         input.authority_kind = "internal".into();
         input.authority = "Firm preparation target".into();
         input.category = None;
+        let internal = create(&surreal, &input).await.unwrap();
+        assert_eq!(internal.category.as_deref(), Some("internal"));
+        let promotion = DeadlinePatch {
+            category: Some(Some("court".into())),
+            ..DeadlinePatch::default()
+        };
+        assert!(matches!(
+            update(&surreal, project_id, internal.id, &promotion).await,
+            Err(DeadlineError::Invalid(_))
+        ));
         assert_eq!(
-            create(&surreal, &input).await.unwrap().category,
-            Some("internal".into())
+            find(&surreal, project_id, internal.id).await.unwrap(),
+            Some(internal)
         );
     }
 
@@ -1092,7 +1391,7 @@ mod tests {
         let project_id = project(&surreal).await;
         let created = create(&surreal, &sample(project_id)).await.unwrap();
         surreal
-            .query("UPDATE $id UNSET category")
+            .query("UPDATE $id UNSET category, calendar_review_pending")
             .bind((
                 "id",
                 crate::surreal::record_id("project_deadlines", created.id),
@@ -1112,6 +1411,18 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(untouched.category, None);
+        let reschedule = DeadlinePatch {
+            due_at: Some("2027-02-01T12:00:00Z".into()),
+            ..DeadlinePatch::default()
+        };
+        assert!(matches!(
+            update(&surreal, project_id, created.id, &reschedule).await,
+            Err(DeadlineError::Invalid(_))
+        ));
+        assert_eq!(
+            find(&surreal, project_id, created.id).await.unwrap(),
+            Some(untouched)
+        );
     }
 
     #[tokio::test]
@@ -1181,7 +1492,9 @@ mod tests {
         let mut input = sample(project_id);
         input.replay_key = Some("notice-1".into());
         let created = create(&surreal, &input).await.unwrap();
-        let cancelled = cancel(&surreal, project_id, created.id).await.unwrap();
+        let cancelled = from_source(cancel(&surreal, project_id, created.id))
+            .await
+            .unwrap();
         input.due_at = "2026-12-15T12:00:00Z".into();
         let error = create(&surreal, &input).await.unwrap_err();
         assert!(error.to_string().contains("cancelled"), "{error}");
@@ -1201,22 +1514,28 @@ mod tests {
         let mut input = sample(project_id);
         input.replay_key = Some("notice-1".into());
         let created = create(&surreal, &input).await.unwrap();
-        let cancelled = cancel(&surreal, project_id, created.id).await.unwrap();
+        let cancelled = from_source(cancel(&surreal, project_id, created.id))
+            .await
+            .unwrap();
         assert!(matches!(
-            reopen(&surreal, other, created.id).await,
+            from_source(reopen(&surreal, other, created.id)).await,
             Err(DeadlineError::NotFound)
         ));
         assert_eq!(
             find(&surreal, project_id, created.id).await.unwrap(),
             Some(cancelled)
         );
-        let reopened = reopen(&surreal, project_id, created.id).await.unwrap();
+        let reopened = from_source(reopen(&surreal, project_id, created.id))
+            .await
+            .unwrap();
         let mut expected = created.clone();
         expected.updated_at = reopened.updated_at.clone();
         expected.calendar_sequence = Some(2);
         assert_eq!(reopened, expected);
         assert_eq!(
-            reopen(&surreal, project_id, created.id).await.unwrap(),
+            from_source(reopen(&surreal, project_id, created.id))
+                .await
+                .unwrap(),
             reopened
         );
         input.due_at = "2026-12-15T12:00:00Z".into();
@@ -1237,7 +1556,9 @@ mod tests {
         let mut input = sample(project_id);
         input.replay_key = Some("notice-1".into());
         let created = create(&surreal, &input).await.unwrap();
-        complete(&surreal, project_id, created.id).await.unwrap();
+        from_source(complete(&surreal, project_id, created.id))
+            .await
+            .unwrap();
         input.due_at = "2026-12-15T12:00:00Z".into();
         let replayed = create(&surreal, &input).await.unwrap();
         assert_eq!(replayed.id, created.id);
@@ -1245,7 +1566,7 @@ mod tests {
         assert_eq!(replayed.inserted_at, created.inserted_at);
         assert_eq!(replayed.due_at, input.due_at.replace('Z', "+00:00"));
         assert!(matches!(
-            reopen(&surreal, project_id, created.id).await,
+            from_source(reopen(&surreal, project_id, created.id)).await,
             Err(DeadlineError::Invalid(_))
         ));
         assert_eq!(
@@ -1259,11 +1580,13 @@ mod tests {
         let surreal = mem_surreal().await;
         let project_id = project(&surreal).await;
         let created = create(&surreal, &sample(project_id)).await.unwrap();
-        let cancelled = cancel(&surreal, project_id, created.id).await.unwrap();
+        let cancelled = from_source(cancel(&surreal, project_id, created.id))
+            .await
+            .unwrap();
         assert_eq!(cancelled.status, STATUS_CANCELLED);
         assert_eq!(list(&surreal, project_id).await.unwrap().len(), 1);
         assert!(matches!(
-            complete(&surreal, project_id, created.id)
+            from_source(complete(&surreal, project_id, created.id))
                 .await
                 .unwrap_err(),
             DeadlineError::Invalid(_)
@@ -1290,7 +1613,9 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(renamed.title.as_deref(), Some("Reply brief"));
-        let kept = complete(&surreal, project_id, created.id).await.unwrap();
+        let kept = from_source(complete(&surreal, project_id, created.id))
+            .await
+            .unwrap();
         assert_eq!(kept.title.as_deref(), Some("Reply brief"));
         let cleared = update(
             &surreal,

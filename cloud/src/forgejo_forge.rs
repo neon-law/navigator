@@ -11,6 +11,9 @@
 //! when the forge reports it private, owned by the Firm's namespace, and named
 //! for the Project code. Every call is bounded by a request timeout.
 
+mod citation;
+pub use citation::{CitationFile, CitationRepository};
+
 use std::time::Duration;
 
 use async_trait::async_trait;

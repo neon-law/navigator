@@ -36,6 +36,7 @@ struct Deadline {
     id: Uuid,
     project_id: Uuid,
     due_at: String,
+    due_on: Option<model::project_deadlines::DueOn>,
     status: String,
     #[serde(default)]
     title: Option<String>,
@@ -130,15 +131,17 @@ fn selected(deadline: &Deadline, filters: &Filters, now: DateTime<Utc>, zone: Tz
     let Ok(due) = DateTime::parse_from_rfc3339(&deadline.due_at) else {
         return false;
     };
-    let local_due = due.with_timezone(&zone);
+    let local_due = deadline
+        .due_on
+        .as_ref()
+        .map_or_else(|| due.with_timezone(&zone).date_naive(), |on| on.date);
     let today = now.with_timezone(&zone).date_naive();
-    if filters.today && local_due.date_naive() != today {
+    // A civil deadline can still be running after midnight in the viewer's zone.
+    if filters.today && (local_due > today || (local_due < today && due.with_timezone(&Utc) < now))
+    {
         return false;
     }
-    if filters
-        .due_by
-        .is_some_and(|date| local_due.date_naive() > date)
-    {
+    if filters.due_by.is_some_and(|date| local_due > date) {
         return false;
     }
     !filters.overdue || due.with_timezone(&Utc) < now
@@ -150,10 +153,13 @@ fn band(deadline: &Deadline, now: DateTime<Utc>, zone: Tz) -> Option<&'static st
         return Some("Overdue");
     }
     let today = now.with_timezone(&zone).date_naive();
-    let day = due.with_timezone(&zone).date_naive();
+    let day = deadline
+        .due_on
+        .as_ref()
+        .map_or_else(|| due.with_timezone(&zone).date_naive(), |on| on.date);
     let distance = day.signed_duration_since(today).num_days();
     Some(match distance {
-        0 => "Today",
+        ..=0 => "Today",
         1..=7 => "Next 7 days",
         8..=30 => "Next 30 days",
         _ => "Later",
@@ -189,7 +195,8 @@ fn deadline_value(base: &str, project: &Project, row: &Deadline, zone: Tz) -> Va
         "deadline_href": source_href(base, project, row),
         "title": title(row),
         "due_at": row.due_at,
-        "due_local": due_utc(row).map(|at| at.with_timezone(&zone).format(LOCAL_FORMAT).to_string()),
+        "due_on": row.due_on,
+        "due_local": local_due(row, zone),
         "status": row.status,
         "category": row.category,
         "calendar_role": row.calendar_role,
@@ -500,7 +507,7 @@ fn render_console(
                     format!(
                         "  {} · {} · {} · {}",
                         project.code,
-                        format_due(&row.due_at, zone),
+                        format_due(row, zone),
                         row.category.as_deref().unwrap_or("uncategorized"),
                         title(row)
                     )
@@ -515,7 +522,7 @@ fn render_console(
         format!(
             "  {} · {} · {}",
             project.code,
-            format_due(&row.due_at, zone),
+            format_due(row, zone),
             row.title.as_deref().unwrap_or("Deadline")
         )
     }));
@@ -530,11 +537,17 @@ fn render_console(
     lines.join("\n")
 }
 
-fn format_due(due_at: &str, zone: Tz) -> String {
-    DateTime::parse_from_rfc3339(due_at).map_or_else(
-        |_| due_at.to_owned(),
-        |date| date.with_timezone(&zone).format(LOCAL_FORMAT).to_string(),
-    )
+fn format_due(row: &Deadline, zone: Tz) -> String {
+    local_due(row, zone).unwrap_or_else(|| row.due_at.clone())
+}
+
+fn local_due(row: &Deadline, zone: Tz) -> Option<String> {
+    row.due_on
+        .as_ref()
+        .map(model::project_deadlines::DueOn::display_date)
+        .or_else(|| {
+            due_utc(row).map(|date| date.with_timezone(&zone).format(LOCAL_FORMAT).to_string())
+        })
 }
 
 fn render_table(base: &str, rows: &[(Project, Deadline)], zone: Tz) -> String {
@@ -576,7 +589,7 @@ fn render_table(base: &str, rows: &[(Project, Deadline)], zone: Tz) -> String {
         );
         table.add_row([
             Cell::new(&project.code),
-            Cell::new(format_due(&row.due_at, zone)),
+            Cell::new(format_due(row, zone)),
             Cell::new(row.category.as_deref().unwrap_or("uncategorized")),
             Cell::new(title(row)),
             Cell::new(context),
@@ -787,6 +800,7 @@ mod tests {
         Deadline {
             id: Uuid::new_v4(),
             project_id: Uuid::nil(),
+            due_on: None,
             due_at: due_at.into(),
             status: status.into(),
             title: Some("Synthetic filing".into()),
@@ -799,6 +813,55 @@ mod tests {
             calendar_role: "firm".into(),
             category: Some("court".into()),
         }
+    }
+
+    fn pacific_cutoff() -> Deadline {
+        let mut row = deadline("2028-07-13T06:59:00Z", "open");
+        row.due_on = Some(model::project_deadlines::DueOn {
+            date: "2028-07-12".parse().unwrap(),
+            timezone: chrono_tz::America::Los_Angeles,
+            cutoff: Some("23:59:00".parse().unwrap()),
+        });
+        row
+    }
+
+    #[test]
+    fn the_brief_shows_the_civil_due_date_when_the_cutoff_is_tomorrow_in_the_viewer_zone() {
+        let now = "2028-07-12T12:00:00Z".parse().unwrap();
+        let zone = chrono_tz::America::New_York;
+        let row = pacific_cutoff();
+        let projects = [(project("sample"), vec![row])];
+        let filters = Filters {
+            today: true,
+            status: "open".into(),
+            ..Default::default()
+        };
+        let text = render("", &projects, &[], &filters, now, zone, false);
+        assert!(text.contains("Wednesday, 12 Jul 2028"));
+        assert!(!text.contains("2028-07-13"));
+        let report: Value =
+            serde_json::from_str(&render("", &projects, &[], &filters, now, zone, true)).unwrap();
+        assert_eq!(
+            report["views"]["Today"][0]["due_local"],
+            "Wednesday, 12 Jul 2028 · 23:59:00 America/Los_Angeles"
+        );
+    }
+
+    #[test]
+    fn a_still_open_pacific_cutoff_stays_urgent_after_eastern_midnight() {
+        let row = pacific_cutoff();
+        let zone = chrono_tz::America::New_York;
+        let filters = Filters {
+            today: true,
+            status: "open".into(),
+            ..Default::default()
+        };
+        let midnight = "2028-07-13T04:00:00Z".parse().unwrap();
+        assert!(selected(&row, &filters, midnight, zone));
+        assert_eq!(band(&row, midnight, zone), Some("Today"));
+        let after_cutoff = "2028-07-13T07:00:00Z".parse().unwrap();
+        assert!(!selected(&row, &filters, after_cutoff, zone));
+        assert_eq!(band(&row, after_cutoff, zone), Some("Overdue"));
     }
 
     #[test]
@@ -1048,7 +1111,7 @@ mod tests {
             ..Filters::default()
         };
         assert!(!selected(&deadline("soon", "open"), &open, now, zone));
-        assert_eq!(format_due("soon", zone), "soon");
+        assert_eq!(format_due(&deadline("soon", "open"), zone), "soon");
         let today = Filters {
             today: true,
             ..open

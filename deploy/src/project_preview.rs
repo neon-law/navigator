@@ -180,6 +180,8 @@ struct LiveDeadline {
     title: Option<String>,
     #[serde(default)]
     description: Option<String>,
+    due_on: Option<store::project_deadlines::DueOn>,
+    hearing: Option<store::project_deadlines::Hearing>,
     due_at: String,
     #[serde(default)]
     authority_kind: String,
@@ -208,6 +210,7 @@ struct LiveDeadline {
     updated_at: String,
     #[serde(default)]
     calendar_sequence: Option<i64>,
+    calendar_review_pending: Option<bool>,
 }
 
 impl From<LiveDeadline> for store::project_deadlines::Deadline {
@@ -217,6 +220,8 @@ impl From<LiveDeadline> for store::project_deadlines::Deadline {
             project_id: row.project_id,
             title: row.title,
             description: row.description,
+            due_on: row.due_on,
+            hearing: row.hearing,
             due_at: row.due_at,
             authority_kind: row.authority_kind,
             authority: row.authority,
@@ -232,6 +237,7 @@ impl From<LiveDeadline> for store::project_deadlines::Deadline {
             inserted_at: row.inserted_at,
             updated_at: row.updated_at,
             calendar_sequence: row.calendar_sequence,
+            calendar_review_pending: row.calendar_review_pending.unwrap_or(false),
         }
     }
 }

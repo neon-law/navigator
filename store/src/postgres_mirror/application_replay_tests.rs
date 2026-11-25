@@ -377,6 +377,8 @@ async fn native_decisions(
             project_id: project,
             title: Some("Synthetic native deadline".into()),
             description: None,
+            hearing: None,
+            due_on: None,
             due_at: "2026-12-01T12:00:00Z".into(),
             authority_kind: "internal".into(),
             authority: "Synthetic authority".into(),

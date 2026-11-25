@@ -30,6 +30,7 @@ pub struct LiveFields<'a> {
     /// `--booking-url`: written to the live row only. The client lens reads
     /// it from there; the repository has no use for it.
     pub booking_url: Option<&'a str>,
+    pub timezone: Option<&'a str>,
     /// `--jurisdiction`: written to the live row only. The onboarding Clause
     /// binding (`project.onboarding_jurisdiction`) reads the live value at
     /// render time; the repository has no use for it.
@@ -479,6 +480,13 @@ fn live_patch(
             ));
         }
         patch.insert("booking_url".into(), booking_url.into());
+    }
+    if let Some(zone) = fields.timezone.map(str::trim) {
+        anyhow::ensure!(
+            zone.is_empty() || zone.parse::<chrono_tz::Tz>().is_ok(),
+            "--timezone must be an IANA time zone"
+        );
+        patch.insert("calendar_timezone".into(), zone.into());
     }
     if let Some(jurisdiction) = fields.jurisdiction.map(str::trim) {
         patch.insert("onboarding_jurisdiction".into(), jurisdiction.into());
@@ -930,6 +938,7 @@ mod tests {
                 "drive_folder_id": "1QaBcD_2-efGhIjKlMnOpQrStUv",
                 "booking_url": "https://calendar.example.com/book",
                 "onboarding_jurisdiction": "NV",
+                "calendar_timezone": "America/Denver",
             })))
             .respond_with(ResponseTemplate::new(200))
             .expect(1)
@@ -943,13 +952,14 @@ mod tests {
                 drive_folder_id: Some("1QaBcD_2-efGhIjKlMnOpQrStUv"),
                 booking_url: Some("https://calendar.example.com/book"),
                 jurisdiction: Some("NV"),
+                timezone: Some("America/Denver"),
             },
             ..request(&host)
         };
         assert_eq!(
             outcome(dir.path(), fields).await.unwrap(),
             "drive_folder_id, calendar_id, live Project booking_url, live Project calendar_id, \
-             live Project drive_folder_id, live Project onboarding_jurisdiction"
+             live Project calendar_timezone, live Project drive_folder_id, live Project onboarding_jurisdiction"
         );
         let written = std::fs::read_to_string(&path).unwrap();
         assert!(!written.contains("calendar_id"), "{written}");

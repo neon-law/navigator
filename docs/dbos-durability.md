@@ -387,8 +387,7 @@ persist until reconciliation succeeds. The nightly Project update also reconcile
 
 On startup, each replica submits the most recent due slot. DBOS deduplicates by workflow, Project, and slot. If Project
 discovery or submission fails, the host retries within a minute. An accepted membership workflow makes up to three
-attempts for transient failures. Its output reports Person IDs, access readback, calendar notification requests, and
-event response counts.
+attempts for transient failures. Its output reports Person IDs and access readback.
 
 An independent hourly DBOS job reads iCalendar event resources through Google's CalDAV API with the delegated owner's
 credentials. Enable the CalDAV API on the Workspace integration's Google Cloud project. Each new resource revision is
@@ -403,8 +402,8 @@ event requires a new archive. The delegated owner must have exclusive write acce
 On staging, run setup twice on a synthetic Project and assign a verified Workspace Clerk or Admin. For a full UTC day,
 check the four `ProjectCalendarMembership` workflow IDs for the Project and their terminal states in
 `dbos.workflow_status`. In the participant's account, read the recorded ID from the Google Calendar list and check event
-access. Remove the assignment and verify that reconciliation removes only its managed grants and guests. Confirm that an
-external address cannot receive access.
+access. Remove the assignment and verify that reconciliation removes only its managed grants. Confirm that an external
+address cannot receive access.
 
 ## Notation worker opt-in
 

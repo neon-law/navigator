@@ -71,6 +71,11 @@ and source boundary. On the installation's Forgejo the repository is `<firm-slug
 enforced by [`store::projects::is_valid_code`](../../store/src/projects.rs) and the PostgreSQL constraints on
 `project.code`. No uppercase, no underscores, no other punctuation, and no spaces.
 
+The Project calendar uses an explicit IANA time zone when the lawyer sets one with `navigator project set --timezone`.
+Otherwise it uses the governing jurisdiction when that jurisdiction has a single identified zone, then the zone shared
+by the current case venues. The fallback is Eastern Time (`America/New_York`), including daylight saving time. Changing
+the default leaves saved Deadline dates and hearing instants in place.
+
 **The code is the matter's URL.** Its show page is `/app/projects/{code}` and its Portal is
 `/app/projects/{code}/portal/`; the internal UUID appears in neither. That holds because both directions read the `code`
 column and neither consults the id — `portal::dioxus_app::project_show_path` writes a code into every link Navigator

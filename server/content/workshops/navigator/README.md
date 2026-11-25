@@ -131,24 +131,23 @@ Have each attendee sign in with the role relevant to their work. Keep the browse
 
 ## Work the litigation matter
 
-### Project Calendar invitations
+### Shared Project Calendars
 
 The matter has one private, shared Project Calendar. When you check a proposed time, use your own calendar and the
 shared calendar for this matter.
 
-When the Firm has a Workspace calendar owner, DBOS invites eligible Clerks, Lawyers, and Admins assigned to the Project
-to events organized by its calendar. Ending the assignment removes the invitations Navigator added. The guest list shows
-who was invited.
+Project members receive access to the shared calendar. Create each event once, with the Project code first in the title.
+Use Busy to block scheduling. Invite each person whose attendance or RSVP you need.
 
 At 03:33 UTC each day, the DBOS Nightly Project Update syncs open Projects’ shared calendars and posts the daily update
 in each Project’s internal Slack channel.
 
 ---
 
-On a synthetic Project with a connected Google Workspace, open a test event organized by the Project Calendar. Assign a
-Lawyer with a confirmed Firm Workspace address. After the next five-minute sync, open the event and find the Lawyer on
-its guest list. End the assignment and verify that the next sync removes the Lawyer and keeps a manually invited guest.
-An assigned Clerk also needs a supervising Lawyer DRI.
+On a synthetic Project, create a Busy event on its shared calendar. Assign a Lawyer with a confirmed Firm Workspace
+address. After membership sync, verify the Lawyer can see the calendar and the event blocks their Navigator
+availability. Check that the event title starts with the Project code and its guest list is empty. An assigned Clerk
+also needs a supervising Lawyer DRI.
 
 ### The four nouns in one workflow
 

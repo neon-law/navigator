@@ -703,6 +703,8 @@ fn native_deadline(project_id: uuid::Uuid) -> crate::project_deadlines::NewDeadl
         project_id,
         title: Some("Synthetic deadline".into()),
         description: None,
+        hearing: None,
+        due_on: None,
         due_at: "2026-12-01T12:00:00Z".into(),
         authority_kind: "statute".into(),
         authority: "Synthetic authority".into(),
@@ -726,6 +728,46 @@ async fn wait_for_deadline_writers(pg: &PostgresDb, project: uuid::Uuid, count: 
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         }
     }).await.expect("deadline operations reach the cooperating Project lock");
+}
+
+#[tokio::test]
+async fn deadline_civil_date_round_trips_and_reschedules_the_same_record() {
+    use crate::project_deadlines as deadlines;
+    let (pg, _, _, project, _) = application_fixture().await;
+    PostgresDb::with_test_db(pg, async {
+        let db = crate::surreal::SurrealDb::uninitialized();
+        let mut input = native_deadline(project);
+        let day: deadlines::DueOn = serde_json::from_value(serde_json::json!({"date":"2028-07-12","timezone":"America/Los_Angeles","cutoff":"23:59:00"})).unwrap();
+        input.due_at = day.instant().unwrap().to_rfc3339();
+        input.due_on = Some(day.clone());
+        input.category = Some("tickler".into());
+        let first = deadlines::create(&db, &input).await.unwrap();
+        assert_eq!(first.due_on.as_ref(), Some(&day));
+        assert_eq!(deadlines::create(&db, &input).await.unwrap(), first);
+        let updated = deadlines::update(&db, project, first.id, &deadlines::DeadlinePatch {
+            description: Some(Some("Reviewed".into())), ..Default::default()
+        }).await.unwrap();
+        assert_eq!(updated.due_on.as_ref(), Some(&day));
+        let timed = deadlines::update(&db, project, first.id, &deadlines::DeadlinePatch {
+            due_at: Some("2028-07-12T10:00:00Z".into()), ..Default::default()
+        }).await.unwrap();
+        assert!(timed.due_on.is_none());
+        assert_eq!(timed.id, first.id);
+        let hearing = deadlines::DeadlinePatch {
+            calendar_role: Some("hearing".into()),
+            category: Some(Some("hearing".into())),
+            hearing: Some(deadlines::Hearing {duration_minutes: std::num::NonZeroU32::new(90),location:Some("Courtroom A".into())}),
+            ..Default::default()
+        };
+        let saved = deadlines::update(&db, project, timed.id, &hearing).await.unwrap();
+        let event = crate::deadline_calendar::deadline_event(&saved,"sample",None).unwrap();
+        assert_eq!(event.timing, cloud::calendar::EventTiming::Hearing(90));
+        assert_eq!(event.location.as_deref(), Some("Courtroom A"));
+        let moved = deadlines::update(&db, project, timed.id, &deadlines::DeadlinePatch {
+            hearing:Some(deadlines::Hearing {location:Some("Courtroom B".into()),..Default::default()}),..Default::default()
+        }).await.unwrap();
+        assert_eq!(moved.hearing.as_ref().unwrap().minutes(), 90);
+    }).await;
 }
 
 #[tokio::test]
@@ -1210,4 +1252,408 @@ async fn accepted_plan_notices_open_one_pitch_per_provider_case() {
             assert!(projects::find_by_code(&source, &duplicate_code.code).await.unwrap().is_none());
         }
     })).await;
+}
+
+#[tokio::test]
+async fn a_project_override_and_governing_jurisdiction_precede_the_venue() {
+    use crate::projects::calendar_timezone;
+    use crate::{cases, jurisdictions, projects};
+    use chrono_tz::America;
+    let (pg, _, _, id, _) = application_fixture().await;
+    PostgresDb::with_test_db(pg, async {
+        let db = crate::surreal::SurrealDb::uninitialized();
+        let row = projects::find_by_id(&db, id).await.unwrap().unwrap();
+        assert_eq!(
+            calendar_timezone(&db, &row).await.unwrap(),
+            America::New_York
+        );
+        cases::open_case(
+            &db,
+            &cases::NewCase {
+                project_id: row.id,
+                caption: "Sample",
+                forum: None,
+                jurisdiction: Some("CA"),
+                docket_number: None,
+                judge: None,
+                posture: "plaintiff",
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            calendar_timezone(&db, &row).await.unwrap(),
+            America::Los_Angeles
+        );
+        let state = jurisdictions::create(
+            &db,
+            &jurisdictions::NewJurisdiction::new("Illinois", "IL", "state"),
+        )
+        .await
+        .unwrap();
+        let row = projects::set_jurisdiction(&db, row.id, Some(state.id))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            calendar_timezone(&db, &row).await.unwrap(),
+            America::Chicago
+        );
+        let update = |zone: &str| projects::UpdateProjectCommand {
+            calendar_timezone: Some(zone.into()),
+            ..Default::default()
+        };
+        assert!(projects::update_project(&db, row.id, &update("fake/zone"))
+            .await
+            .is_err());
+        let saved = projects::update_project(&db, row.id, &update("America/Denver"))
+            .await
+            .unwrap();
+        assert_eq!(
+            calendar_timezone(&db, &saved).await.unwrap(),
+            America::Denver
+        );
+        let saved = projects::update_project(&db, row.id, &update(""))
+            .await
+            .unwrap();
+        assert_eq!(
+            calendar_timezone(&db, &saved).await.unwrap(),
+            America::Chicago
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn court_date_approval_survives_replay_and_preserves_the_effective_deadline() {
+    use crate::deadline_proposals as queue;
+    use model::deadline_proposals::{Decision, Draft, Status};
+    use uuid::Uuid;
+    let (pg, lawyer, _, project, _) = application_fixture().await;
+    sqlx::query("INSERT INTO person_project_role(project_id,person_id,participation) VALUES($1,$2,'lawyer')").bind(project).bind(lawyer).execute(pg.pool()).await.unwrap();
+    let order = Uuid::now_v7();
+    let hash = "a".repeat(64);
+    sqlx::query("INSERT INTO asset(id,project_id,kind,storage_key,sha256_hex,content_type,byte_size) VALUES($1,$2,'order','synthetic',$3,'application/pdf',123)").bind(order).bind(project).bind(&hash).execute(pg.pool()).await.unwrap();
+    let mut draft:Draft=serde_json::from_value(serde_json::json!({"kind":"signed_order","title":"Synthetic court date","timezone":"America/New_York","due_on":"2027-03-10","evidence":[]})).unwrap();
+    let id = Uuid::new_v4();
+    let first = queue::stage(&pg, project, id, None, &draft).await.unwrap();
+    assert_eq!(first.status, Status::Pending);
+    assert!(matches!(
+        queue::decide(&pg, project, id, lawyer, 1, Decision::Confirm).await,
+        Err(queue::Error::Invalid(_))
+    ));
+    assert!(queue::get(&pg, Uuid::new_v4(), id).await.unwrap().is_none());
+    draft.evidence.push(serde_json::from_value(serde_json::json!({"role":"signed_order","id":order,"sha256_hex":hash,"page":1,"rects":[{"x":0.1,"y":0.1,"width":0.3,"height":0.1}]})).unwrap());
+    assert!(queue::stage(&pg, Uuid::new_v4(), id, None, &draft)
+        .await
+        .is_err());
+    let amended = queue::correct(&pg, project, id, 1, &draft).await.unwrap();
+    assert_eq!(amended.revision, 2);
+    assert!(matches!(
+        queue::decide(&pg, project, id, lawyer, 1, Decision::Confirm).await,
+        Err(queue::Error::Conflict)
+    ));
+    assert!(matches!(
+        queue::decide(&pg, project, id, Uuid::new_v4(), 2, Decision::Confirm).await,
+        Err(queue::Error::Forbidden)
+    ));
+    let approved = queue::decide(&pg, project, id, lawyer, 2, Decision::Confirm)
+        .await
+        .unwrap();
+    assert_eq!(approved.status, Status::Approved);
+    assert!(approved.deadline_id.is_none());
+    let job = queue::approved(&pg).await.unwrap().pop().unwrap();
+    let (a, b) = tokio::join!(queue::publish(&pg, job), queue::publish(&pg, job));
+    a.unwrap();
+    b.unwrap();
+    let published = queue::decide(&pg, project, id, lawyer, 2, Decision::Confirm)
+        .await
+        .unwrap();
+    let target = published.deadline_id.unwrap();
+    assert_eq!(published.status, Status::Published);
+    draft.due_on = Some("2027-03-12".parse().unwrap());
+    draft.timezone = chrono_tz::America::Chicago;
+    queue::correct(&pg, project, id, 2, &draft).await.unwrap();
+    assert_revision_timezones(&pg, project, id, &draft).await;
+    let day = |pg: PostgresDb| async move {
+        sqlx::query_as::<_, (String, bool)>(
+            "SELECT due_on->>'date',calendar_review_pending FROM project_deadlines WHERE id=$1",
+        )
+        .bind(target)
+        .fetch_one(pg.pool())
+        .await
+        .unwrap()
+    };
+    assert_eq!(day(pg.clone()).await, ("2027-03-10".to_string(), false));
+    queue::decide(
+        &pg,
+        project,
+        id,
+        lawyer,
+        3,
+        Decision::Return {
+            reason: "Check source".into(),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(queue::approved(&pg).await.unwrap().is_empty());
+    queue::correct(&pg, project, id, 3, &draft).await.unwrap();
+    queue::decide(&pg, project, id, lawyer, 4, Decision::Confirm)
+        .await
+        .unwrap();
+    queue::publish(&pg, queue::approved(&pg).await.unwrap()[0])
+        .await
+        .unwrap();
+    assert_eq!(
+        queue::get(&pg, project, id)
+            .await
+            .unwrap()
+            .unwrap()
+            .deadline_id,
+        Some(target)
+    );
+    assert_eq!(day(pg.clone()).await, ("2027-03-12".to_string(), false));
+    assert_direct_court_writes_require_review(pg, project, target).await;
+}
+
+async fn assert_direct_court_writes_require_review(
+    pg: PostgresDb,
+    project: uuid::Uuid,
+    target: uuid::Uuid,
+) {
+    PostgresDb::with_test_db(pg, async {
+        let src = crate::surreal::SurrealDb::uninitialized();
+        let mut input = native_deadline(project);
+        input.category = Some("court".into());
+        let provisional = crate::project_deadlines::create(&src, &input)
+            .await
+            .unwrap();
+        assert!(provisional.calendar_review_pending);
+        assert!(matches!(
+            crate::project_deadlines::update(
+                &src,
+                project,
+                target,
+                &crate::project_deadlines::DeadlinePatch {
+                    due_at: Some("2030-01-01T12:00:00Z".into()),
+                    ..Default::default()
+                }
+            )
+            .await,
+            Err(crate::project_deadlines::DeadlineError::Invalid(_))
+        ));
+    })
+    .await;
+}
+
+async fn assert_revision_timezones(
+    pg: &PostgresDb,
+    project: uuid::Uuid,
+    id: uuid::Uuid,
+    draft: &model::deadline_proposals::Draft,
+) {
+    let mut unzoned = serde_json::to_value(draft).unwrap();
+    unzoned.as_object_mut().unwrap().remove("timezone");
+    let unzoned: model::deadline_proposals::DraftInput = serde_json::from_value(unzoned).unwrap();
+    let source = crate::surreal::SurrealDb::uninitialized();
+    for (revision, expected) in [
+        (None, chrono_tz::America::New_York),
+        (Some(3), chrono_tz::America::Chicago),
+    ] {
+        let resolved = crate::deadline_proposals::resolve_draft(
+            pg,
+            &source,
+            project,
+            id,
+            revision,
+            unzoned.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resolved.timezone, expected);
+    }
+}
+
+#[tokio::test]
+async fn forgejo_evidence_binds_the_verified_repository_and_historical_archived_original() {
+    use crate::deadline_proposals as queue;
+    use model::deadline_proposals::{Decision, Draft};
+    use serde_json::json;
+    use uuid::Uuid;
+
+    let (pg, lawyer, _, project, firm) = application_fixture().await;
+    sqlx::query("INSERT INTO person_project_role(project_id,person_id,participation) VALUES($1,$2,'lawyer')")
+        .bind(project).bind(lawyer).execute(pg.pool()).await.unwrap();
+    let authority = Uuid::now_v7();
+    let order = Uuid::now_v7();
+    let archive = Uuid::now_v7();
+    let replacement = Uuid::now_v7();
+    let hash = "b".repeat(64);
+    for (id, project_id) in [(order, Some(project)), (archive, None), (replacement, None)] {
+        sqlx::query("INSERT INTO asset(id,project_id,kind,storage_key,sha256_hex,content_type,byte_size) VALUES($1,$2,'order',$3,$4,'application/pdf',51)")
+            .bind(id).bind(project_id).bind(id.to_string()).bind(&hash).execute(pg.pool()).await.unwrap();
+    }
+    sqlx::query("INSERT INTO authority(id,class,citation,title,archived_asset_id) VALUES($1,'regulation','Synthetic Rule 1','Fixture Rule',$2)").bind(authority).bind(archive).execute(pg.pool()).await.unwrap();
+    let id = Uuid::now_v7();
+    let source = |role, id| json!({"role":role,"id":id,"sha256_hex":hash,"page":1,"rects":[{"x":0.1,"y":0.1,"width":0.5,"height":0.1}]});
+    let mut rule = source("authority", authority);
+    rule["forgejo"] =
+        json!({"repository":"firm_library","commit":"c".repeat(40),"path":"rules/filed.pdf"});
+    let mut draft: Draft = serde_json::from_value(json!({"kind":"signed_order","title":"Synthetic hearing response","due_on":"2028-03-01","timezone":"America/New_York","evidence":[source("signed_order",order),rule]})).unwrap();
+    let mut attested = queue::VerifiedForgejo {
+        project_id: project,
+        firm_id: firm,
+        source_id: authority,
+        asset_id: archive,
+        sha256_hex: hash,
+        pin: draft.evidence[1].forgejo.clone().unwrap(),
+        origin: "https://forge.example.test".into(),
+        owner: "another-firm".into(),
+        name: "library".into(),
+        repository_id: 41,
+    };
+    assert!(queue::stage(&pg, project, id, None, &draft).await.is_err());
+    assert!(queue::stage_verified(
+        &pg,
+        project,
+        id,
+        None,
+        &draft,
+        std::slice::from_ref(&attested)
+    )
+    .await
+    .is_err());
+    attested.owner = sqlx::query_scalar("SELECT slug FROM firm WHERE id=$1")
+        .bind(firm)
+        .fetch_one(pg.pool())
+        .await
+        .unwrap();
+    queue::stage_verified(
+        &pg,
+        project,
+        id,
+        None,
+        &draft,
+        std::slice::from_ref(&attested),
+    )
+    .await
+    .unwrap();
+    let receipt = queue::evidence_receipt(&pg, project, id, 1, 1)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(receipt.asset_id, archive);
+    assert_eq!(receipt.forgejo.as_ref(), Some(&attested));
+    sqlx::query("UPDATE authority SET archived_asset_id=$2 WHERE id=$1")
+        .bind(authority)
+        .bind(replacement)
+        .execute(pg.pool())
+        .await
+        .unwrap();
+    assert!(matches!(
+        queue::decide(&pg, project, id, lawyer, 1, Decision::Confirm).await,
+        Err(queue::Error::Invalid(_))
+    ));
+    assert!(
+        queue::correct_verified(&pg, project, id, 1, &draft, std::slice::from_ref(&attested))
+            .await
+            .is_err()
+    );
+    draft.evidence[1].forgejo = None;
+    queue::correct(&pg, project, id, 1, &draft).await.unwrap();
+    assert_historical_evidence(&pg, project, id, receipt, replacement).await;
+    assert_firm_library_order(&pg, draft, attested, order).await;
+}
+
+async fn assert_firm_library_order(
+    pg: &PostgresDb,
+    mut draft: model::deadline_proposals::Draft,
+    mut attested: crate::deadline_proposals::VerifiedForgejo,
+    order: uuid::Uuid,
+) {
+    use crate::deadline_proposals as queue;
+    use uuid::Uuid;
+    let second = Uuid::now_v7();
+    let project = attested.project_id;
+    let firm = attested.firm_id;
+    draft.evidence[0].forgejo = Some(attested.pin.clone());
+    attested.source_id = order;
+    attested.asset_id = order;
+    attested.firm_id = Uuid::now_v7();
+    assert!(queue::stage_verified(
+        pg,
+        project,
+        second,
+        None,
+        &draft,
+        std::slice::from_ref(&attested)
+    )
+    .await
+    .is_err());
+    attested.firm_id = firm;
+    queue::stage_verified(pg, project, second, None, &draft, &[attested])
+        .await
+        .unwrap();
+    assert_eq!(
+        queue::evidence_receipt(pg, project, second, 1, 0)
+            .await
+            .unwrap()
+            .unwrap()
+            .asset_id,
+        order
+    );
+}
+
+async fn assert_historical_evidence(
+    pg: &PostgresDb,
+    project: uuid::Uuid,
+    id: uuid::Uuid,
+    receipt: crate::deadline_proposals::SourceReceipt,
+    replacement: uuid::Uuid,
+) {
+    use crate::deadline_proposals as queue;
+    use uuid::Uuid;
+    let archive = receipt.asset_id;
+    assert!(sqlx::query("UPDATE deadline_proposal SET source_receipts=NULL WHERE project_id=$1 AND id=$2 AND revision=1")
+        .bind(project).bind(id).execute(pg.pool()).await.is_err());
+    assert!(queue::get_revision(pg, project, id, 1)
+        .await
+        .unwrap()
+        .unwrap()
+        .draft
+        .evidence[1]
+        .forgejo
+        .is_some());
+    assert!(queue::get_revision(pg, Uuid::now_v7(), id, 1)
+        .await
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        queue::evidence_receipt(pg, project, id, 1, 1)
+            .await
+            .unwrap(),
+        Some(receipt)
+    );
+    assert_eq!(
+        queue::evidence_receipt(pg, project, id, 2, 1)
+            .await
+            .unwrap()
+            .unwrap()
+            .asset_id,
+        replacement
+    );
+    assert!(queue::evidence_receipt(pg, Uuid::now_v7(), id, 1, 1)
+        .await
+        .unwrap()
+        .is_none());
+    sqlx::query("UPDATE asset SET deleted_at=now() WHERE id=$1")
+        .bind(archive)
+        .execute(pg.pool())
+        .await
+        .unwrap();
+    assert!(queue::evidence_receipt(pg, project, id, 1, 1)
+        .await
+        .unwrap()
+        .is_none());
 }

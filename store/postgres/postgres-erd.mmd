@@ -367,6 +367,22 @@ erDiagram
         string workflow_id
         string workflow_name
     }
+    deadline_proposal {
+        int attempt
+        uuid deadline_id
+        json draft
+        uuid id
+        datetime next_attempt_at
+        uuid project_id
+        string reason
+        datetime reviewed_at
+        uuid reviewer_id
+        int revision
+        json source_receipts
+        string status
+        uuid target_deadline_id
+        boolean worker_settled
+    }
     deployment_secret_change {
         string actor_id
         string ciphertext
@@ -1655,6 +1671,7 @@ erDiagram
         string booking_url
         string brand
         string calendar_id
+        string calendar_timezone
         uuid client_dri_person_id
         string closed_at
         string closure_reason
@@ -1777,12 +1794,15 @@ erDiagram
     project_deadlines {
         string authority
         string authority_kind
+        boolean calendar_review_pending
         string calendar_role
         int calendar_sequence
         string category
         int client_lead_days
         string description
         datetime due_at
+        json due_on
+        json hearing
         uuid id
         datetime inserted_at
         int internal_lead_days
@@ -2340,6 +2360,9 @@ erDiagram
     person }o--|| credential : references
     database_origin }o--|| database_origin_upgrade : references
     database_origin }o--|| database_recovery : references
+    person }o--|| deadline_proposal : references
+    project }o--|| deadline_proposal : references
+    project_deadlines }o--|| deadline_proposal : references
     document_chain_archive }o--|| document_chain_archive_item : references
     project }o--|| document_upload_session : references
     firm }o--|| docusign_completion : references

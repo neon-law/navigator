@@ -613,6 +613,61 @@ route_allow if {
     is_lawyer(input.session)
 }
 
+# Reviewers see only proposals in their own Project. The handler enforces active
+# participation and Clerk supervision; approval additionally requires a browser Lawyer.
+court_date_reviewer if is_lawyer(input.session)
+court_date_reviewer if is_clerk(input.session)
+
+court_date_path if {
+	array.slice(input.path, 0, 3) == ["app", "api", "projects"]
+	input.path[4] == "court-date-proposals"
+}
+
+ci_matter_content_denied if {
+	input.session.source == "ci"
+	court_date_path
+}
+
+route_allow if {
+	court_date_path
+	court_date_reviewer
+	count(input.path) == 5
+	input.method in {"GET", "POST"}
+}
+
+route_allow if {
+	court_date_path
+	court_date_reviewer
+	count(input.path) == 6
+	input.method == "PATCH"
+}
+
+route_allow if {
+	court_date_path
+	court_date_reviewer
+	count(input.path) == 8
+	input.path[6] == "evidence"
+	input.method == "GET"
+}
+
+route_allow if {
+	court_date_path
+	court_date_reviewer
+	count(input.path) == 9
+	input.path[6] == "evidence"
+	input.path[8] == "forgejo"
+	input.method == "GET"
+}
+
+route_allow if {
+	court_date_path
+	is_lawyer(input.session)
+	input.session.source == "browser"
+	count(input.path) == 7
+	input.path[6] in {"confirm", "return"}
+	input.method == "POST"
+}
+
 # Record a Docket Entry (LAW-133): POST /app/api/projects/{id}/docket, and
 # POST .../docket/{entry_id}/{link-document,supersede}. Lawyer tier, the same
 # gate the `LawyerSession` extractor applies; the handler repeats the

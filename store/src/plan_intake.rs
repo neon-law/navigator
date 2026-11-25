@@ -1469,6 +1469,8 @@ async fn create_plan_deadlines(
                 "Review this assignment by {} for {}.",
                 acceptance_due, plan.name
             )),
+            hearing: None,
+            due_on: None,
             due_at: acceptance_due.to_rfc3339(),
             authority_kind: "internal".to_string(),
             authority: format!("{} acceptance SLA", plan.name),
@@ -1499,6 +1501,8 @@ async fn create_plan_deadlines(
                     "{} expects the matter finished within {} days of acceptance.",
                     plan.name, days
                 )),
+                hearing: None,
+                due_on: None,
                 due_at: turnaround_due(accepted_at, days).to_rfc3339(),
                 authority_kind: "internal".to_string(),
                 authority: format!("{} turnaround SLA", plan.name),
@@ -1527,6 +1531,8 @@ async fn create_plan_deadlines(
                      started when the notice landed.",
                     plan.portal.as_deref().unwrap_or("the provider's portal")
                 )),
+                hearing: None,
+                due_on: None,
                 due_at: acceptance_due.to_rfc3339(),
                 authority_kind: "internal".to_string(),
                 authority: format!("{} acceptance SLA", plan.name),

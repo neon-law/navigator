@@ -144,6 +144,13 @@
     "scope": "identity",
     "through": "identity ownership and explicit Person/Entity links; no inferred participation"
   },
+  "deadline_proposal": {
+    "migration_slice": "matter-storage",
+    "parity_scenario": "a participating lawyer approves an exact source-backed revision and durable replay publishes one Project Deadline",
+    "scope": "project",
+    "target_only": true,
+    "through": "project_id and immutable revision, with the lawyer decision and resulting Deadline recorded on that revision"
+  },
   "deployment_secret_change": {
     "migration_slice": "platform-storage",
     "parity_scenario": "operator authorization; no matter visibility grant",

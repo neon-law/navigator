@@ -1,49 +1,85 @@
-# Propose a Deadline
+# Review court dates
 
-`navigator project deadline propose` shows a cited, date-only proposal. It does not record a Deadline until the lawyer
-passes `--confirm`. The command resolves a filed Authority's canonical citation through the authenticated API and
-requires that Authority's archive to remain retrievable. This checks the filed record; the lawyer verifies that the rule
-and its offset correctly state the source.
+A lawyer confirms each court date in the Project's **Court date review** queue. A supervised clerk can prepare and
+correct a proposal. Existing confirmed dates stay in effect while an amendment awaits review.
 
-Save a private JSON rule outside Git. Its required fields are:
+## Queue dates from the record
 
-| Field | Meaning |
-| --- | --- |
-| `trigger` | Event whose date starts the count. |
-| `offset_days` | Signed whole-day offset from the trigger. |
-| `basis` | `calendar_days`, `court_days`, or `holidays`. |
-| `authority_kind` | `statute`, `court_rule`, `court_order`, `contract`, or `internal`. |
-| `authority_id` | Id of the already filed Authority. |
+Save one submission or an array of submissions in a private JSON file. Give each proposal a stable UUID `request_id`.
+Sending the same file again recovers the original proposals. Use `target_deadline_id` to amend an existing Deadline. The
+following example uses synthetic identifiers and a placeholder digest.
 
-Calendar-day counting adds the signed offset without holiday, service-method, or time-of-day adjustments. Navigator
-supplies no built-in legal rules. Court-day and holiday rules return `due_on: null` and `manual_due_on_required: true`.
-
-```bash
-navigator project deadline propose \
-  --rule /private/path/rule.json \
-  --trigger-on 2028-02-28 \
-  --title "Synthetic response" \
-  --replay-key synthetic-response
+```json
+{
+  "request_id": "00000000-0000-4000-8000-000000000001",
+  "draft": {
+    "kind": "signed_order",
+    "title": "File response",
+    "due_on": "2030-07-16",
+    "evidence": [
+      {
+        "role": "signed_order",
+        "id": "00000000-0000-4000-8000-000000000002",
+        "sha256_hex": "<SHA-256 of the filed original>",
+        "page": 1,
+        "rects": [{ "x": 0.10, "y": 0.25, "width": 0.60, "height": 0.04 }],
+        "forgejo": {
+          "repository": "project",
+          "commit": "0123456789abcdef0123456789abcdef01234567",
+          "path": "blobs/orders/sample-order.pdf.yaml"
+        }
+      }
+    ]
+  }
+}
 ```
 
-Output includes the proposal date, trigger, basis, citation, Authority id, and replay key.
+```bash
+navigator project deadline review queue --file /private/path/submissions.json
+navigator project deadline review list
+```
 
-Review the proposal against the filed source. Changing the trigger never changes a stored Deadline.
+An express date needs the signed order alone. Cite the filed version's asset ID and the page stating the date. Highlight
+coordinates range from zero to one, measured from the top left of the displayed page. A date without an explicit zone
+inherits the matter zone. A hearing uses `due_at` with an offset, `category: "hearing"`, and optional
+`hearing.duration_minutes` and `hearing.location`.
 
-To record the reviewed date, repeat those inputs with `--confirm`, the Project, and `--due-at` containing the lawyer's
-chosen time and explicit offset. Its local date must match the proposal. For a court-day or holiday basis, also supply
-the lawyer-counted `--due-on YYYY-MM-DD`. Navigator never invents a due time or counts those rules.
+For a calculated date, use `kind: "calculated"` and cite both the triggering record and the governing Authority with
+separate `trigger` and `authority` evidence entries. Use the filed Authority ID for the latter. Include its archived
+digest, page and highlights. The `calculation` object carries `trigger`, `trigger_on`, `offset_days`, `counting_basis`
+and `authority_kind`. Select `case_law`, `court_rule` or `statute` according to the filed source. Calendar-day offsets
+must agree with the proposed date. A lawyer supplies a date that depends on court days or holidays.
 
-Confirmation uses the existing Project Deadline API and its lawyer and Project access checks. A new row is internal,
-uses calendar role `firm`, and records source `lawyer`.
+### Cite a file in Forgejo
 
-The citation comes from the Authority record. The description retains the proposal inputs and Authority id for review.
+The optional `forgejo` field identifies the file at a full commit SHA. Choose `project` for the matter repository or
+`firm_library` for its owning [Firm Library](glossary/firm-library.md). Navigator checks that the file contains the
+archived bytes or a document pointer to that exact version. The citation records the repository identity, commit, path,
+archived version, page and highlights.
 
-A stable replay key identifies the obligation: keep it when correcting the trigger. Repeat confirmation intentionally
-updates that row's reviewed date, title, authority, and proposal audit through the existing update route. Owner, lead
-times, visibility, calendar role, source Document, source, and status stay unchanged. Existing description notes remain
-beside the refreshed proposal audit. Cancelled rows must be reopened through the existing Deadline command before
-confirmation. Use `navigator project deadline update` for owner, lead times, or visibility changes.
+Reviewers can open the highlighted original from Navigator even if the repository is offline or the file changes later.
+**Open in Forgejo** opens the verified file at the cited commit when it is available. Access to the archived page still
+follows Project participation, Authority permissions and document retention.
 
-A successful confirmation prints the stored row. Read it back with `navigator project deadline list` and check the due
-instant, citation, and replay key. A proposal does not schedule reminders or mirror a calendar.
+## Review and publish
+
+Open **Court date review** from the Project's Deadlines tab. Select a row to inspect the proposed date and its
+highlighted source pages. Open a crop to see the entire page. The review screen also shows the calculation for a derived
+date. A lawyer can confirm the displayed revision or return it with a reason. A supervised clerk can see returned work
+in their Project overview.
+
+Use J and K to move, R to open the record, A to open the Authority, and Escape to close the source. Command+Enter on
+macOS or Ctrl+Enter confirms the selected revision. The question-mark shortcut lists the available keys.
+
+To revise a returned row, save the corrected draft object in a private file and use its current revision.
+
+```bash
+navigator project deadline review correct <proposal-id> --revision <revision> --file /private/path/draft.json
+```
+
+DBOS publishes the confirmed revision to the stored Deadline. Calendar sync and ICS use that record. Confirmation
+records the reviewing lawyer, time and exact evidence revision. A corrected date retains its Deadline identity in
+calendar exports.
+
+The existing `navigator project deadline propose` calculation command can preview a filed rule and its trigger. Use the
+queue to publish a court date. Direct Deadline creation remains available for internal and contractual obligations.

@@ -7,10 +7,32 @@
 use serde::Deserialize;
 use serde_json::{json, Value};
 use store::persons::Role;
+use store::project_deadlines::{
+    AuthorityKind, CalendarRole, Category, DeadlineIdentity, DueOnInput, Hearing,
+};
 use store::project_deadlines::{Deadline, DeadlineError};
 use uuid::Uuid;
 
 use super::ToolError;
+
+pub(super) async fn dispatch(
+    name: &str,
+    surreal: &store::surreal::SurrealDb,
+    person_id: Uuid,
+    role: Role,
+    arguments: &Value,
+) -> Result<Value, ToolError> {
+    match name {
+        "list_project_deadlines" => list_call(surreal, person_id, role, arguments).await,
+        "queue_court_date" => queue_call(surreal, person_id, role, arguments).await,
+        "create_deadline" => create_call(surreal, person_id, role, arguments).await,
+        "update_deadline" => update_call(surreal, person_id, role, arguments).await,
+        "complete_deadline" => complete_call(surreal, person_id, role, arguments).await,
+        "cancel_deadline" => cancel_call(surreal, person_id, role, arguments).await,
+        "reopen_deadline" => reopen_call(surreal, person_id, role, arguments).await,
+        other => Err(ToolError::Unknown(other.to_owned())),
+    }
+}
 
 #[must_use]
 pub fn list_descriptor() -> Value {
@@ -29,12 +51,153 @@ pub fn list_descriptor() -> Value {
     })
 }
 
+fn due_on_schema() -> Value {
+    json!({"type": "object", "required": ["date"], "additionalProperties": false,
+           "properties": {"date": {"type":"string","format":"date"}, "timezone":{"type":"string","description":"IANA time zone"},
+           "cutoff":{"type":"string","description":"Optional local cutoff, HH:MM:SS"}}})
+}
+
+/// Agents can prepare a revision. Releasing it requires the lawyer's interactive review.
+#[must_use]
+pub fn queue_descriptor() -> Value {
+    let rect = json!({"type":"object","required":["x","y","width","height"],"properties":{
+        "x":{"type":"number"},"y":{"type":"number"},"width":{"type":"number"},"height":{"type":"number"}}});
+    let evidence = json!({"type":"object","required":["role","id","sha256_hex","page","rects"],"properties":{
+        "role":{"enum":["signed_order","trigger","authority"]},"id":{"type":"string","format":"uuid"},
+        "sha256_hex":{"type":"string","pattern":"^[0-9a-f]{64}$"},"page":{"type":"integer","minimum":1},
+        "rects":{"type":"array","items":rect},"forgejo":forgejo_pin_schema()
+    }});
+    let draft = json!({"type":"object","required":["kind","title"],"properties":{
+        "kind":{"enum":["signed_order","calculated"]},"title":{"type":"string","maxLength":200},
+        "timezone":{"type":"string"},"due_on":{"type":"string","format":"date"},
+        "due_at":{"type":"string","format":"date-time"},"cutoff":{"type":"string"},
+        "hearing":{"type":"object"},"category":{"enum":store::project_deadlines::CATEGORIES},
+        "calendar_role":{"enum":store::project_deadlines::CALENDAR_ROLES},
+        "calculation":{"type":"object","description":"trigger, trigger_on, offset_days, counting_basis and authority_kind."},
+        "evidence":{"type":"array","maxItems":32,"items":evidence}
+    }});
+    json!({
+        "name":"queue_court_date",
+        "description":"Stage a court date for a participating lawyer to review in Navigator. Source IDs, digests, one-based pages and normalized highlight rectangles refer to filed originals. This tool creates a proposal.",
+        "inputSchema":{"type":"object","additionalProperties":false,"required":["project_id","request_id","draft"],"properties":{
+            "project_id":{"type":"string","format":"uuid"},"request_id":{"type":"string","format":"uuid"},
+            "target_deadline_id":{"type":"string","format":"uuid"},"draft":draft
+        }}
+    })
+}
+
+/// The same immutable repository coordinates are accepted by the HTTP and agent doors.
+#[must_use]
+pub fn forgejo_pin_schema() -> Value {
+    json!({
+        "type":"object","additionalProperties":false,"required":["repository","commit","path"],
+        "properties":{
+            "repository":{"enum":["project","firm_library"]},
+            "commit":{"type":"string","pattern":"^[0-9a-f]{40}$"},
+            "path":{"type":"string","minLength":1,"description":"Repository-relative path at the cited commit."}
+        }
+    })
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct QueueArgs {
+    project_id: Uuid,
+    request_id: Uuid,
+    target_deadline_id: Option<Uuid>,
+    draft: model::deadline_proposals::DraftInput,
+}
+
+pub async fn queue_call(
+    surreal: &store::surreal::SurrealDb,
+    person_id: Uuid,
+    role: Role,
+    arguments: &Value,
+) -> Result<Value, ToolError> {
+    let args: QueueArgs = super::decode_args(arguments)?;
+    let project_id = args.project_id;
+    if !role.is_lawyer_tier()
+        || !store::projects::has_firm_participation(surreal, person_id, project_id)
+            .await
+            .map_err(|e| ToolError::Database(e.to_string()))?
+    {
+        return Err(ToolError::NotFound("project".into()));
+    }
+    let pg = store::postgres::PostgresDb::application()
+        .await
+        .map_err(|e| ToolError::Database(e.to_string()))?;
+    let draft = store::deadline_proposals::resolve_draft(
+        &pg,
+        surreal,
+        project_id,
+        args.request_id,
+        None,
+        args.draft,
+    )
+    .await
+    .map_err(map_proposal)?;
+    let receipts = if draft.evidence.iter().any(|source| source.forgejo.is_some()) {
+        let kms = cloud::runtime_kms_from_env().await;
+        store::court_date_forgejo::verify(
+            surreal,
+            project_id,
+            &draft,
+            role.is_lawyer_tier(),
+            kms.as_ref(),
+        )
+        .await
+        .map_err(map_forgejo)?
+    } else {
+        Vec::new()
+    };
+    let proposal = store::deadline_proposals::stage_verified(
+        &pg,
+        project_id,
+        args.request_id,
+        args.target_deadline_id,
+        &draft,
+        &receipts,
+    )
+    .await
+    .map_err(map_proposal)?;
+    Ok(
+        json!({"content":[{"type":"text","text":"Court date queued for lawyer review."}],"structuredContent":{"proposal":proposal}}),
+    )
+}
+
+fn map_forgejo(error: store::court_date_forgejo::Error) -> ToolError {
+    use store::court_date_forgejo::Error;
+    match error {
+        Error::Invalid => ToolError::InvalidArguments(
+            "The pinned Forgejo source does not match the filed evidence.".into(),
+        ),
+        Error::NotFound => ToolError::NotFound("cited source".into()),
+        Error::Forbidden => ToolError::Forbidden("The cited source is outside your access.".into()),
+        Error::Unavailable => ToolError::Internal(
+            "The Firm’s Forgejo source could not be verified. Retry when available.".into(),
+        ),
+    }
+}
+
+fn map_proposal(e: store::deadline_proposals::Error) -> ToolError {
+    match e {
+        store::deadline_proposals::Error::Invalid(reason) => {
+            ToolError::InvalidArguments(reason.into())
+        }
+        store::deadline_proposals::Error::Conflict => {
+            ToolError::Conflict("The court-date revision changed".into())
+        }
+        store::deadline_proposals::Error::NotFound => ToolError::NotFound("proposal".into()),
+        other => ToolError::Database(other.to_string()),
+    }
+}
+
 #[must_use]
 pub fn create_descriptor() -> Value {
     json!({
         "name": "create_deadline",
         "description": "Store a deadline on a Project the caller participates in and return the written row. \
-                        due_at is an RFC 3339 timestamp with an offset. A statute or court_rule requires an authority citation. \
+                        Supply an offset timestamp in due_at or a civil date in due_on. An omitted civil-date time zone inherits the Project zone. Use queue_court_date for hearings and court-bound dates. A participating lawyer confirms their evidence in Navigator. \
                         Dates are stored as given; court days are not computed.",
         "inputSchema": {
             "type": "object",
@@ -42,19 +205,22 @@ pub fn create_descriptor() -> Value {
                 "project_id": { "type": "string", "format": "uuid" },
                 "description": { "type": "string" },
                 "title": { "type": "string", "maxLength": 200, "description": "A short name for what is due, such as the pleading or response." },
-                "due_at": { "type": "string" },
-                "authority_kind": { "type": "string" },
+                "due_at": { "type": "string", "format": "date-time" },
+                "due_on": due_on_schema(),
+                "hearing": {"type":"object","additionalProperties":false,"properties":{"duration_minutes":{"type":"integer","minimum":1,"maximum":u32::MAX},"location":{"type":"string"}}},
+                "authority_kind": { "type": "string", "enum": store::project_deadlines::AUTHORITY_KINDS },
                 "authority": { "type": "string" },
                 "source": { "type": "string" },
                 "source_document_id": { "type": "string", "format": "uuid" },
                 "owner_person_id": { "type": "string", "format": "uuid" },
-                "calendar_role": { "type": "string" },
-                "category": { "type": "string", "description": "court, hearing, discovery, or internal. Omitted lets the store settle it from the calendar role or an internal authority." },
+                "calendar_role": { "type": "string", "enum": store::project_deadlines::CALENDAR_ROLES },
+                "category": { "type": "string", "enum": store::project_deadlines::CATEGORIES, "description": "court, hearing, discovery, internal, or tickler. Omitted lets the store settle it from the calendar role or an internal authority." },
                 "internal_lead_days": { "type": "integer" },
                 "client_lead_days": { "type": "integer" },
                 "replay_key": { "type": "string" }
             },
-            "required": ["project_id", "due_at", "authority_kind", "calendar_role"],
+            "required": ["project_id", "authority_kind", "calendar_role"],
+            "oneOf": [{"required": ["due_at"]}, {"required": ["due_on"]}],
             "additionalProperties": false
         }
     })
@@ -72,18 +238,21 @@ pub fn update_descriptor() -> Value {
                 "deadline_id": { "type": "string", "format": "uuid" },
                 "description": { "type": "string" },
                 "title": { "type": "string", "maxLength": 200, "description": "An empty string clears the title." },
-                "due_at": { "type": "string" },
-                "authority_kind": { "type": "string" },
+                "due_at": { "type": "string", "format": "date-time" },
+                "due_on": due_on_schema(),
+                "hearing": {"type":"object","additionalProperties":false,"properties":{"duration_minutes":{"type":"integer","minimum":1,"maximum":u32::MAX},"location":{"type":"string"}}},
+                "authority_kind": { "type": "string", "enum": store::project_deadlines::AUTHORITY_KINDS },
                 "authority": { "type": "string" },
                 "source": { "type": "string" },
                 "source_document_id": { "type": ["string", "null"], "format": "uuid" },
                 "owner_person_id": { "type": ["string", "null"], "format": "uuid" },
-                "calendar_role": { "type": "string" },
-                "category": { "type": ["string", "null"], "description": "court, hearing, discovery, or internal. An empty string clears it." },
+                "calendar_role": { "type": "string", "enum": store::project_deadlines::CALENDAR_ROLES },
+                "category": { "type": ["string", "null"], "description": "court, hearing, discovery, internal, or tickler. An empty string clears it." },
                 "internal_lead_days": { "type": ["integer", "null"] },
                 "client_lead_days": { "type": ["integer", "null"] }
             },
             "required": ["project_id", "deadline_id"],
+            "not": {"required": ["due_at", "due_on"]},
             "additionalProperties": false
         }
     })
@@ -139,16 +308,22 @@ struct CreateArgs {
     project_id: Uuid,
     title: Option<String>,
     description: Option<String>,
-    due_at: String,
-    authority_kind: String,
+    due_at: Option<String>,
+    due_on: Option<DueOnInput>,
+    hearing: Option<Hearing>,
+    authority_kind: AuthorityKind,
     #[serde(default)]
     authority: String,
     #[serde(default)]
     source: String,
     source_document_id: Option<Uuid>,
     owner_person_id: Option<Uuid>,
-    calendar_role: String,
-    category: Option<String>,
+    calendar_role: CalendarRole,
+    #[serde(
+        default,
+        deserialize_with = "store::project_deadlines::optional_category"
+    )]
+    category: Option<Category>,
     internal_lead_days: Option<i64>,
     client_lead_days: Option<i64>,
     replay_key: Option<String>,
@@ -162,6 +337,8 @@ struct UpdateArgs {
     title: Option<String>,
     description: Option<String>,
     due_at: Option<String>,
+    due_on: Option<DueOnInput>,
+    hearing: Option<Hearing>,
     authority_kind: Option<String>,
     authority: Option<String>,
     source: Option<String>,
@@ -243,20 +420,42 @@ pub async fn create_call(
 ) -> Result<Value, ToolError> {
     let args: CreateArgs = super::decode_args(arguments)?;
     require_participant(surreal, person_id, role, args.project_id).await?;
+    if model::project_deadlines::requires_court_review(
+        &args.calendar_role.to_string(),
+        &args.authority_kind.to_string(),
+        args.category
+            .map(|category| category.to_string())
+            .as_deref(),
+    ) {
+        return Err(ToolError::InvalidArguments(
+            "Use queue_court_date to submit this date for lawyer review in Navigator.".into(),
+        ));
+    }
+    let (due_at, due_on) = store::project_deadlines::resolve_due(
+        surreal,
+        args.project_id,
+        DeadlineIdentity::Replay(args.replay_key.as_deref()),
+        args.due_at.as_deref(),
+        args.due_on,
+    )
+    .await
+    .map_err(map_deadline)?;
     let deadline = store::project_deadlines::create(
         surreal,
         &store::project_deadlines::NewDeadline {
             project_id: args.project_id,
             title: args.title,
             description: args.description,
-            due_at: args.due_at,
-            authority_kind: args.authority_kind,
+            due_on,
+            hearing: args.hearing,
+            due_at,
+            authority_kind: args.authority_kind.to_string(),
             authority: args.authority,
             source: args.source,
             source_document_id: args.source_document_id,
             owner_person_id: args.owner_person_id,
-            calendar_role: args.calendar_role,
-            category: args.category,
+            calendar_role: args.calendar_role.to_string(),
+            category: args.category.map(|category| category.to_string()),
             internal_lead_days: args.internal_lead_days,
             client_lead_days: args.client_lead_days,
             replay_key: args.replay_key,
@@ -266,7 +465,14 @@ pub async fn create_call(
     .map_err(map_deadline)?;
     Ok(row_result(
         &deadline,
-        &format!("Stored deadline {} due {}.", deadline.id, deadline.due_at),
+        &format!(
+            "Stored deadline {} due {}.",
+            deadline.id,
+            deadline.due_on.as_ref().map_or_else(
+                || deadline.due_at.clone(),
+                store::project_deadlines::DueOn::display_date
+            )
+        ),
     ))
 }
 
@@ -278,6 +484,20 @@ pub async fn update_call(
 ) -> Result<Value, ToolError> {
     let args: UpdateArgs = super::decode_args(arguments)?;
     require_participant(surreal, person_id, role, args.project_id).await?;
+    let (due_at, due_on) = if args.due_at.is_some() || args.due_on.is_some() {
+        let (at, on) = store::project_deadlines::resolve_due(
+            surreal,
+            args.project_id,
+            DeadlineIdentity::Id(args.deadline_id),
+            args.due_at.as_deref(),
+            args.due_on,
+        )
+        .await
+        .map_err(map_deadline)?;
+        (Some(at), on)
+    } else {
+        (None, None)
+    };
     let deadline = store::project_deadlines::update(
         surreal,
         args.project_id,
@@ -285,7 +505,9 @@ pub async fn update_call(
         &store::project_deadlines::DeadlinePatch {
             title: args.title.map(Some),
             description: args.description.map(Some),
-            due_at: args.due_at,
+            due_at,
+            due_on,
+            hearing: args.hearing,
             authority_kind: args.authority_kind,
             authority: args.authority,
             source: args.source,
@@ -420,10 +642,10 @@ mod tests {
         json!({
             "project_id": project_id,
             "due_at": "2026-11-02T17:00:00-08:00",
-            "authority_kind": "statute",
+            "authority_kind": "contract",
             "authority": authority,
             "calendar_role": "firm",
-            "category": "court",
+            "category": "internal",
             "internal_lead_days": 14,
             "client_lead_days": 7
         })
@@ -439,7 +661,7 @@ mod tests {
                 &surreal,
                 person_id,
                 Role::Lawyer,
-                &create_args(project_id, "15 U.S.C. § 1"),
+                &create_args(project_id, "Synthetic agreement § 1"),
             )
             .await
             .unwrap();
@@ -464,14 +686,14 @@ mod tests {
                 &json!({
                     "project_id": project_id,
                     "deadline_id": deadline_id,
-                    "calendar_role": "hearing"
+                    "calendar_role": "opponent"
                 }),
             )
             .await
             .unwrap();
             assert_eq!(
                 updated["structuredContent"]["deadline"]["calendar_role"],
-                "hearing"
+                "opponent"
             );
             let completed = complete_call(
                 &surreal,
@@ -495,7 +717,7 @@ mod tests {
             let surreal = crate::test_fixtures::handle();
             let project_id = project(&surreal).await;
             let person_id = lawyer(&surreal, Some(project_id)).await;
-            let mut args = create_args(project_id, "15 U.S.C. § 1");
+            let mut args = create_args(project_id, "Synthetic agreement § 1");
             args["title"] = json!("Answer to the complaint");
             let created = create_call(&surreal, person_id, Role::Lawyer, &args)
                 .await
@@ -532,7 +754,7 @@ mod tests {
                 &surreal,
                 person_id,
                 Role::Lawyer,
-                &create_args(project_id, "15 U.S.C. § 1"),
+                &create_args(project_id, "Synthetic agreement § 1"),
             )
             .await
             .unwrap();
@@ -566,20 +788,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_statute_without_a_citation_is_refused() {
+    async fn a_court_order_requires_review_even_with_a_citation() {
         store::test_support::with_postgres(async {
             let surreal = crate::test_fixtures::handle();
             let project_id = project(&surreal).await;
             let person_id = lawyer(&surreal, Some(project_id)).await;
-            let error = create_call(
-                &surreal,
-                person_id,
-                Role::Lawyer,
-                &create_args(project_id, "  "),
-            )
-            .await
-            .unwrap_err();
-            assert!(matches!(error, ToolError::InvalidArguments(_)), "{error}");
+            let mut args = create_args(project_id, "Synthetic order, page 1");
+            args["authority_kind"] = json!("court_order");
+            let error = create_call(&surreal, person_id, Role::Lawyer, &args)
+                .await
+                .unwrap_err();
+            assert!(matches!(error, ToolError::InvalidArguments(reason) if reason.contains("queue_court_date")));
         })
         .await;
     }
@@ -594,7 +813,7 @@ mod tests {
                 &surreal,
                 person_id,
                 Role::Lawyer,
-                &create_args(project_id, "15 U.S.C. § 1"),
+                &create_args(project_id, "Synthetic agreement § 1"),
             )
             .await
             .unwrap_err();

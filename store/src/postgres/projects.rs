@@ -79,6 +79,7 @@ pub(super) fn row(row: &sqlx::postgres::PgRow) -> Result<Project, ProjectError> 
         private_notion_page_url: row.try_get("private_notion_page_url")?,
         shared_notion_page_url: row.try_get("shared_notion_page_url")?,
         calendar_id: row.try_get("calendar_id")?,
+        calendar_timezone: row.try_get("calendar_timezone")?,
         booking_url: row.try_get("booking_url")?,
         // Plan-panel economics (ENG-1269). PG-native rows carry the dates
         // as DATE; the SurrealDB-authored surface keeps ISO text, so this

@@ -104,6 +104,10 @@ pub fn timeline_events(
                     .to_string()
             },
         );
+        let date = deadline
+            .due_on
+            .as_ref()
+            .map_or(date, store::project_deadlines::DueOn::display_date);
         let authority = if deadline.authority.trim().is_empty() {
             crate::project_deadlines::authority_kind_label(&deadline.authority_kind).to_string()
         } else {
@@ -179,6 +183,8 @@ mod tests {
             project_id: Uuid::nil(),
             title: None,
             description: None,
+            hearing: None,
+            due_on: None,
             due_at: due_at.to_string(),
             authority_kind: "court_order".to_string(),
             authority: "Order setting briefing schedule".to_string(),
@@ -194,6 +200,7 @@ mod tests {
             inserted_at: String::new(),
             updated_at: String::new(),
             calendar_sequence: None,
+            calendar_review_pending: false,
         }
     }
 

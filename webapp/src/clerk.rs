@@ -2,19 +2,10 @@
 //! `/app/projects/{code}`) as Dioxus
 //! components (#956 Phase 4) — the supervised, read-only Project lens.
 //!
-//! The successor to the `views::pages::clerk` renders. The surface is
-//! deliberately small: a Clerk sees a matter only when they hold a firm-side
-//! participation row **and** the matter names a currently licensed lawyer as its
-//! lawyer DRI, and then sees only its name, status, and supervisor. Legal advice,
-//! drafting, document contents, approvals, filing, Git, MCP, A2A, and
-//! conversations are absent by construction, not merely hidden.
-//!
-//! Reads go through `store::access::supervised_projects` — the same shared
-//! `store` call the handler used, which resolves visibility and the
-//! supervisor disclosure as one answer so the list and the detail page can never
-//! disagree about who supervises a matter. There is no `/api` read cluster for
-//! the Clerk lens yet (#866 has not covered it); when one lands, both loaders
-//! move onto it rather than growing a bespoke JSON endpoint (#690).
+//! Project visibility uses the Clerk's firm-side participation and licensed supervising lawyer.
+//! The overview shows matter facts, collaboration resources and a link to court-date proposals.
+//! The proposal queue reads the supervised Project API. Returned revisions include the lawyer's
+//! correction reason, and only the lawyer's workbench offers a decision or opens a filed Authority.
 
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -65,6 +56,8 @@ pub struct ClerkProjectsView {
 /// The rendered Clerk project detail page.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
 pub struct ClerkProjectDetailView {
+    #[serde(default)]
+    pub court_date_review: bool,
     /// The matter's page strip from its synced `pages:`, clerk lens.
     #[serde(default)]
     pub page_tabs: Vec<crate::sections::page::PageTab>,
@@ -207,6 +200,7 @@ pub async fn get_clerk_project() -> Result<ClerkProjectDetailView, ServerFnError
     let not_found = |role| {
         commit_not_found();
         Ok(ClerkProjectDetailView {
+            court_date_review: false,
             page_tabs: Vec::new(),
             tokens_href: tokens_href.clone(),
             firm_name: firm_name.clone(),
@@ -261,7 +255,14 @@ pub async fn get_clerk_project() -> Result<ClerkProjectDetailView, ServerFnError
         store::access::MatterViewer::Clerk,
     )
     .await;
+    let court_date_review = dioxus_fullstack_core::FullstackContext::extract::<
+        axum::extract::Query<crate::lawyer_project_detail::MatterQuery>,
+        _,
+    >()
+    .await
+    .is_ok_and(|axum::extract::Query(query)| query.review.as_deref() == Some("court-dates"));
     Ok(ClerkProjectDetailView {
+        court_date_review,
         client_preview_link: crate::brand_website::client_preview_link(&project).await,
         page_tabs,
         tokens_href: crate::app_chrome::app_tokens_href_from_context().await,
@@ -414,7 +415,15 @@ pub fn ClerkProjectDetail() -> Element {
                     crate::components::dri_view::ViewAsClient {
                         code: project.code.clone(), csrf: view.csrf_token.clone(), portal_link: view.client_preview_link.clone(),
                     }
-                    crate::project_resources::ProjectResourcesPanel { view: view.resources.clone() }
+                    if view.court_date_review {
+                        a { class: "nav-link", href: "/app/projects/{project.code}", "Back to Project" }
+                        crate::court_date_review::CourtDateReview {
+                            project_id: project.id.clone(), project_code: project.code.clone(), csrf: view.csrf_token.clone(), supervised: true,
+                        }
+                    } else {
+                        a { class: "nav-link", href: "/app/projects/{project.code}?review=court-dates", "Court date proposals" }
+                        crate::project_resources::ProjectResourcesPanel { view: view.resources.clone() }
+                    }
                     div { class: "nav-form-notice", role: "note",
                         strong { "Limited access. " }
                         "Legal advice, drafting, approval, filing, Git, MCP, A2A, and conversations are not available on this surface."

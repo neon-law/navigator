@@ -20,6 +20,8 @@ pub(super) struct DeadlineImage {
     title: Option<String>,
     description: Option<String>,
     due_at: DateTime<Utc>,
+    due_on: Option<serde_json::Value>,
+    hearing: Option<serde_json::Value>,
     authority_kind: String,
     authority: String,
     source: String,
@@ -34,6 +36,7 @@ pub(super) struct DeadlineImage {
     inserted_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
     calendar_sequence: Option<i64>,
+    calendar_review_pending: bool,
 }
 
 #[derive(SurrealValue)]
@@ -43,6 +46,8 @@ struct DeadlineSource {
     title: Option<String>,
     description: Option<String>,
     due_at: String,
+    due_on: Option<serde_json::Value>,
+    hearing: Option<serde_json::Value>,
     authority_kind: String,
     authority: String,
     source: String,
@@ -57,6 +62,7 @@ struct DeadlineSource {
     inserted_at: String,
     updated_at: String,
     calendar_sequence: Option<i64>,
+    calendar_review_pending: Option<bool>,
 }
 
 fn uuid(id: &RecordId) -> Result<Uuid, MirrorError> {
@@ -79,6 +85,8 @@ impl TryFrom<DeadlineSource> for DeadlineImage {
             title: row.title,
             description: row.description,
             due_at: date(&row.due_at)?,
+            due_on: row.due_on,
+            hearing: row.hearing,
             authority_kind: row.authority_kind,
             authority: row.authority,
             source: row.source,
@@ -93,11 +101,12 @@ impl TryFrom<DeadlineSource> for DeadlineImage {
             inserted_at: date(&row.inserted_at)?,
             updated_at: date(&row.updated_at)?,
             calendar_sequence: row.calendar_sequence,
+            calendar_review_pending: row.calendar_review_pending.unwrap_or(false),
         })
     }
 }
 
-const SELECT: &str = "id, project_id, title, description, due_at, authority_kind, authority, source, source_document_id, owner_person_id, status, calendar_role, category, internal_lead_days, client_lead_days, replay_key, inserted_at, updated_at, calendar_sequence";
+const SELECT: &str = "id, project_id, title, description, due_at, due_on, hearing, authority_kind, authority, source, source_document_id, owner_person_id, status, calendar_role, category, internal_lead_days, client_lead_days, replay_key, inserted_at, updated_at, calendar_sequence, calendar_review_pending";
 async fn source(surreal: &SurrealDb) -> Result<BTreeMap<MirrorKey, Columns>, MirrorError> {
     let rows: Vec<DeadlineSource> = surreal
         .query(format!("SELECT {SELECT} FROM project_deadlines"))
@@ -177,7 +186,7 @@ async fn ensure_parent(
     Ok(())
 }
 async fn target(pg: &PostgresDb) -> Result<BTreeMap<MirrorKey, Columns>, MirrorError> {
-    let rows = sqlx::query("SELECT id, project_id, title, description, due_at, authority_kind, authority, source, source_document_id, owner_person_id, status, calendar_role, category, internal_lead_days, client_lead_days, replay_key, inserted_at, updated_at, calendar_sequence FROM project_deadlines")
+    let rows = sqlx::query("SELECT id, project_id, title, description, due_at, due_on, hearing, authority_kind, authority, source, source_document_id, owner_person_id, status, calendar_role, category, internal_lead_days, client_lead_days, replay_key, inserted_at, updated_at, calendar_sequence, calendar_review_pending FROM project_deadlines")
         .fetch_all(&pg.0)
         .await?;
     rows.into_iter()
@@ -197,6 +206,8 @@ fn from_row(row: &PgRow) -> Result<DeadlineImage, sqlx::Error> {
         title: row.try_get("title")?,
         description: row.try_get("description")?,
         due_at: row.try_get("due_at")?,
+        due_on: row.try_get("due_on")?,
+        hearing: row.try_get("hearing")?,
         authority_kind: row.try_get("authority_kind")?,
         authority: row.try_get("authority")?,
         source: row.try_get("source")?,
@@ -211,13 +222,14 @@ fn from_row(row: &PgRow) -> Result<DeadlineImage, sqlx::Error> {
         inserted_at: row.try_get("inserted_at")?,
         updated_at: row.try_get("updated_at")?,
         calendar_sequence: row.try_get("calendar_sequence")?,
+        calendar_review_pending: row.try_get("calendar_review_pending")?,
     })
 }
 async fn upsert(pg: &PostgresDb, row: &DeadlineImage) -> Result<Mirrored, MirrorError> {
-    let result = sqlx::query("INSERT INTO project_deadlines (id,project_id,title,due_at,authority_kind,authority,source,source_document_id,owner_person_id,status,calendar_role,category,internal_lead_days,client_lead_days,replay_key,inserted_at,updated_at,description,calendar_sequence) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) ON CONFLICT (id) DO NOTHING")
+    let result = sqlx::query("INSERT INTO project_deadlines (id,project_id,title,due_at,authority_kind,authority,source,source_document_id,owner_person_id,status,calendar_role,category,internal_lead_days,client_lead_days,replay_key,inserted_at,updated_at,description,calendar_sequence,due_on,hearing,calendar_review_pending) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22) ON CONFLICT (id) DO NOTHING")
         .bind(row.id).bind(row.project_id).bind(&row.title).bind(row.due_at).bind(&row.authority_kind).bind(&row.authority).bind(&row.source)
         .bind(row.source_document_id).bind(row.owner_person_id).bind(&row.status).bind(&row.calendar_role).bind(&row.category)
-        .bind(row.internal_lead_days).bind(row.client_lead_days).bind(&row.replay_key).bind(micros(row.inserted_at)).bind(micros(row.updated_at)).bind(&row.description).bind(row.calendar_sequence)
+        .bind(row.internal_lead_days).bind(row.client_lead_days).bind(&row.replay_key).bind(micros(row.inserted_at)).bind(micros(row.updated_at)).bind(&row.description).bind(row.calendar_sequence).bind(&row.due_on).bind(&row.hearing).bind(row.calendar_review_pending)
         .execute(&pg.0).await?;
     Ok(changed(result.rows_affected(), Mirrored::Written))
 }

@@ -87,6 +87,8 @@ pub enum Action {
     Back,
     /// Click the numbered radio or checkbox option of the question.
     Choose,
+    /// Activate the matching court date review control on this page.
+    CourtDateReview,
 }
 
 /// One declaration: a key, what it does, where it applies, and how it is run.
@@ -205,6 +207,23 @@ pub fn questionnaire_shortcuts(has_choices: bool, can_go_back: bool) -> Vec<Shor
         ));
     }
     shortcuts
+}
+
+/// The court-date workbench shares the global help dialog. Native dialogs handle Escape.
+#[must_use]
+pub fn court_date_shortcuts(supervised: bool) -> Vec<Shortcut> {
+    [
+        ("j", "Next proposed date"),
+        ("k", "Previous proposed date"),
+        ("r", "Open the full record page"),
+        ("a", "Open the full authority page"),
+        ("Mod+Enter", "Confirm the focused date"),
+        ("Escape", "Close the evidence page or correction form"),
+    ]
+    .into_iter()
+    .filter(|(key, _)| !supervised || !matches!(*key, "a" | "Mod+Enter"))
+    .map(|(key, label)| Shortcut::new(key, label, Scope::Page, Action::CourtDateReview))
+    .collect()
 }
 
 /// Why a key notation is not valid.

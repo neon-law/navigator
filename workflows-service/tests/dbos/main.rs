@@ -6,6 +6,7 @@ mod billing_canary;
 mod billing_digest;
 mod ceo_digest;
 mod deadline_mirror;
+mod deadline_proposal;
 mod dri_digest;
 mod effects;
 mod executors;

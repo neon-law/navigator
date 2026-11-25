@@ -9,13 +9,20 @@ malpractice event, not a backlog item, so the date lives in two places on purpos
 record of what binds, and the calendar event is where the working day actually gets looked at. The mirror is what stops
 the two from drifting apart silently.
 
-The store's engine is `store::deadline_calendar`: it renders each open Deadline to one event on the ICS feed's field
-basis (the title or its fallback, the due instant, the authority and deadline description, the internal lead days as the
-only reminder), and marks every mirrored event with private extended properties — the Deadline's record id and a hash of
-the rendered content — so the reconcile can tell drift apart from a stale cache. Completing or cancelling a Deadline
-takes its event off the calendar as a cancelled event with no reminder. Deleting a Deadline row deletes its mirrored
-event. An event a person moved or cancelled on the Google side is left alone: the reconcile writes from the rows, and it
-never argues with a person's own calendar edits unless the row itself changes.
+The mirror and ICS export put the Project code first, followed by a colon, a known category label, and the action. Civil
+dates appear as all-day events. A supplied cutoff appears in the description. A hearing reserves Busy time for the
+supplied duration, or one hour when its duration is unknown. The court-supplied address appears in Location. Other
+Deadline events show as Free. Open court Deadlines carry popup reminders seven, three, and one day before, plus any
+distinct internal lead. Google reminder settings are personal to the calendar user.
+
+The mirror records the Deadline ID, a hash of its source fields, and a fingerprint of the event Google returned after
+the last write. Before updating or deleting the event, Navigator checks that fingerprint and sends Google the version it
+just read. A direct edit or a concurrent change leaves the event in place and appears in the sync report for review. An
+older event without a fingerprint also needs review when its Deadline changes. Events created directly on the calendar
+stay outside the Deadline mirror.
+
+For a verified event, completing its Deadline marks the title as complete and clears its reminders. Cancelling or
+removing the Deadline clears its event. A sync with no changes leaves the event alone.
 
 Reconciliation runs three ways, all through the same engine. The `navigator project deadline sync` verb drives the
 portal's `POST /app/api/integrations/calendar/deadline-mirror` door for one matter; a nightly workflow at 04:03 UTC

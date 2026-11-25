@@ -550,7 +550,11 @@ pub async fn login_as_clerk(c: &Client) {
 /// not a hand-passed `--ignored`, decides whether a scenario executes.
 #[must_use]
 pub async fn harness_ready() -> bool {
-    port_open(&webdriver_url()).await && port_open(&base_url()).await
+    harness_ready_at(&base_url()).await
+}
+
+async fn harness_ready_at(url: &str) -> bool {
+    port_open(&webdriver_url()).await && port_open(url).await
 }
 
 /// Connect a browser client, or return `None` (with a skip note) when
@@ -559,7 +563,7 @@ pub async fn harness_ready() -> bool {
 /// skip cleanly rather than panic — the suite stays green everywhere and
 /// the same test runs for real under `navigator dev e2e`.
 pub async fn new_client_or_skip() -> Option<Client> {
-    new_client_or_skip_with(None).await
+    new_client_or_skip_with(&base_url(), None).await
 }
 
 /// [`new_client_or_skip`], with `prefers-color-scheme` pinned to `scheme`.
@@ -568,11 +572,16 @@ pub async fn new_client_or_skip() -> Option<Client> {
 /// under `NAV_REQUIRE_HARNESS=1` or skips cleanly otherwise. Pinning the scheme
 /// changes what the session renders, never whether it is allowed to skip.
 pub async fn new_client_or_skip_in_scheme(scheme: ColorScheme) -> Option<Client> {
-    new_client_or_skip_with(Some(scheme)).await
+    new_client_or_skip_with(&base_url(), Some(scheme)).await
 }
 
-async fn new_client_or_skip_with(scheme: Option<ColorScheme>) -> Option<Client> {
-    match harness_decision(harness_ready().await, require_harness()) {
+/// Apply the browser gate to a test's own HTTP fixture.
+pub async fn new_client_for_fixture_or_skip(url: &str) -> Option<Client> {
+    new_client_or_skip_with(url, None).await
+}
+
+async fn new_client_or_skip_with(url: &str, scheme: Option<ColorScheme>) -> Option<Client> {
+    match harness_decision(harness_ready_at(url).await, require_harness()) {
         HarnessDecision::Connect => Some(new_client_with(scheme).await),
         // In CI the harness is always expected up, so an unreachable harness
         // is a real failure, not a green pass — panic for a non-zero exit.
@@ -581,7 +590,7 @@ async fn new_client_or_skip_with(scheme: Option<ColorScheme>) -> Option<Client> 
              chromedriver ({}) + web server ({}) not both reachable \
              — refusing to pass without asserting",
             webdriver_url(),
-            base_url(),
+            url,
         ),
         // Locally (NAV_REQUIRE_HARNESS unset) a missing harness skips cleanly
         // so a bare `cargo test` stays green without standing one up.
@@ -590,7 +599,7 @@ async fn new_client_or_skip_with(scheme: Option<ColorScheme>) -> Option<Client> 
                 "skipping browser test: chromedriver ({}) + web server ({}) not both reachable \
                  — bring up the harness with `navigator dev e2e`",
                 webdriver_url(),
-                base_url(),
+                url,
             );
             None
         }
