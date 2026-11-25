@@ -260,6 +260,7 @@ fn projects_help_lists_the_project_workspace_verbs() {
             "onboard",
             "pages",
             "participant",
+            "rate",
             "reference",
             "reopen",
             "repository",
