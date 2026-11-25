@@ -5935,3 +5935,12 @@ ALTER TABLE lead_intake ADD COLUMN contact_name TEXT;
 ALTER TABLE lead_intake ALTER COLUMN school_district DROP NOT NULL;
 ALTER TABLE lead_intake ALTER COLUMN relationship DROP NOT NULL;
 ALTER TABLE lead_intake ADD CONSTRAINT lead_intake_answer_shape CHECK ((contact_name IS NULL AND school_district IS NOT NULL AND relationship IS NOT NULL) OR (contact_name IS NOT NULL AND school_district IS NULL AND relationship IS NULL AND next_date IS NULL));
+
+-- Migration: 20261125200000_attorney_booking_calendar.sql
+-- One dedicated booking availability calendar per attorney.
+ALTER TABLE person_calendar DROP CONSTRAINT person_calendar_kind_check;
+ALTER TABLE person_calendar ADD CONSTRAINT person_calendar_kind_check CHECK (kind IN ('primary', 'freebusy', 'booking'));
+CREATE UNIQUE INDEX person_calendar_one_booking ON person_calendar (person_id)
+    WHERE kind = 'booking';
+CREATE UNIQUE INDEX person_calendar_booking_owner ON person_calendar (calendar_id)
+    WHERE kind = 'booking';

@@ -14,12 +14,15 @@ use uuid::Uuid;
 
 use crate::postgres::{PostgresDb, PostgresError};
 
+pub mod booking;
+
 /// `primary` is the signed-in Person's own calendar. `freebusy` is an extra
 /// calendar shared for busy time only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CalendarKind {
     Primary,
     FreeBusy,
+    Booking,
 }
 
 impl CalendarKind {
@@ -28,6 +31,7 @@ impl CalendarKind {
         match self {
             Self::Primary => "primary",
             Self::FreeBusy => "freebusy",
+            Self::Booking => "booking",
         }
     }
 
@@ -35,6 +39,7 @@ impl CalendarKind {
         match value {
             "primary" => Some(Self::Primary),
             "freebusy" => Some(Self::FreeBusy),
+            "booking" => Some(Self::Booking),
             _ => None,
         }
     }
@@ -56,6 +61,8 @@ pub enum AttorneyCalendarError {
     InvalidId,
     #[error("PostgreSQL is unavailable")]
     Unavailable,
+    #[error("a different booking calendar is already registered")]
+    BookingAlreadyRegistered,
 }
 
 impl From<PostgresError> for AttorneyCalendarError {
@@ -159,6 +166,36 @@ pub async fn register(
     if !is_valid_calendar_id(calendar_id) {
         return Err(AttorneyCalendarError::InvalidId);
     }
+    if kind == CalendarKind::Booking {
+        if !calendar_id.ends_with("@group.calendar.google.com") {
+            return Err(AttorneyCalendarError::InvalidId);
+        }
+        let written = sqlx::query(
+            "INSERT INTO person_calendar (person_id, calendar_id, kind)
+             SELECT $1, $2, 'booking' WHERE NOT EXISTS (SELECT 1 FROM project WHERE calendar_id = $2)
+             ON CONFLICT (person_id, calendar_id) DO UPDATE SET kind = 'booking'
+             WHERE person_calendar.kind <> 'primary'",
+        )
+        .bind(person_id)
+        .bind(calendar_id)
+        .execute(pg.pool())
+        .await
+        .map_err(|error| {
+            if error.as_database_error().is_some_and(sqlx::error::DatabaseError::is_unique_violation) {
+                AttorneyCalendarError::BookingAlreadyRegistered
+            } else {
+                AttorneyCalendarError::Unavailable
+            }
+        })?;
+        if written.rows_affected() != 1 {
+            return Err(AttorneyCalendarError::InvalidId);
+        }
+        return Ok(AttorneyCalendar {
+            person_id,
+            calendar_id: calendar_id.into(),
+            kind,
+        });
+    }
     let mut tx = pg
         .pool()
         .begin()
@@ -175,10 +212,11 @@ pub async fn register(
         .await
         .map_err(|_| AttorneyCalendarError::Unavailable)?;
     }
-    sqlx::query(
+    let written = sqlx::query(
         "INSERT INTO person_calendar (person_id, calendar_id, kind) VALUES ($1, $2, $3) \
          ON CONFLICT (person_id, calendar_id) DO UPDATE SET kind = \
-         CASE WHEN person_calendar.kind = 'primary' THEN 'primary' ELSE EXCLUDED.kind END",
+         CASE WHEN person_calendar.kind = 'primary' THEN 'primary' ELSE EXCLUDED.kind END
+         WHERE person_calendar.kind <> 'booking'",
     )
     .bind(person_id)
     .bind(calendar_id)
@@ -186,6 +224,9 @@ pub async fn register(
     .execute(&mut *tx)
     .await
     .map_err(|_| AttorneyCalendarError::Unavailable)?;
+    if written.rows_affected() != 1 {
+        return Err(AttorneyCalendarError::InvalidId);
+    }
     tx.commit()
         .await
         .map_err(|_| AttorneyCalendarError::Unavailable)?;
@@ -210,7 +251,7 @@ pub async fn listed(
     }
     let rows = sqlx::query(
         "SELECT person_id, calendar_id, kind FROM person_calendar \
-         WHERE person_id = ANY($1) ORDER BY person_id, kind, calendar_id",
+         WHERE person_id = ANY($1) AND kind <> 'booking' ORDER BY person_id, kind, calendar_id",
     )
     .bind(person_ids)
     .fetch_all(pg.pool())
@@ -232,6 +273,29 @@ pub async fn listed(
             })
         })
         .collect()
+}
+
+/// Opted-in attorney IDs. Booking calendars never feed Navigator's own free/busy checks.
+pub async fn booking_candidates(pg: &PostgresDb) -> Result<Vec<Uuid>, AttorneyCalendarError> {
+    sqlx::query_scalar(
+        "SELECT person_id FROM person_calendar WHERE kind = 'booking' ORDER BY person_id",
+    )
+    .fetch_all(pg.pool())
+    .await
+    .map_err(|_| AttorneyCalendarError::Unavailable)
+}
+
+pub async fn booking_calendar(
+    pg: &PostgresDb,
+    person_id: Uuid,
+) -> Result<Option<String>, AttorneyCalendarError> {
+    sqlx::query_scalar(
+        "SELECT calendar_id FROM person_calendar WHERE kind = 'booking' AND person_id = $1",
+    )
+    .bind(person_id)
+    .fetch_optional(pg.pool())
+    .await
+    .map_err(|_| AttorneyCalendarError::Unavailable)
 }
 
 /// One busy interval attributed to a person, the Project Calendar, or a Deadline.

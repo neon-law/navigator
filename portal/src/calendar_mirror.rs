@@ -72,6 +72,106 @@ impl Source for MembershipSource {
             .map_err(|_| sync_error("reading Project Calendar candidates"))
     }
 
+    async fn booking_candidates(&self) -> Result<Vec<Uuid>, SyncError> {
+        let db = store::attorney_calendars::postgres()
+            .await
+            .map_err(|_| sync_error("reading Attorney Calendar registrations"))?;
+        store::attorney_calendars::booking_candidates(&db)
+            .await
+            .map_err(|_| sync_error("reading booking calendar registrations"))
+    }
+
+    async fn sync_booking(&self, person_id: Uuid) -> Result<u64, SyncError> {
+        let _guard = crate::integrations_api::calendar_lock(person_id)
+            .await
+            .map_err(|()| sync_error("locking booking availability"))?;
+        let db = store::attorney_calendars::postgres()
+            .await
+            .map_err(|_| sync_error("reading Attorney Calendar registrations"))?;
+        let Some(target) = store::attorney_calendars::booking_calendar(&db, person_id)
+            .await
+            .map_err(|_| sync_error("reading the booking calendar registration"))?
+        else {
+            return Ok(0);
+        };
+        let person = store::persons::find_by_id(&self.surreal, person_id)
+            .await
+            .map_err(|_| sync_error("reading the booking calendar owner"))?
+            .filter(|person| person.email_confirmed)
+            .ok_or_else(|| sync_error("verifying the booking calendar owner"))?;
+        let writer = cloud::calendar::GoogleCalendar::for_owner(&person.email)
+            .await
+            .map_err(provider_error)?;
+        writer
+            .verify_booking_calendar(&target)
+            .await
+            .map_err(provider_error)?;
+
+        let memberships = store::firms::memberships_for_person(&self.surreal, person_id)
+            .await
+            .map_err(|_| sync_error("reading the attorney's Firm memberships"))?;
+        let firms: Vec<_> = memberships
+            .iter()
+            .map(|membership| membership.firm_id)
+            .collect();
+        let assigned =
+            store::project_calendar::shared_freebusy_calendars(&db, &firms, &[person_id])
+                .await
+                .map_err(|_| sync_error("reading current Project Calendar assignments"))?;
+        let start = Utc::now().fixed_offset();
+        let end = start + chrono::TimeDelta::days(90);
+        let mut events = Vec::new();
+        let mut unavailable = None;
+        for projects in assigned.values() {
+            let Some(first) = projects.first() else {
+                continue;
+            };
+            let reader = match self
+                .providers
+                .calendar(&self.surreal, first.project_id)
+                .await
+            {
+                Ok(reader) => reader,
+                Err(error) => {
+                    unavailable.get_or_insert_with(|| sync_error(error.slug()));
+                    continue;
+                }
+            };
+            let verified = match reader.owned_calendar_codes().await {
+                Ok(verified) => verified,
+                Err(error) => {
+                    unavailable.get_or_insert_with(|| provider_error(error));
+                    continue;
+                }
+            };
+            for project in projects {
+                let Some(id) = project.calendar_id.as_deref().filter(|id| {
+                    *id != target.as_str() && verified.get(*id) == Some(&project.code)
+                }) else {
+                    unavailable.get_or_insert_with(|| {
+                        sync_error("verifying a Project Calendar for booking availability")
+                    });
+                    continue;
+                };
+                match reader.events_in_window(id, start, end).await {
+                    Ok(source) => events.extend(source),
+                    Err(error) => {
+                        unavailable.get_or_insert_with(|| provider_error(error));
+                    }
+                }
+            }
+        }
+        let count = store::attorney_calendars::booking::reconcile(
+            &writer,
+            &target,
+            events,
+            unavailable.is_none(),
+        )
+        .await
+        .map_err(provider_error)?;
+        unavailable.map_or(Ok(count), Err)
+    }
+
     async fn sync(
         &self,
         project_id: Uuid,

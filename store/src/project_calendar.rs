@@ -342,12 +342,25 @@ pub async fn sync_membership(
     .await?;
 
     let members = desired.values().map(String::as_str).collect();
+    let open_project_code = (project.status == "open").then_some(project.code.as_str());
+    let brand_policy = if open_project_code.is_some() {
+        let brands = crate::brands::for_firm(surreal, firm_id)
+            .await
+            .map_err(sync_db)?;
+        crate::brand_domains::DomainPolicy::from_brands(&brands)
+    } else {
+        crate::brand_domains::DomainPolicy::default()
+    };
+    let workspace_domain = owner
+        .trim()
+        .rsplit_once('@')
+        .map(|(_, domain)| domain.to_ascii_lowercase());
+    let internal_domains = brand_policy
+        .domains()
+        .chain(workspace_domain.as_deref())
+        .collect();
     calendar
-        .reconcile_project_events(
-            &calendar_id,
-            (project.status == "open").then_some(project.code.as_str()),
-            &members,
-        )
+        .reconcile_project_events(&calendar_id, open_project_code, &members, &internal_domains)
         .await?;
     Ok(report)
 }

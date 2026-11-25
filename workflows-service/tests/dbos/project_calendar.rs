@@ -28,6 +28,14 @@ impl Source for CalendarSource {
         Ok(0)
     }
 
+    async fn booking_candidates(&self) -> Result<Vec<Uuid>, SyncError> {
+        Ok(Vec::new())
+    }
+
+    async fn sync_booking(&self, _: Uuid) -> Result<u64, SyncError> {
+        Ok(0)
+    }
+
     async fn sync(&self, project_id: Uuid) -> Result<Vec<ParticipantSync>, SyncError> {
         if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
             assert_eq!(project_id, self.before);
@@ -84,6 +92,7 @@ async fn duplicate_calendar_jobs_share_the_retry_and_read_back_current_assignmen
 struct TwoProjects {
     denied: Uuid,
     allowed: Uuid,
+    attorney: Uuid,
 }
 
 #[async_trait::async_trait]
@@ -94,6 +103,15 @@ impl Source for TwoProjects {
 
     async fn backup(&self, _: Uuid) -> Result<u64, SyncError> {
         Ok(0)
+    }
+
+    async fn booking_candidates(&self) -> Result<Vec<Uuid>, SyncError> {
+        Ok(vec![self.attorney])
+    }
+
+    async fn sync_booking(&self, attorney: Uuid) -> Result<u64, SyncError> {
+        assert_eq!(attorney, self.attorney);
+        Ok(1)
     }
 
     async fn sync(&self, project: Uuid) -> Result<Vec<ParticipantSync>, SyncError> {
@@ -110,13 +128,14 @@ impl Source for TwoProjects {
 }
 
 #[tokio::test]
-async fn calendar_host_catches_up_both_schedules_and_isolates_a_denied_project() {
+async fn calendar_host_catches_up_its_schedules_and_isolates_a_denied_project() {
     let Some(db) = database().await else {
         return;
     };
     let source = Arc::new(TwoProjects {
         denied: Uuid::now_v7(),
         allowed: Uuid::now_v7(),
+        attorney: Uuid::now_v7(),
     });
     let executor = Executor::launch_hosting(
         &Settings::from_lookup(db.lookup()).unwrap(),
@@ -134,6 +153,7 @@ async fn calendar_host_catches_up_both_schedules_and_isolates_a_denied_project()
         ("ProjectCalendarMembership", source.allowed, "SUCCESS"),
         ("ProjectCalendarEventBackup", source.denied, "SUCCESS"),
         ("ProjectCalendarEventBackup", source.allowed, "SUCCESS"),
+        ("AttorneyBookingAvailability", source.attorney, "SUCCESS"),
     ] {
         let prefix = format!("{name}:{project}:%");
         tokio::time::timeout(DEADLINE, async {

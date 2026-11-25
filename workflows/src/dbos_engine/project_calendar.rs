@@ -12,6 +12,13 @@ use uuid::Uuid;
 
 const WORKFLOW: &str = "ProjectCalendarMembership";
 const BACKUP: &str = "ProjectCalendarEventBackup";
+const BOOKING: &str = "AttorneyBookingAvailability";
+
+#[derive(Clone, Copy)]
+enum Targets {
+    Projects,
+    Attorneys,
+}
 
 struct Cadence {
     period_seconds: i64,
@@ -48,8 +55,10 @@ pub struct SyncError {
 #[async_trait::async_trait]
 pub trait Source: Send + Sync {
     async fn candidates(&self) -> Result<Vec<Uuid>, SyncError>;
+    async fn booking_candidates(&self) -> Result<Vec<Uuid>, SyncError>;
     async fn backup(&self, project_id: Uuid) -> Result<u64, SyncError>;
     async fn sync(&self, project_id: Uuid) -> Result<Vec<ParticipantSync>, SyncError>;
+    async fn sync_booking(&self, person_id: Uuid) -> Result<u64, SyncError>;
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -125,13 +134,37 @@ pub(super) fn register_schedule(
             .await
         }
     })?;
+    let booking_source = source.clone();
+    let booking = dbos.register_workflow(BOOKING, move |person_id: Uuid| {
+        let source = booking_source.clone();
+        async move {
+            dbos::step_with(
+                "reconcile-booking-availability",
+                dbos::StepOptions {
+                    max_attempts: 3,
+                    ..Default::default()
+                },
+                move || {
+                    let source = source.clone();
+                    async move {
+                        source
+                            .sync_booking(person_id)
+                            .await
+                            .map_err(dbos::Error::Application)
+                    }
+                },
+            )
+            .await
+        }
+    })?;
     Ok(Box::new(move |stop| {
         tokio::spawn(async move {
             tokio::select! {
                 biased;
                 () = stop.cancelled() => {}
-                () = schedule(&workflow, &source, MEMBERSHIP_CADENCE) => {}
-                () = schedule(&backup, &source, BACKUP_CADENCE) => {}
+                () = schedule(&workflow, &source, MEMBERSHIP_CADENCE, Targets::Projects) => {}
+                () = schedule(&backup, &source, BACKUP_CADENCE, Targets::Projects) => {}
+                () = schedule(&booking, &source, BACKUP_CADENCE, Targets::Attorneys) => {}
             }
         })
     }))
@@ -141,19 +174,24 @@ async fn schedule<R>(
     workflow: &WorkflowRef<Uuid, R, SyncError>,
     source: &Arc<dyn Source>,
     cadence: Cadence,
+    targets: Targets,
 ) where
     R: Serialize + serde::de::DeserializeOwned + Send + 'static,
 {
     loop {
         let (slot, next) = cadence.slot(Utc::now());
         let mut submitted = true;
-        match source.candidates().await {
-            Ok(projects) => {
-                for project_id in projects {
-                    let id = format!("{}:{project_id}:{slot}", workflow.name());
+        let candidates = match targets {
+            Targets::Projects => source.candidates().await,
+            Targets::Attorneys => source.booking_candidates().await,
+        };
+        match candidates {
+            Ok(candidates) => {
+                for target in candidates {
+                    let id = format!("{}:{target}:{slot}", workflow.name());
                     if let Err(error) = workflow
                         .start_with(
-                            project_id,
+                            target,
                             dbos::StartOptions {
                                 workflow_id: Some(&id),
                                 ..Default::default()

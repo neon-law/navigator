@@ -118,8 +118,11 @@ enum PersonalAction {
         #[arg(long)]
         calendar: Option<String>,
         /// Record an extra free/busy calendar.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "booking")]
         freebusy: bool,
+        /// Register a private secondary Google Calendar for guest-free booking holds.
+        #[arg(long, requires = "calendar")]
+        booking: bool,
     },
 }
 
@@ -158,8 +161,19 @@ impl PersonalCalendarArgs {
                 availability(host, project.as_deref(), window, true).await
             }
             Some(PersonalAction::Access { project }) => access(host, project.as_deref()).await,
-            Some(PersonalAction::Register { calendar, freebusy }) => {
-                register(host, calendar.as_deref(), freebusy).await
+            Some(PersonalAction::Register {
+                calendar,
+                freebusy,
+                booking,
+            }) => {
+                let kind = if booking {
+                    "booking"
+                } else if freebusy {
+                    "freebusy"
+                } else {
+                    "primary"
+                };
+                register(host, calendar.as_deref(), kind).await
             }
         }
     }
@@ -281,7 +295,7 @@ fn access_blocked(value: &Value) -> bool {
     attorneys || project
 }
 
-async fn register(host: Option<&str>, calendar_id: Option<&str>, freebusy: bool) -> ExitCode {
+async fn register(host: Option<&str>, calendar_id: Option<&str>, kind: &str) -> ExitCode {
     let result: Result<Value> = async {
         let (base, token) = remote::resolve(host)?;
         post(
@@ -290,7 +304,7 @@ async fn register(host: Option<&str>, calendar_id: Option<&str>, freebusy: bool)
             "/app/api/calendars/register",
             json!({
                 "calendar_id": calendar_id,
-                "kind": if freebusy { "freebusy" } else { "primary" },
+                "kind": kind,
             }),
         )
         .await
