@@ -58,16 +58,16 @@
       var px = Math.max(window.innerWidth, 1) * (window.devicePixelRatio || 1);
       var size = px >= 3000 ? '-4k' : px > 2000 ? '-2560' : '';
       function clipSrc(name) { return '/assets/img/guieb-shook/video/' + name + size + '.mp4'; }
-      var players = {};
-      // The first clip is named in data-src, not src, so the browser downloads only the size picked here
-      // (it used to fetch the 1920 file and then the 2560 one on laptops; 2026-11-25). The poster shows meanwhile.
-      var firstClip = slides[0].dataset.video;
+      // Keep media URLs independent of DOM text. The poster shows while the selected size loads.
+      var clips = ['hero-1-williamsburg', 'hero-2-golden-gate', 'hero-3-brooklyn', 'hero-4-bay-bridge'];
+      var players = new Map();
+      var firstClip = clips[0];
       if (!paused) video.src = clipSrc(firstClip);
-      players[firstClip] = video;
+      players.set(firstClip, video);
       hero.setAttribute('data-clip', firstClip);
       function setVideo(name) {
         if (!video || !name) return;
-        var next = players[name];
+        var next = players.get(name);
         if (next === video) return;
         if (!next) {
           next = document.createElement('video');
@@ -78,7 +78,7 @@
           next.poster = '/assets/img/guieb-shook/video/' + name + '.jpg';
           if (!paused) next.src = clipSrc(name);
           media.insertBefore(next, media.firstChild);
-          players[name] = next;
+          players.set(name, next);
         }
         var prev = video;
         video = next;
@@ -99,7 +99,7 @@
         slides[i].removeAttribute('aria-hidden');
         dots[i].classList.add('is-active');
         dots[i].setAttribute('aria-pressed', 'true');
-        setVideo(slides[i].getAttribute('data-video'));
+        setVideo(clips[i]);
       }
       function start() { stop(); if (!paused) timer = setInterval(function () { show(i + 1); }, 7000); }
       function stop() { if (timer) clearInterval(timer); timer = null; }
@@ -110,7 +110,7 @@
         if (p) {
           video.pause();
         } else {
-          if (!video.getAttribute('src')) video.src = clipSrc(slides[i].dataset.video);
+          if (!video.getAttribute('src')) video.src = clipSrc(clips[i]);
           video.play().catch(function () {});
         }
         start();
@@ -502,12 +502,24 @@
     }
 
     const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
-    const ambientVideos = document.querySelectorAll('.as-half video, .contact-video, .banner-video, .namesake-video');
+    const ambientVideos = new Map();
+    for (const [selector, clip] of [
+      ['#as-law video', 'about-constitution'],
+      ['#as-tech video', 'about-code'],
+      ['video.contact-video', 'contact-path'],
+      ['video.banner-video', 'story-midtown'],
+      ['video.namesake-video', 'name-masungi'],
+    ]) {
+      const video = document.querySelector(selector);
+      if (video instanceof HTMLVideoElement) {
+        ambientVideos.set(video, '/assets/img/guieb-shook/video/' + clip + '.mp4');
+      }
+    }
     function syncPlayback(video) {
       if (reducedMotion.matches || video.dataset.inView !== 'true') {
         video.pause();
       } else {
-        if (!video.getAttribute('src')) video.src = video.dataset.src;
+        if (!video.getAttribute('src')) video.src = ambientVideos.get(video);
         video.play().catch(() => {});
       }
     }
@@ -517,5 +529,7 @@
         syncPlayback(entry.target);
       }
     }, { rootMargin: '400px 0px' });
-    for (const video of ambientVideos) inView.observe(video);
-    reducedMotion.addEventListener('change', () => ambientVideos.forEach(syncPlayback));
+    for (const video of ambientVideos.keys()) inView.observe(video);
+    reducedMotion.addEventListener('change', () => {
+      for (const video of ambientVideos.keys()) syncPlayback(video);
+    });
