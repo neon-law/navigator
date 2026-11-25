@@ -420,8 +420,8 @@ pub(crate) async fn document_pdf_ready(
 /// questionnaire answers or the bound Person; `firm` from the Project's
 /// lawyer DRI or configured signing lawyer; other roles from declared `name`/`email`
 /// answer-key bindings, falling back to `person__<role>.name` /
-/// `.email`. Templates with no declared signers and no fields use the
-/// provider's single-signer fallback. Explicit signers require placed fields
+/// `.email`. Templates with no declared signers and no fields route only to
+/// the Firm signer. Explicit signers require placed fields
 /// and resolved identities.
 ///
 /// Resolve the signer set for a template from the bytes the send path

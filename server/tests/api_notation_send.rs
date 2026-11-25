@@ -519,45 +519,17 @@ async fn the_status_door_gates_like_the_send_door() {
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 
-/// LAW-326: after a real dispatch through the shared send flow, the
-/// status door reports the envelope, the provider, and each declared
-/// signer's own step — and the webhook's per-role receipts
-/// (`record_signer_completion`) move the read.
-#[tokio::test]
-async fn status_reports_the_sent_envelope_and_the_webhooks_receipts() {
-    let h = build_app().await;
-    let project = open_project(&h.surreal).await;
-    let dri = store::persons::create(
-        &h.surreal,
-        &store::persons::NewPerson::with_role("Ada Example", "ada@example.com", Role::Lawyer),
-    )
-    .await
-    .unwrap();
-    store::projects::designate_dri_in_surreal(
-        &h.surreal,
-        project.id,
-        dri.id,
-        store::projects::DriSide::Lawyer,
-    )
-    .await
-    .unwrap();
-    let notation_id = seed_lawyer_review_notation(&h, project.id).await;
-    let lawyer = bearer_new_person(
-        &h.surreal,
-        "acting-lawyer@example.com",
-        Role::Lawyer,
-        Some((project.id, "lawyer")),
-    )
-    .await;
-
-    let approve = post(&h.app, Some(&lawyer), notation_id, "approval").await;
-    assert_eq!(approve.status(), StatusCode::OK, "approval renders the PDF");
-    let prepare = h
+async fn prepare_and_check_onboarding_draft(
+    harness: &Harness,
+    lawyer: &str,
+    notation_id: uuid::Uuid,
+) -> serde_json::Value {
+    let prepare = harness
         .app
         .clone()
         .oneshot(
             Request::post(format!("/app/api/notations/{notation_id}/signature"))
-                .header("authorization", &lawyer)
+                .header("authorization", lawyer)
                 .header("content-type", "application/json")
                 .body(Body::from(r#"{"prepare":true}"#))
                 .unwrap(),
@@ -567,7 +539,7 @@ async fn status_reports_the_sent_envelope_and_the_webhooks_receipts() {
     assert_eq!(prepare.status(), StatusCode::OK);
     let body = prepare.into_body().collect().await.unwrap().to_bytes();
     let prepared: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    let envelopes = h.signature_provider.envelopes().unwrap();
+    let envelopes = harness.signature_provider.envelopes().unwrap();
     assert_eq!(envelopes.len(), 1);
     assert_eq!(
         envelopes[0].status,
@@ -586,22 +558,63 @@ async fn status_reports_the_sent_envelope_and_the_webhooks_receipts() {
         Some("Please sign the onboarding retainer in order for us to represent you.")
     );
 
-    let fixture = h
+    let fixture = harness
         .signature_provider
         .root()
         .join(format!("{}.json", envelope.id));
     let mut edited = envelope.clone();
     edited.email_blurb = Some(format!("Please sign {notation_id}"));
     std::fs::write(&fixture, serde_json::to_vec(&edited).unwrap()).unwrap();
-    let refused = post(&h.app, Some(&lawyer), notation_id, "signature").await;
+    let refused = post(&harness.app, Some(lawyer), notation_id, "signature").await;
     assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY);
     let body = refused.into_body().collect().await.unwrap().to_bytes();
     assert!(String::from_utf8_lossy(&body).contains("onboarding_message"));
     assert_eq!(
-        h.signature_provider.envelopes().unwrap()[0].status,
+        harness.signature_provider.envelopes().unwrap()[0].status,
         portal::signature::EnvelopeStatus::Prepared
     );
     std::fs::write(fixture, serde_json::to_vec(envelope).unwrap()).unwrap();
+    prepared
+}
+
+async fn designate_onboarding_signer(harness: &Harness, project_id: uuid::Uuid) {
+    let dri = store::persons::create(
+        &harness.surreal,
+        &store::persons::NewPerson::with_role("Ada Example", "ada@example.com", Role::Lawyer),
+    )
+    .await
+    .unwrap();
+    store::projects::designate_dri_in_surreal(
+        &harness.surreal,
+        project_id,
+        dri.id,
+        store::projects::DriSide::Lawyer,
+    )
+    .await
+    .unwrap();
+}
+
+/// LAW-326: after a real dispatch through the shared send flow, the
+/// status door reports the envelope, the provider, and each declared
+/// signer's own step — and the webhook's per-role receipts
+/// (`record_signer_completion`) move the read.
+#[tokio::test]
+async fn status_reports_the_sent_envelope_and_the_webhooks_receipts() {
+    let h = build_app().await;
+    let project = open_project(&h.surreal).await;
+    designate_onboarding_signer(&h, project.id).await;
+    let notation_id = seed_lawyer_review_notation(&h, project.id).await;
+    let lawyer = bearer_new_person(
+        &h.surreal,
+        "acting-lawyer@example.com",
+        Role::Lawyer,
+        Some((project.id, "lawyer")),
+    )
+    .await;
+
+    let approve = post(&h.app, Some(&lawyer), notation_id, "approval").await;
+    assert_eq!(approve.status(), StatusCode::OK, "approval renders the PDF");
+    let prepared = prepare_and_check_onboarding_draft(&h, &lawyer, notation_id).await;
 
     let sent = post(&h.app, Some(&lawyer), notation_id, "signature").await;
     assert_eq!(sent.status(), StatusCode::OK);

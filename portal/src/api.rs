@@ -5490,14 +5490,29 @@ async fn lookup_project_envelope(
     if !participates_as_firm(&state, &lawyer, id).await {
         return Err(ApiError::NotFound);
     }
-    Ok(Json(read_project_envelope(&state, id, envelope_id).await?).into_response())
+    let (envelope, notation) = read_project_envelope(&state, id, envelope_id).await?;
+    let envelope = crate::signature_status::project_envelope_json(
+        &state.surreal,
+        &state.storage,
+        notation.as_ref(),
+        &envelope,
+    )
+    .await
+    .map_err(crate::signature_adoption::internal)?;
+    Ok(Json(envelope).into_response())
 }
 
 async fn read_project_envelope(
     state: &ApiState,
     id: Uuid,
     envelope_id: Uuid,
-) -> Result<crate::signature::ExternalEnvelope, ApiError> {
+) -> Result<
+    (
+        crate::signature::ExternalEnvelope,
+        Option<store::notations::Notation>,
+    ),
+    ApiError,
+> {
     use crate::signature::SignatureProvider as _;
     use crate::signature_adoption::internal;
     let db = &state.surreal;
@@ -5530,19 +5545,20 @@ async fn read_project_envelope(
     )
     .await
     .map_err(internal)?;
-    if let Some(signature) = &signature {
-        if store::notations::find_by_id(db, signature.notation_id)
-            .await?
-            .is_none_or(|notation| notation.project_id != id)
-        {
-            return Err(ApiError::NotFound);
-        }
-    }
+    let notation = match signature {
+        Some(signature) => Some(
+            store::notations::find_by_id(db, signature.notation_id)
+                .await?
+                .filter(|notation| notation.project_id == id)
+                .ok_or(ApiError::NotFound)?,
+        ),
+        None => None,
+    };
     let envelope = provider
         .read_external_envelope(envelope_id)
         .await
         .map_err(|_| ApiError::NotFound)?;
-    if signature.is_none() {
+    if notation.is_none() {
         let (fields, names) = provider
             .envelope_project_hints(envelope_id)
             .await
@@ -5555,7 +5571,7 @@ async fn read_project_envelope(
             return Err(ApiError::NotFound);
         }
     }
-    Ok(envelope)
+    Ok((envelope, notation))
 }
 
 /// Refresh only envelopes already correlated to this participating Project.
@@ -5629,6 +5645,14 @@ async fn refresh_project_envelopes(
                 .await
                 .map_err(internal)?;
         }
+        let envelope = crate::signature_status::project_envelope_json(
+            &state.surreal,
+            &state.storage,
+            Some(&notation),
+            &envelope,
+        )
+        .await
+        .map_err(internal)?;
         refreshed.push(serde_json::json!({"notation_id": notation.id, "envelope": envelope}));
     }
     if let Some((pg, firm, account)) = &account {
@@ -5644,7 +5668,7 @@ async fn refresh_project_envelopes(
                 continue;
             }
             let started = chrono::Utc::now();
-            let envelope = read_project_envelope(&state, id, previous.envelope_id).await?;
+            let (envelope, _) = read_project_envelope(&state, id, previous.envelope_id).await?;
             store::project_envelopes::observe(pg, *firm, *account, id, started, &envelope)
                 .await
                 .map_err(internal)?;

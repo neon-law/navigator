@@ -82,12 +82,13 @@ template is a template + spec, not a new handler — the spec just needs the ret
 
 Two postures, one envelope: **prepare** holds the envelope as a draft on the provider (DocuSign `status: created`, fake
 provider `Prepared`) without advancing the workflow — the lawyer's screen keeps saying review; **send** dispatches and
-promotes any prepared draft rather than creating a second envelope. Validation (unfinished placeholders, anchor and tab
-refusals) runs identically on both, before anything is written. From the portal REST door, `POST
-/app/api/notations/:id/signature` with `{"prepare": true}` drafts and with no body (or `false`) sends. From a Project
-checkout, `navigator notation envelope prepare <notation-id>` drafts and `navigator notation envelope send
-<notation-id>` dispatches, stamping the returned envelope id on the notation's document pointer; `navigator notation
-envelope status <notation-id>` reads per-signer state.
+promotes any prepared draft rather than creating a second envelope. Both validate placeholders, anchors, and tabs.
+Before dispatch, Navigator also checks the saved Firm signer and the fixed onboarding email against the expected values.
+From the portal REST door, `POST /app/api/notations/:id/signature` with `{"prepare": true}` drafts and with no body (or
+`false`) sends. From a Project checkout, `navigator notation envelope prepare <notation-id>` drafts and `navigator
+notation envelope send <notation-id>` dispatches, stamping the returned envelope id on the notation's document pointer;
+`navigator notation envelope status <notation-id>` reads per-signer state and the provider's signer names and email
+addresses.
 
 After preparing a draft, open the sender-view URL printed by the CLI to review the placed fields. Add `--open` to
 `navigator notation envelope prepare <notation-id>` to launch the browser. Continue back to Navigator, then run
@@ -169,8 +170,8 @@ navigator project envelope register "$envelope_id" --host "$host" --project "$pr
 ```
 
 The Project's client DRI must be among the signers. Navigator links the envelope to the Draft's Notation and records the
-provider's signer status and timestamps on the matter. Use `navigator project envelope status <code> --host <host>` to
-refresh known envelopes directly from the Firm's DocuSign account. `navigator project status <code>` reads the saved
+provider's signer status and timestamps on the matter. Refresh known envelopes from the Firm's DocuSign account with
+`navigator project envelope status <code> --json --host <host>`. `navigator project status <code>` reads the saved
 status. A pending envelope keeps a pitch pending. On completion, Navigator files the signed PDF and Certificate of
 Completion with their DocuSign envelope ID and records the provider's completion date. A verified Connect completion
 updates the linked envelope, and rerunning the command refreshes it directly from DocuSign.

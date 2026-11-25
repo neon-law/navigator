@@ -1626,13 +1626,9 @@ enum TokenSource {
 /// eSignature base path (e.g. `https://demo.docusign.net/restapi` for
 /// the developer sandbox), `account_id` the API account GUID, and
 /// `access_token` an OAuth bearer token. We hit the REST surface
-/// directly with `reqwest` rather than pulling a DocuSign SDK — the
-/// surface we need is one POST, mirroring [`workflows::email`]'s
-/// SendGrid backend.
+/// directly with `reqwest` rather than pulling a DocuSign SDK.
 ///
-/// `signer_email` / `signer_name` address the envelope. v1 sends to a
-/// single configured recipient (the firm's own signing inbox in the
-/// reference deploy); per-client routing belongs to a later change.
+/// Explicit Notation recipients take precedence over the configured signer.
 #[derive(Clone)]
 pub struct DocuSignSignatureProvider {
     http: reqwest::Client,

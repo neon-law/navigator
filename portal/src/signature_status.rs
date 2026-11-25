@@ -18,6 +18,58 @@ use std::sync::Arc;
 
 use serde::Serialize;
 
+pub(crate) async fn project_envelope_json(
+    db: &store::surreal::SurrealDb,
+    storage: &Arc<dyn cloud::StorageService>,
+    notation: Option<&store::notations::Notation>,
+    envelope: &crate::signature::ExternalEnvelope,
+) -> Result<serde_json::Value, serde_json::Error> {
+    let roles = match notation {
+        Some(notation) => declared_roles(db, storage, notation)
+            .await
+            .unwrap_or_default(),
+        None => Vec::new(),
+    };
+    envelope_with_roles(envelope, &roles)
+}
+
+fn envelope_with_roles(
+    envelope: &crate::signature::ExternalEnvelope,
+    roles: &[rules::f107::SignerRole],
+) -> Result<serde_json::Value, serde_json::Error> {
+    let mut value = serde_json::to_value(envelope)?;
+    let order = |signer: &crate::signature::ExternalSigner| {
+        signer
+            .routing_order
+            .as_deref()
+            .and_then(|order| order.parse::<u32>().ok())
+    };
+    let Some(signers) = value["signers"].as_array_mut() else {
+        return Ok(value);
+    };
+    for (signer, recipient) in signers.iter_mut().zip(&envelope.signers) {
+        let Some(routing_order) = order(recipient) else {
+            continue;
+        };
+        if envelope
+            .signers
+            .iter()
+            .filter(|other| order(other) == Some(routing_order))
+            .count()
+            != 1
+        {
+            continue;
+        }
+        if let Some(role) = roles
+            .iter()
+            .find(|role| role.routing_order == routing_order)
+        {
+            signer["role"] = serde_json::Value::String(role.role.clone());
+        }
+    }
+    Ok(value)
+}
+
 /// One declared signer's own step on the envelope.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct EnvelopeSignerState {
@@ -198,6 +250,29 @@ async fn declared_roles(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn project_envelope_labels_only_unambiguous_slots_and_keeps_provider_identity() {
+        let envelope = serde_json::from_value(serde_json::json!({
+            "envelopeId": uuid::Uuid::nil(),
+            "status": "sent",
+            "signers": [
+                {"name": "Ada Example", "email": "ada@example.com", "status": "sent", "routingOrder": "2"},
+                {"name": "Client Example", "email": "client@example.com", "status": "sent", "routingOrder": "1"},
+                {"name": "Other Example", "email": "other@example.com", "status": "sent", "routingOrder": "1"}
+            ]
+        })).unwrap();
+        let roles = crate::signature_flow::signer_set_for_template("test", "").unwrap();
+        let json = envelope_with_roles(&envelope, &roles.signers).unwrap();
+        assert_eq!(json["signers"][0]["role"], "firm");
+        assert_eq!(json["signers"][0]["name"], "Ada Example");
+        assert_eq!(json["signers"][0]["email"], "ada@example.com");
+        assert!(json["signers"][1].get("role").is_none());
+        assert!(json["signers"][2].get("role").is_none());
+        assert!(envelope_with_roles(&envelope, &[]).unwrap()["signers"][0]
+            .get("role")
+            .is_none());
+    }
 
     // status_for_notation needs an engine, so its integration behavior is
     // covered by the REST-door tests (`server/tests/api_notation_send.rs`)
