@@ -5667,7 +5667,26 @@ fn parse_web_binary_envs(
 /// The data keys carrying a non-empty value in the prod Secret.
 fn secret_data_keys(cfg: &ShipConfig) -> Result<BTreeSet<String>> {
     let json = kubectl_json(cfg, "secret", &cfg.secret_name)?;
+    check_signer_email(&json)?;
     Ok(populated_secret_keys(&json))
+}
+
+fn check_signer_email(secret: &serde_json::Value) -> Result<()> {
+    use base64::Engine as _;
+
+    let key = "DOCUSIGN_SIGNER_EMAIL";
+    if let Some(value) = secret["data"].get(key) {
+        let encoded = value
+            .as_str()
+            .context("DOCUSIGN_SIGNER_EMAIL must be base64")?;
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .map_err(|_| anyhow::anyhow!("DOCUSIGN_SIGNER_EMAIL must be base64"))?;
+        let mailbox = std::str::from_utf8(&decoded)
+            .map_err(|_| anyhow::anyhow!("DOCUSIGN_SIGNER_EMAIL must be UTF-8"))?;
+        super::deployments::validate_payload(key, mailbox)?;
+    }
+    Ok(())
 }
 
 /// The Secret's `data` keys whose value is non-empty. An empty value is
@@ -12685,6 +12704,19 @@ spec:
             }),
             "the web pod must receive the deployment Secret through envFrom"
         );
+    }
+
+    #[test]
+    fn ship_checks_the_signer_email_from_the_projected_secret() {
+        use base64::Engine as _;
+
+        for (mailbox, valid) in [("ada@example.com", true), (" Ada@example.com", false)] {
+            let secret = serde_json::json!({"data": {
+                "DOCUSIGN_SIGNER_EMAIL": base64::engine::general_purpose::STANDARD.encode(mailbox)
+            }});
+            assert_eq!(check_signer_email(&secret).is_ok(), valid);
+        }
+        assert!(check_signer_email(&serde_json::json!({"data": {}})).is_ok());
     }
 
     #[test]

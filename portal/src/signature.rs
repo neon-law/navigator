@@ -282,7 +282,15 @@ pub enum SignatureError {
     /// provider would send it and no signer would place it.
     #[error("tab preparation failed: {0}")]
     TabValidation(String),
+    #[error("The Firm signer must match the Project’s lawyer DRI or the configured signing lawyer when no DRI is assigned.")]
+    FirmSigner,
+    #[error("The onboarding draft does not have the required client message.")]
+    OnboardingMessage,
 }
+
+pub(crate) const ONBOARDING_EMAIL_BLURB: &str =
+    "Please sign the onboarding retainer in order for us to represent you.";
+const ONBOARDING_EMAIL_SUBJECT: &str = "Onboarding retainer for signature";
 
 pub use store::project_envelopes::{ExternalEnvelope, ExternalSigner};
 
@@ -343,6 +351,53 @@ pub trait SignatureProvider: Send + Sync {
         manifest: &SignatureManifest,
         mode: SendMode,
     ) -> Result<SignatureRequestId, SignatureError>;
+
+    fn configured_signer(&self) -> Option<(&str, &str)> {
+        None
+    }
+
+    async fn prepare_onboarding(
+        &self,
+        notation_id: Uuid,
+        pdf: &[u8],
+        manifest: &SignatureManifest,
+    ) -> Result<SignatureRequestId, SignatureError> {
+        self.send_for_signature(notation_id, pdf, manifest, SendMode::Prepare)
+            .await
+    }
+
+    async fn verify_notation_draft(
+        &self,
+        _request_id: &SignatureRequestId,
+        firm: Option<&SignatureRecipient>,
+        onboarding: bool,
+    ) -> Result<(), SignatureError> {
+        match (firm, onboarding) {
+            (_, true) => Err(SignatureError::OnboardingMessage),
+            (Some(_), false) => Err(SignatureError::FirmSigner),
+            (None, false) => Ok(()),
+        }
+    }
+
+    async fn dispatch_notation_draft(
+        &self,
+        request_id: &SignatureRequestId,
+        firm: Option<&SignatureRecipient>,
+        onboarding: bool,
+    ) -> Result<(), SignatureError> {
+        self.verify_notation_draft(request_id, firm, onboarding)
+            .await?;
+        self.dispatch_prepared(request_id).await
+    }
+
+    async fn notation_signers(
+        &self,
+        request_id: &SignatureRequestId,
+    ) -> Result<Vec<ExternalSigner>, SignatureError> {
+        let id = Uuid::parse_str(&request_id.0)
+            .map_err(|_| SignatureError::Provider("Invalid DocuSign envelope ID".into()))?;
+        Ok(self.read_external_envelope(id).await?.signers)
+    }
 
     /// Dispatch a recorded draft, or confirm it has already been sent.
     async fn dispatch_prepared(
@@ -422,6 +477,10 @@ pub struct FakeEnvelope {
     pub status: EnvelopeStatus,
     pub recipients: Vec<SignatureRecipient>,
     pub fields: Vec<SignatureField>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email_subject: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email_blurb: Option<String>,
     /// The prepared PDF, base64-encoded. Anchors were validated against
     /// this text before the envelope was accepted.
     pub pdf_base64: String,
@@ -1238,14 +1297,14 @@ impl Default for FakeSignatureProvider {
     }
 }
 
-#[async_trait]
-impl SignatureProvider for FakeSignatureProvider {
-    async fn send_for_signature(
+impl FakeSignatureProvider {
+    fn submit(
         &self,
         notation_id: Uuid,
         pdf: &[u8],
         manifest: &SignatureManifest,
         mode: SendMode,
+        onboarding: bool,
     ) -> Result<SignatureRequestId, SignatureError> {
         // Nothing is sent unsigned: validate every anchor against the
         // prepared PDF's text first, and refuse the whole envelope on a
@@ -1307,6 +1366,8 @@ impl SignatureProvider for FakeSignatureProvider {
                     },
                     recipients: manifest.recipients.clone(),
                     fields: manifest.fields.clone(),
+                    email_subject: onboarding.then(|| ONBOARDING_EMAIL_SUBJECT.to_owned()),
+                    email_blurb: onboarding.then(|| ONBOARDING_EMAIL_BLURB.to_owned()),
                     pdf_base64: Engine::encode(&base64::engine::general_purpose::STANDARD, pdf),
                     created_at: chrono::Utc::now().to_rfc3339(),
                     signed: Vec::new(),
@@ -1337,7 +1398,73 @@ impl SignatureProvider for FakeSignatureProvider {
         });
         Ok(SignatureRequestId(id))
     }
+}
 
+#[async_trait]
+impl SignatureProvider for FakeSignatureProvider {
+    fn configured_signer(&self) -> Option<(&str, &str)> {
+        Some(("Example Signing Lawyer", "firm-signer@example.com"))
+    }
+
+    async fn notation_signers(
+        &self,
+        request_id: &SignatureRequestId,
+    ) -> Result<Vec<ExternalSigner>, SignatureError> {
+        Ok(self
+            .envelope(request_id)?
+            .into_iter()
+            .flat_map(|envelope| envelope.recipients)
+            .map(|recipient| ExternalSigner {
+                name: recipient.name,
+                email: recipient.email,
+                status: String::new(),
+                signed_date_time: None,
+                routing_order: Some(recipient.routing_order.to_string()),
+            })
+            .collect())
+    }
+
+    async fn verify_notation_draft(
+        &self,
+        request_id: &SignatureRequestId,
+        firm: Option<&SignatureRecipient>,
+        onboarding: bool,
+    ) -> Result<(), SignatureError> {
+        let envelope = self
+            .envelope(request_id)?
+            .ok_or_else(|| SignatureError::Provider("Unknown fake envelope".into()))?;
+        if envelope.status == EnvelopeStatus::Prepared {
+            if firm.is_some_and(|firm| !envelope.recipients.contains(firm)) {
+                return Err(SignatureError::FirmSigner);
+            }
+            if onboarding
+                && (envelope.email_subject.as_deref() != Some(ONBOARDING_EMAIL_SUBJECT)
+                    || envelope.email_blurb.as_deref() != Some(ONBOARDING_EMAIL_BLURB))
+            {
+                return Err(SignatureError::OnboardingMessage);
+            }
+        }
+        Ok(())
+    }
+
+    async fn prepare_onboarding(
+        &self,
+        notation_id: Uuid,
+        pdf: &[u8],
+        manifest: &SignatureManifest,
+    ) -> Result<SignatureRequestId, SignatureError> {
+        self.submit(notation_id, pdf, manifest, SendMode::Prepare, true)
+    }
+
+    async fn send_for_signature(
+        &self,
+        notation_id: Uuid,
+        pdf: &[u8],
+        manifest: &SignatureManifest,
+        mode: SendMode,
+    ) -> Result<SignatureRequestId, SignatureError> {
+        self.submit(notation_id, pdf, manifest, mode, false)
+    }
     async fn dispatch_prepared(
         &self,
         request_id: &SignatureRequestId,
@@ -1592,8 +1719,8 @@ impl DocuSignSignatureProvider {
     /// vars are absent (dev / KIND, where the stub is used instead).
     ///
     /// Required: `DOCUSIGN_BASE_URL`, `DOCUSIGN_ACCOUNT_ID`. Optional:
-    /// `DOCUSIGN_SIGNER_EMAIL` / `DOCUSIGN_SIGNER_NAME` (the envelope
-    /// recipient), defaulting to the firm's support inbox.
+    /// `DOCUSIGN_SIGNER_EMAIL` / `DOCUSIGN_SIGNER_NAME` name the Firm's
+    /// configured signing lawyer when a Project has no lawyer DRI.
     ///
     /// Prefers JWT grant when [`DocuSignJwtAuth::from_env`] is satisfied
     /// (integration key + impersonated user + RSA key present) — the
@@ -1604,9 +1731,8 @@ impl DocuSignSignatureProvider {
         let get = |k: &str| std::env::var(k).ok().filter(|s| !s.is_empty());
         let base_url = get("DOCUSIGN_BASE_URL")?;
         let account_id = get("DOCUSIGN_ACCOUNT_ID")?;
-        let signer_email =
-            get("DOCUSIGN_SIGNER_EMAIL").unwrap_or_else(|| "support@neonlaw.com".to_string());
-        let signer_name = get("DOCUSIGN_SIGNER_NAME").unwrap_or_else(|| "Neon Law".to_string());
+        let signer_email = get("DOCUSIGN_SIGNER_EMAIL").unwrap_or_default();
+        let signer_name = get("DOCUSIGN_SIGNER_NAME").unwrap_or_default();
         if let Some(auth) = DocuSignJwtAuth::from_env() {
             Some(Self::with_jwt_auth(
                 base_url,
@@ -1704,7 +1830,7 @@ impl DocuSignSignatureProvider {
                 })
                 .collect()
         };
-        serde_json::json!({
+        let mut body = serde_json::json!({
             "emailSubject": format!("Document for signature ({notation_id})"),
             "status": status,
             "documents": [{
@@ -1714,7 +1840,81 @@ impl DocuSignSignatureProvider {
                 "documentId": "1",
             }],
             "recipients": { "signers": signers },
-        })
+        });
+        if prepared
+            .signers
+            .iter()
+            .any(|signer| signer.recipient.role == "firm")
+        {
+            body["recipientsLock"] = "true".into();
+        }
+        body
+    }
+
+    fn onboarding_envelope_body(
+        &self,
+        notation_id: Uuid,
+        pdf: &[u8],
+        prepared: &PreparedTabs,
+    ) -> serde_json::Value {
+        let mut body = self.build_envelope_body(notation_id, pdf, prepared, "created");
+        body["emailSubject"] = ONBOARDING_EMAIL_SUBJECT.into();
+        body["emailBlurb"] = ONBOARDING_EMAIL_BLURB.into();
+        body["messageLock"] = "true".into();
+        body
+    }
+
+    async fn notation_envelope_json(
+        &self,
+        request_id: &SignatureRequestId,
+        suffix: &str,
+    ) -> Result<serde_json::Value, SignatureError> {
+        let url = self.request_url(&format!(
+            "v2.1/accounts/{}/envelopes/{}{suffix}",
+            self.account_id, request_id.0
+        ))?;
+        self.http
+            .get(url)
+            .bearer_auth(self.bearer_token().await?)
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status)
+            .map_err(|_| SignatureError::Provider("DocuSign envelope lookup failed".into()))?
+            .json()
+            .await
+            .map_err(|_| SignatureError::Provider("Invalid DocuSign envelope response".into()))
+    }
+
+    async fn post_envelope(
+        &self,
+        notation_id: Uuid,
+        body: &serde_json::Value,
+    ) -> Result<EnvelopeSummary, SignatureError> {
+        let url = self.request_url(&format!("v2.1/accounts/{}/envelopes", self.account_id))?;
+        let response = self
+            .http
+            .post(url)
+            .header("X-DocuSign-Idempotency-Key", notation_id.to_string())
+            .bearer_auth(self.bearer_token().await?)
+            .json(body)
+            .send()
+            .await
+            .map_err(|_| SignatureError::Unreachable)?;
+        let status = response.status();
+        if matches!(status.as_u16(), 401 | 403) {
+            return Err(SignatureError::Authentication(format!(
+                "envelope request refused with HTTP {status}"
+            )));
+        }
+        if !status.is_success() {
+            return Err(SignatureError::Provider(format!(
+                "docusign responded {status}"
+            )));
+        }
+        response
+            .json()
+            .await
+            .map_err(|error| SignatureError::Provider(error.to_string()))
     }
 
     /// GET one envelope document as raw bytes. `which` is the DocuSign
@@ -1751,6 +1951,57 @@ impl DocuSignSignatureProvider {
             .map_err(|e| SignatureError::Provider(e.to_string()))?;
         Ok(bytes.to_vec())
     }
+}
+
+fn validate_draft(
+    envelope: &serde_json::Value,
+    recipients: &serde_json::Value,
+    firm: Option<&SignatureRecipient>,
+    onboarding: bool,
+) -> Result<(), SignatureError> {
+    if onboarding
+        && (envelope["emailSubject"].as_str() != Some(ONBOARDING_EMAIL_SUBJECT)
+            || envelope["emailBlurb"].as_str() != Some(ONBOARDING_EMAIL_BLURB))
+    {
+        return Err(SignatureError::OnboardingMessage);
+    }
+    if let Some(firm) = firm {
+        let order = firm.routing_order.to_string();
+        let mut matches = recipients["signers"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|signer| signer["recipientId"].as_str() == Some(&order));
+        if !matches.next().is_some_and(|signer| {
+            signer["routingOrder"].as_str() == Some(&order)
+                && signer["name"].as_str() == Some(&firm.name)
+                && signer["email"]
+                    .as_str()
+                    .is_some_and(|email| email.eq_ignore_ascii_case(&firm.email))
+                && signer["clientUserId"].as_str().is_none_or(str::is_empty)
+        }) || matches.next().is_some()
+        {
+            return Err(SignatureError::FirmSigner);
+        }
+    }
+    if onboarding
+        && !recipients["signers"].as_array().is_some_and(|signers| {
+            !signers.is_empty()
+                && recipients.as_object().is_some_and(|groups| {
+                    groups
+                        .values()
+                        .filter_map(serde_json::Value::as_array)
+                        .flatten()
+                        .all(|recipient| {
+                            recipient["emailNotification"]["emailSubject"].is_null()
+                                && recipient["emailNotification"]["emailBody"].is_null()
+                        })
+                })
+        })
+    {
+        return Err(SignatureError::OnboardingMessage);
+    }
+    Ok(())
 }
 
 /// DocuSign's envelope-create response. We need only the id.
@@ -1938,6 +2189,63 @@ impl DocuSignSignatureProvider {
 
 #[async_trait]
 impl SignatureProvider for DocuSignSignatureProvider {
+    fn configured_signer(&self) -> Option<(&str, &str)> {
+        Some((&self.signer_name, &self.signer_email))
+    }
+
+    async fn prepare_onboarding(
+        &self,
+        notation_id: Uuid,
+        pdf: &[u8],
+        manifest: &SignatureManifest,
+    ) -> Result<SignatureRequestId, SignatureError> {
+        let body =
+            self.onboarding_envelope_body(notation_id, pdf, &prepare_envelope(pdf, manifest)?);
+        validate_draft(&body, &body["recipients"], None, true)?;
+        let summary = self.post_envelope(notation_id, &body).await?;
+        Ok(SignatureRequestId(summary.envelope_id))
+    }
+
+    async fn verify_notation_draft(
+        &self,
+        request_id: &SignatureRequestId,
+        firm: Option<&SignatureRecipient>,
+        onboarding: bool,
+    ) -> Result<(), SignatureError> {
+        if firm.is_none() && !onboarding {
+            return Ok(());
+        }
+        let envelope = self.notation_envelope_json(request_id, "").await?;
+        match envelope["status"].as_str() {
+            Some("created") => {
+                if envelope["envelopeId"].as_str() != Some(&request_id.0) {
+                    return Err(SignatureError::Provider(
+                        "DocuSign returned a different envelope".into(),
+                    ));
+                }
+                let recipients = self
+                    .notation_envelope_json(request_id, "/recipients?include_extended=true")
+                    .await?;
+                validate_draft(&envelope, &recipients, firm, onboarding)
+            }
+            Some("sent" | "delivered" | "signed" | "completed" | "declined" | "voided") => Ok(()),
+            _ => Err(SignatureError::Provider(
+                "DocuSign has not confirmed the envelope's dispatch state".into(),
+            )),
+        }
+    }
+
+    async fn notation_signers(
+        &self,
+        request_id: &SignatureRequestId,
+    ) -> Result<Vec<ExternalSigner>, SignatureError> {
+        let mut recipients = self
+            .notation_envelope_json(request_id, "/recipients")
+            .await?;
+        serde_json::from_value(recipients["signers"].take())
+            .map_err(|_| SignatureError::Provider("Invalid DocuSign signers response".into()))
+    }
+
     async fn read_external_envelope(&self, id: Uuid) -> Result<ExternalEnvelope, SignatureError> {
         #[derive(Deserialize)]
         struct Recipients {
@@ -1991,7 +2299,6 @@ impl SignatureProvider for DocuSignSignatureProvider {
         manifest: &SignatureManifest,
         mode: SendMode,
     ) -> Result<SignatureRequestId, SignatureError> {
-        let url = self.request_url(&format!("v2.1/accounts/{}/envelopes", self.account_id))?;
         // `sent` dispatches; `created` holds the envelope as a draft. The
         // idempotency key is the same either way: a send that arrives after
         // a prepare dedupes onto the prepared envelope rather than creating
@@ -2000,43 +2307,9 @@ impl SignatureProvider for DocuSignSignatureProvider {
             SendMode::Send => "sent",
             SendMode::Prepare => "created",
         };
-        let resp = self
-            .http
-            .post(url)
-            // Idempotency at the provider boundary: the same notation
-            // never creates two envelopes, even under a concurrent
-            // double-send. DocuSign honors this key for 24h.
-            .header("X-DocuSign-Idempotency-Key", notation_id.to_string())
-            .bearer_auth(self.bearer_token().await?)
-            // Prepare fails closed before the POST: a missing anchor or
-            // an unbound field refuses the send — DocuSign never sees an
-            // envelope Navigator could have refused itself. The same
-            // validation gates a draft: nothing unvalidated is ever
-            // created, sent or not.
-            .json(&self.build_envelope_body(
-                notation_id,
-                pdf,
-                &prepare_envelope(pdf, manifest)?,
-                status,
-            ))
-            .send()
-            .await
-            .map_err(|_| SignatureError::Unreachable)?;
-        let response_status = resp.status();
-        if matches!(response_status.as_u16(), 401 | 403) {
-            return Err(SignatureError::Authentication(format!(
-                "envelope request refused with HTTP {response_status}"
-            )));
-        }
-        if !response_status.is_success() {
-            return Err(SignatureError::Provider(format!(
-                "docusign responded {response_status}"
-            )));
-        }
-        let summary: EnvelopeSummary = resp
-            .json()
-            .await
-            .map_err(|e| SignatureError::Provider(e.to_string()))?;
+        let body =
+            self.build_envelope_body(notation_id, pdf, &prepare_envelope(pdf, manifest)?, status);
+        let summary = self.post_envelope(notation_id, &body).await?;
         // A send whose POST deduped onto a prepared draft — DocuSign
         // answered `created` — dispatches it now with the status PUT. A
         // POST that answered `sent` (fresh or already dispatched) is done.
@@ -2872,6 +3145,79 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(view, "https://docusign.example/sender");
+    }
+
+    #[tokio::test]
+    async fn onboarding_draft_uses_exact_copy_and_refuses_edits_before_dispatch() {
+        use super::{validate_draft, ONBOARDING_EMAIL_BLURB};
+
+        let provider = docusign("https://docusign.example".into());
+        let manifest = retainer_manifest();
+        let prepared = prepare_tabs(&manifest).unwrap();
+        let body = provider.onboarding_envelope_body(ID42, b"pdf", &prepared);
+        assert_eq!(
+            body["emailBlurb"].as_str().unwrap().as_bytes(),
+            ONBOARDING_EMAIL_BLURB.as_bytes()
+        );
+        assert_eq!(
+            ONBOARDING_EMAIL_BLURB,
+            "Please sign the onboarding retainer in order for us to represent you."
+        );
+        assert!(!body.to_string().contains(&ID42.to_string()));
+        let firm = manifest
+            .recipients
+            .iter()
+            .find(|recipient| recipient.role == "firm")
+            .unwrap();
+        let recipients = &body["recipients"];
+        validate_draft(&body, recipients, Some(firm), true).unwrap();
+        let mut changed_recipients = recipients.clone();
+        let firm_index = manifest
+            .recipients
+            .iter()
+            .position(|recipient| recipient.role == "firm")
+            .unwrap();
+        changed_recipients["signers"][firm_index]["name"] = "Example Law".into();
+        assert!(matches!(
+            validate_draft(&body, &changed_recipients, Some(firm), true),
+            Err(SignatureError::FirmSigner)
+        ));
+        let mut changed_recipients = recipients.clone();
+        changed_recipients["signers"][0]["emailNotification"] =
+            serde_json::json!({"emailBody": "Override"});
+        assert!(matches!(
+            validate_draft(&body, &changed_recipients, Some(firm), true),
+            Err(SignatureError::OnboardingMessage)
+        ));
+
+        let server = MockServer::start().await;
+        let mut changed = body.clone();
+        changed["envelopeId"] = "draft".into();
+        changed["emailBlurb"] = "Changed".into();
+        Mock::given(method("GET"))
+            .and(path("/v2.1/accounts/acct-guid/envelopes/draft"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(changed))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/v2.1/accounts/acct-guid/envelopes/draft/recipients"))
+            .and(wiremock::matchers::query_param("include_extended", "true"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(recipients))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(0)
+            .mount(&server)
+            .await;
+        assert!(matches!(
+            docusign(server.uri())
+                .dispatch_notation_draft(&SignatureRequestId("draft".into()), Some(firm), true)
+                .await,
+            Err(SignatureError::OnboardingMessage)
+        ));
     }
 
     #[tokio::test]

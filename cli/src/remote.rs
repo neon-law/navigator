@@ -5214,6 +5214,8 @@ async fn stamp_envelope_on_pointer(
 struct NotationSignerStatus {
     role: String,
     signed: bool,
+    name: Option<String>,
+    email: Option<String>,
 }
 
 /// The success body of `GET /app/api/notations/{id}/signature`. Every
@@ -5283,7 +5285,11 @@ async fn notation_envelope_status_in(
             } else {
                 "not signed"
             };
-            println!("  {}: {}", signer.role, step);
+            if let (Some(name), Some(email)) = (&signer.name, &signer.email) {
+                println!("  {}: {name} <{email}> ({step})", signer.role);
+            } else {
+                println!("  {}: {}", signer.role, step);
+            }
         }
         if let Some(href) = &envelope.sender_view_href {
             println!("open in DocuSign: {base}{href}");

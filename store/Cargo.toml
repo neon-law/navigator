@@ -23,6 +23,7 @@ test-support = []
 surreal-compatibility = ["surrealdb/kv-mem"]
 
 [dependencies]
+addr.workspace = true
 model.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true

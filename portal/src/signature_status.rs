@@ -27,6 +27,12 @@ pub struct EnvelopeSignerState {
     /// receipt); on a completed envelope every declared role reports
     /// signed.
     pub signed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    #[serde(skip)]
+    routing_order: Option<u32>,
 }
 
 /// One notation's envelope, read off the durable signature row.
@@ -80,9 +86,15 @@ pub async fn status_for_notation(
     let signers = match declared_roles(surreal, storage, notation).await {
         Ok(declared) => declared
             .into_iter()
-            .map(|role| {
-                let signed = completed || signed_roles.contains(&role);
-                EnvelopeSignerState { role, signed }
+            .map(|signer| {
+                let signed = completed || signed_roles.contains(&signer.role);
+                EnvelopeSignerState {
+                    role: signer.role,
+                    signed,
+                    name: None,
+                    email: None,
+                    routing_order: Some(signer.routing_order),
+                }
             })
             .collect(),
         // The declaration could not be read back; the recorded roles
@@ -94,6 +106,9 @@ pub async fn status_for_notation(
                 .map(|role| EnvelopeSignerState {
                     role: role.clone(),
                     signed: true,
+                    name: None,
+                    email: None,
+                    routing_order: None,
                 })
                 .collect()
         }
@@ -109,6 +124,43 @@ pub async fn status_for_notation(
     }
 }
 
+pub(crate) async fn read_signer_identities(
+    report: &mut EnvelopeStatusReport,
+    db: &store::surreal::SurrealDb,
+    project_id: uuid::Uuid,
+    provider: &dyn crate::signature::SignatureProvider,
+) {
+    let Some(request_id) = &report.signature_request_id else {
+        return;
+    };
+    let Ok(scoped) = provider.for_project(db, project_id).await else {
+        return;
+    };
+    let provider = crate::firm_docusign::resolved(scoped.as_ref(), provider);
+    let Ok(recipients) = provider
+        .notation_signers(&crate::signature::SignatureRequestId(request_id.clone()))
+        .await
+    else {
+        return;
+    };
+    for signer in &mut report.signers {
+        let Some(order) = signer.routing_order else {
+            continue;
+        };
+        let mut matching = recipients.iter().filter(|recipient| {
+            recipient
+                .routing_order
+                .as_deref()
+                .and_then(|value| value.parse().ok())
+                == Some(order)
+        });
+        if let Some(recipient) = matching.next().filter(|_| matching.next().is_none()) {
+            signer.name = Some(recipient.name.clone());
+            signer.email = Some(recipient.email.clone());
+        }
+    }
+}
+
 /// The template's declared signer roles in routing order — the same
 /// resolution the send path's manifest used, so status and envelope
 /// never disagree about who signs.
@@ -116,7 +168,7 @@ async fn declared_roles(
     surreal: &store::surreal::SurrealDb,
     storage: &Arc<dyn cloud::StorageService>,
     notation: &store::notations::Notation,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<rules::f107::SignerRole>, String> {
     let template = store::templates::find_by_id(surreal, notation.template_id)
         .await
         .map_err(|e| e.to_string())?
@@ -125,7 +177,22 @@ async fn declared_roles(
         .await
         .map_err(|e| e.to_string())?;
     let set = crate::signature_flow::signer_set_for_template(&template.code, &source)?;
-    Ok(set.signers.into_iter().map(|s| s.role).collect())
+    let fields = rules::f107::signature_placeholders(&source);
+    let fallback = !set.explicit && fields.is_empty();
+    Ok(set
+        .signers
+        .into_iter()
+        .filter_map(|mut signer| {
+            if fallback && signer.role == "firm" {
+                signer.routing_order = 1;
+                Some(signer)
+            } else if set.explicit || fields.iter().any(|field| field.signer == signer.role) {
+                Some(signer)
+            } else {
+                None
+            }
+        })
+        .collect())
 }
 
 #[cfg(test)]
@@ -166,10 +233,16 @@ mod tests {
                 EnvelopeSignerState {
                     role: "client".to_string(),
                     signed: true,
+                    name: None,
+                    email: None,
+                    routing_order: Some(1),
                 },
                 EnvelopeSignerState {
                     role: "firm".to_string(),
                     signed: false,
+                    name: Some("Ada Example".into()),
+                    email: Some("ada@example.com".into()),
+                    routing_order: Some(2),
                 },
             ],
             updated_at: Some("2026-11-12T00:00:00+00:00".to_string()),
@@ -179,6 +252,8 @@ mod tests {
         assert_eq!(json["signers"][0]["signed"], true);
         assert_eq!(json["signers"][1]["role"], "firm");
         assert_eq!(json["signers"][1]["signed"], false);
+        assert_eq!(json["signers"][1]["name"], "Ada Example");
+        assert_eq!(json["signers"][1]["email"], "ada@example.com");
         assert_eq!(json["state"], "requested");
         assert_eq!(
             json["sender_view_href"],

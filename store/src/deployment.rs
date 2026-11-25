@@ -167,10 +167,7 @@ pub static WEB_REQUIREMENTS: &[Requirement] = &[
     // credential by `portal::config::enforce_deployment_invariants`, which
     // rejects an empty value once `DOCUSIGN_INTEGRATION_KEY` is set. Stating it
     // here makes that conditional readable from the table every other gate
-    // reads. `DOCUSIGN_SIGNER_EMAIL` has no such backstop: `portal` defaults it
-    // to a hard-coded address, so a deployment that declares DocuSign and omits
-    // it sends envelopes from whatever that default happens to be. A declared
-    // integration names its own signer.
+    // reads. A declared integration supplies a signing lawyer's mailbox.
     required!(integration "DOCUSIGN_OAUTH_BASE" if "DOCUSIGN_BASE_URL"),
     required!(integration "DOCUSIGN_SIGNER_EMAIL" if "DOCUSIGN_BASE_URL"),
     // The Project-repo organization: read by Forge's repository governance
@@ -375,6 +372,19 @@ pub fn applicable_web_requirements<F: Fn(&str) -> Option<String>>(
         })
         .copied()
         .collect())
+}
+
+/// Whether DocuSign can address a signer at a single mailbox with a DNS domain.
+#[must_use]
+pub fn is_signer_mailbox(value: &str) -> bool {
+    !value
+        .chars()
+        .any(|character| character.is_whitespace() || character.is_control())
+        && matches!(
+            addr::parse_email_address(value).map(|address| address.host()),
+            Ok(addr::email::Host::Domain(domain)) if domain.as_str().contains('.')
+                && !domain.as_str().ends_with('.')
+        )
 }
 
 #[cfg(test)]

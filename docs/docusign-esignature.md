@@ -214,7 +214,8 @@ The standalone sandbox tools accept the following `DOCUSIGN_*` settings:
   `https://account-d.docusign.com`; a production boot may not. Once `DOCUSIGN_BASE_URL` declares the integration,
   `store::deployment::WEB_REQUIREMENTS` demands it, and `portal::config::enforce_deployment_invariants` separately
   rejects both an empty value alongside a JWT integration key and any value naming the demo host. Production is
-  `https://account.docusign.com`. `DOCUSIGN_SIGNER_EMAIL` — the firm countersignature inbox and the live test's signer.
+  `https://account.docusign.com`. `DOCUSIGN_SIGNER_EMAIL` identifies the configured signing lawyer for Projects without
+  a lawyer DRI. When a Project has a lawyer DRI, its envelope uses that Person's name and email instead.
   `DOCUSIGN_HMAC_KEY` — the DocuSign Connect HMAC key used to verify completion webhooks (see below).
 
 ## Sandbox setup (one-time)
