@@ -229,7 +229,7 @@ strum = { version = "0.28", features = ["derive"] }
 # require the store crate's explicit surreal-compatibility feature.
 surrealdb = { version = "4.0.1", default-features = false, features = ["protocol-http", "protocol-ws", "rustls"] }
 tempfile = "3"
-git2 = { version = "0.20.4", default-features = false, features = ["vendored-libgit2"] }
+git2 = { version = "0.21.0", default-features = false, features = ["vendored-libgit2"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "net", "process"] }
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.7", features = ["fs", "trace", "set-header", "request-id"] }
