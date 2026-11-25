@@ -26,7 +26,7 @@ async fn firm_for_project(
         store::access::matter_viewer(&state.surreal, session.person_id, session.role, project_id)
             .await
             .map_err(ApiError::Db)?;
-    if !viewer.is_some_and(|viewer| viewer.is_firm_side()) {
+    if !viewer.is_some_and(store::access::MatterViewer::is_firm_side) {
         return Err(ApiError::NotFound);
     }
     store::projects::find_by_id(&state.surreal, project_id)
