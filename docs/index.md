@@ -19,6 +19,8 @@ cannot decay the way the old seven-line stub did.
 - [`observability.md`](observability.md) — how Navigator emits and reads telemetry.
 - [`test-database.md`](test-database.md) — the one-engine-per-test SurrealDB contract.
 - [`licensing.md`](licensing.md) — the MIT OR Apache-2.0 grant and what it means operationally.
+- [`clax-feedback.md`](clax-feedback.md) — in-app problem reports through a CLax queue, off by default, and its LGPL
+  overlay.
 - [`licensing/redistribution-audit.md`](licensing/redistribution-audit.md) — redistribution evidence and
   rights-review gaps.
 

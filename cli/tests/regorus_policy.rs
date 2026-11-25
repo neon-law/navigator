@@ -534,9 +534,10 @@ fn regorus_matches_every_checked_in_policy_decision() {
     // The dashboard's deadline inventory admits Lawyers only and denies CI and other methods.
     // Court-date review covers browser confirmation, clerk preparation, client and CI denial, and the Forgejo source.
     // Project labels cover lawyer-tier reads and writes and denial to clients, clerks, and scoped CI sessions.
+    // The CLax report token route admits Lawyer and denies Client and anonymous callers: 721 + 3 = 724.
     assert_eq!(
         test_names.len(),
-        721,
+        724,
         "the policy decision inventory changed; review every new or removed rule"
     );
 
