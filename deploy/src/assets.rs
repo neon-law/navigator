@@ -1885,18 +1885,18 @@ async fn download(storage: &dyn StorageService, out: &Path) -> anyhow::Result<us
 #[cfg(test)]
 mod tests {
     use super::{
-        applicable_asset_refs, asset_exists, build_gorp_otf_zip, bundled_slide_asset_keys,
-        content_image_refs, content_type_for, destination_for_ref, download, embedded_asset_refs,
-        fetch_asset, fetch_referenced_content, fetch_report_exit, font_family_refs,
-        gallery_variant_keys, join_public_url, orphan_keys, orphan_report, parse_image_refs,
-        placeholder_bytes_for, published_asset_refs, reachable_image_keys, report_exit,
-        resolve_public_origin, run_fetch_referenced, run_orphans, run_pull, run_upload,
-        run_upload_desktop_fonts, run_upload_fonts, select, stub_referenced_content, upload,
-        upload_font_family, upload_gorp_otf_zip, verify_content, verify_public_asset_origin,
-        verify_public_asset_origin_embedded, verify_refs, verify_refs_with_retry,
-        verify_required_public_assets, verify_required_public_assets_bucket, verify_storage_refs,
-        AssetProbe, FetchReport, VerifyReport, ASSET_CACHE_CONTROL, BUCKET_FONT_FAMILIES,
-        GORP_OTF_ZIP_KEY, GORP_SERIF,
+        applicable_asset_refs, asset_exists, brand_media_keys, build_gorp_otf_zip,
+        bundled_slide_asset_keys, content_image_refs, content_type_for, destination_for_ref,
+        download, embedded_asset_refs, fetch_asset, fetch_referenced_content, fetch_report_exit,
+        font_family_refs, gallery_variant_keys, join_public_url, orphan_keys, orphan_report,
+        parse_image_refs, placeholder_bytes_for, published_asset_refs, reachable_image_keys,
+        report_exit, resolve_public_origin, run_fetch_referenced, run_orphans, run_pull,
+        run_upload, run_upload_desktop_fonts, run_upload_fonts, select, stub_referenced_content,
+        upload, upload_font_family, upload_gorp_otf_zip, verify_content,
+        verify_public_asset_origin, verify_public_asset_origin_embedded, verify_refs,
+        verify_refs_with_retry, verify_required_public_assets,
+        verify_required_public_assets_bucket, verify_storage_refs, AssetProbe, FetchReport,
+        VerifyReport, ASSET_CACHE_CONTROL, BUCKET_FONT_FAMILIES, GORP_OTF_ZIP_KEY, GORP_SERIF,
     };
     use cloud::{FsStorage, ObjectListing, StorageError, StorageService, StoredObject};
     use std::collections::BTreeSet;
