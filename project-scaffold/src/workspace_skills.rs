@@ -87,6 +87,10 @@ pub const WORKSPACE_SKILLS: &[(&str, &str)] = &[
         include_str!("../../.agents/skills/message-processing/SKILL.md"),
     ),
     (
+        "navigator-version-bump",
+        include_str!("../../.agents/skills/navigator-version-bump/SKILL.md"),
+    ),
+    (
         "outlook-triage",
         include_str!("../../.agents/skills/outlook-triage/SKILL.md"),
     ),
