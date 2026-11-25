@@ -31,6 +31,10 @@ pub struct VisibleProject {
     pub firm_id: Option<Uuid>,
     #[serde(default)]
     pub brand: Option<String>,
+    /// The live lifecycle status (`pitch`, `open`, `closed`, ...), when the
+    /// project list reports one.
+    #[serde(default)]
+    pub status: Option<String>,
 }
 
 /// The first line of a response body, for a one-line error.

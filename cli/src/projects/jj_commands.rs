@@ -172,8 +172,12 @@ mod tests {
         let origin = format!("{root}/sample-firm/sample-matter.git");
         let manifest = format!("project:\n  name: sample-matter\n  host: {root}\n");
         let dir = checkout(&manifest, Some(&origin));
+        // With no token in the environment and no credential held by git for
+        // this host, the checkout refuses to bind.
+        std::env::remove_var("FORGEJO_TOKEN");
+        std::env::remove_var("NAVIGATOR_FORGEJO_ROOT_URL");
         let error = policy(dir.path(), true, None).await.unwrap_err();
-        assert!(error.to_string().contains("NAVIGATOR_FORGEJO_ROOT_URL"));
+        assert!(error.to_string().contains("FORGEJO_TOKEN"), "{error:#}");
 
         std::env::set_var("NAVIGATOR_FORGEJO_ROOT_URL", &root);
         std::env::set_var("FORGEJO_TOKEN", "forge-token");

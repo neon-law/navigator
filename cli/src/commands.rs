@@ -1033,6 +1033,17 @@ pub enum ProjectsCmd {
         #[command(flatten)]
         host: HostOpt,
     },
+    /// Read, for every Project checkout, GitHub main, Forgejo main, and how the
+    /// Forgejo mirror stands: equal, behind, ahead, or diverged. Read-only.
+    MirrorStatus {
+        /// Workspace of Project checkouts, or one checkout. Defaults to the
+        /// selected workspace root.
+        #[arg(long)]
+        dir: Option<PathBuf>,
+        /// Emit the rows as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Read the Project's onboarding status: optional, pitch, or official.
     Lifecycle {
         /// Project code. Defaults to project.name in navigator.yaml.
@@ -3238,6 +3249,9 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
                 .await
             }
         },
+        ProjectsCmd::MirrorStatus { dir, json } => {
+            projects::mirror_status::run(dir.as_deref(), json).await
+        }
         ProjectsCmd::Status {
             host,
             project_code,
@@ -4407,6 +4421,9 @@ pub fn gate_root() -> Result<PathBuf, String> {
     // A worktree's `.git` is a file holding a pointer, not a directory, so this
     // asks whether the entry exists at all rather than what shape it is.
     let git = root.join(".git").exists();
+    if let Some(message) = projects::repository::needs_scaffold_resume(&root) {
+        return Err(message);
+    }
     let missing = match (readme, git) {
         (true, true) => return Ok(root),
         (false, false) => "no README and no .git",

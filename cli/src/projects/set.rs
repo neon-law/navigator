@@ -123,7 +123,7 @@ pub(super) async fn set_at(dir: &Path, request: SetRequest<'_>) -> Result<Vec<St
         );
         return apply_manifest_plan(host, project, &parsed, dry_run).await;
     }
-    let ownership = manifest_ownership(host, project, &parsed, firm.zip(brand), from_live).await?;
+    let ownership = manifest_ownership(host, project, firm.zip(brand), from_live).await?;
     let mut values: [Option<String>; 6] = [
         lawyer_dri,
         client_dri,
@@ -162,12 +162,7 @@ pub(super) async fn set_at(dir: &Path, request: SetRequest<'_>) -> Result<Vec<St
         clear_drive_folder,
     )?;
     if let Some((firm, brand)) = ownership {
-        let before_ownership = updated.clone();
-        updated = replace_project_key(&updated, "firm", &firm.to_string())?;
-        updated = replace_project_key(&updated, "brand", &brand)?;
-        if updated != before_ownership {
-            changed.push("manifest Firm and brand".into());
-        }
+        updated = apply_ownership(&parsed, updated, (firm, &brand), from_live, &mut changed)?;
     }
     if let (None, Some(name)) = (&parsed.legal_plan, live_plan) {
         updated = replace_project_key(&updated, "legal_plan", &name)?;
@@ -195,6 +190,91 @@ pub(super) async fn set_at(dir: &Path, request: SetRequest<'_>) -> Result<Vec<St
         changed.push("coordinates already current".to_string());
     }
     Ok(changed)
+}
+
+/// Write the Firm and brand into the manifest text, and with `--from-live`
+/// report the diff and apply the host the live brand is registered for.
+fn apply_ownership(
+    parsed: &manifest::Manifest,
+    mut updated: String,
+    (firm, brand): (uuid::Uuid, &str),
+    from_live: bool,
+    changed: &mut Vec<String>,
+) -> Result<String> {
+    let before = updated.clone();
+    let diff = ownership_diff(parsed, firm, brand);
+    updated = replace_project_key(&updated, "firm", &firm.to_string())?;
+    updated = replace_project_key(&updated, "brand", brand)?;
+    if updated != before {
+        changed.push("manifest Firm and brand".into());
+    }
+    if from_live {
+        diff.print();
+        if let Some((_, new_host)) = &diff.host {
+            updated = replace_project_key(&updated, "host", new_host)?;
+            changed.push("manifest host".into());
+        }
+    }
+    Ok(updated)
+}
+
+/// What adopting the live Firm and brand would change in the manifest, as
+/// `(manifest value, live value)` pairs; a key already current is `None`.
+#[derive(Debug, PartialEq, Eq)]
+struct OwnershipDiff {
+    firm: Option<(String, String)>,
+    brand: Option<(String, String)>,
+    /// Set only when the manifest host is registered to a different brand than
+    /// the live one: the same-environment host the live brand is registered
+    /// for, since CI mints a token only when Project and host brand agree.
+    host: Option<(String, String)>,
+}
+
+fn ownership_diff(declared: &manifest::Manifest, firm: uuid::Uuid, brand: &str) -> OwnershipDiff {
+    let pair = |old: Option<&str>, new: &str| (old.unwrap_or("none").to_owned(), new.to_owned());
+    let declared_firm = declared.firm.as_deref();
+    let firm_current = declared_firm
+        .and_then(|id| uuid::Uuid::parse_str(id).ok())
+        .is_some_and(|id| id == firm);
+    let host = declared.host.as_deref().and_then(|host| {
+        let name = host
+            .split_once("://")
+            .map_or(host, |(_, rest)| rest)
+            .split(['/', ':'])
+            .next()
+            .unwrap_or(host);
+        let registered = views::brand::registered_brand_key(name)?;
+        let live = views::brand::BrandKey::parse(brand)?;
+        if registered == live {
+            return None;
+        }
+        let staging = views::brand::is_staging_host(name);
+        let new_host = live
+            .hosts()
+            .iter()
+            .find(|candidate| views::brand::is_staging_host(candidate) == staging)?;
+        Some((host.to_owned(), (*new_host).to_owned()))
+    });
+    OwnershipDiff {
+        firm: (!firm_current).then(|| pair(declared_firm, &firm.to_string())),
+        brand: (declared.brand.as_deref() != Some(brand))
+            .then(|| pair(declared.brand.as_deref(), brand)),
+        host,
+    }
+}
+
+impl OwnershipDiff {
+    fn print(&self) {
+        for (key, change) in [
+            ("firm", &self.firm),
+            ("brand", &self.brand),
+            ("host", &self.host),
+        ] {
+            if let Some((old, new)) = change {
+                println!("  manifest {key}: {old} -> {new}");
+            }
+        }
+    }
 }
 
 fn manifest_target<'a>(
@@ -277,7 +357,6 @@ async fn apply_manifest_plan(
 async fn manifest_ownership(
     host: &str,
     project: &str,
-    declared: &manifest::Manifest,
     explicit: Option<(&str, &str)>,
     from_live: bool,
 ) -> Result<Option<(uuid::Uuid, String)>> {
@@ -288,9 +367,8 @@ async fn manifest_ownership(
             .into_iter()
             .find(|row| row.code == project)
             .context("no live Project")?;
-        declared
-            .check_live_ownership(row.firm_id, row.brand.as_deref())
-            .map_err(anyhow::Error::msg)?;
+        // `--from-live` is the reconcile: it adopts the live Firm and brand
+        // whatever the manifest says, and reports the difference.
         Some((
             row.firm_id.context("live Project has no Firm")?,
             row.brand.context("live Project has no brand")?,
@@ -1002,10 +1080,12 @@ mod tests {
 
         let (other, _path) = checkout(&declared.replace("brand: sample", "brand: another"));
         let error = outcome(other.path(), apply(true)).await.unwrap_err();
-        assert_eq!(
-            error,
-            "navigator.yaml Firm and brand differ from the live Project"
+        assert!(
+            error.starts_with("navigator.yaml Firm and brand differ from the live Project: "),
+            "{error}"
         );
+        assert!(error.contains("brand another"), "{error}");
+        assert!(error.contains("brand sample"), "{error}");
     }
 
     #[tokio::test]
@@ -1036,5 +1116,107 @@ mod tests {
         let owned = crate::projects::manifest::parse(&written).unwrap();
         assert_eq!(owned.firm.as_deref(), Some(FIRM));
         assert_eq!(owned.brand.as_deref(), Some("sample"));
+    }
+
+    /// ENG-1417: `--from-live` is the reconcile, so a manifest whose Firm and
+    /// brand drifted is repaired by it rather than refused. The dry run shows
+    /// the edit, and once it is applied the gate's ownership check passes.
+    #[tokio::test]
+    async fn from_live_repairs_a_drifted_firm_and_brand_and_turns_the_check_green() {
+        const OTHER: &str = "22222222-2222-4222-8222-222222222222";
+        let id = uuid::Uuid::new_v4();
+        let live = json!([{"id": id, "code": CODE, "firm_id": FIRM, "brand": "sample"}]);
+        let (server, _login) = site(live).await;
+        let host = server.uri();
+        let handles = json!({
+            "code": CODE, "repository_url": null,
+            "lawyer_dri": ["lawyer@example.com"], "client_dri": ["client@example.com"],
+            "private_slack_channel": "https://slack.example.com/private",
+            "private_notion_page": "https://notion.example.com/private",
+            "calendar_id": "c_0123@group.calendar.example.com",
+            "dangling_dri_person_ids": [],
+        });
+        answer(
+            &server,
+            "GET",
+            &format!("/app/api/project-surfaces/{id}"),
+            200,
+            handles,
+        )
+        .await;
+        let drifted = format!(
+            "{}  firm: {OTHER}\n  brand: another\n",
+            manifest_on("site.example.test")
+        );
+        let (dir, path) = checkout(&drifted);
+        let from_live = |dry_run| SetRequest {
+            from_live: true,
+            dry_run,
+            ..request(&host)
+        };
+        let plan = outcome(dir.path(), from_live(true)).await.unwrap();
+        assert!(plan.contains("manifest Firm and brand"), "{plan}");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            drifted,
+            "a dry run writes nothing"
+        );
+
+        outcome(dir.path(), from_live(false)).await.unwrap();
+        let repaired =
+            crate::projects::manifest::parse(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            repaired.check_live_ownership(Some(FIRM.parse().unwrap()), Some("sample")),
+            Ok(())
+        );
+    }
+
+    /// The diff names each differing key, and proposes `host` only when the
+    /// manifest host is registered to a different brand, in the same
+    /// environment as the manifest.
+    #[test]
+    fn the_ownership_diff_names_each_key_and_proposes_a_host_only_for_a_registered_mismatch() {
+        let parse = |host: &str, extra: &str| {
+            crate::projects::manifest::parse(&format!(
+                "project:\n  host: {host}\n  name: acme\n{extra}"
+            ))
+            .unwrap()
+        };
+        let firm: uuid::Uuid = FIRM.parse().unwrap();
+        let drifted = parse(
+            "staging.neonlaw.com",
+            &format!("  firm: {FIRM}\n  brand: neon\n"),
+        );
+        let diff = super::ownership_diff(&drifted, firm, "vesta");
+        assert_eq!(diff.brand, Some(("neon".to_owned(), "vesta".to_owned())));
+        assert_eq!(diff.firm, None, "an equal Firm is not a change");
+        assert_eq!(
+            diff.host,
+            Some((
+                "staging.neonlaw.com".to_owned(),
+                "staging.vestaestateplanning.com".to_owned()
+            ))
+        );
+        let production = parse(
+            "www.neonlaw.com",
+            &format!("  firm: {FIRM}\n  brand: neon\n"),
+        );
+        assert_eq!(
+            super::ownership_diff(&production, firm, "vesta")
+                .host
+                .map(|pair| pair.1),
+            Some("www.vestaestateplanning.com".to_owned())
+        );
+        for host in [
+            "staging.vestaestateplanning.com",
+            "site.example.test",
+            "127.0.0.1:8080",
+        ] {
+            let diff = super::ownership_diff(&parse(host, ""), firm, "vesta");
+            assert_eq!(diff.host, None, "{host}");
+        }
+        let bare = super::ownership_diff(&parse("site.example.test", ""), firm, "vesta");
+        assert_eq!(bare.firm, Some(("none".to_owned(), FIRM.to_owned())));
+        assert_eq!(bare.brand, Some(("none".to_owned(), "vesta".to_owned())));
     }
 }

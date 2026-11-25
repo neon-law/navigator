@@ -253,6 +253,7 @@ fn projects_help_lists_the_project_workspace_verbs() {
             "labels",
             "lifecycle",
             "migrate-letter",
+            "mirror-status",
             "notations",
             "notify-main-push",
             "offboard",

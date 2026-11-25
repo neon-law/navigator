@@ -192,12 +192,13 @@ pub struct Manifest {
 }
 
 impl Manifest {
-    /// Refuse drift from declared ownership; an absent pair can be filled from live.
+    /// Refuse drift from declared ownership; an absent pair can be filled from
+    /// live. The refusal names both sides so the repair is visible.
     pub fn check_live_ownership(
         &self,
         firm_id: Option<uuid::Uuid>,
         brand: Option<&str>,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), String> {
         if self.firm.is_none() && self.brand.is_none() {
             return Ok(());
         }
@@ -208,7 +209,14 @@ impl Manifest {
             self.brand.as_deref(),
         ) {
             (Some(firm), Some(key)) if Some(firm) == firm_id && Some(key) == brand => Ok(()),
-            _ => Err("navigator.yaml Firm and brand differ from the live Project"),
+            _ => Err(format!(
+                "navigator.yaml Firm and brand differ from the live Project: \
+                 manifest firm {}, brand {}; live firm {}, brand {}",
+                self.firm.as_deref().unwrap_or("none"),
+                self.brand.as_deref().unwrap_or("none"),
+                firm_id.map_or_else(|| "none".to_owned(), |id| id.to_string()),
+                brand.unwrap_or("none"),
+            )),
         }
     }
 }
@@ -2173,5 +2181,41 @@ mod tests {
             "a version bump updates in place, not a duplicate"
         );
         assert_eq!(parsed.skills[0].version, "2");
+    }
+
+    /// A drifted Firm or brand names both sides, so the repair is visible
+    /// without reading the live row some other way.
+    #[test]
+    fn a_live_ownership_mismatch_names_the_manifest_and_the_live_sides() {
+        const FIRM: &str = "11111111-1111-4111-8111-111111111111";
+        const OTHER: &str = "22222222-2222-4222-8222-222222222222";
+        let manifest = |extra: &str| {
+            parse(&format!(
+                "project:\n  host: staging.neonlaw.com\n  name: acme\n{extra}"
+            ))
+            .expect("parses")
+        };
+        let owned = manifest(&format!("  firm: {FIRM}\n  brand: vesta\n"));
+        let live_firm = uuid::Uuid::parse_str(FIRM).unwrap();
+        assert_eq!(
+            owned.check_live_ownership(Some(live_firm), Some("vesta")),
+            Ok(())
+        );
+        let error = owned
+            .check_live_ownership(Some(uuid::Uuid::parse_str(OTHER).unwrap()), Some("neon"))
+            .unwrap_err();
+        assert_eq!(
+            error,
+            format!(
+                "navigator.yaml Firm and brand differ from the live Project: \
+                 manifest firm {FIRM}, brand vesta; live firm {OTHER}, brand neon"
+            )
+        );
+        let none = manifest("").check_live_ownership(None, None);
+        assert_eq!(none, Ok(()), "a manifest with neither claims nothing");
+        let half = manifest("  brand: vesta\n")
+            .check_live_ownership(Some(live_firm), Some("vesta"))
+            .unwrap_err();
+        assert!(half.contains("manifest firm none, brand vesta"), "{half}");
     }
 }

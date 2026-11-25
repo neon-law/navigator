@@ -579,6 +579,19 @@ fn sync_mirror_refs(
         ],
     )
     .map_err(|_| anyhow::anyhow!("could not fetch the exact GitHub squash merge"))?;
+    // The mirror follows by fast-forward only. A main that is ahead of or has
+    // diverged from the authoritative merge is preserved and named, not pushed over.
+    if let Some(current) = super::mirror::remote_ref(dir, &mirror, "refs/heads/main")? {
+        if current != merge_commit {
+            super::mirror::fetch_objects(dir, &mirror, "refs/heads/main")?;
+            let relation = super::mirror::classify(dir, merge_commit, &current)?;
+            anyhow::ensure!(
+                relation == super::mirror::Relation::Behind,
+                "Forgejo main {current} is {} GitHub main {merge_commit}; it was preserved, not overwritten",
+                relation.as_str()
+            );
+        }
+    }
     let main = format!("{merge_commit}:refs/heads/main");
     let topic = format!("refs/heads/{branch}");
     let refs = git_text(dir, &["ls-remote", "--refs", "forgejo", &topic])
@@ -599,6 +612,11 @@ fn sync_mirror_refs(
             "Forgejo rejected the atomic push. Check mirror access, branch protection, and ref divergence"
         )
     })?;
+    anyhow::ensure!(
+        super::mirror::remote_ref(dir, &mirror, "refs/heads/main")?.as_deref()
+            == Some(merge_commit),
+        "Forgejo main did not read back as GitHub main {merge_commit}"
+    );
     println!("mirror: synchronized Forgejo main");
     if !refs.is_empty() && !delete_reviewed {
         println!("mirror: preserved the topic branch because it differs from the reviewed head");
@@ -1578,6 +1596,8 @@ mod tests {
         );
         let error = sync().unwrap_err();
         assert!(error.to_string().contains(&forge.merge_sha));
+        let cause = format!("{error:#}");
+        assert!(cause.contains("diverged") && cause.contains(&forge.review.head_sha));
         for reference in ["refs/heads/main", "refs/heads/push/the-change"] {
             assert_eq!(
                 super::git_text(&mirror, &["rev-parse", reference]).unwrap(),

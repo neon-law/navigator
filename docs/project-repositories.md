@@ -104,16 +104,19 @@ rejects missing, malformed, or placeholder values. Shared Slack/Notion and Xero 
 hostname; `name` is a Project code. An Owner or Admin with authority over the target Firm may also change live ownership
 with `navigator project set <code> --firm <firm-name> --brand <brand-key>`. Supply the pair together; the server checks
 the Firm wears that brand. This updates the live row and records `project.firm` (the Firm UUID) and `project.brand` (the
-brand key) together in the manifest. `project set --from-live` fills an absent ownership pair. When ownership is
-declared, both `--from-live` and the live gate refuse a mismatch with the Project's `firm_id` and `brand` before any
-writes. Declare both fields together; `project.firm` must be a UUID. `GET /app/api/firms` lists each authorized Firm's
-`id`, `name`, `slug`, and `brands` (the keys it wears). `project create` and `project scaffold` accept paired `--firm
-<firm-name> --brand <key>` flags, validating the selection before creating contacts or opening the matter. Omit both to
-use the deployment's default brand. Scaffold records the opened Project's actual Firm UUID and brand, including when
-resuming. `no_live_row` requires a reason. `allowed_hosts`, `allowed_links`, and `allowed_prefixes` are maps of `entry:
-reason`, never lists; `allowed_links` keys are bare citation hosts linked with `rel="noreferrer"` to protect referrers.
-Comments in YAML are refused because pull requests and repository contracts record reasons; quoted scalar values may
-contain `#` as content.
+brand key) together in the manifest. `project set --from-live` adopts the live ownership pair: it fills an absent pair
+and repairs a drifted one, printing each manifest key it changes as `old -> new`. When the manifest host is registered
+to a different brand than the live one, it also proposes the same-environment host registered for the live brand,
+because CI mints a token only when the Project brand and the host's brand agree. `--dry-run` writes nothing, and the
+edit lands through normal review. When ownership is declared, the live gate refuses a mismatch with the Project's
+`firm_id` and `brand`, and its error names the manifest side and the live side. Declare both fields together;
+`project.firm` must be a UUID. `GET /app/api/firms` lists each authorized Firm's `id`, `name`, `slug`, and `brands` (the
+keys it wears). `project create` and `project scaffold` accept paired `--firm <firm-name> --brand <key>` flags,
+validating the selection before creating contacts or opening the matter. Omit both to use the deployment's default
+brand. Scaffold records the opened Project's actual Firm UUID and brand, including when resuming. `no_live_row` requires
+a reason. `allowed_hosts`, `allowed_links`, and `allowed_prefixes` are maps of `entry: reason`, never lists;
+`allowed_links` keys are bare citation hosts linked with `rel="noreferrer"` to protect referrers. Comments in YAML are
+refused because pull requests and repository contracts record reasons; quoted scalar values may contain `#` as content.
 
 With `project set`, an explicit `--private-slack-channel` URL updates the live Project before the manifest, preserving
 the channel ID. `--dry-run` names both writes without performing either. `not provisioned` changes only the manifest; it
@@ -292,7 +295,8 @@ it would make fails the job and the output names the fix. Uploading a staged fil
 **`navigator project status` reads the live lifecycle.** It takes the Project code and host from `navigator.yaml`, or an
 explicit code and `--host`. `--json` emits the full response. The caller must be a firm-side participant with the Lawyer
 tier or above. The command reports the workbench label, stored `project_status`, `opened_at` (Project creation),
-`closed_at`, derived `source_state`, and the linked Drive folder, or that none is linked. An open Project with no Drive
+`closed_at`, derived `source_state`, the live Firm id, Firm name and brand key, and the linked Drive folder, or that
+none is linked. A role that cannot list Firms sees the Firm id and brand without the name. An open Project with no Drive
 folder names `navigator project set <code> --drive-folder <link>` as missing work, and `navigator project doctor
 --project <code>` run in that Project's checkout warns when `navigator.yaml` links none. Onboarding evidence includes
 filed document visibility and generated onboarding instruments. Filing establishes presence; execution remains
@@ -597,6 +601,12 @@ setup verifies the configured Forgejo host, branch protection, and a successful 
 recorded repository URL determines which forge is authoritative. Setup keeps that URL and refuses to overwrite divergent
 history.
 
+A checkout whose repository was opened with an empty source (a `.git` with nothing tracked, and no README or
+`navigator.yaml`) fails `sync-skills` and the gate with `needs scaffold resume` and the exact command. A release bump
+cannot repair it. `navigator project scaffold --resume <code> --dir <checkout>` emits the scaffold, removes the
+untracked root licence files that `Y028` refuses, imports the source to the Project's repository, and leaves a tree that
+passes the gate. The next bump then lands it.
+
 Setup fetches or creates the Project's colocated Jujutsu checkout under `~/Work/<code>` without discarding local work.
 If the published manifest has stale coordinates, run `navigator project set --from-live` in that checkout and land the
 change through normal review before retrying setup. Use `navigator project status <code>` to see the source and mirror
@@ -786,7 +796,16 @@ verifies the outgoing signatures and reports each review's URL, default branch, 
 adopts the published release topic, including a push interrupted before the review opened. An existing ready review
 keeps its state. Empty and archived repositories have separate outcomes. A base that pins the release and has no topic
 reports `base_pinned`. A missing proposal or a conflicting topic identifies the Project that needs attention while the
-rest of the inventory continues.
+rest of the inventory continues. A Project whose live status is `closed` or `archived`, and whose manifest does not
+declare `no_live_row`, is reported as `skipped` with that reason and is not reviewed; the gate refuses the same case.
+
+With `--land`, after the authoritative merge and its deployment, each other destination fast-forwards to the merge and
+both `main` refs are read back. A Forgejo mirror that is ahead of the merge or has diverged from it is preserved and the
+report names both SHAs; Navigator never forces a mirror. `navigator project repository push` applies the same rule to
+its mirror sync. `navigator project mirror-status [--dir <workspace>] [--json]` reads, for each checkout, GitHub `main`,
+Forgejo `main` and the mirror's relation to GitHub: `equal`, `behind` (a landing fast-forwards it), `ahead`, or
+`diverged`. It reads refs with `git ls-remote`, so it needs the credentials git already holds and no Forgejo API token,
+and it writes nothing.
 
 A Forgejo-primary checkout uses Forgejo as the reference. Pass `--forgejo-first` during the transition to compare
 against the verified Forgejo repository while the recorded primary still owns review and merge. The report flags that
@@ -820,6 +839,13 @@ Every Project repository follows one branch contract:
   the client is meant to read that document. Treat every change to `visibility: client` as a deliberate client-release
   decision. For each Deadline, choose deliberately whether it is internal or client-visible and review that choice.
 - Publishing a page or a Draft means merging its pull request.
+
+On a Forgejo checkout, `navigator project repository push` reads the Forgejo origin from the checkout's remote and the
+credential from `FORGEJO_TOKEN` when set, otherwise from the credential git already holds for that host, so a shell
+signed in over git needs no variables. `NAVIGATOR_FORGEJO_ROOT_URL` overrides the origin. A `user@host` HTTPS remote is
+the same origin as the plain URL; a remote with an embedded password is refused. When Forgejo refuses the credential,
+the error names its source and asks for a new sign-in. A git credential that lacks API scope fails there; the Forgejo
+token lifecycle is ENG-1233.
 
 `navigator project repository push` checks the live document ledger with the local site session before it branches,
 stages files, or opens a pull request. The check writes nothing. It prints every Pointer path it would create or repair,

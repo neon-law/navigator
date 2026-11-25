@@ -164,7 +164,10 @@ fn validate_scaffold_start(
     resume: Option<&str>,
     options: &ScaffoldOptions,
 ) -> Result<bool> {
-    let empty = is_empty_dir(directory)?;
+    // A checkout opened with an empty source holds only untracked remnants, so
+    // a resume writes the whole scaffold into it as it would an empty directory.
+    let empty = is_empty_dir(directory)?
+        || (resume.is_some() && crate::projects::repository::is_empty_source(directory));
     if let Some(code) = resume {
         if !model::projects::is_valid_code(code) {
             bail!("invalid immutable Project code `{code}`");
@@ -264,6 +267,11 @@ async fn run_inner(
         }
         if empty {
             let email = client_dri_for_resume(&handles.client_dri, supplied)?;
+            if crate::projects::repository::is_empty_source(directory) {
+                for name in crate::projects::repository::remove_root_licence_files(directory)? {
+                    println!("removed {name}: a Project repository carries no licence file (Y028)");
+                }
+            }
             write_tree(&base, directory, &code, Some(&email))?;
         } else {
             let outcome = crate::projects::repository::validate_gate(directory, Some(&code), true);
@@ -889,5 +897,101 @@ mod tests {
         )
         .await;
         assert_eq!(code, ExitCode::from(2));
+    }
+
+    fn git_in(dir: &Path, args: &[&str]) {
+        assert!(std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .status()
+            .unwrap()
+            .success());
+    }
+
+    fn resume_options() -> ScaffoldOptions {
+        ScaffoldOptions {
+            firm: None,
+            brand: None,
+            provision_repository: false,
+            client_email: None,
+        }
+    }
+
+    /// A repository opened with an empty source: `.git`, nothing tracked, and
+    /// untracked remnants such as the root LICENSE.
+    fn half_opened() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        git_in(dir.path(), &["init", "--quiet"]);
+        std::fs::write(dir.path().join("LICENSE"), "licence\n").unwrap();
+        dir
+    }
+
+    #[test]
+    fn resume_treats_a_checkout_with_an_empty_source_as_fresh_but_not_one_with_content() {
+        let dir = half_opened();
+        assert!(
+            validate_scaffold_start(dir.path(), Some("pitch-acme"), &resume_options()).unwrap()
+        );
+        // Without --resume it is still a used directory.
+        assert!(validate_scaffold_start(dir.path(), None, &resume_options()).is_err());
+
+        git_in(dir.path(), &["add", "LICENSE"]);
+        let error =
+            validate_scaffold_start(dir.path(), Some("pitch-acme"), &resume_options()).unwrap_err();
+        assert!(
+            error.to_string().contains("something other than"),
+            "{error}"
+        );
+    }
+
+    /// ENG-1416 acceptance: a Project opened with its repository left empty is
+    /// finished by one documented command, and its tree then passes the gate.
+    #[tokio::test]
+    async fn resume_finishes_a_half_opened_checkout_into_a_gate_clean_tree() {
+        use crate::projects::test_login::{answer, site};
+        const FIRM: &str = "11111111-1111-4111-8111-111111111111";
+        let id = uuid::Uuid::new_v4();
+        let (server, _login) = site(serde_json::json!([
+            {"id": id, "code": "pitch-acme", "firm_id": FIRM, "brand": "neon"}
+        ]))
+        .await;
+        answer(
+            &server,
+            "GET",
+            &format!("/app/api/project-surfaces/{id}"),
+            200,
+            serde_json::json!({
+                "code": "pitch-acme", "repository_url": null,
+                "lawyer_dri": ["lawyer@example.test"], "client_dri": ["client@example.com"],
+                "private_slack_channel": null, "private_notion_page": null,
+                "calendar_id": null, "legal_plan": null, "dangling_dri_person_ids": [],
+            }),
+        )
+        .await;
+        let dir = half_opened();
+        let host = server.uri();
+        let code = run_inner(
+            Some(&host),
+            dir.path(),
+            Some("pitch-acme"),
+            resume_options(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(code, ExitCode::SUCCESS);
+        assert!(dir.path().join("README.md").is_file());
+        assert!(
+            !dir.path().join("LICENSE").exists(),
+            "the licence remnant the gate refuses is removed"
+        );
+        let manifest = crate::projects::manifest::read(dir.path()).unwrap();
+        assert_eq!(manifest.firm.as_deref(), Some(FIRM));
+        let outcome =
+            crate::projects::repository::validate_gate(dir.path(), Some("pitch-acme"), true);
+        assert_eq!(outcome.errors, 0);
+        assert!(
+            crate::projects::repository::needs_scaffold_resume(dir.path()).is_none(),
+            "the report clears once the scaffold exists"
+        );
     }
 }

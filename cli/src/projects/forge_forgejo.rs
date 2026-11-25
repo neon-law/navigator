@@ -19,6 +19,8 @@ pub struct ForgejoForge {
     root: String,
     repository: String,
     token: String,
+    /// Where `token` came from, named in the message when Forgejo refuses it.
+    credential: String,
     governance: Forgejo,
 }
 
@@ -34,8 +36,14 @@ impl ForgejoForge {
             root: root.trim_end_matches('/').into(),
             repository: repository.into(),
             token,
+            credential: "the supplied token".into(),
             governance,
         })
+    }
+
+    fn with_credential(mut self, credential: String) -> Self {
+        self.credential = credential;
+        self
     }
 
     pub fn from_checkout(dir: &Path) -> Result<Self> {
@@ -44,22 +52,73 @@ impl ForgejoForge {
     }
 
     pub(super) fn from_remote(remote: &str) -> Result<Self> {
-        let root = std::env::var("NAVIGATOR_FORGEJO_ROOT_URL")
-            .context("configure NAVIGATOR_FORGEJO_ROOT_URL for this Forgejo checkout")?;
+        Self::from_remote_with(remote, |root| git_credential_token(root, &[]))
+    }
+
+    /// Bind a checkout's remote to the forge it names. The root is
+    /// `NAVIGATOR_FORGEJO_ROOT_URL` when set, otherwise the remote's own host,
+    /// which callers have already tied to the Project's recorded source. The
+    /// token is `FORGEJO_TOKEN` when set, otherwise the credential git holds
+    /// for that host, so an agent shell signed in over git needs no variables.
+    fn from_remote_with(
+        remote: &str,
+        git_token: impl FnOnce(&str) -> Result<String>,
+    ) -> Result<Self> {
+        let root = match set_env("NAVIGATOR_FORGEJO_ROOT_URL") {
+            Some(root) => root,
+            None => Self::remote_root(remote)?,
+        };
         let repository = Self::remote_repository(&root, remote)?;
-        Self::new(
-            &root,
-            &repository,
-            std::env::var("FORGEJO_TOKEN")
-                .context("FORGEJO_TOKEN must be configured on this trusted host")?,
-        )
+        let (token, credential) = match set_env("FORGEJO_TOKEN") {
+            Some(token) => (token, "FORGEJO_TOKEN".to_owned()),
+            None => (
+                git_token(&root)?,
+                format!(
+                    "the git credential for {}",
+                    root.trim_start_matches("https://")
+                ),
+            ),
+        };
+        Ok(Self::new(&root, &repository, token)?.with_credential(credential))
+    }
+
+    /// The forge's origin as the remote names it: its scheme and authority,
+    /// with ssh and scp-style remotes read as the forge's https origin.
+    fn remote_root(remote: &str) -> Result<String> {
+        if !remote.contains("://") {
+            let (user_host, path) = remote
+                .split_once(':')
+                .context("checkout remote is not a Forgejo URL")?;
+            ensure!(
+                !path.starts_with('/') && !user_host.contains('/'),
+                "checkout remote is not a Forgejo URL"
+            );
+            let host = user_host.rsplit('@').next().unwrap_or(user_host);
+            return Ok(format!("https://{host}"));
+        }
+        let url = url::Url::parse(remote).context("parse Forgejo origin remote")?;
+        let host = url.host_str().context("Forgejo origin needs a host")?;
+        match url.scheme() {
+            "ssh" => Ok(format!("https://{host}")),
+            scheme @ ("http" | "https") => Ok(match url.port() {
+                Some(port) => format!("{scheme}://{host}:{port}"),
+                None => format!("{scheme}://{host}"),
+            }),
+            scheme => bail!("checkout remote scheme `{scheme}` is not a Forgejo origin"),
+        }
     }
 
     fn remote_repository(root: &str, remote: &str) -> Result<String> {
         let origin = url::Url::parse(root)?;
         let host = origin.host_str().context("Forgejo origin needs a host")?;
-        if let Some(path) = remote.strip_prefix(&format!("git@{host}:")) {
-            return Ok(path.trim_end_matches(".git").to_owned());
+        if !remote.contains("://") {
+            if let Some((_, path)) = remote
+                .split_once('@')
+                .filter(|(_, rest)| rest.starts_with(&format!("{host}:")))
+                .map(|(user, rest)| (user, &rest[host.len() + 1..]))
+            {
+                return Ok(path.trim_end_matches(".git").to_owned());
+            }
         }
         let url = url::Url::parse(remote).context("parse Forgejo origin remote")?;
         ensure!(
@@ -69,10 +128,9 @@ impl ForgejoForge {
         let path = if url.scheme() == "ssh" {
             url.path().trim_start_matches('/')
         } else {
+            // `https://user@host/...` is the same origin; a password is not.
             ensure!(
-                url.origin() == origin.origin()
-                    && url.username().is_empty()
-                    && url.password().is_none(),
+                url.origin() == origin.origin() && url.password().is_none(),
                 "checkout remote differs from configured Forgejo origin"
             );
             let prefix = format!("{}/", origin.path().trim_end_matches('/'));
@@ -150,9 +208,13 @@ impl ForgejoForge {
         if let Some(body) = body {
             request = request.json(body);
         }
-        request
-            .send()
-            .await?
+        let response = request.send().await?;
+        ensure!(
+            !matches!(response.status().as_u16(), 401 | 403),
+            "Forgejo refused {}; sign in again with git for this host, or set FORGEJO_TOKEN to a token with repository access",
+            self.credential
+        );
+        response
             .error_for_status()
             .context("Forgejo request refused")?
             .json()
@@ -549,6 +611,56 @@ fn terminal(status: &str) -> Option<String> {
         "success" | "failure" | "cancelled" | "skipped" => Some(status.into()),
         _ => None,
     }
+}
+
+/// A variable's value, when it is set and not blank.
+fn set_env(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+}
+
+/// The password git's credential helpers hold for a forge origin. The helper
+/// is asked with prompting off, so a missing credential fails fast instead of
+/// hanging an agent shell; the value is returned to the caller and appears in
+/// no message. `env` lets a test isolate git's configuration.
+fn git_credential_token(root: &str, env: &[(&str, &str)]) -> Result<String> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let url = url::Url::parse(root)?;
+    let host = url.host_str().context("Forgejo origin needs a host")?;
+    let authority = url
+        .port()
+        .map_or_else(|| host.to_owned(), |port| format!("{host}:{port}"));
+    let missing = || {
+        format!(
+            "no Forgejo credential for {authority}: set FORGEJO_TOKEN, or sign in so git holds one for this host"
+        )
+    };
+    let mut child = Command::new("git")
+        .args(["credential", "fill"])
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "never")
+        .envs(env.iter().copied())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .context(missing())?;
+    child
+        .stdin
+        .take()
+        .context("git credential stdin")?
+        .write_all(format!("protocol={}\nhost={authority}\n\n", url.scheme()).as_bytes())?;
+    let output = child.wait_with_output()?;
+    ensure!(output.status.success(), "{}", missing());
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| line.strip_prefix("password="))
+        .filter(|password| !password.is_empty())
+        .map(str::to_owned)
+        .with_context(missing)
 }
 
 #[cfg(test)]
@@ -951,14 +1063,140 @@ mod tests {
                 "{origin}"
             );
         }
+    }
+
+    #[test]
+    fn the_forge_root_comes_from_the_remote_when_none_is_configured() {
+        for (remote, root) in [
+            (
+                "git@forge.example.test:a/b.git",
+                "https://forge.example.test",
+            ),
+            (
+                "ssh://git@forge.example.test:2222/a/b",
+                "https://forge.example.test",
+            ),
+            (
+                "https://forge.example.test/a/b",
+                "https://forge.example.test",
+            ),
+            (
+                "https://git@forge.example.test:3000/a/b",
+                "https://forge.example.test:3000",
+            ),
+            ("http://127.0.0.1:8080/a/b", "http://127.0.0.1:8080"),
+        ] {
+            assert_eq!(ForgejoForge::remote_root(remote).unwrap(), root, "{remote}");
+        }
+        for remote in [
+            "file:///srv/a/b",
+            "/srv/a/b",
+            "ftp://forge.example.test/a/b",
+        ] {
+            assert!(ForgejoForge::remote_root(remote).is_err(), "{remote}");
+        }
+    }
+
+    /// `git clone https://user@host/...` is the same origin as the plain URL;
+    /// only an embedded password is refused.
+    #[test]
+    fn a_remote_that_names_a_user_is_the_same_origin() {
+        let root = "https://forge.example.test";
+        for remote in [
+            "https://git@forge.example.test/a/b.git",
+            "https://nick@forge.example.test/a/b",
+        ] {
+            assert_eq!(
+                ForgejoForge::remote_repository(root, remote).unwrap(),
+                "a/b"
+            );
+        }
+        let error =
+            ForgejoForge::remote_repository(root, "https://nick:secret@forge.example.test/a/b")
+                .unwrap_err();
+        assert!(error.to_string().contains("differs from configured"));
+        assert!(!error.to_string().contains("secret"));
+    }
+
+    /// With nothing in the environment, the checkout binds from its remote and
+    /// the credential git already holds; `FORGEJO_TOKEN` still wins when set.
+    #[test]
+    fn the_token_comes_from_the_environment_first_then_from_git() {
+        let remote = "https://git@forge.example.test/example/sample-litigation.git";
+        let asked = std::cell::RefCell::new(Vec::new());
+        let git = |root: &str| {
+            asked.borrow_mut().push(root.to_owned());
+            Ok("git-token".to_owned())
+        };
+        std::env::remove_var("NAVIGATOR_FORGEJO_ROOT_URL");
         std::env::remove_var("FORGEJO_TOKEN");
-        let dir = checkout(
-            "project: sample-litigation\n",
-            Some("git@forge.example.test:a/b"),
+        let forge = ForgejoForge::from_remote_with(remote, git).unwrap();
+        assert_eq!(forge.token, "git-token");
+        assert_eq!(forge.root, "https://forge.example.test");
+        assert_eq!(forge.repository, REPOSITORY);
+        assert_eq!(asked.borrow().as_slice(), ["https://forge.example.test"]);
+
+        std::env::set_var("FORGEJO_TOKEN", "env-token");
+        let forge = ForgejoForge::from_remote_with(remote, git).unwrap();
+        assert_eq!(forge.token, "env-token");
+        assert_eq!(
+            asked.borrow().len(),
+            1,
+            "git is not asked when the env is set"
         );
-        let error = ForgejoForge::from_checkout(dir.path()).err().unwrap();
-        assert!(error
-            .to_string()
-            .contains("FORGEJO_TOKEN must be configured"));
+
+        std::env::remove_var("FORGEJO_TOKEN");
+        let error = ForgejoForge::from_remote_with(remote, |_| bail!("no credential"))
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("no credential"));
+    }
+
+    /// The real lookup, against an isolated git configuration whose helper
+    /// holds one credential: no keychain, no prompt, nothing printed.
+    #[test]
+    fn git_credential_fill_reads_the_helper_for_the_forge_host_only() {
+        let home = tempfile::tempdir().unwrap();
+        let config = home.path().join("gitconfig");
+        std::fs::write(
+            &config,
+            "[credential \"https://forge.example.test\"]\n\
+             \thelper = \"!f() { echo username=oauth; echo password=oauth-token; }; f\"\n",
+        )
+        .unwrap();
+        let env = [
+            ("GIT_CONFIG_GLOBAL", config.to_str().unwrap()),
+            ("GIT_CONFIG_NOSYSTEM", "1"),
+        ];
+        assert_eq!(
+            git_credential_token("https://forge.example.test", &env).unwrap(),
+            "oauth-token"
+        );
+        let error = git_credential_token("https://other.example.test", &env).unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("other.example.test"), "{message}");
+        assert!(message.contains("FORGEJO_TOKEN"), "{message}");
+        assert!(!message.contains("oauth-token"), "{message}");
+    }
+
+    #[tokio::test]
+    async fn a_refused_credential_names_its_source_and_the_recovery() {
+        let server = MockServer::start().await;
+        let forge = ForgejoForge::new(&server.uri(), REPOSITORY, "t".into())
+            .unwrap()
+            .with_credential("the git credential for forge.example.test".into());
+        for status in [401, 403] {
+            wiremock::Mock::given(wiremock::matchers::any())
+                .respond_with(wiremock::ResponseTemplate::new(status))
+                .mount(&server)
+                .await;
+            let message = forge.remote_reachable().await.unwrap_err().to_string();
+            assert!(
+                message.contains("the git credential for forge.example.test"),
+                "{message}"
+            );
+            assert!(message.contains("sign in"), "{message}");
+            server.reset().await;
+        }
     }
 }

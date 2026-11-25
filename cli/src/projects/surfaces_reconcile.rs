@@ -228,6 +228,7 @@ mod tests {
             id,
             firm_id: None,
             brand: None,
+            status: None,
             code: code.to_string(),
         }
     }

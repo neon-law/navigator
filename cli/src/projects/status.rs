@@ -92,11 +92,12 @@ pub(super) async fn read(host: Option<&str>, project: Option<&str>) -> Result<se
         .ok_or_else(|| anyhow!("pass a Project code or run from a Project checkout"))?;
     let host = host.or_else(|| local.as_ref().and_then(|m| m.host.as_deref()));
     let (base, token) = remote::resolve(host)?;
-    let id = surfaces::resolve_project_id(&base, &token, project).await?;
+    let visible = surfaces::resolve_visible_project(&base, &token, project).await?;
+    let id = visible.id;
     let response = reqwest::Client::new()
         .get(format!("{base}/app/api/projects/{id}/status"))
         .timeout(Duration::from_secs(30))
-        .bearer_auth(token)
+        .bearer_auth(&token)
         .send()
         .await
         .context("read Project status")?;
@@ -104,7 +105,51 @@ pub(super) async fn read(host: Option<&str>, project: Option<&str>) -> Result<se
     if !status.is_success() {
         return Err(anyhow!("Project status read failed: {status}"));
     }
-    response.json().await.context("parse Project status")
+    let mut value: serde_json::Value = response.json().await.context("parse Project status")?;
+    // The live ownership the manifest's Firm and brand are checked against.
+    if let Some(firm) = visible.firm_id {
+        value["firm_id"] = serde_json::json!(firm);
+    }
+    if let Some(brand) = &visible.brand {
+        value["brand"] = serde_json::json!(brand);
+    }
+    if let Some(firm) = visible.firm_id {
+        if let Some(name) = firm_name(&base, &token, firm).await {
+            value["firm_name"] = serde_json::json!(name);
+        }
+    }
+    Ok(value)
+}
+
+/// The Firm's name from the Firm directory, when this caller may list it.
+async fn firm_name(base: &str, token: &str, firm: uuid::Uuid) -> Option<String> {
+    #[derive(serde::Deserialize)]
+    struct Firm {
+        id: uuid::Uuid,
+        name: String,
+    }
+    let response = reqwest::Client::new()
+        .get(format!("{base}/app/api/firms"))
+        .timeout(Duration::from_secs(30))
+        .bearer_auth(token)
+        .send()
+        .await
+        .ok()?
+        .error_for_status()
+        .ok()?;
+    let firms: Vec<Firm> = response.json().await.ok()?;
+    firms.into_iter().find(|f| f.id == firm).map(|f| f.name)
+}
+
+/// The live Firm and brand as one status line.
+fn ownership_line(value: &serde_json::Value) -> String {
+    let brand = value["brand"].as_str().unwrap_or("none");
+    let firm = match (value["firm_id"].as_str(), value["firm_name"].as_str()) {
+        (Some(id), Some(name)) => format!("{name} ({id})"),
+        (Some(id), None) => format!("{id} (name not visible to this role)"),
+        _ => "none".to_owned(),
+    };
+    format!("Firm: {firm}; brand: {brand}")
 }
 
 fn print_status(value: &serde_json::Value) {
@@ -118,6 +163,7 @@ fn print_status(value: &serde_json::Value) {
     ] {
         println!("{field}: {}", value[field].as_str().unwrap_or("none"));
     }
+    println!("{}", ownership_line(value));
     match value["drive_folder_id"].as_str() {
         Some(id) => println!("drive folder: https://drive.google.com/drive/folders/{id}"),
         None => println!("drive folder: none linked"),
@@ -255,5 +301,87 @@ mod envelope_tests {
             let result = read_envelopes(&server.uri(), "test-token", id, None).await;
             assert_eq!(result.is_ok(), status == 200);
         }
+    }
+}
+
+#[cfg(test)]
+mod ownership_tests {
+    use super::*;
+    use crate::projects::test_login::{answer, site};
+    use serde_json::json;
+
+    const FIRM: &str = "11111111-1111-4111-8111-111111111111";
+
+    /// ENG-1417: the live Firm and brand are readable, so a gate refusal that
+    /// names both sides has a verb to confirm the live one.
+    #[tokio::test]
+    async fn the_read_adds_the_live_firm_id_firm_name_and_brand() {
+        let id = uuid::Uuid::new_v4();
+        let (server, _login) =
+            site(json!([{"id": id, "code": "acme", "firm_id": FIRM, "brand": "vesta"}])).await;
+        let host = server.uri();
+        answer(
+            &server,
+            "GET",
+            &format!("/app/api/projects/{id}/status"),
+            200,
+            json!({"code": "acme"}),
+        )
+        .await;
+        answer(
+            &server,
+            "GET",
+            "/app/api/firms",
+            200,
+            json!([
+                {"id": "22222222-2222-4222-8222-222222222222", "name": "Other Firm", "slug": "other", "brands": []},
+                {"id": FIRM, "name": "Sample Firm", "slug": "sample", "brands": ["vesta"]},
+            ]),
+        )
+        .await;
+        let value = read(Some(&host), Some("acme")).await.unwrap();
+        assert_eq!(value["firm_id"], FIRM);
+        assert_eq!(value["firm_name"], "Sample Firm");
+        assert_eq!(value["brand"], "vesta");
+        assert_eq!(
+            ownership_line(&value),
+            format!("Firm: Sample Firm ({FIRM}); brand: vesta")
+        );
+    }
+
+    /// A role that cannot list Firms still sees the id and brand.
+    #[tokio::test]
+    async fn a_caller_who_cannot_list_firms_still_sees_the_id_and_brand() {
+        let id = uuid::Uuid::new_v4();
+        let (server, _login) =
+            site(json!([{"id": id, "code": "acme", "firm_id": FIRM, "brand": "vesta"}])).await;
+        let host = server.uri();
+        answer(
+            &server,
+            "GET",
+            &format!("/app/api/projects/{id}/status"),
+            200,
+            json!({"code": "acme"}),
+        )
+        .await;
+        answer(
+            &server,
+            "GET",
+            "/app/api/firms",
+            403,
+            json!({"message": "not admin"}),
+        )
+        .await;
+        let value = read(Some(&host), Some("acme")).await.unwrap();
+        assert!(value["firm_name"].is_null());
+        assert_eq!(
+            ownership_line(&value),
+            format!("Firm: {FIRM} (name not visible to this role); brand: vesta")
+        );
+    }
+
+    #[test]
+    fn a_project_with_no_owner_says_so() {
+        assert_eq!(ownership_line(&json!({})), "Firm: none; brand: none");
     }
 }

@@ -575,6 +575,40 @@ fn gate_refuses_a_directory_that_is_not_a_repository_root() {
         .stderr(str::contains("has no README and no .git"));
 }
 
+/// A Project repository opened with an empty source is a `.git` with scaffold
+/// remnants and nothing tracked. The gate says it needs the scaffold resume,
+/// and prints the command, rather than reporting a missing README.
+#[test]
+fn gate_reports_an_empty_source_as_needing_a_scaffold_resume() {
+    let dir = TempDir::new().unwrap();
+    let git = |args: &[&str]| {
+        assert!(std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir.path())
+            .status()
+            .unwrap()
+            .success());
+    };
+    git(&["init", "--quiet"]);
+    git(&[
+        "remote",
+        "add",
+        "origin",
+        "https://forge.example.test/sample-firm/pitch-acme.git",
+    ]);
+    write(dir.path(), "LICENSE", "licence\n");
+    navigator()
+        .current_dir(dir.path())
+        .args(["project", "gate"])
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(str::contains("needs scaffold resume"))
+        .stderr(str::contains(
+            "navigator project scaffold --resume pitch-acme --dir",
+        ));
+}
+
 /// A subdirectory of a repository is still not a root, which is the case the
 /// old directory argument made easy to get wrong: a gate pointed at `docs/`
 /// reported a clean tree over every file it never read.
