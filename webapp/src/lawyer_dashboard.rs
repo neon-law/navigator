@@ -301,12 +301,12 @@ pub async fn get_lawyer_dashboard() -> Result<DashboardView, ServerFnError> {
         .filter(|project| project.status == "open")
         .map(|project| project.id)
         .collect();
-    let (states, deadline_result, next_due_by_project) = tokio::join!(
+    let (current_state_result, deadline_result, next_due_by_project) = tokio::join!(
         current_states_for_projects(&surreal, page_of_projects),
         deadlines::load(&projects, today, requested_deadline_page),
         store::project_deadlines::next_upcoming_date_by_project(&project_page_ids, today),
     );
-    let current_state_by_project = states?;
+    let current_state_by_project = current_state_result?;
     let (deadlines, deadline_has_next) = deadline_result?;
     let next_due_by_project =
         next_due_by_project.map_err(crate::lawyer_project_detail::server_error)?;

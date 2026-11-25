@@ -92,7 +92,7 @@ pub async fn set_hourly_rate(
     .map_err(|error| {
         if error
             .as_database_error()
-            .and_then(|database| database.code())
+            .and_then(sqlx::error::DatabaseError::code)
             .is_some_and(|code| code == "23505")
         {
             FeeStructureError::Conflict
@@ -269,7 +269,7 @@ pub async fn import_project_seed(
                     {
                         if error
                             .as_database_error()
-                            .and_then(|database| database.code())
+                            .and_then(sqlx::error::DatabaseError::code)
                             .is_some_and(|code| code == "23505")
                         {
                             return Err(FeeStructureError::Conflict);

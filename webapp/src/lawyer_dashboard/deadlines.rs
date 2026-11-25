@@ -6,7 +6,8 @@ use chrono::{DateTime, FixedOffset};
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
-pub const DEADLINES_PER_PAGE: usize = 10;
+#[cfg(feature = "server")]
+const DEADLINES_PER_PAGE: usize = 10;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Entry {
