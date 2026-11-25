@@ -17,21 +17,21 @@
 //! Forgejo run is refused.
 
 use axum::extract::State;
-use axum::http::{header, HeaderMap, StatusCode};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use store::seed::SeedModel;
-use views::brand::{admitted_brand_key, held_out_host, BrandKey};
+use views::brand::{BrandKey, admitted_brand_key, held_out_host};
 
-use crate::forgejo_oidc::{repository_matches_issuer, ForgejoOidc, ForgejoRun};
+use crate::CanonicalHost;
+use crate::forgejo_oidc::{ForgejoOidc, ForgejoRun, repository_matches_issuer};
 use crate::github_oidc::{GitHubActionsClaims, GitHubOidc};
 use crate::session::{
-    now_unix_secs, random_token_32, DocumentScope, SeedScope, SessionData, SessionScope,
-    SessionSource, SessionStore, CI_SESSION_TTL_SECS,
+    CI_SESSION_TTL_SECS, DocumentScope, SeedScope, SessionData, SessionScope, SessionSource,
+    SessionStore, now_unix_secs, random_token_32,
 };
-use crate::CanonicalHost;
 
 /// Shared state for the CI mint door.
 #[derive(Clone)]
@@ -279,7 +279,7 @@ async fn mint_forgejo_inner(
         (CiSessionKind::Seed, ForgejoRun::MainGate) => {
             return Err(MintError::Forbidden(
                 "only the trusted Forgejo CD workflow on main may write seeds".into(),
-            ))
+            ));
         }
         // A pull request's seed session is dry-run; a document session never writes.
         (CiSessionKind::Seed, ForgejoRun::PullRequest) | (CiSessionKind::Document, _) => true,
@@ -526,12 +526,12 @@ pub fn github_repository_from_url(url: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{authorize_github_run, github_repository_from_url, routes, CiAuthState};
+    use super::{CiAuthState, authorize_github_run, github_repository_from_url, routes};
+    use crate::CanonicalHost;
     use crate::forgejo_oidc::ForgejoOidc;
     use crate::github_oidc::{GitHubActionsClaims, GitHubOidc};
-    use crate::session::{now_unix_secs, SessionStore};
-    use crate::CanonicalHost;
-    use axum::body::{to_bytes, Body};
+    use crate::session::{SessionStore, now_unix_secs};
+    use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
 
@@ -675,6 +675,13 @@ mod tests {
         code: &str,
         brand: &str,
     ) -> store::projects::Project {
+        if store::brands::find_by_key(surreal, brand)
+            .await
+            .unwrap()
+            .is_none()
+        {
+            store::test_support::seed_compiled_brands_postgres(surreal).await;
+        }
         let entity_id = store::test_support::seed_entity_with_parents(surreal).await;
         let project = store::projects::create(
             surreal,
@@ -718,6 +725,17 @@ mod tests {
 
     /// A live Project `acme` with a lawyer DRI, recorded at `repository_url`.
     async fn project_at(surreal: &store::surreal::SurrealDb, repository_url: &str, brand: &str) {
+        if let Some(project) = store::projects::all(surreal)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|project| project.code == "acme")
+        {
+            store::projects::set_repository_url(surreal, project.id, Some(repository_url))
+                .await
+                .unwrap();
+            return;
+        }
         let project = project_with_no_lawyer_dri(surreal, "acme", brand).await;
         store::projects::set_repository_url(surreal, project.id, Some(repository_url))
             .await
@@ -745,14 +763,14 @@ mod tests {
     /// A GitHub run of `<owner>/acme` against a deployment whose GitHub
     /// organization is `org` and whose Forgejo issuer is `forgejo.example`.
     async fn forgejo_fallback_mint(
+        surreal: &store::surreal::SurrealDb,
         repository_url: &str,
         owner: &str,
         org: Option<&str>,
         forgejo_oidc: ForgejoOidc,
     ) -> (StatusCode, serde_json::Value) {
-        let surreal = store::test_support::mem_surreal().await;
-        project_at(&surreal, repository_url, "neon").await;
-        let mut state = ci_state(surreal, &format!("{owner}/acme"), "fallback-jti");
+        project_at(surreal, repository_url, "neon").await;
+        let mut state = ci_state(surreal.clone(), &format!("{owner}/acme"), "fallback-jti");
         state.github_oidc = GitHubOidc::fixed(GitHubActionsClaims {
             repository: format!("{owner}/acme"),
             repository_owner: owner.to_string(),
@@ -780,74 +798,88 @@ mod tests {
 
     #[tokio::test]
     async fn the_deployment_org_binds_a_project_recorded_at_its_trusted_forgejo_url() {
-        let (status, body) = forgejo_fallback_mint(
-            FORGEJO_URL,
-            "example-org",
-            Some("example-org"),
-            trusted_forgejo(),
-        )
+        store::test_support::with_required_postgres(async {
+            let db = store::surreal::SurrealDb::uninitialized();
+            let (status, body) = forgejo_fallback_mint(
+                &db,
+                FORGEJO_URL,
+                "example-org",
+                Some("example-org"),
+                trusted_forgejo(),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            assert_eq!(body["project_code"], "acme");
+        })
         .await;
-        assert_eq!(status, StatusCode::OK, "{body}");
-        assert_eq!(body["project_code"], "acme");
     }
 
     #[tokio::test]
     async fn the_exact_github_url_binds_without_the_fallback() {
-        let (status, body) = forgejo_fallback_mint(
-            "https://github.com/example-org/acme",
-            "example-org",
-            None,
-            ForgejoOidc::rejecting(),
-        )
+        store::test_support::with_required_postgres(async {
+            let db = store::surreal::SurrealDb::uninitialized();
+            let (status, body) = forgejo_fallback_mint(
+                &db,
+                "https://github.com/example-org/acme",
+                "example-org",
+                None,
+                ForgejoOidc::rejecting(),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            assert_eq!(body["project_code"], "acme");
+        })
         .await;
-        assert_eq!(status, StatusCode::OK, "{body}");
-        assert_eq!(body["project_code"], "acme");
     }
 
     #[tokio::test]
     async fn the_forgejo_fallback_refuses_every_run_it_does_not_trust() {
-        for (case, repository_url, owner, org, forgejo_oidc) in [
-            (
-                "a same-named repository under a foreign owner",
-                FORGEJO_URL,
-                "someone-else",
-                Some("example-org"),
-                trusted_forgejo(),
-            ),
-            (
-                "a Project URL on an untrusted host",
-                "https://other.example/example-forge-org/acme",
-                "example-org",
-                Some("example-org"),
-                trusted_forgejo(),
-            ),
-            (
-                "an unset GitHub organization",
-                FORGEJO_URL,
-                "example-org",
-                None,
-                trusted_forgejo(),
-            ),
-            (
-                "a blank GitHub organization",
-                FORGEJO_URL,
-                "example-org",
-                Some("  "),
-                trusted_forgejo(),
-            ),
-            (
-                "no trusted Forgejo issuer",
-                FORGEJO_URL,
-                "example-org",
-                Some("example-org"),
-                ForgejoOidc::rejecting(),
-            ),
-        ] {
-            let (status, body) =
-                forgejo_fallback_mint(repository_url, owner, org, forgejo_oidc).await;
-            assert_eq!(status, StatusCode::FORBIDDEN, "{case}: {body}");
-            assert_eq!(body["message"], super::UNBOUND, "{case}");
-        }
+        store::test_support::with_required_postgres(async {
+            let db = store::surreal::SurrealDb::uninitialized();
+            for (case, repository_url, owner, org, forgejo_oidc) in [
+                (
+                    "a same-named repository under a foreign owner",
+                    FORGEJO_URL,
+                    "someone-else",
+                    Some("example-org"),
+                    trusted_forgejo(),
+                ),
+                (
+                    "a Project URL on an untrusted host",
+                    "https://other.example/example-forge-org/acme",
+                    "example-org",
+                    Some("example-org"),
+                    trusted_forgejo(),
+                ),
+                (
+                    "an unset GitHub organization",
+                    FORGEJO_URL,
+                    "example-org",
+                    None,
+                    trusted_forgejo(),
+                ),
+                (
+                    "a blank GitHub organization",
+                    FORGEJO_URL,
+                    "example-org",
+                    Some("  "),
+                    trusted_forgejo(),
+                ),
+                (
+                    "no trusted Forgejo issuer",
+                    FORGEJO_URL,
+                    "example-org",
+                    Some("example-org"),
+                    ForgejoOidc::rejecting(),
+                ),
+            ] {
+                let (status, body) =
+                    forgejo_fallback_mint(&db, repository_url, owner, org, forgejo_oidc).await;
+                assert_eq!(status, StatusCode::FORBIDDEN, "{case}: {body}");
+                assert_eq!(body["message"], super::UNBOUND, "{case}");
+            }
+        })
+        .await;
     }
 
     async fn mint_request(state: CiAuthState, path: &str) -> (StatusCode, serde_json::Value) {
@@ -883,8 +915,8 @@ mod tests {
     }
 
     async fn check_github_mint_brand() {
-        use crate::test_support::{sign_rs256_claims, test_oidc_jwks_rsa, TEST_OIDC_KID};
-        use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
+        use crate::test_support::{TEST_OIDC_KID, sign_rs256_claims, test_oidc_jwks_rsa};
+        use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
 
         let db = store::surreal::SurrealDb::uninitialized();
         store::test_support::seed_firm_with_new_brand(&db, "iep-defenders").await;
@@ -924,35 +956,41 @@ mod tests {
 
     #[tokio::test]
     async fn the_seed_door_names_a_ci_seed_write_when_no_lawyer_dri_exists() {
-        let surreal = store::test_support::mem_surreal().await;
-        project_with_no_lawyer_dri(&surreal, "no-dri-seed", "neon").await;
-        let state = ci_state(surreal, "neon-law-staging/no-dri-seed", "seed-door-jti");
+        store::test_support::with_required_postgres(async {
+            let postgres = store::surreal::SurrealDb::uninitialized();
+            project_with_no_lawyer_dri(&postgres, "no-dri-seed", "neon").await;
+            let state = ci_state(postgres, "neon-law-staging/no-dri-seed", "seed-door-jti");
 
-        let (status, body) = mint_request(state, "/auth/ci/seed-token").await;
+            let (status, body) = mint_request(state, "/auth/ci/seed-token").await;
 
-        assert_eq!(status, StatusCode::FORBIDDEN);
-        assert_eq!(
-            body["message"],
-            "the live project has no lawyer-tier lawyer DRI to attribute a CI seed write to"
-        );
+            assert_eq!(status, StatusCode::FORBIDDEN);
+            assert_eq!(
+                body["message"],
+                "the live project has no lawyer-tier lawyer DRI to attribute a CI seed write to"
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn the_document_door_names_verification_not_a_write_when_no_lawyer_dri_exists() {
-        let surreal = store::test_support::mem_surreal().await;
-        project_with_no_lawyer_dri(&surreal, "no-dri-document", "neon").await;
-        let state = ci_state(
-            surreal,
-            "neon-law-staging/no-dri-document",
-            "document-door-jti",
-        );
+        store::test_support::with_required_postgres(async {
+            let surreal = store::surreal::SurrealDb::uninitialized();
+            project_with_no_lawyer_dri(&surreal, "no-dri-document", "neon").await;
+            let state = ci_state(
+                surreal,
+                "neon-law-staging/no-dri-document",
+                "document-door-jti",
+            );
 
-        let (status, body) = mint_request(state, "/auth/ci/document-token").await;
+            let (status, body) = mint_request(state, "/auth/ci/document-token").await;
 
-        assert_eq!(status, StatusCode::FORBIDDEN);
-        assert_eq!(
-            body["message"],
+            assert_eq!(status, StatusCode::FORBIDDEN);
+            assert_eq!(
+                body["message"],
             "the live project has no lawyer-tier lawyer DRI to attribute CI document verification to"
-        );
+            );
+        })
+        .await;
     }
 }
