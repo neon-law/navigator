@@ -186,7 +186,7 @@ mod tests {
     use super::{ingest_for_config, Config};
     use crate::inbound_email::{InboundAttachment, InboundEmail, SmtpEnvelope};
     use store::persons::{NewPerson, Role};
-    use store::test_support::{ensure_person, mem_surreal, seed_firm_with_brand};
+    use store::test_support::{ensure_person, with_required_postgres};
     use uuid::Uuid;
 
     fn fixture_firm() -> Uuid {
@@ -291,9 +291,9 @@ mod tests {
 
     #[tokio::test]
     async fn unaddressed_mail_is_not_routed() {
-        let db = mem_surreal().await;
         let storage = storage().await;
-        let firm_id = seed_firm_with_brand(&db, "neon").await;
+        let db = store::surreal::SurrealDb::uninitialized();
+        let firm_id = fixture_firm();
         let config = config(&["nick@neonlaw.com"], firm_id);
         let email = email("Client <client@example.com>", "Nick <other@example.com>");
         let ingested = ingest_for_config(&db, &storage, &email, Some(config))
@@ -304,7 +304,7 @@ mod tests {
 
     #[tokio::test]
     async fn unconfigured_channel_is_not_routed() {
-        let db = mem_surreal().await;
+        let db = store::surreal::SurrealDb::uninitialized();
         let storage = storage().await;
         let email = email("Client <client@example.com>", "Nick <nick@neonlaw.com>");
         let ingested = ingest_for_config(&db, &storage, &email, None)
@@ -315,143 +315,164 @@ mod tests {
 
     #[tokio::test]
     async fn lawyer_tier_sender_is_never_inbound_correspondence() {
-        let db = mem_surreal().await;
-        let storage = storage().await;
-        let firm_id = seed_firm_with_brand(&db, "neon").await;
-        ensure_person(
-            &db,
-            &NewPerson::with_role("Nick", "nick@neonlaw.com", Role::Lawyer),
-        )
+        with_required_postgres(async {
+            let db = store::surreal::SurrealDb::uninitialized();
+            let storage = storage().await;
+            let firm_id = store::test_support::seed_firm_with_new_brand(&db, "neon")
+                .await
+                .0;
+            ensure_person(
+                &db,
+                &NewPerson::with_role("Nick", "nick@neonlaw.com", Role::Lawyer),
+            )
+            .await;
+            let config = config(&["nick@neonlaw.com"], firm_id);
+            let own_mail = email("Nick <nick@neonlaw.com>", "Nick <nick@neonlaw.com>");
+            let ingested = ingest_for_config(&db, &storage, &own_mail, Some(config.clone()))
+                .await
+                .unwrap();
+            assert!(ingested.is_none());
+            let clerk_mail = email("Assistant <clerk@neonlaw.com>", "Nick <nick@neonlaw.com>");
+            ensure_person(
+                &db,
+                &NewPerson::with_role("Assistant", "clerk@neonlaw.com", Role::Clerk),
+            )
+            .await;
+            let ingested = ingest_for_config(&db, &storage, &clerk_mail, Some(config.clone()))
+                .await
+                .unwrap();
+            assert!(ingested.is_none());
+            // An alias of the lawyer's mailbox resolves to the same lawyer.
+            let lawyer = store::persons::find_by_email_ci(&db, "nick@neonlaw.com")
+                .await
+                .unwrap()
+                .expect("the lawyer exists");
+            store::persons::add_alias(&db, lawyer.id, "nick+intake@neonlaw.com")
+                .await
+                .unwrap();
+            let alias_mail = email("Nick <nick+intake@neonlaw.com>", "Nick <nick@neonlaw.com>");
+            let ingested = ingest_for_config(&db, &storage, &alias_mail, Some(config))
+                .await
+                .unwrap();
+            assert!(ingested.is_none());
+        })
         .await;
-        let config = config(&["nick@neonlaw.com"], firm_id);
-        let own_mail = email("Nick <nick@neonlaw.com>", "Nick <nick@neonlaw.com>");
-        let ingested = ingest_for_config(&db, &storage, &own_mail, Some(config.clone()))
-            .await
-            .unwrap();
-        assert!(ingested.is_none());
-        let clerk_mail = email("Assistant <clerk@neonlaw.com>", "Nick <nick@neonlaw.com>");
-        ensure_person(
-            &db,
-            &NewPerson::with_role("Assistant", "clerk@neonlaw.com", Role::Clerk),
-        )
-        .await;
-        let ingested = ingest_for_config(&db, &storage, &clerk_mail, Some(config.clone()))
-            .await
-            .unwrap();
-        assert!(ingested.is_none());
-        // An alias of the lawyer's mailbox resolves to the same lawyer.
-        let lawyer = store::persons::find_by_email_ci(&db, "nick@neonlaw.com")
-            .await
-            .unwrap()
-            .expect("the lawyer exists");
-        store::persons::add_alias(&db, lawyer.id, "nick+intake@neonlaw.com")
-            .await
-            .unwrap();
-        let alias_mail = email("Nick <nick+intake@neonlaw.com>", "Nick <nick@neonlaw.com>");
-        let ingested = ingest_for_config(&db, &storage, &alias_mail, Some(config))
-            .await
-            .unwrap();
-        assert!(ingested.is_none());
     }
 
     #[tokio::test]
     async fn client_mail_ingests_under_one_provider_account_across_aliases() {
-        let db = mem_surreal().await;
-        let storage = storage().await;
-        let firm_id = seed_firm_with_brand(&db, "neon").await;
-        let config = config(&["nick@neonlaw.com", "nick+intake@neonlaw.com"], firm_id);
-        let mut first = email("Client <client@example.com>", "Nick <nick@neonlaw.com>");
-        first.message_id = Some("first@example.com".into());
-        let mut second = email(
-            "Client <client@example.com>",
-            "Nick <nick+intake@neonlaw.com>",
-        );
-        second.message_id = Some("second@example.com".into());
-        let first_ingested = ingest_for_config(&db, &storage, &first, Some(config.clone()))
-            .await
-            .unwrap()
-            .expect("first delivery ingests");
-        let second_ingested = ingest_for_config(&db, &storage, &second, Some(config))
-            .await
-            .unwrap()
-            .expect("second delivery ingests");
-        assert!(!first_ingested.deduped);
-        assert_eq!(
-            first_ingested.conversation_id,
-            second_ingested.conversation_id
-        );
-        let conversation = store::inbox::conversation_by_id(&db, first_ingested.conversation_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(conversation.channel, store::inbox::channel::EMAIL);
-        assert_eq!(conversation.provider_account, "nick@neonlaw.com");
-        assert_eq!(conversation.firm_id, firm_id);
-        assert_eq!(conversation.external_address, "client@example.com");
+        with_required_postgres(async {
+            let db = store::surreal::SurrealDb::uninitialized();
+            let storage = storage().await;
+            let firm_id = store::test_support::seed_firm_with_new_brand(&db, "neon")
+                .await
+                .0;
+            let config = config(&["nick@neonlaw.com", "nick+intake@neonlaw.com"], firm_id);
+            let mut first = email("Client <client@example.com>", "Nick <nick@neonlaw.com>");
+            first.message_id = Some("first@example.com".into());
+            let mut second = email(
+                "Client <client@example.com>",
+                "Nick <nick+intake@neonlaw.com>",
+            );
+            second.message_id = Some("second@example.com".into());
+            let first_ingested = ingest_for_config(&db, &storage, &first, Some(config.clone()))
+                .await
+                .unwrap()
+                .expect("first delivery ingests");
+            let second_ingested = ingest_for_config(&db, &storage, &second, Some(config))
+                .await
+                .unwrap()
+                .expect("second delivery ingests");
+            assert!(!first_ingested.deduped);
+            assert_eq!(
+                first_ingested.conversation_id,
+                second_ingested.conversation_id
+            );
+            let conversation =
+                store::inbox::conversation_by_id(&db, first_ingested.conversation_id)
+                    .await
+                    .unwrap()
+                    .unwrap();
+            assert_eq!(conversation.channel, store::inbox::channel::EMAIL);
+            assert_eq!(conversation.provider_account, "nick@neonlaw.com");
+            assert_eq!(conversation.firm_id, firm_id);
+            assert_eq!(conversation.external_address, "client@example.com");
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn redelivery_dedupes_and_keeps_the_firm_archive_and_original_message_time() {
-        let db = mem_surreal().await;
-        let storage = storage().await;
-        let firm_id = seed_firm_with_brand(&db, "neon").await;
-        let config = config(&["nick@neonlaw.com"], firm_id);
-        let mut email = email("Client <client@example.com>", "Nick <nick@neonlaw.com>");
-        email.message_id = Some("original@example.com".into());
-        email.raw = b"From: client@example.com\r\nTo: nick@neonlaw.com\r\n\
+        with_required_postgres(async {
+            let db = store::surreal::SurrealDb::uninitialized();
+            let storage = storage().await;
+            let firm_id = store::test_support::seed_firm_with_new_brand(&db, "neon")
+                .await
+                .0;
+            let config = config(&["nick@neonlaw.com"], firm_id);
+            let mut email = email("Client <client@example.com>", "Nick <nick@neonlaw.com>");
+            email.message_id = Some("original@example.com".into());
+            email.raw = b"From: client@example.com\r\nTo: nick@neonlaw.com\r\n\
 Date: Mon, 16 Nov 2026 01:25:00 -0800\r\nMessage-ID: <original@example.com>\r\n\r\n\
 Synthetic body"
-            .to_vec();
-        let first = ingest_for_config(&db, &storage, &email, Some(config.clone()))
-            .await
-            .unwrap()
-            .unwrap();
-        let replay = ingest_for_config(&db, &storage, &email, Some(config))
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(!first.deduped);
-        assert!(replay.deduped);
-        assert_eq!(first.message_id, replay.message_id);
+                .to_vec();
+            let first = ingest_for_config(&db, &storage, &email, Some(config.clone()))
+                .await
+                .unwrap()
+                .unwrap();
+            let replay = ingest_for_config(&db, &storage, &email, Some(config))
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(!first.deduped);
+            assert!(replay.deduped);
+            assert_eq!(first.message_id, replay.message_id);
 
-        let conversation = store::inbox::conversation_by_id(&db, first.conversation_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(conversation.unread);
+            let conversation = store::inbox::conversation_by_id(&db, first.conversation_id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(conversation.unread);
 
-        let stored = store::inbox::message_by_id(&db, first.message_id)
-            .await
-            .unwrap()
-            .unwrap();
-        let timestamp = chrono::DateTime::parse_from_rfc3339(&stored.occurred_at).unwrap();
-        assert_eq!(timestamp.to_rfc3339(), "2026-11-16T09:25:00+00:00");
-        let key = stored.raw_storage_key.unwrap();
-        assert!(key.starts_with(&format!("inbound/inbox/{firm_id}/")));
-        assert_eq!(storage.get(&key).await.unwrap().bytes, email.raw);
+            let stored = store::inbox::message_by_id(&db, first.message_id)
+                .await
+                .unwrap()
+                .unwrap();
+            let timestamp = chrono::DateTime::parse_from_rfc3339(&stored.occurred_at).unwrap();
+            assert_eq!(timestamp.to_rfc3339(), "2026-11-16T09:25:00+00:00");
+            let key = stored.raw_storage_key.unwrap();
+            assert!(key.starts_with(&format!("inbound/inbox/{firm_id}/")));
+            assert_eq!(storage.get(&key).await.unwrap().bytes, email.raw);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn attachment_bytes_change_the_dedup_key_when_the_provider_id_is_missing() {
-        let db = mem_surreal().await;
-        let storage = storage().await;
-        let firm_id = seed_firm_with_brand(&db, "neon").await;
-        let config = config(&["nick@neonlaw.com"], firm_id);
-        let mut email = email("Client <client@example.com>", "Nick <nick@neonlaw.com>");
-        email.attachments.push(InboundAttachment {
-            filename: "report.pdf".into(),
-            content_type: "application/pdf".into(),
-            bytes: b"%PDF-1.7 attachment bytes".to_vec(),
-        });
-        let first = ingest_for_config(&db, &storage, &email, Some(config.clone()))
-            .await
-            .unwrap()
-            .unwrap();
-        let second = ingest_for_config(&db, &storage, &email, Some(config))
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(!first.deduped);
-        assert!(second.deduped);
+        with_required_postgres(async {
+            let db = store::surreal::SurrealDb::uninitialized();
+            let storage = storage().await;
+            let firm_id = store::test_support::seed_firm_with_new_brand(&db, "neon")
+                .await
+                .0;
+            let config = config(&["nick@neonlaw.com"], firm_id);
+            let mut email = email("Client <client@example.com>", "Nick <nick@neonlaw.com>");
+            email.attachments.push(InboundAttachment {
+                filename: "report.pdf".into(),
+                content_type: "application/pdf".into(),
+                bytes: b"%PDF-1.7 attachment bytes".to_vec(),
+            });
+            let first = ingest_for_config(&db, &storage, &email, Some(config.clone()))
+                .await
+                .unwrap()
+                .unwrap();
+            let second = ingest_for_config(&db, &storage, &email, Some(config))
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(!first.deduped);
+            assert!(second.deduped);
+        })
+        .await;
     }
 }
