@@ -468,22 +468,14 @@ pub async fn upcoming_page_for_projects(
         .ok_or(crate::postgres::matter::MatterAuthorityError::Unavailable)?;
     let result: Option<serde_json::Value> = sqlx::query_scalar(
         "WITH page AS (
-             SELECT to_jsonb(d) AS row,
-                    COALESCE(
-                        (due_on->>'date')::date,
-                        (due_at AT TIME ZONE 'UTC')::date
-                    ) AS sort_date,
-                    due_at, id
+             SELECT to_jsonb(d) AS row, due_at, id
              FROM project_deadlines d
              WHERE status = 'open' AND project_id = ANY($1::uuid[])
-               AND COALESCE(
-                   (due_on->>'date')::date,
-                   (due_at AT TIME ZONE 'UTC')::date
-               ) >= $2
-             ORDER BY sort_date, due_at, id
+               AND due_at >= ($2::date::timestamp AT TIME ZONE 'UTC')
+             ORDER BY due_at, id
              LIMIT $3 OFFSET $4
          )
-         SELECT jsonb_agg(row ORDER BY sort_date, due_at, id) FROM page",
+         SELECT jsonb_agg(row ORDER BY due_at, id) FROM page",
     )
     .bind(project_ids)
     .bind(today)
@@ -515,24 +507,15 @@ pub async fn next_upcoming_date_by_project(
     let pg = crate::postgres::matter::authority_for("project_deadlines")
         .await?
         .ok_or(crate::postgres::matter::MatterAuthorityError::Unavailable)?;
-    let rows: Vec<(Uuid, String)> = sqlx::query_as(
-        "SELECT visible.id, next_due.due_date
+    let rows: Vec<(Uuid, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+        "SELECT visible.id, next_due.due_at
          FROM unnest($1::uuid[]) AS visible(id)
          CROSS JOIN LATERAL (
-             SELECT COALESCE(
-                 due_on->>'date',
-                 ((due_at AT TIME ZONE 'UTC')::date)::text
-             ) AS due_date
+             SELECT due_at
              FROM project_deadlines
              WHERE project_id = visible.id AND status = 'open'
-               AND COALESCE(
-                   (due_on->>'date')::date,
-                   (due_at AT TIME ZONE 'UTC')::date
-               ) >= $2
-             ORDER BY COALESCE(
-                 (due_on->>'date')::date,
-                 (due_at AT TIME ZONE 'UTC')::date
-             ), due_at, id
+               AND due_at >= ($2::date::timestamp AT TIME ZONE 'UTC')
+             ORDER BY due_at, id
              LIMIT 1
          ) AS next_due",
     )
@@ -541,7 +524,10 @@ pub async fn next_upcoming_date_by_project(
     .fetch_all(pg.pool())
     .await
     .map_err(crate::postgres::matter::MatterAuthorityError::from)?;
-    Ok(rows.into_iter().collect())
+    Ok(rows
+        .into_iter()
+        .map(|(project_id, due_at)| (project_id, due_at.date_naive().to_string()))
+        .collect())
 }
 
 pub async fn find(

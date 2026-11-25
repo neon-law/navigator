@@ -5926,14 +5926,6 @@ CREATE TRIGGER attorney_rate_delete_immutable
     FOR EACH ROW EXECUTE FUNCTION reject_attorney_rate_delete();
 
 -- Migration: 20261125020000_index_upcoming_project_deadlines.sql
-CREATE INDEX project_deadlines_open_due_date
-    ON project_deadlines (
-        project_id,
-        (COALESCE(
-            (due_on->>'date')::date,
-            (due_at AT TIME ZONE 'UTC')::date
-        )),
-        due_at,
-        id
-    )
+CREATE INDEX project_deadlines_open_due_at
+    ON project_deadlines (project_id, due_at, id)
     WHERE status = 'open';
