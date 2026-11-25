@@ -471,14 +471,14 @@ pub async fn upcoming_page_for_projects(
              SELECT to_jsonb(d) AS row,
                     COALESCE(
                         (due_on->>'date')::date,
-                        DATE '1970-01-01' + floor(extract(epoch FROM due_at) / 86400)::integer
+                        (due_at AT TIME ZONE 'UTC')::date
                     ) AS sort_date,
                     due_at, id
              FROM project_deadlines d
              WHERE status = 'open' AND project_id = ANY($1::uuid[])
                AND COALESCE(
                    (due_on->>'date')::date,
-                   DATE '1970-01-01' + floor(extract(epoch FROM due_at) / 86400)::integer
+                   (due_at AT TIME ZONE 'UTC')::date
                ) >= $2
              ORDER BY sort_date, due_at, id
              LIMIT $3 OFFSET $4
@@ -521,17 +521,17 @@ pub async fn next_upcoming_date_by_project(
          CROSS JOIN LATERAL (
              SELECT COALESCE(
                  due_on->>'date',
-                 (DATE '1970-01-01' + floor(extract(epoch FROM due_at) / 86400)::integer)::text
+                 ((due_at AT TIME ZONE 'UTC')::date)::text
              ) AS due_date
              FROM project_deadlines
              WHERE project_id = visible.id AND status = 'open'
                AND COALESCE(
                    (due_on->>'date')::date,
-                   DATE '1970-01-01' + floor(extract(epoch FROM due_at) / 86400)::integer
+                   (due_at AT TIME ZONE 'UTC')::date
                ) >= $2
              ORDER BY COALESCE(
                  (due_on->>'date')::date,
-                 DATE '1970-01-01' + floor(extract(epoch FROM due_at) / 86400)::integer
+                 (due_at AT TIME ZONE 'UTC')::date
              ), due_at, id
              LIMIT 1
          ) AS next_due",
