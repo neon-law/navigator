@@ -34,20 +34,21 @@ use crate::components::aster::{AsterArtwork, AsterPose};
 use crate::components::{
     wire_runs, Accordion, ActionItem, ActionList, AppLogo, AppNavbar, AppProfileMenu, Avatar,
     BackBreadcrumb, Badge, BadgeTone, Callout, CalloutTone, Card, CatalogHero, Choice, ChoiceGroup,
-    ChoiceGroupOption, CiteCheckCitation, CiteCheckPane, CiteCheckSide, CiteCheckStatus,
-    CiteCheckView, ClientDriView, ClientDriViewBanner, CodeBlock, Column, ConfirmDelete, CopyRun,
-    DataTable, Empty, ExternalLink, FactCard, FactGrid, Feed, FeedAccent, FeedPost, FeedSource,
-    Field, FooterAttorney, FooterBarLicense, FooterMembership, FooterNavLink, FooterOffice,
-    FooterSocialLink, FormCard, GitHubStars, Hero, HeroAlign, HeroLevel, Honeypot, Icon, IconName,
-    LawyerPortalBreadcrumb, LegalBlueprintDisclaimer, NavigatorDestination, NavigatorFooter,
-    NavigatorFooterLink, NavigatorNavbar, NavigatorShell, NotationDocument, NotationDocumentData,
-    OpenTermLink, Pagination, Panel, PeopleListInputs, PersonChoice, PersonPicker, PricingCard,
-    PricingSection, Progress, PublicShell, QuestionStage, RowActions, RunParagraph,
-    SampleMattersBanner, SealRole, SealSigner, SealState, Separator, SeparatorOrientation,
-    SignatureSeal, SignatureSealData, SiteFooterLegal, SiteHeader, SiteNavLink, SocialMeta,
-    SortState, Stage, StageWidth, StatEntry, StatGrid, StatusCell, StatusStrip, StepMeta, Stepper,
-    StepperPanel, Tab, Tabs, TestimonialCard, TestimonialCards, TestimonialSection, Toast,
-    ToastTone, ToggleGroup, ToggleOption, UtcTime, THEME_STYLESHEET_HREF,
+    ChoiceGroupOption, CitationHighlight, CitationRect, CiteCheckCitation, CiteCheckPane,
+    CiteCheckSide, CiteCheckStatus, CiteCheckView, ClientDriView, ClientDriViewBanner, CodeBlock,
+    Column, ConfirmDelete, CopyRun, DataTable, Empty, ExternalLink, FactCard, FactGrid, Feed,
+    FeedAccent, FeedPost, FeedSource, Field, FooterAttorney, FooterBarLicense, FooterMembership,
+    FooterNavLink, FooterOffice, FooterSocialLink, FormCard, GitHubStars, Hero, HeroAlign,
+    HeroLevel, Honeypot, Icon, IconName, LawyerPortalBreadcrumb, LegalBlueprintDisclaimer,
+    NavigatorDestination, NavigatorFooter, NavigatorFooterLink, NavigatorNavbar, NavigatorShell,
+    NotationDocument, NotationDocumentData, OpenTermLink, Pagination, Panel, PeopleListInputs,
+    PersonChoice, PersonPicker, PricingCard, PricingSection, Progress, PublicShell, QuestionStage,
+    RowActions, RunParagraph, SampleMattersBanner, SealRole, SealSigner, SealState, Separator,
+    SeparatorOrientation, SignatureSeal, SignatureSealData, SiteFooterLegal, SiteHeader,
+    SiteNavLink, SocialMeta, SortState, Stage, StageWidth, StatEntry, StatGrid, StatusCell,
+    StatusStrip, StepMeta, Stepper, StepperPanel, Tab, Tabs, TestimonialCard, TestimonialCards,
+    TestimonialSection, Toast, ToastTone, ToggleGroup, ToggleOption, UtcTime,
+    THEME_STYLESHEET_HREF,
 };
 // The vendor marks come from their own module rather than the theme root: they
 // are the one component whose colours are a third party's rather than the
@@ -1978,38 +1979,49 @@ fn MatterPrimitivesShowcase() -> Element {
                 description: "Uploaded files appear here.".to_string(),
                 action: rsx! { a { href: "/design#matter-primitives", "Upload a document" } },
             }
-            h3 { "Cite-check view" }
-            p {
-                "A draft beside the record page it cites: the drafted assertion on the left, the "
-                code { "Complaint" }
-                " page on the right, and the draft's record citations marked with what their "
-                "check says under the split."
-            }
-            CiteCheckView {
-                id: "design-cite-check".to_string(),
-                draft: CiteCheckSide {
-                    pane: CiteCheckPane::Draft,
-                    title: "Draft: Opposition to Motion to Dismiss".to_string(),
-                    body: "The Complaint at 4:12–19 alleges the breach. Id. at 5:2 adds the\nrest of the exchange.".to_string(),
+            CiteCheckExample {}
+        }
+    }
+}
+
+/// The design gallery's interactive record citation, using a firm-authored sample page.
+#[component]
+pub fn CiteCheckExample() -> Element {
+    rsx! {
+        h3 { "Cite-check view" }
+        p { "Open the highlighted passage to read the full source page." }
+        CiteCheckView {
+            id: "design-cite-check".to_string(),
+            draft: CiteCheckSide {
+                pane: CiteCheckPane::Draft,
+                title: "Draft: Opposition to Motion to Dismiss".to_string(),
+                body: "The parties signed a written supply contract (Complaint ¶ 1). The seller says it shipped every month (id. ¶ 2).".to_string(),
+            },
+            source: CiteCheckSide {
+                pane: CiteCheckPane::Source,
+                title: "Complaint (Doc. 3)".to_string(),
+                body: "¶ 1. The parties signed a written supply contract.".to_string(),
+            },
+            source_highlight: rsx! {
+                CitationHighlight {
+                    label: "Complaint, ¶ 1".to_string(),
+                    page: 4,
+                    image_url: "/public/design/sample-complaint-page.png".to_string(),
+                    rects: vec![CitationRect { x: 0.085, y: 0.311, width: 0.581, height: 0.034 }],
+                }
+            },
+            citations: vec![
+                CiteCheckCitation {
+                    reference: "Complaint ¶ 1, p. 4".to_string(),
+                    sentence: "The parties signed a written supply contract.".to_string(),
+                    status: CiteCheckStatus::Verified,
                 },
-                source: CiteCheckSide {
-                    pane: CiteCheckPane::Source,
-                    title: "Complaint (Doc. 3)".to_string(),
-                    body: "¶ 1. The parties signed a written supply contract.\n¶ 2. Seller delivered\nthe goods monthly.".to_string(),
+                CiteCheckCitation {
+                    reference: "Id. ¶ 2".to_string(),
+                    sentence: "The seller says it shipped every month.".to_string(),
+                    status: CiteCheckStatus::Review,
                 },
-                citations: vec![
-                    CiteCheckCitation {
-                        reference: "Complaint at 4:12–19".to_string(),
-                        sentence: "The Complaint at 4:12–19 alleges the breach.".to_string(),
-                        status: CiteCheckStatus::Verified,
-                    },
-                    CiteCheckCitation {
-                        reference: "Id. at 5:2".to_string(),
-                        sentence: "Id. at 5:2 adds the rest of the exchange.".to_string(),
-                        status: CiteCheckStatus::Review,
-                    },
-                ],
-            }
+            ],
         }
     }
 }

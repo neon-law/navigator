@@ -95,16 +95,23 @@ pub fn CiteCheckView(
     draft: CiteCheckSide,
     source: CiteCheckSide,
     #[props(default)] citations: Vec<CiteCheckCitation>,
+    #[props(default)] source_highlight: Option<Element>,
 ) -> Element {
+    let layout = if source_highlight.is_some() {
+        "nav-cite-check nav-cite-check--illustrated"
+    } else {
+        "nav-cite-check"
+    };
     rsx! {
-        div { class: "nav-cite-check", id,
+        div { class: layout, id,
             div { class: "nav-cite-check__side nav-cite-check__side--{draft.pane.suffix()}",
                 h3 { class: "nav-cite-check__title", "{draft.title}" }
                 pre { class: "nav-cite-check__body", "{draft.body}" }
             }
             div { class: "nav-cite-check__side nav-cite-check__side--{source.pane.suffix()}",
                 h3 { class: "nav-cite-check__title", "{source.title}" }
-                pre { class: "nav-cite-check__body", "{source.body}" }
+                if let Some(highlight) = source_highlight { {highlight} }
+                if !source.body.is_empty() { pre { class: "nav-cite-check__body", "{source.body}" } }
             }
             if citations.is_empty() {
                 div { class: "nav-cite-check__empty",

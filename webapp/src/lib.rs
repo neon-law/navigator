@@ -111,6 +111,7 @@ pub mod matter_surface;
 pub mod notations_about;
 // The Same Day Legal subscription shell. `same-day-mobile/` launches it natively;
 // it lives here so the workspace suite renders and tests it.
+pub mod court_date_review;
 pub mod mobile;
 pub mod notation_demo;
 pub mod notation_document_review;

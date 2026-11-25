@@ -192,15 +192,23 @@ async fn delete_and_archive_restore_round_trip_one_project() {
     let archived = records::update_on(
         &pg,
         created.id,
-        &[Column::Text(
-            "repository_url",
-            Some("https://forge.example/firm/synthetic"),
-        )],
+        &[
+            Column::Text(
+                "repository_url",
+                Some("https://forge.example/firm/synthetic"),
+            ),
+            Column::Text("calendar_timezone", Some("America/Chicago")),
+        ],
         None,
     )
     .await
     .unwrap()
     .unwrap();
+
+    assert_eq!(
+        archived.calendar_timezone.as_deref(),
+        Some("America/Chicago")
+    );
 
     assert!(records::delete_on(&pg, created.id).await.unwrap());
     assert!(!records::delete_on(&pg, created.id).await.unwrap());

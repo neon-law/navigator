@@ -16,7 +16,7 @@
 mod retirement;
 pub use retirement::confirm_archived_calendars;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use uuid::Uuid;
 
@@ -132,30 +132,43 @@ pub async fn ensure(
     if project.status != "open" {
         return close(surreal, project_id, calendar).await;
     }
-    let outcome = if let Some(recorded) = configured(&project) {
-        if !calendar
-            .recorded_calendar_matches(&project.code, &recorded)
-            .await?
-        {
-            return Ok(CalendarReport {
-                outcome: CalendarOutcome::RecordedResourceMissing,
-                changed: 0,
-            });
-        }
-        CalendarOutcome::Present
+    let timezone = projects::calendar_timezone(surreal, &project)
+        .await
+        .map_err(|error| ProjectCalendarError::Db(error.to_string()))?;
+    let (id, outcome) = if let Some(recorded) = configured(&project) {
+        (recorded, CalendarOutcome::Present)
     } else {
-        let (found, outcome) = match calendar.find_calendar(&project.code).await? {
-            Some(found) => (found, CalendarOutcome::Adopted),
+        match calendar.find_calendar(&project.code).await? {
+            Some(found) => (found.id, CalendarOutcome::Adopted),
             None => (
-                calendar.create_calendar(&project.code).await?,
+                calendar
+                    .create_calendar(&project.code, timezone.name())
+                    .await?
+                    .id,
                 CalendarOutcome::Created,
             ),
-        };
-        projects::set_calendar_id(surreal, project_id, &found.id)
+        }
+    };
+    if outcome != CalendarOutcome::Created
+        && !calendar
+            .recorded_calendar_matches(&project.code, &id)
+            .await?
+    {
+        return Ok(CalendarReport {
+            outcome: CalendarOutcome::RecordedResourceMissing,
+            changed: 0,
+        });
+    }
+    if outcome != CalendarOutcome::Present {
+        projects::set_calendar_id(surreal, project_id, &id)
             .await?
             .ok_or(ProjectCalendarError::NotFound)?;
-        outcome
-    };
+    }
+    if outcome != CalendarOutcome::Created {
+        calendar
+            .reconcile_calendar_timezone(&project.code, &id, timezone.name())
+            .await?;
+    }
     Ok(CalendarReport {
         outcome,
         changed: 0,
@@ -270,11 +283,9 @@ pub async fn backup_events(
 pub struct ParticipantSync {
     pub person_id: Uuid,
     pub access: String,
-    pub calendar_invitation: String,
-    pub event_responses: BTreeMap<String, usize>,
 }
 
-/// Reconcile direct reader grants and event guests after provisioning. The
+/// Reconcile direct reader grants after provisioning. The
 /// caller holds the same project write lane as setup and the Deadline mirror.
 ///
 /// # Errors
@@ -310,9 +321,14 @@ pub async fn sync_membership(
     };
 
     // A recorded id is an operator input. Verify it still identifies this
-    // Project's calendar in the owning Firm's Workspace before ACL or event writes.
+    // Project's calendar in the owning Firm's Workspace before sharing.
     verify_private_calendar(calendar, &project.code, &calendar_id).await?;
-    let (desired, guests, mut report) = current_roster(&db, &project, firm_id, &owner).await?;
+    let (desired, mut report) = if project.status == "open" {
+        let mut rosters = load_rosters(&db, &[project.id]).await?;
+        eligible_roster(rosters.remove(&project.id).unwrap_or_default(), &owner)?
+    } else {
+        Default::default()
+    };
 
     reconcile_reader_grants(
         &db,
@@ -325,12 +341,14 @@ pub async fn sync_membership(
     )
     .await?;
 
-    let mut event_responses = calendar.sync_event_guests(&calendar_id, &guests).await?;
-    for row in &mut report {
-        if let Some(responses) = event_responses.remove(&row.person_id.simple().to_string()) {
-            row.event_responses = responses;
-        }
-    }
+    let members = desired.values().map(String::as_str).collect();
+    calendar
+        .reconcile_project_events(
+            &calendar_id,
+            (project.status == "open").then_some(project.code.as_str()),
+            &members,
+        )
+        .await?;
     Ok(report)
 }
 
@@ -343,7 +361,7 @@ async fn reconcile_reader_grants(
     desired: &BTreeMap<Uuid, String>,
     report: &mut [ParticipantSync],
 ) -> Result<(), ProjectCalendarError> {
-    let mut managed: BTreeMap<String, bool> = sqlx::query_as::<_, (String, bool)>("SELECT email, notified FROM project_calendar_grant WHERE project_id = $1 AND firm_id = $2 AND calendar_id = $3")
+    let managed: BTreeSet<String> = sqlx::query_scalar("SELECT email FROM project_calendar_grant WHERE project_id = $1 AND firm_id = $2 AND calendar_id = $3")
     .bind(project_id)
     .bind(firm_id)
     .bind(calendar_id)
@@ -353,10 +371,10 @@ async fn reconcile_reader_grants(
     .into_iter()
     .collect();
 
-    // Revoke expired job grants before attempting new invitations. Direct
+    // Revoke expired job grants before attempting new grants. Direct
     // grants that predate this job never enter the ledger.
     for email in managed
-        .keys()
+        .iter()
         .filter(|email| !desired.values().any(|value| value == *email))
     {
         calendar.revoke_reader(calendar_id, email).await?;
@@ -384,7 +402,7 @@ async fn reconcile_reader_grants(
         };
         if !current.contains_key(email) {
             // Record intent before making a side effect. On a lost response
-            // the next pass reads ACL state before it ever tries to invite.
+            // the next pass checks the ACL before inserting another grant.
             sqlx::query(
                 "INSERT INTO project_calendar_grant (project_id, firm_id, calendar_id, email)
                  VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
@@ -396,12 +414,7 @@ async fn reconcile_reader_grants(
             .execute(db.pool())
             .await
             .map_err(sync_db)?;
-            if calendar.invite_reader(calendar_id, email).await? {
-                sqlx::query("UPDATE project_calendar_grant SET notified = true WHERE project_id = $1 AND firm_id = $2 AND calendar_id = $3 AND email = $4")
-                .bind(project_id).bind(firm_id).bind(calendar_id).bind(email)
-                .execute(db.pool()).await.map_err(sync_db)?;
-                managed.insert(email.clone(), true);
-            } else if !managed.contains_key(email) {
+            if !calendar.grant_reader(calendar_id, email).await? && !managed.contains(email) {
                 delete_grant(db, project_id, firm_id, calendar_id, email).await?;
             }
         }
@@ -420,48 +433,96 @@ async fn reconcile_reader_grants(
             }));
         }
         row.access = "verified".into();
-        row.calendar_invitation = match managed.get(email) {
-            Some(true) => "notification_requested",
-            Some(false) => "notification_unconfirmed",
-            None => "existing_access",
-        }
-        .into();
     }
 
     Ok(())
 }
 
-type Roster = (
-    BTreeMap<Uuid, String>,
-    BTreeMap<String, String>,
-    Vec<ParticipantSync>,
-);
+type RosterRow = (Uuid, String, bool, String, String, bool, Option<String>);
+type Roster = (BTreeMap<Uuid, String>, Vec<ParticipantSync>);
 
-async fn current_roster(
+async fn load_rosters(
     db: &crate::postgres::PostgresDb,
-    project: &Project,
-    firm_id: Uuid,
-    owner: &str,
-) -> Result<Roster, ProjectCalendarError> {
-    if project.status != "open" {
-        return Ok(Roster::default());
-    }
-    let owner_domain = owner.rsplit_once('@').map(|(_, domain)| domain);
-    let rows = sqlx::query_as::<_, (Uuid, String, bool, String, String, bool, Option<String>)>(
-        "SELECT p.id, r.participation, r.is_lawyer_dri, p.role, p.email, p.email_confirmed, f.membership
+    projects: &[Uuid],
+) -> Result<BTreeMap<Uuid, Vec<RosterRow>>, ProjectCalendarError> {
+    let rows = sqlx::query_as::<_, (Uuid, Uuid, String, bool, String, String, bool, Option<String>)>(
+        "SELECT r.project_id, p.id, r.participation, r.is_lawyer_dri, p.role, p.email, p.email_confirmed, f.membership
          FROM person_project_role r JOIN person p ON p.id = r.person_id
-         LEFT JOIN person_firm_role f ON f.person_id = p.id AND f.firm_id = $2
-         WHERE r.project_id = $1 AND NOT r.is_client_dri AND r.participation <> ALL($3::text[])
+         JOIN project pr ON pr.id = r.project_id
+         LEFT JOIN person_firm_role f ON f.person_id = p.id AND f.firm_id = pr.firm_id
+         WHERE r.project_id = ANY($1) AND NOT r.is_client_dri AND r.participation <> ALL($2::text[])
          ORDER BY r.inserted_at, r.id",
     )
-    .bind(project.id)
-    .bind(firm_id)
+    .bind(projects)
     .bind(projects::PARTICIPATION_CLIENT_SIDE)
     .fetch_all(db.pool())
     .await
     .map_err(sync_db)?;
+    let mut rosters = BTreeMap::<_, Vec<_>>::new();
+    for (project, person, participation, dri, role, email, confirmed, membership) in rows {
+        rosters.entry(project).or_default().push((
+            person,
+            participation,
+            dri,
+            role,
+            email,
+            confirmed,
+            membership,
+        ));
+    }
+    Ok(rosters)
+}
+
+/// A recorded Project Calendar and the participants eligible for a free/busy check.
+pub struct SharedCalendar {
+    pub project_id: Uuid,
+    pub code: String,
+    pub calendar_id: Option<String>,
+    pub people: Vec<Uuid>,
+}
+
+/// Shared calendars to query as each participant, limited to the caller's authorized Firms.
+/// The provider checks the participant's access on every free/busy read.
+pub async fn shared_freebusy_calendars(
+    db: &crate::postgres::PostgresDb,
+    firms: &[Uuid],
+    people: &[Uuid],
+) -> Result<BTreeMap<Uuid, Vec<SharedCalendar>>, ProjectCalendarError> {
+    let projects: Vec<(Uuid, Uuid, String, Option<String>, String)> = crate::firms::calendar_owners_query()
+        .push("SELECT p.id, p.firm_id, p.code, p.calendar_id, c.owner FROM project p JOIN calendar_owners c ON c.firm_id = p.firm_id
+               WHERE c.owner IS NOT NULL AND p.status = 'open' AND p.firm_id = ANY(")
+        .push_bind(firms)
+        .push(") AND EXISTS (SELECT 1 FROM person_project_role r WHERE r.project_id = p.id AND r.person_id = ANY(")
+        .push_bind(people)
+        .push("))")
+        .build_query_as()
+        .fetch_all(db.pool())
+        .await
+        .map_err(sync_db)?;
+    let ids: Vec<_> = projects.iter().map(|(id, ..)| *id).collect();
+    let mut rosters = load_rosters(db, &ids).await?;
+    let mut calendars = BTreeMap::<_, Vec<_>>::new();
+    for (id, firm, code, calendar_id, owner) in projects {
+        let (eligible, _) = eligible_roster(rosters.remove(&id).unwrap_or_default(), &owner)?;
+        let people: Vec<_> = eligible
+            .into_keys()
+            .filter(|person| people.contains(person))
+            .collect();
+        if !people.is_empty() {
+            calendars.entry(firm).or_default().push(SharedCalendar {
+                project_id: id,
+                code,
+                calendar_id,
+                people,
+            });
+        }
+    }
+    Ok(calendars)
+}
+
+fn eligible_roster(rows: Vec<RosterRow>, owner: &str) -> Result<Roster, ProjectCalendarError> {
+    let owner_domain = owner.rsplit_once('@').map(|(_, domain)| domain);
     let mut desired = BTreeMap::new();
-    let mut guests = BTreeMap::new();
     let mut report = Vec::new();
     let mut has_lawyer_dri = false;
     let mut clerks = Vec::new();
@@ -484,17 +545,12 @@ async fn current_roster(
         report.push(ParticipantSync {
             person_id,
             access: gap.unwrap_or("pending").into(),
-            calendar_invitation: "not_requested".into(),
-            event_responses: BTreeMap::new(),
         });
         if gap.is_none() {
             if role == Role::Clerk {
                 clerks.push(person_id);
             } else {
                 has_lawyer_dri |= is_lawyer_dri;
-            }
-            if receives_event_invitation(role) {
-                guests.insert(person_id.simple().to_string(), address.clone());
             }
             desired.insert(person_id, address);
         }
@@ -503,18 +559,13 @@ async fn current_roster(
     if !has_lawyer_dri {
         for clerk in clerks {
             desired.remove(&clerk);
-            guests.remove(&clerk.simple().to_string());
             if let Some(row) = report.iter_mut().find(|row| row.person_id == clerk) {
                 row.access = "no_supervising_lawyer".into();
             }
         }
     }
 
-    Ok((desired, guests, report))
-}
-
-fn receives_event_invitation(role: Role) -> bool {
-    matches!(role, Role::Clerk | Role::Lawyer | Role::Admin)
+    Ok((desired, report))
 }
 
 fn delivery_gap(
@@ -636,15 +687,6 @@ mod tests {
     use crate::projects::{self, UpdateProjectCommand};
     use crate::test_support::seed_calendar_project;
 
-    #[test]
-    fn assigned_lawyers_join_event_guests_without_inviting_clients_or_owners() {
-        assert!(super::receives_event_invitation(Role::Lawyer));
-        assert!(super::receives_event_invitation(Role::Clerk));
-        assert!(super::receives_event_invitation(Role::Admin));
-        assert!(!super::receives_event_invitation(Role::Client));
-        assert!(!super::receives_event_invitation(Role::Owner));
-    }
-
     #[tokio::test]
     async fn replay_keeps_each_calendar_event_revision_once() {
         use super::backup_events;
@@ -753,7 +795,10 @@ mod tests {
             let db = crate::surreal::SurrealDb::uninitialized();
             let (project, _) = seed_calendar_project().await;
             let calendar = FakeCalendar::default();
-            let other = calendar.create_calendar("other-project").await.unwrap();
+            let other = calendar
+                .create_calendar("other-project", "UTC")
+                .await
+                .unwrap();
             let writer = "writer@calendar.test";
             calendar
                 .set_member_role(&other.id, writer, CalendarRole::Writer)
@@ -803,8 +848,19 @@ mod tests {
         .unwrap();
     }
 
+    async fn assert_no_shared_calendars(
+        db: &crate::postgres::PostgresDb,
+        firms: &[uuid::Uuid],
+        person: uuid::Uuid,
+    ) {
+        assert!(super::shared_freebusy_calendars(db, firms, &[person])
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
     #[tokio::test]
-    async fn postgres_assignments_add_and_remove_each_eligible_event_guest() {
+    async fn assignments_share_calendar_access_and_freebusy_for_the_same_roster() {
         use crate::firms::{self, FirmMembership, NewPersonFirmRole};
         use crate::participation::{
             add_participant, remove_participant, AddParticipantCommand, DriActor, DriRequest,
@@ -863,13 +919,19 @@ mod tests {
                 super::sync_membership(&db, project_id, &calendar)
                     .await
                     .unwrap();
-                let guests = calendar.assigned_guests(&calendar_id);
-                let key = person.id.simple().to_string();
-                if role == Role::Owner {
-                    assert!(!guests.contains_key(&key));
-                } else {
-                    assert_eq!(guests.get(&key), Some(&email));
-                }
+                assert_eq!(
+                    calendar.sharing(&calendar_id).get(&email),
+                    Some(&CalendarRole::Reader)
+                );
+                let pg = crate::postgres::PostgresDb::application().await.unwrap();
+                let calendars = super::shared_freebusy_calendars(&pg, &[firm_id], &[person.id])
+                    .await
+                    .unwrap();
+                assert!(calendars[&firm_id]
+                    .iter()
+                    .any(|shared| shared.calendar_id.as_ref() == Some(&calendar_id)
+                        && shared.people.contains(&person.id)));
+                assert_no_shared_calendars(&pg, &[], person.id).await;
                 if row.is_lawyer_dri {
                     continue;
                 }
@@ -881,7 +943,7 @@ mod tests {
                     assert!(report
                         .iter()
                         .any(|r| r.person_id == person.id && r.access == "not_a_firm_member"));
-                    assert!(!calendar.assigned_guests(&calendar_id).contains_key(&key));
+                    assert_no_shared_calendars(&pg, &[firm_id], person.id).await;
                     assert!(!calendar.sharing(&calendar_id).contains_key(&email));
                 }
                 remove_participant(&db, project_id, row.id, DriActor::System)
@@ -890,11 +952,8 @@ mod tests {
                 super::sync_membership(&db, project_id, &calendar)
                     .await
                     .unwrap();
-                let guests = calendar.assigned_guests(&calendar_id);
-                assert!(!guests.contains_key(&key));
-                assert!(guests
-                    .values()
-                    .any(|email| email == "participant-supervisor@calendar.test"));
+                assert!(!calendar.sharing(&calendar_id).contains_key(&email));
+                assert_no_shared_calendars(&pg, &[firm_id], person.id).await;
             }
         })
         .await;
@@ -1012,12 +1071,29 @@ mod tests {
             let db = crate::surreal::SurrealDb::uninitialized();
             let (project, _) = seed_calendar_project().await;
             let calendar = FakeCalendar::default();
-            let existing = calendar.create_calendar("calendar-test").await.unwrap();
+            projects::update_project(
+                &db,
+                project,
+                &UpdateProjectCommand {
+                    calendar_timezone: Some("America/Phoenix".into()),
+                    ..UpdateProjectCommand::default()
+                },
+            )
+            .await
+            .unwrap();
+            let existing = calendar
+                .create_calendar("calendar-test", "UTC")
+                .await
+                .unwrap();
 
             let report = ensure(&db, project, &calendar).await.unwrap();
 
             assert_eq!(report.outcome, CalendarOutcome::Adopted);
             assert_eq!(calendar.created(), 1);
+            assert_eq!(
+                calendar.timezone(&existing.id).as_deref(),
+                Some("America/Phoenix")
+            );
             let stored = projects::find_by_id(&db, project).await.unwrap().unwrap();
             assert_eq!(stored.calendar_id.as_deref(), Some(existing.id.as_str()));
         })

@@ -76,7 +76,7 @@ pub(crate) async fn reconcile(
     }
     project_calendar::sync_membership(surreal, project_id, &calendar)
         .await
-        .map_err(|_| failed("reconciling assigned event guests"))?;
+        .map_err(|_| failed("verifying calendar membership"))?;
     if !mirror.failures.is_empty() {
         return Err(failed("mirroring individual Deadlines"));
     }

@@ -96,12 +96,16 @@ fn assemble(
                     || row["authority_kind"] == "court_order";
                 let mut entry = row.clone();
                 entry["kind"] = json!("deadline");
-                entry["at"] = json!(due);
+                let civil = row["due_on"]["date"]
+                    .as_str()
+                    .and_then(|value| value.parse::<NaiveDate>().ok());
+                entry["at"] = civil.map_or_else(|| json!(due), |date| json!(date));
+                entry["all_day"] = json!(civil.is_some());
                 entry["priority"] = json!(priority);
                 if due < now {
                     overdue.push(entry);
-                } else if due >= start && due < end {
-                    entries.push((!priority, due, entry));
+                } else if civil.map_or_else(|| due >= start && due < end, |date| date == day) {
+                    entries.push((!priority, if civil.is_some() { start } else { due }, entry));
                 }
             }
             json!({"complete": report["complete"], "projects": report["coverage"]})
@@ -157,14 +161,13 @@ fn print(report: &Value) {
     ] {
         println!("{label}");
         for row in report[field].as_array().into_iter().flatten() {
-            let when = if row["all_day"] == true {
-                "All day"
-            } else {
-                row["due_local"]
-                    .as_str()
-                    .or_else(|| row["at"].as_str())
-                    .unwrap_or_default()
-            };
+            let when = row["due_local"].as_str().unwrap_or_else(|| {
+                if row["all_day"] == true {
+                    "All day"
+                } else {
+                    row["at"].as_str().unwrap_or_default()
+                }
+            });
             let marker = if row["priority"] == true {
                 "Court • "
             } else {
@@ -210,6 +213,25 @@ mod tests {
             report["coverage"]["calendar"]["detail"]["unreadable"][0]["missing"],
             "scope"
         );
+    }
+
+    #[test]
+    fn the_agenda_lists_a_civil_deadline_only_on_its_recorded_date() {
+        let now = "2028-07-12T12:00:00Z".parse().unwrap();
+        let brief = json!({"complete":true, "deadlines":[{
+            "due_on":{"date":"2028-07-12", "timezone":"America/Los_Angeles", "cutoff":"23:59:00"},
+            "due_at":"2028-07-13T06:59:00Z", "title":"Synthetic response"
+        }]});
+        for (date, expected_count) in [("2028-07-12", 1), ("2028-07-13", 0)] {
+            let (day, start, end, now) = dates(date, chrono_tz::America::New_York, now).unwrap();
+            let report = assemble(day, start, end, now, Ok(brief.clone()), Ok(json!([])));
+            let entries = report["entries"].as_array().unwrap();
+            assert_eq!(entries.len(), expected_count);
+            if let Some(entry) = entries.first() {
+                assert_eq!(entry["all_day"], true);
+                assert_eq!(entry["at"], "2028-07-12");
+            }
+        }
     }
 
     #[test]

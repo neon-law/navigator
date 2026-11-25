@@ -27,8 +27,8 @@ async fn mount(server: &MockServer, project_id: Uuid, deadline_id: Uuid) -> Stor
         "id": deadline_id,
         "project_id": project_id,
         "due_at": "2026-11-03T01:00:00+00:00",
-        "authority_kind": "statute",
-        "authority": "15 U.S.C. § 1",
+        "authority_kind": "contract",
+        "authority": "Synthetic agreement § 1",
         "source": "lawyer",
         "status": "open",
         "calendar_role": "firm"
@@ -42,10 +42,10 @@ async fn mount(server: &MockServer, project_id: Uuid, deadline_id: Uuid) -> Stor
                 Uuid::parse_str(key.as_str()?).ok()?;
                 Some(body)
             }) == Some(json!({
-            "title": "Answer to the complaint",
+            "title": "Agreement response",
             "due_at": "2026-11-02T17:00:00-08:00",
-            "authority_kind": "statute",
-            "authority": "15 U.S.C. § 1",
+            "authority_kind": "contract",
+            "authority": "Synthetic agreement § 1",
             "calendar_role": "firm",
             "internal_lead_days": 14,
             "client_lead_days": 7
@@ -149,13 +149,13 @@ async fn deadline_create_list_update_and_complete_print_the_stored_row() {
                 "deadline",
                 "create",
                 "--title",
-                "Answer to the complaint",
+                "Agreement response",
                 "--due-at",
                 "2026-11-02T17:00:00-08:00",
                 "--authority-kind",
-                "statute",
+                "contract",
                 "--authority",
-                "15 U.S.C. § 1",
+                "Synthetic agreement § 1",
                 "--calendar-role",
                 "firm",
                 "--internal-lead-days",
@@ -323,23 +323,25 @@ async fn deadline_ics_prints_one_calendar_event_per_row() {
     assert!(calendar.ends_with("END:VCALENDAR\r\n"));
     assert_eq!(calendar.matches("BEGIN:VEVENT").count(), 1);
     assert!(calendar.contains(&format!("UID:{deadline_id}@127.0.0.1\r\n")));
-    assert!(calendar.contains("SUMMARY:Statutory deadline - acme\r\n"));
+    assert!(calendar.contains("SUMMARY:acme: Statutory deadline\r\n"));
     assert!(calendar.contains("TRIGGER:-P14D\r\n"));
     server.verify().await;
 }
 
 /// The CLI reaches real API handlers and persistence over HTTP. Only session
 /// establishment is supplied by the fixture; the API enforces Project scoping.
-#[allow(clippy::too_many_lines)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cli_api_round_trip_cancels_refuses_replay_and_reopens_the_same_row() {
-    let surreal = store::test_support::mem_surreal().await;
-    let project_id =
-        store::test_support::seed_project_surreal(&surreal, "Synthetic deadline").await;
-    let project = store::projects::find_by_id(&surreal, project_id)
-        .await
-        .unwrap()
-        .unwrap();
+    store::test_support::with_postgres(deadline_lifecycle()).await;
+}
+
+#[allow(clippy::too_many_lines)]
+async fn deadline_lifecycle() {
+    let pg = store::postgres::PostgresDb::application().await.unwrap();
+    let surreal = store::surreal::SurrealDb::uninitialized();
+    let project =
+        store::test_support::seed_project_on_firm(&surreal, None, "Synthetic deadline").await;
+    let project_id = project.id;
     let person = store::persons::create(
         &surreal,
         &store::persons::NewPerson::with_role(
@@ -380,6 +382,11 @@ async fn cli_api_round_trip_cancels_refuses_replay_and_reopens_the_same_row() {
             canonical_base_url: None,
             jev: None,
         })
+        .layer(axum::middleware::from_fn(
+            move |request, next: axum::middleware::Next| {
+                store::postgres::PostgresDb::with_test_db(pg.clone(), next.run(request))
+            },
+        ))
         .layer(axum::Extension(portal::SessionData {
             person_id: Some(person.id),
             ..portal::SessionData::fresh("lawyer@example.com", store::persons::Role::Lawyer)
@@ -500,6 +507,44 @@ async fn mount_projects(server: &MockServer) {
         ])))
         .mount(server)
         .await;
+}
+
+#[tokio::test]
+async fn create_accepts_civil_date_without_requiring_a_made_up_cutoff() {
+    let server = MockServer::start().await;
+    mount_projects(&server).await;
+    let root = TempDir::new().unwrap();
+    let host = server.uri();
+    let credentials = credentials(root.path(), &host);
+    let day = json!({"date":"2028-07-12"});
+    Mock::given(method("POST")).and(body_json(json!({
+        "title":"Check docket","category":"tickler","calendar_role":"firm","authority_kind":"internal",
+        "client_lead_days": null,"due_on":day,"replay_key":"tickler-1"
+    }))).respond_with(ResponseTemplate::new(201).set_body_json(json!({"id":Uuid::now_v7(),"due_on":day})))
+        .expect(1).mount(&server).await;
+    let row = run(
+        root.path(),
+        &credentials,
+        &host,
+        &[
+            "project",
+            "deadline",
+            "create",
+            "--title",
+            "Check docket",
+            "--replay-key",
+            "tickler-1",
+            "--category",
+            "tickler",
+            "--authority-kind",
+            "internal",
+            "--calendar-role",
+            "firm",
+            "--due-on",
+            "2028-07-12",
+        ],
+    );
+    assert_eq!(row["due_on"], day);
 }
 
 async fn mount_mirror(server: &MockServer, body: Value, status: u16) {

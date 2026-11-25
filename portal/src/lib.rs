@@ -91,7 +91,9 @@ pub mod brand_tokens;
 pub mod claude_router;
 pub(crate) mod communications_api;
 pub(crate) mod contingency_api;
+pub(crate) mod court_dates_api;
 pub mod cron_schedules;
+pub(crate) mod deadline_evidence;
 pub(crate) mod deadlines_api;
 pub mod deployment_keys;
 #[cfg(debug_assertions)]

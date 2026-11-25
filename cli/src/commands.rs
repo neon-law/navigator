@@ -1117,6 +1117,9 @@ pub enum ProjectsCmd {
         /// live Project only and shown to the client; an empty value clears it.
         #[arg(long, value_name = "URL")]
         booking_url: Option<String>,
+        /// Project calendar time zone, e.g. `America/Los_Angeles`. An empty value clears the override.
+        #[arg(long, value_name = "IANA_ZONE")]
+        timezone: Option<String>,
         /// The jurisdiction an onboarding Notation's Clauses bind to: the state
         /// whose law and arbitration seat an engagement letter names. Written
         /// to the live Project row and read live at render time by a Clause
@@ -2094,6 +2097,15 @@ pub enum ServiceCmd {
 
 #[derive(Subcommand)]
 pub enum DeadlineCmd {
+    /// Stage and inspect court dates awaiting lawyer review.
+    Review {
+        #[command(subcommand)]
+        action: projects::deadline_review::Action,
+        #[arg(long, global = true)]
+        project: Option<String>,
+        #[arg(long, global = true)]
+        host: Option<String>,
+    },
     /// Show a cited date proposal; only --confirm writes a stored Deadline.
     Propose {
         #[command(flatten)]
@@ -2158,11 +2170,26 @@ pub enum DeadlineCmd {
         #[arg(long, requires = "ics")]
         location: Option<String>,
         /// RFC 3339 timestamp with an explicit offset.
+        #[arg(long, required_unless_present = "due_on", conflicts_with = "due_on")]
+        due_at: Option<String>,
+        /// Civil due date displayed on every calendar in this matter.
         #[arg(long)]
-        due_at: String,
+        due_on: Option<chrono::NaiveDate>,
+        /// Governing IANA time zone. Defaults to the Project calendar zone.
+        #[arg(long, requires = "due_on")]
+        due_timezone: Option<chrono_tz::Tz>,
+        /// Verified local cutoff on the due date (HH:MM:SS).
+        #[arg(long, requires = "due_on")]
+        cutoff: Option<chrono::NaiveTime>,
+        /// Duration given for a timed hearing, in minutes.
+        #[arg(long)]
+        hearing_minutes: Option<std::num::NonZeroU32>,
+        /// Court-supplied location saved on the hearing.
+        #[arg(long)]
+        hearing_location: Option<String>,
         /// `statute`, `court_rule`, `court_order`, `contract`, or `internal`.
         #[arg(long)]
-        authority_kind: String,
+        authority_kind: model::project_deadlines::AuthorityKind,
         /// Citation. Required for `statute` and `court_rule`.
         #[arg(long)]
         authority: Option<String>,
@@ -2177,8 +2204,8 @@ pub enum DeadlineCmd {
         owner: Option<uuid::Uuid>,
         /// `firm`, `opponent`, or `hearing`.
         #[arg(long)]
-        calendar_role: String,
-        /// `court`, `hearing`, `discovery`, or `internal`. Defaults from the
+        calendar_role: model::project_deadlines::CalendarRole,
+        /// `court`, `hearing`, `discovery`, `tickler`, or `internal`. Defaults from the
         /// calendar role and authority kind when either settles it.
         #[arg(long)]
         category: Option<String>,
@@ -2216,8 +2243,23 @@ pub enum DeadlineCmd {
         /// Court-supplied location; included only in the exported file.
         #[arg(long, requires = "ics")]
         location: Option<String>,
-        #[arg(long)]
+        #[arg(long, conflicts_with = "due_on")]
         due_at: Option<String>,
+        /// Civil due date displayed on every calendar in this matter.
+        #[arg(long)]
+        due_on: Option<chrono::NaiveDate>,
+        /// Governing IANA time zone. Defaults to the Project calendar zone.
+        #[arg(long, requires = "due_on")]
+        due_timezone: Option<chrono_tz::Tz>,
+        /// Verified local cutoff on the due date (HH:MM:SS).
+        #[arg(long, requires = "due_on")]
+        cutoff: Option<chrono::NaiveTime>,
+        /// Duration given for a timed hearing, in minutes.
+        #[arg(long)]
+        hearing_minutes: Option<std::num::NonZeroU32>,
+        /// Court-supplied location saved on the hearing.
+        #[arg(long)]
+        hearing_location: Option<String>,
         #[arg(long)]
         authority_kind: Option<String>,
         #[arg(long)]
@@ -2230,7 +2272,7 @@ pub enum DeadlineCmd {
         owner: Option<uuid::Uuid>,
         #[arg(long)]
         calendar_role: Option<String>,
-        /// `court`, `hearing`, `discovery`, or `internal`. An empty value clears it.
+        /// `court`, `hearing`, `discovery`, `tickler`, or `internal`. An empty value clears it.
         #[arg(long)]
         category: Option<String>,
         #[arg(long)]
@@ -2896,6 +2938,11 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
             }
         },
         ProjectsCmd::Deadline { action } => match action {
+            DeadlineCmd::Review {
+                action,
+                host,
+                project,
+            } => projects::deadline_review::run(host.as_deref(), project.as_deref(), action).await,
             DeadlineCmd::Propose {
                 args,
                 host,
@@ -2943,6 +2990,11 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
                 ics,
                 location,
                 due_at,
+                due_on,
+                due_timezone,
+                cutoff,
+                hearing_minutes,
+                hearing_location,
                 authority_kind,
                 authority,
                 source,
@@ -2961,12 +3013,18 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
                     description,
                     visibility,
                     due_at,
-                    authority_kind,
+                    due_on.map(|date| model::project_deadlines::DueOnInput {
+                        date,
+                        timezone: due_timezone,
+                        cutoff,
+                    }),
+                    projects::deadline::hearing_details(hearing_minutes, hearing_location),
+                    authority_kind.to_string(),
                     authority,
                     source,
                     source_document,
                     owner,
-                    calendar_role,
+                    calendar_role.to_string(),
                     category,
                     internal_lead_days,
                     client_lead_days,
@@ -2986,6 +3044,11 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
                 ics,
                 location,
                 due_at,
+                due_on,
+                due_timezone,
+                cutoff,
+                hearing_minutes,
+                hearing_location,
                 authority_kind,
                 authority,
                 source,
@@ -3004,6 +3067,12 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
                     description,
                     visibility,
                     due_at,
+                    due_on.map(|date| model::project_deadlines::DueOnInput {
+                        date,
+                        timezone: due_timezone,
+                        cutoff,
+                    }),
+                    projects::deadline::hearing_details(hearing_minutes, hearing_location),
                     authority_kind,
                     authority,
                     source,
@@ -3221,6 +3290,7 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
             private_notion_page,
             calendar,
             booking_url,
+            timezone,
             jurisdiction,
             drive_folder,
             dry_run,
@@ -3243,6 +3313,7 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
                     calendar_id: calendar.as_deref(),
                     drive_folder_id: drive_folder.as_deref(),
                     booking_url: booking_url.as_deref(),
+                    timezone: timezone.as_deref(),
                     jurisdiction: jurisdiction.as_deref(),
                 },
                 firm: firm.as_deref(),

@@ -54,6 +54,7 @@ const WORKSPACE_DEPENDENCIES: &[&str] = &[
     "dioxus-core",
     "dioxus-fullstack-core",
     "dioxus-server",
+    "dioxus-ssr",
     "dotenvy",
     "ed25519-dalek",
     "encoding_rs",
@@ -70,6 +71,7 @@ const WORKSPACE_DEPENDENCIES: &[&str] = &[
     "google-cloud-auth",
     "google-cloud-storage",
     "google-cloud-token",
+    "hayro",
     "hex",
     "hifitime",
     "hmac",
@@ -178,8 +180,6 @@ const MEMBER_LOCAL_DEPENDENCIES: &[(&str, &str)] = &[
     // endpoint needs a registered rustls `CryptoProvider`, and the choice of
     // backend belongs with the crate that opens the connection.
     ("store", "rustls"),
-    // The Dioxus server-side renderer, used by the crate that renders.
-    ("webapp", "dioxus-ssr"),
     // Assertions over rendered markup in the `views` test suite.
     ("views", "regex"),
     // The Language Server Protocol wire types.

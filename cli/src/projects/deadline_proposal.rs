@@ -29,7 +29,7 @@ pub struct ProposalArgs {
     /// Lawyer-supplied due instant with an explicit offset; requires confirmation.
     #[arg(long, requires = "confirm")]
     pub due_at: Option<String>,
-    /// Lawyer-counted date for court-day or holiday rules; requires confirmation.
+    /// Reviewed all-day date. Required for court-day and holiday rules.
     #[arg(long, requires = "confirm")]
     pub due_on: Option<NaiveDate>,
 }
@@ -153,18 +153,20 @@ async fn execute(
     if args.due_on.is_some_and(|manual| manual != chosen) {
         return Err(anyhow!("--due-on cannot override a calendar-day proposal"));
     }
-    let due_at = args
-        .due_at
-        .as_deref()
-        .ok_or_else(|| anyhow!("confirmation requires --due-at with an explicit offset"))?;
-    let instant = DateTime::<FixedOffset>::parse_from_rfc3339(due_at)
-        .context("--due-at must include an explicit offset")?;
-    if instant.date_naive() != chosen {
-        return Err(anyhow!("--due-at must match the reviewed due_on"));
+    if let Some(due_at) = args.due_at.as_deref() {
+        let instant = DateTime::<FixedOffset>::parse_from_rfc3339(due_at)
+            .context("--due-at must include an explicit offset")?;
+        if instant.date_naive() != chosen {
+            return Err(anyhow!("--due-at must match the reviewed due_on"));
+        }
+    } else if args.due_on.is_none() {
+        return Err(anyhow!(
+            "confirmation requires the reviewed --due-on or --due-at"
+        ));
     }
     let project = project.ok_or_else(|| anyhow!("confirmation requires a Project"))?;
     proposal["reviewed_due_on"] = json!(chosen);
-    save(base, token, project, args, due_at, &authority, proposal).await
+    save(base, token, project, args, chosen, &authority, proposal).await
 }
 
 #[derive(Deserialize)]
@@ -173,6 +175,7 @@ struct ExistingDeadline {
     replay_key: Option<String>,
     status: String,
     description: Option<String>,
+    due_on: Option<model::project_deadlines::DueOn>,
 }
 
 fn audit_description(existing: Option<&str>, proposal: Value) -> String {
@@ -192,7 +195,7 @@ async fn save(
     token: &str,
     project: Uuid,
     args: &ProposalArgs,
-    due_at: &str,
+    chosen: NaiveDate,
     authority: &FiledAuthority,
     proposal: Value,
 ) -> Result<Value> {
@@ -218,8 +221,24 @@ async fn save(
         existing.as_ref().and_then(|row| row.description.as_deref()),
         proposal,
     );
-    let mut body = json!({"title":args.title, "description":description, "due_at":due_at,
+    let mut body = json!({"title":args.title, "description":description,
         "authority_kind":authority_kind, "authority":authority.citation});
+    if let Some(saved) = existing.as_ref().and_then(|row| row.due_on.as_ref()) {
+        if args.due_at.is_some() {
+            return Err(anyhow!(
+                "this Deadline is all-day. Confirm its date with --due-on or convert it using deadline update"
+            ));
+        }
+        if saved.date != chosen {
+            let mut rescheduled = saved.clone();
+            rescheduled.date = chosen;
+            body["due_on"] = json!(rescheduled);
+        }
+    } else if let Some(at) = &args.due_at {
+        body["due_at"] = json!(at);
+    } else {
+        body["due_on"] = json!({ "date": chosen });
+    }
     if let Some(category) = category {
         body["category"] = category;
     }
@@ -444,6 +463,92 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_reviewed_date_confirms_without_an_invented_time_or_zone() {
+        let server = server().await;
+        let project = Uuid::new_v4();
+        let mut args = args();
+        args.confirm = true;
+        assert!(
+            execute(&server.uri(), "token", Some(project), &args, &rule())
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("reviewed --due-on")
+        );
+        args.due_on = Some("2028-03-01".parse().unwrap());
+        Mock::given(method("POST"))
+            .and(path(format!("/app/api/projects/{project}/deadlines")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id":"saved"})))
+            .expect(1)
+            .mount(&server)
+            .await;
+        execute(&server.uri(), "token", Some(project), &args, &rule())
+            .await
+            .unwrap();
+        let requests = server.received_requests().await.unwrap();
+        let body: Value = requests.last().unwrap().body_json().unwrap();
+        assert_eq!(body["due_on"], json!({"date":"2028-03-01"}));
+        assert!(body.get("due_at").is_none());
+    }
+
+    #[tokio::test]
+    async fn replay_preserves_the_reviewed_civil_form_zone_and_cutoff() {
+        let server = server().await;
+        let project = Uuid::new_v4();
+        let id = Uuid::new_v4();
+        let endpoint = format!("/app/api/projects/{project}/deadlines");
+        Mock::given(method("GET"))
+            .and(path(&endpoint))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([{
+                "id":id,"status":"open","replay_key":"synthetic-rule-1",
+                "due_on":{"date":"2028-03-01","cutoff":"17:00:00","timezone":"America/Los_Angeles"}
+            }])))
+            .with_priority(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("PATCH"))
+            .and(path(format!("{endpoint}/{id}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id":id})))
+            .expect(2)
+            .mount(&server)
+            .await;
+        let mut args = args();
+        args.confirm = true;
+        args.due_on = Some("2028-03-01".parse().unwrap());
+        execute(&server.uri(), "token", Some(project), &args, &rule())
+            .await
+            .unwrap();
+        args.trigger_on = "2028-03-01".parse().unwrap();
+        args.due_on = Some("2028-03-03".parse().unwrap());
+        execute(&server.uri(), "token", Some(project), &args, &rule())
+            .await
+            .unwrap();
+        args.due_at = Some("2028-03-03T17:00:00-08:00".into());
+        assert!(
+            execute(&server.uri(), "token", Some(project), &args, &rule())
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("this Deadline is all-day")
+        );
+        let patches = server
+            .received_requests()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|r| r.method == "PATCH")
+            .map(|r| r.body_json::<Value>().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(patches.len(), 2);
+        assert!(patches.iter().all(|body| body.get("due_at").is_none()));
+        assert!(patches[0].get("due_on").is_none());
+        assert_eq!(
+            patches[1]["due_on"],
+            json!({"date":"2028-03-03","cutoff":"17:00:00","timezone":"America/Los_Angeles"})
+        );
+    }
+
+    #[tokio::test]
     async fn cancelled_replay_requires_reopening_and_never_writes() {
         let server = server().await;
         let project = Uuid::new_v4();
@@ -503,7 +608,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unsupported_counting_requires_a_manual_date_and_an_explicit_matching_instant() {
+    async fn unsupported_counting_requires_a_manual_date_and_an_optional_instant_must_match() {
         let server = server().await;
         for basis in [Basis::CourtDays, Basis::Holidays] {
             let mut rule = rule();

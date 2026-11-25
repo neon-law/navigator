@@ -173,6 +173,8 @@ pub(crate) mod matter_record_links;
 pub use model::correspondence;
 pub use model::mail_attachments;
 pub use model::nef;
+pub mod court_date_forgejo;
+pub mod deadline_proposals;
 pub mod notarizations;
 pub mod notation_clauses;
 pub mod notation_documents;

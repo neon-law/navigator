@@ -244,7 +244,9 @@ pub async fn post_notice(
         .map_err(WorkflowStepError::retryable)?;
     let open: Vec<_> = deadlines
         .iter()
-        .filter(|row| row.status == store::project_deadlines::STATUS_OPEN)
+        .filter(|row| {
+            !row.calendar_review_pending && row.status == store::project_deadlines::STATUS_OPEN
+        })
         .collect();
     if !open.is_empty() {
         let _ = write!(text, "\nOpen deadlines: {}.", open.len());
@@ -255,7 +257,10 @@ pub async fn post_notice(
             text,
             "\nDeadline ({}): {} — {}: {}",
             deadline.calendar_role,
-            deadline.due_at,
+            deadline.due_on.as_ref().map_or_else(
+                || deadline.due_at.clone(),
+                store::project_deadlines::DueOn::display_date
+            ),
             deadline.authority_kind,
             slack_plain_text(&deadline.authority.chars().take(300).collect::<String>())
         );
@@ -437,19 +442,32 @@ mod tests {
             title: None,
             description: None,
             project_id: project.id,
+            hearing: None,
+            due_on: None,
             due_at: "2026-10-09T17:00:00-07:00".into(),
-            authority_kind: "court_rule".into(),
-            authority: "Synthetic Rule 12".into(),
+            authority_kind: "contract".into(),
+            authority: "Synthetic agreement".into(),
             source: "lawyer".into(),
             source_document_id: None,
             owner_person_id: None,
             calendar_role: "firm".into(),
-            category: Some("court".into()),
+            category: Some("internal".into()),
             internal_lead_days: Some(7),
             client_lead_days: None,
             replay_key: None,
         };
         let open = project_deadlines::create(&surreal, &input).await.unwrap();
+        project_deadlines::create(
+            &surreal,
+            &NewDeadline {
+                authority_kind: "court_order".into(),
+                category: Some("court".into()),
+                authority: "Unreviewed synthetic order".into(),
+                ..input.clone()
+            },
+        )
+        .await
+        .unwrap();
         let completed = project_deadlines::create(
             &surreal,
             &NewDeadline {
@@ -484,7 +502,8 @@ mod tests {
         assert!(text.contains("2026-10-05T12:00:00Z"));
         assert!(text.contains(&format!("<{}|View repository>", repository.url)));
         assert!(text.contains(&open.due_at));
-        assert!(text.contains("Synthetic Rule 12"));
+        assert!(text.contains("Synthetic agreement"));
+        assert!(!text.contains("Unreviewed synthetic order"));
         assert!(!text.contains("Completed synthetic date"));
         assert!(!text.contains("Cancelled synthetic date"));
         assert!(!text.contains(EXTERNAL));

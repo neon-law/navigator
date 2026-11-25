@@ -60,6 +60,8 @@ pub struct MatterQuery {
     pub flash: Option<String>,
     #[serde(default)]
     pub confirm: Option<String>,
+    #[serde(default)]
+    pub review: Option<String>,
 }
 
 pub use crate::sections::page::MatterTab;
@@ -157,6 +159,35 @@ pub struct EnvelopeRow {
     pub signers: Vec<String>,
 }
 
+/// The selected view on the lawyer's Deadlines tab.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug, Default)]
+pub enum DeadlineTabView {
+    #[default]
+    Details,
+    Timeline {
+        sort: String,
+        dir: String,
+    },
+    CourtDateReview,
+}
+
+#[cfg(any(feature = "server", test))]
+impl DeadlineTabView {
+    fn from_query(review: Option<&str>, calendar: &crate::project_calendar::CalendarQuery) -> Self {
+        use crate::project_calendar::{sort_dir, sort_field, MATTER_COLUMNS};
+        if review == Some("court-dates") {
+            Self::CourtDateReview
+        } else if let Some(sort) = calendar.sort.as_deref() {
+            Self::Timeline {
+                sort: sort_field(Some(sort), MATTER_COLUMNS),
+                dir: sort_dir(calendar.dir.as_deref()),
+            }
+        } else {
+            Self::Details
+        }
+    }
+}
+
 /// The rendered lawyer workbench — every field wasm-safe (plain scalars; no
 /// `store`/`SeaORM`/`cloud`/`repos` type crosses to the client build).
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
@@ -252,10 +283,8 @@ pub struct LawyerDetailView {
     #[serde(default)]
     pub client_preview_link: Option<String>,
     pub csrf_token: String,
-    /// The matter calendar's active sort, read from `?sort=`/`?dir=` and
-    /// normalised to the advertised columns.
-    pub calendar_sort: Option<String>,
-    pub calendar_dir: String,
+    #[serde(default)]
+    pub deadline_view: DeadlineTabView,
     /// The matter timeline: docket entries and open deadlines, in date order.
     #[serde(default)]
     pub calendar_events: Vec<crate::project_calendar::CalendarEvent>,
@@ -462,10 +491,6 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         |_| crate::project_calendar::CalendarQuery::default(),
         |axum::extract::Query(q)| q,
     );
-    let calendar_sort = calendar_query.sort.as_deref().map(|sort| {
-        crate::project_calendar::sort_field(Some(sort), crate::project_calendar::MATTER_COLUMNS)
-    });
-    let calendar_dir = crate::project_calendar::sort_dir(calendar_query.dir.as_deref());
     // The `?error=` flash a refused write's redirect carries, the write
     // forms' success flash, and the generate-invoice action's confirm step.
     let query =
@@ -948,8 +973,7 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         asset_kind_choices: asset_kind_choices(),
         upload_limits: upload_form_limits(),
         csrf_token,
-        calendar_sort,
-        calendar_dir,
+        deadline_view: DeadlineTabView::from_query(query.review.as_deref(), &calendar_query),
         calendar_events,
         deadlines: deadline_groups.open,
         past_deadlines: deadline_groups.past,
@@ -1230,25 +1254,33 @@ pub fn LawyerProjectDetail() -> Element {
                         }
                     },
                     MatterTab::Deadlines => rsx! {
-                        if let Some(sort) = &view.calendar_sort {
-                            a { class: "nav-link", href: "{current_page}", "View deadline details" }
-                            crate::project_calendar::ProjectCalendar {
-                                section_class: "lawyer-detail__section project-calendar".to_string(),
-                                heading: "Calendar timeline".to_string(),
-                                empty_message: "No calendar events scheduled for this project.".to_string(),
-                                columns: crate::project_calendar::MATTER_COLUMNS.to_vec(),
-                                path: MatterTab::Deadlines.href(&view.code),
-                                query_prefix: String::new(),
-                                sort: sort.clone(),
-                                dir: view.calendar_dir.clone(),
-                                events: view.calendar_events.clone(),
+                        if view.deadline_view == DeadlineTabView::CourtDateReview {
+                            a { class: "nav-link", href: "{current_page}", "Back to Deadlines" }
+                            crate::court_date_review::CourtDateReview {
+                                project_id: view.id.clone(), project_code: view.code.clone(), csrf: csrf.clone(),
                             }
                         } else {
-                            a { class: "nav-link", href: "{current_page}?sort=date&dir=asc", "View calendar timeline" }
-                            crate::project_deadlines::ProjectDeadlinesPanel {
-                                section_class: "lawyer-detail__section".to_string(),
-                                rows: view.deadlines.clone(),
-                                past: view.past_deadlines.clone(),
+                            a { class: "nav-link", href: "{current_page}?review=court-dates", "Review proposed court dates" }
+                            if let DeadlineTabView::Timeline { sort, dir } = &view.deadline_view {
+                                a { class: "nav-link", href: "{current_page}", "View deadline details" }
+                                crate::project_calendar::ProjectCalendar {
+                                    section_class: "lawyer-detail__section project-calendar".to_string(),
+                                    heading: "Calendar timeline".to_string(),
+                                    empty_message: "No calendar events scheduled for this project.".to_string(),
+                                    columns: crate::project_calendar::MATTER_COLUMNS.to_vec(),
+                                    path: MatterTab::Deadlines.href(&view.code),
+                                    query_prefix: String::new(),
+                                    sort: sort.clone(),
+                                    dir: dir.clone(),
+                                    events: view.calendar_events.clone(),
+                                }
+                            } else {
+                                a { class: "nav-link", href: "{current_page}?sort=date&dir=asc", "View calendar timeline" }
+                                crate::project_deadlines::ProjectDeadlinesPanel {
+                                    section_class: "lawyer-detail__section".to_string(),
+                                    rows: view.deadlines.clone(),
+                                    past: view.past_deadlines.clone(),
+                                }
                             }
                         }
                     },
@@ -1487,6 +1519,32 @@ mod tests {
         let html = dioxus_ssr::render_element(matter_fact_grid(&LawyerDetailView::default()));
         assert!(!html.contains("lawyer-detail__summary"), "{html}");
         assert!(!html.contains("Open deadlines"), "{html}");
+    }
+
+    #[test]
+    fn court_review_and_the_sorted_timeline_are_distinct_deadline_views() {
+        let calendar = crate::project_calendar::CalendarQuery {
+            sort: Some("date".into()),
+            dir: Some("desc".into()),
+        };
+        assert_eq!(
+            DeadlineTabView::from_query(Some("court-dates"), &calendar),
+            DeadlineTabView::CourtDateReview
+        );
+        assert_eq!(
+            DeadlineTabView::from_query(None, &calendar),
+            DeadlineTabView::Timeline {
+                sort: "date".into(),
+                dir: "desc".into()
+            }
+        );
+        assert_eq!(
+            DeadlineTabView::from_query(
+                Some("unrecognized"),
+                &crate::project_calendar::CalendarQuery::default()
+            ),
+            DeadlineTabView::Details
+        );
     }
 
     #[test]

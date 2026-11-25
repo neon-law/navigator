@@ -7,6 +7,7 @@
 
 pub mod asset_config;
 pub mod cron_triggers;
+pub mod dbos_deadline_proposal;
 pub mod dbos_email_summary;
 pub mod dbos_finance_aggregate;
 pub mod dbos_inbound_message_alert;

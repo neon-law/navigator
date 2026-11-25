@@ -1117,6 +1117,7 @@ erDiagram
         string booking_url
         string brand
         string calendar_id
+        string calendar_timezone
         uuid client_dri_person_id
         string closed_at
         string closure_reason
@@ -1153,12 +1154,15 @@ erDiagram
         string id
         string authority
         string authority_kind
+        boolean calendar_review_pending
         string calendar_role
         number calendar_sequence
         string category
         number client_lead_days
         string description
         string due_at
+        json due_on
+        json hearing
         string inserted_at
         number internal_lead_days
         uuid owner_person_id

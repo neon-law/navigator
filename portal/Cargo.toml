@@ -39,6 +39,8 @@ gateway.workspace = true
 futures.workspace = true
 hmac.workspace = true
 hex.workspace = true
+# Rasterize the filed PDF itself for court-date reviewer evidence.
+hayro.workspace = true
 include_dir.workspace = true
 image.workspace = true
 jsonwebtoken.workspace = true

@@ -171,6 +171,9 @@ pub struct Project {
     /// the calendar is shared with the firm-side participants only.
     #[serde(default)]
     pub calendar_id: Option<String>,
+    /// Explicit IANA time zone for this Project. A blank update restores the derived default.
+    #[serde(default)]
+    pub calendar_timezone: Option<String>,
     /// Where the client books time: an appointment schedule a lawyer made on
     /// the Project calendar in Google Calendar, entered by hand because the
     /// Calendar API cannot create one. Shown to the client; cleared on close.
@@ -206,6 +209,7 @@ struct ProjectRow {
     private_notion_page_url: Option<String>,
     shared_notion_page_url: Option<String>,
     calendar_id: Option<String>,
+    calendar_timezone: Option<String>,
     booking_url: Option<String>,
     /// The onboarding-jurisdiction value a Clause input may bind directly.
     /// Optional because rows written before the field existed keep no value;
@@ -266,6 +270,7 @@ impl ProjectRow {
             private_notion_page_url: self.private_notion_page_url,
             shared_notion_page_url: self.shared_notion_page_url,
             calendar_id: self.calendar_id,
+            calendar_timezone: self.calendar_timezone,
             booking_url: self.booking_url,
             legal_plan_id: self.legal_plan_id,
             plan_member_id: self.plan_member_id,
@@ -285,6 +290,9 @@ impl ProjectRow {
 
 impl ProjectRow {}
 
+mod timezone;
+pub use timezone::calendar_timezone;
+
 pub(crate) const PROJECT_TABLE: &str = "project";
 /// The entities cluster this table links into (ENG-120).
 const ENTITY_TABLE: &str = "entity";
@@ -297,7 +305,7 @@ const PROJECT_SELECT: &str = "id, code, name, status, brand, entity_id, firm_id,
                               internal_slack_channel_url, external_slack_channel_url, \
                               internal_slack_channel_id, \
                               private_notion_page_url, shared_notion_page_url, \
-                              calendar_id, booking_url, \
+                              calendar_id, calendar_timezone, booking_url, \
                               legal_plan_id, plan_member_id, plan_case_number, \
                               benefit_code, plan_matter_type, plan_state, plan_assigned_on, \
                               plan_accepted_on, plan_closed_on, kit_version, \
@@ -341,6 +349,10 @@ pub enum ProjectStoreError {
     NoSuchJurisdiction(Uuid),
     #[error(transparent)]
     Jurisdictions(#[from] crate::jurisdictions::JurisdictionError),
+    #[error("Project calendar time zone is invalid")]
+    InvalidCalendarTimezone,
+    #[error(transparent)]
+    CalendarVenue(#[from] crate::cases::CaseError),
     /// `NewProject.brand` does not match any live `brand` row (ENG-587) —
     /// the same check `store::firms::attach_brand` runs, not a compiled
     /// closed list.
@@ -1631,7 +1643,7 @@ async fn restore_archived_in_surreal(
                  internal_slack_channel_id = $internal_slack_channel_id, \
                  private_notion_page_url = $private_notion_page_url, \
                  shared_notion_page_url = $shared_notion_page_url, \
-                 calendar_id = $calendar_id, booking_url = $booking_url, \
+                 calendar_id = $calendar_id, calendar_timezone = $calendar_timezone, booking_url = $booking_url, \
                  legal_plan_id = $legal_plan_id, plan_member_id = $plan_member_id, \
                  plan_case_number = $plan_case_number, \
                  benefit_code = $benefit_code, plan_matter_type = $plan_matter_type, \
@@ -1684,6 +1696,7 @@ async fn restore_archived_in_surreal(
                 project.shared_notion_page_url.clone(),
             ))
             .bind(("calendar_id", project.calendar_id.clone()))
+            .bind(("calendar_timezone", project.calendar_timezone.clone()))
             .bind(("booking_url", project.booking_url.clone()))
             .bind(("legal_plan_id", project.legal_plan_id))
             .bind(("plan_member_id", project.plan_member_id.clone()))
@@ -3445,6 +3458,9 @@ pub struct UpdateProjectCommand {
     /// terms. Checked by [`is_valid_calendar_id`].
     #[serde(default)]
     pub calendar_id: Option<String>,
+    /// Explicit IANA time zone for this Project. A blank update restores the derived default.
+    #[serde(default)]
+    pub calendar_timezone: Option<String>,
     /// The Project's Drive ingest folder id, on the same blank-clears terms.
     /// Checked by [`is_valid_drive_folder_id`] for shape and by
     /// [`drive_folder_recorded_elsewhere`] for ownership — a folder another
@@ -3666,7 +3682,7 @@ pub enum ProjectCommandError {
 /// `SET` clause carries and which parameters are bound — so a new optional
 /// column is one row here instead of two `if` blocks that must agree. `None`
 /// means "leave this column alone"; `Some("")` means "clear it".
-fn optional_text_columns(input: &UpdateProjectCommand) -> [(&'static str, Option<&String>); 11] {
+fn optional_text_columns(input: &UpdateProjectCommand) -> [(&'static str, Option<&String>); 12] {
     [
         ("description", input.description.as_ref()),
         (
@@ -3687,6 +3703,7 @@ fn optional_text_columns(input: &UpdateProjectCommand) -> [(&'static str, Option
             input.shared_notion_page_url.as_ref(),
         ),
         ("calendar_id", input.calendar_id.as_ref()),
+        ("calendar_timezone", input.calendar_timezone.as_ref()),
         ("drive_folder_id", input.drive_folder_id.as_ref()),
         ("booking_url", input.booking_url.as_ref()),
         (
@@ -3708,6 +3725,13 @@ fn validate_resource_links(input: &UpdateProjectCommand) -> Result<(), ProjectCo
     for url in links.into_iter().flatten() {
         if !url.trim().is_empty() && !is_valid_resource_url(url) {
             return Err(ProjectCommandError::Invalid(RESOURCE_URL_INVALID));
+        }
+    }
+    if let Some(zone) = input.calendar_timezone.as_deref().map(str::trim) {
+        if !zone.is_empty() && zone.parse::<chrono_tz::Tz>().is_err() {
+            return Err(ProjectCommandError::Invalid(
+                "calendar_timezone must be an IANA time zone",
+            ));
         }
     }
     if let Some(calendar_id) = &input.calendar_id {

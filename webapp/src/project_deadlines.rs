@@ -116,6 +116,10 @@ pub fn deadline_groups(
                 || row.due_at.clone(),
                 |due| due.format("%A, %-d %b %y %H:%M %:z").to_string(),
             );
+            let due = row
+                .due_on
+                .as_ref()
+                .map_or(due, store::project_deadlines::DueOn::display_date);
             let authority = row.authority.clone();
             let authority_kind = authority_kind_label(&row.authority_kind).to_string();
             let authority_preview = if authority.trim().is_empty() {
@@ -190,6 +194,7 @@ pub fn category_label(category: &str) -> &'static str {
         "hearing" => "Hearing",
         "discovery" => "Discovery",
         "internal" => "Internal",
+        "tickler" => "Tickler",
         "" => "",
         _ => "Uncategorized",
     }
@@ -201,6 +206,7 @@ pub fn authority_kind_label(authority_kind: &str) -> &'static str {
     match authority_kind {
         "statute" => "Statute",
         "court_rule" => "Court rule",
+        "case_law" => "Case law",
         "court_order" => "Court order",
         "contract" => "Contract",
         "internal" => "Internal target",
@@ -515,6 +521,8 @@ mod tests {
                 project_id: Uuid::nil(),
                 title: None,
                 description: None,
+                hearing: None,
+                due_on: None,
                 due_at: due_at.to_string(),
                 authority_kind: "court_order".to_string(),
                 authority: String::new(),
@@ -530,6 +538,7 @@ mod tests {
                 inserted_at: String::new(),
                 updated_at: String::new(),
                 calendar_sequence: None,
+                calendar_review_pending: false,
             }
         }
 

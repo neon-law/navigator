@@ -5,9 +5,14 @@ description: "An Attorney Calendar is a Google Calendar id recorded on a Person 
 
 One Google Calendar id on a [Person](person.md). A lawyer-tier sign-in records the Person's Workspace address as the
 `primary` calendar when none is recorded; a consumer Gmail address is never recorded. Attorney Calendars exist only for
-a Firm whose [Firm Calendar Settings](firm-calendar-settings.md) name a Google Workspace mailbox. An extra calendar is
-`freebusy` and exists only after that Person records it. The Google OIDC subject on [Person External
-Identity](person-external-identity.md) identifies the Person and is not a calendar id.
+a Firm whose [Firm Calendar Settings](firm-calendar-settings.md) name a Google Workspace mailbox. A Person can record
+extra calendars as `freebusy`. Navigator also checks shared calendars from eligible open Project assignments in the
+authorized Firm. Those calendars contribute busy intervals or access gaps without disclosing another Project's calendar
+ID or titles. The Google OIDC subject on [Person External Identity](person-external-identity.md) identifies the Person
+and is not a calendar id.
+
+Navigator verifies the recorded calendar ID and Project code in the owning Firm's Workspace before checking shared
+availability. A missing or mismatched Project Calendar makes the affected participant's availability unknown.
 
 Free/busy for other Firm participants uses the Workspace delegation's free/busy scope and returns no event details.
 Event details use the events scope and only for the signed-in Person's primary calendar. A calendar the delegation

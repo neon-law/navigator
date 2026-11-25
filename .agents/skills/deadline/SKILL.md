@@ -27,25 +27,28 @@ navigator project deadline list
 ```
 
 The command reads the Project code from `navigator.yaml`. Match the new date against existing rows by authority,
-calendar role, and due date before writing. If a row already covers it, update that row; never write a second one.
+calendar role, and due date before writing. Use its ID when amending an existing date.
 
 ## 2. Verify the date and its authority
 
-- **Where it binds.** Pick the `authority_kind`: `statute`, `court_rule`, `court_order`, `contract`, or `internal`.
+- **Where it binds.** Use `statute`, `court_rule`, `case_law`, `court_order`, `contract`, or `internal`.
   `statute` and `court_rule` require a citation in `--authority`; verify it as the `case-downloader` skill does.
 - **Whose date it is.** `--calendar-role` is `firm` (our obligation), `opponent` (the other side's), or `hearing` (an
   appearance). A hearing is not a filing obligation, and its date is owned by the docket: record the appearance as a
   Docket Entry through the `case-timeline` skill (`navigator project docket add --kind hearing --scheduled-on …`), and
   use a `hearing` row here only for the reminder about it.
 - **What kind of date it is.** `--category` is `court` (a filing or response the court requires), `hearing` (a scheduled
-  appearance), `discovery` (a discovery request, response, disclosure, or cutoff), or `internal` (a firm preparation
-  target). A `hearing` role defaults to the `hearing` category and an `internal` authority kind to `internal`; otherwise
-  name the category. Court and discovery dates can look alike by authority, and the category sets the row's fixed color
-  on every mirrored Google Calendar.
+  appearance), `discovery` (a discovery request, response, disclosure, or cutoff), `internal` (a firm preparation
+  target), or `tickler` (a follow-up reminder). A `hearing` role defaults to the `hearing` category and an `internal`
+  authority kind to `internal`; otherwise name the category. Court and discovery dates can look alike by authority, and
+  the category sets the row's fixed color on every mirrored Google Calendar.
 - **Court date versus preparation target.** A court deadline and the internal date by which a draft must be ready are
   two rows: the court date under its rule or order, the preparation target as `internal`.
-- **The instant.** `--due-at` is RFC 3339 with an explicit offset, in the court's or counterparty's time zone (for
-  example `2026-11-02T17:00:00-08:00`). A bare date is refused.
+- **Date or instant.** Use `--due-on YYYY-MM-DD` for an all-day Deadline in the matter’s time zone. Supply
+  `--due-timezone Area/City` when an event has its own governing zone. Include `--cutoff HH:MM:SS` only when the source
+  names a local cutoff. Use `--due-at` with an explicit RFC 3339 offset for an exact instant. A hearing requires a timed
+  start. Use `--hearing-minutes` for the duration in the notice and `--hearing-location` for its address. Without a
+  duration, the calendar reserves an hour.
 - **Never compute court days.** Navigator stores the date; it never derives one. If the date depends on counting court
   days, service-method extensions, or holidays, the lawyer DRI confirms the count and the authority records the rule.
 - **Never assume relief.** Do not record an extension, a continuance, or a stipulated date until the order or the signed
@@ -55,14 +58,22 @@ If a fact is missing or unverified, stop and ask the lawyer DRI. Do not record a
 
 ## 3. Record it
 
+Queue a court date with `navigator project deadline review queue --file <private-file>`. For an express date include the
+highlighted signed order. For a calculated date include the highlighted trigger and archived governing Authority. The
+lawyer inspects the actual source pages in **Court date review** and confirms the individual revision. Include the
+existing Deadline ID on an amendment. DBOS releases the confirmed date to calendar sync and ICS. A clerk may prepare or
+correct the proposal.
+
+Use direct creation for an internal or contractual obligation.
+
 ```bash
 navigator project deadline create \
-  --title "Opposition to the motion" \
+  --title "Review draft agreement" \
   --due-at 2026-11-02T17:00:00-08:00 \
-  --authority-kind court_order \
-  --authority "Order setting briefing schedule, entered 2026-10-05" \
+  --authority-kind contract \
+  --authority "Synthetic agreement, section 4" \
   --calendar-role firm \
-  --category court \
+  --category internal \
   --source lawyer \
   --source-document <document id> \
   --owner <lawyer DRI person id> \
@@ -98,8 +109,9 @@ navigator project deadline reopen <id>
 Put the docket on a calendar with `navigator project deadline ics`. It prints every row as one RFC 5545 `VCALENDAR`, one
 `VEVENT` per Deadline. The `UID` is `<deadline id>@<host>` and `SEQUENCE` is the row's monotonic calendar revision, so
 re-importing the file after an `update` changes the same calendar event. A cancelled row renders `STATUS:CANCELLED`, and
-`--internal-lead-days` becomes the reminder alarm. The summary is the row's title (or its kind, when untitled) followed
-by the Project code, never the client's name.
+`--internal-lead-days` becomes the reminder alarm. The summary starts with the Project code, followed by a colon, its
+category when known, and the action. Civil dates render as all-day events. Court Deadlines also carry reminders at
+seven, three, and one day.
 
 For a single saved event, pass `--ics <private path>` to `create` or `update`. The command prints the stored row and
 writes that row as a calendar file. `--location` requires `--ics` and copies a court-supplied location into that file

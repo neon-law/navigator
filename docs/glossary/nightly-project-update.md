@@ -85,7 +85,7 @@ pushed to `main`. The report counts update pull requests opened, awaiting merge,
 whose governance was repaired. Participation is never copied onto the forge.
 
 `calendar` — create or adopt the owning Firm's private Project Calendar and mirror its stored [Deadlines](deadline.md).
-Reconcile calendar access and event guests against current Firm-side assignments. Each DBOS child uses the same Project
+Reconcile calendar access and event titles against current Firm-side assignments. Each DBOS child uses the same Project
 write lock as the on-demand mirror and the periodic membership job. A failed child is counted and the Project's Slack
 notice can still run.
 
@@ -108,7 +108,7 @@ flowchart LR
   subgraph calendar ["tag: calendar"]
     direction TB
     C1[Verify private Project Calendar] --> C2[Mirror stored Deadlines]
-    C2 --> C3[Reconcile access and event guests]
+    C2 --> C3[Reconcile access and event titles]
   end
 ```
 

@@ -192,6 +192,31 @@ fn engagement_envelopes<'a>(
         .collect()
 }
 
+fn next_deadline(project: &Value) -> String {
+    let deadline = &project["deadlines"][0];
+    let when = if deadline["due_on"].is_object() {
+        &deadline["due_local"]
+    } else {
+        &deadline["due_at"]
+    };
+    if let Some(due) = when.as_str() {
+        format!(
+            "{}{} • {}",
+            if deadline["overdue"] == true {
+                "Overdue "
+            } else {
+                ""
+            },
+            due,
+            deadline["title"].as_str().unwrap_or("Deadline")
+        )
+    } else if project["deadlines"].is_array() {
+        "None recorded".into()
+    } else {
+        "Unavailable".into()
+    }
+}
+
 fn print(report: &Value) {
     let mut table = Table::new();
     table.set_header([
@@ -204,23 +229,7 @@ fn print(report: &Value) {
         "Billing",
     ]);
     for project in report["projects"].as_array().into_iter().flatten() {
-        let deadline = &project["deadlines"][0];
-        let next = if let Some(due) = deadline["due_at"].as_str() {
-            format!(
-                "{}{} • {}",
-                if deadline["overdue"] == true {
-                    "Overdue "
-                } else {
-                    ""
-                },
-                due,
-                deadline["title"].as_str().unwrap_or("Deadline")
-            )
-        } else if project["deadlines"].is_array() {
-            "None recorded".into()
-        } else {
-            "Unavailable".into()
-        };
+        let next = next_deadline(project);
         let envelopes = project["status"]["engagement_envelopes"].as_array();
         let states = envelopes
             .into_iter()
@@ -276,6 +285,19 @@ fn print(report: &Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn next_deadline_labels_report_the_civil_date_with_its_recorded_cutoff() {
+        let project = json!({"deadlines": [{
+            "title":"Synthetic response", "due_at":"2028-07-13T06:59:00Z",
+            "due_on":{"date":"2028-07-12","cutoff":"23:59:00","timezone":"America/Los_Angeles"},
+            "due_local":"Wednesday, 12 Jul 2028 · 23:59:00 America/Los_Angeles"
+        }]});
+        assert_eq!(
+            next_deadline(&project),
+            "Wednesday, 12 Jul 2028 · 23:59:00 America/Los_Angeles • Synthetic response"
+        );
+    }
 
     #[test]
     fn the_open_only_inventory_cannot_look_like_an_empty_fleet() {

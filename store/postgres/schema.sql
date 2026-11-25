@@ -5819,6 +5819,59 @@ CREATE TABLE lead_intake (
 );
 CREATE INDEX lead_intake_history ON lead_intake (lead_id, submitted_at);
 
+-- Migration: 20261124150000_deadline_civil_date.sql
+ALTER TABLE project_deadlines ADD COLUMN due_on JSONB;
+ALTER TABLE project_deadlines ADD COLUMN hearing JSONB;
+ALTER TABLE project_deadlines DROP CONSTRAINT project_deadlines_category_check;
+ALTER TABLE project_deadlines ADD CONSTRAINT project_deadlines_category_check CHECK (category IN ('court', 'hearing', 'discovery', 'internal', 'tickler'));
+
+-- Migration: 20261124150100_project_calendar_timezone.sql
+ALTER TABLE project ADD COLUMN calendar_timezone TEXT;
+
+-- Migration: 20261124150200_deadline_proposals.sql
+ALTER TABLE project_deadlines DROP CONSTRAINT project_deadlines_authority_kind_check;
+ALTER TABLE project_deadlines ADD CONSTRAINT project_deadlines_authority_kind_check CHECK (authority_kind IN ('statute','court_rule','case_law','court_order','contract','internal'));
+
+CREATE TABLE deadline_proposal (
+    project_id UUID NOT NULL REFERENCES project(id),
+    id UUID NOT NULL,
+    revision BIGINT NOT NULL CHECK (revision > 0),
+    draft JSONB NOT NULL,
+    target_deadline_id UUID REFERENCES project_deadlines(id),
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','published','returned')),
+    reviewer_id UUID REFERENCES person(id),
+    reviewed_at TIMESTAMPTZ,
+    deadline_id UUID REFERENCES project_deadlines(id),
+    reason TEXT,
+    attempt INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    worker_settled BOOLEAN NOT NULL DEFAULT false,
+    PRIMARY KEY (project_id,id,revision),
+    CHECK ((reviewer_id IS NULL) = (reviewed_at IS NULL)),
+    CHECK ((status = 'pending') = (reviewer_id IS NULL)),
+    CHECK (status <> 'published' OR deadline_id IS NOT NULL),
+    CHECK ((status = 'returned') = (reason IS NOT NULL))
+);
+CREATE INDEX deadline_proposal_dispatch ON deadline_proposal(next_attempt_at) WHERE NOT worker_settled;
+ALTER TABLE project_deadlines ADD COLUMN calendar_review_pending BOOLEAN NOT NULL DEFAULT false;
+CREATE UNIQUE INDEX deadline_proposal_first_deadline ON deadline_proposal(deadline_id) WHERE revision=1 AND deadline_id IS NOT NULL;
+
+-- Migration: 20261124150300_deadline_proposal_source_receipts.sql
+-- Historical proposals predate immutable archive receipts.
+ALTER TABLE deadline_proposal ADD COLUMN source_receipts JSONB;
+ALTER TABLE deadline_proposal ADD CONSTRAINT deadline_proposal_source_receipts_check CHECK (source_receipts IS NULL OR (jsonb_typeof(source_receipts) = 'array' AND jsonb_array_length(source_receipts) = COALESCE(jsonb_array_length(draft->'evidence'),0)));
+
+CREATE FUNCTION protect_deadline_proposal_revision() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'a saved court-date proposal revision is immutable';
+END;
+$$;
+CREATE TRIGGER deadline_proposal_revision_immutable
+    BEFORE UPDATE OF project_id, id, revision, draft, target_deadline_id, source_receipts ON deadline_proposal
+    FOR EACH ROW WHEN ((OLD.project_id, OLD.id, OLD.revision, OLD.draft, OLD.target_deadline_id, OLD.source_receipts)
+                       IS DISTINCT FROM (NEW.project_id, NEW.id, NEW.revision, NEW.draft, NEW.target_deadline_id, NEW.source_receipts))
+    EXECUTE FUNCTION protect_deadline_proposal_revision();
+
 -- Migration: 20261124180000_firm_namespace_provider_source.sql
 -- Preserve the independently verified provider name when a Firm and its existing
 -- Forgejo organization start with different names. Earlier receipts used old_slug for both.

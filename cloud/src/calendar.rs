@@ -23,8 +23,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use base64::Engine as _;
 use chrono::{DateTime, FixedOffset};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 const CALENDAR_SCOPE: &str = "https://www.googleapis.com/auth/calendar";
@@ -88,11 +90,16 @@ pub struct CalendarMember {
     pub role: CalendarRole,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EventTiming {
+    Instant,
+    Hearing(u32),
+    AllDay(chrono::NaiveDate),
+}
+
 /// One event on a Project calendar, as Navigator writes it.
 ///
-/// An event written through this API holds a one-minute block from its start,
-/// so a Deadline stays visible on the calendar without occupying a lawyer's
-/// morning.
+/// Civil dates display as Free all-day events. A hearing holds Busy time.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CalendarEvent {
     pub summary: String,
@@ -103,15 +110,16 @@ pub struct CalendarEvent {
     pub color_id: Option<String>,
     /// The instant the event marks, with its own offset.
     pub start: DateTime<FixedOffset>,
+    pub timing: EventTiming,
     /// RFC 5545 `SEQUENCE`, raised on every update.
     pub sequence: i32,
     /// A cancelled event keeps its place on the calendar with
     /// `status: cancelled`, the way the ICS feed renders a cancelled row.
     pub cancelled: bool,
-    /// Display reminder minutes before `start`. `None` writes no reminder and
+    /// Display reminder minutes before `start`. An empty list writes no reminder and
     /// suppresses the calendar's defaults, so an event without a reminder
     /// stays silent.
-    pub reminder_minutes: Option<i64>,
+    pub reminder_minutes: Vec<i64>,
     /// Private extended properties carrying the mirror's identity: the source
     /// row's record id and the body sha a reconcile compares against the row
     /// it now reads. Only Navigator reads these.
@@ -123,13 +131,31 @@ pub struct CalendarEvent {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredEvent {
     pub id: String,
+    /// Present only when the event still matches Navigator’s last confirmed write.
+    writable_etag: Option<String>,
     pub private_properties: BTreeMap<String, String>,
+}
+
+impl StoredEvent {
+    /// A source update or cancellation can be applied at this exact version.
+    #[must_use]
+    pub fn can_write(&self) -> bool {
+        self.writable_etag.is_some()
+    }
+
+    /// Legacy events can still be left in place when their source is unchanged.
+    #[must_use]
+    pub fn has_baseline(&self) -> bool {
+        self.private_properties.contains_key(BASELINE)
+    }
 }
 
 /// An event returned by an authorized Project Calendar read.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ProjectCalendarEvent {
     pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transparency: Option<String>,
     pub summary: Option<String>,
     pub start: ProjectCalendarEventTime,
     pub end: ProjectCalendarEventTime,
@@ -169,10 +195,14 @@ pub enum CalendarError {
     InvalidEventBackup,
     #[error("Calendar API response while creating a calendar did not include an id")]
     MissingCalendarId,
+    #[error("could not verify the managed Project Calendar metadata")]
+    UnverifiedCalendarMetadata,
     #[error("the participant's calendar list did not confirm the recorded Project Calendar ID")]
     UnverifiedCalendarListEntry,
     #[error("Calendar API response while writing an event did not include an id")]
     MissingEventId,
+    #[error("calendar event was edited directly or has no verified mirror baseline")]
+    UnverifiedEvent,
     #[error("Calendar found {count} calendars for one project code; refusing to guess")]
     AmbiguousSummary { count: usize },
 }
@@ -182,7 +212,18 @@ pub enum CalendarError {
 pub trait CalendarService: Send + Sync {
     /// The delegated user's own calendar named `summary`, if exactly one.
     async fn find_calendar(&self, summary: &str) -> Result<Option<ProjectCalendar>, CalendarError>;
-    async fn create_calendar(&self, summary: &str) -> Result<ProjectCalendar, CalendarError>;
+    async fn create_calendar(
+        &self,
+        summary: &str,
+        timezone: &str,
+    ) -> Result<ProjectCalendar, CalendarError>;
+    /// Apply the Project zone to its recorded, deployment-managed calendar.
+    async fn reconcile_calendar_timezone(
+        &self,
+        code: &str,
+        id: &str,
+        timezone: &str,
+    ) -> Result<(), CalendarError>;
     /// Whether a calendar with this id still exists. Checked by id, never by
     /// name, so a renamed calendar is still the recorded one.
     async fn calendar_exists(&self, calendar_id: &str) -> Result<bool, CalendarError>;
@@ -211,6 +252,9 @@ pub trait CalendarService: Send + Sync {
     /// Require the selected owner to be the only identity able to change events at retirement.
     async fn verify_retirement_acl(&self, id: &str, owner: &str) -> Result<(), CalendarError>;
 
+    /// Owned secondary calendar IDs and Project codes that can be checked for availability.
+    async fn owned_calendar_codes(&self) -> Result<BTreeMap<String, String>, CalendarError>;
+
     /// Every person the calendar is shared with, owner included.
     async fn members(&self, calendar_id: &str) -> Result<Vec<CalendarMember>, CalendarError>;
     /// Share the calendar with `email` at `role`, without a notification
@@ -222,9 +266,9 @@ pub trait CalendarService: Send + Sync {
         role: CalendarRole,
     ) -> Result<(), CalendarError>;
 
-    /// Insert a reader grant and ask Google to notify the recipient. A conflict
+    /// Insert a reader grant without a sharing email. A conflict
     /// is read-only and means a grant already exists.
-    async fn invite_reader(&self, calendar_id: &str, email: &str) -> Result<bool, CalendarError>;
+    async fn grant_reader(&self, calendar_id: &str, email: &str) -> Result<bool, CalendarError>;
 
     /// Remove a direct reader grant without modifying elevated grants.
     async fn revoke_reader(&self, calendar_id: &str, email: &str) -> Result<(), CalendarError>;
@@ -242,12 +286,13 @@ pub trait CalendarService: Send + Sync {
         email: &str,
     ) -> Result<bool, CalendarError>;
 
-    /// Reconcile guests on events organized by the Project Calendar.
-    async fn sync_event_guests(
+    /// Correct owned event titles on open Projects and revoke only marked guests whose assignment ended.
+    async fn reconcile_project_events(
         &self,
         calendar_id: &str,
-        desired: &BTreeMap<String, String>,
-    ) -> Result<BTreeMap<String, BTreeMap<String, usize>>, CalendarError>;
+        open_project_code: Option<&str>,
+        members: &BTreeSet<&str>,
+    ) -> Result<(), CalendarError>;
 
     /// Read the complete iCalendar resources on a verified private calendar.
     async fn event_backups(
@@ -256,7 +301,7 @@ pub trait CalendarService: Send + Sync {
     ) -> Result<Vec<CalendarEventBackup>, CalendarError>;
 
     /// Read a Project Calendar only when its recorded id agrees with the
-    /// unique calendar the deployment owns under the Project code.
+    /// calendar the deployment owns under the Project code.
     async fn project_events(
         &self,
         project_code: &str,
@@ -264,8 +309,10 @@ pub trait CalendarService: Send + Sync {
         start: DateTime<FixedOffset>,
         end: DateTime<FixedOffset>,
     ) -> Result<Option<Vec<ProjectCalendarEvent>>, CalendarError> {
-        let owned = self.find_calendar(project_code).await?;
-        if owned.is_none_or(|calendar| calendar.id != recorded_id) {
+        if !self
+            .recorded_calendar_matches(project_code, recorded_id)
+            .await?
+        {
             return Ok(None);
         }
         self.events_in_window(recorded_id, start, end)
@@ -288,18 +335,21 @@ pub trait CalendarService: Send + Sync {
         event: &CalendarEvent,
     ) -> Result<StoredEvent, CalendarError>;
 
-    /// Overwrite the event's Navigator-written fields, leaving everything a
-    /// person set in Google — its color, its guests — alone.
+    /// Update a verified mirror at its last observed version.
     async fn patch_event(
         &self,
         calendar_id: &str,
-        event_id: &str,
+        previous: &StoredEvent,
         event: &CalendarEvent,
     ) -> Result<StoredEvent, CalendarError>;
 
     /// Delete an event. Deleting one already gone succeeds: the desired end
     /// state is what the mirror reconciles to.
-    async fn delete_event(&self, calendar_id: &str, event_id: &str) -> Result<(), CalendarError>;
+    async fn delete_event(
+        &self,
+        calendar_id: &str,
+        previous: &StoredEvent,
+    ) -> Result<(), CalendarError>;
 
     /// Every event on the calendar whose private extended property `key`
     /// carries `value`. The mirror's marker property finds its events in one
@@ -319,6 +369,7 @@ pub struct GoogleCalendar {
     http: reqwest::Client,
     base_url: String,
     namespace: Option<&'static str>,
+    delegated_user: String,
 }
 
 impl GoogleCalendar {
@@ -333,7 +384,11 @@ impl GoogleCalendar {
             .token_source(&[CALENDAR_SCOPE])
             .await
             .map_err(|_| CalendarError::Authentication)?;
-        Ok(Self::from_parts(token_source, CALENDAR_BASE_URL))
+        Ok(Self::from_parts(
+            token_source,
+            CALENDAR_BASE_URL,
+            &delegation.delegated_user,
+        ))
     }
 
     /// Build from [`CALENDAR_CONFIGURATION_KEYS`], naming every missing key.
@@ -439,6 +494,50 @@ impl GoogleCalendar {
         Ok(())
     }
 
+    async fn owned_entries(
+        &self,
+        include_hidden: bool,
+    ) -> Result<Vec<CalendarListEntry>, CalendarError> {
+        let action = "listing calendars";
+        let mut found = Vec::new();
+        let mut page_token: Option<String> = None;
+        loop {
+            let token = self.token().await?;
+            let mut query = vec![("minAccessRole", "owner".to_string())];
+            if include_hidden {
+                query.push(("showHidden", "true".into()));
+            }
+            if let Some(page) = &page_token {
+                query.push(("pageToken", page.clone()));
+            }
+            let page = Self::checked(
+                self.http
+                    .get(self.url(&["users", "me", "calendarList"]))
+                    .bearer_auth(token)
+                    .query(&query)
+                    .send()
+                    .await,
+                action,
+            )?
+            .json::<CalendarListPage>()
+            .await
+            .map_err(|source| CalendarError::Response { action, source })?;
+            found.extend(page.items);
+            page_token = page.next_page_token;
+            if page_token.is_none() {
+                break;
+            }
+        }
+        Ok(found)
+    }
+
+    fn other_namespace(&self, entry: &CalendarListEntry) -> bool {
+        entry.description.as_deref().is_some_and(|description| {
+            description.starts_with("Navigator Project Calendar (")
+                && Some(description) != self.ownership_marker().as_deref()
+        })
+    }
+
     fn project_summary<'a>(&self, code: &'a str) -> std::borrow::Cow<'a, str> {
         if self.namespace == Some("staging") {
             format!("staging-{code}").into()
@@ -452,12 +551,17 @@ impl GoogleCalendar {
             .map(|environment| format!("Navigator Project Calendar ({environment})"))
     }
 
-    fn from_parts(token_source: Arc<dyn google_cloud_token::TokenSource>, base_url: &str) -> Self {
+    fn from_parts(
+        token_source: Arc<dyn google_cloud_token::TokenSource>,
+        base_url: &str,
+        delegated_user: &str,
+    ) -> Self {
         Self {
             token_source,
             http: reqwest::Client::new(),
             base_url: base_url.trim_end_matches('/').to_string(),
             namespace: None,
+            delegated_user: delegated_user.to_owned(),
         }
     }
 
@@ -494,6 +598,59 @@ impl GoogleCalendar {
                 status: response.status().as_u16(),
             })
         }
+    }
+
+    /// Stamp the exact representation returned by our write. A concurrent edit
+    /// invalidates this precondition and can never become the mirror baseline.
+    async fn baseline_event(
+        &self,
+        calendar_id: &str,
+        resource: serde_json::Value,
+    ) -> Result<StoredEvent, CalendarError> {
+        let action = "recording the event mirror baseline";
+        let id = resource["id"]
+            .as_str()
+            .ok_or(CalendarError::MissingEventId)?;
+        let etag = event_etag(&resource).ok_or(CalendarError::UnverifiedEvent)?;
+        if resource["summary"].as_str().is_none()
+            || resource["start"].is_null()
+            || resource["end"].is_null()
+            || contains_meeting_material(&resource)
+        {
+            return Err(CalendarError::UnverifiedEvent);
+        }
+        let sha = event_fingerprint(&resource);
+        let patch = serde_json::json!({"extendedProperties":{"private":{(BASELINE):sha}}});
+        let confirmed = Self::checked(
+            self.http
+                .patch(self.url(&["calendars", calendar_id, "events", id]))
+                .bearer_auth(self.token().await?)
+                .header(reqwest::header::IF_MATCH, etag)
+                .query(&[
+                    ("sendUpdates", "none"),
+                    ("supportsAttachments", "true"),
+                    ("conferenceDataVersion", "1"),
+                ])
+                .json(&patch)
+                .send()
+                .await,
+            action,
+        )?
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|source| CalendarError::Response { action, source })?;
+        if confirmed["id"] != resource["id"]
+            || confirmed["extendedProperties"]["private"][BASELINE] != sha
+        {
+            return Err(CalendarError::UnverifiedEvent);
+        }
+        // The baseline stamp changes the ETag. Verify Google's complete response too.
+        let stored = stored_event(&confirmed)?;
+        stored
+            .writable_etag
+            .as_ref()
+            .ok_or(CalendarError::UnverifiedEvent)?;
+        Ok(stored)
     }
 
     async fn list_events<T: serde::de::DeserializeOwned>(
@@ -571,6 +728,45 @@ impl GoogleCalendar {
 
 #[async_trait]
 impl CalendarService for GoogleCalendar {
+    async fn reconcile_project_events(
+        &self,
+        calendar_id: &str,
+        open_project_code: Option<&str>,
+        members: &BTreeSet<&str>,
+    ) -> Result<(), CalendarError> {
+        let events = self
+            .list_events::<MembershipEvent>(
+                calendar_id,
+                "reading Project Calendar titles",
+                &[(
+                    "fields",
+                    "nextPageToken,items(id,etag,summary,organizer(self),status,locked,attendees,attendeesOmitted,extendedProperties/private)",
+                )],
+            )
+            .await?;
+        for event in events {
+            let Some(patch) = event.membership_patch(open_project_code, members)? else {
+                continue;
+            };
+            Self::checked(
+                self.http
+                    .patch(self.url(&["calendars", calendar_id, "events", &event.id]))
+                    .bearer_auth(self.token().await?)
+                    .header(reqwest::header::IF_MATCH, event.etag)
+                    .query(&[
+                        ("sendUpdates", "none"),
+                        ("supportsAttachments", "true"),
+                        ("conferenceDataVersion", "1"),
+                    ])
+                    .json(&patch)
+                    .send()
+                    .await,
+                "updating a Project Calendar event",
+            )?;
+        }
+        Ok(())
+    }
+
     async fn event_backups(
         &self,
         calendar_id: &str,
@@ -594,7 +790,10 @@ impl CalendarService for GoogleCalendar {
                 ("timeMax", &end),
                 ("singleEvents", "true"),
                 ("orderBy", "startTime"),
-                ("fields", "nextPageToken,items(id,summary,start,end)"),
+                (
+                    "fields",
+                    "nextPageToken,items(id,summary,start,end,transparency)",
+                ),
             ],
         )
         .await
@@ -602,56 +801,35 @@ impl CalendarService for GoogleCalendar {
     async fn find_calendar(&self, summary: &str) -> Result<Option<ProjectCalendar>, CalendarError> {
         let summary = self.project_summary(summary);
         let marker = self.ownership_marker();
-        let action = "listing calendars";
-        let mut found = Vec::new();
-        let mut page_token: Option<String> = None;
-        loop {
-            let token = self.token().await?;
-            let mut query = vec![("minAccessRole", "owner".to_string())];
-            if let Some(page) = &page_token {
-                query.push(("pageToken", page.clone()));
-            }
-            let page = Self::checked(
-                self.http
-                    .get(self.url(&["users", "me", "calendarList"]))
-                    .bearer_auth(token)
-                    .query(&query)
-                    .send()
-                    .await,
-                action,
-            )?
-            .json::<CalendarListPage>()
-            .await
-            .map_err(|source| CalendarError::Response { action, source })?;
-            found.extend(
-                page.items
-                    .into_iter()
-                    .filter(|entry| {
-                        entry.summary.as_deref() == Some(summary.as_ref())
-                            && marker
-                                .as_ref()
-                                .is_none_or(|expected| entry.description.as_ref() == Some(expected))
-                    })
-                    .map(|entry| ProjectCalendar {
-                        id: entry.id,
-                        summary: summary.to_string(),
-                    }),
-            );
-            page_token = page.next_page_token;
-            if page_token.is_none() {
-                break;
-            }
-        }
+        let found: Vec<_> = self
+            .owned_entries(false)
+            .await?
+            .into_iter()
+            .filter(|entry| {
+                entry.summary.as_deref() == Some(summary.as_ref())
+                    && marker
+                        .as_ref()
+                        .is_none_or(|expected| entry.description.as_ref() == Some(expected))
+            })
+            .map(|entry| ProjectCalendar {
+                id: entry.id,
+                summary: summary.to_string(),
+            })
+            .collect();
         match found.len() {
             0 => Ok(None),
-            1 => Ok(found.pop()),
+            1 => Ok(found.into_iter().next()),
             count => Err(CalendarError::AmbiguousSummary { count }),
         }
     }
 
-    async fn create_calendar(&self, summary: &str) -> Result<ProjectCalendar, CalendarError> {
+    async fn create_calendar(
+        &self,
+        summary: &str,
+        timezone: &str,
+    ) -> Result<ProjectCalendar, CalendarError> {
         let summary = self.project_summary(summary);
-        let mut body = serde_json::json!({ "summary": summary.as_ref() });
+        let mut body = serde_json::json!({ "summary": summary.as_ref(), "timeZone": timezone });
         if let Some(marker) = self.ownership_marker() {
             body["description"] = marker.into();
         }
@@ -682,6 +860,66 @@ impl CalendarService for GoogleCalendar {
             id,
             summary: summary.to_string(),
         })
+    }
+
+    async fn reconcile_calendar_timezone(
+        &self,
+        code: &str,
+        id: &str,
+        timezone: &str,
+    ) -> Result<(), CalendarError> {
+        let Some(marker) = self.ownership_marker() else {
+            return Ok(());
+        };
+        let action = "reading the managed Project Calendar time zone";
+        let token = self.token().await?;
+        let url = self.url(&["calendars", id]);
+        let resource = Self::checked(
+            self.http
+                .get(&url)
+                .bearer_auth(&token)
+                .query(&[("fields", "id,etag,summary,description,dataOwner,timeZone")])
+                .send()
+                .await,
+            action,
+        )?
+        .json::<CalendarResource>()
+        .await
+        .map_err(|source| CalendarError::Response { action, source })?;
+        if resource.id.as_deref() != Some(id)
+            || resource.summary.as_deref() != Some(self.project_summary(code).as_ref())
+        {
+            return Err(CalendarError::UnverifiedCalendarMetadata);
+        }
+        // A hand-built calendar can be explicitly linked and remains user-managed.
+        if resource.description.as_deref() != Some(marker.as_str()) {
+            return Ok(());
+        }
+        if !resource
+            .data_owner
+            .as_deref()
+            .is_some_and(|owner| owner.eq_ignore_ascii_case(&self.delegated_user))
+        {
+            return Err(CalendarError::UnverifiedCalendarMetadata);
+        }
+        if resource.time_zone.as_deref() == Some(timezone) {
+            return Ok(());
+        }
+        let version = resource
+            .etag
+            .filter(|etag| !etag.is_empty())
+            .ok_or(CalendarError::UnverifiedCalendarMetadata)?;
+        Self::checked(
+            self.http
+                .patch(url)
+                .bearer_auth(token)
+                .header(reqwest::header::IF_MATCH, version)
+                .json(&serde_json::json!({"timeZone":timezone}))
+                .send()
+                .await,
+            "setting the managed Project Calendar time zone",
+        )?;
+        Ok(())
     }
 
     async fn calendar_exists(&self, calendar_id: &str) -> Result<bool, CalendarError> {
@@ -745,13 +983,11 @@ impl CalendarService for GoogleCalendar {
             .map_err(|source| CalendarError::Response { action, source })?;
         // A manually linked calendar can lack a Navigator marker. An explicit
         // marker for another deployment can never be adopted.
-        let other_namespace = entry.description.as_deref().is_some_and(|description| {
-            description.starts_with("Navigator Project Calendar (")
-                && Some(description) != self.ownership_marker().as_deref()
-        });
         Ok(if entry.id != id {
             Some("The provider returned a different calendar ID.")
-        } else if other_namespace {
+        } else if entry.primary {
+            Some("A primary calendar cannot be a Project Calendar.")
+        } else if self.other_namespace(&entry) {
             Some("The recorded calendar belongs to another deployment.")
         } else if entry.access_role.as_deref() != Some("owner") {
             Some("The delegated account does not own the recorded calendar.")
@@ -831,6 +1067,30 @@ impl CalendarService for GoogleCalendar {
         Ok(())
     }
 
+    async fn owned_calendar_codes(&self) -> Result<BTreeMap<String, String>, CalendarError> {
+        let mut codes = BTreeMap::new();
+        for entry in self.owned_entries(true).await? {
+            if entry.primary
+                || self.other_namespace(&entry)
+                || entry.access_role.as_deref() != Some("owner")
+            {
+                continue;
+            }
+            if let Some(summary) = entry.summary {
+                let code = if self.namespace == Some("staging") {
+                    let Some(code) = summary.strip_prefix("staging-") else {
+                        continue;
+                    };
+                    code.to_owned()
+                } else {
+                    summary
+                };
+                codes.insert(entry.id, code);
+            }
+        }
+        Ok(codes)
+    }
+
     async fn members(&self, calendar_id: &str) -> Result<Vec<CalendarMember>, CalendarError> {
         Ok(self
             .user_acl_rules(calendar_id)
@@ -845,14 +1105,14 @@ impl CalendarService for GoogleCalendar {
             .collect())
     }
 
-    async fn invite_reader(&self, calendar_id: &str, email: &str) -> Result<bool, CalendarError> {
+    async fn grant_reader(&self, calendar_id: &str, email: &str) -> Result<bool, CalendarError> {
         let token = self.token().await?;
-        let action = "requesting a calendar invitation";
+        let action = "granting calendar access";
         let response = self
             .http
             .post(self.url(&["calendars", calendar_id, "acl"]))
             .bearer_auth(token)
-            .query(&[("sendNotifications", "true")])
+            .query(&[("sendNotifications", "false")])
             .json(&serde_json::json!({
                 "role": "reader",
                 "scope": { "type": "user", "value": email },
@@ -961,106 +1221,6 @@ impl CalendarService for GoogleCalendar {
         Ok(readable)
     }
 
-    async fn sync_event_guests(
-        &self,
-        calendar_id: &str,
-        desired: &BTreeMap<String, String>,
-    ) -> Result<BTreeMap<String, BTreeMap<String, usize>>, CalendarError> {
-        let action = "reading Project Calendar invitation status";
-        let events = self
-            .list_events::<InvitationEvent>(calendar_id, action, &[])
-            .await?;
-        let mut status = BTreeMap::<String, BTreeMap<String, usize>>::new();
-        for event in events {
-            if event.status.as_deref() == Some("cancelled") {
-                continue;
-            }
-            if !event
-                .organizer
-                .as_ref()
-                .is_some_and(|organizer| organizer.is_self)
-            {
-                for person in desired.keys() {
-                    *status
-                        .entry(person.clone())
-                        .or_default()
-                        .entry("external_organizer".into())
-                        .or_default() += 1;
-                }
-                continue;
-            }
-            let stored = if let Some(patch) = event.guest_patch(desired)? {
-                let path = ["calendars", calendar_id, "events", event.id.as_str()];
-                Self::checked(
-                    self.http
-                        .patch(self.url(&path))
-                        .bearer_auth(self.token().await?)
-                        .header(reqwest::header::IF_MATCH, &event.etag)
-                        .query(&[("sendUpdates", "all")])
-                        .json(&patch)
-                        .send()
-                        .await,
-                    "updating Project Calendar guests",
-                )?;
-                let stored = Self::checked(
-                    self.http
-                        .get(self.url(&path))
-                        .bearer_auth(self.token().await?)
-                        .send()
-                        .await,
-                    action,
-                )?
-                .json::<InvitationEvent>()
-                .await
-                .map_err(|source| CalendarError::Response { action, source })?;
-                if let Some(markers) = patch["extendedProperties"]["private"].as_object() {
-                    if markers.iter().any(|(key, value)| {
-                        stored
-                            .extended_properties
-                            .private
-                            .get(key)
-                            .map(String::as_str)
-                            != value.as_str()
-                    }) {
-                        return Err(CalendarError::Api {
-                            action,
-                            status: 409,
-                        });
-                    }
-                }
-                stored
-            } else {
-                event
-            };
-            if stored.guest_patch(desired)?.is_some() {
-                return Err(CalendarError::Api {
-                    action,
-                    status: 409,
-                });
-            }
-            for (person, email) in desired {
-                let response = stored
-                    .attendees
-                    .iter()
-                    .find(|guest| attendee_matches(guest, email))
-                    .and_then(|guest| guest["responseStatus"].as_str());
-                let response = match response {
-                    Some("accepted") => "accepted",
-                    Some("declined") => "declined",
-                    Some("tentative") => "tentative",
-                    Some("needsAction") => "needs_action",
-                    _ => "response_unknown",
-                };
-                *status
-                    .entry(person.clone())
-                    .or_default()
-                    .entry(response.into())
-                    .or_default() += 1;
-            }
-        }
-        Ok(status)
-    }
-
     async fn set_member_role(
         &self,
         calendar_id: &str,
@@ -1140,41 +1300,63 @@ impl CalendarService for GoogleCalendar {
                 .await,
             action,
         )?
-        .json::<EventResource>()
+        .json::<serde_json::Value>()
         .await
         .map_err(|source| CalendarError::Response { action, source })?;
-        stored_event(&stored)
+        self.baseline_event(calendar_id, stored).await
     }
 
     async fn patch_event(
         &self,
         calendar_id: &str,
-        event_id: &str,
+        previous: &StoredEvent,
         event: &CalendarEvent,
     ) -> Result<StoredEvent, CalendarError> {
         let action = "updating an event";
+        let etag = previous
+            .writable_etag
+            .as_deref()
+            .ok_or(CalendarError::UnverifiedEvent)?;
         let token = self.token().await?;
         let stored = Self::checked(
             self.http
-                .patch(self.url(&["calendars", calendar_id, "events", event_id]))
+                .patch(self.url(&["calendars", calendar_id, "events", &previous.id]))
+                .header(reqwest::header::IF_MATCH, etag)
+                .query(&[
+                    ("sendUpdates", "none"),
+                    ("supportsAttachments", "true"),
+                    ("conferenceDataVersion", "1"),
+                ])
                 .bearer_auth(token)
                 .json(&event_body(event))
                 .send()
                 .await,
             action,
         )?
-        .json::<EventResource>()
+        .json::<serde_json::Value>()
         .await
         .map_err(|source| CalendarError::Response { action, source })?;
-        stored_event(&stored)
+        if stored["id"].as_str() != Some(&previous.id) {
+            return Err(CalendarError::UnverifiedEvent);
+        }
+        self.baseline_event(calendar_id, stored).await
     }
 
-    async fn delete_event(&self, calendar_id: &str, event_id: &str) -> Result<(), CalendarError> {
+    async fn delete_event(
+        &self,
+        calendar_id: &str,
+        previous: &StoredEvent,
+    ) -> Result<(), CalendarError> {
         let action = "deleting an event";
+        let etag = previous
+            .writable_etag
+            .as_deref()
+            .ok_or(CalendarError::UnverifiedEvent)?;
         let token = self.token().await?;
         let response = self
             .http
-            .delete(self.url(&["calendars", calendar_id, "events", event_id]))
+            .delete(self.url(&["calendars", calendar_id, "events", &previous.id]))
+            .header(reqwest::header::IF_MATCH, etag)
             .bearer_auth(token)
             .send()
             .await
@@ -1195,7 +1377,7 @@ impl CalendarService for GoogleCalendar {
         value: &str,
     ) -> Result<Vec<StoredEvent>, CalendarError> {
         let filter = format!("{key}={value}");
-        self.list_events::<EventResource>(
+        self.list_events::<serde_json::Value>(
             calendar_id,
             "listing mirrored events",
             &[("privateExtendedProperty", &filter), ("maxResults", "250")],
@@ -1218,6 +1400,8 @@ struct CalendarListPage {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CalendarListEntry {
+    #[serde(default)]
+    primary: bool,
     id: String,
     access_role: Option<String>,
     summary: Option<String>,
@@ -1225,7 +1409,12 @@ struct CalendarListEntry {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct CalendarResource {
+    summary: Option<String>,
+    description: Option<String>,
+    data_owner: Option<String>,
+    time_zone: Option<String>,
     id: Option<String>,
     etag: Option<String>,
 }
@@ -1253,73 +1442,6 @@ struct AclScope {
     value: Option<String>,
 }
 
-const INVITED_PERSON: &str = "nv_invited_";
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct InvitationEvent {
-    id: String,
-    #[serde(default)]
-    etag: String,
-    status: Option<String>,
-    organizer: Option<InvitationOrganizer>,
-    #[serde(default)]
-    attendees: Vec<serde_json::Value>,
-    #[serde(default)]
-    attendees_omitted: bool,
-    #[serde(default)]
-    extended_properties: EventExtendedProperties,
-}
-
-#[derive(Deserialize)]
-struct InvitationOrganizer {
-    #[serde(rename = "self", default)]
-    is_self: bool,
-}
-
-fn attendee_matches(guest: &serde_json::Value, email: &str) -> bool {
-    guest["email"]
-        .as_str()
-        .is_some_and(|value| value.eq_ignore_ascii_case(email))
-}
-
-impl InvitationEvent {
-    fn guest_patch(
-        &self,
-        desired: &BTreeMap<String, String>,
-    ) -> Result<Option<serde_json::Value>, CalendarError> {
-        if self.attendees_omitted || self.etag.is_empty() {
-            return Err(CalendarError::Api {
-                action: "reading complete calendar guests",
-                status: 409,
-            });
-        }
-        let mut attendees = self.attendees.clone();
-        let mut markers = serde_json::Map::new();
-        for (key, email) in &self.extended_properties.private {
-            let Some(person) = key.strip_prefix(INVITED_PERSON) else {
-                continue;
-            };
-            if desired.get(person) != Some(email) && !desired.values().any(|value| value == email) {
-                attendees.retain(|guest| !attendee_matches(guest, email));
-                markers.insert(key.clone(), serde_json::Value::Null);
-            }
-        }
-        for (person, email) in desired {
-            if !attendees.iter().any(|guest| attendee_matches(guest, email)) {
-                attendees.push(serde_json::json!({ "email": email }));
-                markers.insert(format!("{INVITED_PERSON}{person}"), email.clone().into());
-            }
-        }
-        Ok((!markers.is_empty()).then(|| {
-            serde_json::json!({
-                "attendees": attendees,
-                "extendedProperties": { "private": markers }
-            })
-        }))
-    }
-}
-
 /// One page of a filtered events read.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", bound(deserialize = "T: Deserialize<'de>"))]
@@ -1329,12 +1451,84 @@ struct EventPage<T> {
     next_page_token: Option<String>,
 }
 
-/// One event as the Calendar API returns it.
+#[derive(Deserialize)]
+struct EventOrganizer {
+    #[serde(rename = "self", default)]
+    owns_event: bool,
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct EventResource {
-    id: Option<String>,
-    extended_properties: Option<EventExtendedProperties>,
+struct MembershipEvent {
+    id: String,
+    etag: String,
+    summary: Option<String>,
+    organizer: Option<EventOrganizer>,
+    status: Option<String>,
+    #[serde(default)]
+    locked: bool,
+    #[serde(default)]
+    attendees: Vec<serde_json::Value>,
+    #[serde(default)]
+    attendees_omitted: bool,
+    #[serde(default)]
+    extended_properties: EventExtendedProperties,
+}
+
+impl MembershipEvent {
+    fn membership_patch(
+        &self,
+        code: Option<&str>,
+        members: &BTreeSet<&str>,
+    ) -> Result<Option<serde_json::Value>, CalendarError> {
+        if self.status.as_deref() == Some("cancelled")
+            || !self.organizer.as_ref().is_some_and(|o| o.owns_event)
+        {
+            return Ok(None);
+        }
+        let mut patch = serde_json::Map::new();
+        if let Some(code) = code.filter(|_| !self.locked) {
+            let title = model::projects::calendar_event_title(
+                code,
+                self.summary.as_deref().unwrap_or_default(),
+            );
+            if self.summary.as_deref() != Some(&title) {
+                patch.insert("summary".into(), title.into());
+            }
+        }
+        // A marked guest can retain event access after losing the calendar grant.
+        let mut expired = BTreeSet::new();
+        let mut markers = serde_json::Map::new();
+        for (key, email) in &self.extended_properties.private {
+            if key.starts_with("nv_invited_") && !members.contains(email.as_str()) {
+                expired.insert(email.to_ascii_lowercase());
+                markers.insert(key.clone(), serde_json::Value::Null);
+            }
+        }
+        if !expired.is_empty() {
+            if self.attendees_omitted || self.locked {
+                return Err(CalendarError::Api {
+                    action: "revoking expired Project event access",
+                    status: 409,
+                });
+            }
+            let guests: Vec<_> = self
+                .attendees
+                .iter()
+                .filter(|guest| {
+                    !guest["email"]
+                        .as_str()
+                        .is_some_and(|email| expired.contains(&email.to_ascii_lowercase()))
+                })
+                .collect();
+            patch.insert("attendees".into(), serde_json::json!(guests));
+            patch.insert(
+                "extendedProperties".into(),
+                serde_json::json!({"private":markers}),
+            );
+        }
+        Ok((!patch.is_empty()).then_some(serde_json::Value::Object(patch)))
+    }
 }
 
 /// The `extendedProperties` object; only the `private` map is ours.
@@ -1368,8 +1562,24 @@ struct EventBody<'a> {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct EventTime {
-    date_time: String,
+enum EventTime {
+    DateTime(String),
+    Date(chrono::NaiveDate),
+}
+
+impl From<EventTime> for ProjectCalendarEventTime {
+    fn from(time: EventTime) -> Self {
+        match time {
+            EventTime::DateTime(value) => Self {
+                date_time: Some(value),
+                date: None,
+            },
+            EventTime::Date(value) => Self {
+                date: Some(value.to_string()),
+                date_time: None,
+            },
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -1386,35 +1596,56 @@ struct EventReminder {
 }
 
 fn event_body(event: &CalendarEvent) -> EventBody<'_> {
-    let start = event.start.to_rfc3339();
-    let end = (event.start + chrono::Duration::minutes(1)).to_rfc3339();
+    let (start, end) = match event.timing {
+        EventTiming::AllDay(day) => (
+            EventTime::Date(day),
+            EventTime::Date(day.succ_opt().unwrap_or(day)),
+        ),
+        timing => {
+            let minutes = if let EventTiming::Hearing(minutes) = timing {
+                i64::from(minutes)
+            } else {
+                1
+            };
+            (
+                EventTime::DateTime(event.start.to_rfc3339()),
+                EventTime::DateTime(
+                    (event.start + chrono::Duration::minutes(minutes)).to_rfc3339(),
+                ),
+            )
+        }
+    };
     EventBody {
         summary: &event.summary,
         description: event.description.as_deref(),
         location: event.location.as_deref(),
         color_id: event.color_id.as_deref(),
-        start: EventTime {
-            date_time: start.clone(),
-        },
-        end: EventTime { date_time: end },
+        start,
+        end,
         status: if event.cancelled {
             "cancelled"
         } else {
             "confirmed"
         },
-        transparency: "transparent",
+        transparency: if matches!(event.timing, EventTiming::Hearing(_)) {
+            "opaque"
+        } else {
+            "transparent"
+        },
         sequence: event.sequence,
         reminders: EventReminders {
             use_default: false,
             overrides: event
                 .reminder_minutes
-                .map(|minutes| {
-                    vec![EventReminder {
-                        method: "popup",
-                        minutes,
-                    }]
+                .iter()
+                .copied()
+                // Google accepts popup offsets of up to four weeks. Longer internal leads remain on the Deadline.
+                .filter(|minutes| (0..=40_320).contains(minutes))
+                .map(|minutes| EventReminder {
+                    method: "popup",
+                    minutes,
                 })
-                .unwrap_or_default(),
+                .collect(),
         },
         extended_properties: EventExtendedProperties {
             private: event.private_properties.clone(),
@@ -1422,20 +1653,111 @@ fn event_body(event: &CalendarEvent) -> EventBody<'_> {
     }
 }
 
-fn stored_event(resource: &EventResource) -> Result<StoredEvent, CalendarError> {
-    let id = resource
-        .id
-        .clone()
+const BASELINE: &str = "navigator_event_baseline_v1";
+
+fn event_etag(resource: &serde_json::Value) -> Option<&str> {
+    resource["etag"]
+        .as_str()
+        .map(str::trim)
+        .filter(|etag| !etag.is_empty() && *etag != "*")
+}
+
+/// Hash Google's own complete response, including the event ID, meeting data and unknown
+/// fields. Only the baseline stamp and Google's write bookkeeping may change on our stamp.
+fn event_fingerprint(resource: &serde_json::Value) -> String {
+    let mut content = resource.clone();
+    if let Some(object) = content.as_object_mut() {
+        for field in ["etag", "updated", "sequence"] {
+            object.remove(field);
+        }
+    }
+    if let Some(props) = content
+        .pointer_mut("/extendedProperties/private")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        props.remove(BASELINE);
+    }
+    for key in ["start", "end"] {
+        if let Some(instant) = content[key]["dateTime"]
+            .as_str()
+            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        {
+            // Google can render the same instant in the query's or calendar's time zone.
+            content[key]["dateTime"] = instant.to_utc().to_rfc3339().into();
+        }
+    }
+    content.sort_all_objects();
+    base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(Sha256::digest(content.to_string().as_bytes()))
+}
+
+/// A provider can add conferencing or a recording even to a Navigator-created event.
+fn contains_meeting_material(resource: &serde_json::Value) -> bool {
+    ["attendees", "attachments"].iter().any(|field| {
+        resource[*field]
+            .as_array()
+            .is_some_and(|entries| !entries.is_empty())
+    }) || ["conferenceData", "hangoutLink"]
+        .iter()
+        .any(|field| !resource[*field].is_null())
+        || resource["attendeesOmitted"].as_bool() == Some(true)
+}
+
+fn stored_event(resource: &serde_json::Value) -> Result<StoredEvent, CalendarError> {
+    let id = resource["id"]
+        .as_str()
         .filter(|id| !id.is_empty())
         .ok_or(CalendarError::MissingEventId)?;
+    let private_properties: BTreeMap<String, String> = resource["extendedProperties"]["private"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter_map(|(key, value)| value.as_str().map(|v| (key.clone(), v.to_string())))
+        .collect();
+    let writable_etag = event_etag(resource)
+        .filter(|_| !contains_meeting_material(resource))
+        .filter(|_| {
+            private_properties
+                .get(BASELINE)
+                .is_some_and(|saved| saved == &event_fingerprint(resource))
+        })
+        .map(str::to_owned);
     Ok(StoredEvent {
-        id,
-        private_properties: resource
-            .extended_properties
-            .as_ref()
-            .map(|properties| properties.private.clone())
-            .unwrap_or_default(),
+        id: id.to_string(),
+        private_properties,
+        writable_etag,
     })
+}
+
+fn fake_event_resource(id: &str, event: &CalendarEvent) -> serde_json::Value {
+    let mut resource = serde_json::json!(event_body(event));
+    resource["id"] = id.into();
+    resource["etag"] = event_fingerprint(&resource).into();
+    resource
+}
+
+fn fake_mirror_write(id: &str, mut event: CalendarEvent) -> (CalendarEvent, StoredEvent) {
+    let sha = event_fingerprint(&fake_event_resource(id, &event));
+    event.private_properties.insert(BASELINE.into(), sha);
+    let stored = stored_event(&fake_event_resource(id, &event)).expect("fixture event has ID");
+    (event, stored)
+}
+
+fn verify_fake_version(
+    previous: &StoredEvent,
+    existing: &CalendarEvent,
+) -> Result<(), CalendarError> {
+    let etag = previous
+        .writable_etag
+        .as_deref()
+        .ok_or(CalendarError::UnverifiedEvent)?;
+    if fake_event_resource(&previous.id, existing)["etag"] != etag {
+        return Err(CalendarError::Api {
+            action: "checking event version",
+            status: 412,
+        });
+    }
+    Ok(())
 }
 
 /// In-memory calendars for store and door tests. The delegated user is
@@ -1455,9 +1777,9 @@ struct FakeCalendarState {
 
 #[derive(Debug)]
 struct FakeCalendarEntry {
+    timezone: String,
     backups: Vec<CalendarEventBackup>,
     summary: String,
-    assigned_guests: BTreeMap<String, String>,
     members: BTreeMap<String, CalendarRole>,
 }
 
@@ -1499,6 +1821,17 @@ impl FakeCalendar {
             .collect()
     }
 
+    /// The zone recorded on a simulated calendar.
+    #[must_use]
+    pub fn timezone(&self, calendar_id: &str) -> Option<String> {
+        self.state
+            .lock()
+            .expect("fake calendar mutex poisoned")
+            .calendars
+            .get(calendar_id)
+            .map(|entry| entry.timezone.clone())
+    }
+
     /// Who a calendar is shared with, by email.
     #[must_use]
     pub fn sharing(&self, calendar_id: &str) -> BTreeMap<String, CalendarRole> {
@@ -1507,18 +1840,6 @@ impl FakeCalendar {
             .calendars
             .get(calendar_id)
             .map(|entry| entry.members.clone())
-            .unwrap_or_default()
-    }
-
-    /// The most recent event guest assignments submitted to this calendar.
-    #[must_use]
-    pub fn assigned_guests(&self, calendar_id: &str) -> BTreeMap<String, String> {
-        self.state
-            .lock()
-            .expect("fake calendar mutex poisoned")
-            .calendars
-            .get(calendar_id)
-            .map(|entry| entry.assigned_guests.clone())
             .unwrap_or_default()
     }
 
@@ -1539,9 +1860,8 @@ impl FakeCalendar {
             .map(|events| {
                 events
                     .iter()
-                    .map(|(id, event)| StoredEvent {
-                        id: id.clone(),
-                        private_properties: event.private_properties.clone(),
+                    .map(|(id, event)| {
+                        stored_event(&fake_event_resource(id, event)).expect("fixture event has ID")
                     })
                     .collect()
             })
@@ -1567,6 +1887,24 @@ impl FakeCalendar {
 
 #[async_trait]
 impl CalendarService for FakeCalendar {
+    async fn reconcile_project_events(
+        &self,
+        calendar_id: &str,
+        open_project_code: Option<&str>,
+        _: &BTreeSet<&str>,
+    ) -> Result<(), CalendarError> {
+        let Some(code) = open_project_code else {
+            return Ok(());
+        };
+        let mut state = self.state.lock().expect("fake calendar mutex poisoned");
+        if let Some(events) = state.events.get_mut(calendar_id) {
+            for event in events.values_mut().filter(|event| !event.cancelled) {
+                event.summary = model::projects::calendar_event_title(code, &event.summary);
+            }
+        }
+        Ok(())
+    }
+
     async fn event_backups(
         &self,
         calendar_id: &str,
@@ -1586,33 +1924,37 @@ impl CalendarService for FakeCalendar {
         end: DateTime<FixedOffset>,
     ) -> Result<Vec<ProjectCalendarEvent>, CalendarError> {
         let state = self.state.lock().expect("fake calendar mutex poisoned");
-        let mut events: Vec<_> = state
-            .events
-            .get(calendar_id)
-            .into_iter()
-            .flatten()
-            .filter(|(_, event)| !event.cancelled && start < event.start && event.start < end)
-            .map(|(id, event)| (event.start, id, &event.summary))
-            .collect();
-        events.sort_unstable();
-        Ok(events
-            .into_iter()
-            .map(|(start, id, summary)| {
-                let instant = start.to_rfc3339();
-                ProjectCalendarEvent {
-                    id: id.clone(),
-                    summary: Some(summary.clone()),
-                    start: ProjectCalendarEventTime {
-                        date: None,
-                        date_time: Some(instant.clone()),
-                    },
-                    end: ProjectCalendarEventTime {
-                        date: None,
-                        date_time: Some(instant),
-                    },
+        let mut events = Vec::new();
+        for (id, event) in state.events.get(calendar_id).into_iter().flatten() {
+            if event.cancelled {
+                continue;
+            }
+            let body = event_body(event);
+            let in_window = match event.timing {
+                EventTiming::AllDay(day) => day >= start.date_naive() && day <= end.date_naive(),
+                EventTiming::Hearing(minutes) => {
+                    event.start < end
+                        && event.start + chrono::Duration::minutes(i64::from(minutes)) > start
                 }
-            })
-            .collect())
+                EventTiming::Instant => {
+                    event.start < end && event.start + chrono::Duration::minutes(1) > start
+                }
+            };
+            if in_window {
+                events.push((
+                    event.start,
+                    ProjectCalendarEvent {
+                        id: id.clone(),
+                        transparency: Some(body.transparency.into()),
+                        summary: Some(event.summary.clone()),
+                        start: body.start.into(),
+                        end: body.end.into(),
+                    },
+                ));
+            }
+        }
+        events.sort_by(|(a, left), (b, right)| (a, &left.id).cmp(&(b, &right.id)));
+        Ok(events.into_iter().map(|(_, event)| event).collect())
     }
 
     async fn find_calendar(&self, summary: &str) -> Result<Option<ProjectCalendar>, CalendarError> {
@@ -1633,7 +1975,11 @@ impl CalendarService for FakeCalendar {
         }
     }
 
-    async fn create_calendar(&self, summary: &str) -> Result<ProjectCalendar, CalendarError> {
+    async fn create_calendar(
+        &self,
+        summary: &str,
+        timezone: &str,
+    ) -> Result<ProjectCalendar, CalendarError> {
         let mut state = self.state.lock().expect("fake calendar mutex poisoned");
         state.next_id += 1;
         state.created += 1;
@@ -1641,9 +1987,9 @@ impl CalendarService for FakeCalendar {
         state.calendars.insert(
             id.clone(),
             FakeCalendarEntry {
+                timezone: timezone.to_owned(),
                 backups: Vec::new(),
                 summary: summary.to_string(),
-                assigned_guests: BTreeMap::new(),
                 members: BTreeMap::from([(FAKE_CALENDAR_OWNER.to_string(), CalendarRole::Owner)]),
             },
         );
@@ -1651,6 +1997,26 @@ impl CalendarService for FakeCalendar {
             id,
             summary: summary.to_string(),
         })
+    }
+
+    async fn reconcile_calendar_timezone(
+        &self,
+        code: &str,
+        id: &str,
+        timezone: &str,
+    ) -> Result<(), CalendarError> {
+        let mut state = self.state.lock().expect("fake calendar mutex poisoned");
+        let entry = state
+            .calendars
+            .get_mut(id)
+            .ok_or(CalendarError::UnverifiedCalendarMetadata)?;
+        if entry.summary != code
+            || entry.members.get(FAKE_CALENDAR_OWNER) != Some(&CalendarRole::Owner)
+        {
+            return Err(CalendarError::UnverifiedCalendarMetadata);
+        }
+        timezone.clone_into(&mut entry.timezone);
+        Ok(())
     }
 
     async fn calendar_exists(&self, calendar_id: &str) -> Result<bool, CalendarError> {
@@ -1687,6 +2053,14 @@ impl CalendarService for FakeCalendar {
         })
     }
 
+    async fn owned_calendar_codes(&self) -> Result<BTreeMap<String, String>, CalendarError> {
+        Ok(self
+            .calendars()
+            .into_iter()
+            .map(|c| (c.id, c.summary))
+            .collect())
+    }
+
     async fn members(&self, calendar_id: &str) -> Result<Vec<CalendarMember>, CalendarError> {
         Ok(self
             .sharing(calendar_id)
@@ -1695,13 +2069,13 @@ impl CalendarService for FakeCalendar {
             .collect())
     }
 
-    async fn invite_reader(&self, calendar_id: &str, email: &str) -> Result<bool, CalendarError> {
+    async fn grant_reader(&self, calendar_id: &str, email: &str) -> Result<bool, CalendarError> {
         let mut state = self.state.lock().expect("fake calendar mutex poisoned");
         let entry = state
             .calendars
             .get_mut(calendar_id)
             .ok_or(CalendarError::Api {
-                action: "inviting a calendar reader",
+                action: "granting calendar access",
                 status: 404,
             })?;
         if entry.members.contains_key(email) {
@@ -1740,25 +2114,6 @@ impl CalendarService for FakeCalendar {
             .is_some_and(|role| *role != CalendarRole::FreeBusyReader))
     }
 
-    async fn sync_event_guests(
-        &self,
-        calendar_id: &str,
-        desired: &BTreeMap<String, String>,
-    ) -> Result<BTreeMap<String, BTreeMap<String, usize>>, CalendarError> {
-        self.state
-            .lock()
-            .expect("fake calendar mutex poisoned")
-            .calendars
-            .get_mut(calendar_id)
-            .ok_or(CalendarError::Api {
-                action: "syncing event guests",
-                status: 404,
-            })?
-            .assigned_guests
-            .clone_from(desired);
-        Ok(BTreeMap::new())
-    }
-
     async fn set_member_role(
         &self,
         calendar_id: &str,
@@ -1792,47 +2147,47 @@ impl CalendarService for FakeCalendar {
         }
         state.next_id += 1;
         let id = format!("e_{}", state.next_id);
+        let (event, stored) = fake_mirror_write(&id, event.clone());
         state
             .events
             .entry(calendar_id.to_string())
             .or_default()
-            .insert(id.clone(), event.clone());
-        Ok(StoredEvent {
-            id,
-            private_properties: event.private_properties.clone(),
-        })
+            .insert(id, event);
+        Ok(stored)
     }
 
     async fn patch_event(
         &self,
         calendar_id: &str,
-        event_id: &str,
+        previous: &StoredEvent,
         event: &CalendarEvent,
     ) -> Result<StoredEvent, CalendarError> {
         let mut state = self.state.lock().expect("fake calendar mutex poisoned");
-        match state
+        let existing = state
             .events
             .get_mut(calendar_id)
-            .and_then(|events| events.get_mut(event_id))
-        {
-            Some(stored) => {
-                *stored = event.clone();
-                Ok(StoredEvent {
-                    id: event_id.to_string(),
-                    private_properties: event.private_properties.clone(),
-                })
-            }
-            None => Err(CalendarError::Api {
+            .and_then(|events| events.get_mut(&previous.id))
+            .ok_or(CalendarError::Api {
                 action: "updating an event",
                 status: 404,
-            }),
-        }
+            })?;
+        verify_fake_version(previous, existing)?;
+        let (updated, stored) = fake_mirror_write(&previous.id, event.clone());
+        *existing = updated;
+        Ok(stored)
     }
 
-    async fn delete_event(&self, calendar_id: &str, event_id: &str) -> Result<(), CalendarError> {
+    async fn delete_event(
+        &self,
+        calendar_id: &str,
+        previous: &StoredEvent,
+    ) -> Result<(), CalendarError> {
         let mut state = self.state.lock().expect("fake calendar mutex poisoned");
         if let Some(events) = state.events.get_mut(calendar_id) {
-            events.remove(event_id);
+            if let Some(existing) = events.get(&previous.id) {
+                verify_fake_version(previous, existing)?;
+                events.remove(&previous.id);
+            }
         }
         Ok(())
     }
@@ -2309,6 +2664,7 @@ impl AttorneyCalendars for FakeAttorneyCalendars {
             .enumerate()
             .map(|(index, row)| ProjectCalendarEvent {
                 id: format!("synthetic-{index}"),
+                transparency: None,
                 summary: row.summary.clone(),
                 start: ProjectCalendarEventTime {
                     date: None,
@@ -2363,7 +2719,7 @@ mod tests {
     }
 
     fn google(server: &MockServer) -> GoogleCalendar {
-        GoogleCalendar::from_parts(Arc::new(StaticToken), &server.uri())
+        GoogleCalendar::from_parts(Arc::new(StaticToken), &server.uri(), "owner@calendar.test")
     }
 
     #[tokio::test]
@@ -2470,7 +2826,9 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/calendars"))
-            .and(body_json(serde_json::json!({ "summary": "matter-42" })))
+            .and(body_json(
+                serde_json::json!({ "summary": "matter-42", "timeZone":"America/Chicago" }),
+            ))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_json(serde_json::json!({ "id": "c_42@group.calendar.example.com" })),
@@ -2478,9 +2836,58 @@ mod tests {
             .expect(1)
             .mount(&server)
             .await;
-        let calendar = google(&server).create_calendar("matter-42").await.unwrap();
+        let calendar = google(&server)
+            .create_calendar("matter-42", "America/Chicago")
+            .await
+            .unwrap();
         assert_eq!(calendar.id, "c_42@group.calendar.example.com");
         assert_eq!(calendar.summary, "matter-42");
+    }
+
+    #[tokio::test]
+    async fn timezone_reconcile_changes_only_drifted_managed_calendar_metadata() {
+        let server = MockServer::start().await;
+        let mut calendar = google(&server);
+        calendar.namespace = Some("production");
+        let marker = "Navigator Project Calendar (production)";
+        let zone = "America/Phoenix";
+        for (id, before, description, owner) in [
+            ("moved", "UTC", marker, "owner@calendar.test"),
+            ("current", zone, marker, "owner@calendar.test"),
+            ("manual", "UTC", "", "owner@calendar.test"),
+            ("transferred", "UTC", marker, "other@calendar.test"),
+        ] {
+            Mock::given(method("GET"))
+                .and(path(format!("/calendars/{id}")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "id":id,"summary":"sample","description":description,"timeZone":before,
+                    "dataOwner":owner,"etag":"version-one"
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+        Mock::given(method("PATCH"))
+            .and(path("/calendars/moved"))
+            .and(wiremock::matchers::header("if-match", "version-one"))
+            .and(body_json(serde_json::json!({"timeZone": zone})))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        for id in ["moved", "current", "manual"] {
+            calendar
+                .reconcile_calendar_timezone("sample", id, zone)
+                .await
+                .unwrap();
+        }
+        assert!(matches!(
+            calendar
+                .reconcile_calendar_timezone("sample", "transferred", zone)
+                .await,
+            Err(CalendarError::UnverifiedCalendarMetadata)
+        ));
     }
 
     #[tokio::test]
@@ -2492,7 +2899,7 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/calendars"))
             .and(body_json(serde_json::json!({
-                "summary": "staging-fixture", "description": marker
+                "summary": "staging-fixture", "description": marker, "timeZone":"America/New_York"
             })))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "id": "staging-id"
@@ -2513,7 +2920,11 @@ mod tests {
             .mount(&server)
             .await;
         assert_eq!(
-            calendar.create_calendar("fixture").await.unwrap().summary,
+            calendar
+                .create_calendar("fixture", "America/New_York")
+                .await
+                .unwrap()
+                .summary,
             "staging-fixture"
         );
         assert_eq!(
@@ -2580,72 +2991,6 @@ mod tests {
             .calendar_exists("c_gone@group.calendar.example.com")
             .await
             .unwrap());
-    }
-
-    #[tokio::test]
-    async fn changed_project_guests_preserve_manual_guests_and_do_not_notify_on_replay() {
-        let server = MockServer::start().await;
-        let list = "/calendars/shared/events";
-        let event_path = "/calendars/shared/events/hearing";
-        let manual =
-            serde_json::json!({"email": "manual@example.com", "responseStatus": "accepted"});
-        let initial = serde_json::json!({
-            "id": "hearing", "etag": "old", "organizer": {"self": true},
-            "attendees": [manual.clone(), {"email": "old@example.com"}],
-            "extendedProperties": {"private": {"nv_invited_old": "old@example.com", "deadline_id": "d1"}}
-        });
-        let updated = serde_json::json!({
-            "id": "hearing", "etag": "new", "organizer": {"self": true},
-            "attendees": [manual.clone(), {"email": "new@example.com", "responseStatus": "needsAction"}],
-            "extendedProperties": {"private": {"nv_invited_new": "new@example.com", "deadline_id": "d1"}}
-        });
-        let before = Mock::given(method("GET"))
-            .and(path(list))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({"items": [initial]})),
-            )
-            .expect(1)
-            .mount_as_scoped(&server)
-            .await;
-        Mock::given(method("PATCH")).and(path(event_path))
-            .and(wiremock::matchers::header("if-match", "old"))
-            .and(query_param("sendUpdates", "all"))
-            .and(body_json(serde_json::json!({
-                "attendees": [manual, {"email": "new@example.com"}],
-                "extendedProperties": {"private": {"nv_invited_new": "new@example.com", "nv_invited_old": null}}
-            })))
-            .respond_with(ResponseTemplate::new(200)).expect(1).mount(&server).await;
-        Mock::given(method("GET"))
-            .and(path(event_path))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&updated))
-            .expect(1)
-            .mount(&server)
-            .await;
-        let calendar = google(&server);
-        let desired = [("new".into(), "new@example.com".into())]
-            .into_iter()
-            .collect();
-        let status = calendar
-            .sync_event_guests("shared", &desired)
-            .await
-            .unwrap();
-        assert_eq!(status["new"]["needs_action"], 1);
-        drop(before);
-        Mock::given(method("GET"))
-            .and(path(list))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({"items": [updated]})),
-            )
-            .expect(1)
-            .mount(&server)
-            .await;
-        assert_eq!(
-            calendar
-                .sync_event_guests("shared", &desired)
-                .await
-                .unwrap(),
-            status
-        );
     }
 
     #[tokio::test]
@@ -2733,17 +3078,59 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn invitation_conflict_does_not_update_an_existing_grant() {
+    async fn title_repair_only_patches_the_summary_of_an_owned_event() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET")).and(path("/calendars/shared/events"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"items": [
+                {"id":"series","etag":"one","organizer":{"self":true},"summary":"Hearing - acme"},
+                {"id":"correct","etag":"two","organizer":{"self":true},"summary":"acme: Call"},
+                {"id":"external","etag":"three","organizer":{"self":false},"summary":"Meeting"},
+                {"id":"locked","etag":"four","organizer":{"self":true},"locked":true}
+            ]}))).mount(&server).await;
+        Mock::given(method("PATCH"))
+            .and(path("/calendars/shared/events/series"))
+            .and(query_param("sendUpdates", "none"))
+            .and(wiremock::matchers::header("if-match", "one"))
+            .and(body_json(serde_json::json!({"summary":"acme: Hearing"})))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+        google(&server)
+            .reconcile_project_events("shared", Some("acme"), &std::collections::BTreeSet::new())
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    fn offboarding_revokes_only_marked_guests_who_lost_calendar_access() {
+        let event: super::MembershipEvent = serde_json::from_value(serde_json::json!({
+            "id":"series", "etag":"one", "organizer":{"self":true},
+            "extendedProperties":{"private":{"nv_invited_old":"old@example.com","nv_invited_current":"current@example.com"}},
+            "attendees":[{"email":"old@example.com"},{"email":"manual@example.com"},{"email":"current@example.com","responseStatus":"accepted"}]
+        })).unwrap();
+        let members = ["current@example.com"].into_iter().collect();
+        assert_eq!(
+            event.membership_patch(None, &members).unwrap(),
+            Some(serde_json::json!({
+                "attendees":[{"email":"manual@example.com"},{"email":"current@example.com","responseStatus":"accepted"}],
+                "extendedProperties":{"private":{"nv_invited_old":null}}
+            }))
+        );
+    }
+
+    #[tokio::test]
+    async fn quiet_reader_grant_preserves_an_existing_role() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/calendars/shared/acl"))
-            .and(query_param("sendNotifications", "true"))
+            .and(query_param("sendNotifications", "false"))
             .respond_with(ResponseTemplate::new(409))
             .expect(1)
             .mount(&server)
             .await;
         assert!(!google(&server)
-            .invite_reader("shared", "clerk@example.com")
+            .grant_reader("shared", "clerk@example.com")
             .await
             .unwrap());
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
@@ -2857,7 +3244,7 @@ mod tests {
             .mount(&server)
             .await;
         let error = google(&server)
-            .create_calendar("matter-42")
+            .create_calendar("matter-42", "America/Chicago")
             .await
             .unwrap_err();
         assert!(matches!(
@@ -2872,7 +3259,10 @@ mod tests {
     #[tokio::test]
     async fn the_fake_shares_and_refuses_an_unknown_calendar() {
         let calendar = FakeCalendar::default();
-        let created = calendar.create_calendar("matter-42").await.unwrap();
+        let created = calendar
+            .create_calendar("matter-42", "America/Chicago")
+            .await
+            .unwrap();
         calendar
             .set_member_role(&created.id, "lawyer@example.com", CalendarRole::Writer)
             .await
@@ -2891,16 +3281,50 @@ mod tests {
             .is_err());
     }
 
+    #[test]
+    fn civil_date_writes_an_exclusive_date_end_and_hearing_blocks_an_hour() {
+        let mut event = event();
+        event.timing = super::EventTiming::AllDay("2028-12-31".parse().unwrap());
+        let json = serde_json::to_value(super::event_body(&event)).unwrap();
+        assert_eq!(json["start"], serde_json::json!({"date":"2028-12-31"}));
+        assert_eq!(json["end"], serde_json::json!({"date":"2029-01-01"}));
+        assert_eq!(json["transparency"], "transparent");
+        event.timing = super::EventTiming::Hearing(60);
+        let json = serde_json::to_value(super::event_body(&event)).unwrap();
+        assert_eq!(json["transparency"], "opaque");
+        assert_eq!(
+            json["end"]["dateTime"],
+            (event.start + chrono::Duration::hours(1)).to_rfc3339()
+        );
+    }
+
+    #[test]
+    fn google_omits_an_unsupported_lead_and_preserves_all_three_court_popups() {
+        let mut event = event();
+        event.reminder_minutes = vec![43_200, 10_080, 4_320, 1_440];
+        let body = serde_json::to_value(super::event_body(&event)).unwrap();
+        assert_eq!(
+            body["reminders"],
+            serde_json::json!({
+                "useDefault":false, "overrides":[
+                    {"method":"popup","minutes":10_080}, {"method":"popup","minutes":4_320},
+                    {"method":"popup","minutes":1_440}
+                ]
+            })
+        );
+    }
+
     fn event() -> CalendarEvent {
         CalendarEvent {
-            summary: "Court order deadline - acme".into(),
+            summary: "acme: Court order deadline".into(),
             description: Some("Authority: Order setting briefing".into()),
             location: None,
             color_id: Some("11".into()),
             start: DateTime::parse_from_rfc3339("2026-11-02T17:00:00-08:00").unwrap(),
             sequence: 3,
             cancelled: false,
-            reminder_minutes: Some(10_080),
+            timing: super::EventTiming::Instant,
+            reminder_minutes: vec![10_080],
             private_properties: BTreeMap::from([
                 ("navigator_mirror".to_string(), "deadline".to_string()),
                 (
@@ -2912,13 +3336,37 @@ mod tests {
         }
     }
 
-    fn stored(id: &str, private_properties: &[(&str, &str)]) -> StoredEvent {
+    async fn mock_mirror_write(
+        server: &MockServer,
+        calendar_id: &str,
+        id: &str,
+        event: &CalendarEvent,
+    ) -> ResponseTemplate {
+        let mut resource = serde_json::json!(event_body(event));
+        resource["id"] = id.into();
+        resource["etag"] = "written".into();
+        let written = ResponseTemplate::new(200).set_body_json(&resource);
+        let hash = super::event_fingerprint(&resource);
+        resource["extendedProperties"]["private"][super::BASELINE] = hash.clone().into();
+        resource["etag"] = "baselined".into();
+        Mock::given(method("PATCH"))
+            .and(path(format!("/calendars/{calendar_id}/events/{id}")))
+            .and(wiremock::matchers::header("if-match", "written"))
+            .and(body_json(
+                serde_json::json!({"extendedProperties":{"private":{(super::BASELINE):hash}}}),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(resource))
+            .expect(1)
+            .mount(server)
+            .await;
+        written
+    }
+
+    fn previous() -> StoredEvent {
         StoredEvent {
-            id: id.to_string(),
-            private_properties: private_properties
-                .iter()
-                .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
-                .collect(),
+            id: "evt_1".into(),
+            private_properties: BTreeMap::new(),
+            writable_etag: Some("original".into()),
         }
     }
 
@@ -2939,7 +3387,7 @@ mod tests {
         Mock::given(method("POST"))
             .and(path(format!("/calendars/{calendar_id}/events")))
             .and(body_json(serde_json::json!({
-                "summary": "Court order deadline - acme",
+                "summary": "acme: Court order deadline",
                 "description": "Authority: Order setting briefing",
                 "colorId": "11",
                 "start": { "dateTime": "2026-11-02T17:00:00-08:00" },
@@ -2957,14 +3405,7 @@ mod tests {
                     "body_sha": "abc123"
                 }}
             })))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "id": "evt_1",
-                "extendedProperties": { "private": {
-                    "navigator_mirror": "deadline",
-                    "deadline_id": "0190a000-0000-7000-8000-000000000001",
-                    "body_sha": "abc123"
-                }}
-            })))
+            .respond_with(mock_mirror_write(&server, calendar_id, "evt_1", &event()).await)
             .expect(1)
             .mount(&server)
             .await;
@@ -2972,17 +3413,9 @@ mod tests {
             .insert_event(calendar_id, &event())
             .await
             .unwrap();
-        assert_eq!(
-            stored_event,
-            stored(
-                "evt_1",
-                &[
-                    ("body_sha", "abc123"),
-                    ("deadline_id", "0190a000-0000-7000-8000-000000000001"),
-                    ("navigator_mirror", "deadline")
-                ]
-            )
-        );
+        assert_eq!(stored_event.id, "evt_1");
+        assert_eq!(stored_event.writable_etag.as_deref(), Some("baselined"));
+        assert_eq!(stored_event.private_properties["body_sha"], "abc123");
     }
 
     #[tokio::test]
@@ -2990,15 +3423,13 @@ mod tests {
         let server = MockServer::start().await;
         let calendar_id = "c_42@group.calendar.example.com";
         let mut silent = event();
-        silent.reminder_minutes = None;
+        silent.reminder_minutes.clear();
         Mock::given(method("POST"))
             .and(path(format!("/calendars/{calendar_id}/events")))
             .and(body_partial_json(serde_json::json!({
                 "reminders": { "useDefault": false, "overrides": [] }
             })))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "id": "evt_2" })),
-            )
+            .respond_with(mock_mirror_write(&server, calendar_id, "evt_2", &silent).await)
             .expect(1)
             .mount(&server)
             .await;
@@ -3015,28 +3446,124 @@ mod tests {
         let calendar_id = "c_42@group.calendar.example.com";
         let mut moved = event();
         moved.sequence = 4;
+        moved
+            .private_properties
+            .insert("body_sha".into(), "def456".into());
         moved.start = DateTime::parse_from_rfc3339("2026-11-09T17:00:00-08:00").unwrap();
         Mock::given(method("PATCH"))
+            .and(wiremock::matchers::header("if-match", "original"))
             .and(path(format!("/calendars/{calendar_id}/events/evt_1")))
             .and(body_partial_json(serde_json::json!({
                 "sequence": 4,
                 "start": { "dateTime": "2026-11-09T17:00:00-08:00" }
             })))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "id": "evt_1",
-                "extendedProperties": { "private": { "body_sha": "def456" } }
-            })))
+            .respond_with(mock_mirror_write(&server, calendar_id, "evt_1", &moved).await)
             .expect(1)
             .mount(&server)
             .await;
         let stored_event = google(&server)
-            .patch_event(calendar_id, "evt_1", &moved)
+            .patch_event(calendar_id, &previous(), &moved)
             .await
             .unwrap();
         assert_eq!(
             stored_event.private_properties.get("body_sha"),
             Some(&"def456".to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn a_racing_edit_blocks_the_patch_and_delete() {
+        let server = MockServer::start().await;
+        for verb in ["PATCH", "DELETE"] {
+            Mock::given(method(verb))
+                .and(path("/calendars/cal/events/evt_1"))
+                .and(wiremock::matchers::header("if-match", "original"))
+                .respond_with(ResponseTemplate::new(412))
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+        let calendar = google(&server);
+        assert!(matches!(
+            calendar.patch_event("cal", &previous(), &event()).await,
+            Err(CalendarError::Api { status: 412, .. })
+        ));
+        assert!(matches!(
+            calendar.delete_event("cal", &previous()).await,
+            Err(CalendarError::Api { status: 412, .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_racing_edit_cannot_be_adopted_as_the_initial_baseline() {
+        let server = MockServer::start().await;
+        let mut inserted = serde_json::json!(event_body(&event()));
+        inserted["id"] = "evt_1".into();
+        inserted["etag"] = "insert-version".into();
+        Mock::given(method("POST"))
+            .and(path("/calendars/cal/events"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(inserted))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("PATCH"))
+            .and(path("/calendars/cal/events/evt_1"))
+            .and(wiremock::matchers::header("if-match", "insert-version"))
+            .respond_with(ResponseTemplate::new(412))
+            .expect(1)
+            .mount(&server)
+            .await;
+        assert!(matches!(
+            google(&server).insert_event("cal", &event()).await,
+            Err(CalendarError::Api {
+                action: "recording the event mirror baseline",
+                status: 412
+            })
+        ));
+    }
+
+    #[test]
+    fn edited_meeting_content_and_legacy_events_have_no_writable_version() {
+        let mut resource = super::fake_event_resource("evt", &event());
+        assert!(super::stored_event(&resource)
+            .unwrap()
+            .writable_etag
+            .is_none());
+        resource["extendedProperties"]["private"][super::BASELINE] =
+            super::event_fingerprint(&resource).into();
+        assert!(super::stored_event(&resource)
+            .unwrap()
+            .writable_etag
+            .is_some());
+        for (key, value) in [
+            ("summary", serde_json::json!("New hearing name")),
+            ("description", serde_json::json!("Call notes")),
+            (
+                "attendees",
+                serde_json::json!([{"email":"guest@example.test"}]),
+            ),
+            ("attachments", serde_json::json!([{"fileId":"recording"}])),
+            (
+                "conferenceData",
+                serde_json::json!({"conferenceId":"test-meet"}),
+            ),
+            ("id", serde_json::json!("manually-copied-event")),
+        ] {
+            let mut changed = resource.clone();
+            changed[key] = value;
+            assert!(
+                super::stored_event(&changed)
+                    .unwrap()
+                    .writable_etag
+                    .is_none(),
+                "{key}"
+            );
+        }
+        resource["start"]["dateTime"] = "2026-11-03T01:00:00Z".into();
+        assert!(super::stored_event(&resource)
+            .unwrap()
+            .writable_etag
+            .is_some());
     }
 
     #[tokio::test]
@@ -3055,22 +3582,52 @@ mod tests {
             .mount(&server)
             .await;
         let calendar = google(&server);
-        calendar.delete_event(calendar_id, "evt_1").await.unwrap();
-        calendar.delete_event(calendar_id, "evt_1").await.unwrap();
+        calendar
+            .delete_event(calendar_id, &previous())
+            .await
+            .unwrap();
+        calendar
+            .delete_event(calendar_id, &previous())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn availability_accepts_only_owned_secondary_calendars_in_the_deployment() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET")).and(path("/users/me/calendarList"))
+            .and(query_param("minAccessRole", "owner")).and(query_param("showHidden", "true"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"items":[
+                {"id":"matching","summary":"staging-sample","accessRole":"owner"},
+                {"id":"foreign","summary":"staging-sample","accessRole":"owner","description":"Navigator Project Calendar (production)"},
+                {"id":"primary","summary":"staging-sample","accessRole":"owner","primary":true},
+                {"id":"other","summary":"sample","accessRole":"owner"},
+                {"id":"reader","summary":"staging-sample","accessRole":"reader"}
+            ]}))).expect(1).mount(&server).await;
+        let mut calendar = google(&server);
+        calendar.namespace = Some("staging");
+        assert_eq!(
+            calendar.owned_calendar_codes().await.unwrap(),
+            [("matching".into(), "sample".into())].into_iter().collect()
+        );
     }
 
     #[tokio::test]
     async fn project_events_only_read_the_verified_owned_calendar() {
         let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/users/me/calendarList"))
-            .and(query_param("minAccessRole", "owner"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "items": [{"id": "owned", "summary": "sample-litigation"}]
-            })))
-            .expect(2)
-            .mount(&server)
-            .await;
+        for (id, summary) in [
+            ("owned", "sample-litigation"),
+            ("different", "another-project"),
+        ] {
+            Mock::given(method("GET"))
+                .and(path(format!("/users/me/calendarList/{id}")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "id": id, "summary": summary, "accessRole": "owner"
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
         Mock::given(method("GET"))
             .and(path("/calendars/different/events"))
             .respond_with(ResponseTemplate::new(500))
@@ -3176,7 +3733,10 @@ mod tests {
     #[tokio::test]
     async fn the_fake_finds_patches_and_deletes_mirrored_events() {
         let calendar = FakeCalendar::default();
-        let created = calendar.create_calendar("matter-42").await.unwrap();
+        let created = calendar
+            .create_calendar("matter-42", "America/Chicago")
+            .await
+            .unwrap();
         let first = calendar.insert_event(&created.id, &event()).await.unwrap();
         let mut second = event();
         second
@@ -3196,8 +3756,8 @@ mod tests {
         edited
             .private_properties
             .insert("body_sha".into(), "def456".into());
-        calendar
-            .patch_event(&created.id, &first.id, &edited)
+        let updated = calendar
+            .patch_event(&created.id, &first, &edited)
             .await
             .unwrap();
         assert_eq!(
@@ -3208,8 +3768,8 @@ mod tests {
                 .id,
             first.id
         );
-        calendar.delete_event(&created.id, &first.id).await.unwrap();
-        calendar.delete_event(&created.id, &first.id).await.unwrap();
+        calendar.delete_event(&created.id, &updated).await.unwrap();
+        calendar.delete_event(&created.id, &updated).await.unwrap();
         assert_eq!(calendar.events(&created.id).len(), 1);
         calendar.remove_event(&created.id, &second_stored.id);
         assert!(calendar.events(&created.id).is_empty());
@@ -3219,16 +3779,19 @@ mod tests {
     #[tokio::test]
     async fn the_fake_patches_and_refuses_an_unknown_event() {
         let calendar = FakeCalendar::default();
-        let created = calendar.create_calendar("matter-42").await.unwrap();
+        let created = calendar
+            .create_calendar("matter-42", "America/Chicago")
+            .await
+            .unwrap();
         let inserted = calendar.insert_event(&created.id, &event()).await.unwrap();
         let mut moved = event();
         moved.start = DateTime::parse_from_rfc3339("2026-11-09T17:00:00-08:00").unwrap();
         calendar
-            .patch_event(&created.id, &inserted.id, &moved)
+            .patch_event(&created.id, &inserted, &moved)
             .await
             .unwrap();
         assert!(calendar
-            .patch_event(&created.id, "e_missing", &moved)
+            .patch_event(&created.id, &previous(), &moved)
             .await
             .is_err());
         calendar.put_event(&created.id, &inserted.id, moved);

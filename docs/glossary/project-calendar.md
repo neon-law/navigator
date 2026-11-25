@@ -20,10 +20,18 @@ calendars every six hours on the [DBOS schedule](../dbos-durability.md#project-c
 missing calendars for open Projects. A participant needs the matching Firm role, a confirmed address in the owner's
 domain, and successful Workspace delegation. Clerks also require a supervising Lawyer DRI. Eligible participants receive
 reader access. The job adds the calendar to each participant's Google Calendar list with its events selected, verifies
-the entry, and preserves existing display preferences. Eligible Clerks, Lawyers, and Admins are invited to events
-organized by the Project Calendar, including recurring series. Google controls invitations on events organized
-elsewhere. The job preserves manual grants and guests and removes the access and guests it added when an assignment
-ends. It refuses automatic sharing on calendars with public or domain-wide access. An hourly [event
+the entry, and preserves existing display preferences. It requests no sharing email. Navigator includes the calendar in
+eligible participants' free/busy checks while the Project is open. Mark an event Busy when it should block scheduling.
+Google appointment schedules have their own selection of calendars to check for conflicts.
+
+Create each event once on the shared calendar. Invite people individually when they need to attend or respond. Every
+title begins with the exact Project code and a colon, as in `sample-litigation: Hearing`. The worker corrects editable
+titles on events the open Project Calendar organizes, including recurring series. It requests no guest update and
+preserves attendance. Review existing invitations with the organizer before removing a guest whose attendance is
+unclear.
+
+When an assignment ends, the job revokes its reader grant and any event access it marked for that participant. It
+refuses automatic sharing on calendars with public or domain-wide access. An hourly [event
 backup](project-calendar-event-backup.md) preserves event revisions for the Firm.
 
 Closing the Project makes writers readers and clears the [Booking Link](booking-link.md). The firm-side matter page

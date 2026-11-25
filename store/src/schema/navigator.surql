@@ -154,6 +154,7 @@ DEFINE FIELD OVERWRITE calendar_id ON project TYPE option<string>;
 -- The client's booking link: the address of an appointment schedule a lawyer
 -- made on the Project calendar in Google Calendar. The Calendar API cannot
 -- create one, so the address is entered by hand. Cleared on close.
+DEFINE FIELD OVERWRITE calendar_timezone ON project TYPE option<string>;
 DEFINE FIELD OVERWRITE booking_url ON project TYPE option<string>;
 DEFINE FIELD OVERWRITE inserted_at ON project TYPE string;
 DEFINE FIELD OVERWRITE updated_at ON project TYPE string;
@@ -391,9 +392,11 @@ DEFINE TABLE IF NOT EXISTS project_deadlines SCHEMAFULL PERMISSIONS NONE;
 DEFINE FIELD OVERWRITE project_id ON project_deadlines TYPE record<project>;
 DEFINE FIELD OVERWRITE title ON project_deadlines TYPE option<string>;
 DEFINE FIELD OVERWRITE description ON project_deadlines TYPE option<string>;
+DEFINE FIELD OVERWRITE hearing ON project_deadlines TYPE any;
+DEFINE FIELD OVERWRITE due_on ON project_deadlines TYPE any;
 DEFINE FIELD OVERWRITE due_at ON project_deadlines TYPE string;
 DEFINE FIELD OVERWRITE authority_kind ON project_deadlines TYPE string
-    ASSERT $value IN ['statute', 'court_rule', 'court_order', 'contract', 'internal'];
+    ASSERT $value IN ['statute', 'court_rule', 'case_law', 'court_order', 'contract', 'internal'];
 DEFINE FIELD OVERWRITE authority ON project_deadlines TYPE string;
 DEFINE FIELD OVERWRITE source ON project_deadlines TYPE string;
 DEFINE FIELD OVERWRITE source_document_id ON project_deadlines TYPE option<record<asset>>;
@@ -403,12 +406,13 @@ DEFINE FIELD OVERWRITE status ON project_deadlines TYPE string
 DEFINE FIELD OVERWRITE calendar_role ON project_deadlines TYPE string
     ASSERT $value IN ['firm', 'opponent', 'hearing'];
 DEFINE FIELD OVERWRITE category ON project_deadlines TYPE option<string>
-    ASSERT $value IS NONE OR $value IN ['court', 'hearing', 'discovery', 'internal'];
+    ASSERT $value IS NONE OR $value IN ['court', 'hearing', 'discovery', 'internal', 'tickler'];
 DEFINE FIELD OVERWRITE internal_lead_days ON project_deadlines TYPE option<int>;
 DEFINE FIELD OVERWRITE client_lead_days ON project_deadlines TYPE option<int>;
 DEFINE FIELD OVERWRITE replay_key ON project_deadlines TYPE option<string>;
 DEFINE FIELD OVERWRITE inserted_at ON project_deadlines TYPE string;
 DEFINE FIELD OVERWRITE updated_at ON project_deadlines TYPE string;
+DEFINE FIELD OVERWRITE calendar_review_pending ON project_deadlines TYPE option<bool>;
 DEFINE FIELD OVERWRITE calendar_sequence ON project_deadlines TYPE option<int>
     ASSERT $value = NONE OR ($value >= 0 AND $value <= 2147483647);
 

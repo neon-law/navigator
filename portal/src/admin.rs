@@ -4758,6 +4758,7 @@ async fn projects_update_lawyer_only(
         // them all alone. `kit_version` is written through by
         // `navigator project skill use`, so the form leaves it alone too.
         calendar_id: None,
+        calendar_timezone: None,
         booking_url: None,
         onboarding_jurisdiction: None,
         kit_version: None,

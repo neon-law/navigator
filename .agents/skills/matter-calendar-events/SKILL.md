@@ -19,7 +19,13 @@ belongs to when several matter calendars show together.
 - **Name each matter calendar exactly as its Project code**, as `navigator.yaml` and Navigator show it: lowercase, with
   hyphens, such as `acme-auto-ny`.
 - **Rename a calendar that doesn't match** to its Project code, then re-prefix its events.
-- **Keep matter calendars private** to the firm's lawyers on the matter.
+- **Keep matter calendars private** to eligible firm-side participants on the matter.
+
+## Sharing and attendance
+
+Create each event once on the shared calendar. Membership gives eligible participants calendar access and includes Busy
+events in their Navigator availability. Invite a person to an individual event when attendance or an RSVP is needed.
+Before removing an existing invitation, verify calendar access, the scheduling result, and the organizer's intent.
 
 ## Event titles
 

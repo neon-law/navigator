@@ -368,6 +368,8 @@ async fn litigation(
                 project_id: project.id,
                 title: None,
                 description: None,
+                hearing: None,
+                due_on: None,
                 due_at: ahead.due_at.to_string(),
                 authority_kind: ahead.authority_kind.to_string(),
                 authority: ahead.authority.to_string(),

@@ -1753,6 +1753,10 @@ mod tests {
             ("20261123190000_create_project_calendar_event_backup.sql", include_str!("../postgres/migrations/20261123190000_create_project_calendar_event_backup.sql")),
             ("20261123200000_widen_plan_matter_type.sql", include_str!("../postgres/migrations/20261123200000_widen_plan_matter_type.sql")),
             ("20261124030000_create_lead_intake.sql", include_str!("../postgres/migrations/20261124030000_create_lead_intake.sql")),
+            ("20261124150000_deadline_civil_date.sql", include_str!("../postgres/migrations/20261124150000_deadline_civil_date.sql")),
+            ("20261124150100_project_calendar_timezone.sql", include_str!("../postgres/migrations/20261124150100_project_calendar_timezone.sql")),
+            ("20261124150200_deadline_proposals.sql", include_str!("../postgres/migrations/20261124150200_deadline_proposals.sql")),
+            ("20261124150300_deadline_proposal_source_receipts.sql", include_str!("../postgres/migrations/20261124150300_deadline_proposal_source_receipts.sql")),
             ("20261124180000_firm_namespace_provider_source.sql", include_str!("../postgres/migrations/20261124180000_firm_namespace_provider_source.sql")),
         ])
         .expect("timestamped migration assembles");

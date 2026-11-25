@@ -50,6 +50,9 @@ mod practice_preview;
 #[path = "common/inbox_triage.rs"]
 mod inbox_triage;
 
+#[path = "common/court_date_review.rs"]
+mod court_date_review;
+
 #[path = "common/private_chart.rs"]
 mod private_chart;
 

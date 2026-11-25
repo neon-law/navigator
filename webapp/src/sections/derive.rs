@@ -235,12 +235,12 @@ pub fn docket(inputs: &DocketInputs<'_>) -> Docket {
 }
 
 /// Whether a Deadline's authority binds the date: `Hard` for a statute,
-/// court rule, court order, or contract; `Soft` for an internal target or an
+/// court rule, court order, case law, or contract; `Soft` for an internal target or an
 /// authority the row does not state.
 #[must_use]
 pub fn binding(authority_kind: &str) -> &'static str {
     match authority_kind {
-        "statute" | "court_rule" | "court_order" | "contract" => "Hard",
+        "statute" | "court_rule" | "court_order" | "case_law" | "contract" => "Hard",
         _ => "Soft",
     }
 }
@@ -673,6 +673,8 @@ mod tests {
             project_id: Uuid::nil(),
             title: None,
             description: None,
+            hearing: None,
+            due_on: None,
             due_at: due_at.to_string(),
             authority_kind: "court_order".to_string(),
             authority: format!("Synthetic {role} order"),
@@ -688,6 +690,7 @@ mod tests {
             inserted_at: String::new(),
             updated_at: String::new(),
             calendar_sequence: None,
+            calendar_review_pending: false,
         }
     }
 

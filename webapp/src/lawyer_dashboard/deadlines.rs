@@ -15,6 +15,8 @@ pub struct Entry {
     project_name: String,
     title: String,
     due: DateTime<FixedOffset>,
+    civil_date: Option<chrono::NaiveDate>,
+    civil_label: Option<String>,
     authority: String,
     notes: String,
 }
@@ -22,7 +24,9 @@ pub struct Entry {
 impl Entry {
     /// The due date alone, for the Active list's "Next due" column.
     pub fn due_label(&self) -> String {
-        self.due.format("%Y-%m-%d").to_string()
+        self.civil_date
+            .unwrap_or_else(|| self.due.date_naive())
+            .to_string()
     }
 
     pub fn project_code(&self) -> &str {
@@ -30,12 +34,13 @@ impl Entry {
     }
 }
 
-fn band(due: DateTime<FixedOffset>, now: DateTime<Utc>) -> &'static str {
+fn band(entry: &Entry, now: DateTime<Utc>) -> &'static str {
+    let due = entry.due;
     if due.to_utc() < now {
         return "Overdue";
     }
     let today = now.with_timezone(due.offset()).date_naive();
-    let day = due.date_naive();
+    let day = entry.civil_date.unwrap_or_else(|| due.date_naive());
     if day == today {
         "Today"
     } else if today
@@ -92,7 +97,15 @@ pub(super) async fn load(
                     "Deadline".into()
                 }
             }),
-            due,
+            due: row
+                .due_on
+                .as_ref()
+                .map_or(due, |day| due.with_timezone(&day.timezone).fixed_offset()),
+            civil_date: row.due_on.as_ref().map(|on| on.date),
+            civil_label: row
+                .due_on
+                .as_ref()
+                .map(store::project_deadlines::DueOn::display_date),
             authority: if row.authority.trim().is_empty() {
                 crate::project_deadlines::authority_kind_label(&row.authority_kind).into()
             } else {
@@ -125,10 +138,10 @@ pub fn WorkbenchDeadlines(entries: Vec<Entry>, now: DateTime<Utc>) -> Element {
                 p { class: "nav-muted", "No open Deadlines on your open matters." }
             } else {
                 for label in BANDS {
-                    if entries.iter().any(|entry| band(entry.due, now) == label) {
+                    if entries.iter().any(|entry| band(entry, now) == label) {
                         h3 { class: if label == "Overdue" { "is-overdue" } else { "" }, "{label}" }
                         ul {
-                            for entry in entries.iter().filter(|entry| band(entry.due, now) == label) {
+                            for entry in entries.iter().filter(|entry| band(entry, now) == label) {
                                 DeadlineRow { key: "{entry.id}", entry: entry.clone() }
                             }
                         }
@@ -141,7 +154,10 @@ pub fn WorkbenchDeadlines(entries: Vec<Entry>, now: DateTime<Utc>) -> Element {
 
 #[component]
 fn DeadlineRow(entry: Entry) -> Element {
-    let due = entry.due.format("%Y-%m-%d %H:%M %:z").to_string();
+    let due = entry
+        .civil_label
+        .clone()
+        .unwrap_or_else(|| entry.due.format("%Y-%m-%d %H:%M %:z").to_string());
     rsx! {
         li {
             "{due} · "
@@ -165,6 +181,8 @@ mod tests {
             project_name: "Synthetic matter".into(),
             title: format!("Due {id}"),
             due: DateTime::parse_from_rfc3339(due).unwrap(),
+            civil_date: None,
+            civil_label: None,
             authority: "Synthetic scheduling order".into(),
             notes: "Moves to May 6 if the order is entered.".into(),
         }

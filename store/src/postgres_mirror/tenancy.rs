@@ -78,6 +78,7 @@ const PROJECT_COLUMNS: &[&str] = &[
     "internal_slack_channel_id",
     "private_notion_page_url",
     "shared_notion_page_url",
+    "calendar_timezone",
     "calendar_id",
     "booking_url",
     "onboarding_jurisdiction",
@@ -376,6 +377,7 @@ struct ProjectImage {
     internal_slack_channel_id: Option<String>,
     private_notion_page_url: Option<String>,
     shared_notion_page_url: Option<String>,
+    calendar_timezone: Option<String>,
     calendar_id: Option<String>,
     booking_url: Option<String>,
     onboarding_jurisdiction: Option<String>,
@@ -429,6 +431,7 @@ impl ProjectImage {
             internal_slack_channel_id: project.internal_slack_channel_id.clone(),
             private_notion_page_url: project.private_notion_page_url.clone(),
             shared_notion_page_url: project.shared_notion_page_url.clone(),
+            calendar_timezone: project.calendar_timezone.clone(),
             calendar_id: project.calendar_id.clone(),
             booking_url: project.booking_url.clone(),
             onboarding_jurisdiction: project.onboarding_jurisdiction.clone(),
@@ -473,6 +476,7 @@ impl ProjectImage {
             internal_slack_channel_id: row.try_get("internal_slack_channel_id")?,
             private_notion_page_url: row.try_get("private_notion_page_url")?,
             shared_notion_page_url: row.try_get("shared_notion_page_url")?,
+            calendar_timezone: row.try_get("calendar_timezone")?,
             calendar_id: row.try_get("calendar_id")?,
             booking_url: row.try_get("booking_url")?,
             onboarding_jurisdiction: row.try_get("onboarding_jurisdiction")?,
@@ -779,6 +783,7 @@ async fn upsert_project(pg: &PostgresDb, project: &ProjectImage) -> Result<Mirro
         .bind(&project.internal_slack_channel_id)
         .bind(&project.private_notion_page_url)
         .bind(&project.shared_notion_page_url)
+        .bind(&project.calendar_timezone)
         .bind(&project.calendar_id)
         .bind(&project.booking_url)
         .bind(&project.onboarding_jurisdiction)

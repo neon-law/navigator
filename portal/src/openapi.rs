@@ -109,6 +109,7 @@ pub fn document_with_base(base: &str) -> Value {
     add_ephemeris_source_operation(&mut document);
     add_inbox_attachment_operation(&mut document);
     add_assign_matches_operation(&mut document);
+    add_court_date_schemas(&mut document);
     document["paths"]["/app/api/projects/{id}/section-counts"] = serde_json::json!({
       "get": {
         "operationId": "getProjectSectionCounts", "tags": ["Projects"],
@@ -3311,6 +3312,302 @@ fn canonical_document(base: &str) -> Value {
             "responses": { "401": { "description": "Authenticated session required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "403": { "description": "Lawyer tier required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "404": { "description": "No such Project or stage, or the caller does not participate", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "200": { "description": "The appended stage event (or the current one on a no-op)", "content": { "application/json": { "schema": { "type": "object" } } } }, "422": { "description": "The stage is not in the matter Firm's vocabulary, or the note is invalid", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } } }
           }
         },
+        "/app/api/projects/{id}/court-date-proposals": {
+          "get": {
+            "summary": "List Project court dates for review",
+            "parameters": [
+              {
+                "name": "id",
+                "in": "path",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            ],
+            "responses": {
+              "200": {
+                "description": "Court-date review result"
+              },
+              "401": {
+                "description": "Authenticated session required"
+              },
+              "403": {
+                "description": "The session cannot perform this review action"
+              },
+              "404": {
+                "description": "The Project or source is unavailable"
+              },
+              "409": {
+                "description": "The submitted revision is stale"
+              }
+            }
+          },
+          "post": {
+            "summary": "Stage a court-date proposal",
+            "parameters": [
+              {
+                "name": "id",
+                "in": "path",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            ],
+            "responses": {
+              "201": {
+                "description": "Court-date review result"
+              },
+              "401": {
+                "description": "Authenticated session required"
+              },
+              "403": {
+                "description": "The session cannot perform this review action"
+              },
+              "404": {
+                "description": "The Project or source is unavailable"
+              },
+              "409": {
+                "description": "The submitted revision is stale"
+              }
+            },
+            "requestBody": {
+              "required": true,
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "/app/api/projects/{id}/court-date-proposals/{proposal_id}": {
+          "patch": {
+            "summary": "Revise a court-date proposal",
+            "parameters": [
+              {
+                "name": "id",
+                "in": "path",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              },
+              {
+                "name": "proposal_id",
+                "in": "path",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            ],
+            "responses": {
+              "200": {
+                "description": "Court-date review result"
+              },
+              "401": {
+                "description": "Authenticated session required"
+              },
+              "403": {
+                "description": "The session cannot perform this review action"
+              },
+              "404": {
+                "description": "The Project or source is unavailable"
+              },
+              "409": {
+                "description": "The submitted revision is stale"
+              }
+            },
+            "requestBody": {
+              "required": true,
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "/app/api/projects/{id}/court-date-proposals/{proposal_id}/confirm": {
+          "post": {
+            "summary": "Confirm the reviewed proposal revision",
+            "parameters": [
+              {
+                "name": "id",
+                "in": "path",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              },
+              {
+                "name": "proposal_id",
+                "in": "path",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            ],
+            "responses": {
+              "200": {
+                "description": "Court-date review result"
+              },
+              "401": {
+                "description": "Authenticated session required"
+              },
+              "403": {
+                "description": "The session cannot perform this review action"
+              },
+              "404": {
+                "description": "The Project or source is unavailable"
+              },
+              "409": {
+                "description": "The submitted revision is stale"
+              }
+            },
+            "requestBody": {
+              "required": true,
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "/app/api/projects/{id}/court-date-proposals/{proposal_id}/return": {
+          "post": {
+            "summary": "Return the proposal for correction",
+            "parameters": [
+              {
+                "name": "id",
+                "in": "path",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              },
+              {
+                "name": "proposal_id",
+                "in": "path",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            ],
+            "responses": {
+              "200": {
+                "description": "Court-date review result"
+              },
+              "401": {
+                "description": "Authenticated session required"
+              },
+              "403": {
+                "description": "The session cannot perform this review action"
+              },
+              "404": {
+                "description": "The Project or source is unavailable"
+              },
+              "409": {
+                "description": "The submitted revision is stale"
+              }
+            },
+            "requestBody": {
+              "required": true,
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "/app/api/projects/{id}/court-date-proposals/{proposal_id}/evidence/{index}": {
+          "get": {
+            "summary": "Render a cited original page with its pinned revision",
+            "parameters": [
+              {
+                "name": "id",
+                "in": "path",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              },
+              {
+                "name": "proposal_id",
+                "in": "path",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              },
+              {
+                "name": "index",
+                "in": "path",
+                "required": true,
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              {
+                "name": "revision",
+                "in": "query",
+                "required": true,
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            ],
+            "responses": {
+              "200": {
+                "description": "The verified original page",
+                "content": {
+                  "image/png": {
+                    "schema": {
+                      "type": "string",
+                      "format": "binary"
+                    }
+                  }
+                }
+              },
+              "401": {
+                "description": "Authenticated session required"
+              },
+              "403": {
+                "description": "The session cannot perform this review action"
+              },
+              "404": {
+                "description": "The Project or source is unavailable"
+              },
+              "409": {
+                "description": "The submitted revision is stale"
+              }
+            }
+          }
+        },
         "/app/api/projects/{id}/deadlines": {
           "get": {
             "summary": "List a Project's deadlines",
@@ -3327,7 +3624,7 @@ fn canonical_document(base: &str) -> Value {
           },
           "post": {
             "summary": "Create a deadline",
-            "description": "Store a deadline and return the written row. An optional title (at most 200 characters) names what is due. due_at is an RFC 3339 timestamp with an offset. A statute or court_rule requires an authority citation. The internal lead time is never shorter than the client lead time. Dates are stored as given; court days are not computed. Replaying a cancelled row is refused without changing it; POST to the row's /reopen endpoint first. Replaying a complete row updates its fields and preserves complete status.",
+            "description": "Store a deadline and return the written row. An optional title (at most 200 characters) names what is due. Supply an RFC 3339 timestamp with an offset in due_at, or a civil due_on date with an optional IANA timezone and local cutoff. An omitted zone inherits the Project default. Submit court dates and hearings to the Project’s court-date-proposals endpoint for evidence-backed lawyer confirmation. The internal lead time is never shorter than the client lead time. Dates are stored as given; court days are not computed. Replaying a cancelled row is refused without changing it; POST to the row's /reopen endpoint first. Replaying a complete row updates its fields and preserves complete status.",
             "x-mcp-tool": "create_deadline",
             "parameters": [
               { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
@@ -6331,6 +6628,7 @@ fn canonical_document(base: &str) -> Value {
               "closed_at":          { "type": ["string", "null"] },
               "calendar_id":        { "type": ["string", "null"],
                                       "description": "The Project's shared Google Calendar id, or `null` before it is created." },
+              "calendar_timezone": { "type": ["string", "null"], "description": "Explicit IANA time zone for the Project." },
               "booking_url":        { "type": ["string", "null"],
                                       "description": "Where the client books time with the firm, or `null`. Cleared when the Project closes." },
               "onboarding_jurisdiction": { "type": ["string", "null"],
@@ -6477,6 +6775,7 @@ fn canonical_document(base: &str) -> Value {
                                "description": "The Project's shared Google Calendar id. Omit to leave unchanged; a blank string clears it." },
               "drive_folder_id": { "type": "string",
                                "description": "The Project's Drive ingest folder id, in the Firm's Projects shared drive. Omit to leave unchanged; a blank string clears it. Refused when another matter already records the folder, or when the deployment's Drive provider does not find it as a live folder in that drive. The response's navigator-drive-folder-check header is verified when Drive confirmed the folder and skipped when the deployment has no Drive provider." },
+              "calendar_timezone": { "type": "string", "description": "IANA time zone. An empty string restores the jurisdiction-based default." },
               "booking_url": { "type": "string",
                                "description": "The client's booking page, an http(s) URL. Omit to leave unchanged; a blank string clears it." },
               "onboarding_jurisdiction": { "type": "string",
@@ -7079,6 +7378,75 @@ pub const TOOLS_WITHOUT_AN_API_OPERATION: &[(&str, &str)] = &[
          HTTP-side command for an operation to share.",
     ),
 ];
+
+/// Request types for the court-date queue, shared by the agent and the HTTP API.
+fn add_court_date_schemas(document: &mut Value) {
+    let base = "/app/api/projects/{id}/court-date-proposals";
+    let schemas = &mut document["components"]["schemas"];
+    let num = json!({"type":"number","minimum":0,"maximum":1});
+    schemas["CourtDateRect"] = json!({"type":"object","required":["x","y","width","height"],"properties":{
+        "x":num,"y":num,"width":num,"height":num}});
+    schemas["ForgejoCitationPin"] = mcp::tools::project_deadlines::forgejo_pin_schema();
+    schemas["CourtDateEvidence"] = json!({"type":"object","required":["role","id","sha256_hex","page","rects"],"properties":{
+        "role":{"enum":["signed_order","trigger","authority"]},"id":{"type":"string","format":"uuid"},
+        "sha256_hex":{"type":"string","pattern":"^[0-9a-f]{64}$"},"page":{"type":"integer","minimum":1},
+        "rects":{"type":"array","items":{"$ref":"#/components/schemas/CourtDateRect"}},
+        "forgejo":{"$ref":"#/components/schemas/ForgejoCitationPin"}}});
+    schemas["CourtDateCalculation"] = json!({"type":"object","required":["trigger","trigger_on","offset_days","counting_basis","authority_kind"],
+       "properties":{"trigger":{"type":"string"},"trigger_on":{"type":"string","format":"date"},"offset_days":{"type":"integer"},
+       "counting_basis":{"enum":["calendar_days","court_days","holidays"]},"authority_kind":{"enum":["statute","court_rule","case_law"]}}});
+    schemas["CourtDateDraft"] = json!({"type":"object","additionalProperties":false,"required":["kind","title"],
+        "properties":{"kind":{"enum":["signed_order","calculated"]},"title":{"type":"string","maxLength":200},"timezone":{"type":"string"},
+            "due_at":{"type":"string","format":"date-time"},"due_on":{"type":"string","format":"date"},"cutoff":{"type":"string"},
+            "category":{"enum":model::project_deadlines::CATEGORIES},"calendar_role":{"enum":model::project_deadlines::CALENDAR_ROLES},
+            "hearing":{"type":"object","properties":{"duration_minutes":{"type":"integer","minimum":1},"location":{"type":"string"}}},
+            "calculation":{"$ref":"#/components/schemas/CourtDateCalculation"},
+            "evidence":{"type":"array","maxItems":32,"items":{"$ref":"#/components/schemas/CourtDateEvidence"}}}});
+    let revision = json!({"type":"integer","minimum":1});
+    let uuid = json!({"type":"string","format":"uuid"});
+    let draft = json!({"$ref":"#/components/schemas/CourtDateDraft"});
+    let paths = &mut document["paths"];
+    paths[base]["post"]["x-mcp-tool"] = json!("queue_court_date");
+    for (suffix, method, schema) in [
+        (
+            "",
+            "post",
+            json!({"type":"object","additionalProperties":false,"required":["request_id","draft"],"properties":{
+            "request_id":uuid,"target_deadline_id":uuid,"draft":draft}}),
+        ),
+        (
+            "/{proposal_id}",
+            "patch",
+            json!({"type":"object","additionalProperties":false,"required":["revision","draft"],"properties":{"revision":revision,"draft":draft}}),
+        ),
+        (
+            "/{proposal_id}/confirm",
+            "post",
+            json!({"type":"object","additionalProperties":false,"required":["revision"],"properties":{"revision":revision}}),
+        ),
+        (
+            "/{proposal_id}/return",
+            "post",
+            json!({"type":"object","additionalProperties":false,"required":["revision","reason"],"properties":{"revision":revision,"reason":{"type":"string"}}}),
+        ),
+    ] {
+        paths[format!("{base}{suffix}")][method]["requestBody"]["content"]["application/json"]
+            ["schema"] = schema;
+    }
+    let page = format!("{base}/{{proposal_id}}/evidence/{{index}}");
+    paths[format!("{page}/forgejo")] = json!({"get":{
+        "summary":"Open the cited Forgejo file at the verified commit",
+        "parameters":paths[&page]["get"]["parameters"],
+        "responses":{
+            "303":{"description":"The source file at the verified Forgejo repository and commit"},
+            "401":{"description":"Authentication required"},
+            "403":{"description":"The source is restricted"},
+            "404":{"description":"No accessible citation at this revision"},
+            "409":{"description":"The stored provenance no longer matches the repository"},
+            "503":{"description":"Forgejo is unavailable"}
+        }
+    }});
+}
 
 /// Every `x-mcp-tool` value in [`document`], paired with the operation
 /// carrying it, as `(tool, METHOD, path)`.

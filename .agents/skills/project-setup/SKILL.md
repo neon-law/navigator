@@ -40,16 +40,17 @@ Drive, repository, Slack, Notion, and calendar surfaces and reports each resourc
 after partial failures. A Project repository commits only source, so there is no Portal publisher to provision.
 
 The `calendar` resource is the Project's shared Google Calendar on the Firm's Workspace, named for the Project code.
-Setup creates it when none is recorded, records its id on the Project, and shares it with every firm-side participant,
-never the client. Record the id in `navigator.yaml` with `navigator project set --from-live` (or `--calendar <id>`).
-When the Project closes, the calendar becomes read-only for its participants and the booking link is cleared.
+Setup creates it when none is recorded and records its id on the Project. Membership sync quietly grants eligible
+firm-side participants reader access and verifies their calendar list entry. Record the id in `navigator.yaml` with
+`navigator project set --from-live` (or `--calendar <id>`). When the Project closes, the calendar becomes read-only for
+its participants and the booking link is cleared.
 
 ## Client booking link
 
 The Calendar API cannot create appointment schedules, so the client booking link is one manual step per Project:
 
 1. In Google Calendar on the web, create an appointment schedule for the lawyer, and choose the Project calendar as the
-   calendar bookings are saved to.
+   calendar bookings are saved to. Select the shared calendar for conflict checks when the schedule supports it.
 2. Copy the schedule's booking page address.
 3. Record it: `navigator project set --booking-url <address>`.
 

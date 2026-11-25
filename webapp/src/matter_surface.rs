@@ -18,7 +18,7 @@
 //! | --- | --- |
 //! | `Client` | service, invoice, agreements, documents |
 //! | `ClientDri` | the client page plus the controls only the accountable client may fire |
-//! | `Clerk` | name, status, supervising lawyer — nothing else |
+//! | `Clerk` | supervised matter facts, collaboration links and court-date proposals |
 //! | `Lawyer` | the firm workbench |
 //! | `LawyerDri` | the workbench plus the matter-level accountability actions |
 //! | *(no row, Owner/Admin)* | [`MatterViewerKind::AdminUnassigned`] — participation only |

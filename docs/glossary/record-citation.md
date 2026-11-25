@@ -15,6 +15,11 @@ the document it resolved to. Document names are matched by their drafted shape �
 `of` — and resolved through the matter's alias table, so the same draft parses against any [Matter](matter.md)'s
 documents without hardcoding spellings.
 
+The **Citation highlight** component shows the cited passage on the archived page. Opening the passage shows the whole
+page with the same highlights. Court date review uses it for both the matter record and filed Authorities. The design
+gallery includes an interactive example. A citation can open the exact Forgejo commit and file in the matter repository
+or its owning Firm Library. See [Review court dates](../deadline-proposals.md).
+
 A shorthand with no earlier citation in the draft is **flagged for review, not rejected**: `Id. at 5` at the top of a
 section may legitimately continue a thread the reader reached from elsewhere. The view renders the flag; the lawyer
 decides. A drafted name that matches no document in the alias table leaves the citation unresolved — rendered without a

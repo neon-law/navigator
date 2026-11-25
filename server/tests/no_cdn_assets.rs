@@ -142,6 +142,8 @@ fn served_css_imports_nothing_from_an_external_origin() {
 /// namespace URIs inside string literals, so they are not line-scanned here.
 const FIRST_PARTY_JS: &[&str] = &[
     "js/document-review.js",
+    "js/court-date-review.js",
+    "js/citation-highlight.js",
     "js/collage-lightbox.js",
     "js/workshop-progress.js",
     "js/upload-progress.js",

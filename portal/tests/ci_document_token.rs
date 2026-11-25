@@ -158,6 +158,8 @@ async fn fixture() -> Fixture {
                     title: None,
                     description: None,
                     project_id: project,
+                    hearing: None,
+                    due_on: None,
                     due_at: "2026-11-02T17:00:00-08:00".into(),
                     authority_kind: "internal".into(),
                     authority: "Synthetic authority".into(),
