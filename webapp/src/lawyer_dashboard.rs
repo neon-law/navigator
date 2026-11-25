@@ -3,9 +3,9 @@
 //!
 //! The successor to the `views::pages::admin::dashboard`. It carries four
 //! sections: the project KPI overview (a conic-gradient status pie plus a
-//! paginated, status-filtered list of the caller's matters), the project
-//! calendar of upcoming appearances, the conflicts section (ENG-307), and the
-//! "Details" directory of every administrative sub-page and JSON endpoint.
+//! paginated, status-filtered list of the caller's matters), upcoming deadlines,
+//! the project calendar of appearances, the conflicts section, and the
+//! "Details" directory of administrative sub-pages and JSON endpoints.
 //!
 //! **Conflicts are firm-wide, oriented on the caller's own matters — not
 //! scoped to them.** `store::conflicts::findings_for_matters` anchors on the
@@ -42,7 +42,7 @@ use serde::{Deserialize, Serialize};
 use crate::people::ViewerRole;
 
 /// How many matters the KPI list shows per page — the page's pagination.
-pub const PROJECTS_PER_PAGE: usize = 5;
+pub const PROJECTS_PER_PAGE: usize = 10;
 
 /// CRUD admin pages — full list / new / edit / delete surfaces.
 const CRUD_PAGES: &[(&str, &str)] = &[
@@ -185,8 +185,10 @@ pub struct DashboardView {
     /// Open Deadlines across the caller's visible open matters, earliest first.
     #[serde(default)]
     pub deadlines: Vec<deadlines::Entry>,
-    #[serde(default = "chrono::Utc::now")]
-    pub deadlines_now: chrono::DateTime<chrono::Utc>,
+    #[serde(default = "default_page")]
+    pub deadline_page: u64,
+    #[serde(default)]
+    pub deadline_has_next: bool,
     /// Ranked firm-wide conflict findings anchored on the caller's visible
     /// matters (ENG-307). Empty when the graph raises nothing — rendered as
     /// the section's own empty state, never synthesized.
@@ -195,6 +197,10 @@ pub struct DashboardView {
     /// The Contingency Pipeline over the same visible matters.
     #[serde(default)]
     pub pipeline: crate::projected_cash::PipelineCardView,
+}
+
+fn default_page() -> u64 {
+    1
 }
 
 /// The dashboard's query string. All four are lenient: an unrecognised value
@@ -210,6 +216,8 @@ pub struct DashboardQuery {
     pub status: Option<String>,
     #[serde(default)]
     pub page: Option<u64>,
+    #[serde(default)]
+    pub deadline_page: Option<u64>,
 }
 
 /// Load the lawyer workbench for the caller: refuse non-lawyer, read the injected
@@ -240,9 +248,16 @@ pub async fn get_lawyer_dashboard() -> Result<DashboardView, ServerFnError> {
     let pg = store::postgres::PostgresDb::application()
         .await
         .map_err(crate::lawyer_project_detail::server_error)?;
-    let mut verified = store::onboarding::verified_providers(&pg, &project_ids)
-        .await
-        .map_err(crate::lawyer_project_detail::server_error)?;
+    let (verified, pending_esign_result, filed, agreement_rows) = tokio::join!(
+        store::onboarding::verified_providers(&pg, &project_ids),
+        store::projects::onboarding_esign_pending(&surreal, &projects),
+        store::onboarding::filed_signing_methods(&pg, &project_ids),
+        store::onboarding::agreements(&pg, &project_ids),
+    );
+    let mut verified = verified.map_err(crate::lawyer_project_detail::server_error)?;
+    let pending_esign = pending_esign_result.unwrap_or_default();
+    let mut filed = filed.map_err(crate::lawyer_project_detail::server_error)?;
+    let agreement_rows = agreement_rows.map_err(crate::lawyer_project_detail::server_error)?;
     let has_engagement = verified.keys().copied().collect();
     let (pitch_projects, active_projects, closed_projects) =
         kpi_lifecycle_counts(&projects, &has_engagement);
@@ -264,9 +279,6 @@ pub async fn get_lawyer_dashboard() -> Result<DashboardView, ServerFnError> {
             _ => p.status == "open" && has_engagement.contains(&p.id),
         })
         .collect();
-    let pending_esign = store::projects::onboarding_esign_pending(&surreal, &projects)
-        .await
-        .unwrap_or_default();
     let total_pages = filtered
         .len()
         .saturating_add(PROJECTS_PER_PAGE - 1)
@@ -280,8 +292,25 @@ pub async fn get_lawyer_dashboard() -> Result<DashboardView, ServerFnError> {
     let first = page.saturating_sub(1).saturating_mul(PROJECTS_PER_PAGE);
     let last = first.saturating_add(PROJECTS_PER_PAGE).min(filtered.len());
     let page_of_projects = &filtered[first..last];
-    let current_state_by_project = current_states_for_projects(&surreal, page_of_projects).await?;
-    let deadlines = deadlines::load(&projects).await?;
+    let today = chrono::Utc::now().date_naive();
+    let requested_deadline_page = usize::try_from(query.deadline_page.unwrap_or(1))
+        .unwrap_or(usize::MAX)
+        .max(1);
+    let project_page_ids: Vec<_> = page_of_projects
+        .iter()
+        .filter(|project| project.status == "open")
+        .map(|project| project.id)
+        .collect();
+    let (states, deadline_result, next_due_by_project) = tokio::join!(
+        current_states_for_projects(&surreal, page_of_projects),
+        deadlines::load(&projects, today, requested_deadline_page),
+        store::project_deadlines::next_upcoming_date_by_project(&project_page_ids, today),
+    );
+    let current_state_by_project = states?;
+    let (deadlines, deadline_has_next) = deadline_result?;
+    let next_due_by_project =
+        next_due_by_project.map_err(crate::lawyer_project_detail::server_error)?;
+    let deadline_page = requested_deadline_page;
     let rows = page_of_projects
         .iter()
         .map(|p| {
@@ -292,21 +321,15 @@ pub async fn get_lawyer_dashboard() -> Result<DashboardView, ServerFnError> {
                 has_engagement.contains(&p.id),
                 &pending_esign,
             );
-            if let Some(next) = deadlines.iter().find(|d| d.project_code() == p.code) {
-                row.next_due = next.due_label();
+            if let Some(next) = next_due_by_project.get(&p.id) {
+                row.next_due.clone_from(next);
             }
             row
         })
         .collect();
 
-    let mut filed = store::onboarding::filed_signing_methods(&pg, &project_ids)
-        .await
-        .map_err(crate::lawyer_project_detail::server_error)?;
     let mut agreements = std::collections::HashMap::<_, Vec<_>>::new();
-    for row in store::onboarding::agreements(&pg, &project_ids)
-        .await
-        .map_err(crate::lawyer_project_detail::server_error)?
-    {
+    for row in agreement_rows {
         let href = match (row.notation_id, row.document_id) {
             (Some(id), _) => format!("/app/lawyer/notations/{id}/review"),
             (_, Some(id)) => format!("/app/projects/{}/documents/{id}", row.project),
@@ -344,10 +367,13 @@ pub async fn get_lawyer_dashboard() -> Result<DashboardView, ServerFnError> {
         })
         .collect();
     retainers.sort_by(|left, right| left.code.cmp(&right.code));
-    let calendar_events = calendar_events_for_projects(&surreal, &projects).await?;
-    let conflict_findings = conflict_findings_for_projects(&surreal, &projects).await?;
-    let pipeline =
-        crate::projected_cash::derive::load_pipeline(&surreal, person_id, &projects).await;
+    let (calendar_events, conflict_findings, pipeline) = tokio::join!(
+        calendar_events_for_projects(&surreal, &projects),
+        conflict_findings_for_projects(&surreal, &projects),
+        crate::projected_cash::derive::load_pipeline(&surreal, person_id, &projects),
+    );
+    let calendar_events = calendar_events?;
+    let conflict_findings = conflict_findings?;
 
     Ok(DashboardView {
         firm_name: crate::app_chrome::firm_name_from_context().await,
@@ -372,7 +398,8 @@ pub async fn get_lawyer_dashboard() -> Result<DashboardView, ServerFnError> {
         tokens_href: crate::app_chrome::app_tokens_href_from_context().await,
         calendar_events,
         deadlines,
-        deadlines_now: chrono::Utc::now(),
+        deadline_page: u64::try_from(deadline_page).unwrap_or(u64::MAX),
+        deadline_has_next,
         conflict_findings,
         pipeline,
     })
@@ -726,7 +753,15 @@ fn lawyer_dashboard_body(view: &DashboardView) -> Element {
                     }
                 }
             }
-            deadlines::WorkbenchDeadlines { entries: view.deadlines.clone(), now: view.deadlines_now }
+            deadlines::WorkbenchDeadlines {
+                entries: view.deadlines.clone(),
+                page: view.deadline_page,
+                has_next: view.deadline_has_next,
+                status: view.status.clone(),
+                sort: view.sort.clone(),
+                dir: view.dir.clone(),
+                project_page: view.page,
+            }
             crate::projected_cash::PipelineCard { view: view.pipeline.clone() }
             // The workbench calendar spans every matter the caller can see, and
             // carries the adjacent list's status so re-sorting one control does
@@ -1158,7 +1193,8 @@ mod tests {
             logo: None,
             calendar_events: vec![],
             deadlines: vec![],
-            deadlines_now: chrono::Utc::now(),
+            deadline_page: 1,
+            deadline_has_next: false,
             conflict_findings: vec![],
             pipeline: crate::projected_cash::PipelineCardView::default(),
         }
