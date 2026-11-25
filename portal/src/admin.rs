@@ -973,6 +973,10 @@ fn register_project_routes(r: Router<AdminState>) -> Router<AdminState> {
             post(crate::project_billing_forms::log_time),
         )
         .route(
+            &format!("{prefix}/{{project_code}}/rates"),
+            post(crate::project_billing_forms::set_matter_rate),
+        )
+        .route(
             &format!("{prefix}/{{project_code}}/timer/start"),
             post(crate::project_billing_forms::start_timer),
         )

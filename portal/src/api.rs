@@ -4046,55 +4046,18 @@ async fn reconcile_seed(
 ) -> Response {
     let outcome = async {
         let model = store::seed::SeedModel::parse(&input.model)?;
-        match &session.scope {
-            None => {}
-            Some(SessionScope::Seed(scope)) => {
-                if scope.endpoint != SEED_ENDPOINT {
-                    return Err(anyhow::Error::new(
-                        store::seed::ScopeViolation::EndpointNotScoped,
-                    ));
-                }
-                if !scope.models.contains(&model) {
-                    return Err(anyhow::Error::new(
-                        store::seed::ScopeViolation::ModelNotScoped(model.term()),
-                    ));
-                }
-                if scope.dry_run_only && (!input.dry_run || input.overwrite) {
-                    return Err(anyhow::Error::new(store::seed::ScopeViolation::DryRunOnly));
-                }
-            }
-            Some(SessionScope::Document(_)) => {
-                return Err(anyhow::Error::new(
-                    store::seed::ScopeViolation::EndpointNotScoped,
-                ));
-            }
-        }
-        // `as_ci` is a validation capability, exactly like the pull-request
-        // CI session it stands in for: a live write under borrowed scope
-        // rules is refused the same way.
-        let as_ci_scope = if input.as_ci {
-            if !input.dry_run || input.overwrite {
-                return Err(anyhow::Error::new(store::seed::ScopeViolation::DryRunOnly));
-            }
-            Some(
-                input
-                    .project
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|code| !code.is_empty())
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("as_ci requires `project`: the code CI would be scoped to")
-                    })?,
+        let (session_scope, as_ci_scope) = seed_project_scope(&session, &input, model)?;
+        if model == store::seed::SeedModel::AttorneyRate {
+            return reconcile_attorney_rate_seed(
+                &state,
+                &session,
+                &input,
+                session_scope.as_deref(),
+                as_ci_scope.as_deref(),
             )
-        } else {
-            None
-        };
-        let session_scope = session
-            .scope
-            .as_ref()
-            .and_then(SessionScope::as_seed)
-            .map(|scope| scope.project_code.as_str());
-        store::seed::reconcile_yaml(
+            .await;
+        }
+        let report = store::seed::reconcile_yaml(
             &state.surreal,
             model,
             &input.yaml,
@@ -4104,12 +4067,13 @@ async fn reconcile_seed(
                 bootstrap_owner_email: state.bootstrap_owner_email.as_deref(),
                 actor_role: session.role,
                 may_change_roles: may_change_roles(&session) && !input.as_ci,
-                project_scope: session_scope.or(as_ci_scope),
+                project_scope: session_scope.as_deref().or(as_ci_scope.as_deref()),
                 dry_run: input.dry_run,
                 actor_person_id: session.person_id,
             },
         )
-        .await
+        .await?;
+        Ok(serde_json::to_value(report)?)
     }
     .await;
     match outcome {
@@ -4142,6 +4106,125 @@ async fn reconcile_seed(
             }
         }
     }
+}
+
+fn seed_project_scope(
+    session: &SessionData,
+    input: &SeedRequest,
+    model: store::seed::SeedModel,
+) -> anyhow::Result<(Option<String>, Option<String>)> {
+    match &session.scope {
+        None => {}
+        Some(SessionScope::Seed(scope)) => {
+            if scope.endpoint != SEED_ENDPOINT {
+                return Err(anyhow::Error::new(
+                    store::seed::ScopeViolation::EndpointNotScoped,
+                ));
+            }
+            if !scope.models.contains(&model) {
+                return Err(anyhow::Error::new(
+                    store::seed::ScopeViolation::ModelNotScoped(model.term()),
+                ));
+            }
+            if scope.dry_run_only && (!input.dry_run || input.overwrite) {
+                return Err(anyhow::Error::new(store::seed::ScopeViolation::DryRunOnly));
+            }
+        }
+        Some(SessionScope::Document(_)) => {
+            return Err(anyhow::Error::new(
+                store::seed::ScopeViolation::EndpointNotScoped,
+            ));
+        }
+    }
+    // `as_ci` is a validation capability, exactly like the pull-request CI
+    // session it stands in for: a live write under borrowed scope rules is refused.
+    let as_ci_scope = if input.as_ci {
+        if !input.dry_run || input.overwrite {
+            return Err(anyhow::Error::new(store::seed::ScopeViolation::DryRunOnly));
+        }
+        Some(
+            input
+                .project
+                .as_deref()
+                .map(str::trim)
+                .filter(|code| !code.is_empty())
+                .ok_or_else(|| {
+                    anyhow::anyhow!("as_ci requires `project`: the code CI would be scoped to")
+                })?
+                .to_owned(),
+        )
+    } else {
+        None
+    };
+    let session_scope = session
+        .scope
+        .as_ref()
+        .and_then(SessionScope::as_seed)
+        .map(|scope| scope.project_code.clone());
+    Ok((session_scope, as_ci_scope))
+}
+
+async fn reconcile_attorney_rate_seed(
+    state: &ApiState,
+    session: &SessionData,
+    input: &SeedRequest,
+    session_scope: Option<&str>,
+    as_ci_scope: Option<&str>,
+) -> anyhow::Result<serde_json::Value> {
+    if input.overwrite {
+        anyhow::bail!("Attorney Rate history is insert-only");
+    }
+    let project_code = session_scope
+        .or(as_ci_scope)
+        .or(input.project.as_deref())
+        .map(str::trim)
+        .filter(|code| !code.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("attorney_rate import requires a Project scope"))?;
+    if let Some(scoped) = session_scope {
+        if !scoped.eq_ignore_ascii_case(project_code) {
+            return Err(anyhow::Error::new(
+                store::seed::ScopeViolation::CrossProject,
+            ));
+        }
+    }
+    let project = store::projects::find_by_code(&state.surreal, project_code)
+        .await?
+        .ok_or_else(|| {
+            anyhow::Error::new(store::seed::ScopeViolation::UnknownProject(
+                project_code.to_string(),
+            ))
+        })?;
+    if !input.as_ci {
+        let viewer = store::access::matter_viewer(
+            &state.surreal,
+            session.person_id,
+            session.role,
+            project.id,
+        )
+        .await
+        .map_err(anyhow::Error::msg)?;
+        if !viewer.is_some_and(store::access::MatterViewer::is_firm_side) {
+            return Err(anyhow::Error::new(
+                store::seed::ScopeViolation::CrossProject,
+            ));
+        }
+    }
+    let pg = crate::time_tracking_api::prepared_store(
+        &state.surreal,
+        "import_attorney_rates",
+        project.id,
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("PostgreSQL is unavailable"))?;
+    let report =
+        store::attorney_rates::import_project_seed(&pg, project.id, &input.yaml, input.dry_run)
+            .await?;
+    Ok(serde_json::json!({
+        "model": store::seed::SeedModel::AttorneyRate.term(),
+        "created": report.created,
+        "updated": 0,
+        "unchanged": report.unchanged,
+    }))
 }
 
 /// `PATCH /app/api/entities/{id}` — the Entity update command. Same lawyer-tier

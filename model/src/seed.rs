@@ -49,11 +49,13 @@ pub enum SeedModel {
     EstateAsset,
     /// One holder's shares of one class on a Project's cap table.
     CapTableHolding,
+    /// One Project's effective-dated hourly rate override.
+    AttorneyRate,
 }
 
 impl SeedModel {
     /// Every model a CI-minted seed session may reconcile.
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::Person,
         Self::Entity,
         Self::PersonProjectRole,
@@ -64,6 +66,7 @@ impl SeedModel {
         Self::FiduciaryRole,
         Self::EstateAsset,
         Self::CapTableHolding,
+        Self::AttorneyRate,
     ];
 
     /// Resolve the singular glossary term, Surreal table name, or `PascalCase`
@@ -80,8 +83,9 @@ impl SeedModel {
             "fiduciary_role" => Ok(Self::FiduciaryRole),
             "estate_asset" => Ok(Self::EstateAsset),
             "cap_table_holding" => Ok(Self::CapTableHolding),
+            "attorney_rate" => Ok(Self::AttorneyRate),
             _ => anyhow::bail!(
-                "unsupported seed model `{value}`; supported glossary terms: person, entity, person_project_role, person_entity_role, address, relationship_log, project_reference, fiduciary_role, estate_asset, cap_table_holding"
+                "unsupported seed model `{value}`; supported glossary terms: person, entity, person_project_role, person_entity_role, address, relationship_log, project_reference, fiduciary_role, estate_asset, cap_table_holding, attorney_rate"
             ),
         }
     }
@@ -99,6 +103,7 @@ impl SeedModel {
             Self::FiduciaryRole => "fiduciary_role",
             Self::EstateAsset => "estate_asset",
             Self::CapTableHolding => "cap_table_holding",
+            Self::AttorneyRate => "attorney_rate",
         }
     }
 }
@@ -182,6 +187,31 @@ pub fn validate_yaml(model: SeedModel, yaml: &str) -> anyhow::Result<()> {
         SeedModel::FiduciaryRole => module_records::validate_fiduciary_roles(yaml),
         SeedModel::EstateAsset => module_records::validate_estate_assets(yaml),
         SeedModel::CapTableHolding => module_records::validate_cap_table_holdings(yaml),
+        SeedModel::AttorneyRate => {
+            let records = parse_seed::<OperatorAttorneyRateRec>(
+                yaml,
+                model,
+                &["person.email", "effective_on"],
+            )?;
+            for record in &records {
+                if record.person.email.trim().is_empty() || record.hourly_rate_cents < 0 {
+                    anyhow::bail!(
+                        "attorney_rate seed needs a Person email and a non-negative rate"
+                    );
+                }
+            }
+            require_unique(
+                model,
+                "person.email and effective_on",
+                records.iter().map(|record| {
+                    format!(
+                        "{}\u{0}{}",
+                        record.person.email.trim().to_ascii_lowercase(),
+                        record.effective_on
+                    )
+                }),
+            )
+        }
     }
 }
 
@@ -470,6 +500,31 @@ pub fn glossary_token(value: &str) -> String {
 #[serde(deny_unknown_fields)]
 pub struct OperatorPersonRef {
     pub email: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OperatorAttorneyRateRec {
+    pub person: OperatorPersonRef,
+    pub hourly_rate_cents: i32,
+    pub effective_on: chrono::NaiveDate,
+}
+
+#[cfg(test)]
+mod attorney_rate_tests {
+    use super::{validate_yaml, SeedModel};
+
+    #[test]
+    fn attorney_rate_seed_requires_a_unique_person_and_effective_date() {
+        let valid = "lookup_fields: [person.email, effective_on]\nrecords:\n  - person: { email: lawyer@example.test }\n    hourly_rate_cents: 50000\n    effective_on: 2026-11-25\n";
+        assert!(validate_yaml(SeedModel::AttorneyRate, valid).is_ok());
+
+        let negative = valid.replace("50000", "-1");
+        assert!(validate_yaml(SeedModel::AttorneyRate, &negative).is_err());
+
+        let duplicate = "lookup_fields: [person.email, effective_on]\nrecords:\n  - person: { email: lawyer@example.test }\n    hourly_rate_cents: 50000\n    effective_on: 2026-11-25\n  - person: { email: LAWYER@example.test }\n    hourly_rate_cents: 60000\n    effective_on: 2026-11-25\n";
+        assert!(validate_yaml(SeedModel::AttorneyRate, duplicate).is_err());
+    }
 }
 
 #[derive(Debug, Deserialize)]

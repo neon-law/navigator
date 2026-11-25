@@ -52,6 +52,13 @@ pub struct Deadline {
     pub calendar_review_pending: bool,
 }
 
+/// One page of upcoming open Deadlines and whether another page exists.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeadlinePage {
+    pub rows: Vec<Deadline>,
+    pub has_next: bool,
+}
+
 #[derive(SurrealValue)]
 struct DeadlineRow {
     id: surrealdb::types::RecordId,
@@ -437,6 +444,90 @@ pub async fn open_for_projects(project_ids: &[Uuid]) -> Result<Vec<Deadline>, De
         &["due_at", "id"],
     )
     .await?)
+}
+
+/// Page upcoming open Deadlines across visible Projects. One lookahead row
+/// exposes a next page without counting every matching Deadline.
+pub async fn upcoming_page_for_projects(
+    project_ids: &[Uuid],
+    today: chrono::NaiveDate,
+    limit: i64,
+    offset: i64,
+) -> Result<DeadlinePage, DeadlineError> {
+    if project_ids.is_empty() {
+        return Ok(DeadlinePage {
+            rows: Vec::new(),
+            has_next: false,
+        });
+    }
+    if !(1..=100).contains(&limit) || offset < 0 {
+        return Err(DeadlineError::Invalid("deadline page".into()));
+    }
+    let pg = crate::postgres::matter::authority_for("project_deadlines")
+        .await?
+        .ok_or(crate::postgres::matter::MatterAuthorityError::Unavailable)?;
+    let result: Option<serde_json::Value> = sqlx::query_scalar(
+        "WITH page AS (
+             SELECT to_jsonb(d) AS row, due_at, id
+             FROM project_deadlines d
+             WHERE status = 'open' AND project_id = ANY($1::uuid[])
+               AND due_at >= ($2::date::timestamp AT TIME ZONE 'UTC')
+             ORDER BY due_at, id
+             LIMIT $3 OFFSET $4
+         )
+         SELECT jsonb_agg(row ORDER BY due_at, id) FROM page",
+    )
+    .bind(project_ids)
+    .bind(today)
+    // One lookahead row enables Next without counting the entire workload.
+    .bind(limit + 1)
+    .bind(offset)
+    .fetch_one(pg.pool())
+    .await
+    .map_err(crate::postgres::matter::MatterAuthorityError::from)?;
+    let mut rows: Vec<Deadline> = result
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(crate::postgres::matter::MatterAuthorityError::from)?
+        .unwrap_or_default();
+    let has_next = rows.len() > usize::try_from(limit).unwrap_or(usize::MAX);
+    rows.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+    Ok(DeadlinePage { rows, has_next })
+}
+
+/// Earliest upcoming open Deadline per Project for the dashboard's compact
+/// Project list. The lateral lookup stops at the first indexed row per Project.
+pub async fn next_upcoming_date_by_project(
+    project_ids: &[Uuid],
+    today: chrono::NaiveDate,
+) -> Result<std::collections::HashMap<Uuid, String>, DeadlineError> {
+    if project_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let pg = crate::postgres::matter::authority_for("project_deadlines")
+        .await?
+        .ok_or(crate::postgres::matter::MatterAuthorityError::Unavailable)?;
+    let rows: Vec<(Uuid, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+        "SELECT visible.id, next_due.due_at
+         FROM unnest($1::uuid[]) AS visible(id)
+         CROSS JOIN LATERAL (
+             SELECT due_at
+             FROM project_deadlines
+             WHERE project_id = visible.id AND status = 'open'
+               AND due_at >= ($2::date::timestamp AT TIME ZONE 'UTC')
+             ORDER BY due_at, id
+             LIMIT 1
+         ) AS next_due",
+    )
+    .bind(project_ids)
+    .bind(today)
+    .fetch_all(pg.pool())
+    .await
+    .map_err(crate::postgres::matter::MatterAuthorityError::from)?;
+    Ok(rows
+        .into_iter()
+        .map(|(project_id, due_at)| (project_id, due_at.date_naive().to_string()))
+        .collect())
 }
 
 pub async fn find(

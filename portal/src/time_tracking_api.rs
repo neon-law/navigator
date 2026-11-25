@@ -9,7 +9,8 @@
 //! [`store::access::matter_viewer`], so a caller with no firm-side
 //! participation row — a client, a clerk, an unassigned lawyer, Owner and
 //! Admin included — gets the non-disclosing 404, never a refusal. The rate
-//! doors are firm-tier: every lawyer may read and record the firm's rates.
+//! matter-rate doors require firm-side participation; firm defaults require
+//! Firm administration.
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -22,6 +23,7 @@ use store::{attorney_rates, postgres_mirror, time_entries, timers};
 use uuid::Uuid;
 
 use crate::api::{ApiError, ApiState, LawyerSession};
+use crate::session::SessionData;
 
 /// The wire shape for a Time Entry: flat lowercase words for `source` and
 /// `billing_status` (the store's `as_str`, the same convention as the
@@ -123,6 +125,7 @@ fn timer_error(error: &timers::TimerError, operation: &'static str, project_id: 
 fn fee_error(error: &attorney_rates::FeeStructureError) -> Response {
     let status = match error {
         attorney_rates::FeeStructureError::Invalid(_) => StatusCode::UNPROCESSABLE_ENTITY,
+        attorney_rates::FeeStructureError::Conflict => StatusCode::CONFLICT,
         attorney_rates::FeeStructureError::Postgres(_) => StatusCode::SERVICE_UNAVAILABLE,
         attorney_rates::FeeStructureError::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,
     };
@@ -154,6 +157,18 @@ async fn ensure_firm_side(
         Some(viewer) if viewer.is_firm_side() => Ok(()),
         _ => Err(ApiError::NotFound),
     }
+}
+
+async fn ensure_firm_rate_admin(state: &ApiState, session: &SessionData) -> Result<(), ApiError> {
+    if !session.role.is_admin_tier() || session.viewing_as_dri.is_some() {
+        return Err(ApiError::Forbidden);
+    }
+    let firm_id =
+        store::firms::firm_id_for_brand_key(&state.surreal, views::brand::brand_key().as_str())
+            .await
+            .map_err(|error| ApiError::Db(error.to_string()))?
+            .ok_or(ApiError::NotFound)?;
+    crate::api::require_firm_administration(&state.surreal, session, firm_id).await
 }
 
 pub(crate) async fn postgres(
@@ -565,22 +580,40 @@ pub(crate) async fn discard_timer(
 #[serde(deny_unknown_fields)]
 pub(crate) struct RatesQuery {
     person_id: Uuid,
+    /// When present, include this matter's overrides and firm defaults only.
+    project_id: Option<Uuid>,
 }
 
 /// `GET /app/api/attorney-rates?person_id={id}` — the firm's rate history for
 /// one attorney: firm defaults and matter overrides together, newest
 /// effective date first.
 pub(crate) async fn list_rates(
-    State(_state): State<ApiState>,
-    LawyerSession(_session): LawyerSession,
+    State(state): State<ApiState>,
+    LawyerSession(session): LawyerSession,
     Query(query): Query<RatesQuery>,
 ) -> Result<Response, ApiError> {
+    if session.viewing_as_dri.is_some() {
+        return Err(ApiError::Forbidden);
+    }
+    if let Some(project_id) = query.project_id {
+        ensure_firm_side(&state, session.person_id, session.role, project_id).await?;
+    } else {
+        ensure_firm_rate_admin(&state, &session).await?;
+    }
     let pg = match postgres("list_rates", None).await {
         Ok(pg) => pg,
         Err(response) => return Ok(response),
     };
     match attorney_rates::rates_for_person(&pg, query.person_id).await {
-        Ok(rows) => Ok(Json(serde_json::json!({"rates": rows})).into_response()),
+        Ok(mut rows) => {
+            rows.retain(|rate| match query.project_id {
+                Some(project_id) => {
+                    rate.project_id.is_none() || rate.project_id == Some(project_id)
+                }
+                None => rate.project_id.is_none(),
+            });
+            Ok(Json(serde_json::json!({"rates": rows})).into_response())
+        }
         Err(e) => Ok(fee_error(&e)),
     }
 }
@@ -597,17 +630,16 @@ pub(crate) struct NewRateInput {
 
 /// `POST /app/api/attorney-rates` — record an attorney's hourly rate, either
 /// the firm default (`project_id: null`) or a matter override. Rows are
-/// effective-dated and never edited: a row for the same scope and effective
-/// date replaces the prior one, any other date appends to the history.
+/// effective-dated and insert-only; a duplicate scope and effective date is
+/// refused with `409`.
 pub(crate) async fn create_rate(
     State(state): State<ApiState>,
-    LawyerSession(_session): LawyerSession,
+    LawyerSession(session): LawyerSession,
     Json(input): Json<NewRateInput>,
 ) -> Result<Response, ApiError> {
-    let pg = match postgres("create_rate", None).await {
-        Ok(pg) => pg,
-        Err(response) => return Ok(response),
-    };
+    if session.viewing_as_dri.is_some() {
+        return Err(ApiError::Forbidden);
+    }
     // The rate rows carry foreign keys into the mirrored identity and
     // project tables; mirror what the row names first, and refuse an
     // unknown attorney or matter with the non-disclosing 404 rather than a
@@ -627,6 +659,18 @@ pub(crate) async fn create_rate(
         if !project_exists {
             return Err(ApiError::NotFound);
         }
+        ensure_firm_side(&state, session.person_id, session.role, project_id).await?;
+    } else {
+        if !session.role.is_admin_tier() {
+            return Err(ApiError::Forbidden);
+        }
+        ensure_firm_rate_admin(&state, &session).await?;
+    }
+    let pg = match postgres("create_rate", input.project_id).await {
+        Ok(pg) => pg,
+        Err(response) => return Ok(response),
+    };
+    if let Some(project_id) = input.project_id {
         if let Err(store_error) = postgres_mirror::mirror(
             &state.surreal,
             &pg,

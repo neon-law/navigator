@@ -1,12 +1,13 @@
-//! The workbench's Deadlines section: every open Deadline across the caller's
-//! visible open matters, grouped by urgency. Court appearances stay on the
-//! Project calendar; this section lists obligations.
+//! The workbench's upcoming Deadlines table across the caller's visible open
+//! matters. Court appearances stay on the Project calendar; this table lists
+//! obligations from today forward.
 
-use chrono::{DateTime, Days, FixedOffset, Utc};
+use chrono::{DateTime, FixedOffset};
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
-const BANDS: [&str; 5] = ["Overdue", "Today", "Next 7 days", "Next 30 days", "Later"];
+#[cfg(feature = "server")]
+const DEADLINES_PER_PAGE: usize = 10;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Entry {
@@ -15,7 +16,6 @@ pub struct Entry {
     project_name: String,
     title: String,
     due: DateTime<FixedOffset>,
-    civil_date: Option<chrono::NaiveDate>,
     civil_label: Option<String>,
     authority: String,
     notes: String,
@@ -24,63 +24,43 @@ pub struct Entry {
 impl Entry {
     /// The due date alone, for the Active list's "Next due" column.
     pub fn due_label(&self) -> String {
-        self.civil_date
-            .unwrap_or_else(|| self.due.date_naive())
-            .to_string()
-    }
-
-    pub fn project_code(&self) -> &str {
-        &self.project_code
+        self.civil_label
+            .clone()
+            .unwrap_or_else(|| self.due.format("%Y-%m-%d %H:%M %:z").to_string())
     }
 }
 
-fn band(entry: &Entry, now: DateTime<Utc>) -> &'static str {
-    let due = entry.due;
-    if due.to_utc() < now {
-        return "Overdue";
-    }
-    let today = now.with_timezone(due.offset()).date_naive();
-    let day = entry.civil_date.unwrap_or_else(|| due.date_naive());
-    if day == today {
-        "Today"
-    } else if today
-        .checked_add_days(Days::new(7))
-        .is_some_and(|end| day <= end)
-    {
-        "Next 7 days"
-    } else if today
-        .checked_add_days(Days::new(30))
-        .is_some_and(|end| day <= end)
-    {
-        "Next 30 days"
-    } else {
-        "Later"
-    }
-}
-
-/// Open Deadlines on `projects`' open matters, one batched read, earliest first.
+/// Upcoming open Deadlines on visible open matters, fetched a page at a time.
 #[cfg(feature = "server")]
 pub(super) async fn load(
     projects: &[store::projects::Project],
-) -> Result<Vec<Entry>, ServerFnError> {
+    today: chrono::NaiveDate,
+    page: usize,
+) -> Result<(Vec<Entry>, bool), ServerFnError> {
     let open: std::collections::HashMap<uuid::Uuid, &store::projects::Project> = projects
         .iter()
         .filter(|project| project.status == "open")
         .map(|project| (project.id, project))
         .collect();
     let ids: Vec<uuid::Uuid> = open.keys().copied().collect();
-    let rows = store::project_deadlines::open_for_projects(&ids)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "dashboard: open deadlines failed");
-            dioxus_fullstack_core::FullstackContext::commit_http_status(
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                None,
-            );
-            ServerFnError::new("Could not load Deadlines")
-        })?;
-    let mut entries = Vec::with_capacity(rows.len());
-    for row in rows {
+    let offset = page.saturating_sub(1).saturating_mul(DEADLINES_PER_PAGE);
+    let page_rows = store::project_deadlines::upcoming_page_for_projects(
+        &ids,
+        today,
+        i64::try_from(DEADLINES_PER_PAGE).unwrap_or(10),
+        i64::try_from(offset).unwrap_or(i64::MAX),
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!(error = %e, "dashboard: open deadlines failed");
+        dioxus_fullstack_core::FullstackContext::commit_http_status(
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            None,
+        );
+        ServerFnError::new("Could not load Deadlines")
+    })?;
+    let mut entries = Vec::with_capacity(page_rows.rows.len());
+    for row in page_rows.rows {
         let Some(project) = open.get(&row.project_id) else {
             continue;
         };
@@ -101,7 +81,6 @@ pub(super) async fn load(
                 .due_on
                 .as_ref()
                 .map_or(due, |day| due.with_timezone(&day.timezone).fixed_offset()),
-            civil_date: row.due_on.as_ref().map(|on| on.date),
             civil_label: row
                 .due_on
                 .as_ref()
@@ -114,8 +93,7 @@ pub(super) async fn load(
             notes: notes(row.description.unwrap_or_default()),
         });
     }
-    entries.sort_by(|a, b| (a.due.to_utc(), &a.id).cmp(&(b.due.to_utc(), &b.id)));
-    Ok(entries)
+    Ok((entries, page_rows.has_next))
 }
 
 /// A proposal's description is JSON; show only the note a lawyer wrote.
@@ -130,42 +108,83 @@ fn notes(description: String) -> String {
 }
 
 #[component]
-pub fn WorkbenchDeadlines(entries: Vec<Entry>, now: DateTime<Utc>) -> Element {
+pub fn WorkbenchDeadlines(
+    entries: Vec<Entry>,
+    page: u64,
+    has_next: bool,
+    status: String,
+    sort: String,
+    dir: String,
+    project_page: u64,
+) -> Element {
     rsx! {
         section { id: "workbench-deadlines", class: "project-deadlines", aria_labelledby: "workbench-deadlines-title",
-            h2 { id: "workbench-deadlines-title", "Deadlines" }
+            h2 { id: "workbench-deadlines-title", "Upcoming deadlines" }
             if entries.is_empty() {
-                p { class: "nav-muted", "No open Deadlines on your open matters." }
+                p { class: "nav-muted", "No upcoming Deadlines on your open matters." }
             } else {
-                for label in BANDS {
-                    if entries.iter().any(|entry| band(entry, now) == label) {
-                        h3 { class: if label == "Overdue" { "is-overdue" } else { "" }, "{label}" }
-                        ul {
-                            for entry in entries.iter().filter(|entry| band(entry, now) == label) {
-                                DeadlineRow { key: "{entry.id}", entry: entry.clone() }
+                div { class: "nav-table-wrap",
+                    table { class: "nav-table upcoming-deadlines-table",
+                        thead { tr {
+                            th { scope: "col", "Due" }
+                            th { scope: "col", "Deadline" }
+                            th { scope: "col", "Project" }
+                            th { scope: "col", "Authority" }
+                            th { scope: "col", "Notes" }
+                        } }
+                        tbody {
+                            for entry in entries.iter() {
+                                tr { key: "{entry.id}",
+                                    td { "{entry.due_label()}" }
+                                    td { a { href: "/app/projects/{entry.project_code}/deadlines#deadline-{entry.id}", "{entry.title}" } }
+                                    td { a { href: "/app/projects/{entry.project_code}", "{entry.project_name}" } }
+                                    td { "{entry.authority}" }
+                                    td { "{entry.notes}" }
+                                }
                             }
                         }
                     }
                 }
+                DeadlinePagination { page, has_next, status, sort, dir, project_page }
             }
         }
     }
 }
 
 #[component]
-fn DeadlineRow(entry: Entry) -> Element {
-    let due = entry
-        .civil_label
-        .clone()
-        .unwrap_or_else(|| entry.due.format("%Y-%m-%d %H:%M %:z").to_string());
+fn DeadlinePagination(
+    page: u64,
+    has_next: bool,
+    status: String,
+    sort: String,
+    dir: String,
+    project_page: u64,
+) -> Element {
+    if page <= 1 && !has_next {
+        return rsx! {};
+    }
+    let page = page.max(1);
+    let href = |target: u64| {
+        format!(
+            "/app/lawyer?status={status}&sort={sort}&dir={dir}&page={project_page}&deadline_page={target}"
+        )
+    };
+    let previous = href(page.saturating_sub(1));
+    let next = href(page.saturating_add(1));
+    let summary = format!("Page {page}");
     rsx! {
-        li {
-            "{due} · "
-            a { href: "/app/projects/{entry.project_code}/deadlines#deadline-{entry.id}", "{entry.title}" }
-            " · "
-            a { href: "/app/projects/{entry.project_code}", "{entry.project_name}" }
-            if !entry.authority.is_empty() { p { "{entry.authority}" } }
-            if !entry.notes.is_empty() { p { "{entry.notes}" } }
+        nav { class: "nav-pagination", aria_label: "Upcoming deadline pagination",
+            if page > 1 {
+                a { class: "nav-pagination__link", href: "{previous}", "Previous" }
+            } else {
+                span { class: "nav-pagination__link is-disabled", aria_disabled: "true", "Previous" }
+            }
+            span { class: "nav-pagination__status", aria_current: "page", "{summary}" }
+            if has_next {
+                a { class: "nav-pagination__link", href: "{next}", "Next" }
+            } else {
+                span { class: "nav-pagination__link is-disabled", aria_disabled: "true", "Next" }
+            }
         }
     }
 }
@@ -181,7 +200,6 @@ mod tests {
             project_name: "Synthetic matter".into(),
             title: format!("Due {id}"),
             due: DateTime::parse_from_rfc3339(due).unwrap(),
-            civil_date: None,
             civil_label: None,
             authority: "Synthetic scheduling order".into(),
             notes: "Moves to May 6 if the order is entered.".into(),
@@ -189,26 +207,26 @@ mod tests {
     }
 
     #[test]
-    fn deadlines_group_by_urgency_and_link_back_to_the_matter() {
-        let now = "2028-05-01T12:00:00Z".parse().unwrap();
+    fn upcoming_deadline_table_orders_and_links_rows() {
         let entries = vec![
-            entry("a", "2028-04-28T12:00:00Z"),
-            entry("b", "2028-05-01T20:00:00Z"),
-            entry("c", "2028-05-05T12:00:00Z"),
-            entry("d", "2028-05-20T12:00:00Z"),
-            entry("e", "2029-01-01T12:00:00Z"),
+            entry("a", "2028-05-05T12:00:00Z"),
+            entry("b", "2028-05-20T12:00:00Z"),
         ];
-        let html = dioxus_ssr::render_element(rsx! { WorkbenchDeadlines { entries, now } });
-        let order: Vec<usize> = ["Overdue", "Today", "Next 7 days", "Next 30 days", "Later"]
-            .iter()
-            .map(|label| {
-                html.find(&format!(">{label}<"))
-                    .unwrap_or_else(|| panic!("no {label}"))
-            })
-            .collect();
-        assert!(order.windows(2).all(|pair| pair[0] < pair[1]));
+        let html = dioxus_ssr::render_element(rsx! {
+            WorkbenchDeadlines {
+                entries,
+                page: 1,
+                has_next: true,
+                status: "open".to_string(),
+                sort: "project".to_string(),
+                dir: "asc".to_string(),
+                project_page: 2,
+            }
+        });
         for expected in [
+            "Upcoming deadlines",
             "href=\"/app/projects/synthetic-matter/deadlines#deadline-a\"",
+            "href=\"/app/lawyer?status=open&#38;sort=project&#38;dir=asc&#38;page=2&#38;deadline_page=2\"",
             "Synthetic scheduling order",
             "Moves to May 6 if the order is entered.",
         ] {
@@ -218,9 +236,11 @@ mod tests {
 
     #[test]
     fn no_open_deadlines_names_its_empty_state() {
-        let html = dioxus_ssr::render_element(
-            rsx! { WorkbenchDeadlines { entries: vec![], now: Utc::now() } },
-        );
-        assert!(html.contains("No open Deadlines on your open matters."));
+        let html = dioxus_ssr::render_element(rsx! { WorkbenchDeadlines {
+            entries: vec![], page: 1, has_next: false,
+            status: "open".to_string(), sort: "date".to_string(),
+            dir: "asc".to_string(), project_page: 1,
+        } });
+        assert!(html.contains("No upcoming Deadlines on your open matters."));
     }
 }

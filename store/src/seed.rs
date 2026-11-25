@@ -624,6 +624,9 @@ pub async fn reconcile_yaml(
             )
             .await
         }
+        SeedModel::AttorneyRate => {
+            anyhow::bail!("Attorney Rate seeds require a Project-scoped PostgreSQL write")
+        }
     }
 }
 

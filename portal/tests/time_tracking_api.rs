@@ -225,15 +225,38 @@ async fn create_entry(
     .await
 }
 
-/// Record a rate through the API door itself — the same mirror ceremony the
-/// browser door runs — so every scenario's fee structure is real, mirrored
-/// data, never a store-level backdoor.
+/// Seed a rate into the test fee structure. Matter overrides use the API door;
+/// firm defaults are set up directly because this lawyer fixture cannot
+/// administer its Firm.
 async fn seed_rate(
     f: &Fixture,
     project_id: Option<Uuid>,
     hourly_rate_cents: i32,
     effective_on: NaiveDate,
 ) -> Value {
+    if project_id.is_none() {
+        let pg = store::postgres::PostgresDb::from_env().await.unwrap();
+        for key in [
+            store::postgres_mirror::MirrorKey::Project(f.project_id),
+            store::postgres_mirror::MirrorKey::Person(f.lawyer_id),
+        ] {
+            store::postgres_mirror::mirror(&f.surreal, &pg, &key)
+                .await
+                .unwrap();
+        }
+        let rate = store::attorney_rates::set_hourly_rate(
+            &pg,
+            store::attorney_rates::NewAttorneyRate {
+                person_id: f.lawyer_id,
+                project_id: None,
+                hourly_rate_cents,
+                effective_on,
+            },
+        )
+        .await
+        .unwrap();
+        return serde_json::to_value(rate).unwrap();
+    }
     let response = post_json(
         &f.app,
         "/app/api/attorney-rates",
@@ -726,28 +749,31 @@ isolated_scenario!(
     run_the_running_timer_read_discloses_nothing_about_other_matters
 );
 
-// The fee structure: rows are effective-dated history, newest effective date
-// first; a row re-recorded at the same scope and date replaces the prior one;
-// and an entry is priced by the rate effective on its performed date.
-async fn run_rate_history_is_effective_dated_and_a_same_date_row_replaces_the_prior_one() {
+// The fee structure: rows are insert-only effective-dated history, newest
+// effective date first; a duplicate date is refused, and entries use the rate
+// effective on their performed date.
+async fn run_rate_history_is_insert_only_and_effective_dated() {
     let f = fixture().await;
     seed_rate(
         &f,
-        None,
+        Some(f.project_id),
         10_000,
         NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
     )
     .await;
     seed_rate(
         &f,
-        None,
+        Some(f.project_id),
         12_000,
         NaiveDate::from_ymd_opt(2026, 6, 1).unwrap(),
     )
     .await;
     let history = get_json(
         &f.app,
-        &format!("/app/api/attorney-rates?person_id={}", f.lawyer_id),
+        &format!(
+            "/app/api/attorney-rates?person_id={}&project_id={}",
+            f.lawyer_id, f.project_id
+        ),
         &f.lawyer,
     )
     .await;
@@ -762,25 +788,34 @@ async fn run_rate_history_is_effective_dated_and_a_same_date_row_replaces_the_pr
         "newest effective first"
     );
     assert_eq!(rates[1]["hourly_rate_cents"], 10_000);
-    seed_rate(
-        &f,
-        None,
-        11_000,
-        NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
-    )
-    .await;
-    let replaced = get_json(
+    let duplicate = post_json(
         &f.app,
-        &format!("/app/api/attorney-rates?person_id={}", f.lawyer_id),
+        "/app/api/attorney-rates",
+        json!({
+            "person_id": f.lawyer_id,
+            "project_id": f.project_id,
+            "hourly_rate_cents": 11_000,
+            "effective_on": "2026-01-01",
+        }),
         &f.lawyer,
     )
     .await;
-    let rates = body_json(replaced).await["rates"]
+    assert_eq!(duplicate.status(), StatusCode::CONFLICT);
+    let unchanged = get_json(
+        &f.app,
+        &format!(
+            "/app/api/attorney-rates?person_id={}&project_id={}",
+            f.lawyer_id, f.project_id
+        ),
+        &f.lawyer,
+    )
+    .await;
+    let rates = body_json(unchanged).await["rates"]
         .as_array()
         .unwrap()
         .clone();
-    assert_eq!(rates.len(), 2, "the re-recorded row replaced, not appended");
-    assert_eq!(rates[1]["hourly_rate_cents"], 11_000);
+    assert_eq!(rates.len(), 2, "the duplicate leaves history unchanged");
+    assert_eq!(rates[1]["hourly_rate_cents"], 10_000);
     let spring = create_entry(
         &f,
         f.lawyer_id,
@@ -790,7 +825,7 @@ async fn run_rate_history_is_effective_dated_and_a_same_date_row_replaces_the_pr
         true,
     )
     .await;
-    assert_eq!(body_json(spring).await["rate_cents_per_hour"], 11_000);
+    assert_eq!(body_json(spring).await["rate_cents_per_hour"], 10_000);
     let summer = create_entry(
         &f,
         f.lawyer_id,
@@ -803,8 +838,29 @@ async fn run_rate_history_is_effective_dated_and_a_same_date_row_replaces_the_pr
     assert_eq!(body_json(summer).await["rate_cents_per_hour"], 12_000);
 }
 isolated_scenario!(
-    rate_history_is_effective_dated_and_a_same_date_row_replaces_the_prior_one,
-    run_rate_history_is_effective_dated_and_a_same_date_row_replaces_the_prior_one
+    rate_history_is_insert_only_and_effective_dated,
+    run_rate_history_is_insert_only_and_effective_dated
+);
+
+async fn run_a_project_lawyer_cannot_change_the_firm_default_rate() {
+    let f = fixture().await;
+    let response = post_json(
+        &f.app,
+        "/app/api/attorney-rates",
+        json!({
+            "person_id": f.lawyer_id,
+            "project_id": null,
+            "hourly_rate_cents": 50_000,
+            "effective_on": "2026-11-25",
+        }),
+        &f.lawyer,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+isolated_scenario!(
+    a_project_lawyer_cannot_change_the_firm_default_rate,
+    run_a_project_lawyer_cannot_change_the_firm_default_rate
 );
 
 // The flat fee is the matter's current agreement: setting a new figure

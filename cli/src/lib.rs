@@ -8,6 +8,7 @@
 
 pub mod answers_file;
 pub mod atomic_directory;
+pub mod attorney_rates;
 pub mod authorities;
 pub mod billing;
 pub mod closing_trailer;
