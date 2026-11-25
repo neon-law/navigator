@@ -3278,17 +3278,17 @@ mod tests {
                 {"id":"upcoming","etag":"one","summary":"sample: Meeting",
                  "organizer":{"self":true,"email":"owner@firm.example"},
                  "attendees":[{"email":"owner@firm.example","organizer":true},
-                              {"email":"staff@FIRM.EXAMPLE","optional":true},
+                              {"email":"colleague@FIRM.EXAMPLE","optional":true},
                               {"email":"team@brand.example"},
                               {"email":"room@firm.example","resource":true},
                               {"email":"client@otherfirm.example","responseStatus":"accepted"}],
                  "extendedProperties":{"private":{"nv_invited_current":"team@brand.example"}}},
                 {"id":"past","etag":"two","summary":"sample: Past","organizer":{"self":true},
-                 "attendees":[{"email":"staff@firm.example"}]},
+                 "attendees":[{"email":"colleague@firm.example"}]},
                 {"id":"external","etag":"three","organizer":{"self":false},
-                 "attendees":[{"email":"staff@firm.example"}]},
+                 "attendees":[{"email":"colleague@firm.example"}]},
                 {"id":"incomplete","etag":"four","summary":"sample: Hidden","organizer":{"self":true},
-                 "attendeesOmitted":true,"attendees":[{"email":"staff@firm.example"}]}
+                 "attendeesOmitted":true,"attendees":[{"email":"colleague@firm.example"}]}
             ]})))
             .expect(1)
             .mount(&server)
