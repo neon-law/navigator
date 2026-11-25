@@ -21,7 +21,7 @@ use portal::idp_admin::IdentityAdminConfig;
 use portal::oauth::IdentityPasswordConfig;
 use portal::{policy, AppState, AuthConfig, OAuthConfig, SessionStore};
 use serde_json::{json, Value};
-use store::test_support::mem_surreal;
+use store::test_support::with_postgres;
 use tower::ServiceExt;
 use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -112,7 +112,7 @@ async fn state_with_reset(
     metadata: &MockServer,
     password_door: bool,
 ) -> (AppState, store::surreal::SurrealDb, Arc<CapturingEmail>) {
-    let surreal = mem_surreal().await;
+    let surreal = store::surreal::SurrealDb::uninitialized();
     let captured = Arc::new(CapturingEmail::new());
     let email: Arc<dyn EmailService> = captured.clone();
     let state = AppState {
@@ -235,6 +235,10 @@ async fn post_form(
 
 #[tokio::test]
 async fn full_reset_flow_sets_a_new_password_and_signs_in() {
+    with_postgres(check_full_reset()).await;
+}
+
+async fn check_full_reset() {
     let meta = mount_metadata().await;
     let idp = mount_idp(password_user("libra@example.com"), None).await;
     let (state, surreal, email) = state_with_reset(&idp, &meta, true).await;
@@ -301,21 +305,27 @@ async fn full_reset_flow_sets_a_new_password_and_signs_in() {
 /// visitor asked from — `neonlaw.com` for Lex Tecnica's `neonlaw.com`
 /// subdomain, never its unauthenticated `lextecnica.com`.
 #[tokio::test]
-async fn reset_mail_sends_from_the_requesting_hosts_naked_domain() {
+async fn reset_mail_uses_the_requesting_brands_sender_theme_and_links() {
+    with_postgres(check_branded_reset()).await;
+}
+
+async fn check_branded_reset() {
     let meta = mount_metadata().await;
     let idp = mount_idp(password_user("libra@example.com"), None).await;
     let (state, surreal, email) = state_with_reset(&idp, &meta, true).await;
     let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
-    for (host, person, sender) in [
+    for (host, person, sender, brand) in [
         (
             "staging-lex-tecnica.neonlaw.com",
             "libra@example.com",
             "staging@neonlaw.com",
+            views::brand::BrandKey::LexTecnica,
         ),
         (
             "www.vestaestateplanning.com",
             "leo@example.com",
             "support@vestaestateplanning.com",
+            views::brand::BrandKey::Vesta,
         ),
     ] {
         seed_person(&surreal, person).await;
@@ -348,13 +358,43 @@ async fn reset_mail_sends_from_the_requesting_hosts_naked_domain() {
             .unwrap();
         assert_eq!(submit.status(), StatusCode::OK, "{host}");
         let sent = email.captured();
-        assert_eq!(sent.last().unwrap().to, person, "{host}");
-        assert_eq!(sent.last().unwrap().from.as_deref(), Some(sender), "{host}");
+        let message = sent.last().unwrap();
+        let branding = brand.resolve_branding(&views::brand::DEFAULT_BRANDING);
+        assert_eq!(message.to, person);
+        assert_eq!(message.from.as_deref(), Some(sender));
+        assert_eq!(message.from_name.as_deref(), Some(branding.firm.site_name));
+        assert_eq!(
+            message.subject,
+            format!("Reset your {} password", branding.firm.site_name)
+        );
+        assert!(message.body.contains(branding.firm_email));
+        let url = format!(
+            "https://{host}/auth/password/reset/new?token={}",
+            token_from_email(&email, "/auth/password/reset/new?token=")
+        );
+        assert!(message.body.contains(&url));
+        let html = message.html_body.as_deref().unwrap();
+        assert!(html.contains(&format!(r#"href="{url}""#)));
+        assert!(html.contains(brand.default_typeface().label));
+        assert!(html.contains(brand.default_palette().light.link));
+        if branding.firm.social_image.is_empty() {
+            assert!(!html.contains("<img"));
+            assert!(html.contains(branding.firm.site_name));
+        } else {
+            assert!(html.contains(&format!(
+                r#"src="https://{host}{}""#,
+                branding.firm.social_image
+            )));
+        }
     }
 }
 
 #[tokio::test]
 async fn request_for_unknown_email_is_neutral_and_sends_nothing() {
+    with_postgres(check_unknown_email()).await;
+}
+
+async fn check_unknown_email() {
     let meta = mount_metadata().await;
     let idp = mount_idp(json!({}), None).await; // lookup finds nobody
     let (state, _surreal, email) = state_with_reset(&idp, &meta, true).await;
@@ -378,25 +418,46 @@ async fn request_for_unknown_email_is_neutral_and_sends_nothing() {
 
 #[tokio::test]
 async fn request_for_a_google_user_mails_the_sign_in_with_google_notice() {
+    with_postgres(check_google_notice()).await;
+}
+
+async fn check_google_notice() {
     // The reported bug: nick@neonlaw.com signed in with Google, so Identity
     // Platform holds no password to reset. The flow must not stay silent —
     // it mails a "you sign in with Google" notice instead of a reset link.
     let meta = mount_metadata().await;
-    let idp = mount_idp(google_user("nick@neonlaw.com"), None).await;
+    let idp = mount_idp(google_user("libra@example.com"), None).await;
     let (state, surreal, email) = state_with_reset(&idp, &meta, true).await;
-    seed_person(&surreal, "nick@neonlaw.com").await;
+    seed_person(&surreal, "libra@example.com").await;
+    let pg = store::postgres::PostgresDb::application().await.unwrap();
+    sqlx::query(
+        "INSERT INTO brand (id, name, brand_key, typeface, logo_content_type, logo_object_key)
+         VALUES ($1, 'Synthetic practice', 'vesta', 'system-sans', 'image/png', 'brand/vesta/custom.png')
+         ON CONFLICT (brand_key) DO UPDATE SET typeface = EXCLUDED.typeface,
+             logo_content_type = EXCLUDED.logo_content_type, logo_object_key = EXCLUDED.logo_object_key",
+    )
+    .bind(uuid::Uuid::now_v7())
+    .execute(pg.pool())
+    .await
+    .unwrap();
     let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
 
     let form = get(&app, "/auth/password/reset").await;
     let cookie = account_csrf_cookie(&form);
     let (_, token) = csrf_pair(&cookie, &body_string(form).await);
-    let submit = post_form(
-        &app,
-        "/auth/password/reset",
-        &cookie,
-        format!("email=nick%40neonlaw.com&csrf_token={token}"),
-    )
-    .await;
+    let submit = app
+        .oneshot(
+            Request::post("/auth/password/reset")
+                .header("host", "www.vestaestateplanning.com")
+                .header("cookie", &cookie)
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(format!(
+                    "email=libra%40example.com&csrf_token={token}"
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
     // Same neutral page as every other request — no enumeration.
     assert_eq!(submit.status(), StatusCode::OK);
     assert!(&body_string(submit).await.contains("Check your inbox"));
@@ -405,7 +466,15 @@ async fn request_for_a_google_user_mails_the_sign_in_with_google_notice() {
     let captured = email.captured();
     assert_eq!(captured.len(), 1, "one notice is mailed");
     let msg = &captured[0];
-    assert_eq!(msg.to, "nick@neonlaw.com");
+    assert_eq!(msg.to, "libra@example.com");
+    assert_eq!(msg.subject, "Sign in to Vesta Estate Planning with Google");
+    assert!(msg
+        .body
+        .contains("https://www.vestaestateplanning.com/auth/login"));
+    let html = msg.html_body.as_deref().unwrap();
+    assert!(html.contains("font-family:ui-sans-serif, system-ui, sans-serif"));
+    assert!(html.contains(r#"brand/vesta/custom.png" alt="Vesta Estate Planning""#));
+
     assert!(
         msg.body.contains("Google"),
         "body names Google as the sign-in method: {}",
@@ -420,6 +489,10 @@ async fn request_for_a_google_user_mails_the_sign_in_with_google_notice() {
 
 #[tokio::test]
 async fn request_with_bad_csrf_is_rejected() {
+    with_postgres(check_bad_csrf()).await;
+}
+
+async fn check_bad_csrf() {
     let meta = mount_metadata().await;
     let idp = mount_idp(password_user("libra@example.com"), None).await;
     let (state, surreal, _email) = state_with_reset(&idp, &meta, true).await;
@@ -438,6 +511,10 @@ async fn request_with_bad_csrf_is_rejected() {
 
 #[tokio::test]
 async fn an_unknown_reset_token_shows_the_dead_link_page() {
+    with_postgres(check_expired_link()).await;
+}
+
+async fn check_expired_link() {
     let meta = mount_metadata().await;
     let idp = mount_idp(password_user("libra@example.com"), None).await;
     let (state, _surreal, _email) = state_with_reset(&idp, &meta, true).await;
@@ -451,6 +528,10 @@ async fn an_unknown_reset_token_shows_the_dead_link_page() {
 
 #[tokio::test]
 async fn reset_routes_are_absent_when_the_password_door_is_off() {
+    with_postgres(check_disabled_routes()).await;
+}
+
+async fn check_disabled_routes() {
     // The existing-deploy invariant: an OIDC-only deploy has no reset
     // surface at all (the routes simply don't mount → 404).
     let meta = mount_metadata().await;
@@ -465,6 +546,10 @@ async fn reset_routes_are_absent_when_the_password_door_is_off() {
 
 #[tokio::test]
 async fn unverified_password_sign_in_is_gated_and_confirmable() {
+    with_postgres(check_unverified_sign_in()).await;
+}
+
+async fn check_unverified_sign_in() {
     let meta = mount_metadata().await;
     // signInWithPassword returns a token whose email is NOT verified.
     let idp = mount_idp(
@@ -523,6 +608,10 @@ async fn unverified_password_sign_in_is_gated_and_confirmable() {
 
 #[tokio::test]
 async fn reset_for_a_person_without_a_sign_in_account_creates_a_verified_one() {
+    with_postgres(check_first_password()).await;
+}
+
+async fn check_first_password() {
     // A Person created inside a Project has a `persons` row but no
     // Identity Platform account. The reset link is how they set their
     // first password: finishing it creates the account, and because they

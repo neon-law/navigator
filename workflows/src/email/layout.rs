@@ -1,29 +1,5 @@
-//! Inline-styled HTML wrapper for outbound email.
-//!
-//! Email clients (Gmail, Outlook) strip `<style>` blocks and external
-//! stylesheets and never load SVG `<img>` sources, so this layout uses
-//! **inline** styles on a table skeleton and references the shared NL
-//! mark as a hosted **PNG** (`/logo.png`, served by `web`'s static
-//! asset route). It deliberately shares nothing with the `views`
-//! page shell — an email is not a web page, and we don't want the
-//! site nav/footer landing in someone's inbox.
-//!
-//! ## Typeface
-//!
-//! The body is set in **GORP Serif**, the firm web typeface, declared via
-//! a `@font-face` in a `<head>` `<style>` block pointing at the same
-//! WOFF2 files served from the deployment asset origin. Be honest about reach: web fonts in
-//! email are best-effort — Apple Mail honors `@font-face`, but Gmail
-//! and Outlook strip it. Every cell therefore also carries an
-//! **inline** `font-family` that leads with `GORP Serif` and falls
-//! back to a serif stack (Georgia), so a client that ignores the
-//! webfont still renders a serif close in feel, not the default
-//! sans-serif. The webfont URL is absolute (from `NAVIGATOR_ASSET_BASE_URL`,
-//! or `base_url` for local development) because an inbox has no notion of our origin.
-//!
-//! Callers render their markdown body (the same source as the
-//! plain-text part) through [`render_email_html`] so the two stay in
-//! lockstep; the markdown is the single source of truth.
+//! HTML email uses inline brand colors and font stacks so the message remains
+//! legible in clients that strip stylesheets or block hosted fonts and images.
 
 use pulldown_cmark::{html, Options, Parser};
 
@@ -31,7 +7,6 @@ use pulldown_cmark::{html, Options, Parser};
 /// Mirrors `portal::openapi`'s base-URL knob so a single value drives
 /// both the OpenAPI doc and email assets.
 const BASE_URL_ENV: &str = "NAV_BASE_URL";
-const ASSET_BASE_URL_ENV: &str = "NAVIGATOR_ASSET_BASE_URL";
 
 /// OSS placeholder origin. Real deploys set [`BASE_URL_ENV`]; this
 /// default matches the one in `portal::openapi` so the repo ships no
@@ -47,18 +22,6 @@ pub fn base_url_from_env() -> String {
         return views::brand::base_url().to_string();
     }
     std::env::var(BASE_URL_ENV).unwrap_or_else(|_| DEFAULT_BASE_URL.to_string())
-}
-
-/// Resolve the absolute origin for licensed email webfonts. Production serves
-/// them from the public assets bucket. Relative asset paths work for pages,
-/// but email clients need a network origin, so they fall back to the site URL.
-fn font_base_url(base_url: &str, asset_base_url: Option<&str>) -> String {
-    asset_base_url
-        .map(str::trim)
-        .filter(|base| base.starts_with("https://") || base.starts_with("http://"))
-        .unwrap_or(base_url.trim())
-        .trim_end_matches('/')
-        .to_string()
 }
 
 /// The wordmark every email signs with, from the mounted brand bundle.
@@ -82,71 +45,80 @@ pub fn support_email() -> &'static str {
     views::brand::firm_email()
 }
 
-/// Render `content_markdown` into a self-contained, inline-styled HTML email
-/// document headed by the firm's logo. `base_url` is the public origin where
-/// the brand PNG (`/logo.png`) is served (e.g. from
-/// [`base_url_from_env`]); a trailing slash is tolerated.
-///
-/// One brand, resolved from the mounted bundle. Every email this workspace
-/// sends is the firm's, so there is no per-message brand to pass and nothing to
-/// misattribute — a white-label deploy renames the sender by mounting its own
-/// manifest, not by picking a variant at the call site.
-///
-/// PNG, never SVG — email clients won't render an SVG `<img>` src. The logo is
-/// served under `/public/` (the `ServeDir` static mount) rather than at the
-/// site root: `/public` is the path that exists as a route, so an email client
-/// fetching it unauthenticated gets the PNG (200). A root `/logo-*.png` is
-/// unrouted, and every email's logo silently broke on it.
+/// Render Markdown in the request brand's email layout.
 #[must_use]
 pub fn render_email_html(content_markdown: &str, base_url: &str) -> String {
-    let parser = Parser::new_ext(content_markdown, Options::empty());
-    let mut content_html = String::new();
-    html::push_html(&mut content_html, parser);
+    render_branded_email_html(content_markdown, base_url, None)
+}
 
-    let base = base_url.trim_end_matches('/');
-    // The font origin lands inside a single-quoted CSS `url('…')` in a raw
-    // `<style>` block, so it needs the same CSS-string + style-terminator
-    // escaping the page layout applies — a `'` or `</style>` in the deployment
-    // asset base must not break out of the rule or the style element.
-    let font_base = views::assets::css_single_quoted(&font_base_url(
-        base,
-        std::env::var(ASSET_BASE_URL_ENV).ok().as_deref(),
-    ));
-    let logo = views::brand::FIRM_BRAND.social_image;
-    let alt = brand_name();
-    let support = support_email();
+/// Apply the same catalog overrides as the brand's site and prefer its uploaded raster logo.
+#[must_use]
+pub fn render_branded_email_html(
+    content_markdown: &str,
+    base_url: &str,
+    brand: Option<&store::brands::Brand>,
+) -> String {
+    let key = views::brand::brand_key();
+    let (face, palette) = views::brand::resolve_presentation(
+        brand.and_then(|b| b.typeface.as_deref()),
+        brand.and_then(|b| b.primary_color.as_deref()),
+        Some(key),
+    )
+    .expect("invariant: every compiled brand has a typeface and palette");
+    let scheme = &palette.light;
+    let font_css = views::brand_presentation::webfont_css_at(face, base_url).unwrap_or_default();
+    let font = face.stack.replace('"', "'");
+    let primary = scheme.primary;
+    let link = scheme.link;
+    let background = scheme.bg.unwrap_or(scheme.surface_subtle);
+    let surface = scheme.surface.unwrap_or("#ffffff");
+    let text = scheme.text.unwrap_or("#212529");
+    let muted = scheme.text_muted.unwrap_or("#59636f");
+    let border = scheme.border.unwrap_or("#dee2e6");
+
+    let mut content_html = String::new();
+    html::push_html(
+        &mut content_html,
+        Parser::new_ext(content_markdown, Options::empty()),
+    );
+    let content_html =
+        content_html.replace("<a href=", &format!(r#"<a style="color:{link};" href="#));
+    let alt = escape_attribute(brand_name());
+    let support = escape_attribute(support_email());
+    let uploaded = brand
+        .filter(|b| b.logo_content_type.as_deref() == Some("image/png"))
+        .and_then(|b| b.logo_object_key.as_deref())
+        .map(views::assets::bucket_asset_url);
+    let logo = uploaded
+        .as_deref()
+        .unwrap_or(views::brand::FIRM_BRAND.social_image);
+    let mark = if logo.is_empty() {
+        format!("<strong>{alt}</strong>")
+    } else {
+        let src = escape_attribute(&views::assets::absolute_url_at(base_url, logo));
+        format!(
+            r#"<img src="{src}" alt="{alt}" width="120" style="display:block;width:120px;height:auto;border:0;">"#
+        )
+    };
     format!(
         r#"<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-@font-face {{
-  font-family: 'GORP Serif';
-  font-style: normal;
-  font-weight: 400;
-  src: url('{font_base}/fonts/gorp-serif/GORPSerif-Regular.woff2') format('woff2');
-}}
-@font-face {{
-  font-family: 'GORP Serif';
-  font-style: normal;
-  font-weight: 700;
-  src: url('{font_base}/fonts/gorp-serif/GORPSerif-Bold.woff2') format('woff2');
-}}
-</style>
+<style>{font_css}</style>
 </head>
-<body style="margin:0;padding:0;background:#f4f4f5;">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f5;">
+<body style="margin:0;padding:0;background:{background};">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:{background};">
 <tr><td align="center" style="padding:24px 12px;">
-<table role="presentation" width="600" cellpadding="0" cellspacing="0" style="width:100%;max-width:600px;background:#ffffff;border-radius:8px;">
-<tr><td style="padding:32px 32px 0;">
-<img src="{base}{logo}" alt="{alt}" width="120" style="display:block;width:120px;height:auto;border:0;">
+<table role="presentation" width="600" cellpadding="0" cellspacing="0" style="width:100%;max-width:600px;background:{surface};border-top:4px solid {primary};border-radius:8px;">
+<tr><td style="padding:32px 32px 0;font-family:{font};font-size:22px;color:{text};">
+{mark}
 </td></tr>
-<tr><td style="padding:8px 32px 24px;font-family:'GORP Serif',Georgia,'Times New Roman',serif;font-size:16px;line-height:1.5;color:#18181b;">
+<tr><td style="padding:8px 32px 24px;font-family:{font};font-size:16px;line-height:1.5;color:{text};">
 {content_html}</td></tr>
-<tr><td style="padding:16px 32px 28px;border-top:1px solid #e4e4e7;font-family:'GORP Serif',Georgia,'Times New Roman',serif;font-size:13px;line-height:1.5;color:#71717a;">
-{alt} · Reach us any time at <a href="mailto:{support}" style="color:#71717a;">{support}</a>.
+<tr><td style="padding:16px 32px 28px;border-top:1px solid {border};font-family:{font};font-size:13px;line-height:1.5;color:{muted};">
+{alt} · Reach us any time at <a href="mailto:{support}" style="color:{link};">{support}</a>.
 </td></tr>
 </table>
 </td></tr>
@@ -157,9 +129,17 @@ pub fn render_email_html(content_markdown: &str, base_url: &str) -> String {
     )
 }
 
+fn escape_attribute(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{base_url_from_env, font_base_url, render_email_html};
+    use super::{base_url_from_env, render_email_html};
 
     #[test]
     fn renders_markdown_body_into_html() {
@@ -183,64 +163,22 @@ mod tests {
         assert!(!html.contains("logo.svg"));
     }
 
-    /// Every email signs with the firm's wordmark, and with no other.
-    ///
-    /// A second brand used to sign some of these — a nonprofit sharing the
-    /// firm's family name, which is exactly the case where a wrong wordmark
-    /// misattributes the sender. That brand is retired, so this asserts the one
-    /// that remains rather than the distinction between two.
-    #[test]
-    fn every_email_signs_with_the_firms_wordmark() {
-        let html = render_email_html("body", "https://example.test");
-        assert!(html.contains(r#"src="https://example.test/public/logo.png""#));
-        assert!(html.contains(r#"alt="Neon Law""#));
-        assert!(
-            !html.contains("Foundation"),
-            "no email signs under the retired nonprofit's wordmark: {html}"
-        );
-    }
-
-    #[test]
-    fn body_is_set_in_gorp_serif_with_serif_fallback() {
-        let html = render_email_html("body", "https://mail.test");
-        // @font-face falls back to the local site's static mount when the
-        // deployment asset origin is not configured…
-        assert!(
-            html.contains(
-                "src: url('https://mail.test/fonts/gorp-serif/\
-                 GORPSerif-Regular.woff2') format('woff2')"
-            ),
-            "expected absolute @font-face src for GORP Serif regular: {html}"
-        );
-        // …and the body cell leads with GORP Serif, serif fallback for
-        // clients (Gmail/Outlook) that strip the webfont.
-        assert!(
-            html.contains("font-family:'GORP Serif',Georgia,'Times New Roman',serif;"),
-            "expected GORP-Serif-first serif font stack on the body cell: {html}"
-        );
-        assert!(
-            !html.contains("Noto Serif"),
-            "superseded email font: {html}"
-        );
-    }
-
-    #[test]
-    fn font_base_prefers_the_deployment_asset_origin() {
-        assert_eq!(
-            font_base_url(
-                "https://app.example.test/",
-                Some("https://storage.example.test/navigator-assets/"),
-            ),
-            "https://storage.example.test/navigator-assets"
-        );
-        assert_eq!(
-            font_base_url("https://app.example.test/", None),
-            "https://app.example.test"
-        );
-        assert_eq!(
-            font_base_url("https://app.example.test/", Some("/public")),
-            "https://app.example.test"
-        );
+    #[tokio::test]
+    async fn brand_without_a_raster_uses_a_wordmark_and_its_own_theme() {
+        let key = views::brand::BrandKey::LexTecnica;
+        views::brand::scope(
+            key.resolve_branding(&views::brand::DEFAULT_BRANDING),
+            async {
+                let html =
+                    render_email_html("[Reset](https://mail.test/reset)", "https://mail.test");
+                assert!(html.contains("<strong>Lex Tecnica</strong>"));
+                assert!(!html.contains("<img"));
+                assert!(html.contains("font-family:'Tinos', 'Times New Roman', serif"));
+                assert!(html.contains("https://mail.test/public/fonts/tinos/Tinos-Regular.woff2"));
+                assert!(html.contains(r#"style="color:#000000;" href="https://mail.test/reset""#));
+            },
+        )
+        .await;
     }
 
     #[test]
