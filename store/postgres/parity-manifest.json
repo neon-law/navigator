@@ -4479,6 +4479,7 @@
       "lead_intake": {
         "columns": {
           "concern": "TEXT",
+          "contact_name": "TEXT",
           "firm_id": "UUID",
           "id": "TEXT",
           "lead_id": "UUID",

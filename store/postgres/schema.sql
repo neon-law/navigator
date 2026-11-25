@@ -5929,3 +5929,9 @@ CREATE TRIGGER attorney_rate_delete_immutable
 CREATE INDEX project_deadlines_open_due_at
     ON project_deadlines (project_id, due_at, id)
     WHERE status = 'open';
+
+-- Migration: 20261125120000_public_contact_lead_intake.sql
+ALTER TABLE lead_intake ADD COLUMN contact_name TEXT;
+ALTER TABLE lead_intake ALTER COLUMN school_district DROP NOT NULL;
+ALTER TABLE lead_intake ALTER COLUMN relationship DROP NOT NULL;
+ALTER TABLE lead_intake ADD CONSTRAINT lead_intake_answer_shape CHECK ((contact_name IS NULL AND school_district IS NOT NULL AND relationship IS NOT NULL) OR (contact_name IS NOT NULL AND school_district IS NULL AND relationship IS NULL AND next_date IS NULL));

@@ -40,7 +40,7 @@ fn the_default_letterhead_is_the_default_brands() {
 
 /// Every registered host frames its letter with the Brand it serves: the
 /// Brand's display name, its Firm's legal name, its voice line, its
-/// production host, and `contact@` that host's registrable domain.
+/// production host, and the published correspondence mailbox.
 #[test]
 fn every_registered_host_wears_its_brands_letterhead() {
     for key in BrandKey::ALL.iter().copied() {
@@ -61,19 +61,22 @@ fn every_registered_host_wears_its_brands_letterhead() {
             assert_eq!(letterhead.web, key.canonical_host(), "{host}");
             let labels: Vec<&str> = key.canonical_host().split('.').collect();
             let domain = labels[labels.len() - 2..].join(".");
-            assert_eq!(letterhead.email, format!("contact@{domain}"), "{host}");
-            let expected_mark = if key == BrandKey::Neon {
-                pdf::LetterheadMark::Compiled
+            if key == BrandKey::GuiebShook {
+                assert_eq!(letterhead.email, branding.firm_email, "{host}");
+                assert_eq!(letterhead.mark, pdf::LetterheadMark::GuiebShook, "{host}");
+                assert_eq!(letterhead.font_family, "Instrument Sans", "{host}");
+                assert!(letterhead.postal_address.contains("Reno"), "{host}");
             } else {
-                pdf::LetterheadMark::Wordmark
-            };
-            assert_eq!(letterhead.mark, expected_mark, "{host}");
-            // The compiled registry publishes no postal address and names
-            // no letterhead font: a Brand's own address and font live in
-            // its runtime row (LAW-266). If a compiled Brand ever grows
-            // one, this is the test to change — deliberately.
-            assert!(letterhead.postal_address.is_empty(), "{host}");
-            assert!(letterhead.font_family.is_empty(), "{host}");
+                assert_eq!(letterhead.email, format!("contact@{domain}"), "{host}");
+                let expected_mark = if key == BrandKey::Neon {
+                    pdf::LetterheadMark::Compiled
+                } else {
+                    pdf::LetterheadMark::Wordmark
+                };
+                assert_eq!(letterhead.mark, expected_mark, "{host}");
+                assert!(letterhead.postal_address.is_empty(), "{host}");
+                assert!(letterhead.font_family.is_empty(), "{host}");
+            }
         }
     }
 }

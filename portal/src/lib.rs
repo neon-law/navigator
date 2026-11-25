@@ -862,7 +862,12 @@ pub(crate) fn public_asset_key_is_safe(key: &str) -> bool {
             .all(|segment| !segment.is_empty() && segment != "." && segment != "..")
 }
 
-async fn public_asset(State(state): State<AppState>, AxumPath(key): AxumPath<String>) -> Response {
+async fn public_asset(
+    State(state): State<AppState>,
+    AxumPath(key): AxumPath<String>,
+    method: Method,
+    headers: axum::http::HeaderMap,
+) -> Response {
     if !public_asset_key_is_safe(&key) {
         return StatusCode::NOT_FOUND.into_response();
     }
@@ -871,7 +876,14 @@ async fn public_asset(State(state): State<AppState>, AxumPath(key): AxumPath<Str
         Ok(object) => {
             let content_type = HeaderValue::from_str(&object.content_type)
                 .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream"));
-            let mut response = object.bytes.into_response();
+            let mut response = if object.content_type == "video/mp4" {
+                let range = (method == Method::GET && !headers.contains_key(header::IF_RANGE))
+                    .then(|| headers.get(header::RANGE)?.to_str().ok())
+                    .flatten();
+                public_video_bytes(object.bytes, range)
+            } else {
+                object.bytes.into_response()
+            };
             response
                 .headers_mut()
                 .insert(header::CONTENT_TYPE, content_type);
@@ -894,6 +906,89 @@ async fn public_asset(State(state): State<AppState>, AxumPath(key): AxumPath<Str
         Err(error) => {
             tracing::error!(error = %error, asset_key = %key, "public asset read failed");
             StatusCode::BAD_GATEWAY.into_response()
+        }
+    }
+}
+
+// Browsers can send a single byte range even to start a fast-start MP4.
+fn public_video_bytes(bytes: Vec<u8>, range: Option<&str>) -> Response {
+    use axum::body::Bytes;
+    let len = bytes.len();
+    let bytes = Bytes::from(bytes);
+    let range = range
+        .and_then(|value| value.strip_prefix("bytes="))
+        .filter(|value| !value.contains(','))
+        .and_then(|value| video_range(value, len));
+    let mut response = match range {
+        Some(Ok((start, end))) => (
+            StatusCode::PARTIAL_CONTENT,
+            [(header::CONTENT_RANGE, format!("bytes {start}-{end}/{len}"))],
+            bytes.slice(start..=end),
+        )
+            .into_response(),
+        Some(Err(())) => (
+            StatusCode::RANGE_NOT_SATISFIABLE,
+            [(header::CONTENT_RANGE, format!("bytes */{len}"))],
+        )
+            .into_response(),
+        None => bytes.into_response(),
+    };
+    response
+        .headers_mut()
+        .insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+    response
+}
+
+fn video_range(spec: &str, len: usize) -> Option<Result<(usize, usize), ()>> {
+    let (start, end) = spec.trim().split_once('-')?;
+    let start = if start.is_empty() {
+        let suffix = end.parse::<usize>().ok()?;
+        len.saturating_sub(suffix)
+    } else {
+        start.parse().ok()?
+    };
+    let last = len.saturating_sub(1);
+    let end = if spec.trim_start().starts_with('-') || end.is_empty() {
+        last
+    } else {
+        end.parse::<usize>().ok()?.min(last)
+    };
+    Some(if start < len && start <= end {
+        Ok((start, end))
+    } else {
+        Err(())
+    })
+}
+
+#[cfg(test)]
+mod public_video_range_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn mp4_assets_answer_single_ranges_and_keep_a_full_response_for_other_clients() {
+        for (request, status, content_range, body) in [
+            (Some("bytes=0-1"), 206, Some("bytes 0-1/5"), &b"12"[..]),
+            (Some("bytes=2-"), 206, Some("bytes 2-4/5"), &b"345"[..]),
+            (Some("bytes=-2"), 206, Some("bytes 3-4/5"), &b"45"[..]),
+            (Some("bytes=4-9"), 206, Some("bytes 4-4/5"), &b"5"[..]),
+            (Some("bytes=5-"), 416, Some("bytes */5"), &b""[..]),
+            (Some("bytes=0-1,3-4"), 200, None, &b"12345"[..]),
+            (None, 200, None, &b"12345"[..]),
+        ] {
+            let response = public_video_bytes(b"12345".to_vec(), request);
+            assert_eq!(response.status(), status);
+            assert_eq!(response.headers()[header::ACCEPT_RANGES], "bytes");
+            assert_eq!(
+                response
+                    .headers()
+                    .get(header::CONTENT_RANGE)
+                    .map(|value| value.to_str().unwrap()),
+                content_range
+            );
+            assert_eq!(
+                axum::body::to_bytes(response.into_body(), 8).await.unwrap(),
+                body
+            );
         }
     }
 }

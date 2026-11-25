@@ -98,6 +98,8 @@ pub enum LetterheadMark {
     Compiled,
     /// The Brand's own uploaded mark, these bytes.
     Png(Vec<u8>),
+    /// Guieb & Shook's navy wordmark and corresponding signing-field style.
+    GuiebShook,
 }
 
 impl Default for Letterhead {
@@ -660,8 +662,11 @@ fn letter_continuation_prefix(blocks: &LetterBlocks) -> String {
 /// identity is drawn in exactly one place and a new format only chooses
 /// how much air sits beneath it via `below`.
 fn letterhead_block(letterhead: &Letterhead, below: &str) -> String {
+    if letterhead.mark == LetterheadMark::GuiebShook {
+        return guieb_shook_letterhead_block(letterhead, below);
+    }
     let mark = match &letterhead.mark {
-        LetterheadMark::Wordmark => String::new(),
+        LetterheadMark::Wordmark | LetterheadMark::GuiebShook => String::new(),
         LetterheadMark::Compiled => {
             format!("  #align(center)[#image(\"{LOGO_PATH}\", width: 0.34in)]\n  #v(0.45em)\n")
         }
@@ -712,6 +717,25 @@ fn letterhead_block(letterhead: &Letterhead, below: &str) -> String {
         entity_line = entity_line(letterhead),
         reach_line = contact_line(&[&letterhead.phone, &letterhead.email, &letterhead.web]),
         postal_address = postal_address_lines(letterhead),
+    )
+}
+
+fn guieb_shook_letterhead_block(letterhead: &Letterhead, below: &str) -> String {
+    let logo = crate::GUIEB_SHOOK_WORDMARK_PATH;
+    let contact = contact_line(&[&letterhead.phone, &letterhead.email, &letterhead.web]);
+    let entity = entity_line(letterhead);
+    let address = postal_address_lines(letterhead);
+    format!(
+        "#let navigator-signature-stroke = 0.7pt + rgb(\"#85714f\")\n\
+         #let navigator-signature-caption(body) = text(\
+             font: (\"Instrument Sans\", \"Noto Serif\"), size: 8.5pt, fill: rgb(\"#092039\"), \
+             tracking: 0.065em, upper(body))\n\
+         #block(below: {below})[\n\
+         #set text(font: (\"Instrument Sans\", \"Noto Serif\"), fill: rgb(\"#092039\"))\n\
+         #align(center)[#image(\"{logo}\", width: 2.65in, alt: \"Guieb & Shook\")]\n\
+         #v(0.25em)\n{entity}\n\
+         #line(length: 100%, stroke: navigator-signature-stroke)\n\
+         #v(0.35em)\n{contact}{address}]\n\n"
     )
 }
 
@@ -871,7 +895,7 @@ pub fn render_document_with_options(
     // above references; every other mark resolves nothing extra.
     let assets: &[(&str, &[u8])] = match &letterhead.mark {
         LetterheadMark::Png(bytes) => &[(crate::BRAND_LOGO_PATH, bytes.as_slice())],
-        LetterheadMark::Compiled | LetterheadMark::Wordmark => &[],
+        LetterheadMark::Compiled | LetterheadMark::Wordmark | LetterheadMark::GuiebShook => &[],
     };
     crate::render_with_options_and_assets(&source, options, assets)
 }

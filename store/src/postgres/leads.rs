@@ -1,6 +1,6 @@
 //! Atomic Lead identity and consent persistence.
 
-use crate::leads::{Lead, LeadError, NewConsentEvent, NewLead};
+use crate::leads::{Lead, LeadError, LeadIntakeDetails, NewConsentEvent, NewLead};
 use uuid::Uuid;
 
 /// Serialize the natural identity and commit consent with its current contact projection.
@@ -55,10 +55,18 @@ pub(crate) async fn record(
             .execute(&mut *tx).await.map_err(PgError::from)?;
     }
     if let Some(answers) = intake {
-        sqlx::query("INSERT INTO lead_intake (id,lead_id,firm_id,school_district,relationship,concern,next_date)
-            VALUES ($1,$2,(SELECT firm_id FROM firm_brand WHERE brand_key=$3),$4,$5,$6,$7)")
+        let (district, relationship, next_date, name) = match answers.details {
+            LeadIntakeDetails::Iep {
+                district,
+                relationship,
+                next_date,
+            } => (Some(district), Some(relationship), next_date, None),
+            LeadIntakeDetails::Contact { name } => (None, None, None, Some(name)),
+        };
+        sqlx::query("INSERT INTO lead_intake (id,lead_id,firm_id,school_district,relationship,concern,next_date,contact_name)
+            VALUES ($1,$2,(SELECT firm_id FROM firm_brand WHERE brand_key=$3),$4,$5,$6,$7,$8)")
             .bind(&answers.submission_key).bind(id).bind(&new.brand_key)
-            .bind(answers.district).bind(answers.relationship).bind(answers.concern).bind(answers.next_date)
+            .bind(district).bind(relationship).bind(answers.concern).bind(next_date).bind(name)
             .execute(&mut *tx).await.map_err(PgError::from)?;
     }
     let lead = serde_json::from_value(row).map_err(PgError::from)?;

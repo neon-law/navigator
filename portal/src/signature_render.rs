@@ -81,8 +81,8 @@ fn render_block(
     let label = pdf::escape_typst_markup(&block_label(signer, kind, firm_legal_name));
     let anchor = anchor.replace('_', "\\_");
     format!(
-        "#box(stroke: (bottom: 0.5pt), width: {width}, height: 1.4em)\
-         [#text(fill: white, size: 4pt)[{anchor}]] \\\n#text(size: 9pt)[{label}]"
+        "#box(stroke: (bottom: navigator-signature-stroke), width: {width}, height: 1.4em)\
+         [#text(fill: white, size: 4pt)[{anchor}]] \\\n#navigator-signature-caption[{label}]"
     )
 }
 
@@ -168,9 +168,9 @@ mod tests {
         assert!(out.contains("nlsig-client-signature-1"));
         assert!(out.contains("nlsig-client-date-1"));
         assert!(out.contains("nlsig-firm-signature-1"));
-        assert!(out.ends_with("#text(size: 9pt)[Example Legal Group, PC]"));
+        assert!(out.ends_with("#navigator-signature-caption[Example Legal Group, PC]"));
         let (without_firm, fields_without_firm) = expand_signatures(body);
-        assert!(without_firm.ends_with("#text(size: 9pt)[Firm]"));
+        assert!(without_firm.ends_with("#navigator-signature-caption[Firm]"));
         assert_eq!(fields, fields_without_firm);
 
         assert_eq!(fields.len(), 3);

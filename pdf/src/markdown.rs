@@ -431,13 +431,13 @@ fn signature_marker_typst(html: &str, block: bool) -> Option<String> {
 /// reader sees only the line; alone on its line, the caption follows.
 fn signing_line_typst(line: &word::paper::SigningLine, captioned: bool) -> String {
     let rule = format!(
-        "#box(width: {}in, height: 1.4em, stroke: (bottom: 0.5pt + black))\
+        "#box(width: {}in, height: 1.4em, stroke: (bottom: navigator-signature-stroke))\
          [#text(fill: white, size: 4pt)[{}]]",
         line.width_inches(),
         escape_text(&line.anchor)
     );
     if captioned {
-        format!("{rule} \\\n#text(size: 9pt)[{}]", line.label())
+        format!("{rule} \\\n#navigator-signature-caption[{}]", line.label())
     } else {
         rule
     }
@@ -836,7 +836,10 @@ mod tests {
             typst.contains("#text(fill: white, size: 4pt)[nlsig-client-signature-1]"),
             "{typst}"
         );
-        assert!(typst.contains("#text(size: 9pt)[Signature]"), "{typst}");
+        assert!(
+            typst.contains("#navigator-signature-caption[Signature]"),
+            "{typst}"
+        );
         assert!(typst.contains("[nlsig-client-date-1]"), "{typst}");
         assert!(!typst.contains("{{"), "{typst}");
         let pdf = crate::render(&typst).expect("a signing line compiles");

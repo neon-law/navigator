@@ -207,10 +207,19 @@ fn plan(path: &str) -> AuditPlan {
     // gives up. That is the shape every POST-only route takes here, and it is
     // why a write handler has to be skipped by name rather than left to fall
     // through into `Audit`.
-    // The directory publishes on Guieb & Shook. This audit runs against the
-    // Neon host, which links out and answers 404 here.
-    if matches!(path, "/team" | "/team/nick" | "/team/waleed") {
-        return AuditPlan::Skip("published on guiebshook.com");
+    if matches!(
+        path,
+        "/team"
+            | "/team/nick"
+            | "/team/waleed"
+            | "/our-story.html"
+            | "/practice/{slug}"
+            | "/attorneys/{slug}"
+            | "/legal/{slug}"
+            | "/contact.html"
+            | "/index.html"
+    ) {
+        return AuditPlan::Skip("covered by the Guieb & Shook host audit");
     }
     if path == views::brand::SAME_DAY_LEGAL_APP_PATH {
         return AuditPlan::Skip("published on the Same Day Legal origin");
@@ -774,6 +783,35 @@ async fn neon_public_pages_pass_axe_wcag_a_and_aa() {
 
 #[path = "common/practice_preview.rs"]
 mod practice_preview;
+
+#[tokio::test]
+async fn guieb_shook_public_pages_pass_axe_wcag_a_and_aa() {
+    let Some(gate) = new_client_or_skip_in_scheme(ColorScheme::Light).await else {
+        return;
+    };
+    gate.close().await.unwrap();
+    let brand = views::brand::BrandKey::GuiebShook;
+    practice_preview::PracticePreview::run_for_brands(&[brand], |preview| {
+        Box::pin(async move {
+            let (_, origin) = &preview.sites[0];
+            let paths = neon::sitemap_for(&[], brand);
+            for scheme in ColorScheme::both() {
+                let Some(c) = session_in_scheme(scheme, origin).await else {
+                    return;
+                };
+                assert_route_passes_axe_at(&c, origin, "/", DOCUMENT_AXE_SCOPE, scheme).await;
+                assert_public_shell(&c).await;
+                for path in paths.iter().filter(|path| path.as_str() != "/") {
+                    assert_route_passes_axe_at(&c, origin, path, PUBLIC_AXE_SCOPE, scheme).await;
+                }
+                assert_route_passes_axe_at(&c, origin, "/contact/sent", PUBLIC_AXE_SCOPE, scheme)
+                    .await;
+                c.close().await.unwrap();
+            }
+        })
+    })
+    .await;
+}
 
 /// Audit prepared brands on their own HTTP hosts, including their calendar navigation.
 #[tokio::test]

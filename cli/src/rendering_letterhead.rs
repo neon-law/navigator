@@ -33,8 +33,8 @@ pub use crate::letterhead::{resolve_brand, LetterheadError};
 const CACHE_ROOT_ENV: &str = "NAVIGATOR_LETTERHEAD_CACHE";
 
 /// The letterhead `key` wears: its display name, its Firm's legal name,
-/// its production host, `contact@` that host's registrable domain, and its
-/// phone. Only the default Brand draws the compiled mark, which is its own.
+/// its production host, email, and phone. Guieb & Shook supplies its own
+/// published email, wordmark, typeface, and office address.
 ///
 /// # Errors
 /// [`LetterheadError::InvalidBrandHost`] when the compiled host is not a
@@ -49,12 +49,23 @@ pub fn for_brand(key: BrandKey) -> Result<pdf::Letterhead, LetterheadError> {
     )
     .map_err(|_| LetterheadError::InvalidBrandHost(key))?;
     letterhead.entity = branding.firm.legal_entity.to_string();
-    letterhead.mark = if key == BrandKey::Neon {
-        pdf::LetterheadMark::Compiled
-    } else {
-        pdf::LetterheadMark::Wordmark
+    letterhead.mark = match key {
+        BrandKey::Neon => pdf::LetterheadMark::Compiled,
+        BrandKey::GuiebShook => {
+            letterhead.email = branding.firm_email.into();
+            letterhead.font_family = "Instrument Sans".into();
+            address_guieb_shook_letterhead(&mut letterhead, "");
+            pdf::LetterheadMark::GuiebShook
+        }
+        _ => pdf::LetterheadMark::Wordmark,
     };
     Ok(letterhead)
+}
+
+pub(crate) fn address_guieb_shook_letterhead(letterhead: &mut pdf::Letterhead, jurisdiction: &str) {
+    if let Some(office) = views::brand::guieb_shook_letterhead_office(jurisdiction) {
+        letterhead.postal_address = office.address_lines().join("\n");
+    }
 }
 
 /// The letterhead for a Project declaring `brand` and `host`.
@@ -110,23 +121,32 @@ pub async fn for_brand_runtime(
     else {
         return Ok(None);
     };
-    let (mark, warnings) = match resolved.mark {
-        StoreMark::Wordmark => (pdf::LetterheadMark::Wordmark, Vec::new()),
-        StoreMark::Logo => match fetch_png(api_base, resolved.logo_object_key.as_deref()).await {
-            Ok(bytes) => (pdf::LetterheadMark::Png(bytes), Vec::new()),
-            Err(reason) => (
-                pdf::LetterheadMark::Wordmark,
-                vec![format!(
-                    "the Brand's uploaded mark could not be drawn ({reason}); the letter \
+    let (mark, warnings) = match (key, resolved.mark) {
+        (BrandKey::GuiebShook, _) => (pdf::LetterheadMark::GuiebShook, Vec::new()),
+        (_, StoreMark::Wordmark) => (pdf::LetterheadMark::Wordmark, Vec::new()),
+        (_, StoreMark::Logo) => {
+            match fetch_png(api_base, resolved.logo_object_key.as_deref()).await {
+                Ok(bytes) => (pdf::LetterheadMark::Png(bytes), Vec::new()),
+                Err(reason) => (
+                    pdf::LetterheadMark::Wordmark,
+                    vec![format!(
+                        "the Brand's uploaded mark could not be drawn ({reason}); the letter \
                      opens on its wordmark"
-                )],
-            ),
-        },
+                    )],
+                ),
+            }
+        }
     };
+    let mut letterhead = frame_from_row(&resolved, mark);
+    if key == BrandKey::GuiebShook {
+        letterhead.email = key.resolve_branding(&DEFAULT_BRANDING).firm_email.into();
+        letterhead.font_family = "Instrument Sans".into();
+        address_guieb_shook_letterhead(&mut letterhead, "");
+    }
     Ok(Some(RuntimeLetterhead {
         revision: resolved.updated_at.clone(),
         font_object_key: resolved.font_object_key.clone(),
-        letterhead: frame_from_row(&resolved, mark),
+        letterhead,
         warnings,
     }))
 }
@@ -302,13 +322,17 @@ mod tests {
     fn only_the_default_brand_draws_the_compiled_mark() {
         for key in BrandKey::ALL.iter().copied() {
             let letterhead = for_brand(key).expect("every compiled Brand has a letterhead");
-            let expected_mark = if key == BrandKey::Neon {
-                pdf::LetterheadMark::Compiled
-            } else {
-                pdf::LetterheadMark::Wordmark
+            let expected_mark = match key {
+                BrandKey::Neon => pdf::LetterheadMark::Compiled,
+                BrandKey::GuiebShook => pdf::LetterheadMark::GuiebShook,
+                _ => pdf::LetterheadMark::Wordmark,
             };
             assert_eq!(letterhead.mark, expected_mark, "{}", key.as_str());
-            assert!(letterhead.email.starts_with("contact@"));
+            if key == BrandKey::GuiebShook {
+                assert_eq!(letterhead.email, "info@guiebshook.com");
+            } else {
+                assert!(letterhead.email.starts_with("contact@"));
+            }
             assert!(
                 !letterhead.entity.is_empty(),
                 "{} names its Firm",

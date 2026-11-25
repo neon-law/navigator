@@ -84,6 +84,15 @@ with carved capitals in bright sun along the facade of a federal courthouse in D
 `views::assets::GUIEB_SHOOK_HOME_PHOTO_KEY` includes it in publication checks and orphan protection. The photograph
 illustrates public architecture and does not imply that a pictured institution provides or endorses the services.
 
+## Guieb & Shook website media
+
+The site loads its bridge and ambient videos, posters, practice photos, portraits, wordmarks and self-hosted webfonts
+from `img/guieb-shook/`. [`views::assets::GUIEB_SHOOK_WEBSITE_ASSETS`](../views/src/assets.rs) includes the live keys in
+asset restoration, release verification and orphan protection. The supplied Instrument Sans, Archivo and Cormorant
+Garamond webfonts use the SIL Open Font License. The license texts sit at `fonts/guieb-shook-<family>/OFL.txt`. The
+[Letterhead](glossary/letterhead.md) uses the same wordmark and the [embedded Instrument Sans
+face](../pdf/assets/fonts/InstrumentSans/OFL.txt).
+
 ## Guieb & Shook membership badge
 
 The user-supplied Greater Vancouver Chamber membership badge lives at `img/guieb-shook/proud-member-gvc.png`.

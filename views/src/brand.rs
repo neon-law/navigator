@@ -254,6 +254,22 @@ pub struct OfficeChoice {
     pub fallback: bool,
 }
 
+/// The Guieb & Shook office for a letter's jurisdiction, with Reno as the default.
+#[must_use]
+pub fn guieb_shook_letterhead_office(jurisdiction: &str) -> Option<&'static FirmOffice> {
+    let jurisdiction = jurisdiction.trim();
+    let code = jurisdiction.strip_prefix("US-").unwrap_or(jurisdiction);
+    FIRM_OFFICES
+        .iter()
+        .find(|office| {
+            office.state.eq_ignore_ascii_case(jurisdiction)
+                || office
+                    .state_code()
+                    .is_some_and(|state| state.eq_ignore_ascii_case(code))
+        })
+        .or_else(|| FIRM_OFFICES.iter().find(|office| office.default))
+}
+
 /// The firm's published offices, rendered in the public footer.
 ///
 /// This is Guieb & Shook PC's address — the entity of record behind the Neon Law
@@ -596,7 +612,7 @@ pub static GUIEB_SHOOK_BRANDING: Branding = Branding {
         is_law_firm: true,
         legal_entity: "Guieb & Shook PC",
     },
-    firm_email: "contact@guiebshook.com",
+    firm_email: "info@guiebshook.com",
     support_domain: "guiebshook.com",
     firm_phone: "+1 510 800 2090",
     firm_offices: FIRM_OFFICES,
@@ -1370,13 +1386,20 @@ impl BrandKey {
         if path == "/team" || path.starts_with("/team/") {
             return self == Self::GuiebShook;
         }
+        if matches!(path, "/our-story.html" | "/contact.html" | "/index.html")
+            || path.starts_with("/practice/")
+            || path.starts_with("/attorneys/")
+            || path.starts_with("/legal/")
+        {
+            return self == Self::GuiebShook;
+        }
         match self {
             Self::Neon => !matches!(path.trim_end_matches('/'), "/disputes" | "/services"),
             Self::DeleteYourData => matches!(path, "/" | "/contact" | "/testimonials"),
             // Guieb & Shook publishes its services page: the homepage's
             // practice cards link there, so the route must resolve on this
             // host. The team directory is admitted above.
-            Self::GuiebShook => matches!(path, "/" | "/services" | "/testimonials"),
+            Self::GuiebShook => matches!(path, "/" | "/services" | "/testimonials" | "/contact"),
             Self::CyberInjuryLaw => {
                 matches!(
                     path,
@@ -3965,5 +3988,31 @@ mod tests {
         })
         .await;
         assert_eq!(scoped.as_deref(), Some("support@neonlaw.com"));
+    }
+}
+
+#[cfg(test)]
+mod guieb_shook_letterhead_tests {
+    use super::guieb_shook_letterhead_office;
+
+    #[test]
+    fn the_matching_jurisdiction_prints_its_office_with_reno_as_the_default() {
+        for (jurisdiction, city) in [
+            ("CA", "Bakersfield"),
+            ("NV", "Reno"),
+            ("NY", "New York"),
+            ("wa", "Vancouver"),
+            ("US-NY", "New York"),
+            ("Washington", "Vancouver"),
+            ("TX", "Reno"),
+            ("", "Reno"),
+        ] {
+            let office = guieb_shook_letterhead_office(jurisdiction).expect("firm office");
+            assert!(
+                office.address.contains(city),
+                "{jurisdiction}: {}",
+                office.address
+            );
+        }
     }
 }
