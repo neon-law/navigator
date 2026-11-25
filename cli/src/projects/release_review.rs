@@ -4,7 +4,7 @@ use super::{
     forge_forgejo::ForgejoForge,
     forge_github::GitHubForge,
     lifecycle::{git, git_text, github_origin, github_token},
-    push, workspace, workspace_root, workspace_skills,
+    mirror, push, workspace, workspace_root, workspace_skills,
 };
 use anyhow::{ensure, Context, Result};
 use async_trait::async_trait;
@@ -80,7 +80,19 @@ pub(crate) async fn run(
     ensure!(root.is_dir(), "workspace is not a directory");
     let mut rows = BTreeMap::new();
     let mut complete = true;
+    let mut live = BTreeMap::new();
     for checkout in workspace_skills::project_directories(&root)? {
+        if let Some(reason) = skip_reason(&checkout, &mut live).await {
+            rows.insert(
+                checkout
+                    .file_name()
+                    .context("missing Project directory name")?
+                    .to_string_lossy()
+                    .into_owned(),
+                json!({"status":"skipped","reason":reason}),
+            );
+            continue;
+        }
         let outcome = match review_checkout(&checkout, tag, forgejo_first, land).await {
             Ok(row) => {
                 complete &= row.get("error").is_none();
@@ -102,6 +114,45 @@ pub(crate) async fn run(
     }
     println!("{}", json!({"release": tag, "projects": rows}));
     Ok(complete)
+}
+
+/// Why a checkout takes no release: its live Project is closed or archived and
+/// its manifest does not declare `no_live_row`, the case the gate refuses. A
+/// checkout whose live status cannot be read (no session for its host, an
+/// unreachable site, no row) is not skipped; the lane's own checks then speak.
+/// `live` caches each host's project list for the run.
+async fn skip_reason(
+    dir: &Path,
+    live: &mut BTreeMap<String, Option<Vec<super::surfaces::VisibleProject>>>,
+) -> Option<String> {
+    let manifest = super::manifest::read(dir)?;
+    if manifest.no_live_row.is_some() {
+        return None;
+    }
+    let host = manifest.host.as_deref()?;
+    let code = manifest.project.as_deref()?;
+    if !live.contains_key(host) {
+        let projects = match crate::remote::resolve(Some(host)) {
+            Ok((base, token)) => super::surfaces::list_visible_projects(&base, &token)
+                .await
+                .ok(),
+            Err(_) => None,
+        };
+        live.insert(host.to_owned(), projects);
+    }
+    let status = live
+        .get(host)?
+        .as_ref()?
+        .iter()
+        .find(|project| project.code == code)?
+        .status
+        .as_deref()?;
+    matches!(status, "closed" | "archived").then(|| {
+        format!(
+            "the live Project is {status} and navigator.yaml does not declare no_live_row; \
+             skipped. Archive the repository, or declare no_live_row: <reason> to take a release"
+        )
+    })
 }
 
 async fn backend(dir: &Path, remote: &str) -> Result<Box<dyn ReleaseForge>> {
@@ -359,13 +410,28 @@ async fn landed(
         deployment.url
     );
     let main = format!("refs/heads/{base}");
+    // The merge landed on the primary. Each other destination follows it by a
+    // fast-forward that is read back; one that is ahead or diverged is
+    // preserved, and the run reports both SHAs rather than overwriting it.
+    let mut mirrors = serde_json::Map::new();
+    for url in targets
+        .destinations
+        .iter()
+        .filter(|url| **url != targets.primary)
+    {
+        let parity = mirror::fast_forward(dir, &targets.primary, url, &main)?;
+        if let Some(why) = parity.explanation() {
+            anyhow::bail!("main parity unconfirmed for {merge}: {why}");
+        }
+        mirrors.insert(url.clone(), serde_json::to_value(&parity)?);
+    }
     for url in &targets.destinations {
         ensure!(
             remote_ref(dir, url, &main).await?.as_deref() == Some(&merge),
             "main parity unconfirmed for {merge}"
         );
     }
-    Ok(json!({"merge":merge, "deployment":deployment,"main":merge}))
+    Ok(json!({"merge":merge, "deployment":deployment,"main":merge,"mirror":mirrors}))
 }
 
 async fn review(
@@ -698,6 +764,157 @@ mod tests {
         assert_eq!(delivery["main"], merge);
         assert_eq!(delivery["deployment"]["commit"], merge);
         Ok(())
+    }
+
+    /// A forge whose review is merged at `merge` with a successful `cd` run.
+    async fn merged_forge(server: &MockServer, head: &str, merge: &str) -> ForgejoForge {
+        let forge = ForgejoForge::new(&server.uri(), "example/sample", "test".into()).unwrap();
+        let repo = "/api/v1/repos/example/sample";
+        get_json(server, &format!("{repo}/pulls/1"),json!({
+            "number":1,"html_url":"https://example.test/pull/1","head":{"sha":head,"ref":"release/2.0.0"},
+            "base":{"sha":merge,"ref":"main"},"draft":false,"merged":true,"merge_commit_sha":merge,"mergeable":false
+        })).await;
+        get_json(
+            server,
+            &format!("{repo}/actions/runs"),
+            json!({"workflow_runs":[{"id":1,"index_in_repo":1,"commit_sha":merge,
+            "workflow_id":"cd.yml","event":"push","html_url":"https://example.test/runs/1","status":"success"}]}),
+        )
+        .await;
+        get_json(
+            server,
+            &format!("{repo}/actions/tasks"),
+            json!({"workflow_runs":[]}),
+        )
+        .await;
+        forge
+    }
+
+    /// ENG-1418: after the authoritative merge, a mirror that is behind is
+    /// fast-forwarded in the same run and read back; one that is diverged is
+    /// preserved and the run names both SHAs.
+    #[tokio::test]
+    async fn a_landing_fast_forwards_a_behind_mirror_and_preserves_a_diverged_one() -> Result<()> {
+        for diverged in [false, true] {
+            let temp = tempfile::tempdir()?;
+            let dir = temp.path().join("sample");
+            let origin = temp.path().join("origin.git");
+            let mirror_repo = temp.path().join("mirror.git");
+            let head = signed_topic(temp.path(), &dir, &origin, &mirror_repo)?;
+            let (origin_url, mirror_url) =
+                (origin.to_str().unwrap(), mirror_repo.to_str().unwrap());
+            git_text(&dir, &["push", mirror_url, "main"])?;
+            let base = git_text(&dir, &["rev-parse", "main"])?;
+            if diverged {
+                git_text(&dir, &["switch", "--quiet", "-c", "mirror-only", "main"])?;
+                std::fs::write(dir.join("mirror-only"), "x")?;
+                git_text(&dir, &["add", "mirror-only"])?;
+                git_text(&dir, &["commit", "-m", "Mirror only"])?;
+                git_text(&dir, &["push", mirror_url, "mirror-only:main"])?;
+                git_text(&dir, &["switch", "--quiet", "main"])?;
+            }
+            let mirror_before = git_text(&mirror_repo, &["rev-parse", "refs/heads/main"])?;
+            // The review merges on the primary: origin's main moves to the release.
+            git_text(&dir, &["push", origin_url, "release/2.0.0:main"])?;
+            let targets = Targets {
+                primary: origin_url.into(),
+                reference: origin_url.into(),
+                destinations: vec![origin_url.into(), mirror_url.into()],
+            };
+            let review = ReviewRef {
+                number: 1,
+                head_sha: head.clone(),
+                url: "https://example.test/pull/1".into(),
+            };
+            let server = MockServer::start().await;
+            let forge = merged_forge(&server, &head, &head).await;
+            let outcome = landed(&dir, &targets, &forge, &review, "main").await;
+            if diverged {
+                let error = outcome.unwrap_err().to_string();
+                assert!(error.contains("diverged"), "{error}");
+                assert!(
+                    error.contains(&mirror_before) && error.contains(&head),
+                    "{error}"
+                );
+                assert_eq!(
+                    git_text(&mirror_repo, &["rev-parse", "refs/heads/main"])?,
+                    mirror_before,
+                    "a diverged mirror is never overwritten"
+                );
+            } else {
+                let delivery = outcome?;
+                assert_eq!(delivery["main"], head);
+                assert_eq!(delivery["mirror"][mirror_url]["action"], "fast-forwarded");
+                assert_eq!(delivery["mirror"][mirror_url]["relation"], "behind");
+                assert_eq!(delivery["mirror"][mirror_url]["after"], head);
+                assert_eq!(
+                    git_text(&mirror_repo, &["rev-parse", "refs/heads/main"])?,
+                    head
+                );
+                assert_ne!(base, head);
+            }
+        }
+        Ok(())
+    }
+
+    /// ENG-1418: a closed Project is skipped by name with its reason, and an
+    /// open one, one that declares `no_live_row`, and one with no readable
+    /// live status are not.
+    #[tokio::test]
+    async fn a_closed_project_is_skipped_with_its_reason() {
+        use crate::projects::test_login::site;
+        let (server, _login) = site(json!([
+            {"id": uuid::Uuid::new_v4(), "code": "closed-matter", "status": "closed"},
+            {"id": uuid::Uuid::new_v4(), "code": "archived-matter", "status": "archived"},
+            {"id": uuid::Uuid::new_v4(), "code": "open-matter", "status": "open"},
+            {"id": uuid::Uuid::new_v4(), "code": "declared-matter", "status": "closed"},
+        ]))
+        .await;
+        let host = server.uri();
+        let workspace = tempfile::tempdir().unwrap();
+        let checkout = |code: &str, extra: &str| {
+            let dir = workspace.path().join(code);
+            std::fs::create_dir(&dir).unwrap();
+            std::fs::write(
+                dir.join("navigator.yaml"),
+                format!("project:\n  host: {host}\n  name: {code}\n{extra}"),
+            )
+            .unwrap();
+            dir
+        };
+        let closed = checkout("closed-matter", "");
+        let archived = checkout("archived-matter", "");
+        let open = checkout("open-matter", "");
+        let declared = checkout("declared-matter", "no_live_row: the matter closed\n");
+        let unknown = checkout("unlisted-matter", "");
+        let mut live = BTreeMap::new();
+        for dir in [&closed, &archived] {
+            let reason = skip_reason(dir, &mut live).await.unwrap();
+            assert!(reason.contains("no_live_row"), "{reason}");
+            assert!(reason.contains("skipped"), "{reason}");
+        }
+        assert!(skip_reason(&closed, &mut live)
+            .await
+            .unwrap()
+            .contains("closed"));
+        assert!(skip_reason(&archived, &mut live)
+            .await
+            .unwrap()
+            .contains("archived"));
+        for dir in [&open, &declared, &unknown] {
+            assert_eq!(skip_reason(dir, &mut live).await, None, "{}", dir.display());
+        }
+        assert_eq!(live.len(), 1, "the host's list is read once per run");
+
+        let signed_out = tempfile::tempdir().unwrap();
+        let elsewhere = signed_out.path().join("closed-matter");
+        std::fs::create_dir(&elsewhere).unwrap();
+        std::fs::write(
+            elsewhere.join("navigator.yaml"),
+            "project:\n  host: other.example.test\n  name: closed-matter\n",
+        )
+        .unwrap();
+        assert_eq!(skip_reason(&elsewhere, &mut BTreeMap::new()).await, None);
     }
 
     #[tokio::test]

@@ -230,6 +230,7 @@ pub async fn after_create(base: &str, token: &str, id: uuid::Uuid, code: &str) -
         code: code.to_string(),
         firm_id: None,
         brand: None,
+        status: None,
     };
     let report = SetupReport {
         results: vec![setup_one(base, token, &project, WorkspaceMode::Pending).await],
@@ -332,6 +333,7 @@ pub async fn run(
             Ok(id) => vec![VisibleProject {
                 firm_id: None,
                 brand: None,
+                status: None,
                 id,
                 code: code.to_string(),
             }],
