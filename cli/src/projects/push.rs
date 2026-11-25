@@ -1597,11 +1597,7 @@ mod tests {
         let error = sync().unwrap_err();
         assert!(error.to_string().contains(&forge.merge_sha));
         let cause = format!("{error:#}");
-        assert!(cause.contains("diverged"), "{cause}");
-        assert!(
-            cause.contains(&forge.review.head_sha),
-            "names the mirror's main: {cause}"
-        );
+        assert!(cause.contains("diverged") && cause.contains(&forge.review.head_sha));
         for reference in ["refs/heads/main", "refs/heads/push/the-change"] {
             assert_eq!(
                 super::git_text(&mirror, &["rev-parse", reference]).unwrap(),

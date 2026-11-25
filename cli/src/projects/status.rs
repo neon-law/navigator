@@ -107,10 +107,16 @@ pub(super) async fn read(host: Option<&str>, project: Option<&str>) -> Result<se
     }
     let mut value: serde_json::Value = response.json().await.context("parse Project status")?;
     // The live ownership the manifest's Firm and brand are checked against.
-    value["firm_id"] = serde_json::json!(visible.firm_id);
-    value["brand"] = serde_json::json!(visible.brand);
     if let Some(firm) = visible.firm_id {
-        value["firm_name"] = serde_json::json!(firm_name(&base, &token, firm).await);
+        value["firm_id"] = serde_json::json!(firm);
+    }
+    if let Some(brand) = &visible.brand {
+        value["brand"] = serde_json::json!(brand);
+    }
+    if let Some(firm) = visible.firm_id {
+        if let Some(name) = firm_name(&base, &token, firm).await {
+            value["firm_name"] = serde_json::json!(name);
+        }
     }
     Ok(value)
 }

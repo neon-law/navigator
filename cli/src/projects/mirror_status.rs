@@ -10,6 +10,8 @@
 use std::path::Path;
 use std::process::ExitCode;
 
+use std::fmt::Write as _;
+
 use anyhow::{ensure, Context, Result};
 use serde::Serialize;
 
@@ -120,12 +122,13 @@ pub fn render(rows: &[Row]) -> String {
             (None, None, Some(note)) => note.clone(),
             (None, None, None) => "-".to_owned(),
         };
-        out.push_str(&format!(
-            "{:<width$}  {:<12}  {:<12}  {relation}\n",
+        let _ = writeln!(
+            out,
+            "{:<width$}  {:<12}  {:<12}  {relation}",
             row.project,
             short(row.github_main.as_deref()),
             short(row.forgejo_main.as_deref()),
-        ));
+        );
     }
     out
 }

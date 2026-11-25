@@ -7255,7 +7255,7 @@ mod empty_source_tests {
         let message = needs_scaffold_resume(&odd).unwrap();
         assert!(message.contains("--resume <project-code> "), "{message}");
         assert!(
-            message.contains("'"),
+            message.contains('\''),
             "a path with spaces is quoted: {message}"
         );
     }

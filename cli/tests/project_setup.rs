@@ -562,7 +562,7 @@ async fn project_set_from_live_uses_the_stored_bearer_and_fills_required_coordin
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn project_set_from_live_refuses_ownership_drift_without_writes() {
+async fn project_set_from_live_adopts_live_ownership_and_a_dry_run_writes_nothing() {
     let server = MockServer::start().await;
     let host = server.uri();
     let login = TempDir::new().unwrap();
@@ -599,30 +599,33 @@ async fn project_set_from_live_refuses_ownership_drift_without_writes() {
     ] {
         let firm_line = declared_firm.map_or_else(String::new, |id| format!("  firm: {id}\n"));
         let original = format!("version: 26.9.26\nproject:\n  host: example.test\n  name: acme\n{firm_line}  brand: {brand}\n");
-        for dry_run in [false, true] {
+        for dry_run in [true, false] {
             fs::write(checkout.path().join("navigator.yaml"), &original).unwrap();
             let mut cmd = command();
             cmd.current_dir(checkout.path())
                 .env("NAVIGATOR_CREDENTIALS_FILE", &credentials_path)
-                .args([
-                    "project",
-                    "set",
-                    "--from-live",
-                    "--host",
-                    &host,
-                    "--booking-url",
-                    "https://calendar.example.test/booking",
-                ]);
+                .args(["project", "set", "--from-live", "--host", &host]);
             if dry_run {
                 cmd.arg("--dry-run");
             }
             let output = cmd.output().unwrap();
-            assert!(!output.status.success(), "ownership drift must be refused");
-            assert!(String::from_utf8_lossy(&output.stderr).contains("Firm and brand differ"));
-            assert_eq!(
-                fs::read_to_string(checkout.path().join("navigator.yaml")).unwrap(),
-                original
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
             );
+            assert!(
+                stdout.contains("manifest brand:") || stdout.contains("manifest firm:"),
+                "{stdout}"
+            );
+            let written = fs::read_to_string(checkout.path().join("navigator.yaml")).unwrap();
+            if dry_run {
+                assert_eq!(written, original, "a dry run writes nothing");
+            } else {
+                assert!(written.contains(&format!("firm: {firm}")), "{written}");
+                assert!(written.contains("brand: sample"), "{written}");
+            }
         }
     }
     assert!(server

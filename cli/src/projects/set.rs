@@ -162,20 +162,7 @@ pub(super) async fn set_at(dir: &Path, request: SetRequest<'_>) -> Result<Vec<St
         clear_drive_folder,
     )?;
     if let Some((firm, brand)) = ownership {
-        let before_ownership = updated.clone();
-        let diff = ownership_diff(&parsed, firm, &brand);
-        updated = replace_project_key(&updated, "firm", &firm.to_string())?;
-        updated = replace_project_key(&updated, "brand", &brand)?;
-        if updated != before_ownership {
-            changed.push("manifest Firm and brand".into());
-        }
-        if from_live {
-            diff.print();
-            if let Some((_, new_host)) = &diff.host {
-                updated = replace_project_key(&updated, "host", new_host)?;
-                changed.push("manifest host".into());
-            }
-        }
+        updated = apply_ownership(&parsed, updated, (firm, &brand), from_live, &mut changed)?;
     }
     if let (None, Some(name)) = (&parsed.legal_plan, live_plan) {
         updated = replace_project_key(&updated, "legal_plan", &name)?;
@@ -203,6 +190,32 @@ pub(super) async fn set_at(dir: &Path, request: SetRequest<'_>) -> Result<Vec<St
         changed.push("coordinates already current".to_string());
     }
     Ok(changed)
+}
+
+/// Write the Firm and brand into the manifest text, and with `--from-live`
+/// report the diff and apply the host the live brand is registered for.
+fn apply_ownership(
+    parsed: &manifest::Manifest,
+    mut updated: String,
+    (firm, brand): (uuid::Uuid, &str),
+    from_live: bool,
+    changed: &mut Vec<String>,
+) -> Result<String> {
+    let before = updated.clone();
+    let diff = ownership_diff(parsed, firm, brand);
+    updated = replace_project_key(&updated, "firm", &firm.to_string())?;
+    updated = replace_project_key(&updated, "brand", brand)?;
+    if updated != before {
+        changed.push("manifest Firm and brand".into());
+    }
+    if from_live {
+        diff.print();
+        if let Some((_, new_host)) = &diff.host {
+            updated = replace_project_key(&updated, "host", new_host)?;
+            changed.push("manifest host".into());
+        }
+    }
+    Ok(updated)
 }
 
 /// What adopting the live Firm and brand would change in the manifest, as
