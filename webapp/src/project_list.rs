@@ -781,12 +781,12 @@ mod tests {
     #[test]
     fn label_filters_match_any_value_within_a_category_and_every_category() {
         let divorce = LabelFacet {
-            category: "Matter type".into(),
+            category: "Project type".into(),
             name: "Divorce".into(),
             id: "a".into(),
         };
         let annulment = LabelFacet {
-            category: "Matter type".into(),
+            category: "Project type".into(),
             name: "Annulment".into(),
             id: "b".into(),
         };
