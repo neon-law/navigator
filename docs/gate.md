@@ -144,8 +144,11 @@ survived its own fixes. It is the same fix the `navigator-lsp` `source.fixAll` e
 - **The live Project check is read-only.** Locally, the gate uses the bearer from `navigator site login`; in CI, it
   exchanges GitHub Actions OIDC at `POST /auth/ci/document-token` on a push or dispatch to `refs/heads/main` or a pull
   request merge ref. It checks the live Project row and the required DRI, GitHub, Slack, and Notion coordinates against
-  `navigator.yaml`. The host is the one the manifest declares. If the session cannot be authorized or any read fails,
-  the gate fails as inconclusive; it never treats an unavailable live check as a pass.
+  `navigator.yaml`. The host is the one the manifest declares. When the row has a `repository_url`, it must name the
+  same repository as the CI job URL or any remote in the checkout. A GitHub Actions run also agrees when that URL is the
+  Project code on another forge and the job repository is the same code; a different GitHub owner or repository name
+  still fails, and a local run does not take that path. If the session cannot be authorized or any read fails, the gate
+  fails as inconclusive; it never treats an unavailable live check as a pass.
 - **Each declared section's live data is counted (`Y023`).** For every section `pages:` declares, the gate asks the
   deployment with one `GET /app/api/projects/{id}/section-counts`, returning three nonnegative integers:
   `deadline_board` and `key_dates_strip` read open Deadlines, `download_list` reads Documents, and `docket_timeline`

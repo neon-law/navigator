@@ -551,7 +551,17 @@ async fn check_live_with_token(dir: &Path, base: &str, token: &str) -> Result<()
     let matters: Vec<LiveMatter> =
         serde_json::from_str(&body).context("parse GET /app/api/projects")?;
     let live = matters.iter().find(|matter| matter.code == project);
-    disagreement(project, reason, live, this_repository_url(dir).as_deref())
+    let urls = this_repository_urls(dir);
+    let url_refs: Vec<&str> = urls.iter().map(String::as_str).collect();
+    disagreement(project, reason, live, &url_refs, github_actions_run())
+}
+
+/// A GitHub Actions run, and not a Forgejo Actions run. Forgejo exports the
+/// `GITHUB_*` compatibility variables, so the forge flag is what keeps its
+/// gate on the host match.
+fn github_actions_run() -> bool {
+    std::env::var("GITHUB_ACTIONS").ok().as_deref() == Some("true")
+        && std::env::var("FORGEJO_ACTIONS").ok().as_deref() != Some("true")
 }
 
 fn rowless_reason(manifest: &Manifest) -> Option<&str> {
@@ -564,32 +574,73 @@ fn rowless_reason(manifest: &Manifest) -> Option<&str> {
     }
 }
 
-fn this_repository_url(dir: &Path) -> Option<String> {
-    if let Ok(name) = std::env::var("GITHUB_REPOSITORY") {
-        let name = name.trim();
-        if !name.is_empty() {
-            let server =
-                std::env::var("GITHUB_SERVER_URL").unwrap_or_else(|_| "https://github.com".into());
-            return Some(format!("{}/{name}", server.trim_end_matches('/')));
+/// The CI job URL, when the runner exports one, then every remote configured
+/// in this checkout. A directory that is not its own git worktree contributes
+/// no remotes: discovery must not walk up into a parent repository.
+fn this_repository_urls(dir: &Path) -> Vec<String> {
+    let mut urls = Vec::new();
+    if let Some(job) = ci_repository_url() {
+        urls.push(job);
+    }
+    for remote in checkout_remote_urls(dir) {
+        if !urls.iter().any(|existing| existing == &remote) {
+            urls.push(remote);
         }
     }
-    let output = std::process::Command::new("git")
-        .args(["remote", "get-url", "origin"])
-        .current_dir(dir)
-        .output()
-        .ok()?;
-    if !output.status.success() {
+    urls
+}
+
+fn ci_repository_url() -> Option<String> {
+    let name = std::env::var("GITHUB_REPOSITORY").ok()?;
+    let name = name.trim();
+    if name.is_empty() {
         return None;
     }
-    let remote = String::from_utf8(output.stdout).ok()?;
-    Some(remote.trim().to_string())
+    let server = std::env::var("GITHUB_SERVER_URL").unwrap_or_else(|_| "https://github.com".into());
+    let server = server.trim().trim_end_matches('/');
+    if server.is_empty() {
+        return None;
+    }
+    Some(format!("{server}/{name}"))
+}
+
+fn checkout_remote_urls(dir: &Path) -> Vec<String> {
+    if !dir.join(".git").exists() {
+        return Vec::new();
+    }
+    let Ok(output) = std::process::Command::new("git")
+        .args(["remote", "-v"])
+        .current_dir(dir)
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    let Ok(text) = String::from_utf8(output.stdout) else {
+        return Vec::new();
+    };
+    let mut urls = Vec::new();
+    for line in text.lines() {
+        let mut parts = line.split_whitespace();
+        let _name = parts.next();
+        let Some(url) = parts.next() else {
+            continue;
+        };
+        if !urls.iter().any(|existing| existing == url) {
+            urls.push(url.to_string());
+        }
+    }
+    urls
 }
 
 fn disagreement(
     project: &str,
     reason: Option<&str>,
     live: Option<&LiveMatter>,
-    this_repo: Option<&str>,
+    urls: &[&str],
+    github_actions: bool,
 ) -> Result<()> {
     match (live, reason) {
         (None, Some(_)) => Ok(()),
@@ -604,8 +655,11 @@ fn disagreement(
             row.status
         )),
         (Some(row), _) => {
-            if let (Some(live_url), Some(here)) = (row.repository_url.as_deref(), this_repo) {
-                if !repository_urls_agree(live_url, here) {
+            if let Some(live_url) = row.repository_url.as_deref() {
+                if !urls.is_empty()
+                    && !repository_binding_agrees(project, live_url, urls, github_actions)
+                {
+                    let here = urls.join(", ");
                     return Err(anyhow!(
                         "repository_url is `{live_url}` but this job is `{here}`"
                     ));
@@ -614,6 +668,55 @@ fn disagreement(
             Ok(())
         }
     }
+}
+
+/// Whether this checkout is the repository the live row records.
+///
+/// Any candidate that names the same host, owner, and repository agrees,
+/// including another remote in a dual-forge checkout. On a GitHub Actions
+/// run, a recorded URL on another forge also agrees when both repository
+/// names are the Project code. A recorded GitHub URL still has to match the
+/// job's host, owner, and name, and a local run never takes the other-forge
+/// path.
+fn repository_binding_agrees(
+    project: &str,
+    live_url: &str,
+    urls: &[&str],
+    github_actions: bool,
+) -> bool {
+    if urls
+        .iter()
+        .any(|here| repository_urls_agree(live_url, here))
+    {
+        return true;
+    }
+    github_actions && recorded_on_another_forge(project, live_url, urls)
+}
+
+fn recorded_on_another_forge(project: &str, live_url: &str, urls: &[&str]) -> bool {
+    if github_host(live_url) || repository_name(live_url).as_deref() != Some(project) {
+        return false;
+    }
+    urls.iter()
+        .any(|url| github_host(url) && repository_name(url).as_deref() == Some(project))
+}
+
+fn github_host(url: &str) -> bool {
+    let Some((host, _)) = crate::host::split_remote(url) else {
+        return false;
+    };
+    let host = host.to_ascii_lowercase();
+    host.strip_prefix("ssh.").unwrap_or(&host) == "github.com"
+}
+
+fn repository_name(url: &str) -> Option<String> {
+    let (_, path) = crate::host::split_remote(url)?;
+    let path = path.trim_matches('/');
+    let path = path.strip_suffix(".git").unwrap_or(path).trim_matches('/');
+    path.rsplit('/')
+        .next()
+        .filter(|part| !part.is_empty())
+        .map(str::to_string)
 }
 
 /// Whether two repository URLs name the same repository on the same forge.
@@ -687,7 +790,7 @@ mod tests {
 
     #[test]
     fn missing_row_without_reason_fails() {
-        let error = disagreement("acme", None, None, None)
+        let error = disagreement("acme", None, None, &[], false)
             .unwrap_err()
             .to_string();
         assert!(error.contains("no live row"), "{error}");
@@ -696,12 +799,12 @@ mod tests {
 
     #[test]
     fn missing_row_with_reason_passes() {
-        disagreement("acme", Some("the matter closed"), None, None).unwrap();
+        disagreement("acme", Some("the matter closed"), None, &[], false).unwrap();
     }
 
     #[test]
     fn open_row_with_reason_fails() {
-        let error = disagreement("acme", Some("closed"), Some(&row("open", None)), None)
+        let error = disagreement("acme", Some("closed"), Some(&row("open", None)), &[], false)
             .unwrap_err()
             .to_string();
         assert!(error.contains("live status is `open`"), "{error}");
@@ -710,7 +813,7 @@ mod tests {
 
     #[test]
     fn closed_row_without_reason_fails() {
-        let error = disagreement("acme", None, Some(&row("closed", None)), None)
+        let error = disagreement("acme", None, Some(&row("closed", None)), &[], false)
             .unwrap_err()
             .to_string();
         assert!(error.contains("live status is `closed`"), "{error}");
@@ -719,7 +822,7 @@ mod tests {
 
     #[test]
     fn archived_row_without_reason_fails() {
-        let error = disagreement("acme", None, Some(&row("archived", None)), None)
+        let error = disagreement("acme", None, Some(&row("archived", None)), &[], false)
             .unwrap_err()
             .to_string();
         assert!(error.contains("live status is `archived`"), "{error}");
@@ -731,14 +834,15 @@ mod tests {
             "acme",
             Some("the matter closed"),
             Some(&row("closed", None)),
-            None,
+            &[],
+            false,
         )
         .unwrap();
     }
 
     #[test]
     fn open_row_without_reason_passes() {
-        disagreement("acme", None, Some(&row("open", None)), None).unwrap();
+        disagreement("acme", None, Some(&row("open", None)), &[], false).unwrap();
     }
 
     #[test]
@@ -747,7 +851,8 @@ mod tests {
             "acme",
             None,
             Some(&row("open", Some("https://github.com/org/other"))),
-            Some("https://github.com/org/acme"),
+            &["https://github.com/org/acme"],
+            false,
         )
         .unwrap_err()
         .to_string();
@@ -761,7 +866,8 @@ mod tests {
             "acme",
             None,
             Some(&row("open", Some("https://github.com/org/acme.git"))),
-            Some("https://github.com/org/acme"),
+            &["https://github.com/org/acme"],
+            false,
         )
         .unwrap();
     }
@@ -812,9 +918,125 @@ mod tests {
             "acme",
             None,
             Some(&row("open", Some("https://github.com/org/acme"))),
-            Some("ssh://git@ssh.github.com:443/org/acme"),
+            &["ssh://git@ssh.github.com:443/org/acme"],
+            false,
         )
         .unwrap();
+    }
+
+    #[test]
+    fn a_matching_remote_agrees_when_another_remote_is_a_different_forge() {
+        disagreement(
+            "acme",
+            None,
+            Some(&row(
+                "open",
+                Some("https://forge.example.test/firm/acme.git"),
+            )),
+            &[
+                "ssh://git@ssh.github.com:443/org/acme.git",
+                "https://forge.example.test/firm/acme.git",
+            ],
+            false,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_local_run_refuses_a_recorded_url_on_another_forge() {
+        let error = disagreement(
+            "acme",
+            None,
+            Some(&row("open", Some("https://forge.example.test/firm/acme"))),
+            &["ssh://git@ssh.github.com:443/org/acme.git"],
+            false,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("forge.example.test"), "{error}");
+    }
+
+    #[test]
+    fn a_github_actions_run_accepts_the_same_code_recorded_on_another_forge() {
+        disagreement(
+            "acme",
+            None,
+            Some(&row(
+                "open",
+                Some("https://forge.example.test/firm/acme.git"),
+            )),
+            &["https://github.com/org/acme"],
+            true,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_github_actions_run_still_refuses_a_different_repository_name() {
+        let error = disagreement(
+            "acme",
+            None,
+            Some(&row("open", Some("https://forge.example.test/firm/other"))),
+            &["https://github.com/org/acme"],
+            true,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("firm/other"), "{error}");
+    }
+
+    #[test]
+    fn a_github_actions_run_still_refuses_a_different_github_repository() {
+        let error = disagreement(
+            "acme",
+            None,
+            Some(&row("open", Some("https://github.com/other/acme"))),
+            &["https://github.com/org/acme"],
+            true,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("other/acme"), "{error}");
+    }
+
+    #[test]
+    fn checkout_remotes_come_from_this_directory_only() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(super::checkout_remote_urls(dir.path()).is_empty());
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args([
+                "remote",
+                "add",
+                "origin",
+                "ssh://git@ssh.github.com:443/org/acme.git",
+            ])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args([
+                "remote",
+                "add",
+                "forgejo",
+                "https://forge.example.test/firm/acme.git",
+            ])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        let mut urls = super::checkout_remote_urls(dir.path());
+        urls.sort();
+        assert_eq!(
+            urls,
+            vec![
+                "https://forge.example.test/firm/acme.git".to_string(),
+                "ssh://git@ssh.github.com:443/org/acme.git".to_string(),
+            ]
+        );
     }
 
     #[test]
@@ -959,6 +1181,78 @@ mod tests {
 
         restore_env(previous_url, previous_token, previous_repo);
         result.expect("open live row must pass");
+    }
+
+    /// The deployment binds this GitHub run to a Project recorded on another
+    /// forge. The gate agrees when both repositories are named for the code.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_github_actions_run_accepts_a_project_recorded_on_another_forge() {
+        let _lock = ENV_LOCK.lock().await;
+        let github = MockServer::start().await;
+        let navigator = MockServer::start().await;
+        let navigator_uri = navigator.uri();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("navigator.yaml"),
+            "host: staging.neonlaw.com\nproject: acme\n",
+        )
+        .unwrap();
+
+        let previous_url = std::env::var("ACTIONS_ID_TOKEN_REQUEST_URL").ok();
+        let previous_token = std::env::var("ACTIONS_ID_TOKEN_REQUEST_TOKEN").ok();
+        let previous_repo = std::env::var("GITHUB_REPOSITORY").ok();
+        let previous_actions = std::env::var("GITHUB_ACTIONS").ok();
+        let previous_forgejo = std::env::var("FORGEJO_ACTIONS").ok();
+        std::env::set_var("ACTIONS_ID_TOKEN_REQUEST_URL", github.uri());
+        std::env::set_var("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "github-oidc-request");
+        std::env::set_var("GITHUB_REPOSITORY", "org/acme");
+        std::env::set_var("GITHUB_ACTIONS", "true");
+        std::env::remove_var("FORGEJO_ACTIONS");
+
+        Mock::given(method("GET"))
+            .and(path("/"))
+            .and(query_param("audience", navigator_uri.as_str()))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "value": "github-jwt"
+            })))
+            .mount(&github)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/auth/ci/document-token"))
+            .and(body_json(serde_json::json!({ "token": "github-jwt" })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "token": "navigator-ci-token",
+                "exp": 1,
+                "project_code": "acme"
+            })))
+            .mount(&navigator)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/app/api/projects"))
+            .and(header_matcher("authorization", "Bearer navigator-ci-token"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!([{
+                    "id": "00000000-0000-0000-0000-000000000001",
+                    "code": "acme",
+                    "status": "open",
+                    "repository_url": "https://forge.example.test/firm/acme"
+                }])),
+            )
+            .mount(&navigator)
+            .await;
+
+        let result = super::check_live(dir.path(), &navigator_uri).await;
+
+        restore_env(previous_url, previous_token, previous_repo);
+        match previous_actions {
+            Some(value) => std::env::set_var("GITHUB_ACTIONS", value),
+            None => std::env::remove_var("GITHUB_ACTIONS"),
+        }
+        match previous_forgejo {
+            Some(value) => std::env::set_var("FORGEJO_ACTIONS", value),
+            None => std::env::remove_var("FORGEJO_ACTIONS"),
+        }
+        result.expect("a GitHub Actions run recorded on another forge must pass");
     }
 
     /// A Forgejo Actions run asks its own runner for the ID token (appending
