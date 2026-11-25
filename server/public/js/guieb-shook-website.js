@@ -3,7 +3,7 @@
 // Header: see-through over the photo, solid cream with the navy wordmark once the page scrolls.
     (function () {
       var header = document.querySelector('.site-header');
-      var toggle = header.querySelector('.menu-toggle');
+      var toggle = header.querySelector('.nav-menu-toggle');
       function setOpen(open) {
         header.classList.toggle('menu-open', open);
         toggle.setAttribute('aria-expanded', open);
@@ -11,11 +11,11 @@
       }
       toggle.addEventListener('click', function () { setOpen(!header.classList.contains('menu-open')); });
       header.querySelectorAll('.nav a').forEach(function (a) { a.addEventListener('click', function () { setOpen(false); }); });
-      header.querySelectorAll('.sub-toggle').forEach(function (b) {
+      header.querySelectorAll('.nav-sub-toggle').forEach(function (b) {
         b.addEventListener('click', function () {
           var item = b.parentElement, open = !item.classList.contains('is-open');
           header.querySelectorAll('.has-menu.is-open').forEach(function (o) {
-            if (o !== item) { o.classList.remove('is-open'); o.querySelector('.sub-toggle').setAttribute('aria-expanded', 'false'); }
+            if (o !== item) { o.classList.remove('is-open'); o.querySelector('.nav-sub-toggle').setAttribute('aria-expanded', 'false'); }
           });
           item.classList.toggle('is-open', open);
           b.setAttribute('aria-expanded', open);
@@ -40,7 +40,7 @@
       var hero = document.querySelector('.hero');
       var slides = hero.querySelectorAll('.slide');
       var dots = hero.querySelectorAll('.dots button');
-      var pause = hero.querySelector('.pause');
+      var pause = hero.querySelector('.nav-slideshow-pause');
       var i = 0, timer = null;
       var paused = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
       // Background video: one player for all slides. It stays on its still frame for "reduce motion"

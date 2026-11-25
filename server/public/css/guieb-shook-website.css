@@ -268,7 +268,7 @@ h2.split span:first-child {
   height: 100%;
 }
 
-.sub-toggle {
+.nav-sub-toggle {
   display: none;
 }
 
@@ -464,7 +464,7 @@ h2.split span:first-child {
   border-bottom-color: var(--bronze);
 }
 
-.menu-toggle {
+.nav-menu-toggle {
   display: none;
 }
 
@@ -587,7 +587,7 @@ h2.split span:first-child {
   gap: 12px;
 }
 
-.dots button {
+.dots .nav-slide-dot {
   width: 16px;
   height: 16px;
   padding: 0;
@@ -596,12 +596,12 @@ h2.split span:first-child {
   cursor: pointer;
 }
 
-.dots button.is-active {
+.dots .nav-slide-dot.is-active {
   background: var(--sand);
   border-color: var(--sand);
 }
 
-.pause {
+.nav-slideshow-pause {
   width: 34px;
   height: 34px;
   padding: 0;
@@ -611,7 +611,7 @@ h2.split span:first-child {
   position: relative;
 }
 
-.pause span,.pause::before {
+.nav-slideshow-pause span,.nav-slideshow-pause::before {
   content: "";
   position: absolute;
   top: 9px;
@@ -620,19 +620,19 @@ h2.split span:first-child {
   background: var(--on-dark);
 }
 
-.pause::before {
+.nav-slideshow-pause::before {
   left: 10px;
 }
 
-.pause span {
+.nav-slideshow-pause span {
   left: 19px;
 }
 
-.pause.is-paused::before {
+.nav-slideshow-pause.is-paused::before {
   display: none;
 }
 
-.pause.is-paused span {
+.nav-slideshow-pause.is-paused span {
   left: 11px;
   width: 0;
   height: 0;
@@ -1895,7 +1895,7 @@ h2.split span:first-child {
     height: 21px;
   }
 
-  .menu-toggle {
+  .nav-menu-toggle {
     display: grid;
     align-content: center;
     gap: 6px;
@@ -1911,7 +1911,7 @@ h2.split span:first-child {
     z-index: 2;
   }
 
-  .menu-toggle span {
+  .nav-menu-toggle span {
     display: block;
     height: 2px;
     background: currentColor;
@@ -1977,7 +1977,7 @@ h2.split span:first-child {
     color: var(--bronze);
   }
 
-  .sub-toggle {
+  .nav-sub-toggle {
     display: grid;
     place-items: center;
     width: 44px;
@@ -1989,7 +1989,7 @@ h2.split span:first-child {
     cursor: pointer;
   }
 
-  .sub-toggle::before {
+  .nav-sub-toggle::before {
     content: "";
     width: 8px;
     height: 8px;
@@ -2000,7 +2000,7 @@ h2.split span:first-child {
     transition: transform 0.25s;
   }
 
-  .has-menu.is-open>.sub-toggle::before {
+  .has-menu.is-open>.nav-sub-toggle::before {
     transform: translateY(5px) rotate(225deg);
   }
 
@@ -2069,15 +2069,15 @@ h2.split span:first-child {
     opacity: 1;
   }
 
-  .site-header.menu-open .menu-toggle span:nth-child(1) {
+  .site-header.menu-open .nav-menu-toggle span:nth-child(1) {
     transform: translateY(8px) rotate(45deg);
   }
 
-  .site-header.menu-open .menu-toggle span:nth-child(2) {
+  .site-header.menu-open .nav-menu-toggle span:nth-child(2) {
     opacity: 0;
   }
 
-  .site-header.menu-open .menu-toggle span:nth-child(3) {
+  .site-header.menu-open .nav-menu-toggle span:nth-child(3) {
     transform: translateY(-8px) rotate(-45deg);
   }
 
@@ -2536,9 +2536,15 @@ h2.split span:first-child {
   max-width: 640px;
 }
 
-.contact-form .field {
+.contact-form .field,
+.contact-form .nav-field {
   display: grid;
   gap: 8px;
+  margin: 0;
+}
+
+.contact-form .nav-required {
+  display: none;
 }
 
 .contact-form .field-row {
@@ -2612,7 +2618,7 @@ h2.split span:first-child {
   color: var(--ink);
 }
 
-.contact-form .btn {
+.contact-form .nav-contact-submit {
   justify-self: start;
   border: 0;
   cursor: pointer;
@@ -2692,7 +2698,7 @@ main { scroll-margin-top: var(--header-h); }
 .borough#brooklyn img { object-position: 50% 30%; }
 @media (max-width: 860px) {
   .site-header .sign-in { margin-inline-start: auto; }
-  .site-header .menu-toggle { order: 3; }
+  .site-header .nav-menu-toggle { order: 3; }
 }
 
 

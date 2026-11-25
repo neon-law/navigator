@@ -616,6 +616,29 @@ fn bundled_slide_asset_keys() -> BTreeSet<String> {
     keys
 }
 
+fn brand_media_keys() -> impl Iterator<Item = &'static str> {
+    [
+        views::assets::HOME_PRESENTATION_KEY,
+        views::assets::VESTA_EXPLAINER_KEY,
+        views::assets::ASTER_BOARD_KEY,
+        views::assets::CYBER_INJURY_HERO_KEY,
+        views::assets::CYBER_INJURY_AD_KEY,
+        views::assets::ABHAYA_COMMUNITY_PHOTO_KEY,
+        views::assets::GUIEB_SHOOK_HOME_PHOTO_KEY,
+        views::assets::GUIEB_SHOOK_GVC_BADGE_KEY,
+    ]
+    .into_iter()
+    .chain(views::assets::GUIEB_SHOOK_WEBSITE_ASSETS.iter().copied())
+    .chain(views::assets::VESTA_UPDATE_VIDEO_KEYS.iter().copied())
+    .chain(views::assets::VESTA_PHOTOS.iter().map(|(key, _)| *key))
+    .chain(
+        views::assets::NAVIGATOR_MATTER_PAGE_SCREENSHOTS
+            .iter()
+            .copied(),
+    )
+    .chain(views::assets::ARCHITECTURE_PHOTOS.iter().copied())
+}
+
 /// Every bucket key under `img/` the site can actually reach.
 ///
 /// Markdown, responsive photos, and the replaceable home presentation.
@@ -628,40 +651,7 @@ fn bundled_slide_asset_keys() -> BTreeSet<String> {
 fn reachable_image_keys(content_root: &Path) -> anyhow::Result<BTreeSet<String>> {
     let mut keys = content_image_refs(content_root)?;
     keys.extend(gallery_variant_keys());
-    keys.insert(views::assets::HOME_PRESENTATION_KEY.to_owned());
-    keys.insert(views::assets::VESTA_EXPLAINER_KEY.to_owned());
-    keys.extend(
-        views::assets::VESTA_UPDATE_VIDEO_KEYS
-            .iter()
-            .map(|key| (*key).to_owned()),
-    );
-    keys.extend(
-        views::assets::VESTA_PHOTOS
-            .iter()
-            .map(|(key, _)| (*key).to_owned()),
-    );
-    keys.insert(views::assets::ASTER_BOARD_KEY.to_owned());
-    keys.insert(views::assets::CYBER_INJURY_HERO_KEY.to_owned());
-    keys.insert(views::assets::CYBER_INJURY_AD_KEY.to_owned());
-    keys.insert(views::assets::ABHAYA_COMMUNITY_PHOTO_KEY.to_owned());
-    keys.insert(views::assets::GUIEB_SHOOK_HOME_PHOTO_KEY.to_owned());
-    keys.insert(views::assets::GUIEB_SHOOK_GVC_BADGE_KEY.to_owned());
-    keys.extend(
-        views::assets::GUIEB_SHOOK_WEBSITE_ASSETS
-            .iter()
-            .copied()
-            .map(str::to_owned),
-    );
-    keys.extend(
-        views::assets::ARCHITECTURE_PHOTOS
-            .iter()
-            .map(|key| (*key).to_owned()),
-    );
-    keys.extend(
-        views::assets::NAVIGATOR_MATTER_PAGE_SCREENSHOTS
-            .iter()
-            .map(|key| (*key).to_owned()),
-    );
+    keys.extend(brand_media_keys().map(str::to_owned));
     Ok(keys)
 }
 
@@ -1125,40 +1115,7 @@ pub(crate) fn verify_public_asset_origin(content_dir: &Path, base_url: &str) -> 
 pub(crate) fn embedded_asset_refs() -> BTreeSet<String> {
     let mut refs = bundled_slide_asset_keys();
     refs.extend(gallery_variant_keys());
-    refs.insert(views::assets::HOME_PRESENTATION_KEY.to_owned());
-    refs.insert(views::assets::VESTA_EXPLAINER_KEY.to_owned());
-    refs.extend(
-        views::assets::VESTA_UPDATE_VIDEO_KEYS
-            .iter()
-            .map(|key| (*key).to_owned()),
-    );
-    refs.extend(
-        views::assets::VESTA_PHOTOS
-            .iter()
-            .map(|(key, _)| (*key).to_owned()),
-    );
-    refs.insert(views::assets::ASTER_BOARD_KEY.to_owned());
-    refs.insert(views::assets::CYBER_INJURY_HERO_KEY.to_owned());
-    refs.insert(views::assets::CYBER_INJURY_AD_KEY.to_owned());
-    refs.insert(views::assets::ABHAYA_COMMUNITY_PHOTO_KEY.to_owned());
-    refs.insert(views::assets::GUIEB_SHOOK_HOME_PHOTO_KEY.to_owned());
-    refs.insert(views::assets::GUIEB_SHOOK_GVC_BADGE_KEY.to_owned());
-    refs.extend(
-        views::assets::GUIEB_SHOOK_WEBSITE_ASSETS
-            .iter()
-            .copied()
-            .map(str::to_owned),
-    );
-    refs.extend(
-        views::assets::ARCHITECTURE_PHOTOS
-            .iter()
-            .map(|key| (*key).to_owned()),
-    );
-    refs.extend(
-        views::assets::NAVIGATOR_MATTER_PAGE_SCREENSHOTS
-            .iter()
-            .map(|key| (*key).to_owned()),
-    );
+    refs.extend(brand_media_keys().map(str::to_owned));
     for family in BUCKET_FONT_FAMILIES {
         refs.extend(font_family_refs(family));
     }
@@ -2250,24 +2207,6 @@ Inline raw-HTML tile: <div>![Team](img/thanks-apple/team-lunch.jpg)</div>\n";
         assert_eq!(report.checked, 2);
         assert_eq!(report.missing, vec!["img/missing.png".to_string()]);
         assert!(report.unknown.is_empty(), "got: {:?}", report.unknown);
-    }
-
-    fn brand_media_keys() -> Vec<&'static str> {
-        let mut keys = vec![
-            views::assets::HOME_PRESENTATION_KEY,
-            views::assets::VESTA_EXPLAINER_KEY,
-            views::assets::ASTER_BOARD_KEY,
-            views::assets::CYBER_INJURY_HERO_KEY,
-            views::assets::CYBER_INJURY_AD_KEY,
-            views::assets::ABHAYA_COMMUNITY_PHOTO_KEY,
-            views::assets::GUIEB_SHOOK_HOME_PHOTO_KEY,
-            views::assets::GUIEB_SHOOK_GVC_BADGE_KEY,
-        ];
-        keys.extend(views::assets::VESTA_UPDATE_VIDEO_KEYS);
-        keys.extend(views::assets::VESTA_PHOTOS.iter().map(|(key, _)| *key));
-        keys.extend(views::assets::NAVIGATOR_MATTER_PAGE_SCREENSHOTS);
-        keys.extend(views::assets::ARCHITECTURE_PHOTOS);
-        keys
     }
 
     fn content_checkout() -> (TempDir, std::path::PathBuf) {

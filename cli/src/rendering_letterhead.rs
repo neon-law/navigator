@@ -33,8 +33,8 @@ pub use crate::letterhead::{resolve_brand, LetterheadError};
 const CACHE_ROOT_ENV: &str = "NAVIGATOR_LETTERHEAD_CACHE";
 
 /// The letterhead `key` wears: its display name, its Firm's legal name,
-/// its production host, `contact@` that host's registrable domain, and its
-/// phone. Only the default Brand draws the compiled mark, which is its own.
+/// its production host, email, and phone. Guieb & Shook supplies its own
+/// published email, wordmark, typeface, and office address.
 ///
 /// # Errors
 /// [`LetterheadError::InvalidBrandHost`] when the compiled host is not a
@@ -322,13 +322,17 @@ mod tests {
     fn only_the_default_brand_draws_the_compiled_mark() {
         for key in BrandKey::ALL.iter().copied() {
             let letterhead = for_brand(key).expect("every compiled Brand has a letterhead");
-            let expected_mark = if key == BrandKey::Neon {
-                pdf::LetterheadMark::Compiled
-            } else {
-                pdf::LetterheadMark::Wordmark
+            let expected_mark = match key {
+                BrandKey::Neon => pdf::LetterheadMark::Compiled,
+                BrandKey::GuiebShook => pdf::LetterheadMark::GuiebShook,
+                _ => pdf::LetterheadMark::Wordmark,
             };
             assert_eq!(letterhead.mark, expected_mark, "{}", key.as_str());
-            assert!(letterhead.email.starts_with("contact@"));
+            if key == BrandKey::GuiebShook {
+                assert_eq!(letterhead.email, "info@guiebshook.com");
+            } else {
+                assert!(letterhead.email.starts_with("contact@"));
+            }
             assert!(
                 !letterhead.entity.is_empty(),
                 "{} names its Firm",

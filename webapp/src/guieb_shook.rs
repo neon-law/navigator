@@ -253,7 +253,7 @@ fn Header(site: Arc<Website>, home: bool, utility: Vec<ChromeNavLink>) -> Elemen
                     img { class: "brand-light", src: "{ASSETS}/Guieb-Shook-wordmark-cream.svg", alt: "Guieb & Shook" }
                     img { class: "brand-dark", src: "{ASSETS}/Guieb-Shook-wordmark-navy.svg", alt: "", aria_hidden: "true" }
                 }
-                button { class: "menu-toggle", r#type: "button", aria_expanded: "false",
+                button { class: "nav-menu-toggle", r#type: "button", aria_expanded: "false",
                     aria_controls: "primary-nav", aria_label: "Open menu",
                     span {} span {} span {}
                 }
@@ -277,7 +277,7 @@ fn navigation_group(href: &str, label: &str, pages: Vec<(&str, &str)>) -> Elemen
     rsx! {
         div { class: "nav-item has-menu",
             a { href, "{label}" }
-            button { class: "sub-toggle", r#type: "button", aria_expanded: "false", aria_label: "Show {label} pages" }
+            button { class: "nav-sub-toggle", r#type: "button", aria_expanded: "false", aria_label: "Show {label} pages" }
             ul { class: "nav-menu",
                 for (link, name) in pages {
                     li { a { href: link, "{name}" } }
@@ -359,12 +359,12 @@ fn Home(site: Arc<Website>) -> Element {
             div { class: "wrap hero-controls",
                 div { class: "dots", role: "group", aria_label: "Choose a slide",
                     for index in 0..site.home.slides.len() {
-                        button { r#type: "button", class: if index == 0 { "is-active" },
+                        button { r#type: "button", class: "nav-slide-dot", class: if index == 0 { "is-active" },
                             aria_label: "Slide {index + 1}", aria_pressed: index == 0,
                         }
                     }
                 }
-                button { class: "pause", r#type: "button", aria_label: "Pause slideshow", span {} }
+                button { class: "nav-slideshow-pause", r#type: "button", aria_label: "Pause slideshow", span {} }
             }
         }
         About { body: site.home.about.clone() }
@@ -659,21 +659,19 @@ fn Contact(phone: String, consent: String, lead: LeadCaptureContext) -> Element 
                     crate::components::Honeypot { name: "website".to_string() }
                     div { class: "field",
                         label { r#for: "cf-name", "Name" }
-                        input { id: "cf-name", name: "name", r#type: "text", autocomplete: "name", required: true, maxlength: "120" }
+                        input { class: "nav-input", id: "cf-name", name: "name", r#type: "text", autocomplete: "name", required: true, maxlength: "120" }
                     }
                     div { class: "field-row",
-                        div { class: "field",
-                            label { r#for: "cf-email", "Email" }
-                            input { id: "cf-email", name: "email", r#type: "email", autocomplete: "email", required: true, maxlength: "254" }
-                        }
+                        {crate::components::form::Field::email("Email", "email", "")
+                            .id("cf-email").autocomplete("email").required().maxlength(254).render()}
                         div { class: "field",
                             label { r#for: "cf-phone", "Phone " span { class: "opt", "(optional)" } }
-                            input { id: "cf-phone", name: "phone", r#type: "tel", autocomplete: "tel", maxlength: "32" }
+                            input { class: "nav-input", id: "cf-phone", name: "phone", r#type: "tel", autocomplete: "tel", maxlength: "32" }
                         }
                     }
                     div { class: "field",
                         label { r#for: "cf-need", "How can we help?" }
-                        textarea { id: "cf-need", name: "concern", rows: "6", required: true, maxlength: "600",
+                        textarea { class: "nav-input", id: "cf-need", name: "concern", rows: "6", required: true, maxlength: "600",
                             placeholder: "A few lines is plenty: what it is about, where things stand and any deadlines."
                         }
                     }
@@ -681,7 +679,7 @@ fn Contact(phone: String, consent: String, lead: LeadCaptureContext) -> Element 
                         a { href: "/legal/privacy-policy.html", "Privacy Policy" }
                     }
                     if let Some(sitekey) = lead.hcaptcha_sitekey { HCaptchaWidget { sitekey } }
-                    button { class: "btn", r#type: "submit", "Send" }
+                    button { class: "nav-contact-submit btn", r#type: "submit", "Send" }
                 }
             }
             aside { class: "practice-side",

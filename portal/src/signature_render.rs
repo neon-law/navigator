@@ -168,7 +168,7 @@ mod tests {
         assert!(out.contains("nlsig-client-signature-1"));
         assert!(out.contains("nlsig-client-date-1"));
         assert!(out.contains("nlsig-firm-signature-1"));
-        assert!(out.ends_with("#text(size: 9pt)[Example Legal Group, PC]"));
+        assert!(out.ends_with("#navigator-signature-caption[Example Legal Group, PC]"));
         let (without_firm, fields_without_firm) = expand_signatures(body);
         assert!(without_firm.ends_with("#text(size: 9pt)[Firm]"));
         assert_eq!(fields, fields_without_firm);

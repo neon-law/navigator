@@ -836,7 +836,10 @@ mod tests {
             typst.contains("#text(fill: white, size: 4pt)[nlsig-client-signature-1]"),
             "{typst}"
         );
-        assert!(typst.contains("#text(size: 9pt)[Signature]"), "{typst}");
+        assert!(
+            typst.contains("#navigator-signature-caption[Signature]"),
+            "{typst}"
+        );
         assert!(typst.contains("[nlsig-client-date-1]"), "{typst}");
         assert!(!typst.contains("{{"), "{typst}");
         let pdf = crate::render(&typst).expect("a signing line compiles");

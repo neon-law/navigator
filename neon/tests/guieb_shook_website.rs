@@ -48,10 +48,16 @@ async fn the_new_site_publish_routes_and_navigator_entry_points_are_brand_scoped
         assert!(html.contains(marker), "{path} is missing {marker}");
         assert!(html.contains(r#"href="/auth/login""#));
         assert!(html.contains("guieb-shook-website.css"));
+        if path == "/" {
+            assert!(html.contains(r#"class="nav-slide-dot is-active""#));
+        }
         if path == "/contact" {
             assert!(html.contains(r#"action="/leads""#));
             assert!(html.contains(r#"name="concern""#));
             assert!(html.contains(r#"name="csrf_token""#));
+            assert!(html.contains(r#"for="cf-email""#));
+            assert!(html.contains(r#"type="email""#));
+            assert!(html.contains(r#"autocomplete="email""#));
         }
     }
     assert_eq!(
