@@ -366,6 +366,18 @@ pub const SEEDED_TEMPLATES: &[SeededTemplate] = &[
         markdown: canonical::TEMPLATE_ONBOARDING_LETTER,
     },
     SeededTemplate {
+        label: "notations/neon_law/onboarding__arag.md",
+        markdown: include_str!("../../templates/notations/neon_law/onboarding__arag.md"),
+    },
+    SeededTemplate {
+        label: "notations/neon_law/onboarding__legalease.md",
+        markdown: include_str!("../../templates/notations/neon_law/onboarding__legalease.md"),
+    },
+    SeededTemplate {
+        label: "notations/neon_law/engagement_scope_amendment.md",
+        markdown: include_str!("../../templates/notations/neon_law/engagement_scope_amendment.md"),
+    },
+    SeededTemplate {
         label: "notations/neon_law/offboarding__letter.md",
         markdown: canonical::TEMPLATE_OFFBOARDING_LETTER,
     },
