@@ -614,6 +614,18 @@ mod tests {
     }
 
     #[test]
+    fn native_matter_caption_tests_are_selected() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let selection = select(root).unwrap();
+        assert!(!selection
+            .nextest_filter
+            .contains("test(/^matter_captions::/)"));
+        assert!(selection
+            .nextest_filter
+            .contains("test(/^matter_captions::compatibility_tests::/)"));
+    }
+
+    #[test]
     fn native_graph_api_tests_are_selected() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
         let selection = select(root).unwrap();

@@ -289,7 +289,7 @@ mod tests {
     use super::{for_project, replace_for_project};
     use word::matter::{Counsel, Matter, Party};
 
-    fn matter(case_number: &str) -> Matter {
+    pub(super) fn matter(case_number: &str) -> Matter {
         Matter {
             court: vec!["SUPERIOR COURT".into(), "COUNTY OF SAMPLE".into()],
             case_number: case_number.into(),
@@ -322,47 +322,6 @@ mod tests {
                 pro_per: false,
             },
         }
-    }
-
-    #[tokio::test]
-    async fn source_caption_round_trips_nested_fields_and_removes_an_empty_block() {
-        let surreal = crate::surreal::test_support::mem().await;
-        let project_id = crate::postgres_mirror::from_source(
-            crate::test_support::seed_project_surreal(&surreal, "source-caption"),
-        )
-        .await;
-        let declared = matter("00CV000006");
-
-        let stored = crate::postgres_mirror::from_source(replace_for_project(
-            &surreal,
-            project_id,
-            Some(&declared),
-        ))
-        .await
-        .unwrap()
-        .unwrap();
-        assert_eq!(stored.matter, declared);
-        assert_eq!(
-            crate::postgres_mirror::from_source(for_project(&surreal, project_id))
-                .await
-                .unwrap(),
-            Some(stored)
-        );
-
-        assert!(crate::postgres_mirror::from_source(replace_for_project(
-            &surreal,
-            project_id,
-            Some(&Matter::default()),
-        ))
-        .await
-        .unwrap()
-        .is_none());
-        assert!(
-            crate::postgres_mirror::from_source(for_project(&surreal, project_id))
-                .await
-                .unwrap()
-                .is_none()
-        );
     }
 
     #[tokio::test]
@@ -459,3 +418,7 @@ mod tests {
         pg.pool().close().await;
     }
 }
+
+#[cfg(test)]
+#[path = "matter_captions/compatibility_tests.rs"]
+mod compatibility_tests;
