@@ -42,6 +42,8 @@ const CLAUDE_SKILLS: &str = ".claude/skills";
 /// The git-ignored folder where each checkout's own Firm's rules load: one
 /// link, `AGENTS.md`, into `.firm/<that checkout's Firm slug>/AGENTS.md`.
 const CLAUDE_RULES: &str = ".claude/rules";
+pub(super) const CODEX_OVERRIDE: &str = "AGENTS.override.md";
+const CODEX_OWNER_PREFIX: &str = "<!-- navigator: Firm ";
 /// Relative link prefixes sync writes, and so recognizes as its own. The
 /// rules prefix reaches a checkout's `.claude/rules/AGENTS.md` into the Firm
 /// Library checkout itself, `<root>/.firm/<slug>/AGENTS.md`.
@@ -290,7 +292,91 @@ fn link_checkout(
         FIRM_RULES_LINK,
         &format!("{}/{}", checkout.code, CLAUDE_RULES),
         "AGENTS.md",
+    )?;
+    sync_codex_override(
+        io,
+        root,
+        checkout,
+        firm.map(String::as_str),
+        preserve.contains(&checkout.code),
     )
+}
+
+pub(super) fn codex_override_firm(contents: &str) -> Option<&str> {
+    contents
+        .lines()
+        .next()?
+        .strip_prefix(CODEX_OWNER_PREFIX)?
+        .strip_suffix(" -->")
+        .filter(|slug| model::workspace::is_valid_slug(slug))
+}
+
+fn sync_codex_override(
+    io: &mut Writer<'_>,
+    root: &Path,
+    checkout: &Checkout,
+    firm: Option<&str>,
+    preserve: bool,
+) -> Result<()> {
+    use std::io::Write as _;
+
+    let path = checkout.dir.join(CODEX_OVERRIDE);
+    let local = match std::fs::symlink_metadata(&path) {
+        Ok(meta) if meta.is_file() => Some(std::fs::read_to_string(&path)?),
+        Ok(_) => Some(String::new()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    let owner = local.as_deref().and_then(codex_override_firm);
+    let label = format!("{}/{CODEX_OVERRIDE}", checkout.code);
+    if local.is_some() && owner.is_none() {
+        io.report.missing.push(format!(
+            "{label} is locally managed and takes precedence in Codex"
+        ));
+        return Ok(());
+    }
+    let base = checkout.dir.join("AGENTS.md");
+    let firm_rules = firm
+        .filter(|slug| model::workspace::is_valid_slug(slug))
+        .map(|slug| (slug, root.join(FIRM_DIRECTORY).join(slug).join("AGENTS.md")))
+        .filter(|(_, rules)| base.is_file() && rules.is_file());
+    let Some((slug, firm_rules)) = firm_rules else {
+        if let Some(owner) = owner {
+            if preserve && checkout.firm.as_deref().is_none_or(|firm| firm == owner) {
+                return Ok(());
+            }
+            io.report.changes.push(format!("remove stale {label}"));
+            if !io.dry_run {
+                std::fs::remove_file(path)?;
+            }
+        }
+        return Ok(());
+    };
+    if !super::lifecycle::git(&checkout.dir, &["check-ignore", "-q", "--", CODEX_OVERRIDE])?
+        .status
+        .success()
+    {
+        io.report.missing.push(format!(
+            "{label} must be untracked and ignored; run navigator project repository sync-skills there"
+        ));
+        return Ok(());
+    }
+    let canonical = std::fs::read_to_string(base)?;
+    let firm_rules = std::fs::read_to_string(firm_rules)?;
+    let contents =
+        format!("{CODEX_OWNER_PREFIX}{slug} -->\n\n{canonical}\n\n# Firm rules\n\n{firm_rules}");
+    if local.as_deref() == Some(&contents) {
+        return Ok(());
+    }
+    io.report.changes.push(format!("refresh {label}"));
+    if !io.dry_run {
+        let mut file = tempfile::Builder::new()
+            .suffix(".local")
+            .tempfile_in(&checkout.dir)?;
+        file.write_all(contents.as_bytes())?;
+        file.persist(path)?;
+    }
+    Ok(())
 }
 
 /// The sync-written links in `dir` that reach into a Firm library, name →
@@ -1300,6 +1386,78 @@ mod tests {
         )
         .unwrap();
         assert!(again.changes.is_empty(), "{:?}", again.changes);
+    }
+
+    #[test]
+    fn codex_instructions_follow_the_firm_without_replacing_the_project_contract() {
+        let root = tempfile::tempdir().unwrap();
+        for (code, firm) in [("alpha-matter", "firm-a"), ("beta-matter", "firm-b")] {
+            project(root.path(), code, firm);
+            let checkout = root.path().join(code);
+            assert!(
+                super::super::lifecycle::git(&checkout, &["init", "--quiet"])
+                    .unwrap()
+                    .status
+                    .success()
+            );
+            std::fs::write(
+                checkout.join(".gitignore"),
+                project_scaffold::ROOT_GITIGNORE,
+            )
+            .unwrap();
+            std::fs::write(checkout.join("AGENTS.md"), "Canonical project contract\n").unwrap();
+            let library = root.path().join(FIRM_DIRECTORY).join(firm);
+            std::fs::create_dir_all(&library).unwrap();
+            std::fs::write(
+                library.join("AGENTS.md"),
+                format!("Synthetic rules for {firm}\n"),
+            )
+            .unwrap();
+        }
+        let sync = |pairs: &[(&str, &str)], dry_run| {
+            materialize(
+                root.path(),
+                GENERIC,
+                &firms(pairs),
+                &BTreeSet::new(),
+                dry_run,
+            )
+            .unwrap()
+        };
+        let alpha = root.path().join("alpha-matter").join(CODEX_OVERRIDE);
+        let beta = root.path().join("beta-matter").join(CODEX_OVERRIDE);
+        let pairs = [("alpha-matter", "firm-a"), ("beta-matter", "firm-b")];
+        assert!(sync(&pairs, true).missing.is_empty());
+        assert!(!alpha.exists());
+        assert!(sync(&pairs, false).missing.is_empty());
+        let a = std::fs::read_to_string(&alpha).unwrap();
+        let b = std::fs::read_to_string(&beta).unwrap();
+        assert_eq!(codex_override_firm(&a), Some("firm-a"));
+        assert_eq!(codex_override_firm(&b), Some("firm-b"));
+        assert!(
+            a.contains("Canonical project contract") && a.contains("Synthetic rules for firm-a")
+        );
+        assert!(!a.contains("firm-b"));
+        assert!(!b.contains("firm-a"));
+        assert!(sync(&pairs, false).changes.is_empty());
+
+        assert!(sync(&[("alpha-matter", "firm-b")], false)
+            .missing
+            .is_empty());
+        let a = std::fs::read_to_string(&alpha).unwrap();
+        assert_eq!(codex_override_firm(&a), Some("firm-b"));
+        assert!(!a.contains("firm-a"));
+        assert!(!beta.exists());
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("alpha-matter/AGENTS.md")).unwrap(),
+            "Canonical project contract\n"
+        );
+        std::fs::write(&alpha, "Local instructions\n").unwrap();
+        assert_eq!(sync(&pairs, false).missing.len(), 1);
+        assert_eq!(
+            std::fs::read_to_string(alpha).unwrap(),
+            "Local instructions\n"
+        );
     }
 
     /// LAW-550: a checkout whose Firm cannot be resolved this pass keeps the
