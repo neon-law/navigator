@@ -6049,6 +6049,10 @@ SYNTHETIC-DOCX-BYTES\r\n\
 --BOUND--\r\n";
 
     #[tokio::test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the message and attachment assertions share one synthetic filing"
+    )]
     async fn a_reference_filing_uploads_documents_and_files_only_references() {
         use wiremock::matchers::{body_partial_json, method, path, query_param};
         use wiremock::{Mock, MockServer, ResponseTemplate};

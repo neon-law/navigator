@@ -123,7 +123,7 @@ mod tests {
                 "2020.01.01_sample-notebook.docx",
                 "2025.10.09_sample-notebook.docx",
             ),
-            ("Sample Notebook.DOCX", "2025.10.09_sample-notebook-2.DOCX"),
+            ("sample_notebook.DOCX", "2025.10.09_sample-notebook-2.DOCX"),
             ("message.eml", "2025.10.09_message-2.eml"),
             ("", "2025.10.09_attachment.bin"),
         ] {
