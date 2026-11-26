@@ -2,28 +2,9 @@
 //! (manages, owns, member-of), and one of the two edge tables the
 //! pre-matter conflict check walks.
 //!
-//! # This is a relation, not a table with two ids
-//!
-//! The tie *is* the edge: `RELATE person->entity_role->entity`, with
-//! `in` and `out` carrying the endpoints rather than a surrogate `id`
-//! beside two UUID columns. The
-//! conflict traversal walks it natively (`<->entity_role`) rather than
-//! joining on columns, which is the whole reason the graph could stop
-//! being a projection (ENG-120).
-//!
-//! The surrogate key is deliberately **not** carried across. Nothing
-//! referenced `person_entity_roles.id` — it addressed no row and named
-//! no edge in any surface — so re-minting it here would be a column
-//! kept for the shape of the table it came from. The identity of a tie
-//! is its endpoints plus its `role`, which is exactly what the UNIQUE
-//! `entity_role_tie` index says.
-//!
-//! # Where the tie lives
-//!
-//! Under the AGE graph engine PostgreSQL holds the tie — the relational
-//! `entity_role` row and its `HAS_ROLE` edge — and every read here answers
-//! from it; the Surreal relation is the fallback for a deployment without
-//! PostgreSQL ([`crate::postgres_graph::graph_authority`]).
+//! PostgreSQL holds the relational tie and its AGE `HAS_ROLE` edge. Its
+//! identity is the Person, Entity and role; Source reads remain available
+//! for captured historical import.
 //!
 //! # Idempotence is the contract
 //!
@@ -41,7 +22,7 @@ use uuid::Uuid;
 
 use crate::postgres::PostgresDb;
 use crate::postgres_graph::{ensure_vertices, graph_authority, load_edge};
-use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
+use crate::surreal::{record_id, record_uuid, SurrealDb};
 
 const TABLE: &str = "entity_role";
 const PERSON_TABLE: &str = "person";
@@ -106,10 +87,6 @@ pub enum EntityRoleError {
     Graph(#[from] crate::postgres_graph::GraphError),
 }
 
-fn is_duplicate_tie(error: &surrealdb::Error) -> bool {
-    crate::surreal::retry::unique_violation(error) == Some("entity_role_tie")
-}
-
 fn many(mut response: surrealdb::IndexedResults) -> Result<Vec<EntityRole>, EntityRoleError> {
     let rows: Vec<EntityRoleRow> = response.take(0)?;
     Ok(rows
@@ -128,10 +105,9 @@ fn many(mut response: surrealdb::IndexedResults) -> Result<Vec<EntityRole>, Enti
 ///
 /// # Errors
 ///
-/// [`EntityRoleError::Db`] if the Surreal lookup or write fails,
 /// [`EntityRoleError::Postgres`] or [`EntityRoleError::Sqlx`] if the
-/// authoritative PostgreSQL write fails, or [`EntityRoleError::Engine`]
-/// if PostgreSQL is configured but unreachable.
+/// PostgreSQL write fails, or [`EntityRoleError::Engine`] if graph authority
+/// or an endpoint lookup is unavailable.
 pub async fn grant(
     db: &SurrealDb,
     person_id: Uuid,
@@ -139,82 +115,22 @@ pub async fn grant(
     role: &str,
 ) -> Result<EntityRole, EntityRoleError> {
     let role = role.trim();
-    match authority().await? {
-        None => grant_in_surreal(db, person_id, entity_id, role).await,
-        Some(postgres) => grant_in_postgres(db, &postgres, person_id, entity_id, role).await,
-    }
+    let postgres = authority().await?.ok_or_else(|| {
+        EntityRoleError::Engine("Entity Role writes require PostgreSQL graph authority".into())
+    })?;
+    grant_in_postgres(db, &postgres, person_id, entity_id, role).await
 }
 
 async fn authority() -> Result<Option<PostgresDb>, EntityRoleError> {
     graph_authority().await.map_err(EntityRoleError::Engine)
 }
 
-/// The SurrealDB write for a deployment without PostgreSQL: its only
-/// write path, and the seam the fixtures seed the Surreal graph with.
-/// Its PostgreSQL copy is the mirror's business, exactly as before the
-/// cutover.
-pub(crate) async fn grant_in_surreal(
-    db: &SurrealDb,
-    person_id: Uuid,
-    entity_id: Uuid,
-    role: &str,
-) -> Result<EntityRole, EntityRoleError> {
-    if let Some(existing) = find_in_surreal(db, person_id, entity_id, role).await? {
-        return Ok(existing);
-    }
-
-    let written = retry::writing(|| {
-        db.query(format!(
-            "RELATE $person->{TABLE}->$entity \
-             SET role = $role, inserted_at = time::now(), updated_at = time::now() \
-             RETURN {SELECT}"
-        ))
-        .bind(("person", record_id(PERSON_TABLE, person_id)))
-        .bind(("entity", record_id(ENTITY_TABLE, entity_id)))
-        .bind(("role", role.to_string()))
-    })
-    .await;
-
-    match written {
-        Ok(mut response) => {
-            let rows: Vec<EntityRoleRow> = response.take(0)?;
-            let tie = rows
-                .into_iter()
-                .next()
-                .and_then(EntityRoleRow::into_role)
-                .ok_or(EntityRoleError::WriteReturnedNothing)?;
-            crate::postgres_mirror::after_write(
-                db,
-                crate::postgres_mirror::MirrorKey::EntityRole {
-                    person_id: tie.person_id,
-                    entity_id: tie.entity_id,
-                    role: tie.role.clone(),
-                },
-            )
-            .await;
-            Ok(tie)
-        }
-        // Another writer minted the same tie between the read above and
-        // this write. Its row is the answer. A unique violation is not
-        // retryable, so the shared policy hands it straight back here
-        // rather than spending the budget on a write that cannot win.
-        Err(error) if is_duplicate_tie(&error) => find_in_surreal(db, person_id, entity_id, role)
-            .await?
-            .ok_or(EntityRoleError::WriteReturnedNothing),
-        Err(error) => Err(EntityRoleError::Db(error)),
-    }
-}
-
 /// The authoritative write: the relational row first (the store of
 /// record), then the graph's `HAS_ROLE` edge, whose vertices the write
 /// ensures before loading — the projection may not have rebuilt since
-/// the person or entity was minted. The Surreal graph table is retired
-/// from this path: under the `age` engine it receives nothing, which is
-/// the retirement.
+/// the Person or Entity was minted.
 ///
-/// The display names travel from SurrealDB, the store that still mints
-/// persons and entities; the vertex-ensure function falls back to the
-/// relational row's own name for a `None`.
+/// The vertex-ensure function uses the authoritative Person and Entity names.
 async fn grant_in_postgres(
     db: &SurrealDb,
     postgres: &PostgresDb,
@@ -247,8 +163,7 @@ async fn grant_in_postgres(
 
     let Some(row) = written else {
         // Another writer minted the same tie between the read above and
-        // this write. Its row is the answer — the same loser-rereads
-        // contract the Surreal path's unique index provides.
+        // this write. Its row is the answer.
         transaction.rollback().await?;
         return find_in_postgres(postgres, person_id, entity_id, role)
             .await?
