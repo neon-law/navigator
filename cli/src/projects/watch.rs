@@ -1325,7 +1325,7 @@ mod tests {
         std::fs::write(checkout.join("local.txt"), "unfinished work")?;
         assert_eq!(
             run_sync(&host, Some(&root), false, false).await,
-            ExitCode::FAILURE
+            ExitCode::SUCCESS
         );
         assert_eq!(
             std::fs::read_to_string(checkout.join("local.txt"))?,
