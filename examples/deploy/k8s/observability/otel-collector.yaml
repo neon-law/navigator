@@ -360,6 +360,7 @@ data:
                   - count
                   - audit
                   - forgejo.repository
+                  - forgejo.run_number
                   - forgejo.workflow
                   - forgejo.event
                   - event

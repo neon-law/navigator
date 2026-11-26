@@ -2371,6 +2371,15 @@ See docs/forgejo-deployment.md."
         #[arg(long)]
         once: bool,
     },
+    /// Observe waiting and failed Actions runs for one private repository.
+    QueueObserver {
+        /// Public HTTPS Forgejo origin.
+        #[arg(long)]
+        url: String,
+        /// Exact private owner/repository to observe.
+        #[arg(long)]
+        repository: String,
+    },
     /// Print every job log of one Actions run, read from the Forgejo volume.
     #[command(
         after_help = "Needs FORGEJO_TOKEN on the trusted operator host and kubectl exec on the Forgejo pod. \

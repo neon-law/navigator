@@ -134,7 +134,7 @@ impl Forgejo {
         Ok(waiting)
     }
 
-    async fn private_repository_id(&self, name: &str) -> Result<u64> {
+    pub(super) async fn private_repository_id(&self, name: &str) -> Result<u64> {
         runner::repository_scope(name)?;
         let repository = self
             .get(&format!("/repos/{name}"))
@@ -1063,10 +1063,9 @@ mod tests {
         ));
     }
 
-    /// ENG-1239: every Forgejo check rule reads a series this controller or
-    /// the collector's Forgejo scrape exports, one rule per group.
+    /// Every Forgejo check rule reads its owning workload's metric.
     #[test]
-    fn the_forgejo_check_rules_read_the_metrics_the_controller_exports() {
+    fn the_forgejo_check_rules_read_metrics_and_link_concrete_runs() {
         let rules: serde_yaml::Value = serde_yaml::from_str(include_str!(
             "../../../../examples/deploy/k8s/observability/dash0-forgejo-check-rules.yaml"
         ))
@@ -1075,26 +1074,28 @@ mod tests {
         assert!(groups
             .iter()
             .all(|group| group["rules"].as_sequence().unwrap().len() == 1));
-        let expr = |alert: &str| {
+        let rule = |alert: &str| {
             groups
                 .iter()
                 .flat_map(|group| group["rules"].as_sequence().unwrap())
                 .find(|rule| rule["alert"].as_str() == Some(alert))
-                .and_then(|rule| rule["expr"].as_str())
                 .unwrap_or_else(|| panic!("{alert} is declared"))
-                .to_owned()
         };
+        let expr = |alert: &str| rule(alert)["expr"].as_str().unwrap();
         for (alert, metric) in [
             (
                 "ForgejoJobWaitingNoRunner",
-                telemetry::FORGEJO_RUN_OLDEST_WAITING,
+                telemetry::forgejo_queue::WAITING_SECONDS,
             ),
             (
                 "ForgejoRunnerControllerMissed",
                 telemetry::FORGEJO_CONTROLLER_TICK,
             ),
-            ("ForgejoGateFailedOnMain", telemetry::FORGEJO_RUN_FINISHED),
-            ("ForgejoCdFailed", telemetry::FORGEJO_RUN_FINISHED),
+            (
+                "ForgejoGateFailedOnMain",
+                telemetry::forgejo_queue::RECENT_FAILURE,
+            ),
+            ("ForgejoCdFailed", telemetry::forgejo_queue::RECENT_FAILURE),
             ("ForgejoCdMissed", telemetry::FORGEJO_CD_MISSED),
             (
                 "ForgejoRunnerOrphan",
@@ -1107,9 +1108,18 @@ mod tests {
             );
         }
         assert!(expr("ForgejoMetricsAbsent").contains("forgejo"));
-        let main_gate = expr("ForgejoGateFailedOnMain");
-        assert!(main_gate.contains(r#""forgejo.event"="push""#));
-        assert!(main_gate.contains(r#""forgejo.workflow"="gate.yml""#));
+        assert!(expr("ForgejoGateFailedOnMain").contains(r#""forgejo.workflow"="gate.yml""#));
+        assert!(expr("ForgejoCdFailed").contains(r#""forgejo.workflow"="cd.yml""#));
+        for alert in [
+            "ForgejoJobWaitingNoRunner",
+            "ForgejoGateFailedOnMain",
+            "ForgejoCdFailed",
+        ] {
+            assert!(expr(alert).contains(r#""forgejo.run_number""#), "{alert}");
+            assert!(rule(alert)["annotations"]["description"].as_str().unwrap().contains(
+                "YOUR_FORGEJO_ROOT_URL/{{ $labels.forgejo_repository }}/actions/runs/{{ $labels.forgejo_run_number }}"
+            ), "{alert}");
+        }
         let text = serde_yaml::to_string(&rules).unwrap();
         for content in ["title", "commit message", "head_branch"] {
             assert!(!text.contains(content), "{content}");

@@ -197,6 +197,10 @@ service.
 Shared telemetry identifies the repository by `<firm>/<project code>` and the run by its number. Workflow step output
 can contain source content and stays in Forgejo.
 
+The staging queue observer publishes `navigator.forgejo.queue.waiting_seconds` and
+`navigator.forgejo.queue.recent_failure` for the synthetic repository. These gauges carry the run number so alerts can
+link to the run during a controller outage. Each poll replaces the set of waiting runs and recent main failures.
+
 The collector also scrapes Forgejo's `/metrics` (`prometheus/forgejo`) with the bearer token in
 `navigator-forgejo-metrics`. These are installation-wide gauges only: per-repository and per-label series are off in
 `app.ini`. [`dash0-forgejo-check-rules.yaml`](../examples/deploy/k8s/observability/dash0-forgejo-check-rules.yaml)
