@@ -13,6 +13,13 @@
 # person). An email is allowed on a listed domain or any subdomain of one.
 
 [[paths]]
+reason = "The Guieb & Shook website's minified stylesheet and SVG marks: single lines of style rules and path data, past the analyzer's line limit, with no prose (approved by Waleed Amer, 2026-11-26)."
+values = [
+  "server/sites/guieb-shook/styles.css",
+  "server/sites/guieb-shook/assets/*.svg",
+]
+
+[[paths]]
 reason = "Vendored third-party code, generated inventories, and the scanner itself."
 values = [
   "cargo.lock",

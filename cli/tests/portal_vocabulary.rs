@@ -64,6 +64,11 @@ const SKIPPED_DIRS: &[&str] = &[
 /// allowlist above is written in the thing it forbids.
 const SKIPPED_FILES: &[&str] = &["portal_vocabulary.rs"];
 
+/// Trees exempt because they are not Navigator's own copy: the Guieb & Shook
+/// website is served exactly as the firm approved it (`portal::guieb_shook_site`),
+/// where "client portal" is the firm's word to its visitors.
+const SKIPPED_PATHS: &[&str] = &["server/sites/guieb-shook"];
+
 /// The workspace root (this test crate is `cli`).
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..")
@@ -95,7 +100,11 @@ fn walk(dir: &Path, out: &mut Vec<String>) {
         // `.git` is a directory in a normal checkout and a *file* holding a
         // `gitdir:` pointer inside a worktree, so it is skipped by name before
         // the directory test.
-        if SKIPPED_DIRS.contains(&name.as_ref()) {
+        if SKIPPED_DIRS.contains(&name.as_ref())
+            || path
+                .strip_prefix(repo_root())
+                .is_ok_and(|relative| SKIPPED_PATHS.iter().any(|skip| relative.starts_with(skip)))
+        {
             continue;
         }
         if path.is_dir() {
