@@ -1118,7 +1118,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ----------------------------------------------------------------------------------------
-zlib-rs 0.6.8
+zlib-rs 0.6.9
 
 (C) 2024 Trifecta Tech Foundation 
 
@@ -2193,29 +2193,29 @@ Please refer to the LICENSE-APACHE file for more details on the Apache License 2
 
 ----------------------------------------------------------------------------------------
 arrow 60.2.0
-arrow-arith 58.4.1
+arrow-arith 58.4.2
 arrow-arith 60.2.0
-arrow-array 58.4.1
+arrow-array 58.4.2
 arrow-array 60.2.0
-arrow-buffer 58.4.1
+arrow-buffer 58.4.2
 arrow-buffer 60.2.0
-arrow-cast 58.4.1
+arrow-cast 58.4.2
 arrow-cast 60.2.0
 arrow-cmp 60.2.0
-arrow-data 58.4.1
+arrow-data 58.4.2
 arrow-data 60.2.0
-arrow-ipc 58.4.1
+arrow-ipc 58.4.2
 arrow-ipc 60.2.0
-arrow-ord 58.4.1
+arrow-ord 58.4.2
 arrow-ord 60.2.0
 arrow-row 60.2.0
-arrow-schema 58.4.1
+arrow-schema 58.4.2
 arrow-schema 60.2.0
-arrow-select 58.4.1
+arrow-select 58.4.2
 arrow-select 60.2.0
-arrow-string 58.4.1
+arrow-string 58.4.2
 arrow-string 60.2.0
-parquet 58.4.1
+parquet 58.4.2
 parquet 60.2.0
 
 Apache Arrow
@@ -3103,10 +3103,10 @@ aws-smithy-http-client 1.5.3
 aws-smithy-json 0.65.1
 aws-smithy-observability 0.3.1
 aws-smithy-runtime 1.16.4
-aws-smithy-runtime-api 1.22.0
+aws-smithy-runtime-api 1.22.1
 aws-smithy-runtime-api-macros 1.2.0
 aws-smithy-schema 1.2.0
-aws-smithy-types 1.9.4
+aws-smithy-types 1.9.5
 aws-smithy-xml 0.64.1
 aws-types 1.7.0
 
@@ -3291,7 +3291,7 @@ color 0.3.3
 fdeflate 0.3.7
 fearless_simd 0.4.1
 fearless_simd 0.7.0
-fearless_simd 1.2.0
+fearless_simd 1.3.0
 half 2.7.1
 hayro 0.7.1
 hayro 0.9.0
@@ -3317,9 +3317,9 @@ linebender_resource_handle 0.1.1
 miniz_oxide 0.8.9
 miniz_oxide 0.9.1
 num-conv 0.2.2
-pin-project 1.1.13
-pin-project-internal 1.1.13
-pin-project-lite 0.2.17
+pin-project 1.2.0
+pin-project-internal 1.2.0
+pin-project-lite 0.2.18
 portable-atomic 1.15.0
 portable-atomic-util 0.2.8
 raw-window-handle 0.6.2
@@ -5192,8 +5192,8 @@ Apache License
    limitations under the License.
 
 ----------------------------------------------------------------------------------------
-zerocopy 0.8.63
-zerocopy-derive 0.8.63
+zerocopy 0.8.66
+zerocopy-derive 0.8.66
 
 Apache License
                            Version 2.0, January 2004
@@ -5809,7 +5809,7 @@ Apache License
 
 ----------------------------------------------------------------------------------------
 moxcms 0.8.1
-pic-scale 0.7.12
+pic-scale 0.7.14
 pxfm 0.1.30
 
 Apache License
@@ -6015,16 +6015,16 @@ Apache License
    limitations under the License.
 
 ----------------------------------------------------------------------------------------
-arrow-arith 58.4.1
-arrow-array 58.4.1
-arrow-buffer 58.4.1
-arrow-cast 58.4.1
-arrow-data 58.4.1
-arrow-ipc 58.4.1
-arrow-ord 58.4.1
-arrow-schema 58.4.1
-arrow-select 58.4.1
-arrow-string 58.4.1
+arrow-arith 58.4.2
+arrow-array 58.4.2
+arrow-buffer 58.4.2
+arrow-cast 58.4.2
+arrow-data 58.4.2
+arrow-ipc 58.4.2
+arrow-ord 58.4.2
+arrow-schema 58.4.2
+arrow-select 58.4.2
+arrow-string 58.4.2
 as-any 0.3.2
 charset 0.1.5
 ciborium 0.2.2
@@ -6048,7 +6048,7 @@ multiversion_no_op 1.0.0
 ndarray-stats 0.7.0
 ntapi 0.4.3
 object_store 0.14.2
-parquet 58.4.1
+parquet 58.4.2
 peniko 0.6.1
 polycool 0.4.0
 quinn 0.11.12
@@ -6064,7 +6064,7 @@ utf8_iter 1.1.0
 utf_types 1.0.0
 webp 0.3.1
 write16 1.0.0
-zeroize 1.9.1
+zeroize 1.9.2
 zeroize_derive 1.5.0
 zune-core 0.5.3
 zune-jpeg 0.5.15
@@ -7729,7 +7729,7 @@ Apache License
 ----------------------------------------------------------------------------------------
 byteslice 0.2.0
 storekey 0.11.0
-surrealmx 1.3.0
+surrealmx 1.4.0
 trice 0.4.0
 
 Apache License
@@ -8140,7 +8140,7 @@ Apache License
    limitations under the License.
 
 ----------------------------------------------------------------------------------------
-aws-sdk-s3 1.161.0
+aws-sdk-s3 1.162.0
 
 Apache License
                            Version 2.0, January 2004
@@ -8551,15 +8551,15 @@ Apache License
    limitations under the License.
 
 ----------------------------------------------------------------------------------------
-clap 4.6.9
-clap_builder 4.6.7
+clap 4.6.10
+clap_builder 4.6.10
 clap_derive 4.6.9
-clap_lex 1.1.1
+clap_lex 1.1.2
 serde_spanned 1.1.3
-toml 1.2.2+spec-1.1.0
+toml 1.2.3+spec-1.1.0
 toml_datetime 1.1.3+spec-1.1.0
-toml_edit 0.25.20+spec-1.1.0
-toml_parser 1.1.6+spec-1.1.0
+toml_edit 0.25.21+spec-1.1.0
+toml_parser 1.1.7+spec-1.1.0
 toml_writer 1.2.0+spec-1.1.0
 
 Apache License
@@ -8981,7 +8981,7 @@ bytecount 0.6.9
 cobs 0.3.0
 colorchoice 1.0.5
 cookie_store 0.22.1
-crc32fast 1.5.5
+crc32fast 1.5.6
 derive_builder 0.20.2
 derive_builder_core 0.20.2
 derive_builder_macro 0.20.2
@@ -9599,7 +9599,7 @@ Apache License
    limitations under the License.
 
 ----------------------------------------------------------------------------------------
-rangemap 1.8.0
+rangemap 1.9.0
 
 Apache License
                            Version 2.0, January 2004
@@ -10587,14 +10587,14 @@ TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
    of your accepting any such warranty or additional liability.
 
 ----------------------------------------------------------------------------------------
-anyhow 1.0.104
+anyhow 1.0.105
 async-trait 0.1.92
 bon 3.10.3
 bon-macros 3.10.3
 codex 0.3.0
 comemo 0.5.1
 constant_time_eq 0.4.2
-constant_time_eq 0.6.1
+constant_time_eq 0.6.2
 crawdad 0.4.1
 daachorse 5.1.0
 dissimilar 1.0.11
@@ -10609,7 +10609,7 @@ hypher 0.1.8
 inventory 0.3.25
 itoa 1.0.19
 libc 0.2.191
-litrs 1.0.1
+litrs 1.1.0
 macro-string 0.1.4
 num_enum 0.7.6
 num_enum_derive 0.7.6
@@ -11676,7 +11676,7 @@ limitations under the License.
 
 ----------------------------------------------------------------------------------------
 cookie 0.16.2
-cookie 0.18.2
+cookie 0.18.3
 
 Apache License
                         Version 2.0, January 2004
@@ -15174,7 +15174,7 @@ limitations under the License.
 
 ----------------------------------------------------------------------------------------
 addr 0.15.6
-ahash 0.8.12
+ahash 0.8.14
 aligned 0.4.3
 arbitrary 1.5.0
 arc-swap 1.9.5
@@ -15195,17 +15195,17 @@ bitflags 1.3.2
 bitflags 2.13.2
 bitstream-io 4.10.0
 bs58 0.5.1
-bstr 1.13.1
-bumpalo 3.20.3
+bstr 1.14.0
+bumpalo 3.20.4
 by_address 1.2.1
 bytes-utils 0.1.4
-cc 1.11.1
+cc 1.11.3
 cff-parser 0.2.0
 cfg-if 1.0.5
 cmake 0.1.58
 concurrent-queue 2.5.0
-const-random 0.1.18
-const-random-macro 0.1.16
+const-random 0.1.20
+const-random-macro 0.1.18
 core-foundation 0.10.1
 core-foundation 0.9.4
 core-foundation-sys 0.8.7
@@ -15227,7 +15227,7 @@ enumset 1.1.15
 enumset_derive 0.15.1
 env_logger 0.9.3
 equivalent 1.0.3
-errno 0.3.14
+errno 0.3.15
 euclid 0.20.14
 euclid 0.22.14
 event-listener 5.4.2
@@ -15237,7 +15237,7 @@ fantoccini 0.22.2
 fastrand 2.5.0
 ff 0.13.1
 ff 0.14.0
-filetime 0.2.29
+filetime 0.2.30
 find-msvc-tools 0.1.15
 flate2 1.1.11
 fnv 1.0.7
@@ -15257,7 +15257,7 @@ hashbrown 0.12.3
 hashbrown 0.14.5
 hashbrown 0.15.5
 hashbrown 0.16.1
-hashbrown 0.17.1
+hashbrown 0.17.2
 heapless 0.6.1
 heapless 0.7.17
 heapless 0.8.0
@@ -15282,7 +15282,7 @@ lazy_static 1.5.1
 lexicmp 0.2.0
 libfuzzer-sys 0.4.13
 libgit2-sys 0.18.8+1.9.7
-libz-sys 1.1.28
+libz-sys 1.1.33
 linux-raw-sys 0.12.1
 lock_api 0.4.14
 lock_api 0.5.0
@@ -15317,12 +15317,12 @@ parking_lot_core 0.9.12
 percent-encoding 2.3.2
 pkg-config 0.3.34
 png 0.18.1
-postcard 1.1.3
+postcard 1.2.0
 primal-check 0.3.4
 proc-macro-hack 0.5.20+deprecated
-prost 0.14.5
-prost-derive 0.14.5
-prost-types 0.14.5
+prost 0.14.6
+prost-derive 0.14.6
+prost-types 0.14.6
 psl-types 2.0.11
 publicsuffix 2.3.0
 rawpointer 0.2.1
@@ -15349,13 +15349,13 @@ sealed 0.6.0
 security-framework 3.7.0
 security-framework-sys 2.17.0
 send_wrapper 0.6.0
-serde_with 3.24.0
-serde_with_macros 3.24.0
+serde_with 3.25.0
+serde_with_macros 3.25.0
 servo_arc 0.5.0
 signal-hook-registry 1.4.8
 simd_cesu8 1.2.0
 simplecss 0.2.2
-smallvec 1.16.5
+smallvec 1.16.6
 socket2 0.6.5
 stable_deref_trait 1.2.1
 stacker 0.1.25
@@ -15905,7 +15905,7 @@ sec1 0.8.1
 sha1 0.10.7
 sha1 0.11.0
 sha2 0.10.9
-sha2 0.11.1
+sha2 0.11.2
 signature 2.2.0
 signature 3.0.0
 spki 0.7.3
@@ -16304,7 +16304,7 @@ rand_core 0.10.1
 rand_core 0.6.4
 rand_core 0.9.5
 rand_distr 0.5.1
-rand_pcg 0.10.2
+rand_pcg 0.10.3
 
 Apache License
                         Version 2.0, January 2004
@@ -18496,7 +18496,7 @@ Apache License
    limitations under the License.
 
 ----------------------------------------------------------------------------------------
-allocator-api2 0.2.21
+allocator-api2 0.2.22
 
 Apache License
                         Version 2.0, January 2004
@@ -19550,11 +19550,11 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ----------------------------------------------------------------------------------------
-zstd 0.13.4
-zstd 0.14.4
-zstd-safe 7.4.0
-zstd-safe 8.3.0
-zstd-sys 2.1.3+zstd.1.5.7
+zstd 0.13.6
+zstd 0.14.5
+zstd-safe 7.4.2
+zstd-safe 8.4.0
+zstd-sys 2.2.0+zstd.1.6.0
 
 BSD 3-Clause License
 
@@ -19648,7 +19648,7 @@ software or this license, under any kind of legal claim.***
 ----------------------------------------------------------------------------------------
 ryu 1.0.23
 whoami 2.1.3
-xxhash-rust 0.8.19
+xxhash-rust 0.8.21
 
 Boost Software License - Version 1.0 - August 17th, 2003
 
@@ -20393,10 +20393,10 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ----------------------------------------------------------------------------------------
-cc 1.11.1
+cc 1.11.3
 cfg-if 1.0.5
 cmake 0.1.58
-filetime 0.2.29
+filetime 0.2.30
 find-msvc-tools 0.1.15
 git2 0.21.0
 jobserver 0.1.35
@@ -20443,7 +20443,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ----------------------------------------------------------------------------------------
-libz-sys 1.1.28
+libz-sys 1.1.33
 
 Copyright (c) 2014 Alex Crichton
 Copyright (c) 2020 Josh Triplett
@@ -20473,7 +20473,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ----------------------------------------------------------------------------------------
-mio 1.2.4
+mio 1.2.5
 
 Copyright (c) 2014 Carl Lerche and other MIO contributors
 
@@ -20496,7 +20496,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ----------------------------------------------------------------------------------------
-errno 0.3.14
+errno 0.3.15
 
 Copyright (c) 2014 Chris Wong
 
@@ -20774,7 +20774,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ----------------------------------------------------------------------------------------
-libsqlite3-sys 0.37.0
+libsqlite3-sys 0.40.0
 
 Copyright (c) 2014 The rusqlite developers
 
@@ -20797,7 +20797,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ----------------------------------------------------------------------------------------
-rand_pcg 0.10.2
+rand_pcg 0.10.3
 
 Copyright (c) 2014-2017 Melissa O'Neill and PCG Project contributors
 Copyright 2018 Developers of the Rand project
@@ -20950,7 +20950,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ----------------------------------------------------------------------------------------
-hyper 1.12.0
+hyper 1.13.0
 unicase 2.10.0
 
 Copyright (c) 2014-2026 Sean McArthur
@@ -20980,8 +20980,8 @@ itertools 0.14.0
 itertools 0.15.0
 maplit 1.0.2
 rawpointer 0.2.1
-serde_with 3.24.0
-serde_with_macros 3.24.0
+serde_with 3.25.0
+serde_with_macros 3.25.0
 
 Copyright (c) 2015
 
@@ -21071,7 +21071,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ----------------------------------------------------------------------------------------
-plist 1.10.3
+plist 1.10.4
 
 Copyright (c) 2015 Edward Barnard
 
@@ -21665,13 +21665,13 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ----------------------------------------------------------------------------------------
-const-random 0.1.18
-const-random-macro 0.1.16
+const-random 0.1.20
+const-random-macro 0.1.18
 hashbrown 0.12.3
 hashbrown 0.14.5
 hashbrown 0.15.5
 hashbrown 0.16.1
-hashbrown 0.17.1
+hashbrown 0.17.2
 
 Copyright (c) 2016 Amanieu d'Antras
 
@@ -22336,7 +22336,7 @@ THE SOFTWARE.
 ----------------------------------------------------------------------------------------
 md-5 0.11.0
 sha1 0.11.0
-sha2 0.11.1
+sha2 0.11.2
 
 Copyright (c) 2016-2026 The RustCrypto Project Developers
 Copyright (c) 2016 Artyom Pavlov
@@ -22773,7 +22773,7 @@ DEALINGS IN THE SOFTWARE.
 
 ----------------------------------------------------------------------------------------
 cookie 0.16.2
-cookie 0.18.2
+cookie 0.18.3
 
 Copyright (c) 2017 Sergio Benitez
 Copyright (c) 2014 Alex Crichton
@@ -22967,7 +22967,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ----------------------------------------------------------------------------------------
-h2 0.4.20
+h2 0.4.21
 
 Copyright (c) 2017 h2 authors
 
@@ -23463,7 +23463,7 @@ SOFTWARE.
 ----------------------------------------------------------------------------------------
 fearless_simd 0.4.1
 fearless_simd 0.7.0
-fearless_simd 1.2.0
+fearless_simd 1.3.0
 kurbo 0.13.1
 peniko 0.6.1
 polycool 0.4.0
@@ -23495,7 +23495,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ----------------------------------------------------------------------------------------
-smallvec 1.16.5
+smallvec 1.16.6
 
 Copyright (c) 2018 The Servo Project Developers
 
@@ -23537,7 +23537,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ----------------------------------------------------------------------------------------
-ahash 0.8.12
+ahash 0.8.14
 
 Copyright (c) 2018 Tom Kaitchuck
 
@@ -24087,7 +24087,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ----------------------------------------------------------------------------------------
-zeroize 1.9.1
+zeroize 1.9.2
 
 Copyright (c) 2018-2026 The RustCrypto Project Developers
 
@@ -24146,7 +24146,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ----------------------------------------------------------------------------------------
-postcard 1.1.3
+postcard 1.2.0
 
 Copyright (c) 2019 Anthony James Munns
 
@@ -24485,7 +24485,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ----------------------------------------------------------------------------------------
-bumpalo 3.20.3
+bumpalo 3.20.4
 
 Copyright (c) 2019 Nick Fitzgerald
 
@@ -25167,7 +25167,7 @@ Permission is granted to anyone to use this software for any purpose, including 
 3. This notice may not be removed or altered from any source distribution.
 
 ----------------------------------------------------------------------------------------
-litrs 1.0.1
+litrs 1.1.0
 
 Copyright (c) 2020 Project Developers
 
@@ -26401,10 +26401,10 @@ anstyle-parse 1.0.0
 anstyle-query 1.1.5
 anstyle-wincon 3.0.11
 assert_cmd 2.2.2
-clap 4.6.9
-clap_builder 4.6.7
+clap 4.6.10
+clap_builder 4.6.10
 clap_derive 4.6.9
-clap_lex 1.1.1
+clap_lex 1.1.2
 colorchoice 1.0.5
 is_terminal_polyfill 1.70.2
 once_cell_polyfill 1.70.2
@@ -26415,12 +26415,12 @@ serde_spanned 0.6.9
 serde_spanned 1.1.3
 termtree 0.5.1
 toml 0.8.23
-toml 1.2.2+spec-1.1.0
+toml 1.2.3+spec-1.1.0
 toml_datetime 0.6.11
 toml_datetime 1.1.3+spec-1.1.0
 toml_edit 0.22.27
-toml_edit 0.25.20+spec-1.1.0
-toml_parser 1.1.6+spec-1.1.0
+toml_edit 0.25.21+spec-1.1.0
+toml_parser 1.1.7+spec-1.1.0
 toml_write 0.1.2
 toml_writer 1.2.0+spec-1.1.0
 
@@ -26494,7 +26494,7 @@ SOFTWARE.
 
 ----------------------------------------------------------------------------------------
 moxcms 0.8.1
-pic-scale 0.7.12
+pic-scale 0.7.14
 pxfm 0.1.30
 
 Copyright (c) Radzivon Bartoshyk. All rights reserved.
@@ -26990,7 +26990,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ----------------------------------------------------------------------------------------
-rangemap 1.8.0
+rangemap 1.9.0
 
 Copyright 2019 Jeffrey Parsons
 
@@ -27067,8 +27067,8 @@ WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ----------------------------------------------------------------------------------------
-zerocopy 0.8.63
-zerocopy-derive 0.8.63
+zerocopy 0.8.66
+zerocopy-derive 0.8.66
 
 Copyright 2019 The Fuchsia Authors.
 
@@ -27254,8 +27254,8 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ----------------------------------------------------------------------------------------
-zerocopy 0.8.63
-zerocopy-derive 0.8.63
+zerocopy 0.8.66
+zerocopy-derive 0.8.66
 
 Copyright 2023 The Fuchsia Authors
 
@@ -27538,7 +27538,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 base16 0.2.1
 blake3 1.8.7
 constant_time_eq 0.4.2
-constant_time_eq 0.6.1
+constant_time_eq 0.6.2
 dunce 1.0.5
 imgref 1.12.3
 tiny-keccak 2.0.2
@@ -27666,7 +27666,7 @@ express Statement of Purpose.
     this CC0 or use of the Work.
 
 ----------------------------------------------------------------------------------------
-rustls-webpki 0.103.16
+rustls-webpki 0.103.17
 
 Except as otherwise noted, this project is licensed under the following
 (ISC-style) terms:
@@ -30132,7 +30132,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ----------------------------------------------------------------------------------------
-crc32fast 1.5.5
+crc32fast 1.5.6
 
 MIT License
 
@@ -30398,6 +30398,48 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+----------------------------------------------------------------------------------------
+simd_helpers 0.1.1
+
+MIT License
+
+Copyright (c) 2019 Luca Barbato
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+-------------------------------------------------------------------------------
+
+Scope of this license
+---------------------
+
+This license text applies to all released versions of simd_helpers, including
+version 0.1.0 (published from commit ca1a2f84aa386d758e98f8a609d990263932fb85),
+even though that release predates the addition of this file to the repository.
+The copyright line to use in attribution notices is:
+
+    Copyright (c) 2019 Luca Barbato
+
+The license covers both the procedural macro implementation and the code it
+emits. Code generated by simd_helpers is licensed under the same MIT terms,
+with no additional terms or restrictions, including for commercial use and
+redistribution in downstream crates and applications.
 
 ----------------------------------------------------------------------------------------
 arbitrary 1.5.0
@@ -30732,7 +30774,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ----------------------------------------------------------------------------------------
-arrow-array 58.4.1
+arrow-array 58.4.2
 arrow-array 60.2.0
 
 MIT License
@@ -30858,9 +30900,9 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ----------------------------------------------------------------------------------------
-gcloud-auth 1.4.0
+gcloud-auth 1.5.0
 gcloud-metadata 1.0.2
-gcloud-storage 1.3.0
+gcloud-storage 1.3.1
 
 MIT License
 
@@ -33159,7 +33201,7 @@ Exhibit B - "Incompatible With Secondary Licenses" Notice
 
 ----------------------------------------------------------------------------------------
 adler2 2.0.1
-anyhow 1.0.104
+anyhow 1.0.105
 async-channel 2.5.0
 async-lock 3.5.0
 async-task 4.7.1
@@ -33209,9 +33251,9 @@ parking 2.2.1
 paste 1.0.15
 pastey 0.1.1
 pastey 0.2.3
-pin-project 1.1.13
-pin-project-internal 1.1.13
-pin-project-lite 0.2.17
+pin-project 1.2.0
+pin-project-internal 1.2.0
+pin-project-lite 0.2.18
 portable-atomic 1.15.0
 portable-atomic-util 0.2.8
 prettyplease 0.2.37
@@ -33299,7 +33341,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ----------------------------------------------------------------------------------------
-allocator-api2 0.2.21
+allocator-api2 0.2.22
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -33350,7 +33392,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ----------------------------------------------------------------------------------------
 constant_time_eq 0.4.2
-constant_time_eq 0.6.1
+constant_time_eq 0.6.2
 
 Permission is hereby granted, free of charge, to any person obtaining a
 copy of this software and associated documentation files (the
@@ -34074,7 +34116,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 spin 0.10.1
 spin 0.12.3
 spin 0.9.9
-zip 9.8.1
+zip 9.8.2
 
 The MIT License (MIT)
 
@@ -34216,13 +34258,18 @@ csv 1.4.0
 csv-core 0.1.13
 encoding_rs_io 0.1.8
 fst 0.4.7
-globset 0.4.21
-ignore 0.4.34
-jiff 0.2.43
-jiff-core 0.1.5
-jiff-static 0.2.43
-jiff-tzdb 0.1.9
+globset 0.4.22
+ignore 0.4.35
+jiff 0.2.46
+jiff 1.0.3
+jiff-core 0.1.8
+jiff-core 1.0.2
+jiff-static 0.2.46
+jiff-static 1.0.3
+jiff-tzdb 0.1.10
+jiff-tzdb 1.0.0
 jiff-tzdb-platform 0.1.3
+jiff-tzdb-platform 1.0.0
 memchr 2.8.3
 walkdir 2.5.1
 
@@ -34557,7 +34604,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ----------------------------------------------------------------------------------------
 jsonwebtoken 10.4.0
-jsonwebtoken 11.1.0
 jsonwebtoken 12.0.0
 
 The MIT License (MIT)
@@ -35149,7 +35195,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ----------------------------------------------------------------------------------------
-bstr 1.13.1
+bstr 1.14.0
 
 The MIT License (MIT)
 
@@ -35308,7 +35354,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ----------------------------------------------------------------------------------------
-lz4_flex 0.13.1
+lz4_flex 0.13.2
 
 The MIT License (MIT)
 
@@ -35742,7 +35788,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ----------------------------------------------------------------------------------------
-zstd-sys 2.1.3+zstd.1.5.7
+zstd-sys 2.2.0+zstd.1.6.0
 
 The auto-generated bindings are under the 3-clause BSD license:
 
@@ -35778,7 +35824,7 @@ ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ----------------------------------------------------------------------------------------
-zstd-sys 2.1.3+zstd.1.5.7
+zstd-sys 2.2.0+zstd.1.6.0
 
 The decoders for legacy formats, in zstd/lib/legacy/, include code under the
 2-clause BSD license:
@@ -35844,13 +35890,18 @@ byteorder 1.5.0
 csv 1.4.0
 csv-core 0.1.13
 fst 0.4.7
-globset 0.4.21
-ignore 0.4.34
-jiff 0.2.43
-jiff-core 0.1.5
-jiff-static 0.2.43
-jiff-tzdb 0.1.9
+globset 0.4.22
+ignore 0.4.35
+jiff 0.2.46
+jiff 1.0.3
+jiff-core 0.1.8
+jiff-core 1.0.2
+jiff-static 0.2.46
+jiff-static 1.0.3
+jiff-tzdb 0.1.10
+jiff-tzdb 1.0.0
 jiff-tzdb-platform 0.1.3
+jiff-tzdb-platform 1.0.0
 memchr 2.8.3
 same-file 1.0.6
 walkdir 2.5.1
@@ -35873,7 +35924,7 @@ This project is licensed under either of
 at your option.
 
 ----------------------------------------------------------------------------------------
-bstr 1.13.1
+bstr 1.14.0
 
 This project is licensed under either of
 
@@ -36458,7 +36509,7 @@ dioxus-web 0.7.10  —  MIT OR Apache-2.0
 diskann-utils 0.61.0  —  MIT
 diskann-vector 0.61.0  —  MIT
 diskann-wide 0.61.0  —  MIT
-encodify 1.0.2  —  Apache-2.0 OR MIT
+encodify 1.0.3  —  Apache-2.0 OR MIT
 flatbuffers 25.12.19  —  Apache-2.0
 generational-box 0.7.10  —  MIT OR Apache-2.0
 geo 0.32.0  —  MIT OR Apache-2.0
@@ -36467,7 +36518,7 @@ gloo-net 0.6.0  —  MIT OR Apache-2.0
 gloo-net 0.8.0  —  MIT OR Apache-2.0
 gloo-timers 0.3.0  —  MIT OR Apache-2.0
 gloo-utils 0.2.0  —  MIT OR Apache-2.0
-gloo-utils 0.3.0  —  MIT OR Apache-2.0
+gloo-utils 0.3.1  —  MIT OR Apache-2.0
 hashify 0.3.2  —  Apache-2.0 OR MIT
 i_overlay 4.0.7  —  MIT
 include_dir 0.7.4  —  MIT
@@ -36481,7 +36532,7 @@ lazy-js-bundle 0.7.10  —  MIT OR Apache-2.0
 libwebp-sys 0.9.6  —  MIT
 lindera 6.2.0  —  MIT
 lindera-dictionary 6.2.0  —  MIT
-mail-parser 1.0.1  —  Apache-2.0 OR MIT
+mail-parser 1.0.2  —  Apache-2.0 OR MIT
 manganis 0.7.10  —  MIT OR Apache-2.0
 manganis-core 0.7.10  —  MIT OR Apache-2.0
 manganis-macro 0.7.10  —  MIT OR Apache-2.0
@@ -36522,7 +36573,6 @@ rstar 0.8.4  —  MIT/Apache-2.0
 rstar 0.9.3  —  MIT/Apache-2.0
 rustls-platform-verifier-android 0.2.0  —  MIT OR Apache-2.0
 selectors 0.41.0  —  MPL-2.0
-simd_helpers 0.1.0  —  MIT
 sledgehammer_bindgen 0.6.0  —  MIT
 sledgehammer_bindgen_macro 0.6.5  —  MIT
 sledgehammer_utils 0.3.1  —  MIT
