@@ -773,7 +773,7 @@ mod tests {
                 return;
             };
             let pg = connect(&options, &database).await;
-            let surreal = crate::surreal::test_support::mem().await;
+            let surreal = crate::surreal::SurrealDb::uninitialized();
             let m = matter(&pg).await;
             let on = NaiveDate::from_ymd_opt(2026, 11, 6).unwrap();
             for outsider in [m.client, m.clerk, m.outside_lawyer] {
@@ -783,12 +783,13 @@ mod tests {
                 ));
             }
             // No term: an hourly matter, certain money only.
-            assert!(matches!(
-                for_project(&surreal, &pg, m.lawyer, m.project_id, on)
-                    .await
-                    .unwrap(),
-                MatterProjection::Certain(_)
-            ));
+            let certain = crate::postgres::accounting::with_test_db(
+                pg.clone(),
+                for_project(&surreal, &pg, m.lawyer, m.project_id, on),
+            )
+            .await
+            .unwrap();
+            assert!(matches!(certain, MatterProjection::Certain(_)));
 
             let notation = fee_agreement(&pg, &m).await;
             crate::contingency_terms::record(
