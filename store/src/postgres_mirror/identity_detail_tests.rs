@@ -254,10 +254,12 @@ async fn details(
         .await
         .unwrap()
         .id;
-        let credential = crate::credentials::grant(source, holder, licensing, "SYN-0001")
-            .await
-            .unwrap()
-            .id;
+        let credential = Uuid::now_v7();
+        source.query("CREATE $id SET person_id=$person, jurisdiction_id=$jurisdiction, license_number='SYN-0001'")
+            .bind(("id", record_id("credential", credential)))
+            .bind(("person", record_id("person", holder)))
+            .bind(("jurisdiction", record_id("jurisdiction", licensing)))
+            .await.unwrap().check().unwrap();
         let token = Uuid::now_v7();
         source.query("CREATE $id SET person_id=$person, email='captured@example.com', purpose='email_confirm', token_hash=$hash, expires_at=$expires")
             .bind(("id", record_id("email_token", token)))
