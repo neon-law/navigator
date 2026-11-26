@@ -42,8 +42,8 @@ struct CheckoutPreview {
 }
 
 /// Report the checkout state of the signed-in person's active Projects.
-async fn run_preview(host: &str, dir: &Path) -> ExitCode {
-    match preview(host, dir).await {
+async fn run_preview(host: &str, dir: &Path, verbose: bool) -> ExitCode {
+    match preview(host, dir, verbose).await {
         Ok(report) => {
             println!("{report}");
             ExitCode::SUCCESS
@@ -55,11 +55,10 @@ async fn run_preview(host: &str, dir: &Path) -> ExitCode {
     }
 }
 
-async fn preview(host: &str, dir: &Path) -> Result<String> {
+async fn preview(host: &str, dir: &Path, verbose: bool) -> Result<String> {
     if dir.is_dir() {
-        Box::pin(super::workspace_skills::sync(dir, host, true))
-            .await?
-            .print(true);
+        let workspace = Box::pin(super::workspace_skills::sync(dir, host, true)).await?;
+        print_workspace(&workspace, true, verbose);
     }
     let (base, token) = remote::resolve(Some(host))?;
     let projects = visible_projects(&base, &token).await?;
@@ -105,7 +104,7 @@ fn checkout_preview(dir: &Path, projects: Vec<Project>) -> Result<Vec<CheckoutPr
 }
 
 /// Synchronize participating active Projects once, keeping document hydration separate.
-pub async fn run_sync(host: &str, dir: Option<&Path>, dry_run: bool) -> ExitCode {
+pub async fn run_sync(host: &str, dir: Option<&Path>, dry_run: bool, verbose: bool) -> ExitCode {
     let dir = match super::workspace_root::selected(dir) {
         Ok(dir) => dir,
         Err(error) => {
@@ -114,9 +113,9 @@ pub async fn run_sync(host: &str, dir: Option<&Path>, dry_run: bool) -> ExitCode
         }
     };
     if dry_run {
-        return run_preview(host, &dir).await;
+        return run_preview(host, &dir, verbose).await;
     }
-    match sync_once(host, None, &dir).await {
+    match sync_once(host, None, &dir, verbose).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("navigator sync: {error:#}");
@@ -129,12 +128,12 @@ pub async fn run_sync(host: &str, dir: Option<&Path>, dry_run: bool) -> ExitCode
 pub async fn sync_project(host: Option<&str>, code: &str, root: Option<&Path>) -> Result<()> {
     let (base, _) = remote::resolve(host)?;
     let dir = super::workspace_root::selected(root)?;
-    sync_once(&base, Some(code), &dir).await.context(
+    sync_once(&base, Some(code), &dir, false).await.context(
         "Project is open, but checkout setup is incomplete; retry navigator sync --host <host>",
     )
 }
 
-async fn sync_once(host: &str, code: Option<&str>, root: &Path) -> Result<()> {
+async fn sync_once(host: &str, code: Option<&str>, root: &Path, verbose: bool) -> Result<()> {
     std::fs::create_dir_all(root)?;
     ensure!(
         !std::fs::symlink_metadata(root)?.is_symlink(),
@@ -166,12 +165,30 @@ async fn sync_once(host: &str, code: Option<&str>, root: &Path) -> Result<()> {
         "opened Project is absent from the active participation inventory"
     );
     let workspace = Box::pin(super::workspace_skills::sync(&dir, host, false)).await?;
-    workspace.print(false);
+    print_workspace(&workspace, false, verbose);
     ensure!(
         !failed,
         "some checkouts need attention; other Projects were still processed"
     );
     Ok(())
+}
+
+fn print_workspace(workspace: &super::workspace_skills::Report, dry_run: bool, verbose: bool) {
+    if verbose {
+        workspace.print(dry_run);
+        return;
+    }
+    if !workspace.changes.is_empty() || !workspace.missing.is_empty() {
+        let action = if dry_run { "planned" } else { "applied" };
+        eprintln!(
+            "Workspace changes {action}: {}; needs attention: {}",
+            workspace.changes.len(),
+            workspace.missing.len()
+        );
+    }
+    for missing in &workspace.missing {
+        eprintln!("Workspace needs attention: {missing}");
+    }
 }
 
 pub(super) async fn active_codes(base: &str, token: &str) -> Result<Vec<String>> {
@@ -184,7 +201,7 @@ pub(super) async fn active_codes(base: &str, token: &str) -> Result<Vec<String>>
 }
 
 /// Keep polling until Ctrl-C. An unavailable Project does not stop the others.
-pub async fn run(dir: Option<&Path>, host: Option<&str>) -> ExitCode {
+pub async fn run(dir: Option<&Path>, host: Option<&str>, checkouts_only: bool) -> ExitCode {
     let dir = match super::workspace_root::selected(dir) {
         Ok(dir) => dir,
         Err(error) => {
@@ -192,7 +209,7 @@ pub async fn run(dir: Option<&Path>, host: Option<&str>) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    match watch(&dir, host).await {
+    match watch(&dir, host, checkouts_only).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("navigator: {error:#}");
@@ -201,10 +218,14 @@ pub async fn run(dir: Option<&Path>, host: Option<&str>) -> ExitCode {
     }
 }
 
-async fn watch(dir: &Path, host: Option<&str>) -> Result<()> {
+async fn watch(dir: &Path, host: Option<&str>, checkouts_only: bool) -> Result<()> {
     remote::resolve(host)?;
     command(Path::new("."), "jj", &["--version"]).await?;
     std::fs::create_dir_all(dir).context("create Project watch directory")?;
+    ensure!(
+        !std::fs::symlink_metadata(dir)?.is_symlink(),
+        "checkout root is a symlink"
+    );
     let dir = dir
         .canonicalize()
         .context("resolve Project watch directory")?;
@@ -221,7 +242,7 @@ async fn watch(dir: &Path, host: Option<&str>) -> Result<()> {
         () = async {
             loop {
                 interval.tick().await;
-                if let Err(error) = poll(&dir, host, &mut copies).await {
+                if let Err(error) = poll(&dir, host, &mut copies, checkouts_only).await {
                     eprintln!("navigator: {error:#}");
                 }
             }
@@ -229,14 +250,24 @@ async fn watch(dir: &Path, host: Option<&str>) -> Result<()> {
     }
 }
 
-async fn poll(dir: &Path, host: Option<&str>, copies: &mut HashMap<PathBuf, String>) -> Result<()> {
+async fn poll(
+    dir: &Path,
+    host: Option<&str>,
+    copies: &mut HashMap<PathBuf, String>,
+    checkouts_only: bool,
+) -> Result<()> {
     let (base, token) = remote::resolve(host)?;
     let projects = visible_projects(&base, &token).await?;
     for project in projects
         .into_iter()
         .filter(|project| matches!(project.status.as_str(), "open" | "pitch"))
     {
-        if let Err(error) = update(dir, &project, &base, &token, copies).await {
+        let result = if checkouts_only {
+            sync_checkout(dir, &project, &base, &token).await
+        } else {
+            update(dir, &project, &base, &token, copies).await
+        };
+        if let Err(error) = result {
             eprintln!("navigator: Project {}: {error:#}", project.code);
         }
     }
@@ -375,11 +406,14 @@ async fn update_checkout(
         origin.trim() == url,
         "local origin differs from the Project repository"
     );
-    prepare_clean_jj(&root).await?;
+    prepare_jj(&root).await?;
+    let previous_main = checkout_commit(&root, "present(main@origin)").await?;
     // Fetch only the remotes the live Project inventory verified. An existing
     // checkout may retain an earlier mirror or a contributor's personal fork.
     let mut fetch = vec![
         "--ignore-working-copy",
+        "--config",
+        "git.abandon-unreachable-commits=false",
         "git",
         "fetch",
         "--remote",
@@ -408,10 +442,80 @@ async fn update_checkout(
         }
     }
     command(&root, "jj", &fetch).await?;
+    advance_clean_checkout(&root, &project.code, &previous_main).await
+}
+
+pub(super) async fn checkout_commit(root: &Path, revision: &str) -> Result<String> {
+    let output = command(
+        root,
+        "jj",
+        &[
+            "--ignore-working-copy",
+            "log",
+            "--no-graph",
+            "-r",
+            revision,
+            "-T",
+            r#"commit_id ++ "
+""#,
+        ],
+    )
+    .await?;
+    Ok(output.trim().to_owned())
+}
+
+async fn advance_clean_checkout(root: &Path, code: &str, previous_main: &str) -> Result<()> {
+    let main = checkout_commit(root, "present(main@origin)").await?;
+    let parent = checkout_commit(root, "parents(@)").await?;
+    if main == parent {
+        return Ok(());
+    }
+    if main.is_empty() {
+        eprintln!("Skipped {code}: origin has no main bookmark");
+        return Ok(());
+    }
+    let clean = git_working_copy_clean(root).await?;
+    if clean
+        && !previous_main.is_empty()
+        && parent == previous_main
+        && git_output(root, &["merge-base", "--is-ancestor", previous_main, &main])
+            .await?
+            .status
+            .success()
+    {
+        let source = format!(
+            r#"@ & empty() & ~conflicts() & children({previous_main}) & heads(@::) & ~bookmarks() & ~tags() & description(exact:"")"#
+        );
+        if !checkout_commit(root, &source).await?.is_empty() {
+            // Re-evaluate the selection after jj snapshots the working copy,
+            // so an edit between the Git status check and rebase is retained.
+            command(root, "jj", &["rebase", "-r", &source, "--onto", &main]).await?;
+            if checkout_commit(root, "parents(@)").await? == main {
+                eprintln!("Updated {code}");
+                return Ok(());
+            }
+        }
+    }
+    let behind = checkout_commit(root, "main@origin ~ ::parents(@)").await?;
+    eprintln!(
+        "Skipped {code}: kept local checkout, behind by {}",
+        behind.lines().count()
+    );
     Ok(())
 }
 
-async fn prepare_clean_jj(root: &Path) -> Result<()> {
+async fn git_working_copy_clean(root: &Path) -> Result<bool> {
+    Ok(command(
+        root,
+        "git",
+        &["--no-optional-locks", "status", "--porcelain"],
+    )
+    .await?
+    .trim()
+    .is_empty())
+}
+
+async fn prepare_jj(root: &Path) -> Result<()> {
     let needs_jj = match std::fs::symlink_metadata(root.join(".jj")) {
         Ok(metadata) => {
             ensure!(metadata.is_dir(), "jj metadata is not a directory");
@@ -420,39 +524,14 @@ async fn prepare_clean_jj(root: &Path) -> Result<()> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
         Err(error) => return Err(error).context("inspect jj metadata"),
     };
-    ensure!(
-        command(
-            root,
-            "git",
-            &["--no-optional-locks", "status", "--porcelain"]
-        )
-        .await?
-        .trim()
-        .is_empty(),
-        "checkout has local work; skipped"
-    );
     if needs_jj {
+        ensure!(
+            git_working_copy_clean(root).await?,
+            "checkout has local work; skipped"
+        );
         command(root, "jj", &["git", "init", "--colocate"]).await?;
     }
-    let dirty = command(root, "jj", &["--ignore-working-copy", "diff", "--summary"]).await?;
-    let conflicts = command(
-        root,
-        "jj",
-        &[
-            "--ignore-working-copy",
-            "log",
-            "--no-graph",
-            "-r",
-            "@",
-            "-T",
-            "conflict",
-        ],
-    )
-    .await?;
-    ensure!(
-        dirty.trim().is_empty() && conflicts.trim() == "false",
-        "checkout has local work or conflicts; skipped"
-    );
+
     Ok(())
 }
 
@@ -760,23 +839,6 @@ mod tests {
             )
         };
         sync().await?;
-        let existing_root = dir.join("existing");
-        std::fs::create_dir(&existing_root)?;
-        command(
-            &existing_root,
-            "git",
-            &["clone", origin.to_str().unwrap(), "matter"],
-        )
-        .await?;
-        super::update_checkout(
-            &existing_root,
-            &project,
-            origin.to_str().unwrap(),
-            FetchRemotes::Verified(mirror.to_str().unwrap()),
-            "https://site.example.test",
-        )
-        .await?;
-        assert!(existing_root.join("matter/.jj").is_dir());
         let checkout = dir.join("matter");
         assert!(checkout.join(".jj").is_dir());
         assert!(checkout.join(".git").is_dir());
@@ -811,10 +873,34 @@ mod tests {
         .await?;
         assert!(repaired.lines().any(|url| url == origin.to_str().unwrap()));
         assert!(repaired.lines().any(|url| url == mirror.to_str().unwrap()));
+        std::fs::write(dir.join("seed/server.txt"), "first")?;
+        publish_checkout_change(&dir, &origin).await?;
+        sync().await?;
+        assert_eq!(
+            std::fs::read_to_string(checkout.join("server.txt"))?,
+            "first"
+        );
         let before = working_revision(&checkout).await?;
+        let previous_main = checkout_commit(&checkout, "main@origin").await?;
         std::fs::write(checkout.join("local.txt"), "unfinished work")?;
-        let error = sync().await.unwrap_err();
-        assert!(error.to_string().contains("local work"));
+        std::fs::write(dir.join("seed/server.txt"), "second")?;
+        publish_checkout_change(&dir, &origin).await?;
+        sync().await?;
+        assert_ne!(
+            checkout_commit(&checkout, "main@origin").await?,
+            previous_main
+        );
+        assert_eq!(
+            checkout_commit(&checkout, "main@origin ~ ::parents(@)")
+                .await?
+                .lines()
+                .count(),
+            1
+        );
+        assert_eq!(
+            std::fs::read_to_string(checkout.join("server.txt"))?,
+            "first"
+        );
         assert_eq!(working_revision(&checkout).await?, before);
         assert_eq!(
             std::fs::read_to_string(checkout.join("local.txt"))?,
@@ -829,6 +915,42 @@ mod tests {
             .to_string()
             .contains("jj metadata"));
         assert!(!outside.exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn sync_colocates_an_existing_git_checkout() -> Result<()> {
+        if !jj_available() {
+            return Ok(());
+        }
+        let temp = tempfile::tempdir()?;
+        let dir = temp.path().canonicalize()?;
+        let (project, origin, mirror) = seed_checkout_forges(&dir, "site.example.test").await?;
+        let existing_root = dir.join("existing");
+        std::fs::create_dir(&existing_root)?;
+        command(
+            &existing_root,
+            "git",
+            &["clone", origin.to_str().unwrap(), "matter"],
+        )
+        .await?;
+        super::update_checkout(
+            &existing_root,
+            &project,
+            origin.to_str().unwrap(),
+            FetchRemotes::Verified(mirror.to_str().unwrap()),
+            "https://site.example.test",
+        )
+        .await?;
+        assert!(existing_root.join("matter/.jj").is_dir());
+        Ok(())
+    }
+
+    async fn publish_checkout_change(dir: &Path, origin: &Path) -> Result<()> {
+        let seed = dir.join("seed");
+        command(&seed, "git", &["add", "server.txt"]).await?;
+        command(&seed, "git", &["commit", "-m", "server update"]).await?;
+        command(&seed, "git", &["push", origin.to_str().unwrap(), "main"]).await?;
         Ok(())
     }
 
@@ -1119,7 +1241,10 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("checkouts");
 
-        assert_eq!(run_sync(&host, Some(&root), true).await, ExitCode::SUCCESS);
+        assert_eq!(
+            run_sync(&host, Some(&root), true, false).await,
+            ExitCode::SUCCESS
+        );
         assert!(!root.exists(), "a dry run writes nothing");
         assert_eq!(
             active_codes(&host, "test-token").await.unwrap(),
@@ -1127,15 +1252,21 @@ mod tests {
         );
 
         std::fs::create_dir_all(root.join("closed-matter")).unwrap();
-        let error = sync_once(&host, None, &root).await.unwrap_err();
+        let error = sync_once(&host, None, &root, false).await.unwrap_err();
         assert_eq!(
             error.to_string(),
             "some checkouts need attention; other Projects were still processed"
         );
         assert!(root.join("AGENTS.md").is_file());
         assert!(root.join("closed-matter").is_dir());
-        assert_eq!(run_sync(&host, Some(&root), false).await, ExitCode::FAILURE);
-        assert_eq!(run_sync(&host, Some(&root), true).await, ExitCode::SUCCESS);
+        assert_eq!(
+            run_sync(&host, Some(&root), false, false).await,
+            ExitCode::FAILURE
+        );
+        assert_eq!(
+            run_sync(&host, Some(&root), true, false).await,
+            ExitCode::SUCCESS
+        );
 
         let error = sync_project(Some(&host), "closed-matter", Some(&root))
             .await
@@ -1143,17 +1274,19 @@ mod tests {
         assert!(format!("{error:#}")
             .contains("opened Project is absent from the active participation inventory"));
 
-        poll(&root, Some(&host), &mut HashMap::new()).await.unwrap();
+        poll(&root, Some(&host), &mut HashMap::new(), false)
+            .await
+            .unwrap();
 
         let link = temp.path().join("link");
         std::os::unix::fs::symlink(&root, &link).unwrap();
-        let error = sync_once(&host, None, &link).await.unwrap_err();
+        let error = sync_once(&host, None, &link, false).await.unwrap_err();
         assert_eq!(error.to_string(), "checkout root is a symlink");
 
         let signed_out = Some("signed-out.example.test");
-        assert_eq!(run(Some(&root), signed_out).await, ExitCode::from(2));
+        assert_eq!(run(Some(&root), signed_out, false).await, ExitCode::from(2));
         assert_eq!(
-            run_sync("signed-out.example.test", Some(&root), true).await,
+            run_sync("signed-out.example.test", Some(&root), true, false).await,
             ExitCode::from(2)
         );
     }
@@ -1181,7 +1314,10 @@ mod tests {
         std::env::set_var("GIT_CONFIG_VALUE_0", url);
 
         let root = temp.path().join("checkouts");
-        assert_eq!(run_sync(&host, Some(&root), false).await, ExitCode::SUCCESS);
+        assert_eq!(
+            run_sync(&host, Some(&root), false, false).await,
+            ExitCode::SUCCESS
+        );
         let checkout = root.join("matter");
         assert!(checkout.join(".jj").is_dir());
         assert_eq!(std::fs::read(checkout.join(SKILL_PATH))?, SKILL_BYTES);
@@ -1189,17 +1325,27 @@ mod tests {
         assert_eq!(configured.await?.trim(), url);
 
         sync_project(Some(&host), "matter", Some(&root)).await?;
-        poll(&root.canonicalize()?, Some(&host), &mut HashMap::new()).await?;
+        poll(
+            &root.canonicalize()?,
+            Some(&host),
+            &mut HashMap::new(),
+            false,
+        )
+        .await?;
 
         std::fs::write(checkout.join("local.txt"), "unfinished work")?;
-        assert_eq!(run_sync(&host, Some(&root), false).await, ExitCode::FAILURE);
+        assert_eq!(
+            run_sync(&host, Some(&root), false, false).await,
+            ExitCode::SUCCESS
+        );
         assert_eq!(
             std::fs::read_to_string(checkout.join("local.txt"))?,
             "unfinished work"
         );
 
         // The watch reports that checkout on each pass and keeps running.
-        let watching = tokio::time::timeout(Duration::from_millis(500), watch(&root, Some(&host)));
+        let watching =
+            tokio::time::timeout(Duration::from_millis(500), watch(&root, Some(&host), false));
         assert!(watching.await.is_err(), "the watch runs until interrupted");
         Ok(())
     }

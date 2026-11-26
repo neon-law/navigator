@@ -198,6 +198,8 @@ case "${1:-} ${2:-}" in
     done ;;
   "diff "*) [ -d .jj ] || exit 1; cat .jj/diff 2>/dev/null || true ;;
   "log --no-graph") case "$*" in
+      *"present(main@origin) -T commit_id"*) git rev-parse --verify --quiet origin/main || true ;;
+      *"parents(@) -T commit_id"*) git rev-parse --verify --quiet HEAD || true ;;
       *"-T conflict") echo false ;;
       *"main@origin -T commit_id") git rev-parse origin/main ;;
       *"-T commit_id") git rev-parse HEAD ;;
