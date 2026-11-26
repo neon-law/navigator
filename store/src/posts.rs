@@ -1427,7 +1427,7 @@ async fn write_pg(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{brands::NewBrand, firms::NewFirm, persons::NewPerson, test_support};
+    use crate::{persons::NewPerson, test_support};
 
     #[test]
     fn scheduled_posts_are_live_only_at_or_after_their_time() {
@@ -1446,44 +1446,9 @@ mod tests {
     }
 
     async fn practice(db: &SurrealDb, label: &str) -> (Uuid, Uuid, String) {
-        let admin = crate::persons::create(
-            db,
-            &NewPerson::with_role(
-                format!("{label} Admin"),
-                format!("{label}-{}@example.com", Uuid::now_v7()),
-                Role::Admin,
-            ),
-        )
-        .await
-        .unwrap();
-        let firm = crate::firms::create(
-            db,
-            &NewFirm {
-                name: format!("{label} Firm"),
-                status: "active".into(),
-                entity_id: test_support::seed_entity(db).await,
-                admin_dri_person_id: admin.id,
-            },
-        )
-        .await
-        .unwrap();
         let key = format!("{label}-brand");
-        crate::brands::create(
-            db,
-            Role::Admin,
-            Some(admin.id),
-            &NewBrand {
-                name: format!("{label} Brand"),
-                key: key.clone(),
-                firm_id: Some(firm.id),
-                primary_color: None,
-                accent_color: None,
-                typeface: None,
-            },
-        )
-        .await
-        .unwrap();
-        (firm.id, admin.id, key)
+        let (firm_id, admin_id) = test_support::seed_firm_with_new_brand(db, &key).await;
+        (firm_id, admin_id, key)
     }
 
     async fn insert_test_post(
@@ -1503,322 +1468,356 @@ mod tests {
     #[tokio::test]
     async fn public_links_for_database_posts_include_confirmed_receipts_without_handles_or_seed_edits(
     ) {
-        let db = test_support::mem_surreal().await;
-        let (_, _, brand) = practice(&db, "generated-public-links").await;
-        let now = Utc::now();
-        let first = insert_test_post(
-            &db,
-            &brand,
-            "generated",
-            "published",
-            now - chrono::Duration::hours(1),
-            now,
-        )
-        .await;
-        let other = insert_test_post(
-            &db,
-            &brand,
-            "other",
-            "published",
-            now - chrono::Duration::hours(1),
-            now,
-        )
-        .await;
-        for (post, provider, remote, url) in [
-            (
-                first,
-                "facebook",
-                "fb-receipt",
-                Some("https://www.facebook.com/synthetic/posts/fb-receipt"),
-            ),
-            (
-                first,
-                "tiktok",
-                "tt-receipt",
-                Some("https://www.tiktok.com/@synthetic/video/tt-receipt"),
-            ),
-            (first, "instagram", "ig-receipt", None),
-            (
-                other,
-                "youtube",
-                "other-receipt",
-                Some("https://www.youtube.com/watch?v=other-receipt"),
-            ),
-        ] {
-            crate::social_publications::admit(&db, post, provider)
+        test_support::with_required_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            test_support::seed_compiled_brands_postgres(&db).await;
+
+            let (_, _, brand) = practice(&db, "generated-public-links").await;
+            let now = Utc::now();
+            let first = insert_test_post(
+                &db,
+                &brand,
+                "generated",
+                "published",
+                now - chrono::Duration::hours(1),
+                now,
+            )
+            .await;
+            let other = insert_test_post(
+                &db,
+                &brand,
+                "other",
+                "published",
+                now - chrono::Duration::hours(1),
+                now,
+            )
+            .await;
+            for (post, provider, remote, url) in [
+                (
+                    first,
+                    "facebook",
+                    "fb-receipt",
+                    Some("https://www.facebook.com/synthetic/posts/fb-receipt"),
+                ),
+                (
+                    first,
+                    "tiktok",
+                    "tt-receipt",
+                    Some("https://www.tiktok.com/@synthetic/video/tt-receipt"),
+                ),
+                (first, "instagram", "ig-receipt", None),
+                (
+                    other,
+                    "youtube",
+                    "other-receipt",
+                    Some("https://www.youtube.com/watch?v=other-receipt"),
+                ),
+            ] {
+                crate::social_publications::admit(&db, post, provider)
+                    .await
+                    .unwrap();
+                crate::social_publications::mark_confirmed(&db, post, provider, remote, url)
+                    .await
+                    .unwrap();
+            }
+            crate::social_publications::admit(&db, first, "threads")
                 .await
                 .unwrap();
-            crate::social_publications::mark_confirmed(&db, post, provider, remote, url)
+            crate::social_publications::mark_failed(&db, first, "threads", "synthetic failure")
                 .await
                 .unwrap();
-        }
-        crate::social_publications::admit(&db, first, "threads")
-            .await
-            .unwrap();
-        crate::social_publications::mark_failed(&db, first, "threads", "synthetic failure")
-            .await
-            .unwrap();
-        let posts = published_for_brand(&db, &brand, now).await.unwrap();
-        let post = posts.iter().find(|post| post.id == first).unwrap();
-        assert!(post.social_links.is_empty());
-        assert!(crate::social_handles::find(&db, &brand, "facebook")
-            .await
-            .unwrap()
-            .is_none());
-        let receipts = crate::social_publications::for_posts(&db, &[first, other])
-            .await
-            .unwrap();
-        let links = public_social_links(post, &receipts);
-        assert_eq!(
-            links
-                .iter()
-                .map(|link| link.provider.as_str())
-                .collect::<Vec<_>>(),
-            ["facebook", "tiktok"]
-        );
-        assert_eq!(
-            links[0].permalink,
-            "https://www.facebook.com/synthetic/posts/fb-receipt"
-        );
-        assert_eq!(
-            links[1].permalink,
-            "https://www.tiktok.com/@synthetic/video/tt-receipt"
-        );
+            let posts = published_for_brand(&db, &brand, now).await.unwrap();
+            let post = posts.iter().find(|post| post.id == first).unwrap();
+            assert!(post.social_links.is_empty());
+            assert!(crate::social_handles::find(&db, &brand, "facebook")
+                .await
+                .unwrap()
+                .is_none());
+            let receipts = crate::social_publications::for_posts(&db, &[first, other])
+                .await
+                .unwrap();
+            let links = public_social_links(post, &receipts);
+            assert_eq!(
+                links
+                    .iter()
+                    .map(|link| link.provider.as_str())
+                    .collect::<Vec<_>>(),
+                ["facebook", "tiktok"]
+            );
+            assert_eq!(
+                links[0].permalink,
+                "https://www.facebook.com/synthetic/posts/fb-receipt"
+            );
+            assert_eq!(
+                links[1].permalink,
+                "https://www.tiktok.com/@synthetic/video/tt-receipt"
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn public_links_preserve_manual_precedence_and_reject_unconfirmed_or_invalid_receipts() {
-        let db = test_support::mem_surreal().await;
-        let (_, _, brand) = practice(&db, "public-link-validation").await;
-        let now = Utc::now();
-        let id = insert_test_post(
-            &db,
-            &brand,
-            "generated",
-            "published",
-            now - chrono::Duration::hours(1),
-            now,
-        )
-        .await;
-        let mut post = find_by_id(&db, id).await.unwrap().unwrap();
-        let manual = SocialLink {
-            provider: "facebook".into(),
-            account: "synthetic-page".into(),
-            post_id: Some("manual".into()),
-            permalink: Some("https://www.facebook.com/synthetic/posts/manual".into()),
-        };
-        post.social_links = vec![manual.clone(), manual];
-        let receipt = crate::social_publications::SocialPublication {
-            id: "synthetic-receipt".into(),
-            post_id: id,
-            provider: "facebook".into(),
-            state: crate::social_publications::CONFIRMED.into(),
-            attempt_count: 1,
-            provider_task_id: None,
-            provider_post_id: Some("receipt".into()),
-            permalink: Some("https://www.facebook.com/synthetic/posts/receipt".into()),
-            last_error: None,
-            inserted_at: now,
-            updated_at: now,
-        };
-        assert_eq!(
-            public_social_links(&post, std::slice::from_ref(&receipt)),
-            vec![PublicSocialLink {
+        test_support::with_required_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            test_support::seed_compiled_brands_postgres(&db).await;
+
+            let (_, _, brand) = practice(&db, "public-link-validation").await;
+            let now = Utc::now();
+            let id = insert_test_post(
+                &db,
+                &brand,
+                "generated",
+                "published",
+                now - chrono::Duration::hours(1),
+                now,
+            )
+            .await;
+            let mut post = find_by_id(&db, id).await.unwrap().unwrap();
+            let manual = SocialLink {
                 provider: "facebook".into(),
-                permalink: "https://www.facebook.com/synthetic/posts/manual".into()
-            }]
-        );
-        post.social_links.clear();
-        for mut invalid in [
-            crate::social_publications::SocialPublication {
-                state: "unknown".into(),
-                ..receipt.clone()
-            },
-            crate::social_publications::SocialPublication {
-                state: "sending".into(),
-                ..receipt.clone()
-            },
-            crate::social_publications::SocialPublication {
-                state: "failed".into(),
-                ..receipt.clone()
-            },
-            crate::social_publications::SocialPublication {
-                provider_post_id: None,
-                ..receipt.clone()
-            },
-            crate::social_publications::SocialPublication {
-                provider_post_id: Some("unsafe/id".into()),
-                ..receipt.clone()
-            },
-            crate::social_publications::SocialPublication {
-                permalink: None,
-                ..receipt.clone()
-            },
-            crate::social_publications::SocialPublication {
-                permalink: Some("https://example.test/fake".into()),
-                ..receipt.clone()
-            },
-            crate::social_publications::SocialPublication {
-                post_id: Uuid::now_v7(),
-                ..receipt.clone()
-            },
-        ] {
-            assert!(
-                public_social_links(&post, &[invalid.clone()]).is_empty(),
-                "{invalid:?}"
+                account: "synthetic-page".into(),
+                post_id: Some("manual".into()),
+                permalink: Some("https://www.facebook.com/synthetic/posts/manual".into()),
+            };
+            post.social_links = vec![manual.clone(), manual];
+            let receipt = crate::social_publications::SocialPublication {
+                id: "synthetic-receipt".into(),
+                post_id: id,
+                provider: "facebook".into(),
+                state: crate::social_publications::CONFIRMED.into(),
+                attempt_count: 1,
+                provider_task_id: None,
+                provider_post_id: Some("receipt".into()),
+                permalink: Some("https://www.facebook.com/synthetic/posts/receipt".into()),
+                last_error: None,
+                inserted_at: now,
+                updated_at: now,
+            };
+            assert_eq!(
+                public_social_links(&post, std::slice::from_ref(&receipt)),
+                vec![PublicSocialLink {
+                    provider: "facebook".into(),
+                    permalink: "https://www.facebook.com/synthetic/posts/manual".into()
+                }]
             );
-            invalid.provider = "unknown".into();
-            assert!(public_social_links(&post, &[invalid]).is_empty());
-        }
-        let mut reverse = vec![
-            receipt.clone(),
-            crate::social_publications::SocialPublication {
-                provider: "tiktok".into(),
-                permalink: Some("https://www.tiktok.com/@synthetic/video/receipt".into()),
-                ..receipt
-            },
-        ];
-        let ordered = public_social_links(&post, &reverse);
-        reverse.reverse();
-        assert_eq!(public_social_links(&post, &reverse), ordered);
+            post.social_links.clear();
+            for mut invalid in [
+                crate::social_publications::SocialPublication {
+                    state: "unknown".into(),
+                    ..receipt.clone()
+                },
+                crate::social_publications::SocialPublication {
+                    state: "sending".into(),
+                    ..receipt.clone()
+                },
+                crate::social_publications::SocialPublication {
+                    state: "failed".into(),
+                    ..receipt.clone()
+                },
+                crate::social_publications::SocialPublication {
+                    provider_post_id: None,
+                    ..receipt.clone()
+                },
+                crate::social_publications::SocialPublication {
+                    provider_post_id: Some("unsafe/id".into()),
+                    ..receipt.clone()
+                },
+                crate::social_publications::SocialPublication {
+                    permalink: None,
+                    ..receipt.clone()
+                },
+                crate::social_publications::SocialPublication {
+                    permalink: Some("https://example.test/fake".into()),
+                    ..receipt.clone()
+                },
+                crate::social_publications::SocialPublication {
+                    post_id: Uuid::now_v7(),
+                    ..receipt.clone()
+                },
+            ] {
+                assert!(
+                    public_social_links(&post, &[invalid.clone()]).is_empty(),
+                    "{invalid:?}"
+                );
+                invalid.provider = "unknown".into();
+                assert!(public_social_links(&post, &[invalid]).is_empty());
+            }
+            let mut reverse = vec![
+                receipt.clone(),
+                crate::social_publications::SocialPublication {
+                    provider: "tiktok".into(),
+                    permalink: Some("https://www.tiktok.com/@synthetic/video/receipt".into()),
+                    ..receipt
+                },
+            ];
+            let ordered = public_social_links(&post, &reverse);
+            reverse.reverse();
+            assert_eq!(public_social_links(&post, &reverse), ordered);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn same_slug_is_brand_scoped_and_future_or_draft_posts_are_private() {
-        let db = test_support::mem_surreal().await;
-        let (_, _, brand_a) = practice(&db, "a").await;
-        let (_, _, brand_b) = practice(&db, "b").await;
-        let now = Utc::now();
-        let past = now - chrono::Duration::days(1);
-        insert_test_post(&db, &brand_a, "same-slug", "published", past, now).await;
-        insert_test_post(
-            &db,
-            &brand_a,
-            "future",
-            "published",
-            now + chrono::Duration::days(1),
-            now,
-        )
-        .await;
-        let scheduled_at = now + chrono::Duration::days(2);
-        insert_test_post(&db, &brand_a, "scheduled", "scheduled", scheduled_at, now).await;
-        insert_test_post(&db, &brand_a, "draft", "draft", past, now).await;
-        insert_test_post(&db, &brand_b, "same-slug", "published", past, now).await;
+        test_support::with_required_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            test_support::seed_compiled_brands_postgres(&db).await;
 
-        let a = published_for_brand(&db, &brand_a, now).await.unwrap();
-        let b = published_for_brand(&db, &brand_b, now).await.unwrap();
-        assert_eq!(a.len(), 1);
-        assert_eq!(b.len(), 1);
-        assert_eq!(a[0].slug, "same-slug");
-        let after_schedule =
-            published_for_brand(&db, &brand_a, scheduled_at + chrono::Duration::seconds(1))
-                .await
-                .unwrap();
-        assert!(after_schedule.iter().any(|post| post.slug == "scheduled"));
-        assert_eq!(b[0].slug, "same-slug");
-        assert_ne!(a[0].id, b[0].id);
-        let slugs = slugs_for_brand(&db, &brand_a).await.unwrap();
-        assert_eq!(
-            slugs.len(),
-            4,
-            "the projection knows drafts and future Posts too"
-        );
+            let (_, _, brand_a) = practice(&db, "a").await;
+            let (_, _, brand_b) = practice(&db, "b").await;
+            let now = Utc::now();
+            let past = now - chrono::Duration::days(1);
+            insert_test_post(&db, &brand_a, "same-slug", "published", past, now).await;
+            insert_test_post(
+                &db,
+                &brand_a,
+                "future",
+                "published",
+                now + chrono::Duration::days(1),
+                now,
+            )
+            .await;
+            let scheduled_at = now + chrono::Duration::days(2);
+            insert_test_post(&db, &brand_a, "scheduled", "scheduled", scheduled_at, now).await;
+            insert_test_post(&db, &brand_a, "draft", "draft", past, now).await;
+            insert_test_post(&db, &brand_b, "same-slug", "published", past, now).await;
+
+            let a = published_for_brand(&db, &brand_a, now).await.unwrap();
+            let b = published_for_brand(&db, &brand_b, now).await.unwrap();
+            assert_eq!(a.len(), 1);
+            assert_eq!(b.len(), 1);
+            assert_eq!(a[0].slug, "same-slug");
+            let after_schedule =
+                published_for_brand(&db, &brand_a, scheduled_at + chrono::Duration::seconds(1))
+                    .await
+                    .unwrap();
+            assert!(after_schedule.iter().any(|post| post.slug == "scheduled"));
+            assert_eq!(b[0].slug, "same-slug");
+            assert_ne!(a[0].id, b[0].id);
+            let slugs = slugs_for_brand(&db, &brand_a).await.unwrap();
+            assert_eq!(
+                slugs.len(),
+                4,
+                "the projection knows drafts and future Posts too"
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_due_article_stays_public_when_its_social_send_failed() {
-        let db = test_support::mem_surreal().await;
-        let now = Utc::now();
-        let publish_at = now + chrono::Duration::hours(1);
-        let id = insert_test_post(&db, "vesta", "due", "scheduled", publish_at, now).await;
-        crate::social_publications::admit(&db, id, "facebook")
+        test_support::with_required_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            test_support::seed_compiled_brands_postgres(&db).await;
+
+            let now = Utc::now();
+            let publish_at = now + chrono::Duration::hours(1);
+            let id = insert_test_post(&db, "vesta", "due", "scheduled", publish_at, now).await;
+            crate::social_publications::admit(&db, id, "facebook")
+                .await
+                .unwrap();
+            crate::social_publications::mark_failed(
+                &db,
+                id,
+                "facebook",
+                "synthetic provider failure",
+            )
             .await
             .unwrap();
-        crate::social_publications::mark_failed(&db, id, "facebook", "synthetic provider failure")
-            .await
-            .unwrap();
-        let later = publish_at + chrono::Duration::minutes(5);
-        let public = published_for_brand(&db, "vesta", later).await.unwrap();
-        assert_eq!(
-            public.len(),
-            1,
-            "the article does not wait on social delivery"
-        );
-        assert_eq!(
-            public[0].status, "scheduled",
-            "the worker status is unchanged"
-        );
+            let later = publish_at + chrono::Duration::minutes(5);
+            let public = published_for_brand(&db, "vesta", later).await.unwrap();
+            assert_eq!(
+                public.len(),
+                1,
+                "the article does not wait on social delivery"
+            );
+            assert_eq!(
+                public[0].status, "scheduled",
+                "the worker status is unchanged"
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn firm_admin_catalog_is_isolated_and_owner_sees_all_firms() {
-        let db = test_support::mem_surreal().await;
-        let (_, admin_a, brand_a) = practice(&db, "catalog-a").await;
-        let (_, _, brand_b) = practice(&db, "catalog-b").await;
-        let owner = crate::persons::create(
-            &db,
-            &NewPerson::with_role("Catalog Owner", "catalog-owner@example.com", Role::Owner),
-        )
-        .await
-        .unwrap();
-        let now = Utc::now();
-        insert_test_post(&db, &brand_a, "one", "draft", now, now).await;
-        insert_test_post(&db, &brand_b, "two", "draft", now, now).await;
+        test_support::with_required_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            test_support::seed_compiled_brands_postgres(&db).await;
 
-        let a = for_actor(&db, Role::Admin, admin_a).await.unwrap();
-        assert_eq!(a.len(), 1);
-        assert_eq!(a[0].brand_key, brand_a);
-        assert_eq!(
-            for_actor(&db, Role::Owner, owner.id).await.unwrap().len(),
-            2
-        );
+            let (_, admin_a, brand_a) = practice(&db, "catalog-a").await;
+            let (_, _, brand_b) = practice(&db, "catalog-b").await;
+            let owner = crate::persons::create(
+                &db,
+                &NewPerson::with_role("Catalog Owner", "catalog-owner@example.com", Role::Owner),
+            )
+            .await
+            .unwrap();
+            let now = Utc::now();
+            insert_test_post(&db, &brand_a, "one", "draft", now, now).await;
+            insert_test_post(&db, &brand_b, "two", "draft", now, now).await;
+
+            let a = for_actor(&db, Role::Admin, admin_a).await.unwrap();
+            assert_eq!(a.len(), 1);
+            assert_eq!(a[0].brand_key, brand_a);
+            assert_eq!(
+                for_actor(&db, Role::Owner, owner.id).await.unwrap().len(),
+                2
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn cancel_is_firm_scoped_and_holds_until_the_source_reschedules() {
-        let db = test_support::mem_surreal().await;
-        let (_, admin_a, brand_a) = practice(&db, "schedule-a").await;
-        let (_, admin_b, _) = practice(&db, "schedule-b").await;
-        let now = Utc::now();
-        let first_time = now + chrono::Duration::days(3);
-        let mut post = source(&brand_a, "scheduled", "Scheduled");
-        post.status = "scheduled";
-        post.publish_at = first_time;
-        let id = import_source(&db, &post, now).await.unwrap().post_id;
-        assert!(matches!(
-            cancel(&db, Role::Admin, admin_b, id).await,
-            Err(PostError::Denied)
-        ));
-        cancel(&db, Role::Admin, admin_a, id).await.unwrap();
-        assert_eq!(
-            find_by_id(&db, id).await.unwrap().unwrap().status,
-            "cancelled"
-        );
-        let repeat = import_source(&db, &post, now).await.unwrap();
-        assert_eq!(repeat.status, "cancelled", "a repeat import keeps the hold");
-        assert!(!repeat.social_scheduled);
-        post.publish_at = first_time + chrono::Duration::days(1);
-        let moved = import_source(&db, &post, now).await.unwrap();
-        assert_eq!(
-            moved.status, "scheduled",
-            "a new time in Git schedules again"
-        );
-        assert_eq!(moved.change, ImportChange::Schedule);
+        test_support::with_required_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            test_support::seed_compiled_brands_postgres(&db).await;
+
+            let (_, admin_a, brand_a) = practice(&db, "schedule-a").await;
+            let (_, admin_b, _) = practice(&db, "schedule-b").await;
+            let now = Utc::now();
+            let first_time = now + chrono::Duration::days(3);
+            let mut post = source(&brand_a, "scheduled", "Scheduled");
+            post.status = "scheduled";
+            post.publish_at = first_time;
+            let id = import_source(&db, &post, now).await.unwrap().post_id;
+            assert!(matches!(
+                cancel(&db, Role::Admin, admin_b, id).await,
+                Err(PostError::Denied)
+            ));
+            cancel(&db, Role::Admin, admin_a, id).await.unwrap();
+            assert_eq!(
+                find_by_id(&db, id).await.unwrap().unwrap().status,
+                "cancelled"
+            );
+            let repeat = import_source(&db, &post, now).await.unwrap();
+            assert_eq!(repeat.status, "cancelled", "a repeat import keeps the hold");
+            assert!(!repeat.social_scheduled);
+            post.publish_at = first_time + chrono::Duration::days(1);
+            let moved = import_source(&db, &post, now).await.unwrap();
+            assert_eq!(
+                moved.status, "scheduled",
+                "a new time in Git schedules again"
+            );
+            assert_eq!(moved.change, ImportChange::Schedule);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn historical_blog_post_without_platform_fields_remains_readable() {
-        let db = test_support::mem_surreal().await;
-        let (_, _, brand) = practice(&db, "historical-fields").await;
-        let id = Uuid::now_v7();
-        db.query("CREATE $id SET brand_key = $brand, slug = 'older', title = 'Older', description = '', body_html = '', status = 'draft', inserted_at = time::now(), updated_at = time::now()")
-            .bind(("id", record_id(TABLE, id)))
-            .bind(("brand", brand.clone()))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-        let post = post_by_id(&db, id).await.unwrap();
+        test_support::with_required_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            test_support::seed_compiled_brands_postgres(&db).await;
+
+            let (_, _, brand) = practice(&db, "historical-fields").await;
+            let id = Uuid::now_v7();
+            let pg = PostgresDb::application().await.unwrap();
+            sqlx::query("INSERT INTO post (id,brand_key,slug,title,description,body_html,status) VALUES ($1,$2,'older','Older','','','draft')")
+                .bind(id).bind(&brand).execute(pg.pool()).await.unwrap();
+            let post = post_by_id(&db, id).await.unwrap();
         assert_eq!(post.brand_key, brand);
         assert_eq!(post.video_asset, None);
         assert_eq!(post.tiktok_ai_generated, None);
@@ -1832,25 +1831,31 @@ mod tests {
             .unwrap()
             .iter()
             .any(|row| row.id == id));
+            }).await;
     }
 
     #[tokio::test]
     async fn platform_captions_round_trip_through_the_import() {
-        let db = test_support::mem_surreal().await;
-        let mut post = source("neon", "platform-content", "Platform content");
-        post.status = "draft";
-        post.captions = SourceCaptions {
-            facebook: Some("Facebook text"),
-            instagram: Some("Instagram text"),
-            threads: Some("Threads text"),
-            youtube: Some("YouTube text"),
-        };
-        let id = import_source(&db, &post, Utc::now()).await.unwrap().post_id;
-        let created = find_by_id(&db, id).await.unwrap().unwrap();
-        assert_eq!(created.facebook_caption.as_deref(), Some("Facebook text"));
-        assert_eq!(created.instagram_caption.as_deref(), Some("Instagram text"));
-        assert_eq!(created.threads_caption.as_deref(), Some("Threads text"));
-        assert_eq!(created.youtube_caption.as_deref(), Some("YouTube text"));
+        test_support::with_required_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            test_support::seed_compiled_brands_postgres(&db).await;
+
+            let mut post = source("neon", "platform-content", "Platform content");
+            post.status = "draft";
+            post.captions = SourceCaptions {
+                facebook: Some("Facebook text"),
+                instagram: Some("Instagram text"),
+                threads: Some("Threads text"),
+                youtube: Some("YouTube text"),
+            };
+            let id = import_source(&db, &post, Utc::now()).await.unwrap().post_id;
+            let created = find_by_id(&db, id).await.unwrap().unwrap();
+            assert_eq!(created.facebook_caption.as_deref(), Some("Facebook text"));
+            assert_eq!(created.instagram_caption.as_deref(), Some("Instagram text"));
+            assert_eq!(created.threads_caption.as_deref(), Some("Threads text"));
+            assert_eq!(created.youtube_caption.as_deref(), Some("YouTube text"));
+        })
+        .await;
     }
 
     fn source<'a>(brand: &'a str, slug: &'a str, title: &'a str) -> SourcePost<'a> {
@@ -1928,67 +1933,63 @@ mod tests {
 
     #[tokio::test]
     async fn repeat_import_is_idempotent_and_source_edits_keep_the_row_and_its_receipts() {
-        let db = test_support::mem_surreal().await;
-        let now = Utc::now();
-        let first = import_source(&db, &source("neon", "welcome", "Welcome"), now)
-            .await
-            .unwrap();
-        assert_eq!(first.change, ImportChange::Created);
-        let before = find_by_id(&db, first.post_id).await.unwrap().unwrap();
-        let again = import_source(&db, &source("neon", "welcome", "Welcome"), now)
-            .await
-            .unwrap();
-        assert_eq!(again.change, ImportChange::Unchanged);
-        assert_eq!(again.post_id, first.post_id);
-        let unchanged = find_by_id(&db, first.post_id).await.unwrap().unwrap();
-        assert_eq!(
-            unchanged.updated_at, before.updated_at,
-            "a repeat import writes nothing"
-        );
+        test_support::with_required_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            test_support::seed_compiled_brands_postgres(&db).await;
 
-        crate::social_publications::admit(&db, first.post_id, "facebook")
-            .await
-            .unwrap();
-        // Confirmed directly, so the test does not depend on the worker's write API.
-        db.query(
-            "UPDATE type::record('social_publication', $key) \
-             SET state = 'confirmed', provider_post_id = $remote, permalink = $link",
-        )
-        .bind((
-            "key",
-            crate::social_publications::publication_key(first.post_id, "facebook"),
-        ))
-        .bind(("remote", "synthetic-remote-1"))
-        .bind(("link", "https://www.facebook.com/synthetic/posts/1"))
-        .await
-        .unwrap()
-        .check()
-        .unwrap();
+            let now = Utc::now();
+            let first = import_source(&db, &source("neon", "welcome", "Welcome"), now)
+                .await
+                .unwrap();
+            assert_eq!(first.change, ImportChange::Created);
+            let before = find_by_id(&db, first.post_id).await.unwrap().unwrap();
+            let again = import_source(&db, &source("neon", "welcome", "Welcome"), now)
+                .await
+                .unwrap();
+            assert_eq!(again.change, ImportChange::Unchanged);
+            assert_eq!(again.post_id, first.post_id);
+            let unchanged = find_by_id(&db, first.post_id).await.unwrap().unwrap();
+            assert_eq!(
+                unchanged.updated_at, before.updated_at,
+                "a repeat import writes nothing"
+            );
 
-        let edited = import_source(&db, &source("neon", "welcome", "Welcome, revised"), now)
-            .await
-            .unwrap();
-        assert_eq!(edited.change, ImportChange::Editorial);
-        assert_eq!(edited.post_id, first.post_id);
-        assert!(
-            !edited.social_scheduled,
-            "an edit is never a publishing request"
-        );
-        let row = find_by_id(&db, first.post_id).await.unwrap().unwrap();
-        assert_eq!(row.title, "Welcome, revised");
-        assert_ne!(
-            row.source_digest, before.source_digest,
-            "the revision is recorded"
-        );
-        let receipts = crate::social_publications::for_posts(&db, &[first.post_id])
-            .await
-            .unwrap();
-        assert_eq!(receipts.len(), 1);
-        assert_eq!(receipts[0].state, "confirmed");
-        assert_eq!(
-            receipts[0].provider_post_id.as_deref(),
-            Some("synthetic-remote-1")
-        );
+            crate::social_publications::admit(&db, first.post_id, "facebook")
+                .await
+                .unwrap();
+            // Confirmed directly, so the test does not depend on the worker's write API.
+            let pg = PostgresDb::application().await.unwrap();
+            sqlx::query("UPDATE social_publication SET state='confirmed', provider_post_id=$2, permalink=$3 WHERE post_id=$1 AND provider='facebook'")
+                .bind(first.post_id).bind("synthetic-remote-1")
+                .bind("https://www.facebook.com/synthetic/posts/1")
+                .execute(pg.pool()).await.unwrap();
+
+            let edited = import_source(&db, &source("neon", "welcome", "Welcome, revised"), now)
+                .await
+                .unwrap();
+            assert_eq!(edited.change, ImportChange::Editorial);
+            assert_eq!(edited.post_id, first.post_id);
+            assert!(
+                !edited.social_scheduled,
+                "an edit is never a publishing request"
+            );
+            let row = find_by_id(&db, first.post_id).await.unwrap().unwrap();
+            assert_eq!(row.title, "Welcome, revised");
+            assert_ne!(
+                row.source_digest, before.source_digest,
+                "the revision is recorded"
+            );
+            let receipts = crate::social_publications::for_posts(&db, &[first.post_id])
+                .await
+                .unwrap();
+            assert_eq!(receipts.len(), 1);
+            assert_eq!(receipts[0].state, "confirmed");
+            assert_eq!(
+                receipts[0].provider_post_id.as_deref(),
+                Some("synthetic-remote-1")
+            );
+        })
+        .await;
     }
 
     fn link(provider: &str, post_id: &str) -> SocialLink {
@@ -2004,271 +2005,283 @@ mod tests {
 
     #[tokio::test]
     async fn a_receipt_only_change_is_display_data_and_never_a_publishing_request() {
-        let db = test_support::mem_surreal().await;
-        let now = Utc::now();
-        crate::social_handles::set(&db, "neon", "facebook", "synthetic-page")
-            .await
-            .unwrap();
-        let mut post = source("neon", "receipts", "Receipts");
-        post.status = "scheduled";
-        post.publish_at = now + chrono::Duration::hours(1);
-        let first = import_source(&db, &post, now).await.unwrap();
-        crate::social_publications::admit(&db, first.post_id, "facebook")
-            .await
-            .unwrap();
-        // Confirmed directly, so the test does not depend on the worker's write API.
-        db.query(
-            "UPDATE type::record('social_publication', $key) \
-             SET state = 'confirmed', provider_post_id = $remote, permalink = $link",
-        )
-        .bind((
-            "key",
-            crate::social_publications::publication_key(first.post_id, "facebook"),
-        ))
-        .bind(("remote", "remote-7"))
-        .bind(("link", "https://www.facebook.com/synthetic/posts/remote-7"))
-        .await
-        .unwrap()
-        .check()
-        .unwrap();
-        let later = post.publish_at + chrono::Duration::hours(1);
-        db.query("UPDATE $id SET status = 'published'")
-            .bind(("id", record_id(TABLE, first.post_id)))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-        let before = find_by_id(&db, first.post_id).await.unwrap().unwrap();
+        test_support::with_required_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            test_support::seed_compiled_brands_postgres(&db).await;
 
-        let links = [link("facebook", "remote-7")];
-        post.social_links = &links;
-        let receipts = import_source(&db, &post, later).await.unwrap();
-        assert_eq!(receipts.change, ImportChange::Receipts);
-        assert!(!receipts.social_scheduled);
-        let after = find_by_id(&db, first.post_id).await.unwrap().unwrap();
-        assert_eq!(after.social_links, links.to_vec());
-        assert_eq!(after.status, "published");
-        assert_eq!(after.publish_at, before.publish_at);
-        assert_eq!(after.source_digest, before.source_digest);
-        assert_eq!(
-            import_source(&db, &post, later).await.unwrap().change,
-            ImportChange::Unchanged,
-            "a repeated receipt import writes nothing"
-        );
-        let publications = crate::social_publications::for_posts(&db, &[first.post_id])
-            .await
-            .unwrap();
-        assert_eq!(publications.len(), 1);
-        assert_eq!(publications[0].attempt_count, 1, "nothing was re-admitted");
+            let now = Utc::now();
+            crate::social_handles::set(&db, "neon", "facebook", "synthetic-page")
+                .await
+                .unwrap();
+            let mut post = source("neon", "receipts", "Receipts");
+            post.status = "scheduled";
+            post.publish_at = now + chrono::Duration::hours(1);
+            let first = import_source(&db, &post, now).await.unwrap();
+            crate::social_publications::admit(&db, first.post_id, "facebook")
+                .await
+                .unwrap();
+            // Confirmed directly, so the test does not depend on the worker's write API.
+            let pg = PostgresDb::application().await.unwrap();
+            sqlx::query("UPDATE social_publication SET state='confirmed', provider_post_id=$2, permalink=$3 WHERE post_id=$1 AND provider='facebook'")
+                .bind(first.post_id).bind("remote-7")
+                .bind("https://www.facebook.com/synthetic/posts/remote-7")
+                .execute(pg.pool()).await.unwrap();
+            let later = post.publish_at + chrono::Duration::hours(1);
+            sqlx::query("UPDATE post SET status='published' WHERE id=$1")
+                .bind(first.post_id).execute(pg.pool()).await.unwrap();
+            let before = find_by_id(&db, first.post_id).await.unwrap().unwrap();
 
-        let wrong = [link("facebook", "someone-else")];
-        post.social_links = &wrong;
-        assert!(matches!(
-            import_source(&db, &post, later).await,
-            Err(PostError::ReceiptMismatch { .. })
-        ));
+            let links = [link("facebook", "remote-7")];
+            post.social_links = &links;
+            let receipts = import_source(&db, &post, later).await.unwrap();
+            assert_eq!(receipts.change, ImportChange::Receipts);
+            assert!(!receipts.social_scheduled);
+            let after = find_by_id(&db, first.post_id).await.unwrap().unwrap();
+            assert_eq!(after.social_links, links.to_vec());
+            assert_eq!(after.status, "published");
+            assert_eq!(after.publish_at, before.publish_at);
+            assert_eq!(after.source_digest, before.source_digest);
+            assert_eq!(
+                import_source(&db, &post, later).await.unwrap().change,
+                ImportChange::Unchanged,
+                "a repeated receipt import writes nothing"
+            );
+            let publications = crate::social_publications::for_posts(&db, &[first.post_id])
+                .await
+                .unwrap();
+            assert_eq!(publications.len(), 1);
+            assert_eq!(publications[0].attempt_count, 1, "nothing was re-admitted");
+
+            let wrong = [link("facebook", "someone-else")];
+            post.social_links = &wrong;
+            assert!(matches!(
+                import_source(&db, &post, later).await,
+                Err(PostError::ReceiptMismatch { .. })
+            ));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn the_same_slug_imports_independently_for_two_brands() {
-        let db = test_support::mem_surreal().await;
-        let now = Utc::now();
-        let vesta = import_source(&db, &source("vesta", "hello", "Vesta hello"), now)
+        test_support::with_required_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            test_support::seed_compiled_brands_postgres(&db).await;
+
+            let now = Utc::now();
+            let vesta = import_source(&db, &source("vesta", "hello", "Vesta hello"), now)
+                .await
+                .unwrap();
+            let cyber = import_source(
+                &db,
+                &source("cyber-injury-law", "hello", "Cyber hello"),
+                now,
+            )
             .await
             .unwrap();
-        let cyber = import_source(
-            &db,
-            &source("cyber-injury-law", "hello", "Cyber hello"),
-            now,
-        )
-        .await
-        .unwrap();
-        assert_ne!(vesta.post_id, cyber.post_id);
-        import_source(&db, &source("vesta", "hello", "Vesta hello, revised"), now)
-            .await
-            .unwrap();
-        let cyber_row = published_for_brand(&db, "cyber-injury-law", now)
-            .await
-            .unwrap();
-        assert_eq!(cyber_row.len(), 1);
-        assert_eq!(cyber_row[0].title, "Cyber hello");
-        let vesta_row = published_for_brand(&db, "vesta", now).await.unwrap();
-        assert_eq!(vesta_row[0].title, "Vesta hello, revised");
+            assert_ne!(vesta.post_id, cyber.post_id);
+            import_source(&db, &source("vesta", "hello", "Vesta hello, revised"), now)
+                .await
+                .unwrap();
+            let cyber_row = published_for_brand(&db, "cyber-injury-law", now)
+                .await
+                .unwrap();
+            assert_eq!(cyber_row.len(), 1);
+            assert_eq!(cyber_row[0].title, "Cyber hello");
+            let vesta_row = published_for_brand(&db, "vesta", now).await.unwrap();
+            assert_eq!(vesta_row[0].title, "Vesta hello, revised");
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn scheduling_is_future_only_and_a_public_post_keeps_its_runtime_status_and_time() {
-        let db = test_support::mem_surreal().await;
-        let now = Utc::now();
-        let mut past = source("neon", "past", "Past");
-        past.status = "scheduled";
-        past.publish_at = now - chrono::Duration::hours(1);
-        let imported = import_source(&db, &past, now).await.unwrap();
-        assert_eq!(
-            imported.status, "published",
-            "a passed time publishes with no send"
-        );
-        assert!(!imported.social_scheduled);
+        test_support::with_required_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            test_support::seed_compiled_brands_postgres(&db).await;
 
-        let mut future = source("neon", "future", "Future");
-        future.status = "scheduled";
-        future.publish_at = now + chrono::Duration::hours(2);
-        let scheduled = import_source(&db, &future, now).await.unwrap();
-        assert_eq!(scheduled.status, "scheduled");
-        assert!(published_for_brand(&db, "neon", now)
-            .await
-            .unwrap()
-            .iter()
-            .all(|post| post.slug != "future"));
+            let now = Utc::now();
+            let mut past = source("neon", "past", "Past");
+            past.status = "scheduled";
+            past.publish_at = now - chrono::Duration::hours(1);
+            let imported = import_source(&db, &past, now).await.unwrap();
+            assert_eq!(
+                imported.status, "published",
+                "a passed time publishes with no send"
+            );
+            assert!(!imported.social_scheduled);
 
-        // The worker promotes the due post; the unchanged source keeps it.
-        let later = future.publish_at + chrono::Duration::minutes(1);
-        db.query("UPDATE $id SET status = 'published'")
-            .bind(("id", record_id(TABLE, scheduled.post_id)))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-        let kept = import_source(&db, &future, later).await.unwrap();
-        assert_eq!(kept.status, "published");
+            let mut future = source("neon", "future", "Future");
+            future.status = "scheduled";
+            future.publish_at = now + chrono::Duration::hours(2);
+            let scheduled = import_source(&db, &future, now).await.unwrap();
+            assert_eq!(scheduled.status, "scheduled");
+            assert!(published_for_brand(&db, "neon", now)
+                .await
+                .unwrap()
+                .iter()
+                .all(|post| post.slug != "future"));
 
-        let mut moved = future.clone();
-        moved.publish_at = later + chrono::Duration::days(1);
-        assert!(matches!(
-            import_source(&db, &moved, later).await,
-            Err(PostError::ScheduleLocked { .. })
-        ));
-        let mut drafted = future.clone();
-        drafted.status = "draft";
-        assert_eq!(
-            import_source(&db, &drafted, later).await.unwrap().status,
-            "draft",
-            "the source may still withdraw a public article"
-        );
+            // The worker promotes the due post; the unchanged source keeps it.
+            let later = future.publish_at + chrono::Duration::minutes(1);
+            let pg = PostgresDb::application().await.unwrap();
+            sqlx::query("UPDATE post SET status='published' WHERE id=$1")
+                .bind(scheduled.post_id)
+                .execute(pg.pool())
+                .await
+                .unwrap();
+            let kept = import_source(&db, &future, later).await.unwrap();
+            assert_eq!(kept.status, "published");
+
+            let mut moved = future.clone();
+            moved.publish_at = later + chrono::Duration::days(1);
+            assert!(matches!(
+                import_source(&db, &moved, later).await,
+                Err(PostError::ScheduleLocked { .. })
+            ));
+            let mut drafted = future.clone();
+            drafted.status = "draft";
+            assert_eq!(
+                import_source(&db, &drafted, later).await.unwrap().status,
+                "draft",
+                "the source may still withdraw a public article"
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn declared_video_must_be_this_brands_measured_upload() {
-        let db = test_support::mem_surreal().await;
-        let (_, admin, brand) = practice(&db, "video").await;
-        let (_, _, other) = practice(&db, "other-video").await;
-        connect_account(
-            &db,
-            admin,
-            &brand,
-            crate::social_accounts::SocialProvider::Instagram,
-            "synthetic-ig",
-        )
+        test_support::with_required_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            test_support::seed_compiled_brands_postgres(&db).await;
+
+            let (_, admin, brand) = practice(&db, "video").await;
+            let (_, _, other) = practice(&db, "other-video").await;
+            connect_account(
+                &db,
+                admin,
+                &brand,
+                crate::social_accounts::SocialProvider::Instagram,
+                "synthetic-ig",
+            )
+            .await;
+            let portrait = format!("img/{brand}/social/portrait.mp4");
+            let landscape = format!("img/{brand}/social/landscape.mp4");
+            let foreign = format!("img/{other}/social/foreign.mp4");
+            record_video(&db, &brand, &portrait, 1080, 1920)
+                .await
+                .unwrap();
+            record_video(&db, &brand, &landscape, 1920, 1080)
+                .await
+                .unwrap();
+            record_video(&db, &other, &foreign, 1080, 1920)
+                .await
+                .unwrap();
+            let accounts = [alias("instagram", "synthetic-ig")];
+            let now = Utc::now();
+            let mut post = source(&brand, "video", "Video");
+            post.status = "scheduled";
+            post.publish_at = now + chrono::Duration::days(1);
+            post.accounts = &accounts;
+
+            post.video_asset = Some(&portrait);
+            post.vertical_video = Some(true);
+            let ok = import_source(&db, &post, now).await.unwrap();
+            assert!(ok.social_scheduled);
+            let row = find_by_id(&db, ok.post_id).await.unwrap().unwrap();
+            assert!(row.vertical_video);
+            assert_eq!(row.video_orientation.as_deref(), Some("vertical"));
+            assert_eq!(row.video_asset.as_deref(), Some(portrait.as_str()));
+            assert_eq!(row.selected_social_accounts.len(), 1);
+
+            post.video_asset = Some(&landscape);
+            assert!(matches!(
+                import_source(&db, &post, now).await,
+                Err(PostError::VideoOrientationMismatch { declared: true, .. })
+            ));
+            post.video_asset = Some(&portrait);
+            post.vertical_video = Some(false);
+            assert!(matches!(
+                import_source(&db, &post, now).await,
+                Err(PostError::VideoOrientationMismatch {
+                    declared: false,
+                    ..
+                })
+            ));
+            post.vertical_video = Some(true);
+            post.video_asset = Some(&foreign);
+            assert!(matches!(
+                import_source(&db, &post, now).await,
+                Err(PostError::CrossBrandVideo(_))
+            ));
+            let dangling = format!("img/{brand}/social/never-uploaded.mp4");
+            post.video_asset = Some(&dangling);
+            assert!(matches!(
+                import_source(&db, &post, now).await,
+                Err(PostError::VideoAssetMissing(_))
+            ));
+            post.video_asset = None;
+            assert!(matches!(
+                import_source(&db, &post, now).await,
+                Err(PostError::IneligibleDestination { .. })
+            ));
+            post.status = "draft";
+            post.video_asset = Some(&dangling);
+            assert!(
+                import_source(&db, &post, now).await.is_ok(),
+                "a draft may be incomplete"
+            );
+        })
         .await;
-        let portrait = format!("img/{brand}/social/portrait.mp4");
-        let landscape = format!("img/{brand}/social/landscape.mp4");
-        let foreign = format!("img/{other}/social/foreign.mp4");
-        record_video(&db, &brand, &portrait, 1080, 1920)
-            .await
-            .unwrap();
-        record_video(&db, &brand, &landscape, 1920, 1080)
-            .await
-            .unwrap();
-        record_video(&db, &other, &foreign, 1080, 1920)
-            .await
-            .unwrap();
-        let accounts = [alias("instagram", "synthetic-ig")];
-        let now = Utc::now();
-        let mut post = source(&brand, "video", "Video");
-        post.status = "scheduled";
-        post.publish_at = now + chrono::Duration::days(1);
-        post.accounts = &accounts;
-
-        post.video_asset = Some(&portrait);
-        post.vertical_video = Some(true);
-        let ok = import_source(&db, &post, now).await.unwrap();
-        assert!(ok.social_scheduled);
-        let row = find_by_id(&db, ok.post_id).await.unwrap().unwrap();
-        assert!(row.vertical_video);
-        assert_eq!(row.video_orientation.as_deref(), Some("vertical"));
-        assert_eq!(row.video_asset.as_deref(), Some(portrait.as_str()));
-        assert_eq!(row.selected_social_accounts.len(), 1);
-
-        post.video_asset = Some(&landscape);
-        assert!(matches!(
-            import_source(&db, &post, now).await,
-            Err(PostError::VideoOrientationMismatch { declared: true, .. })
-        ));
-        post.video_asset = Some(&portrait);
-        post.vertical_video = Some(false);
-        assert!(matches!(
-            import_source(&db, &post, now).await,
-            Err(PostError::VideoOrientationMismatch {
-                declared: false,
-                ..
-            })
-        ));
-        post.vertical_video = Some(true);
-        post.video_asset = Some(&foreign);
-        assert!(matches!(
-            import_source(&db, &post, now).await,
-            Err(PostError::CrossBrandVideo(_))
-        ));
-        let dangling = format!("img/{brand}/social/never-uploaded.mp4");
-        post.video_asset = Some(&dangling);
-        assert!(matches!(
-            import_source(&db, &post, now).await,
-            Err(PostError::VideoAssetMissing(_))
-        ));
-        post.video_asset = None;
-        assert!(matches!(
-            import_source(&db, &post, now).await,
-            Err(PostError::IneligibleDestination { .. })
-        ));
-        post.status = "draft";
-        post.video_asset = Some(&dangling);
-        assert!(
-            import_source(&db, &post, now).await.is_ok(),
-            "a draft may be incomplete"
-        );
     }
 
     #[tokio::test]
     async fn declared_accounts_resolve_only_within_their_brand() {
-        let db = test_support::mem_surreal().await;
-        let (_, admin_a, brand_a) = practice(&db, "alias-a").await;
-        let (_, admin_b, brand_b) = practice(&db, "alias-b").await;
-        connect_account(
-            &db,
-            admin_a,
-            &brand_a,
-            crate::social_accounts::SocialProvider::Facebook,
-            "synthetic-page-a",
-        )
+        test_support::with_required_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            test_support::seed_compiled_brands_postgres(&db).await;
+
+            let (_, admin_a, brand_a) = practice(&db, "alias-a").await;
+            let (_, admin_b, brand_b) = practice(&db, "alias-b").await;
+            connect_account(
+                &db,
+                admin_a,
+                &brand_a,
+                crate::social_accounts::SocialProvider::Facebook,
+                "synthetic-page-a",
+            )
+            .await;
+            connect_account(
+                &db,
+                admin_b,
+                &brand_b,
+                crate::social_accounts::SocialProvider::Facebook,
+                "synthetic-page-b",
+            )
+            .await;
+            let now = Utc::now();
+            let crossing = [alias("facebook", "synthetic-page-b")];
+            let mut post = source(&brand_a, "aliases", "Aliases");
+            post.accounts = &crossing;
+            assert!(matches!(
+                import_source(&db, &post, now).await,
+                Err(PostError::CrossBrandSocialAccount(_))
+            ));
+            let mixed = [
+                alias("facebook", "synthetic-page-a"),
+                alias("threads", "not-connected-here"),
+            ];
+            post.accounts = &mixed;
+            let imported = import_source(&db, &post, now).await.unwrap();
+            assert_eq!(
+                imported.unresolved_accounts,
+                vec!["threads:not-connected-here"]
+            );
+            let row = find_by_id(&db, imported.post_id).await.unwrap().unwrap();
+            assert_eq!(row.selected_social_accounts.len(), 1);
+        })
         .await;
-        connect_account(
-            &db,
-            admin_b,
-            &brand_b,
-            crate::social_accounts::SocialProvider::Facebook,
-            "synthetic-page-b",
-        )
-        .await;
-        let now = Utc::now();
-        let crossing = [alias("facebook", "synthetic-page-b")];
-        let mut post = source(&brand_a, "aliases", "Aliases");
-        post.accounts = &crossing;
-        assert!(matches!(
-            import_source(&db, &post, now).await,
-            Err(PostError::CrossBrandSocialAccount(_))
-        ));
-        let mixed = [
-            alias("facebook", "synthetic-page-a"),
-            alias("threads", "not-connected-here"),
-        ];
-        post.accounts = &mixed;
-        let imported = import_source(&db, &post, now).await.unwrap();
-        assert_eq!(
-            imported.unresolved_accounts,
-            vec!["threads:not-connected-here"]
-        );
-        let row = find_by_id(&db, imported.post_id).await.unwrap().unwrap();
-        assert_eq!(row.selected_social_accounts.len(), 1);
     }
 
     #[test]
@@ -2301,39 +2314,44 @@ mod tests {
 
     #[tokio::test]
     async fn find_and_manageable_keys_cover_owner_and_admin() {
-        let db = test_support::mem_surreal().await;
-        let (_, admin, brand) = practice(&db, "legacy-import").await;
-        let imported = import_source(
-            &db,
-            &source("neon", "legacy-welcome", "Legacy welcome"),
-            Utc::now(),
-        )
-        .await
-        .unwrap();
-        let found = find_by_id(&db, imported.post_id).await.unwrap();
-        assert_eq!(
-            found.as_ref().map(|row| row.slug.as_str()),
-            Some("legacy-welcome")
-        );
-        assert!(find_by_id(&db, Uuid::now_v7()).await.unwrap().is_none());
-        let admin_keys = manageable_brand_keys(&db, Role::Admin, admin)
+        test_support::with_required_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            test_support::seed_compiled_brands_postgres(&db).await;
+
+            let (_, admin, brand) = practice(&db, "legacy-import").await;
+            let imported = import_source(
+                &db,
+                &source("neon", "legacy-welcome", "Legacy welcome"),
+                Utc::now(),
+            )
             .await
             .unwrap();
-        assert!(admin_keys.contains(&brand));
-        let owner = crate::persons::create(
-            &db,
-            &NewPerson::with_role(
-                "Legacy Owner",
-                format!("legacy-owner-{}@example.com", Uuid::now_v7()),
-                Role::Owner,
-            ),
-        )
-        .await
-        .unwrap();
-        let owner_keys = manageable_brand_keys(&db, Role::Owner, owner.id)
+            let found = find_by_id(&db, imported.post_id).await.unwrap();
+            assert_eq!(
+                found.as_ref().map(|row| row.slug.as_str()),
+                Some("legacy-welcome")
+            );
+            assert!(find_by_id(&db, Uuid::now_v7()).await.unwrap().is_none());
+            let admin_keys = manageable_brand_keys(&db, Role::Admin, admin)
+                .await
+                .unwrap();
+            assert!(admin_keys.contains(&brand));
+            let owner = crate::persons::create(
+                &db,
+                &NewPerson::with_role(
+                    "Legacy Owner",
+                    format!("legacy-owner-{}@example.com", Uuid::now_v7()),
+                    Role::Owner,
+                ),
+            )
             .await
             .unwrap();
-        assert!(owner_keys.contains(&brand));
+            let owner_keys = manageable_brand_keys(&db, Role::Owner, owner.id)
+                .await
+                .unwrap();
+            assert!(owner_keys.contains(&brand));
+        })
+        .await;
     }
 
     #[tokio::test]
@@ -2369,130 +2387,150 @@ mod tests {
 
     #[tokio::test]
     async fn a_social_link_may_only_name_a_handle_the_brand_already_holds() {
-        let db = test_support::mem_surreal().await;
-        let now = Utc::now();
-        // Nullable: the link is declared before the provider post exists.
-        let pending = [SocialLink {
-            provider: "x".into(),
-            account: "NeonLawUSA".into(),
-            post_id: None,
-            permalink: None,
-        }];
-        let mut post = source("neon", "handles", "Handles");
-        post.social_links = &pending;
-        assert!(matches!(
-            import_source(&db, &post, now).await,
-            Err(PostError::UnknownSocialHandle { .. })
-        ));
-        crate::social_handles::set(&db, "neon", "x", "NeonLawUSA")
-            .await
-            .unwrap();
-        let id = import_source(&db, &post, now).await.unwrap().post_id;
-        let stored = find_by_id(&db, id).await.unwrap().unwrap();
-        assert_eq!(stored.social_links, pending.to_vec());
+        test_support::with_required_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            test_support::seed_compiled_brands_postgres(&db).await;
 
-        let other = [SocialLink {
-            account: "SomeoneElse".into(),
-            ..pending[0].clone()
-        }];
-        post.social_links = &other;
-        assert!(matches!(
-            import_source(&db, &post, now).await,
-            Err(PostError::HandleMismatch { .. })
-        ));
+            let now = Utc::now();
+            // Nullable: the link is declared before the provider post exists.
+            let pending = [SocialLink {
+                provider: "x".into(),
+                account: "NeonLawUSA".into(),
+                post_id: None,
+                permalink: None,
+            }];
+            let mut post = source("neon", "handles", "Handles");
+            post.social_links = &pending;
+            assert!(matches!(
+                import_source(&db, &post, now).await,
+                Err(PostError::UnknownSocialHandle { .. })
+            ));
+            crate::social_handles::set(&db, "neon", "x", "NeonLawUSA")
+                .await
+                .unwrap();
+            let id = import_source(&db, &post, now).await.unwrap().post_id;
+            let stored = find_by_id(&db, id).await.unwrap().unwrap();
+            assert_eq!(stored.social_links, pending.to_vec());
+
+            let other = [SocialLink {
+                account: "SomeoneElse".into(),
+                ..pending[0].clone()
+            }];
+            post.social_links = &other;
+            assert!(matches!(
+                import_source(&db, &post, now).await,
+                Err(PostError::HandleMismatch { .. })
+            ));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn the_x_link_is_encoded_after_the_fact_from_the_handle() {
-        let db = test_support::mem_surreal().await;
-        let now = Utc::now();
-        crate::social_handles::set(&db, "neon", "x", "NeonLawUSA")
-            .await
-            .unwrap();
-        let id = import_source(&db, &source("neon", "later", "Later"), now)
-            .await
-            .unwrap()
-            .post_id;
-        let link = encode_social_link(&db, id, "x", "1850000000000000000", None)
-            .await
-            .unwrap();
-        assert_eq!(
-            link.permalink.as_deref(),
-            Some("https://x.com/NeonLawUSA/status/1850000000000000000")
-        );
-        let stored = find_by_id(&db, id).await.unwrap().unwrap();
-        assert_eq!(stored.social_links, vec![link]);
-        assert!(matches!(
-            encode_social_link(&db, id, "tiktok", "1", None).await,
-            Err(PostError::UnknownSocialHandle { .. })
-        ));
+        test_support::with_required_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            test_support::seed_compiled_brands_postgres(&db).await;
+
+            let now = Utc::now();
+            crate::social_handles::set(&db, "neon", "x", "NeonLawUSA")
+                .await
+                .unwrap();
+            let id = import_source(&db, &source("neon", "later", "Later"), now)
+                .await
+                .unwrap()
+                .post_id;
+            let link = encode_social_link(&db, id, "x", "1850000000000000000", None)
+                .await
+                .unwrap();
+            assert_eq!(
+                link.permalink.as_deref(),
+                Some("https://x.com/NeonLawUSA/status/1850000000000000000")
+            );
+            let stored = find_by_id(&db, id).await.unwrap().unwrap();
+            assert_eq!(stored.social_links, vec![link]);
+            assert!(matches!(
+                encode_social_link(&db, id, "tiktok", "1", None).await,
+                Err(PostError::UnknownSocialHandle { .. })
+            ));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_seeded_post_is_created_once_and_never_overwritten() {
-        let db = test_support::mem_surreal().await;
-        let now = Utc::now();
-        let post = source("neon", "seeded", "Seeded");
-        assert_eq!(
-            seed_post(&db, &post, now).await.unwrap(),
-            ImportChange::Created
-        );
-        let id = find_by_brand_slug(&db, "neon", "seeded")
-            .await
-            .unwrap()
-            .unwrap()
-            .id;
-        let edited = source("neon", "seeded", "Seeded, edited in the database");
-        db.query("UPDATE $id SET title = 'Edited in the database'")
-            .bind(("id", record_id(TABLE, id)))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-        assert_eq!(
-            seed_post(&db, &edited, now).await.unwrap(),
-            ImportChange::Unchanged
-        );
-        let stored = find_by_id(&db, id).await.unwrap().unwrap();
-        assert_eq!(stored.title, "Edited in the database");
-        assert!(matches!(
-            seed_post(&db, &source("not-a-brand", "x", "X"), now).await,
-            Err(PostError::InvalidCopy(_))
-        ));
+        test_support::with_required_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            test_support::seed_compiled_brands_postgres(&db).await;
+
+            let now = Utc::now();
+            let post = source("neon", "seeded", "Seeded");
+            assert_eq!(
+                seed_post(&db, &post, now).await.unwrap(),
+                ImportChange::Created
+            );
+            let id = find_by_brand_slug(&db, "neon", "seeded")
+                .await
+                .unwrap()
+                .unwrap()
+                .id;
+            let edited = source("neon", "seeded", "Seeded, edited in the database");
+            let pg = PostgresDb::application().await.unwrap();
+            sqlx::query("UPDATE post SET title='Edited in the database' WHERE id=$1")
+                .bind(id)
+                .execute(pg.pool())
+                .await
+                .unwrap();
+            assert_eq!(
+                seed_post(&db, &edited, now).await.unwrap(),
+                ImportChange::Unchanged
+            );
+            let stored = find_by_id(&db, id).await.unwrap().unwrap();
+            assert_eq!(stored.title, "Edited in the database");
+            assert!(matches!(
+                seed_post(&db, &source("not-a-brand", "x", "X"), now).await,
+                Err(PostError::InvalidCopy(_))
+            ));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn copy_that_breaks_the_contract_is_refused() {
-        let db = test_support::mem_surreal().await;
-        let now = Utc::now();
-        let long = "x".repeat(DESCRIPTION_MAX + 1);
-        for (label, post) in [
-            ("slug", source("neon", "Not_Kebab", "T")),
-            ("blank title", source("neon", "ok", "  ")),
-            ("padded title", source("neon", "ok", " padded ")),
-            (
-                "long description",
-                SourcePost {
-                    description: &long,
-                    ..source("neon", "ok", "T")
-                },
-            ),
-            (
-                "empty body",
-                SourcePost {
-                    body_html: " ",
-                    ..source("neon", "ok", "T")
-                },
-            ),
-        ] {
-            assert!(
-                matches!(
-                    import_source(&db, &post, now).await,
-                    Err(PostError::InvalidCopy(_))
+        test_support::with_required_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            test_support::seed_compiled_brands_postgres(&db).await;
+
+            let now = Utc::now();
+            let long = "x".repeat(DESCRIPTION_MAX + 1);
+            for (label, post) in [
+                ("slug", source("neon", "Not_Kebab", "T")),
+                ("blank title", source("neon", "ok", "  ")),
+                ("padded title", source("neon", "ok", " padded ")),
+                (
+                    "long description",
+                    SourcePost {
+                        description: &long,
+                        ..source("neon", "ok", "T")
+                    },
                 ),
-                "{label} should be refused"
-            );
-        }
+                (
+                    "empty body",
+                    SourcePost {
+                        body_html: " ",
+                        ..source("neon", "ok", "T")
+                    },
+                ),
+            ] {
+                assert!(
+                    matches!(
+                        import_source(&db, &post, now).await,
+                        Err(PostError::InvalidCopy(_))
+                    ),
+                    "{label} should be refused"
+                );
+            }
+        })
+        .await;
     }
 
     #[test]
