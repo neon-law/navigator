@@ -1185,18 +1185,39 @@ mod tests {
         crate::test_support::fs_storage().await
     }
 
+    macro_rules! with_native_inbox_test {
+        ($db:ident, $body:block) => {
+            store::test_support::with_postgres(async {
+                let pg = store::postgres::PostgresDb::application()
+                    .await
+                    .expect("required PostgreSQL application fixture");
+                store::postgres::PostgresDb::with_application_db(pg, async move {
+                    let $db = store::surreal::SurrealDb::uninitialized();
+                    $body
+                })
+                .await
+                .expect("native PostgreSQL application fixture is admitted");
+            })
+            .await
+        };
+    }
+
     #[tokio::test]
     async fn unconfigured_support_mail_is_ignored() {
-        let db = store::test_support::mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_inbox_test!(db, {
         let storage = storage().await;
         ingest_support_email(&db, &storage, &InboundEmail::default())
             .await
             .unwrap();
+        });
     }
 
     #[tokio::test]
     async fn unconfigured_sms_webhooks_are_accepted() {
-        let state = crate::test_support::app_state(store::test_support::mem_surreal().await).await;
+        #[rustfmt::skip]
+        with_native_inbox_test!(db, {
+        let state = crate::test_support::app_state(db).await;
         let inbound = sms_inbound(
             State(state.clone()),
             HeaderMap::new(),
@@ -1211,12 +1232,14 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::ACCEPTED);
+        });
     }
 
     #[tokio::test]
     async fn configured_sms_inbound_ingests_text_and_rejects_invalid_json() {
-        let db = store::test_support::mem_surreal().await;
-        let firm = store::test_support::seed_firm_with_brand(&db, "neon").await;
+        #[rustfmt::skip]
+        with_native_inbox_test!(db, {
+        let firm = store::test_support::seed_firm_with_new_brand(&db, "neon").await.0;
         std::env::set_var("NAVIGATOR_INBOX_FIRM_ID", firm.to_string());
         let state = crate::test_support::app_state(db).await;
         let inbound = sms_inbound(
@@ -1243,11 +1266,13 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::ACCEPTED);
         std::env::remove_var("NAVIGATOR_INBOX_FIRM_ID");
+        });
     }
 
     #[tokio::test]
     async fn anonymous_inbox_posts_are_not_found() {
-        let db = store::test_support::mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_inbox_test!(db, {
         let assign = assign_post(
             State(db.clone()),
             None,
@@ -1282,6 +1307,7 @@ mod tests {
         )
         .await;
         assert_eq!(note.status(), StatusCode::NOT_FOUND);
+        });
     }
 
     #[tokio::test]
@@ -1292,13 +1318,14 @@ mod tests {
 
     #[tokio::test]
     async fn receiving_accounts_keep_two_brands_and_firms_separate() {
-        let db = store::test_support::mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_inbox_test!(db, {
         let storage = storage().await;
-        let neon = store::test_support::seed_firm_with_brand(&db, "neon").await;
-        let shook = store::test_support::seed_firm_with_brand(&db, "guieb-shook").await;
+        let neon = store::test_support::seed_firm_with_new_brand(&db, "neon").await.0;
+        let shook = store::test_support::seed_firm_with_new_brand(&db, "guieb-shook").await.0;
         for (mailbox, firm, brand) in [
             ("support@neonlaw.com", neon, "neon"),
-            ("contact@guiebshook.com", shook, "guieb-shook"),
+            ("info@guiebshook.com", shook, "guieb-shook"),
         ] {
             let email = InboundEmail {
                 from: "sender@example.com".into(),
@@ -1326,6 +1353,7 @@ mod tests {
             .await
             .is_err());
         }
+        });
     }
 
     #[test]
@@ -1409,7 +1437,9 @@ mod tests {
 
     #[tokio::test]
     async fn linking_a_number_requires_a_session_and_reports_a_missing_conversation() {
-        let app = crate::test_support::app_state(store::test_support::mem_surreal().await).await;
+        #[rustfmt::skip]
+        with_native_inbox_test!(db, {
+        let app = crate::test_support::app_state(db).await;
         let state = crate::admin::AdminState {
             surreal: app.surreal,
             workflow_runtime: app.workflow_runtime,
@@ -1452,11 +1482,14 @@ mod tests {
         )
         .await;
         assert_eq!(missing.status(), StatusCode::SEE_OTHER);
+        });
     }
 
     #[tokio::test]
     async fn new_text_requires_a_session_and_a_configured_number() {
-        let app = crate::test_support::app_state(store::test_support::mem_surreal().await).await;
+        #[rustfmt::skip]
+        with_native_inbox_test!(db, {
+        let app = crate::test_support::app_state(db).await;
         let state = crate::admin::AdminState {
             surreal: app.surreal,
             workflow_runtime: app.workflow_runtime,
@@ -1500,11 +1533,14 @@ mod tests {
             .to_str()
             .unwrap();
         assert!(location.starts_with("/app/inbox?error="), "{location}");
+        });
     }
 
     #[tokio::test]
     async fn intake_reply_requires_a_session_and_a_visibility() {
-        let app = crate::test_support::app_state(store::test_support::mem_surreal().await).await;
+        #[rustfmt::skip]
+        with_native_inbox_test!(db, {
+        let app = crate::test_support::app_state(db).await;
         let state = crate::admin::AdminState {
             surreal: app.surreal,
             workflow_runtime: app.workflow_runtime,
@@ -1553,11 +1589,13 @@ mod tests {
         )
         .await;
         assert_eq!(missing_visibility.status(), StatusCode::SEE_OTHER);
+        });
     }
 
     #[tokio::test]
     async fn signed_in_assign_redirects_when_the_conversation_is_missing() {
-        let db = store::test_support::mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_inbox_test!(db, {
         let mut session =
             crate::session::SessionData::fresh("owner@example.com", store::persons::Role::Owner);
         session.person_id = Some(Uuid::now_v7());
@@ -1573,6 +1611,7 @@ mod tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        });
     }
 
     #[test]
@@ -1586,8 +1625,9 @@ mod tests {
 
     #[tokio::test]
     async fn ingest_support_email_persists_public_mail_and_skips_lawyer_private_mail() {
-        let db = store::test_support::mem_surreal().await;
-        let firm = store::test_support::seed_firm_with_brand(&db, "neon").await;
+        #[rustfmt::skip]
+        with_native_inbox_test!(db, {
+        let firm = store::test_support::seed_firm_with_new_brand(&db, "neon").await.0;
         let storage = storage().await;
         let public = ingest_support_email_for_firm(
             &db,
@@ -1631,6 +1671,7 @@ mod tests {
         .await
         .unwrap();
         assert!(skipped.is_none());
+        });
     }
 
     fn session(
@@ -1682,6 +1723,22 @@ mod tests {
         )
         .await
         .unwrap();
+        store::brands::create(
+            db,
+            store::persons::Role::Admin,
+            Some(admin.id),
+            &store::brands::NewBrand {
+                name: "neon".into(),
+                key: "neon".into(),
+                firm_id: Some(firm.id),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        store::firms::attach_brand(db, store::persons::Role::Owner, None, firm.id, "neon")
+            .await
+            .unwrap();
         let project = store::projects::create(
             db,
             &store::projects::NewProject {
@@ -1734,7 +1791,8 @@ mod tests {
 
     #[tokio::test]
     async fn the_reading_pane_assign_returns_to_the_inbox() {
-        let db = store::test_support::mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_inbox_test!(db, {
         let (owner, _admin, firm, project) = inbox_matter(&db).await;
         let ingested = store::inbox::ingest_inbound(
             &db,
@@ -1768,11 +1826,13 @@ mod tests {
             assigned.headers()[axum::http::header::LOCATION],
             "/app/inbox"
         );
+        });
     }
 
     #[tokio::test]
     async fn a_firm_inbox_attachment_streams_only_for_its_own_message() {
-        let db = store::test_support::mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_inbox_test!(db, {
         let (owner, _admin, firm, _project) = inbox_matter(&db).await;
         let app = crate::test_support::app_state(db.clone()).await;
         let attachment = store::inbox::ingest_attachment(
@@ -1853,11 +1913,13 @@ mod tests {
                 StatusCode::NOT_FOUND
             );
         }
+        });
     }
 
     #[tokio::test]
     async fn trash_and_restore_return_to_the_inbox_and_refuse_an_admin() {
-        let db = store::test_support::mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_inbox_test!(db, {
         let (owner, admin, firm, _project) = inbox_matter(&db).await;
         let id = store::inbox::ingest_inbound(
             &db,
@@ -1908,6 +1970,7 @@ mod tests {
 
         post(&owner, Some("true")).await;
         assert!(!trashed().await);
+        });
     }
 
     /// Post the full thread's assign form as `person`.
@@ -1936,7 +1999,8 @@ mod tests {
 
     #[tokio::test]
     async fn signed_in_owner_assigns_and_a_lawyer_leaves_a_note() {
-        let db = store::test_support::mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_inbox_test!(db, {
         let (owner, _admin, firm, project) = inbox_matter(&db).await;
         let ingested = store::inbox::ingest_inbound(
             &db,
@@ -2017,11 +2081,13 @@ mod tests {
         )
         .await;
         assert_eq!(noted.status(), StatusCode::SEE_OTHER);
+        });
     }
 
     #[tokio::test]
     async fn intake_reply_queues_a_public_facebook_comment() {
-        let db = store::test_support::mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_inbox_test!(db, {
         let (owner, _admin, firm, _project) = inbox_matter(&db).await;
         let ingested = store::inbox::ingest_inbound(
             &db,
@@ -2073,11 +2139,13 @@ mod tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        });
     }
 
     #[tokio::test]
     async fn participating_lawyer_sends_a_matter_reply() {
-        let db = store::test_support::mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_inbox_test!(db, {
         let (owner, _admin, firm, project) = inbox_matter(&db).await;
         let ingested = store::inbox::ingest_inbound(
             &db,
@@ -2161,6 +2229,7 @@ mod tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        });
     }
 
     // -- The triage review queue's doors ----------------------------------------
@@ -2219,7 +2288,8 @@ mod tests {
 
     #[tokio::test]
     async fn triage_actions_reject_a_mismatched_conversation_path() {
-        let db = store::test_support::mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_inbox_test!(db, {
         let (owner, _, firm, project) = inbox_matter(&db).await;
         let mut outcomes = Vec::new();
         for action in ["confirm", "override", "resolve", "rerun"] {
@@ -2282,11 +2352,13 @@ mod tests {
                 .all(|(_, status, unchanged)| *status == StatusCode::NOT_FOUND && *unchanged),
             "a mismatched path must never mutate a triage row: {outcomes:?}"
         );
+        });
     }
 
     #[tokio::test]
     async fn triage_doors_require_a_session() {
-        let db = store::test_support::mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_inbox_test!(db, {
         let (owner, _admin, firm, project) = inbox_matter(&db).await;
         let (triage_id, _) =
             triaged_email(&db, firm.id, "triage-door-anon", Some(project.id)).await;
@@ -2322,11 +2394,13 @@ mod tests {
             TriageDisposition::NeedsHuman
         );
         let _ = owner;
+        });
     }
 
     #[tokio::test]
     async fn confirming_an_email_project_leaves_every_message_unfiled() {
-        let db = store::test_support::mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_inbox_test!(db, {
         let (owner, _admin, firm, project) = inbox_matter(&db).await;
         let (triage_id, message) =
             triaged_email(&db, firm.id, "triage-owner-confirm", Some(project.id)).await;
@@ -2389,11 +2463,13 @@ mod tests {
                 .len(),
             1
         );
+        });
     }
 
     #[tokio::test]
     async fn a_firm_member_confirms_only_while_participating() {
-        let db = store::test_support::mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_inbox_test!(db, {
         let (owner, _admin, firm, project) = inbox_matter(&db).await;
         let (triage_id, message) =
             triaged_email(&db, firm.id, "triage-lawyer-confirm", Some(project.id)).await;
@@ -2476,11 +2552,13 @@ mod tests {
                 .len(),
             1
         );
+        });
     }
 
     #[tokio::test]
     async fn an_override_persists_the_correction_as_a_labeled_example() {
-        let db = store::test_support::mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_inbox_test!(db, {
         let (owner, _admin, firm, project) = inbox_matter(&db).await;
         let (triage_id, message) = triaged_email(&db, firm.id, "triage-override", None).await;
         let state = crate::test_support::app_state(db).await;
@@ -2521,11 +2599,13 @@ mod tests {
                 .unwrap()
                 .unwrap();
         assert_eq!(conversation.project_id, None);
+        });
     }
 
     #[tokio::test]
     async fn resolving_privilege_keeps_the_rule_layer_authoritative() {
-        let db = store::test_support::mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_inbox_test!(db, {
         let (owner, _admin, firm, _project) = inbox_matter(&db).await;
 
         // The human settles client email either way.
@@ -2614,11 +2694,13 @@ mod tests {
             PrivilegeLabel::NotPrivileged,
             "the structural rule outranks the form"
         );
+        });
     }
 
     #[tokio::test]
     async fn a_rerun_returns_a_decided_row_to_the_queue() {
-        let db = store::test_support::mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_inbox_test!(db, {
         let (owner, _admin, firm, project) = inbox_matter(&db).await;
         let (triage_id, message) =
             triaged_email(&db, firm.id, "triage-rerun", Some(project.id)).await;
@@ -2664,5 +2746,6 @@ mod tests {
                 .len(),
             1
         );
+        });
     }
 }
