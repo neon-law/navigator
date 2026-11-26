@@ -789,8 +789,9 @@ replace a different existing `forgejo` remote. GitHub remains the source reposit
 reports the Forgejo URL only after verifying the repository with the same Firm-scoped credential; `forgejo_status`
 distinguishes `verified`, `missing`, `unavailable`, `not_configured`, and `not_authorized` from the GitHub `origin`.
 Verification checks private visibility, the owning Firm, the Project code, and the URL under the configured Forgejo
-root. Project status and sync display the cause and recovery step from `forgejo_issue` when verification fails. Repair
-reports the same recovery step for credential, access, and repository verification failures.
+root. Mirror reads use the Firm's recorded Forgejo organization when one exists. Project status and sync display the
+cause and recovery step from `forgejo_issue` when verification fails. Repair reports the same recovery step for
+credential, access, and repository verification failures.
 
 ## Reviewing a Project release
 

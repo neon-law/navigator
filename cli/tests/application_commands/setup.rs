@@ -966,3 +966,106 @@ async fn a_form_blank_is_fetched_once_against_its_pin_then_read_from_the_cache()
     assert_eq!(asked(&contradicted.server, &door).await, 1);
     assert!(!contradicted.dir.path().join("filled.pdf").exists());
 }
+
+#[tokio::test]
+async fn workspace_sync_uses_the_verified_mirror_for_a_new_and_existing_checkout() {
+    use std::process::Command;
+
+    const ORIGIN: &str = "https://github.com/example-firm/sample";
+    const MIRROR: &str = "https://forge.example.test/example-firm/sample";
+
+    if !Command::new("jj")
+        .arg("--version")
+        .output()
+        .is_ok_and(|r| r.status.success())
+    {
+        return;
+    }
+    let site = Site::start().await;
+    let host = site.server.uri();
+    site.server.reset().await;
+    site.answer(
+        "GET",
+        "/app/api/projects",
+        200,
+        json!([{
+            "id": site.project, "code": "sample", "status": "open", "repository_url": ORIGIN
+        }]),
+    )
+    .await;
+    site.answer("GET", &format!("/app/api/projects/{}", site.project), 200, json!({
+        "repository_remotes": { "origin": ORIGIN, "forgejo": MIRROR, "forgejo_status": "verified" }
+    })).await;
+    site.answer("GET", "/app/api/firm-libraries", 200, json!([]))
+        .await;
+
+    let git = |dir: &Path, args: &[&str]| {
+        let output = Command::new("git")
+            .current_dir(dir)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let dir = site.dir.path();
+    let seed = dir.join("seed");
+    std::fs::create_dir(&seed).unwrap();
+    git(&seed, &["init", "--initial-branch=main"]);
+    std::fs::write(
+        seed.join("navigator.yaml"),
+        format!("project:\n  name: sample\n  host: {host}\n"),
+    )
+    .unwrap();
+    git(&seed, &["add", "navigator.yaml"]);
+    git(
+        &seed,
+        &[
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.test",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "Source fixture",
+        ],
+    );
+    for remote in ["origin.git", "mirror.git"] {
+        git(dir, &["init", "--bare", "--initial-branch=main", remote]);
+        git(&seed, &["push", dir.join(remote).to_str().unwrap(), "main"]);
+    }
+    let origin_rewrite = format!("url.{}.insteadOf", dir.join("origin.git").display());
+    let mirror_rewrite = format!("url.{}.insteadOf", dir.join("mirror.git").display());
+    let env = [
+        ("GIT_CONFIG_COUNT", "2"),
+        ("GIT_CONFIG_KEY_0", origin_rewrite.as_str()),
+        ("GIT_CONFIG_VALUE_0", ORIGIN),
+        ("GIT_CONFIG_KEY_1", mirror_rewrite.as_str()),
+        ("GIT_CONFIG_VALUE_1", MIRROR),
+    ];
+    let sync = ["sync", "--host", &host, "--dir", "checkouts"];
+    navigator_in(dir, &sync, &env).await.succeeded();
+    let checkout = dir.join("checkouts/sample");
+    assert!(checkout.join(".jj").is_dir());
+    assert_eq!(
+        git(&checkout, &["config", "--get", "remote.forgejo.url"]).trim(),
+        MIRROR
+    );
+    let destinations = git(&checkout, &["config", "--get-all", "remote.origin.pushurl"]);
+    assert_eq!(destinations.lines().collect::<Vec<_>>(), [ORIGIN, MIRROR]);
+    assert_eq!(
+        git(&checkout, &["rev-parse", "origin/main"]),
+        git(&checkout, &["rev-parse", "forgejo/main"])
+    );
+    navigator_in(dir, &sync, &env).await.succeeded();
+    assert_eq!(
+        git(&checkout, &["config", "--get-all", "remote.origin.pushurl"]),
+        destinations
+    );
+}
