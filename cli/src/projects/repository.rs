@@ -6938,13 +6938,16 @@ mod forgejo_gate_tests {
     }
 
     #[test]
-    fn the_forgejo_gate_runs_navigator_project_gate_on_pull_requests_with_oidc() {
+    fn the_forgejo_gate_runs_with_oidc_on_pull_requests_and_main_pushes() {
         let workflow = forgejo_gate_workflow();
         let parsed: serde_yaml::Value = serde_yaml::from_str(&workflow).unwrap();
         assert_eq!(parsed["name"].as_str(), Some("gate"));
         assert_eq!(
             parsed["on"],
-            serde_yaml::from_str::<serde_yaml::Value>("{pull_request: null}").unwrap()
+            serde_yaml::from_str::<serde_yaml::Value>(
+                "{pull_request: null, push: {branches: [main]}}"
+            )
+            .unwrap()
         );
         let jobs = parsed["jobs"].as_mapping().unwrap();
         assert_eq!(jobs.len(), 1, "one job, one context: {workflow}");
