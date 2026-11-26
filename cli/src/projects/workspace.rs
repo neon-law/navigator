@@ -221,9 +221,9 @@ pub(super) async fn inspect(status: &serde_json::Value) -> serde_json::Value {
         )
     };
     let configured = checkout.filter(|path| {
-        std::fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.is_dir())
+        std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_dir())
             && path.join(".jj").is_dir()
-            && manifest::read(&path).is_some_and(|manifest| manifest.project.as_deref() == code)
+            && manifest::read(path).is_some_and(|manifest| manifest.project.as_deref() == code)
     });
     let checkout_summary = if let Some(checkout) = configured {
         match watch::checkout_commit(&checkout, "main@origin ~ ::parents(@)").await {
