@@ -2684,6 +2684,23 @@ fn canonical_document(base: &str) -> Value {
           }
         },
         "/app/api/project-forgejo-mirrors/{id}": {
+          "get": {
+            "operationId": "previewProjectForgejoMirrorRepair",
+            "summary": "Preview a GitHub Project's Forgejo mirror repair",
+            "description": "Read-only. Returns the verified Forgejo repository URL when present, or a missing status with a null URL. Requires an interactive administrator with Firm integration access.",
+            "parameters": [
+              { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+            ],
+            "responses": {
+              "200": { "description": "The verified repository or missing status", "content": { "application/json": { "schema": { "type": "object" } } } },
+              "401": { "description": "No authenticated session" },
+              "403": { "description": "Caller is not an interactive administrator" },
+              "404": { "description": "Project unavailable to this caller" },
+              "409": { "description": "Forgejo could not verify the private repository identity or URL" },
+              "422": { "description": "Forgejo configuration is incomplete" },
+              "503": { "description": "The Firm credential or Forgejo request is unavailable" }
+            }
+          },
           "post": {
             "summary": "Create or adopt a GitHub Project's Forgejo mirror",
             "description": "Creates or adopts the owning Firm's private Forgejo repository for a GitHub-backed Project and returns Forgejo's verified repository URL and organization. The GitHub repository URL and CI/CD provider remain unchanged. The caller must be Owner or Admin and hold `use_integrations` on the Project's Firm. A missing Forgejo root URL or Firm token fails without changing the GitHub source.",

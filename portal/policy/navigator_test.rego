@@ -1250,15 +1250,24 @@ test_admin_can_reconcile_project_surfaces if {
 }
 
 test_admin_can_repair_project_forgejo_mirror if {
-	authz.allow with input as {"path": ["app", "api", "project-forgejo-mirrors", "p1"], "method": "POST", "session": admin_session}
+    path := ["app", "api", "project-forgejo-mirrors", "p1"]
+    every method in ["GET", "POST"] {
+        authz.allow with input as {"path": path, "method": method, "session": admin_session}
+        ci := object.union(admin_session, {"source": "ci"})
+        not authz.allow with input as {"path": path, "method": method, "session": ci}
+    }
 }
 
 test_lawyer_denied_project_forgejo_mirror_repair if {
-	not authz.allow with input as {"path": ["app", "api", "project-forgejo-mirrors", "p1"], "method": "POST", "session": lawyer_session}
+    every method in ["GET", "POST"] {
+        not authz.allow with input as {"path": ["app", "api", "project-forgejo-mirrors", "p1"], "method": method, "session": lawyer_session}
+    }
 }
 
 test_client_denied_project_forgejo_mirror_repair if {
-	not authz.allow with input as {"path": ["app", "api", "project-forgejo-mirrors", "p1"], "method": "POST", "session": client_session}
+    every method in ["GET", "POST"] {
+        not authz.allow with input as {"path": ["app", "api", "project-forgejo-mirrors", "p1"], "method": method, "session": client_session}
+    }
 }
 
 test_lawyer_denied_project_surfaces if {

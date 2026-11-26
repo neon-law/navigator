@@ -22,7 +22,7 @@ use axum::extract::{
     State,
 };
 use axum::http::request::Parts;
-use axum::http::{header, StatusCode};
+use axum::http::{header, Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::MethodRouter;
@@ -564,6 +564,11 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             "POST",
             "/app/api/project-forgejo-mirrors/{id}",
             post(repair_project_forgejo_mirror_door),
+        ),
+        (
+            "GET",
+            "/app/api/project-forgejo-mirrors/{id}",
+            get(repair_project_forgejo_mirror_door),
         ),
         // Own noun, same reason as `project-repositories`: the `projects`
         // GET rule admits any authenticated caller up to five segments, and
@@ -2203,7 +2208,11 @@ async fn repair_project_forgejo_mirror_door(
     State(state): State<ApiState>,
     AdminSession(session): AdminSession,
     Path(id): Path<Uuid>,
+    method: Method,
 ) -> Result<Response, ApiError> {
+    if session.scope.is_some() {
+        return Err(ApiError::NotFound);
+    }
     let project = store::projects::find_by_id(&state.surreal, id)
         .await
         .map_err(|error| ApiError::Db(error.to_string()))?
@@ -2218,7 +2227,23 @@ async fn repair_project_forgejo_mirror_door(
         return Err(ApiError::NotFound);
     }
     let forge = connect_project_mirror(&state, firm_id).await?;
-    let repair = repair_forgejo_mirror(&forge, &project.code, origin).await?;
+    let repair = if method == Method::GET {
+        let repository = find_forgejo_mirror(&forge, &project.code).await?;
+        let status = if repository.is_some() {
+            "present"
+        } else {
+            "missing"
+        };
+        serde_json::json!({
+            "repository_url": repository.map(|repository| repository.url),
+            "forgejo_owner": forge.owner(),
+            "mirror_status": status,
+            "source_repository_url": origin,
+            "ci_provider": "github"
+        })
+    } else {
+        repair_forgejo_mirror(&forge, &project.code, origin).await?
+    };
     Ok(Json(repair).into_response())
 }
 

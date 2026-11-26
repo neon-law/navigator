@@ -44,8 +44,8 @@ fn verified_mirror_url<'a>(value: &'a str, owner: &str, project: &str) -> Result
 }
 
 /// `navigator project repository repair-mirror --dir <checkout> [--host <site>]`.
-pub async fn run(dir: &Path, host: Option<&str>) -> ExitCode {
-    match run_inner(dir, host).await {
+pub async fn run(dir: &Path, host: Option<&str>, dry_run: bool) -> ExitCode {
+    match run_inner(dir, host, dry_run).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("navigator project repository repair-mirror: {error:#}");
@@ -54,7 +54,7 @@ pub async fn run(dir: &Path, host: Option<&str>) -> ExitCode {
     }
 }
 
-async fn run_inner(dir: &Path, host: Option<&str>) -> Result<()> {
+async fn run_inner(dir: &Path, host: Option<&str>, dry_run: bool) -> Result<()> {
     let manifest = super::manifest::read(dir)
         .ok_or_else(|| anyhow!("run from a Project checkout with navigator.yaml"))?;
     let code = manifest
@@ -73,16 +73,44 @@ async fn run_inner(dir: &Path, host: Option<&str>) -> Result<()> {
 
     let (base, token) = crate::remote::resolve(host)?;
     let project_id = super::surfaces::resolve_project_id(&base, &token, code).await?;
-    let mirror = request(&base, &token, project_id, &owner, &name).await?;
-    let source = &mirror.source;
-    let verified = &mirror.url;
-    let outcome = mirror.outcome;
-
     let existing = super::lifecycle::git(dir, &["remote", "get-url", "forgejo"])?;
     let existing = existing
         .status
         .success()
         .then(|| String::from_utf8_lossy(&existing.stdout).trim().to_string());
+    if dry_run {
+        let body = call(&base, &token, project_id, reqwest::Method::GET).await?;
+        let source = source_url(&body, &owner, &name)?;
+        println!("GitHub source: {source}");
+        match body["mirror_status"].as_str() {
+            Some("missing") if existing.is_none() => {
+                println!(
+                    "Forgejo mirror is missing; repair would create it and configure the remote."
+                );
+            }
+            Some("missing") => {
+                bail!("Forgejo mirror is missing but a local Forgejo remote is configured; verify its repository before repair");
+            }
+            Some("present") => {
+                let verified = mirror_url(&body, &name)?;
+                match remote_action(existing.as_deref(), verified)? {
+                    RemoteAction::Add => {
+                        println!("Repair would configure the verified Forgejo remote.");
+                    }
+                    RemoteAction::AlreadyConfigured => {
+                        println!("The verified Forgejo remote is already configured.");
+                    }
+                }
+                println!("Forgejo mirror: {verified}");
+            }
+            _ => bail!("mirror repair preview has no known outcome"),
+        }
+        return Ok(());
+    }
+    let mirror = request(&base, &token, project_id, &owner, &name).await?;
+    let source = &mirror.source;
+    let verified = &mirror.url;
+    let outcome = mirror.outcome;
     match remote_action(existing.as_deref(), verified)? {
         RemoteAction::Add => {
             super::lifecycle::git_text(dir, &["remote", "add", "forgejo", verified])
@@ -112,15 +140,44 @@ pub(super) async fn request(
     owner: &str,
     name: &str,
 ) -> Result<Mirror> {
-    let response = crate::remote::authenticated_client_builder(base)?
+    let body = call(base, token, project_id, reqwest::Method::POST).await?;
+    let source = source_url(&body, owner, name)?;
+    let verified = mirror_url(&body, name)?;
+    let outcome = match body["mirror_status"].as_str() {
+        Some("created") => "created",
+        Some("present") => "adopted",
+        _ => bail!("mirror repair response has no known outcome"),
+    };
+    Ok(Mirror {
+        source: source.to_owned(),
+        url: verified.to_owned(),
+        outcome,
+    })
+}
+
+async fn call(
+    base: &str,
+    token: &str,
+    project_id: uuid::Uuid,
+    method: reqwest::Method,
+) -> Result<serde_json::Value> {
+    let client = crate::remote::authenticated_client_builder(base)?
         .timeout(std::time::Duration::from_secs(30))
-        .build()?
-        .post(format!(
-            "{base}/app/api/project-forgejo-mirrors/{project_id}"
-        ))
-        .bearer_auth(token)
-        .header(reqwest::header::CONTENT_LENGTH, "0")
-        .body(Vec::<u8>::new())
+        .build()?;
+    let request = client
+        .request(
+            method.clone(),
+            format!("{base}/app/api/project-forgejo-mirrors/{project_id}"),
+        )
+        .bearer_auth(token);
+    let request = if method == reqwest::Method::POST {
+        request
+            .header(reqwest::header::CONTENT_LENGTH, "0")
+            .body(Vec::<u8>::new())
+    } else {
+        request
+    };
+    let response = request
         .send()
         .await
         .context("request Forgejo mirror repair")?;
@@ -135,6 +192,10 @@ pub(super) async fn request(
             .or_else(|| body["error"].as_str())
             .unwrap_or_default()
     );
+    Ok(body)
+}
+
+fn source_url<'a>(body: &'a serde_json::Value, owner: &str, name: &str) -> Result<&'a str> {
     ensure!(
         body["ci_provider"].as_str() == Some("github"),
         "the Project is not configured for GitHub CI/CD"
@@ -147,24 +208,17 @@ pub(super) async fn request(
         source_owner.eq_ignore_ascii_case(owner) && source_name == name,
         "the checkout origin does not match the Project's GitHub source"
     );
+    Ok(source)
+}
+
+fn mirror_url<'a>(body: &'a serde_json::Value, name: &str) -> Result<&'a str> {
     let verified = body["repository_url"]
         .as_str()
         .context("mirror repair response has no verified Forgejo URL")?;
     let forgejo_owner = body["forgejo_owner"]
         .as_str()
         .context("mirror repair response has no verified Forgejo organization")?;
-    let verified = verified_mirror_url(verified, forgejo_owner, name)?;
-    let outcome = match body["mirror_status"].as_str() {
-        Some("created") => "created",
-        Some("present") => "adopted",
-        _ => bail!("mirror repair response has no known outcome"),
-    };
-
-    Ok(Mirror {
-        source: source.to_owned(),
-        url: verified.to_owned(),
-        outcome,
-    })
+    verified_mirror_url(verified, forgejo_owner, name)
 }
 
 pub(super) fn issue_detail(issue: &serde_json::Value) -> Option<String> {
@@ -207,21 +261,41 @@ mod tests {
         let remote =
             || crate::projects::lifecycle::git_text(dir.path(), &["remote", "get-url", "forgejo"]);
 
-        assert_eq!(run(dir.path(), Some(&host)).await, ExitCode::SUCCESS);
+        assert_eq!(run(dir.path(), Some(&host), false).await, ExitCode::SUCCESS);
         assert_eq!(remote().unwrap(), MIRROR);
-        assert_eq!(run(dir.path(), Some(&host)).await, ExitCode::SUCCESS);
+        assert_eq!(run(dir.path(), Some(&host), false).await, ExitCode::SUCCESS);
 
         let other = "https://forge.example.test/other/sample-matter";
         crate::projects::lifecycle::git_text(dir.path(), &["remote", "set-url", "forgejo", other])
             .unwrap();
-        assert_eq!(run(dir.path(), Some(&host)).await, ExitCode::FAILURE);
+        assert_eq!(run(dir.path(), Some(&host), false).await, ExitCode::FAILURE);
         assert_eq!(remote().unwrap(), other);
+    }
+
+    #[tokio::test]
+    async fn repair_preview_reads_provider_status_without_writing_a_remote() {
+        let id = uuid::Uuid::new_v4();
+        let (server, _login) = site(json!([{"id": id, "code": "sample-matter"}])).await;
+        let door = format!("/app/api/project-forgejo-mirrors/{id}");
+        answer(&server, "GET", &door, 200, repaired("present")).await;
+        let dir = checkout(MANIFEST, Some(ORIGIN));
+        let host = server.uri();
+        assert_eq!(run(dir.path(), Some(&host), true).await, ExitCode::SUCCESS);
+        assert!(crate::projects::lifecycle::git_text(
+            dir.path(),
+            &["remote", "get-url", "forgejo"]
+        )
+        .is_err());
+        let requests = server.received_requests().await.unwrap();
+        assert!(requests
+            .iter()
+            .all(|request| request.method == reqwest::Method::GET));
     }
 
     #[tokio::test]
     async fn repair_needs_a_project_checkout_whose_origin_is_its_github_source() {
         let empty = tempfile::tempdir().unwrap();
-        assert_eq!(run(empty.path(), None).await, ExitCode::FAILURE);
+        assert_eq!(run(empty.path(), None, false).await, ExitCode::FAILURE);
         for (manifest, origin, expected) in [
             ("host: site.example.test\n", ORIGIN, "no Project code"),
             (
@@ -236,7 +310,7 @@ mod tests {
             ),
         ] {
             let dir = checkout(manifest, Some(origin));
-            let error = super::run_inner(dir.path(), None).await.unwrap_err();
+            let error = super::run_inner(dir.path(), None, false).await.unwrap_err();
             assert!(format!("{error:#}").contains(expected), "{error:#}");
         }
     }

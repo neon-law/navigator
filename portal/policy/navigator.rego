@@ -1794,15 +1794,21 @@ route_allow if {
 	is_admin(input.session)
 }
 
-# Create or adopt a missing Forgejo mirror for a GitHub-backed Project.
+# Preview, create, or adopt a missing Forgejo mirror for a GitHub-backed Project.
 # Firm credentials are used only after the handler checks `use_integrations`.
 route_allow if {
 	input.path[0] == "app"
 	input.path[1] == "api"
 	input.path[2] == "project-forgejo-mirrors"
 	count(input.path) == 4
-	input.method == "POST"
+	input.method in {"GET", "POST"}
 	is_admin(input.session)
+}
+
+ci_matter_content_denied if {
+    count(input.path) == 4
+    array.slice(input.path, 0, 3) == ["app", "api", "project-forgejo-mirrors"]
+    input.session.source == "ci"
 }
 
 # Read the nonsecret manifest coordinates for a single matter. The handler
