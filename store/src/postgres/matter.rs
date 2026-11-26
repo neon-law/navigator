@@ -637,7 +637,7 @@ async fn delete_now(
 
 #[cfg(test)]
 #[path = "matter_tests.rs"]
-mod tests;
+pub(crate) mod tests;
 
 #[cfg(test)]
 #[path = "matter_satellite_tests.rs"]

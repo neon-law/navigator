@@ -138,16 +138,27 @@ async fn validate(
             "successor_order starts at 1".into(),
         ));
     }
-    require_project(surreal, project_id)
-        .await
-        .map_err(FiduciaryRoleError::Invalid)?;
-    require_party(surreal, "fiduciary", fields.fiduciary)
-        .await
-        .map_err(FiduciaryRoleError::Invalid)?;
-    if let Some(notation_id) = fields.notation_id {
-        require_project_notation(surreal, project_id, notation_id)
+    if let Some(pg) = matter::authority().await? {
+        crate::matter_record_links::require_project_on(&pg, project_id)
             .await
             .map_err(FiduciaryRoleError::Invalid)?;
+        if let Some(notation_id) = fields.notation_id {
+            crate::matter_record_links::require_project_notation_on(&pg, project_id, notation_id)
+                .await
+                .map_err(FiduciaryRoleError::Invalid)?;
+        }
+    } else {
+        require_project(surreal, project_id)
+            .await
+            .map_err(FiduciaryRoleError::Invalid)?;
+        require_party(surreal, "fiduciary", fields.fiduciary)
+            .await
+            .map_err(FiduciaryRoleError::Invalid)?;
+        if let Some(notation_id) = fields.notation_id {
+            require_project_notation(surreal, project_id, notation_id)
+                .await
+                .map_err(FiduciaryRoleError::Invalid)?;
+        }
     }
     Ok(role)
 }
@@ -446,33 +457,17 @@ pub async fn delete_for_project(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::persons::{NewPerson, Role};
-    use crate::test_support::{mem_surreal, seed_entity};
+    use crate::test_support::mem_surreal;
 
-    async fn project(surreal: &SurrealDb, code: &str) -> Uuid {
-        crate::projects::create(
-            surreal,
-            &crate::projects::NewProject {
-                code: code.into(),
-                name: "Sample estate plan".into(),
-                status: "open".into(),
-                entity_id: seed_entity(surreal).await,
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap()
-        .id
-    }
-
-    async fn person(surreal: &SurrealDb, email: &str) -> Uuid {
-        crate::persons::create(
-            surreal,
-            &NewPerson::with_role("Sample Fiduciary", email, Role::Client),
-        )
-        .await
-        .unwrap()
-        .id
+    macro_rules! with_postgres {
+        ($pg:ident, $surreal:ident, $body:block) => {{
+            let Some($pg) = crate::postgres::matter::tests::database().await else {
+                return;
+            };
+            let $surreal = SurrealDb::uninitialized();
+            crate::postgres::matter::with_test_db($pg.clone(), async $body).await;
+            $pg.0.close().await;
+        }};
     }
 
     fn fields(role: &str, order: i64, fiduciary: Uuid) -> FiduciaryRoleFields {
@@ -486,156 +481,175 @@ mod tests {
 
     #[tokio::test]
     async fn insert_list_update_and_delete_round_trip() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal, "sample-fiduciaries").await;
-        let first = person(&surreal, "first-trustee@example.com").await;
-        let second = person(&surreal, "second-trustee@example.com").await;
+        with_postgres!(pg, surreal, {
+            let project_id =
+                crate::postgres::matter::tests::postgres_project(&pg, "sample-fiduciaries").await;
+            let first =
+                crate::postgres::matter::tests::postgres_person(&pg, "first-trustee@example.com")
+                    .await;
+            let second =
+                crate::postgres::matter::tests::postgres_person(&pg, "second-trustee@example.com")
+                    .await;
 
-        let executor = insert(&surreal, project_id, &fields("executor", 1, first))
+            let executor = insert(&surreal, project_id, &fields("executor", 1, first))
+                .await
+                .unwrap();
+            let trustee = insert(&surreal, project_id, &fields("trustee", 1, first))
+                .await
+                .unwrap();
+            let successor = insert(
+                &surreal,
+                project_id,
+                &fields("successor_trustee", 1, second),
+            )
             .await
             .unwrap();
-        let trustee = insert(&surreal, project_id, &fields("trustee", 1, first))
+
+            let roster: Vec<Uuid> = list(&surreal, project_id)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|role| role.id)
+                .collect();
+            assert_eq!(roster, vec![trustee.id, successor.id, executor.id]);
+
+            let updated = update(
+                &surreal,
+                project_id,
+                executor.id,
+                &fields("executor", 1, second),
+            )
             .await
             .unwrap();
-        let successor = insert(
-            &surreal,
-            project_id,
-            &fields("successor_trustee", 1, second),
-        )
-        .await
-        .unwrap();
+            assert_eq!(updated.fiduciary, Party::person(second));
+            assert_eq!(updated.inserted_at, executor.inserted_at);
 
-        let roster: Vec<Uuid> = list(&surreal, project_id)
-            .await
-            .unwrap()
-            .into_iter()
-            .map(|role| role.id)
-            .collect();
-        assert_eq!(roster, vec![trustee.id, successor.id, executor.id]);
-
-        let updated = update(
-            &surreal,
-            project_id,
-            executor.id,
-            &fields("executor", 1, second),
-        )
-        .await
-        .unwrap();
-        assert_eq!(updated.fiduciary, Party::person(second));
-        assert_eq!(updated.inserted_at, executor.inserted_at);
-
-        delete(&surreal, project_id, executor.id).await.unwrap();
-        assert_eq!(list(&surreal, project_id).await.unwrap().len(), 2);
-        assert!(matches!(
-            delete(&surreal, project_id, executor.id).await,
-            Err(FiduciaryRoleError::NotFound)
-        ));
+            delete(&surreal, project_id, executor.id).await.unwrap();
+            assert_eq!(list(&surreal, project_id).await.unwrap().len(), 2);
+            assert!(matches!(
+                delete(&surreal, project_id, executor.id).await,
+                Err(FiduciaryRoleError::NotFound)
+            ));
+        });
     }
 
     #[tokio::test]
     async fn an_entity_may_hold_the_role() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal, "sample-corporate-trustee").await;
-        let trust_company = seed_entity(&surreal).await;
-        let stored = insert(
-            &surreal,
-            project_id,
-            &FiduciaryRoleFields {
-                fiduciary: Party::entity(trust_company),
-                ..fields("trustee", 1, Uuid::now_v7())
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(stored.fiduciary, Party::entity(trust_company));
+        with_postgres!(pg, surreal, {
+            let project_id =
+                crate::postgres::matter::tests::postgres_project(&pg, "sample-corporate-trustee")
+                    .await;
+            let trust_company = crate::postgres::matter::tests::postgres_entity(&pg).await;
+            let stored = insert(
+                &surreal,
+                project_id,
+                &FiduciaryRoleFields {
+                    fiduciary: Party::entity(trust_company),
+                    ..fields("trustee", 1, Uuid::now_v7())
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(stored.fiduciary, Party::entity(trust_company));
+        });
     }
 
     #[tokio::test]
     async fn a_fiduciary_with_no_row_behind_it_is_refused() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal, "sample-one-party").await;
-        for fiduciary in [Party::person(Uuid::now_v7()), Party::entity(Uuid::now_v7())] {
+        with_postgres!(pg, surreal, {
+            let project_id =
+                crate::postgres::matter::tests::postgres_project(&pg, "sample-one-party").await;
+            for fiduciary in [Party::person(Uuid::now_v7()), Party::entity(Uuid::now_v7())] {
+                let error = insert(
+                    &surreal,
+                    project_id,
+                    &FiduciaryRoleFields {
+                        fiduciary,
+                        ..fields("trustee", 1, Uuid::now_v7())
+                    },
+                )
+                .await
+                .unwrap_err();
+                assert!(matches!(error, FiduciaryRoleError::Invalid(_)), "{error}");
+            }
+            assert!(list(&surreal, project_id).await.unwrap().is_empty());
+        });
+    }
+
+    #[tokio::test]
+    async fn an_unknown_role_or_order_below_one_is_refused() {
+        with_postgres!(pg, surreal, {
+            let project_id =
+                crate::postgres::matter::tests::postgres_project(&pg, "sample-bad-role").await;
+            let person_id =
+                crate::postgres::matter::tests::postgres_person(&pg, "bad-role@example.com").await;
+            for bad in [
+                fields("beneficiary", 1, person_id),
+                fields("trustee", 0, person_id),
+            ] {
+                assert!(matches!(
+                    insert(&surreal, project_id, &bad).await.unwrap_err(),
+                    FiduciaryRoleError::Invalid(_)
+                ));
+            }
+        });
+    }
+
+    #[tokio::test]
+    async fn an_unknown_instrument_notation_is_refused() {
+        with_postgres!(pg, surreal, {
+            let project_id =
+                crate::postgres::matter::tests::postgres_project(&pg, "sample-no-notation").await;
+            let person_id =
+                crate::postgres::matter::tests::postgres_person(&pg, "no-notation@example.com")
+                    .await;
             let error = insert(
                 &surreal,
                 project_id,
                 &FiduciaryRoleFields {
-                    fiduciary,
-                    ..fields("trustee", 1, Uuid::now_v7())
+                    notation_id: Some(Uuid::now_v7()),
+                    ..fields("agent_poa", 1, person_id)
                 },
             )
             .await
             .unwrap_err();
             assert!(matches!(error, FiduciaryRoleError::Invalid(_)), "{error}");
-        }
-        assert!(list(&surreal, project_id).await.unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn an_unknown_role_or_order_below_one_is_refused() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal, "sample-bad-role").await;
-        let person_id = person(&surreal, "bad-role@example.com").await;
-        for bad in [
-            fields("beneficiary", 1, person_id),
-            fields("trustee", 0, person_id),
-        ] {
-            assert!(matches!(
-                insert(&surreal, project_id, &bad).await.unwrap_err(),
-                FiduciaryRoleError::Invalid(_)
-            ));
-        }
-    }
-
-    #[tokio::test]
-    async fn an_unknown_instrument_notation_is_refused() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal, "sample-no-notation").await;
-        let person_id = person(&surreal, "no-notation@example.com").await;
-        let error = insert(
-            &surreal,
-            project_id,
-            &FiduciaryRoleFields {
-                notation_id: Some(Uuid::now_v7()),
-                ..fields("agent_poa", 1, person_id)
-            },
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(error, FiduciaryRoleError::Invalid(_)), "{error}");
+        });
     }
 
     #[tokio::test]
     async fn one_row_holds_each_slot() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal, "sample-slot").await;
-        let person_id = person(&surreal, "slot@example.com").await;
-        insert(&surreal, project_id, &fields("guardian", 1, person_id))
-            .await
-            .unwrap();
-        let error = insert(&surreal, project_id, &fields("guardian", 1, person_id))
-            .await
-            .unwrap_err();
-        assert!(matches!(error, FiduciaryRoleError::Invalid(_)), "{error}");
-        assert!(find_by_slot(&surreal, project_id, "guardian", 1)
-            .await
-            .unwrap()
-            .is_some());
+        with_postgres!(pg, surreal, {
+            let project_id =
+                crate::postgres::matter::tests::postgres_project(&pg, "sample-slot").await;
+            let person_id =
+                crate::postgres::matter::tests::postgres_person(&pg, "slot@example.com").await;
+            insert(&surreal, project_id, &fields("guardian", 1, person_id))
+                .await
+                .unwrap();
+            let error = insert(&surreal, project_id, &fields("guardian", 1, person_id))
+                .await
+                .unwrap_err();
+            assert!(matches!(error, FiduciaryRoleError::Invalid(_)), "{error}");
+            assert!(find_by_slot(&surreal, project_id, "guardian", 1)
+                .await
+                .unwrap()
+                .is_some());
+        });
     }
 
     #[tokio::test]
     async fn the_engine_refuses_a_role_outside_the_closed_list() {
         let surreal = mem_surreal().await;
-        let project_id = project(&surreal, "sample-engine-assert").await;
+        let project_id = Uuid::now_v7();
+        let person_id = Uuid::now_v7();
         let result = surreal
             .query(
                 "CREATE fiduciary_role SET project_id = $project_id, role = 'beneficiary', \
                  fiduciary_id = $person, successor_order = 1, inserted_at = '', updated_at = ''",
             )
             .bind(("project_id", record_id("project", project_id)))
-            .bind((
-                "person",
-                record_id("person", person(&surreal, "assert@example.com").await),
-            ))
+            .bind(("person", record_id("person", person_id)))
             .await
             .and_then(surrealdb::IndexedResults::check);
         assert!(result.is_err());
@@ -643,16 +657,18 @@ mod tests {
 
     #[tokio::test]
     async fn rows_are_scoped_to_their_project() {
-        let surreal = mem_surreal().await;
-        let mine = project(&surreal, "sample-mine").await;
-        let other = project(&surreal, "sample-other").await;
-        let person_id = person(&surreal, "scoped@example.com").await;
-        let stored = insert(&surreal, mine, &fields("executor", 1, person_id))
-            .await
-            .unwrap();
-        assert!(list(&surreal, other).await.unwrap().is_empty());
-        assert!(find(&surreal, other, stored.id).await.unwrap().is_none());
-        delete_for_project(&surreal, mine).await.unwrap();
-        assert!(list(&surreal, mine).await.unwrap().is_empty());
+        with_postgres!(pg, surreal, {
+            let mine = crate::postgres::matter::tests::postgres_project(&pg, "sample-mine").await;
+            let other = crate::postgres::matter::tests::postgres_project(&pg, "sample-other").await;
+            let person_id =
+                crate::postgres::matter::tests::postgres_person(&pg, "scoped@example.com").await;
+            let stored = insert(&surreal, mine, &fields("executor", 1, person_id))
+                .await
+                .unwrap();
+            assert!(list(&surreal, other).await.unwrap().is_empty());
+            assert!(find(&surreal, other, stored.id).await.unwrap().is_none());
+            delete_for_project(&surreal, mine).await.unwrap();
+            assert!(list(&surreal, mine).await.unwrap().is_empty());
+        });
     }
 }
