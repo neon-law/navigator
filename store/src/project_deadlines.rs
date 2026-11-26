@@ -1106,7 +1106,7 @@ mod tests {
     use super::*;
     use crate::postgres_mirror::from_source;
     use crate::projects::{create as create_project, NewProject};
-    use crate::test_support::mem_surreal;
+    use crate::test_support::{self, mem_surreal};
 
     fn sample(project_id: Uuid) -> NewDeadline {
         NewDeadline {
@@ -1145,6 +1145,24 @@ mod tests {
         .id
     }
 
+    async fn pg_project(surreal: &SurrealDb) -> Uuid {
+        test_support::seed_compiled_brands_postgres(surreal).await;
+        let entity_id = test_support::seed_entity(surreal).await;
+        create_project(
+            surreal,
+            &NewProject {
+                code: format!("deadline-{}", Uuid::now_v7()),
+                name: "Deadline matter".into(),
+                status: "open".into(),
+                entity_id,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .id
+    }
+
     // Select the embedded Source for the same application commands used by callers.
     async fn create(db: &SurrealDb, input: &NewDeadline) -> Result<Deadline, DeadlineError> {
         from_source(super::create(db, input)).await
@@ -1167,154 +1185,194 @@ mod tests {
         from_source(super::find(db, project, id)).await
     }
 
-    async fn list(db: &SurrealDb, project: Uuid) -> Result<Vec<Deadline>, DeadlineError> {
-        from_source(super::list(db, project)).await
+    async fn pg_create(db: &SurrealDb, input: &NewDeadline) -> Result<Deadline, DeadlineError> {
+        super::create(db, input).await
+    }
+
+    async fn pg_update(
+        db: &SurrealDb,
+        project: Uuid,
+        id: Uuid,
+        patch: &DeadlinePatch,
+    ) -> Result<Deadline, DeadlineError> {
+        super::update(db, project, id, patch).await
+    }
+
+    async fn pg_find(
+        db: &SurrealDb,
+        project: Uuid,
+        id: Uuid,
+    ) -> Result<Option<Deadline>, DeadlineError> {
+        super::find(db, project, id).await
+    }
+
+    async fn pg_list(db: &SurrealDb, project: Uuid) -> Result<Vec<Deadline>, DeadlineError> {
+        super::list(db, project).await
     }
 
     #[tokio::test]
     async fn create_list_update_and_complete_round_trip() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal).await;
-        let created = create(&surreal, &sample(project_id)).await.unwrap();
-        assert_eq!(created.status, STATUS_OPEN);
-        assert_eq!(created.due_at, "2026-11-02T17:00:00-08:00");
-        assert_eq!(created.calendar_role, "firm");
-        let listed = list(&surreal, project_id).await.unwrap();
-        assert_eq!(listed.len(), 1);
-        assert_eq!(listed[0].id, created.id);
-        let updated = update(
-            &surreal,
-            project_id,
-            created.id,
-            &DeadlinePatch {
-                calendar_role: Some("opponent".into()),
-                due_at: Some("2026-12-01T00:00:00Z".into()),
-                ..DeadlinePatch::default()
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(updated.calendar_role, "opponent");
-        assert_eq!(updated.status, STATUS_OPEN);
-        assert_eq!(updated.id, created.id);
-        let completed = from_source(complete(&surreal, project_id, created.id))
+        test_support::with_required_postgres(async {
+            let surreal = SurrealDb::uninitialized();
+            let project_id = pg_project(&surreal).await;
+            let created = pg_create(&surreal, &sample(project_id)).await.unwrap();
+            assert_eq!(created.status, STATUS_OPEN);
+            assert_eq!(
+                DateTime::parse_from_rfc3339(&created.due_at).unwrap(),
+                DateTime::parse_from_rfc3339("2026-11-02T17:00:00-08:00").unwrap()
+            );
+            assert_eq!(created.calendar_role, "firm");
+            let listed = pg_list(&surreal, project_id).await.unwrap();
+            assert_eq!(listed.len(), 1);
+            assert_eq!(listed[0].id, created.id);
+            let updated = pg_update(
+                &surreal,
+                project_id,
+                created.id,
+                &DeadlinePatch {
+                    calendar_role: Some("opponent".into()),
+                    due_at: Some("2026-12-01T00:00:00Z".into()),
+                    ..DeadlinePatch::default()
+                },
+            )
             .await
             .unwrap();
-        assert_eq!(completed.status, STATUS_COMPLETE);
-        assert_eq!(
-            list(&surreal, project_id).await.unwrap()[0].status,
-            STATUS_COMPLETE
-        );
+            assert_eq!(updated.calendar_role, "opponent");
+            assert_eq!(updated.status, STATUS_OPEN);
+            assert_eq!(updated.id, created.id);
+            let completed = complete(&surreal, project_id, created.id).await.unwrap();
+            assert_eq!(completed.status, STATUS_COMPLETE);
+            assert_eq!(
+                pg_list(&surreal, project_id).await.unwrap()[0].status,
+                STATUS_COMPLETE
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_create_without_a_settleable_category_is_refused() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal).await;
-        let mut input = sample(project_id);
-        input.category = None;
-        let error = create(&surreal, &input).await.unwrap_err();
-        assert!(matches!(error, DeadlineError::Invalid(_)), "{error}");
-        assert!(error.to_string().contains("category"), "{error}");
-        assert!(list(&surreal, project_id).await.unwrap().is_empty());
+        test_support::with_required_postgres(async {
+            let surreal = SurrealDb::uninitialized();
+            let project_id = pg_project(&surreal).await;
+            let mut input = sample(project_id);
+            input.category = None;
+            let error = pg_create(&surreal, &input).await.unwrap_err();
+            assert!(matches!(error, DeadlineError::Invalid(_)), "{error}");
+            assert!(error.to_string().contains("category"), "{error}");
+            assert!(pg_list(&surreal, project_id).await.unwrap().is_empty());
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn an_unknown_category_is_refused() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal).await;
-        let mut input = sample(project_id);
-        input.category = Some("filing".into());
-        let error = create(&surreal, &input).await.unwrap_err();
-        assert!(matches!(error, DeadlineError::Invalid(_)), "{error}");
-        assert!(
-            error
-                .to_string()
-                .contains("court, hearing, discovery, internal"),
-            "{error}"
-        );
-        // Whitespace is trimmed before the vocabulary check, and an empty
-        // value means "unsettled", so the default rule answers it.
-        let mut trimmed = sample(project_id);
-        trimmed.calendar_role = "hearing".into();
-        trimmed.category = Some("  hearing  ".into());
-        assert_eq!(
-            create(&surreal, &trimmed).await.unwrap().category,
-            Some("hearing".into())
-        );
+        test_support::with_required_postgres(async {
+            let surreal = SurrealDb::uninitialized();
+            let project_id = pg_project(&surreal).await;
+            let mut input = sample(project_id);
+            input.category = Some("filing".into());
+            let error = pg_create(&surreal, &input).await.unwrap_err();
+            assert!(matches!(error, DeadlineError::Invalid(_)), "{error}");
+            assert!(
+                error
+                    .to_string()
+                    .contains("court, hearing, discovery, internal"),
+                "{error}"
+            );
+            // Whitespace is trimmed before the vocabulary check, and an empty
+            // value means "unsettled", so the default rule answers it.
+            let mut trimmed = sample(project_id);
+            trimmed.calendar_role = "hearing".into();
+            trimmed.category = Some("  hearing  ".into());
+            assert_eq!(
+                pg_create(&surreal, &trimmed).await.unwrap().category,
+                Some("hearing".into())
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_hearing_role_settles_a_hearing_category() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal).await;
-        let mut input = sample(project_id);
-        input.calendar_role = "hearing".into();
-        input.category = None;
-        assert_eq!(
-            create(&surreal, &input).await.unwrap().category,
-            Some("hearing".into())
-        );
+        test_support::with_required_postgres(async {
+            let surreal = SurrealDb::uninitialized();
+            let project_id = pg_project(&surreal).await;
+            let mut input = sample(project_id);
+            input.calendar_role = "hearing".into();
+            input.category = None;
+            assert_eq!(
+                pg_create(&surreal, &input).await.unwrap().category,
+                Some("hearing".into())
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn an_internal_authority_settles_an_internal_category() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal).await;
-        let mut input = sample(project_id);
-        input.authority_kind = "internal".into();
-        input.authority = "Firm preparation target".into();
-        input.category = None;
-        let internal = create(&surreal, &input).await.unwrap();
-        assert_eq!(internal.category.as_deref(), Some("internal"));
-        let promotion = DeadlinePatch {
-            category: Some(Some("court".into())),
-            ..DeadlinePatch::default()
-        };
-        assert!(matches!(
-            update(&surreal, project_id, internal.id, &promotion).await,
-            Err(DeadlineError::Invalid(_))
-        ));
-        assert_eq!(
-            find(&surreal, project_id, internal.id).await.unwrap(),
-            Some(internal)
-        );
+        test_support::with_required_postgres(async {
+            let surreal = SurrealDb::uninitialized();
+            let project_id = pg_project(&surreal).await;
+            let mut input = sample(project_id);
+            input.authority_kind = "internal".into();
+            input.authority = "Firm preparation target".into();
+            input.category = None;
+            let internal = pg_create(&surreal, &input).await.unwrap();
+            assert_eq!(internal.category.as_deref(), Some("internal"));
+            let promotion = DeadlinePatch {
+                category: Some(Some("court".into())),
+                ..DeadlinePatch::default()
+            };
+            assert!(matches!(
+                pg_update(&surreal, project_id, internal.id, &promotion).await,
+                Err(DeadlineError::Invalid(_))
+            ));
+            assert_eq!(
+                pg_find(&surreal, project_id, internal.id).await.unwrap(),
+                Some(internal)
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn update_preserves_the_category_until_it_is_cleared_or_changed() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal).await;
-        let created = create(&surreal, &sample(project_id)).await.unwrap();
-        // A patch that names no category leaves the stored one alone.
-        let untouched = update(&surreal, project_id, created.id, &DeadlinePatch::default())
+        test_support::with_required_postgres(async {
+            let surreal = SurrealDb::uninitialized();
+            let project_id = pg_project(&surreal).await;
+            let created = pg_create(&surreal, &sample(project_id)).await.unwrap();
+            // A patch that names no category leaves the stored one alone.
+            let untouched = pg_update(&surreal, project_id, created.id, &DeadlinePatch::default())
+                .await
+                .unwrap();
+            assert_eq!(untouched.category, Some("court".into()));
+            let renamed = pg_update(
+                &surreal,
+                project_id,
+                created.id,
+                &DeadlinePatch {
+                    category: Some(Some("discovery".into())),
+                    ..DeadlinePatch::default()
+                },
+            )
             .await
             .unwrap();
-        assert_eq!(untouched.category, Some("court".into()));
-        let renamed = update(
-            &surreal,
-            project_id,
-            created.id,
-            &DeadlinePatch {
-                category: Some(Some("discovery".into())),
-                ..DeadlinePatch::default()
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(renamed.category, Some("discovery".into()));
-        let cleared = update(
-            &surreal,
-            project_id,
-            created.id,
-            &DeadlinePatch {
-                category: Some(None),
-                ..DeadlinePatch::default()
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(cleared.category, None);
+            assert_eq!(renamed.category, Some("discovery".into()));
+            let cleared = pg_update(
+                &surreal,
+                project_id,
+                created.id,
+                &DeadlinePatch {
+                    category: Some(None),
+                    ..DeadlinePatch::default()
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(cleared.category, None);
+        })
+        .await;
     }
 
     #[tokio::test]
@@ -1497,89 +1555,100 @@ mod tests {
 
     #[tokio::test]
     async fn a_historical_row_without_a_category_reads_and_updates() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal).await;
-        let created = create(&surreal, &sample(project_id)).await.unwrap();
-        surreal
-            .query("UPDATE $id UNSET category, calendar_review_pending")
-            .bind((
-                "id",
-                crate::surreal::record_id("project_deadlines", created.id),
-            ))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-        let row = find(&surreal, project_id, created.id)
-            .await
-            .unwrap()
-            .expect("row still reads");
-        assert_eq!(row.category, None);
-        // A historical row still updates: an absent patch preserves its lack
-        // of a category rather than inventing one.
-        let untouched = update(&surreal, project_id, created.id, &DeadlinePatch::default())
-            .await
-            .unwrap();
-        assert_eq!(untouched.category, None);
-        let reschedule = DeadlinePatch {
-            due_at: Some("2027-02-01T12:00:00Z".into()),
-            ..DeadlinePatch::default()
-        };
-        assert!(matches!(
-            update(&surreal, project_id, created.id, &reschedule).await,
-            Err(DeadlineError::Invalid(_))
-        ));
-        assert_eq!(
-            find(&surreal, project_id, created.id).await.unwrap(),
-            Some(untouched)
-        );
+        test_support::with_required_postgres(async {
+            let surreal = SurrealDb::uninitialized();
+            let project_id = pg_project(&surreal).await;
+            let created = pg_create(&surreal, &sample(project_id)).await.unwrap();
+            let pg = crate::postgres::PostgresDb::application().await.unwrap();
+            sqlx::query(
+                "UPDATE project_deadlines SET category=NULL, calendar_review_pending=false WHERE id=$1",
+            )
+                .bind(created.id)
+                .execute(pg.pool())
+                .await
+                .unwrap();
+            let row = pg_find(&surreal, project_id, created.id)
+                .await
+                .unwrap()
+                .expect("row still reads");
+            assert_eq!(row.category, None);
+            // A historical row still updates: an absent patch preserves its lack
+            // of a category rather than inventing one.
+            let untouched = pg_update(&surreal, project_id, created.id, &DeadlinePatch::default())
+                .await
+                .unwrap();
+            assert_eq!(untouched.category, None);
+            let reschedule = DeadlinePatch {
+                due_at: Some("2027-02-01T12:00:00Z".into()),
+                ..DeadlinePatch::default()
+            };
+            assert!(matches!(
+                pg_update(&surreal, project_id, created.id, &reschedule).await,
+                Err(DeadlineError::Invalid(_))
+            ));
+            assert_eq!(
+                pg_find(&surreal, project_id, created.id).await.unwrap(),
+                Some(untouched)
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_statute_without_a_citation_is_refused() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal).await;
-        let mut input = sample(project_id);
-        input.authority = "  ".into();
-        let error = create(&surreal, &input).await.unwrap_err();
-        assert!(matches!(error, DeadlineError::Invalid(_)), "{error}");
-        assert!(list(&surreal, project_id).await.unwrap().is_empty());
+        test_support::with_required_postgres(async {
+            let surreal = SurrealDb::uninitialized();
+            let project_id = pg_project(&surreal).await;
+            let mut input = sample(project_id);
+            input.authority = "  ".into();
+            let error = pg_create(&surreal, &input).await.unwrap_err();
+            assert!(matches!(error, DeadlineError::Invalid(_)), "{error}");
+            assert!(pg_list(&surreal, project_id).await.unwrap().is_empty());
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_shorter_internal_lead_is_refused() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal).await;
-        let mut input = sample(project_id);
-        input.internal_lead_days = Some(1);
-        input.client_lead_days = Some(5);
-        assert!(matches!(
-            create(&surreal, &input).await.unwrap_err(),
-            DeadlineError::Invalid(_)
-        ));
+        test_support::with_required_postgres(async {
+            let surreal = SurrealDb::uninitialized();
+            let project_id = pg_project(&surreal).await;
+            let mut input = sample(project_id);
+            input.internal_lead_days = Some(1);
+            input.client_lead_days = Some(5);
+            assert!(matches!(
+                pg_create(&surreal, &input).await.unwrap_err(),
+                DeadlineError::Invalid(_)
+            ));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_date_without_an_offset_is_refused() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal).await;
-        let mut input = sample(project_id);
-        input.due_at = "2026-11-02".into();
-        assert!(matches!(
-            create(&surreal, &input).await.unwrap_err(),
-            DeadlineError::Invalid(_)
-        ));
+        test_support::with_required_postgres(async {
+            let surreal = SurrealDb::uninitialized();
+            let project_id = pg_project(&surreal).await;
+            let mut input = sample(project_id);
+            input.due_at = "2026-11-02".into();
+            assert!(matches!(
+                pg_create(&surreal, &input).await.unwrap_err(),
+                DeadlineError::Invalid(_)
+            ));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn replay_key_updates_the_same_row() {
-        crate::postgres_mirror::from_source(async {
-            let surreal = mem_surreal().await;
-            let project_id = project(&surreal).await;
+        test_support::with_required_postgres(async {
+            let surreal = SurrealDb::uninitialized();
+            let project_id = pg_project(&surreal).await;
             let mut input = sample(project_id);
             input.replay_key = Some("notice-1".into());
-            let (first, second) = tokio::join!(create(&surreal, &input), create(&surreal, &input));
-            let rows = list(&surreal, project_id).await.unwrap();
+            let (first, second) =
+                tokio::join!(pg_create(&surreal, &input), pg_create(&surreal, &input));
+            let rows = pg_list(&surreal, project_id).await.unwrap();
             assert_eq!(rows.len(), 1);
             // A transaction conflict can require one more read-back.
             assert!(first.is_ok() || second.is_ok());
@@ -1587,232 +1656,242 @@ mod tests {
                 assert_eq!(row.id, rows[0].id);
             }
             input.due_at = "2026-12-15T12:00:00+00:00".into();
-            let updated = create(&surreal, &input).await.unwrap();
+            let updated = pg_create(&surreal, &input).await.unwrap();
             assert_eq!(updated.id, rows[0].id);
             assert_eq!(updated.due_at, input.due_at);
-            assert_eq!(list(&surreal, project_id).await.unwrap(), vec![updated]);
+            assert_eq!(pg_list(&surreal, project_id).await.unwrap(), vec![updated]);
         })
         .await;
     }
 
     #[tokio::test]
     async fn cancelled_replay_is_refused_without_changing_the_row() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal).await;
-        let mut input = sample(project_id);
-        input.replay_key = Some("notice-1".into());
-        let created = create(&surreal, &input).await.unwrap();
-        let cancelled = from_source(cancel(&surreal, project_id, created.id))
-            .await
-            .unwrap();
-        input.due_at = "2026-12-15T12:00:00Z".into();
-        let error = create(&surreal, &input).await.unwrap_err();
-        assert!(error.to_string().contains("cancelled"), "{error}");
-        assert!(error.to_string().contains("reopen"), "{error}");
-        assert_eq!(
-            find(&surreal, project_id, created.id).await.unwrap(),
-            Some(cancelled)
-        );
-        assert_eq!(list(&surreal, project_id).await.unwrap().len(), 1);
+        test_support::with_required_postgres(async {
+            let surreal = SurrealDb::uninitialized();
+            let project_id = pg_project(&surreal).await;
+            let mut input = sample(project_id);
+            input.replay_key = Some("notice-1".into());
+            let created = pg_create(&surreal, &input).await.unwrap();
+            let cancelled = cancel(&surreal, project_id, created.id).await.unwrap();
+            input.due_at = "2026-12-15T12:00:00Z".into();
+            let error = pg_create(&surreal, &input).await.unwrap_err();
+            assert!(error.to_string().contains("cancelled"), "{error}");
+            assert!(error.to_string().contains("reopen"), "{error}");
+            assert_eq!(
+                pg_find(&surreal, project_id, created.id).await.unwrap(),
+                Some(cancelled)
+            );
+            assert_eq!(pg_list(&surreal, project_id).await.unwrap().len(), 1);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn reopen_preserves_identity_and_fields_and_is_idempotent() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal).await;
-        let other = project(&surreal).await;
-        let mut input = sample(project_id);
-        input.replay_key = Some("notice-1".into());
-        let created = create(&surreal, &input).await.unwrap();
-        let cancelled = from_source(cancel(&surreal, project_id, created.id))
-            .await
-            .unwrap();
-        assert!(matches!(
-            from_source(reopen(&surreal, other, created.id)).await,
-            Err(DeadlineError::NotFound)
-        ));
-        assert_eq!(
-            find(&surreal, project_id, created.id).await.unwrap(),
-            Some(cancelled)
-        );
-        let reopened = from_source(reopen(&surreal, project_id, created.id))
-            .await
-            .unwrap();
-        let mut expected = created.clone();
-        expected.updated_at = reopened.updated_at.clone();
-        expected.calendar_sequence = Some(2);
-        assert_eq!(reopened, expected);
-        assert_eq!(
-            from_source(reopen(&surreal, project_id, created.id))
-                .await
-                .unwrap(),
-            reopened
-        );
-        input.due_at = "2026-12-15T12:00:00Z".into();
-        let replayed = create(&surreal, &input).await.unwrap();
-        assert_eq!(replayed.id, created.id);
-        assert_eq!(replayed.status, STATUS_OPEN);
-        assert_eq!(replayed.due_at, input.due_at.replace('Z', "+00:00"));
-        input.project_id = other;
-        let foreign = create(&surreal, &input).await.unwrap();
-        assert_ne!(foreign.id, created.id);
-        assert_eq!(list(&surreal, project_id).await.unwrap().len(), 1);
+        test_support::with_required_postgres(async {
+            let surreal = SurrealDb::uninitialized();
+            let project_id = pg_project(&surreal).await;
+            let other = pg_project(&surreal).await;
+            let mut input = sample(project_id);
+            input.replay_key = Some("notice-1".into());
+            let created = pg_create(&surreal, &input).await.unwrap();
+            let cancelled = cancel(&surreal, project_id, created.id).await.unwrap();
+            assert!(matches!(
+                reopen(&surreal, other, created.id).await,
+                Err(DeadlineError::NotFound)
+            ));
+            assert_eq!(
+                pg_find(&surreal, project_id, created.id).await.unwrap(),
+                Some(cancelled)
+            );
+            let reopened = reopen(&surreal, project_id, created.id).await.unwrap();
+            let mut expected = created.clone();
+            expected.updated_at = reopened.updated_at.clone();
+            expected.calendar_sequence = Some(2);
+            assert_eq!(reopened, expected);
+            assert_eq!(
+                reopen(&surreal, project_id, created.id).await.unwrap(),
+                reopened
+            );
+            input.due_at = "2026-12-15T12:00:00Z".into();
+            let replayed = pg_create(&surreal, &input).await.unwrap();
+            assert_eq!(replayed.id, created.id);
+            assert_eq!(replayed.status, STATUS_OPEN);
+            assert_eq!(replayed.due_at, input.due_at.replace('Z', "+00:00"));
+            input.project_id = other;
+            let foreign = pg_create(&surreal, &input).await.unwrap();
+            assert_ne!(foreign.id, created.id);
+            assert_eq!(pg_list(&surreal, project_id).await.unwrap().len(), 1);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn completed_replay_keeps_status_and_cannot_reopen() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal).await;
-        let mut input = sample(project_id);
-        input.replay_key = Some("notice-1".into());
-        let created = create(&surreal, &input).await.unwrap();
-        from_source(complete(&surreal, project_id, created.id))
-            .await
-            .unwrap();
-        input.due_at = "2026-12-15T12:00:00Z".into();
-        let replayed = create(&surreal, &input).await.unwrap();
-        assert_eq!(replayed.id, created.id);
-        assert_eq!(replayed.status, STATUS_COMPLETE);
-        assert_eq!(replayed.inserted_at, created.inserted_at);
-        assert_eq!(replayed.due_at, input.due_at.replace('Z', "+00:00"));
-        assert!(matches!(
-            from_source(reopen(&surreal, project_id, created.id)).await,
-            Err(DeadlineError::Invalid(_))
-        ));
-        assert_eq!(
-            find(&surreal, project_id, created.id).await.unwrap(),
-            Some(replayed)
-        );
+        test_support::with_required_postgres(async {
+            let surreal = SurrealDb::uninitialized();
+            let project_id = pg_project(&surreal).await;
+            let mut input = sample(project_id);
+            input.replay_key = Some("notice-1".into());
+            let created = pg_create(&surreal, &input).await.unwrap();
+            complete(&surreal, project_id, created.id).await.unwrap();
+            input.due_at = "2026-12-15T12:00:00Z".into();
+            let replayed = pg_create(&surreal, &input).await.unwrap();
+            assert_eq!(replayed.id, created.id);
+            assert_eq!(replayed.status, STATUS_COMPLETE);
+            assert_eq!(replayed.inserted_at, created.inserted_at);
+            assert_eq!(replayed.due_at, input.due_at.replace('Z', "+00:00"));
+            assert!(matches!(
+                reopen(&surreal, project_id, created.id).await,
+                Err(DeadlineError::Invalid(_))
+            ));
+            assert_eq!(
+                pg_find(&surreal, project_id, created.id).await.unwrap(),
+                Some(replayed)
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn cancel_keeps_the_row() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal).await;
-        let created = create(&surreal, &sample(project_id)).await.unwrap();
-        let cancelled = from_source(cancel(&surreal, project_id, created.id))
-            .await
-            .unwrap();
-        assert_eq!(cancelled.status, STATUS_CANCELLED);
-        assert_eq!(list(&surreal, project_id).await.unwrap().len(), 1);
-        assert!(matches!(
-            from_source(complete(&surreal, project_id, created.id))
-                .await
-                .unwrap_err(),
-            DeadlineError::Invalid(_)
-        ));
+        test_support::with_required_postgres(async {
+            let surreal = SurrealDb::uninitialized();
+            let project_id = pg_project(&surreal).await;
+            let created = pg_create(&surreal, &sample(project_id)).await.unwrap();
+            let cancelled = cancel(&surreal, project_id, created.id).await.unwrap();
+            assert_eq!(cancelled.status, STATUS_CANCELLED);
+            assert_eq!(pg_list(&surreal, project_id).await.unwrap().len(), 1);
+            assert!(matches!(
+                complete(&surreal, project_id, created.id)
+                    .await
+                    .unwrap_err(),
+                DeadlineError::Invalid(_)
+            ));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_title_round_trips_updates_and_clears() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal).await;
-        let mut input = sample(project_id);
-        input.title = Some("  Answer to the complaint ".into());
-        let created = create(&surreal, &input).await.unwrap();
-        assert_eq!(created.title.as_deref(), Some("Answer to the complaint"));
-        let renamed = update(
-            &surreal,
-            project_id,
-            created.id,
-            &DeadlinePatch {
-                title: Some(Some("Reply brief".into())),
-                ..DeadlinePatch::default()
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(renamed.title.as_deref(), Some("Reply brief"));
-        let kept = from_source(complete(&surreal, project_id, created.id))
+        test_support::with_required_postgres(async {
+            let surreal = SurrealDb::uninitialized();
+            let project_id = pg_project(&surreal).await;
+            let mut input = sample(project_id);
+            input.title = Some("  Answer to the complaint ".into());
+            let created = pg_create(&surreal, &input).await.unwrap();
+            assert_eq!(created.title.as_deref(), Some("Answer to the complaint"));
+            let renamed = pg_update(
+                &surreal,
+                project_id,
+                created.id,
+                &DeadlinePatch {
+                    title: Some(Some("Reply brief".into())),
+                    ..DeadlinePatch::default()
+                },
+            )
             .await
             .unwrap();
-        assert_eq!(kept.title.as_deref(), Some("Reply brief"));
-        let cleared = update(
-            &surreal,
-            project_id,
-            created.id,
-            &DeadlinePatch {
-                title: Some(None),
-                ..DeadlinePatch::default()
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(cleared.title, None);
+            assert_eq!(renamed.title.as_deref(), Some("Reply brief"));
+            let kept = complete(&surreal, project_id, created.id).await.unwrap();
+            assert_eq!(kept.title.as_deref(), Some("Reply brief"));
+            let cleared = pg_update(
+                &surreal,
+                project_id,
+                created.id,
+                &DeadlinePatch {
+                    title: Some(None),
+                    ..DeadlinePatch::default()
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(cleared.title, None);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn descriptions_round_trip_and_clear_without_changing_visibility() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal).await;
-        let mut input = sample(project_id);
-        input.description = Some("  Synthetic preparation instructions  ".into());
-        let created = create(&surreal, &input).await.unwrap();
-        assert_eq!(
-            created.description.as_deref(),
-            Some("Synthetic preparation instructions")
-        );
-        let changed = update(
-            &surreal,
-            project_id,
-            created.id,
-            &DeadlinePatch {
-                description: Some(Some("Revised instructions".into())),
-                ..DeadlinePatch::default()
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(changed.description.as_deref(), Some("Revised instructions"));
-        assert_eq!(changed.client_lead_days, input.client_lead_days);
-        let cleared = update(
-            &surreal,
-            project_id,
-            created.id,
-            &DeadlinePatch {
-                description: Some(Some(String::new())),
-                ..DeadlinePatch::default()
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(cleared.description, None);
+        test_support::with_required_postgres(async {
+            let surreal = SurrealDb::uninitialized();
+            let project_id = pg_project(&surreal).await;
+            let mut input = sample(project_id);
+            input.description = Some("  Synthetic preparation instructions  ".into());
+            let created = pg_create(&surreal, &input).await.unwrap();
+            assert_eq!(
+                created.description.as_deref(),
+                Some("Synthetic preparation instructions")
+            );
+            let changed = pg_update(
+                &surreal,
+                project_id,
+                created.id,
+                &DeadlinePatch {
+                    description: Some(Some("Revised instructions".into())),
+                    ..DeadlinePatch::default()
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(changed.description.as_deref(), Some("Revised instructions"));
+            assert_eq!(changed.client_lead_days, input.client_lead_days);
+            let cleared = pg_update(
+                &surreal,
+                project_id,
+                created.id,
+                &DeadlinePatch {
+                    description: Some(Some(String::new())),
+                    ..DeadlinePatch::default()
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(cleared.description, None);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn an_overlong_title_is_refused() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal).await;
-        let mut input = sample(project_id);
-        input.title = Some("x".repeat(MAX_TITLE_CHARS + 1));
-        assert!(matches!(
-            create(&surreal, &input).await.unwrap_err(),
-            DeadlineError::Invalid(_)
-        ));
+        test_support::with_required_postgres(async {
+            let surreal = SurrealDb::uninitialized();
+            let project_id = pg_project(&surreal).await;
+            let mut input = sample(project_id);
+            input.title = Some("x".repeat(MAX_TITLE_CHARS + 1));
+            assert!(matches!(
+                pg_create(&surreal, &input).await.unwrap_err(),
+                DeadlineError::Invalid(_)
+            ));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_row_written_without_a_title_still_reads() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal).await;
-        let id = Uuid::now_v7();
-        surreal
-            .query(
-                "CREATE $id SET project_id = $project, due_at = '2027-04-05T12:00:00+00:00', \
-                 authority_kind = 'internal', authority = '', source = 'lawyer', status = 'open', \
-                 calendar_role = 'firm', inserted_at = '2026-10-15T12:00:00Z', \
-                 updated_at = '2026-10-15T12:00:00Z'",
+        test_support::with_required_postgres(async {
+            let surreal = SurrealDb::uninitialized();
+            let project_id = pg_project(&surreal).await;
+            let id = Uuid::now_v7();
+            let pg = crate::postgres::PostgresDb::application().await.unwrap();
+            sqlx::query(
+                "INSERT INTO project_deadlines \
+                 (id, project_id, due_at, authority_kind, authority, source, status, calendar_role, inserted_at, updated_at) \
+                 VALUES ($1, $2, $3::timestamptz, 'internal', '', 'lawyer', 'open', 'firm', $4::timestamptz, $4::timestamptz)",
             )
-            .bind(("id", record_id("project_deadlines", id)))
-            .bind(("project", record_id("project", project_id)))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-        let row = find(&surreal, project_id, id).await.unwrap().unwrap();
-        assert_eq!(row.title, None);
-        assert_eq!(row.description, None);
-        assert_eq!(row.calendar_sequence, None);
-        assert_eq!(list(&surreal, project_id).await.unwrap().len(), 1);
+                .bind(id)
+                .bind(project_id)
+                .bind("2027-04-05T12:00:00+00:00")
+                .bind("2026-10-15T12:00:00Z")
+                .execute(pg.pool())
+                .await
+                .unwrap();
+            let row = pg_find(&surreal, project_id, id).await.unwrap().unwrap();
+            assert_eq!(row.title, None);
+            assert_eq!(row.description, None);
+            assert_eq!(row.calendar_sequence, None);
+            assert_eq!(pg_list(&surreal, project_id).await.unwrap().len(), 1);
+
+        }).await;
     }
 }
