@@ -135,7 +135,7 @@ enum Command {
         /// Target Navigator host.
         #[arg(long)]
         host: String,
-        /// Select the directory holding Project checkouts. Overrides NAVIGATOR_WORKSPACE_ROOT (default: ~/Projects).
+        /// Select the directory holding Project checkouts. Overrides `NAVIGATOR_WORKSPACE_ROOT` (default: `~/Projects`).
         #[arg(long)]
         dir: Option<PathBuf>,
         /// Report checkout state without changing files or contacting the forge.
