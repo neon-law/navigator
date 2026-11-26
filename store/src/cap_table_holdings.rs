@@ -428,7 +428,6 @@ pub async fn delete_for_project(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::mem_surreal;
 
     macro_rules! with_postgres {
         ($pg:ident, $surreal:ident, $body:block) => {{
@@ -588,23 +587,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_engine_refuses_negative_shares() {
-        let surreal = mem_surreal().await;
-        let project_id = Uuid::now_v7();
-        let holder_id = Uuid::now_v7();
-        let result = surreal
-            .query(
-                "CREATE cap_table_holding SET project_id = $project_id, holder_id = $holder, \
-                 share_class = 'Common', shares = -5, inserted_at = '', updated_at = ''",
-            )
-            .bind(("project_id", record_id("project", project_id)))
-            .bind(("holder", record_id("entity", holder_id)))
-            .await
-            .and_then(surrealdb::IndexedResults::check);
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
     async fn rows_are_scoped_to_their_project() {
         with_postgres!(pg, surreal, {
             let mine =
@@ -624,3 +606,7 @@ mod tests {
         });
     }
 }
+
+#[cfg(test)]
+#[path = "cap_table_holdings/compatibility_tests.rs"]
+mod compatibility_tests;

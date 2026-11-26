@@ -1738,9 +1738,9 @@
 {"file":"store/src/cap_table_holdings.rs","line":398,"function":"delete","operation":"query","sql_operations":["DELETE"],"tables":[],"transaction":false}
 {"file":"store/src/cap_table_holdings.rs","line":420,"function":"delete_for_project","operation":"bind","sql_operations":[],"tables":["project"],"transaction":false}
 {"file":"store/src/cap_table_holdings.rs","line":420,"function":"delete_for_project","operation":"query","sql_operations":["DELETE"],"tables":[],"transaction":false}
-{"file":"store/src/cap_table_holdings.rs","line":595,"function":"the_engine_refuses_negative_shares","operation":"bind","sql_operations":[],"tables":["entity"],"transaction":false}
-{"file":"store/src/cap_table_holdings.rs","line":595,"function":"the_engine_refuses_negative_shares","operation":"bind","sql_operations":[],"tables":["project"],"transaction":false}
-{"file":"store/src/cap_table_holdings.rs","line":595,"function":"the_engine_refuses_negative_shares","operation":"query","sql_operations":["CREATE"],"tables":["cap_table_holding"],"transaction":false}
+{"file":"store/src/cap_table_holdings/compatibility_tests.rs","line":9,"function":"the_engine_refuses_negative_shares","operation":"bind","sql_operations":[],"tables":["entity"],"transaction":false}
+{"file":"store/src/cap_table_holdings/compatibility_tests.rs","line":9,"function":"the_engine_refuses_negative_shares","operation":"bind","sql_operations":[],"tables":["project"],"transaction":false}
+{"file":"store/src/cap_table_holdings/compatibility_tests.rs","line":9,"function":"the_engine_refuses_negative_shares","operation":"query","sql_operations":["CREATE"],"tables":["cap_table_holding"],"transaction":false}
 {"file":"store/src/case_stages.rs","line":159,"function":"create_definition","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
 {"file":"store/src/case_stages.rs","line":159,"function":"create_definition","operation":"query","sql_operations":["INSERT"],"tables":[],"transaction":false}
 {"file":"store/src/case_stages.rs","line":179,"function":"list_definitions","operation":"query","sql_operations":["SELECT"],"tables":[],"transaction":false}
@@ -2560,9 +2560,9 @@
 {"file":"store/src/fiduciary_roles.rs","line":427,"function":"delete","operation":"query","sql_operations":["DELETE"],"tables":[],"transaction":false}
 {"file":"store/src/fiduciary_roles.rs","line":449,"function":"delete_for_project","operation":"bind","sql_operations":[],"tables":["project"],"transaction":false}
 {"file":"store/src/fiduciary_roles.rs","line":449,"function":"delete_for_project","operation":"query","sql_operations":["DELETE"],"tables":[],"transaction":false}
-{"file":"store/src/fiduciary_roles.rs","line":646,"function":"the_engine_refuses_a_role_outside_the_closed_list","operation":"bind","sql_operations":[],"tables":["person"],"transaction":false}
-{"file":"store/src/fiduciary_roles.rs","line":646,"function":"the_engine_refuses_a_role_outside_the_closed_list","operation":"bind","sql_operations":[],"tables":["project"],"transaction":false}
-{"file":"store/src/fiduciary_roles.rs","line":646,"function":"the_engine_refuses_a_role_outside_the_closed_list","operation":"query","sql_operations":["CREATE"],"tables":["fiduciary_role"],"transaction":false}
+{"file":"store/src/fiduciary_roles/compatibility_tests.rs","line":9,"function":"the_engine_refuses_a_role_outside_the_closed_list","operation":"bind","sql_operations":[],"tables":["person"],"transaction":false}
+{"file":"store/src/fiduciary_roles/compatibility_tests.rs","line":9,"function":"the_engine_refuses_a_role_outside_the_closed_list","operation":"bind","sql_operations":[],"tables":["project"],"transaction":false}
+{"file":"store/src/fiduciary_roles/compatibility_tests.rs","line":9,"function":"the_engine_refuses_a_role_outside_the_closed_list","operation":"query","sql_operations":["CREATE"],"tables":["fiduciary_role"],"transaction":false}
 {"file":"store/src/filings.rs","line":166,"function":"record","operation":"query","sql_operations":["SELECT","INSERT"],"tables":["filing"],"transaction":false}
 {"file":"store/src/filings.rs","line":179,"function":"record","operation":"bind","sql_operations":[],"tables":["filing"],"transaction":false}
 {"file":"store/src/filings.rs","line":179,"function":"record","operation":"query","sql_operations":["SELECT","CREATE"],"tables":[],"transaction":false}
