@@ -262,11 +262,13 @@ fn Header(site: Arc<Website>, home: bool, utility: Vec<ChromeNavLink>) -> Elemen
                     {navigation_group("/#practice", "Practice Areas", practice)}
                     {navigation_group("/#attorneys", "Attorneys", attorneys)}
                     {navigation_group(CONTACT, "Contact", vec![(CONTACT, "Contact Us")])}
-                }
-                if let Some(link) = utility.first() {
-                    a { class: "sign-in", href: "{link.href}", "{link.label}" }
-                } else {
-                    a { class: "sign-in", href: "/auth/login", "Sign in" }
+                    div { class: "nav-item",
+                        if let Some(link) = utility.first() {
+                            a { href: "{link.href}", "{link.label}" }
+                        } else {
+                            a { href: "/auth/login", "Sign in" }
+                        }
+                    }
                 }
             }
         }

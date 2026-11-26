@@ -2673,16 +2673,6 @@ h2.split span:first-child {
   }
 }
 /* The public pages sit inside the server-rendered Navigator document. */
-.site-header .sign-in {
-  margin-left: clamp(12px, 2vw, 32px);
-  white-space: nowrap;
-  text-decoration: none;
-  font: 600 13px var(--wide);
-  letter-spacing: .1em;
-  text-transform: uppercase;
-  color: inherit;
-}
-.site-header .sign-in:hover { text-decoration: underline; }
 .site-header .wrap { gap: 16px; }
 main { scroll-margin-top: var(--header-h); }
 [hidden] { display: none !important; }
@@ -2702,7 +2692,6 @@ main { scroll-margin-top: var(--header-h); }
 .intake-privacy input[type="checkbox"] { width: auto; }
 .borough#brooklyn img { object-position: 50% 30%; }
 @media (max-width: 860px) {
-  .site-header .sign-in { margin-inline-start: auto; }
   .site-header .nav-menu-toggle { order: 3; }
 }
 
