@@ -18,6 +18,7 @@ use url::Url;
 use uuid::Uuid;
 
 pub mod attachments;
+mod email_attachment;
 mod login;
 mod packet;
 mod signature;
@@ -50,8 +51,9 @@ How a local .eml files:
   The message is parsed locally, then its bytes travel through the document
   lane into object storage — never inside the filing request. The full raw
   message files as an internal matter document with a dated .eml pointer in
-  the Project checkout. Each attachment files as one under mail/<message ref>/<index>,
-  and the Communication request carries only headers, text, and references
+  the Project checkout. Each attachment uses its original name in the dated
+  filename convention, with its own pointer beside the .eml pointer. The
+  Communication request carries only headers, text, and references
   to those documents. Re-filing the same message dedups: already-held
   documents are reused, and the Communication reports deduped instead of
   writing twice, so a retry after a partial failure is safe.
@@ -3167,10 +3169,6 @@ async fn upload_and_file_eml(
     bytes: &[u8],
     kind: &str,
 ) -> Result<serde_json::Value> {
-    let slug_ref = mail_slug_ref(&parsed.message_ref);
-    // The full original message lands as a matter document (LAW-469):
-    // buffered up to the per-kind cap (25 MiB), the resumable streaming
-    // lane above it to 1 GiB.
     let provenance = json!({
         "message_id": parsed.source_ref,
         "sender": parsed.from,
@@ -3180,28 +3178,19 @@ async fn upload_and_file_eml(
     let (source_slug, source_pointer) = source
         .upload(client, parsed, bytes, kind, provenance.clone())
         .await?;
-    let mut attachment_ids = Vec::with_capacity(parsed.attachments.len());
-    for (index, attachment) in parsed.attachments.iter().enumerate() {
-        let (filename, attachment_slug) =
-            mail_attachment_identity(&slug_ref, index, &attachment.filename);
-        let pointer = client
-            .upload_bytes_with_details(
-                &filename,
-                &attachment.bytes,
-                kind,
-                None,
-                None,
-                Some(&attachment.content_type),
-                Some(&attachment_slug),
-                None,
-                None,
-                None,
-                &crate::remote::DocumentExecution::default(),
-                Some(provenance.clone()),
-            )
-            .await?;
-        attachment_ids.push(pointer.current_version.asset_id);
-    }
+    let attachments = email_attachment::upload_all(
+        client,
+        parsed,
+        &source_slug,
+        source.checkout,
+        kind,
+        provenance,
+    )
+    .await?;
+    let attachment_ids: Vec<_> = attachments
+        .iter()
+        .map(|(_, pointer)| pointer.current_version.asset_id)
+        .collect();
     // File the Communication: headers, text, source_ref, and document
     // references only — no MIME bytes — so the request stays far under any
     // body limit at any message size. Re-filing the same message dedups on
@@ -3218,9 +3207,10 @@ async fn upload_and_file_eml(
     });
     let filed = post_eml(client.base(), client.token(), client.project_id(), &request).await?;
     if let Some(root) = source.checkout {
-        let path =
-            crate::document_sync::write_uploaded_pointer(root, &source_slug, &source_pointer)?;
-        println!("Filed pointer {}", path.display());
+        for (slug, pointer) in std::iter::once((source_slug, source_pointer)).chain(attachments) {
+            let path = crate::document_sync::write_uploaded_pointer(root, &slug, &pointer)?;
+            println!("Filed pointer {}", path.display());
+        }
     }
     Ok(filed)
 }
@@ -3240,6 +3230,8 @@ struct ParsedEmlFile {
     subject: Option<String>,
     /// RFC 3339 instant the message was sent or received.
     occurred_at: String,
+    /// Calendar date from the message header in the sender's offset.
+    dated_at: chrono::NaiveDate,
     /// Plain-text body, quoted history and signature stripped.
     body: String,
     attachments: Vec<ParsedEmlAttachment>,
@@ -3259,6 +3251,11 @@ fn parse_eml_for_filing(raw: &[u8]) -> Option<ParsedEmlFile> {
     let message = mail_parser::MessageParser::default().parse(raw)?;
     message.from()?;
     let date = message.date()?;
+    let dated_at = chrono::NaiveDate::from_ymd_opt(
+        i32::from(date.year),
+        u32::from(date.month),
+        u32::from(date.day),
+    )?;
     let occurred_at = chrono::DateTime::from_timestamp(date.to_timestamp(), 0)?.to_rfc3339();
     let message_ref = if let Some(id) = message
         .message_id()
@@ -3320,6 +3317,7 @@ fn parse_eml_for_filing(raw: &[u8]) -> Option<ParsedEmlFile> {
         to,
         subject: message.subject().map(str::to_string),
         occurred_at,
+        dated_at,
         body,
         attachments,
     })
@@ -3354,29 +3352,6 @@ fn mail_slug_ref(message_ref: &str) -> String {
             }
         })
         .collect()
-}
-
-/// The upload client refuses a slug that does not end with the uploaded
-/// filename's extension (`model::documents::validate_document_slug`), so
-/// mail attachment slugs carry the part's extension; an extensionless part
-/// gains `.bin` in both the filename and the slug.
-fn mail_attachment_identity(slug_ref: &str, index: usize, part_filename: &str) -> (String, String) {
-    let file_extension = std::path::Path::new(part_filename)
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .filter(|extension| !extension.is_empty());
-    let extension = match file_extension {
-        Some(extension) => format!(".{extension}"),
-        None => ".bin".to_string(),
-    };
-    let filename = if part_filename.is_empty() {
-        format!("attachment-{index}{extension}")
-    } else if file_extension.is_some() {
-        part_filename.to_string()
-    } else {
-        format!("{part_filename}{extension}")
-    };
-    (filename, format!("mail/{slug_ref}/{index}{extension}"))
 }
 
 struct GmailSource<'a> {
@@ -6058,7 +6033,7 @@ see docs/mail-cli.md#provision-gmail-for-navigator-mail."
 From: Client <client@example.test>\r\n\
 To: Lawyer <lawyer@example.test>\r\n\
 Subject: Signing question\r\n\
-Date: Thu, 09 Oct 2025 14:03:00 +0000\r\n\
+Date: Thu, 09 Oct 2025 00:03:00 +0100\r\n\
 Message-ID: <signing-1@example.test>\r\n\
 Content-Type: multipart/mixed; boundary=\"BOUND\"\r\n\
 \r\n\
@@ -6067,15 +6042,15 @@ Content-Type: text/plain\r\n\
 \r\n\
 Can I sign electronically?\r\n\
 --BOUND\r\n\
-Content-Type: application/pdf\r\n\
-Content-Disposition: attachment; filename=\"retainer.pdf\"\r\n\
+Content-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document\r\n\
+Content-Disposition: attachment; filename=\"Sample Notebook.docx\"\r\n\
 \r\n\
-PDF-BYTES\r\n\
+SYNTHETIC-DOCX-BYTES\r\n\
 --BOUND--\r\n";
 
     #[tokio::test]
     async fn a_reference_filing_uploads_documents_and_files_only_references() {
-        use wiremock::matchers::{method, path};
+        use wiremock::matchers::{body_partial_json, method, path, query_param};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
         let server = MockServer::start().await;
@@ -6084,6 +6059,36 @@ PDF-BYTES\r\n\
         let documents_door = format!("/app/api/projects/{project_id}/documents");
         let eml_door = format!("/app/api/projects/{project_id}/mail/eml");
         let raw = SIGNING_QUESTION;
+        let parsed = parse_eml_for_filing(raw).expect("the message parses");
+        assert_eq!(parsed.attachments.len(), 1);
+        let attachment_slug = "mail/signing-1-example.test/2025.10.09_sample-notebook.docx";
+        let attachment_id = Uuid::now_v7();
+        let attachment_bytes = &parsed.attachments[0].bytes;
+        let attachment_version = json!({
+            "asset_id": attachment_id, "version": 1, "created_at": "2026-11-20T12:00:00Z",
+            "sha256": model::documents::sha256_hex(attachment_bytes), "size_bytes": attachment_bytes.len()
+        });
+        let attachment_response = json!({
+            "kind": "letter", "visibility": "internal", "current_version": attachment_version
+        });
+        let mut attachment_revision = attachment_version;
+        attachment_revision["filename"] = json!("2025.10.09_sample-notebook.docx");
+        attachment_revision["operative"] = json!(true);
+        Mock::given(method("GET"))
+            .and(path(format!("{documents_door}/revisions")))
+            .and(query_param("slug", attachment_slug))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"kind":"letter", "revisions":[attachment_revision]})),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(&documents_door))
+            .and(body_partial_json(json!({"slug": attachment_slug})))
+            .respond_with(ResponseTemplate::new(201).set_body_json(attachment_response))
+            .mount(&server)
+            .await;
         let revision = json!({
             "asset_id": Uuid::now_v7(), "version": 1, "created_at": "2026-11-20T12:00:00Z",
             "sha256": model::documents::sha256_hex(raw), "size_bytes": raw.len()
@@ -6129,8 +6134,6 @@ PDF-BYTES\r\n\
             .mount(&server)
             .await;
 
-        let parsed = parse_eml_for_filing(raw).expect("the message parses");
-        assert_eq!(parsed.attachments.len(), 1);
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("2025.10.09_Signing question.eml");
         let receipt = source::thread_receipt(&path, &model::documents::sha256_hex(raw));
@@ -6163,6 +6166,16 @@ PDF-BYTES\r\n\
             .expect("one filing request");
         let filing_body: serde_json::Value = serde_json::from_slice(&filing.body).unwrap();
         assert_reference_filing_body(&filing_body);
+        assert_eq!(filing_body["attachment_documents"], json!([attachment_id]));
+        let attachment_pointer = root.path().join(format!("blobs/{attachment_slug}.yaml"));
+        let attachment_pointer = crate::document_sync::read_pointer(&attachment_pointer)
+            .unwrap()
+            .unwrap();
+        assert_eq!(attachment_pointer.current_version.asset_id, attachment_id);
+        assert_eq!(
+            attachment_pointer.current_version.sha256,
+            model::documents::sha256_hex(attachment_bytes)
+        );
         let blob = root
             .path()
             .join("blobs/mail/signing-1-example.test/2025.10.09_signing-question.eml.yaml");
@@ -6196,10 +6209,16 @@ PDF-BYTES\r\n\
         );
         let attachment = bodies
             .iter()
-            .find(|body| body["slug"] == "mail/signing-1-example.test/0.pdf")
-            .expect("the attachment files under its index");
-        assert_eq!(attachment["filename"], "retainer.pdf");
-        assert_eq!(attachment["content_type"], "application/pdf");
+            .find(|body| {
+                body["slug"] == "mail/signing-1-example.test/2025.10.09_sample-notebook.docx"
+            })
+            .expect("the attachment files under its normalized name");
+        assert_eq!(attachment["filename"], "2025.10.09_sample-notebook.docx");
+        assert_eq!(
+            attachment["content_type"],
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        );
+        assert_eq!(attachment["mail_provenance"]["attachment"], true);
         // Attachments carry the message's provenance — the marker that
         // scopes the door's retry dedup to the mail lane.
         assert_eq!(

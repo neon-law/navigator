@@ -12,6 +12,10 @@ files one message the same way — a Gmail web-URL message, a local .eml, or a l
 — and `save` writes a message's .eml copy under the checkout's git-ignored `mail/` folder. `attachments` writes a
 message's attachments into a directory. Filing and exporting use Gmail reads; draft commands save unsent drafts.
 
+Parsing a saved `.eml` in its Project checkout writes a pointer for the message and one for each attachment in the same
+directory under `blobs/mail/`. Each attachment uses the message's date and the original filename in the
+`YYYY.MM.DD_name.ext` convention. Attachments with the same normalized name receive distinct suffixes.
+
 The CLI reads the refresh token from the macOS Keychain item whose service is
 `com.neonlaw.navigator.gmail.refresh-token` and whose account is the configured Gmail address. It exchanges that token
 at Google's token endpoint using the configured OAuth client id, plus the client secret when one is stored. The macOS
