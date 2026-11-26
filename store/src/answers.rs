@@ -8,12 +8,10 @@
 //!
 //! Re-asks (verification) and corrections are **new rows, never updates**,
 //! and latest-per-`(notation_id, state_name)` wins on read. There is no
-//! unique constraint, and this module exports no update and no delete —
-//! [`record`] is the only writer. That is the guarantee's whole
-//! enforcement: SurrealDB has no trigger equivalent in our usage, so the
-//! invariant lives
-//! in the command seam's shape, the same way `store::sent_emails` carries
-//! it. `no_update_or_delete_is_exported` pins it against a future edit.
+//! unique constraint, and this module exports no update and no delete.
+//! That is the guarantee's whole enforcement: the invariant lives in the
+//! command seam's shape, the same way `store::sent_emails` carries it.
+//! `no_update_or_delete_is_exported` pins it against a future edit.
 //!
 //! # Who answered, and who typed it
 //!
@@ -33,17 +31,11 @@
 //!
 //! It carries three shapes: primitives as `{"value": …}` ([`primitive`]),
 //! singular record answers mirroring the row they create or select, and
-//! aggregates as an array of that shape. On a SCHEMAFULL table only
-//! `TYPE any` accepts all three — see the field's comment in
-//! `store/src/schema/navigator.surql` for the three near misses that do not,
-//! and `value_round_trips_all_three_shapes` for the proof. Read a stored
+//! aggregates as an array of that shape. PostgreSQL stores the payload as
+//! non-null JSONB; `value_round_trips_all_three_shapes` and
+//! `value_carries_arbitrary_nesting` cover its accepted shapes. Read a stored
 //! value through [`primitive_str`] or [`display_value`] rather than
 //! destructuring it at a call site.
-//!
-//! `TYPE any` also means the column's non-null requirement cannot be a schema
-//! ASSERT (one does not fire on a NONE-valued `any` field). [`record`]
-//! always sets `value` and nothing else writes this table, so the guarantee
-//! is this seam's, like append-only above.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -606,15 +598,14 @@ mod tests {
         for_question_and_person, latest_for_person, latest_for_state, list_all, primitive,
         primitive_str, record, NewAnswer, SOURCE_CLIENT, SOURCE_EXTRACTED, SOURCE_LAWYER,
     };
+    use crate::persons::{self, NewPerson};
     use crate::questions::{self, NewQuestion};
-    use crate::surreal::test_support::mem;
     use crate::surreal::SurrealDb;
+    use chrono::{DateTime, Utc};
     use serde_json::{json, Value as Json};
     use uuid::Uuid;
 
-    /// A question and a respondent to hang answers off. `person_id` is a
-    /// bare id: a `record<person>` link is a type constraint, not a foreign
-    /// key, and nothing here needs the person resolved.
+    /// A question and a persisted respondent to hang answers off.
     async fn a_question(db: &SurrealDb, code: &str) -> Uuid {
         questions::create(db, &NewQuestion::new(code, "?", "string"))
             .await
@@ -622,8 +613,52 @@ mod tests {
             .id
     }
 
+    async fn a_person(db: &SurrealDb) -> Uuid {
+        persons::create(
+            db,
+            &NewPerson::new(
+                "Synthetic answer respondent",
+                format!("answer-{}@example.test", Uuid::now_v7()),
+            ),
+        )
+        .await
+        .unwrap()
+        .id
+    }
+
+    async fn a_notation(db: &SurrealDb, person_id: Uuid) -> Uuid {
+        let project = crate::test_support::seed_project_on_firm(
+            db,
+            None,
+            &format!("Synthetic answer project {}", Uuid::now_v7()),
+        )
+        .await;
+        let template = crate::test_support::seed_unpinned_project_template(
+            db,
+            project.id,
+            &format!("answer-{}", Uuid::now_v7()),
+            "Synthetic answer template",
+            "person",
+            None,
+        )
+        .await;
+        let id = Uuid::now_v7();
+        let pg = crate::postgres::PostgresDb::application().await.unwrap();
+        sqlx::query(
+            "INSERT INTO notation (id, template_id, person_id, project_id, state) \
+             VALUES ($1, $2, $3, $4, 'BEGIN')",
+        )
+        .bind(id)
+        .bind(template.id)
+        .bind(person_id)
+        .bind(project.id)
+        .execute(pg.pool())
+        .await
+        .unwrap();
+        id
+    }
+
     async fn answer_at(
-        db: &SurrealDb,
         id: Uuid,
         question_id: Uuid,
         person_id: Uuid,
@@ -631,25 +666,35 @@ mod tests {
         inserted_at: &str,
         value: &str,
     ) {
-        db.query(format!(
-            "CREATE $id SET question_id = $question_id, person_id = $person_id, \
-             notation_id = $notation_id, state_name = 'person__client', value = $value, \
-             source = 'lawyer', inserted_at = d'{inserted_at}', updated_at = d'{inserted_at}'"
-        ))
-        .bind(("id", crate::surreal::record_id(super::TABLE, id)))
-        .bind((
-            "question_id",
-            crate::surreal::record_id("question", question_id),
-        ))
-        .bind(("person_id", crate::surreal::record_id("person", person_id)))
-        .bind((
-            "notation_id",
-            crate::surreal::record_id("notation", notation_id),
-        ))
-        .bind(("value", primitive(value)))
+        let pg = crate::postgres::PostgresDb::application().await.unwrap();
+        let inserted_at = DateTime::parse_from_rfc3339(inserted_at)
+            .unwrap()
+            .with_timezone(&Utc);
+        sqlx::query(
+            "INSERT INTO answer \
+             (id, question_id, person_id, notation_id, state_name, value, source, inserted_at, updated_at) \
+             VALUES ($1, $2, $3, $4, 'person__client', $5, 'lawyer', $6, $6)",
+        )
+        .bind(id)
+        .bind(question_id)
+        .bind(person_id)
+        .bind(notation_id)
+        .bind(primitive(value))
+        .bind(inserted_at)
+        .execute(pg.pool())
         .await
-        .unwrap()
-        .check()
+        .unwrap();
+    }
+
+    async fn set_inserted_at(answer_id: Uuid, seconds_after_epoch: i64) {
+        let pg = crate::postgres::PostgresDb::application().await.unwrap();
+        sqlx::query(
+            "UPDATE answer SET inserted_at = to_timestamp($2::double precision), updated_at = to_timestamp($2::double precision) WHERE id = $1",
+        )
+        .bind(answer_id)
+        .bind(seconds_after_epoch)
+        .execute(pg.pool())
+        .await
         .unwrap();
     }
 
@@ -677,464 +722,503 @@ mod tests {
         assert_eq!(primitive_str(&aggregate), None);
     }
 
-    /// The headline risk of the port. `answers.value` is the ported JSONB
-    /// column and carries three distinct shapes; on a SCHEMAFULL table most
-    /// of the plausible field types accept some and reject others, and none
-    /// of them fail at DEFINE time. This proves all three survive a real
-    /// write and read, byte for byte — not just the primitive case.
+    /// `answer.value` carries three distinct JSON shapes. This proves all
+    /// three survive a PostgreSQL write and read — not just the primitive
+    /// case.
     #[tokio::test]
     async fn value_round_trips_all_three_shapes() {
-        let db = mem().await;
-        let question_id = a_question(&db, "client_name").await;
-        let person_id = Uuid::now_v7();
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let question_id = a_question(&db, "client_name").await;
+            let shapes: [(&str, Json); 3] = [
+                ("primitive", primitive("Libra Jones")),
+                (
+                    "record",
+                    json!({ "value": "Acme LLC", "name": "Acme LLC", "id": Uuid::now_v7() }),
+                ),
+                (
+                    "aggregate",
+                    json!([
+                        { "value": "Libra Jones", "name": "Libra Jones" },
+                        { "value": "Virgo Stone", "name": "Virgo Stone" },
+                    ]),
+                ),
+            ];
 
-        let shapes: [(&str, Json); 3] = [
-            ("primitive", primitive("Libra Jones")),
-            (
-                "record",
-                json!({ "value": "Acme LLC", "name": "Acme LLC", "id": Uuid::now_v7() }),
-            ),
-            (
-                "aggregate",
-                json!([
-                    { "value": "Libra Jones", "name": "Libra Jones" },
-                    { "value": "Virgo Stone", "name": "Virgo Stone" },
-                ]),
-            ),
-        ];
+            for (shape, value) in shapes {
+                let person_id = a_person(&db).await;
+                let written = record(&db, &NewAnswer::new(question_id, person_id, value.clone()))
+                    .await
+                    .unwrap_or_else(|e| panic!("the {shape} shape was refused: {e}"));
+                assert_eq!(written.value, value, "the {shape} shape drifted on write");
 
-        for (shape, value) in shapes {
-            let written = record(&db, &NewAnswer::new(question_id, person_id, value.clone()))
-                .await
-                .unwrap_or_else(|e| panic!("the {shape} shape was refused: {e}"));
-            assert_eq!(written.value, value, "the {shape} shape drifted on write");
-
-            let read_back = latest_for_person(&db, person_id)
-                .await
-                .unwrap()
-                .expect("the answer just written");
-            assert_eq!(
-                read_back.value, value,
-                "the {shape} shape drifted on read-back"
-            );
-        }
+                let read_back = latest_for_person(&db, person_id)
+                    .await
+                    .unwrap()
+                    .expect("the answer just written");
+                assert_eq!(
+                    read_back.value, value,
+                    "the {shape} shape drifted on read-back"
+                );
+            }
+        })
+        .await;
     }
 
-    /// Deep nesting is the case `TYPE object` and every FLEXIBLE union
-    /// variant reject — an undefined nested key on a SCHEMAFULL table.
+    /// Deep nesting exercises JSONB's ability to retain arbitrary nested keys.
     #[tokio::test]
     async fn value_carries_arbitrary_nesting() {
-        let db = mem().await;
-        let question_id = a_question(&db, "client_name").await;
-        let person_id = Uuid::now_v7();
-        let deep = json!({
-            "value": "Acme",
-            "nested": { "deeper": { "deepest": [1, 2, { "leaf": true }] } },
-        });
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let question_id = a_question(&db, "client_name").await;
+            let person_id = a_person(&db).await;
+            let deep = json!({
+                "value": "Acme",
+                "nested": { "deeper": { "deepest": [1, 2, { "leaf": true }] } },
+            });
 
-        let written = record(&db, &NewAnswer::new(question_id, person_id, deep.clone()))
-            .await
-            .unwrap();
-        assert_eq!(written.value, deep);
+            let written = record(&db, &NewAnswer::new(question_id, person_id, deep.clone()))
+                .await
+                .unwrap();
+            assert_eq!(written.value, deep);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_recorded_answer_reads_back_whole() {
-        let db = mem().await;
-        let question_id = a_question(&db, "client_name").await;
-        let person_id = Uuid::now_v7();
-        let notation_id = Uuid::now_v7();
-        let typist = Uuid::now_v7();
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let question_id = a_question(&db, "client_name").await;
+            let person_id = a_person(&db).await;
+            let notation_id = a_notation(&db, person_id).await;
+            let typist = a_person(&db).await;
 
-        let written = record(
-            &db,
-            &NewAnswer::new(question_id, person_id, primitive("Libra Jones"))
-                .in_notation(notation_id, "person__client")
-                .authored_by(SOURCE_CLIENT, Some(typist)),
-        )
-        .await
-        .unwrap();
+            let written = record(
+                &db,
+                &NewAnswer::new(question_id, person_id, primitive("Libra Jones"))
+                    .in_notation(notation_id, "person__client")
+                    .authored_by(SOURCE_CLIENT, Some(typist)),
+            )
+            .await
+            .unwrap();
 
-        assert_eq!(written.question_id, question_id);
-        assert_eq!(written.person_id, person_id);
-        assert_eq!(written.notation_id, Some(notation_id));
-        assert_eq!(written.state_name.as_deref(), Some("person__client"));
-        assert_eq!(written.source, SOURCE_CLIENT);
-        assert_eq!(written.authored_by_person_id, Some(typist));
-        assert_eq!(written.id.get_version_num(), 4);
-        assert_eq!(list_all(&db).await.unwrap(), vec![written]);
+            assert_eq!(written.question_id, question_id);
+            assert_eq!(written.person_id, person_id);
+            assert_eq!(written.notation_id, Some(notation_id));
+            assert_eq!(written.state_name.as_deref(), Some("person__client"));
+            assert_eq!(written.source, SOURCE_CLIENT);
+            assert_eq!(written.authored_by_person_id, Some(typist));
+            assert_eq!(written.id.get_version_num(), 4);
+            assert_eq!(list_all(&db).await.unwrap(), vec![written]);
+        })
+        .await;
     }
 
     /// The seed's person-scoped fixtures have no Notation behind them.
     #[tokio::test]
     async fn an_answer_may_carry_no_notation_and_no_typist() {
-        let db = mem().await;
-        let question_id = a_question(&db, "client_name").await;
-        let person_id = Uuid::now_v7();
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let question_id = a_question(&db, "client_name").await;
+            let person_id = a_person(&db).await;
 
-        let written = record(
-            &db,
-            &NewAnswer::new(question_id, person_id, primitive("Libra Jones")),
-        )
-        .await
-        .unwrap();
-        assert_eq!(written.notation_id, None);
-        assert_eq!(written.state_name, None);
-        assert_eq!(written.authored_by_person_id, None);
-        assert_eq!(
-            written.source, SOURCE_LAWYER,
-            "an answer defaults to lawyer-supplied"
-        );
+            let written = record(
+                &db,
+                &NewAnswer::new(question_id, person_id, primitive("Libra Jones")),
+            )
+            .await
+            .unwrap();
+            assert_eq!(written.notation_id, None);
+            assert_eq!(written.state_name, None);
+            assert_eq!(written.authored_by_person_id, None);
+            assert_eq!(
+                written.source, SOURCE_LAWYER,
+                "an answer defaults to lawyer-supplied"
+            );
+        })
+        .await;
     }
 
     /// Append-only in practice: a correction is a new row, and the walker
     /// reads the newest one.
     #[tokio::test]
     async fn a_correction_appends_and_the_latest_wins() {
-        let db = mem().await;
-        let question_id = a_question(&db, "client_name").await;
-        let person_id = Uuid::now_v7();
-        let notation_id = Uuid::now_v7();
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let question_id = a_question(&db, "client_name").await;
+            let person_id = a_person(&db).await;
+            let notation_id = a_notation(&db, person_id).await;
 
-        let mut ids = Vec::new();
-        for value in ["Libra Jones", "Libra Prime", "Libra Stone"] {
-            ids.push(
-                record(
+            let mut ids = Vec::new();
+            for (index, value) in ["Libra Jones", "Libra Prime", "Libra Stone"]
+                .into_iter()
+                .enumerate()
+            {
+                let id = record(
                     &db,
                     &NewAnswer::new(question_id, person_id, primitive(value))
                         .in_notation(notation_id, "person__client"),
                 )
                 .await
                 .unwrap()
-                .id,
-            );
-        }
-        assert!(ids.iter().all(|id| id.get_version_num() == 4));
-        ids.sort_unstable();
-        ids.dedup();
-        assert_eq!(ids.len(), 3);
+                .id;
+                set_inserted_at(id, 1_700_000_000 + index as i64).await;
+                ids.push(id);
+            }
+            assert!(ids.iter().all(|id| id.get_version_num() == 4));
+            ids.sort_unstable();
+            ids.dedup();
+            assert_eq!(ids.len(), 3);
 
-        let latest = latest_for_state(&db, question_id, "person__client", person_id, notation_id)
-            .await
-            .unwrap()
-            .expect("three answers were appended");
-        assert_eq!(display_value(&latest.value), "Libra Stone");
-        assert_eq!(
-            for_notation(&db, notation_id).await.unwrap().len(),
-            3,
-            "every correction is kept — nothing is overwritten"
-        );
+            let latest =
+                latest_for_state(&db, question_id, "person__client", person_id, notation_id)
+                    .await
+                    .unwrap()
+                    .expect("three answers were appended");
+            assert_eq!(display_value(&latest.value), "Libra Stone");
+            assert_eq!(
+                for_notation(&db, notation_id).await.unwrap().len(),
+                3,
+                "every correction is kept — nothing is overwritten"
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn chronology_orders_answers_independently_of_uuid_version_and_value_precision() {
-        let db = mem().await;
-        let question_id = a_question(&db, "client_name").await;
-        let person_id = Uuid::now_v7();
-        let notation_id = Uuid::now_v7();
-        let older_v4 = Uuid::parse_str("f0000000-0000-4000-8000-000000000001").unwrap();
-        let newer_v7 = Uuid::parse_str("00000000-0001-7000-8000-000000000001").unwrap();
-        let tie_earlier_v7 = Uuid::parse_str("00000000-0002-7000-8000-000000000001").unwrap();
-        let tie_later_v4 = Uuid::parse_str("f0000000-0000-4000-8000-000000000002").unwrap();
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let question_id = a_question(&db, "client_name").await;
+            let person_id = a_person(&db).await;
+            let notation_id = a_notation(&db, person_id).await;
+            let older_v4 = Uuid::parse_str("f0000000-0000-4000-8000-000000000001").unwrap();
+            let newer_v7 = Uuid::parse_str("00000000-0001-7000-8000-000000000001").unwrap();
+            let tie_earlier_v7 = Uuid::parse_str("00000000-0002-7000-8000-000000000001").unwrap();
+            let tie_later_v4 = Uuid::parse_str("f0000000-0000-4000-8000-000000000002").unwrap();
 
-        answer_at(
-            &db,
-            newer_v7,
-            question_id,
-            person_id,
-            notation_id,
-            "2026-01-02T00:00:00.000002Z",
-            "newest",
-        )
-        .await;
-        answer_at(
-            &db,
-            older_v4,
-            question_id,
-            person_id,
-            notation_id,
-            "2026-01-01T00:00:00.000001Z",
-            "oldest",
-        )
-        .await;
-        answer_at(
-            &db,
-            tie_later_v4,
-            question_id,
-            person_id,
-            notation_id,
-            "2026-01-03T00:00:00.123456900Z",
-            "same microsecond, later nanosecond",
-        )
-        .await;
-        answer_at(
-            &db,
-            tie_earlier_v7,
-            question_id,
-            person_id,
-            notation_id,
-            "2026-01-03T00:00:00.123456100Z",
-            "same microsecond, earlier nanosecond",
-        )
-        .await;
+            answer_at(
+                newer_v7,
+                question_id,
+                person_id,
+                notation_id,
+                "2026-01-02T00:00:00.000002Z",
+                "newest",
+            )
+            .await;
+            answer_at(
+                older_v4,
+                question_id,
+                person_id,
+                notation_id,
+                "2026-01-01T00:00:00.000001Z",
+                "oldest",
+            )
+            .await;
+            answer_at(
+                tie_later_v4,
+                question_id,
+                person_id,
+                notation_id,
+                "2026-01-03T00:00:00.123456900Z",
+                "same microsecond, later nanosecond",
+            )
+            .await;
+            answer_at(
+                tie_earlier_v7,
+                question_id,
+                person_id,
+                notation_id,
+                "2026-01-03T00:00:00.123456100Z",
+                "same microsecond, earlier nanosecond",
+            )
+            .await;
 
-        // The chronology key is the persisted microsecond timestamp, then
-        // UUID as a deterministic tie-breaker. Submicrosecond source values
-        // that mirror to the same PostgreSQL timestamp therefore stay tied.
-        let chronological = [older_v4, newer_v7, tie_earlier_v7, tie_later_v4];
-        assert_eq!(
-            for_notation(&db, notation_id)
-                .await
-                .unwrap()
-                .iter()
-                .map(|answer| answer.id)
-                .collect::<Vec<_>>(),
-            chronological
-        );
-        assert_eq!(
-            for_person_in_notation(&db, person_id, notation_id)
-                .await
-                .unwrap()
-                .iter()
-                .map(|answer| answer.id)
-                .collect::<Vec<_>>(),
-            chronological
-        );
-        assert_eq!(
-            for_question_and_person(&db, question_id, person_id, Some("person__client"))
-                .await
-                .unwrap()
-                .iter()
-                .map(|answer| answer.id)
-                .collect::<Vec<_>>(),
-            chronological
-        );
-        assert_eq!(
-            list_all(&db)
-                .await
-                .unwrap()
-                .iter()
-                .map(|answer| answer.id)
-                .collect::<Vec<_>>(),
-            chronological
-        );
-        assert_eq!(
-            latest_for_state(&db, question_id, "person__client", person_id, notation_id)
-                .await
-                .unwrap()
-                .unwrap()
-                .id,
-            tie_later_v4
-        );
-        assert_eq!(
-            latest_for_person(&db, person_id).await.unwrap().unwrap().id,
-            tie_later_v4
-        );
+            // The chronology key is the persisted microsecond timestamp, then
+            // UUID as a deterministic tie-breaker. Submicrosecond source values
+            // that mirror to the same PostgreSQL timestamp therefore stay tied.
+            let chronological = [older_v4, newer_v7, tie_earlier_v7, tie_later_v4];
+            assert_eq!(
+                for_notation(&db, notation_id)
+                    .await
+                    .unwrap()
+                    .iter()
+                    .map(|answer| answer.id)
+                    .collect::<Vec<_>>(),
+                chronological
+            );
+            assert_eq!(
+                for_person_in_notation(&db, person_id, notation_id)
+                    .await
+                    .unwrap()
+                    .iter()
+                    .map(|answer| answer.id)
+                    .collect::<Vec<_>>(),
+                chronological
+            );
+            assert_eq!(
+                for_question_and_person(&db, question_id, person_id, Some("person__client"))
+                    .await
+                    .unwrap()
+                    .iter()
+                    .map(|answer| answer.id)
+                    .collect::<Vec<_>>(),
+                chronological
+            );
+            assert_eq!(
+                list_all(&db)
+                    .await
+                    .unwrap()
+                    .iter()
+                    .map(|answer| answer.id)
+                    .collect::<Vec<_>>(),
+                chronological
+            );
+            assert_eq!(
+                latest_for_state(&db, question_id, "person__client", person_id, notation_id)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .id,
+                tie_later_v4
+            );
+            assert_eq!(
+                latest_for_person(&db, person_id).await.unwrap().unwrap().id,
+                tie_later_v4
+            );
+        })
+        .await;
     }
 
     /// The state is what keeps two records of one type distinct; without
     /// it, `entity__company` and `entity__subsidiary` would collapse.
     #[tokio::test]
     async fn two_states_of_one_question_stay_distinct() {
-        let db = mem().await;
-        let question_id = a_question(&db, "entity").await;
-        let person_id = Uuid::now_v7();
-        let notation_id = Uuid::now_v7();
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let question_id = a_question(&db, "entity").await;
+            let person_id = a_person(&db).await;
+            let notation_id = a_notation(&db, person_id).await;
 
-        for (state, value) in [("entity__company", "Acme"), ("entity__subsidiary", "Beta")] {
-            record(
-                &db,
-                &NewAnswer::new(question_id, person_id, primitive(value))
-                    .in_notation(notation_id, state),
-            )
-            .await
-            .unwrap();
-        }
-
-        for (state, expected) in [("entity__company", "Acme"), ("entity__subsidiary", "Beta")] {
-            let found = latest_for_state(&db, question_id, state, person_id, notation_id)
+            for (state, value) in [("entity__company", "Acme"), ("entity__subsidiary", "Beta")] {
+                record(
+                    &db,
+                    &NewAnswer::new(question_id, person_id, primitive(value))
+                        .in_notation(notation_id, state),
+                )
                 .await
-                .unwrap()
-                .expect("each state holds its own answer");
-            assert_eq!(display_value(&found.value), expected);
-        }
+                .unwrap();
+            }
+
+            for (state, expected) in [("entity__company", "Acme"), ("entity__subsidiary", "Beta")] {
+                let found = latest_for_state(&db, question_id, state, person_id, notation_id)
+                    .await
+                    .unwrap()
+                    .expect("each state holds its own answer");
+                assert_eq!(display_value(&found.value), expected);
+            }
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_notation_transcript_reads_oldest_first() {
-        let db = mem().await;
-        let question_id = a_question(&db, "client_name").await;
-        let person_id = Uuid::now_v7();
-        let notation_id = Uuid::now_v7();
-        let other_notation = Uuid::now_v7();
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let question_id = a_question(&db, "client_name").await;
+            let person_id = a_person(&db).await;
+            let notation_id = a_notation(&db, person_id).await;
+            let other_notation = a_notation(&db, person_id).await;
 
-        for value in ["first", "second", "third"] {
+            for (index, value) in ["first", "second", "third"].into_iter().enumerate() {
+                let answer = record(
+                    &db,
+                    &NewAnswer::new(question_id, person_id, primitive(value))
+                        .in_notation(notation_id, "person__client"),
+                )
+                .await
+                .unwrap();
+                set_inserted_at(answer.id, 1_700_000_000 + index as i64).await;
+            }
             record(
                 &db,
-                &NewAnswer::new(question_id, person_id, primitive(value))
-                    .in_notation(notation_id, "person__client"),
+                &NewAnswer::new(question_id, person_id, primitive("elsewhere"))
+                    .in_notation(other_notation, "person__client"),
             )
             .await
             .unwrap();
-        }
-        record(
-            &db,
-            &NewAnswer::new(question_id, person_id, primitive("elsewhere"))
-                .in_notation(other_notation, "person__client"),
-        )
-        .await
-        .unwrap();
 
-        let rendered: Vec<String> = for_notation(&db, notation_id)
-            .await
-            .unwrap()
-            .iter()
-            .map(|a| display_value(&a.value))
-            .collect();
-        assert_eq!(rendered, ["first", "second", "third"]);
+            let rendered: Vec<String> = for_notation(&db, notation_id)
+                .await
+                .unwrap()
+                .iter()
+                .map(|a| display_value(&a.value))
+                .collect();
+            assert_eq!(rendered, ["first", "second", "third"]);
+        })
+        .await;
     }
 
     /// A two-sided intake interleaves both authorships on one notation, and
     /// the read has to be able to separate them again.
     #[tokio::test]
     async fn a_two_sided_intake_separates_its_respondents() {
-        let db = mem().await;
-        let question_id = a_question(&db, "client_name").await;
-        let notation_id = Uuid::now_v7();
-        let client = Uuid::now_v7();
-        let lawyer = Uuid::now_v7();
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let question_id = a_question(&db, "client_name").await;
+            let client = a_person(&db).await;
+            let lawyer = a_person(&db).await;
+            let notation_id = a_notation(&db, client).await;
 
-        record(
-            &db,
-            &NewAnswer::new(question_id, client, primitive("from the client"))
-                .in_notation(notation_id, "person__client")
-                .authored_by(SOURCE_CLIENT, Some(client)),
-        )
-        .await
-        .unwrap();
-        record(
-            &db,
-            &NewAnswer::new(question_id, lawyer, primitive("from lawyer"))
-                .in_notation(notation_id, "person__lawyer")
-                .authored_by(SOURCE_LAWYER, Some(lawyer)),
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(for_notation(&db, notation_id).await.unwrap().len(), 2);
-        let just_client = for_person_in_notation(&db, client, notation_id)
+            record(
+                &db,
+                &NewAnswer::new(question_id, client, primitive("from the client"))
+                    .in_notation(notation_id, "person__client")
+                    .authored_by(SOURCE_CLIENT, Some(client)),
+            )
             .await
             .unwrap();
-        assert_eq!(just_client.len(), 1);
-        assert_eq!(display_value(&just_client[0].value), "from the client");
-        assert_eq!(just_client[0].source, SOURCE_CLIENT);
+            record(
+                &db,
+                &NewAnswer::new(question_id, lawyer, primitive("from lawyer"))
+                    .in_notation(notation_id, "person__lawyer")
+                    .authored_by(SOURCE_LAWYER, Some(lawyer)),
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(for_notation(&db, notation_id).await.unwrap().len(), 2);
+            let just_client = for_person_in_notation(&db, client, notation_id)
+                .await
+                .unwrap();
+            assert_eq!(just_client.len(), 1);
+            assert_eq!(display_value(&just_client[0].value), "from the client");
+            assert_eq!(just_client[0].source, SOURCE_CLIENT);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn an_extracted_answer_is_visibly_machine_proposed() {
-        let db = mem().await;
-        let question_id = a_question(&db, "client_name").await;
-        let person_id = Uuid::now_v7();
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let question_id = a_question(&db, "client_name").await;
+            let person_id = a_person(&db).await;
 
-        let written = record(
-            &db,
-            &NewAnswer::new(question_id, person_id, primitive("heard on the call"))
-                .authored_by(SOURCE_EXTRACTED, None),
-        )
-        .await
-        .unwrap();
-        assert_eq!(written.source, SOURCE_EXTRACTED);
-        assert_eq!(
-            written.authored_by_person_id, None,
-            "no human typed a machine-extracted answer"
-        );
+            let written = record(
+                &db,
+                &NewAnswer::new(question_id, person_id, primitive("heard on the call"))
+                    .authored_by(SOURCE_EXTRACTED, None),
+            )
+            .await
+            .unwrap();
+            assert_eq!(written.source, SOURCE_EXTRACTED);
+            assert_eq!(
+                written.authored_by_person_id, None,
+                "no human typed a machine-extracted answer"
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_source_outside_the_closed_set_is_refused_by_the_schema() {
-        let db = mem().await;
-        let question_id = a_question(&db, "client_name").await;
-        let refused = record(
-            &db,
-            &NewAnswer::new(question_id, Uuid::now_v7(), primitive("x")).authored_by("robot", None),
-        )
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let question_id = a_question(&db, "client_name").await;
+            let refused = record(
+                &db,
+                &NewAnswer::new(question_id, a_person(&db).await, primitive("x"))
+                    .authored_by("robot", None),
+            )
+            .await;
+            assert!(refused.is_err(), "the engine accepted source `robot`");
+        })
         .await;
-        assert!(refused.is_err(), "the engine accepted source `robot`");
     }
 
     #[tokio::test]
     async fn the_re_ask_history_of_one_step_reads_in_order() {
-        let db = mem().await;
-        let question_id = a_question(&db, "client_name").await;
-        let person_id = Uuid::now_v7();
-        let notation_id = Uuid::now_v7();
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let question_id = a_question(&db, "client_name").await;
+            let person_id = a_person(&db).await;
+            let notation_id = a_notation(&db, person_id).await;
 
-        for value in ["first", "corrected"] {
+            for (index, value) in ["first", "corrected"].into_iter().enumerate() {
+                let answer = record(
+                    &db,
+                    &NewAnswer::new(question_id, person_id, primitive(value))
+                        .in_notation(notation_id, "person__client"),
+                )
+                .await
+                .unwrap();
+                set_inserted_at(answer.id, 1_700_000_000 + index as i64).await;
+            }
             record(
                 &db,
-                &NewAnswer::new(question_id, person_id, primitive(value))
-                    .in_notation(notation_id, "person__client"),
+                &NewAnswer::new(question_id, person_id, primitive("other state"))
+                    .in_notation(notation_id, "person__other"),
             )
             .await
             .unwrap();
-        }
-        record(
-            &db,
-            &NewAnswer::new(question_id, person_id, primitive("other state"))
-                .in_notation(notation_id, "person__other"),
-        )
-        .await
-        .unwrap();
 
-        let scoped = for_question_and_person(&db, question_id, person_id, Some("person__client"))
-            .await
-            .unwrap();
-        let rendered: Vec<String> = scoped.iter().map(|a| display_value(&a.value)).collect();
-        assert_eq!(rendered, ["first", "corrected"]);
+            let scoped =
+                for_question_and_person(&db, question_id, person_id, Some("person__client"))
+                    .await
+                    .unwrap();
+            let rendered: Vec<String> = scoped.iter().map(|a| display_value(&a.value)).collect();
+            assert_eq!(rendered, ["first", "corrected"]);
 
-        let unscoped = for_question_and_person(&db, question_id, person_id, None)
-            .await
-            .unwrap();
-        assert_eq!(unscoped.len(), 3, "no state filter reads every state");
+            let unscoped = for_question_and_person(&db, question_id, person_id, None)
+                .await
+                .unwrap();
+            assert_eq!(unscoped.len(), 3, "no state filter reads every state");
+        })
+        .await;
     }
 
     /// The seed runs on every boot, so both idempotence checks have to say
     /// "already there" on the second pass.
     #[tokio::test]
     async fn the_seed_idempotence_checks_see_an_existing_answer() {
-        let db = mem().await;
-        let question_id = a_question(&db, "client_name").await;
-        let person_id = Uuid::now_v7();
-        let notation_id = Uuid::now_v7();
-        let value = primitive("Libra Jones");
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let question_id = a_question(&db, "client_name").await;
+            let person_id = a_person(&db).await;
+            let notation_id = a_notation(&db, person_id).await;
+            let value = primitive("Libra Jones");
 
-        assert!(!exists_for_state(&db, notation_id, "person__client")
-            .await
-            .unwrap());
-        assert!(!exists_with_value(&db, question_id, person_id, &value)
-            .await
-            .unwrap());
-
-        record(
-            &db,
-            &NewAnswer::new(question_id, person_id, value.clone())
-                .in_notation(notation_id, "person__client"),
-        )
-        .await
-        .unwrap();
-
-        assert!(exists_for_state(&db, notation_id, "person__client")
-            .await
-            .unwrap());
-        assert!(exists_with_value(&db, question_id, person_id, &value)
-            .await
-            .unwrap());
-        assert!(
-            !exists_with_value(&db, question_id, person_id, &primitive("something else"))
+            assert!(!exists_for_state(&db, notation_id, "person__client")
                 .await
-                .unwrap(),
-            "the value check compares the whole envelope, not just the question"
-        );
+                .unwrap());
+            assert!(!exists_with_value(&db, question_id, person_id, &value)
+                .await
+                .unwrap());
+
+            record(
+                &db,
+                &NewAnswer::new(question_id, person_id, value.clone())
+                    .in_notation(notation_id, "person__client"),
+            )
+            .await
+            .unwrap();
+
+            assert!(exists_for_state(&db, notation_id, "person__client")
+                .await
+                .unwrap());
+            assert!(exists_with_value(&db, question_id, person_id, &value)
+                .await
+                .unwrap());
+            assert!(
+                !exists_with_value(&db, question_id, person_id, &primitive("something else"))
+                    .await
+                    .unwrap(),
+                "the value check compares the whole envelope, not just the question"
+            );
+        })
+        .await;
     }
 
     /// Append-only is carried by this module's *shape*, not by the engine —
