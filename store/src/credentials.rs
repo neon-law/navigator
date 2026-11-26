@@ -342,12 +342,11 @@ pub async fn revoke(_db: &SurrealDb, credential_id: Uuid) -> Result<(), Credenti
 mod tests {
     use super::{
         find_by_person_and_jurisdiction, find_or_grant, for_person, grant, is_licensed_in, revoke,
-        CredentialError, JURISDICTION_TABLE, PERSON_TABLE,
+        CredentialError,
     };
     use crate::jurisdictions::{self, NewJurisdiction};
     use crate::persons::{self, NewPerson, Role};
-    use crate::surreal::test_support::mem;
-    use crate::surreal::{record_id, SurrealDb};
+    use crate::surreal::SurrealDb;
     use uuid::Uuid;
 
     async fn an_attorney(db: &SurrealDb, email: &str) -> Uuid {
@@ -501,21 +500,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_engine_itself_would_have_accepted_the_dangling_links() {
-        let db = mem().await;
-
-        // Captured Source rows may have dangling links; import must handle them.
-        db.query("CREATE $id SET person_id = $person, jurisdiction_id = $j, license_number = 'X'")
-            .bind(("id", record_id("credential", Uuid::now_v7())))
-            .bind(("person", record_id(PERSON_TABLE, Uuid::now_v7())))
-            .bind(("j", record_id(JURISDICTION_TABLE, Uuid::now_v7())))
-            .await
-            .unwrap()
-            .check()
-            .expect("the engine does not validate a record link");
-    }
-
-    #[tokio::test]
     async fn a_second_credential_in_the_same_jurisdiction_is_reported_as_granted() {
         crate::test_support::with_required_postgres(async {
             let db = SurrealDb::uninitialized();
@@ -603,3 +587,7 @@ mod tests {
         .await;
     }
 }
+
+#[cfg(test)]
+#[path = "credentials/compatibility_tests.rs"]
+mod compatibility_tests;

@@ -1984,10 +1984,10 @@
 {"file":"store/src/credentials.rs","line":307,"function":"is_licensed_in","operation":"query","sql_operations":["SELECT"],"tables":[],"transaction":false}
 {"file":"store/src/credentials.rs","line":333,"function":"revoke","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
 {"file":"store/src/credentials.rs","line":333,"function":"revoke","operation":"query","sql_operations":["DELETE"],"tables":[],"transaction":false}
-{"file":"store/src/credentials.rs","line":508,"function":"the_engine_itself_would_have_accepted_the_dangling_links","operation":"bind","sql_operations":[],"tables":["credential"],"transaction":false}
-{"file":"store/src/credentials.rs","line":508,"function":"the_engine_itself_would_have_accepted_the_dangling_links","operation":"bind","sql_operations":[],"tables":["jurisdiction"],"transaction":false}
-{"file":"store/src/credentials.rs","line":508,"function":"the_engine_itself_would_have_accepted_the_dangling_links","operation":"bind","sql_operations":[],"tables":["person"],"transaction":false}
-{"file":"store/src/credentials.rs","line":508,"function":"the_engine_itself_would_have_accepted_the_dangling_links","operation":"query","sql_operations":["CREATE"],"tables":[],"transaction":false}
+{"file":"store/src/credentials/compatibility_tests.rs","line":11,"function":"the_engine_itself_would_have_accepted_the_dangling_links","operation":"bind","sql_operations":[],"tables":[],"transaction":false}
+{"file":"store/src/credentials/compatibility_tests.rs","line":11,"function":"the_engine_itself_would_have_accepted_the_dangling_links","operation":"bind","sql_operations":[],"tables":["credential"],"transaction":false}
+{"file":"store/src/credentials/compatibility_tests.rs","line":11,"function":"the_engine_itself_would_have_accepted_the_dangling_links","operation":"bind","sql_operations":[],"tables":["person"],"transaction":false}
+{"file":"store/src/credentials/compatibility_tests.rs","line":11,"function":"the_engine_itself_would_have_accepted_the_dangling_links","operation":"query","sql_operations":["CREATE"],"tables":[],"transaction":false}
 {"file":"store/src/deadline_calendar.rs","line":109,"function":"open_projects","operation":"query_as","sql_operations":["SELECT"],"tables":["project"],"transaction":false}
 {"file":"store/src/deadline_calendar.rs","line":212,"function":"reconcile_rows","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"store/src/deadline_calendar.rs","line":633,"function":"previously_published","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
