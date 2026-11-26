@@ -2802,7 +2802,9 @@ mod tests {
                     assert_eq!(action.href, "/legal-aid");
                     "cta"
                 }
-                _ => panic!("the home publishes only cards, steps, downloads, and a closing call to action"),
+                _ => panic!(
+                    "the home publishes only cards, steps, downloads, and a closing call to action"
+                ),
             })
             .collect();
         assert_eq!(kinds, ["cards", "steps", "downloads", "cta"]);
