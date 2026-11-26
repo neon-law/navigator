@@ -883,20 +883,15 @@ async fn write_hook_probe() {
             )
             .await
             .unwrap();
+            let question = Uuid::now_v7();
+            surreal.query("CREATE $id SET code='synthetic_hooked',prompt='Synthetic?',answer_type='string',audience='both'")
+                .bind(("id", crate::surreal::record_id("question", question)))
+                .await.unwrap().check().unwrap();
+            after_write(&surreal, MirrorKey::Question(question)).await;
             crate::answers::record(
                 &surreal,
                 &crate::answers::NewAnswer::new(
-                    crate::questions::create(
-                        &surreal,
-                        &crate::questions::NewQuestion::new(
-                            "synthetic_hooked",
-                            "Synthetic?",
-                            "string",
-                        ),
-                    )
-                    .await
-                    .unwrap()
-                    .id,
+                    question,
                     admin,
                     crate::answers::primitive("Synthetic"),
                 )

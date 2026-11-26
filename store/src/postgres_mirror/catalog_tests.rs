@@ -3,7 +3,6 @@ use crate::authorities::{AuthorityLookup, AuthorityPatch, NewAuthority};
 use crate::glossary::Term;
 use crate::notation_packages::NewNotationPackage;
 use crate::postgres_mirror::tests::{connect, fresh_schema};
-use crate::questions::NewQuestion;
 use crate::test_support::mem_surreal;
 
 /// Mirror `key` as the first Mirror Backfill, the only copy into the catalog.
@@ -180,20 +179,21 @@ async fn catalog_rows_converge_through_their_lifecycle() {
     assert_eq!(mirrored(&surreal, &pg, &key).await, Mirrored::Unchanged);
 
     // Question: created, then narrowed to the lawyer.
-    let question = crate::questions::create(
-        &surreal,
-        &NewQuestion::new("synthetic_question", "Synthetic?", "string"),
-    )
-    .await
-    .unwrap();
-    let key = MirrorKey::Question(question.id);
+    let question = Uuid::now_v7();
+    surreal.query("CREATE $id SET code='synthetic_question',prompt='Synthetic?',answer_type='string',audience='both'")
+        .bind(("id", record_id("question", question))).await.unwrap().check().unwrap();
+    let key = MirrorKey::Question(question);
     assert_eq!(mirrored(&surreal, &pg, &key).await, Mirrored::Written);
-    crate::questions::set_audience(&surreal, "synthetic_question", "lawyer")
+    surreal
+        .query("UPDATE $id SET audience='lawyer',updated_at=time::now()")
+        .bind(("id", record_id("question", question)))
         .await
+        .unwrap()
+        .check()
         .unwrap();
     assert_eq!(mirrored(&surreal, &pg, &key).await, Mirrored::Written);
     let audience: String = sqlx::query_scalar("SELECT audience FROM question WHERE id = $1")
-        .bind(question.id)
+        .bind(question)
         .fetch_one(&pg.0)
         .await
         .unwrap();

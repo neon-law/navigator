@@ -122,17 +122,16 @@ async fn open(surreal: &SurrealDb, template: Uuid, client: Uuid, project: Uuid) 
 }
 
 async fn question(surreal: &SurrealDb) -> Uuid {
-    crate::questions::create(
-        surreal,
-        &crate::questions::NewQuestion::new(
-            format!("synthetic_{}", Uuid::now_v7().simple()),
-            "Synthetic?",
-            "string",
-        ),
-    )
-    .await
-    .unwrap()
-    .id
+    let id = Uuid::now_v7();
+    surreal
+        .query("CREATE $id SET code=$code,prompt='Synthetic?',answer_type='string',audience='both'")
+        .bind(("id", record_id("question", id)))
+        .bind(("code", format!("synthetic_{}", id.simple())))
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
+    id
 }
 
 async fn answer_at(
