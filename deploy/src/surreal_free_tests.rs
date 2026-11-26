@@ -585,6 +585,20 @@ mod tests {
     }
 
     #[test]
+    fn native_people_and_clerk_ssr_tests_are_selected() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let selection = select(root).unwrap();
+        for binary in ["dioxus_people_ssr", "dioxus_clerk_ssr"] {
+            assert!(!selection.nextest_filter.contains(&format!(
+                "(package(server) & kind(test) & binary(={binary}))"
+            )));
+            assert!(!selection
+                .coverage_ignore
+                .contains(&format!("server/tests/{binary}\\.rs")));
+        }
+    }
+
+    #[test]
     fn native_graph_api_tests_are_selected() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
         let selection = select(root).unwrap();

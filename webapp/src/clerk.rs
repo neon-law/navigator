@@ -139,6 +139,11 @@ fn server_error(e: impl std::fmt::Display) -> ServerFnError {
 /// them, not merely refused.
 #[server]
 pub async fn get_clerk_projects() -> Result<ClerkProjectsView, ServerFnError> {
+    crate::server_store::with_request_store(Box::pin(get_clerk_projects_data())).await
+}
+
+#[cfg(feature = "server")]
+async fn get_clerk_projects_data() -> Result<ClerkProjectsView, ServerFnError> {
     let role = injected_role().await;
     let firm_name = crate::app_chrome::firm_name_from_context().await;
     let Some(person_id) = injected_person_id()
@@ -186,6 +191,11 @@ pub async fn get_clerk_projects() -> Result<ClerkProjectsView, ServerFnError> {
 /// — is the same `404`.
 #[server]
 pub async fn get_clerk_project() -> Result<ClerkProjectDetailView, ServerFnError> {
+    crate::server_store::with_request_store(Box::pin(get_clerk_project_data())).await
+}
+
+#[cfg(feature = "server")]
+async fn get_clerk_project_data() -> Result<ClerkProjectDetailView, ServerFnError> {
     let axum::extract::Path(code) =
         dioxus_fullstack_core::FullstackContext::extract::<axum::extract::Path<String>, _>()
             .await?;

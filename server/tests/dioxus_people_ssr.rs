@@ -75,12 +75,16 @@ async fn render_people_as(
             as Box<dyn Fn() -> Box<dyn Any> + Send + Sync>,
     ]));
 
+    let pg = store::postgres::PostgresDb::application()
+        .await
+        .expect("fixture pool");
     let router: Router = Router::<FullstackState>::new()
         .route(
             "/app/admin/people",
             get(render_handler).layer(axum::Extension(role)),
         )
-        .with_state(FullstackState::new(cfg, webapp::people::AdminPeople));
+        .with_state(FullstackState::new(cfg, webapp::people::AdminPeople))
+        .layer(axum::Extension(pg));
 
     let response = router
         .oneshot(
@@ -107,132 +111,147 @@ async fn render_people_as(
 
 #[tokio::test]
 async fn admin_people_component_ssrs_directory_from_the_database() {
-    let surreal = store::test_support::mem_surreal().await;
-    store::test_support::dri_person(&surreal).await;
+    store::test_support::with_required_postgres(async {
+        let surreal = store::surreal::SurrealDb::uninitialized();
+        store::test_support::dri_person(&surreal).await;
 
-    let (status, html) = render_people_as(
-        &surreal,
-        "/app/admin/people",
-        webapp::people::ViewerRole::Owner,
-    )
+        let (status, html) = render_people_as(
+            &surreal,
+            "/app/admin/people",
+            webapp::people::ViewerRole::Owner,
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert!(
+            html.contains("DRI Fixture"),
+            "SSR HTML must carry the database-backed person directory before hydration; got: {html}",
+        );
+    })
     .await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        html.contains("DRI Fixture"),
-        "SSR HTML must carry the database-backed person directory before hydration; got: {html}",
-    );
 }
 
 #[tokio::test]
 async fn admin_people_renders_role_display_labels_not_raw_tokens() {
-    let surreal = store::test_support::mem_surreal().await;
-    insert_person_with_role(&surreal, "Cleo Clerk", "cleo@test.invalid", Role::Clerk).await;
+    store::test_support::with_required_postgres(async {
+        let surreal = store::surreal::SurrealDb::uninitialized();
+        insert_person_with_role(&surreal, "Cleo Clerk", "cleo@test.invalid", Role::Clerk).await;
 
-    let (status, html) = render_people_as(
-        &surreal,
-        "/app/admin/people",
-        webapp::people::ViewerRole::Owner,
-    )
+        let (status, html) = render_people_as(
+            &surreal,
+            "/app/admin/people",
+            webapp::people::ViewerRole::Owner,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // The role column must show the user-facing label from the contract,
+        // not the internal `Role::as_str()` token (`clerk`).
+        assert!(
+            html.contains("Clerk (non-lawyer)"),
+            "role column must render the display label, not the raw token; got: {html}",
+        );
+        assert!(
+            !html.contains(">clerk<"),
+            "the internal lowercase role token must not reach the UI; got: {html}",
+        );
+    })
     .await;
-    assert_eq!(status, StatusCode::OK);
-
-    // The role column must show the user-facing label from the contract,
-    // not the internal `Role::as_str()` token (`clerk`).
-    assert!(
-        html.contains("Clerk (non-lawyer)"),
-        "role column must render the display label, not the raw token; got: {html}",
-    );
-    assert!(
-        !html.contains(">clerk<"),
-        "the internal lowercase role token must not reach the UI; got: {html}",
-    );
 }
 
 #[tokio::test]
 async fn admin_people_honors_jsonapi_sort_descending_by_name() {
-    let surreal = store::test_support::mem_surreal().await;
-    insert_person(&surreal, "Aaa Person", "aaa@test.invalid").await;
-    insert_person(&surreal, "Zzz Person", "zzz@test.invalid").await;
+    store::test_support::with_required_postgres(async {
+        let surreal = store::surreal::SurrealDb::uninitialized();
+        insert_person(&surreal, "Aaa Person", "aaa@test.invalid").await;
+        insert_person(&surreal, "Zzz Person", "zzz@test.invalid").await;
 
-    let (status, html) = render_people_as(
-        &surreal,
-        "/app/admin/people?sort=-name",
-        webapp::people::ViewerRole::Owner,
-    )
+        let (status, html) = render_people_as(
+            &surreal,
+            "/app/admin/people?sort=-name",
+            webapp::people::ViewerRole::Owner,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let zzz = html.find("Zzz Person").expect("Zzz row rendered");
+        let aaa = html.find("Aaa Person").expect("Aaa row rendered");
+        assert!(
+            zzz < aaa,
+            "?sort=-name must render descending (Zzz before Aaa); got: {html}",
+        );
+        // The sort headers are real anchors carrying the toggled ?sort= value.
+        assert!(
+            html.contains("/app/admin/people?sort=name")
+                || html.contains("/app/admin/people?sort=-name"),
+            "sort header must be an anchor with a ?sort= toggle; got: {html}",
+        );
+    })
     .await;
-    assert_eq!(status, StatusCode::OK);
-
-    let zzz = html.find("Zzz Person").expect("Zzz row rendered");
-    let aaa = html.find("Aaa Person").expect("Aaa row rendered");
-    assert!(
-        zzz < aaa,
-        "?sort=-name must render descending (Zzz before Aaa); got: {html}",
-    );
-    // The sort headers are real anchors carrying the toggled ?sort= value.
-    assert!(
-        html.contains("/app/admin/people?sort=name")
-            || html.contains("/app/admin/people?sort=-name"),
-        "sort header must be an anchor with a ?sort= toggle; got: {html}",
-    );
 }
 
 /// An Admin with no `person_id` (and therefore no `person_firm_role`) sees
 /// an empty directory rather than every person in the deployment.
 #[tokio::test]
 async fn admin_people_without_membership_renders_no_rows() {
-    let surreal = store::test_support::mem_surreal().await;
-    insert_person(&surreal, "Hidden Person", "hidden@test.invalid").await;
+    store::test_support::with_required_postgres(async {
+        let surreal = store::surreal::SurrealDb::uninitialized();
+        insert_person(&surreal, "Hidden Person", "hidden@test.invalid").await;
 
-    let (status, html) = render_people_as(
-        &surreal,
-        "/app/admin/people",
-        webapp::people::ViewerRole::Admin,
-    )
+        let (status, html) = render_people_as(
+            &surreal,
+            "/app/admin/people",
+            webapp::people::ViewerRole::Admin,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(
+            !html.contains("Hidden Person"),
+            "an unscoped Admin listing would leak every person; got: {html}",
+        );
+    })
     .await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        !html.contains("Hidden Person"),
-        "an unscoped Admin listing would leak every person; got: {html}",
-    );
 }
 
 #[tokio::test]
 async fn list_admin_people_refuses_a_non_admin_viewer() {
-    let surreal = store::test_support::mem_surreal().await;
-    insert_person(&surreal, "Secret Person", "secret@test.invalid").await;
+    store::test_support::with_required_postgres(async {
+        let surreal = store::surreal::SurrealDb::uninitialized();
+        insert_person(&surreal, "Secret Person", "secret@test.invalid").await;
 
-    // A direct hit on the generated `#[server]` endpoint need not carry the
-    // route's auth + embedded Rego policy gate, so the injected tier defaults to
-    // the least-privileged `Client`. The server function must refuse it on its
-    // own authority, so the directory never reaches a non-admin caller.
-    //
-    // `Lawyer` is the interesting tier here rather than `Client`: since ENG-304
-    // deleted the `/app/lawyer/people` mirror, a lawyer has no browser surface onto
-    // the directory at all, and `require_admin` is what makes that true.
-    //
-    // `require_admin` commits a real `403` rather than answering `200` with an
-    // error body, so the refusal reads as a refusal to clients, caches, and
-    // monitoring — not as a successful render.
-    for (label, role) in [
-        ("client", webapp::people::ViewerRole::Client),
-        ("clerk", webapp::people::ViewerRole::Clerk),
-        ("lawyer", webapp::people::ViewerRole::Lawyer),
-    ] {
-        let (status, html) = render_people_as(&surreal, "/app/admin/people", role).await;
+        // A direct hit on the generated `#[server]` endpoint need not carry the
+        // route's auth + embedded Rego policy gate, so the injected tier defaults to
+        // the least-privileged `Client`. The server function must refuse it on its
+        // own authority, so the directory never reaches a non-admin caller.
+        //
+        // `Lawyer` is the interesting tier here rather than `Client`: since ENG-304
+        // deleted the `/app/lawyer/people` mirror, a lawyer has no browser surface onto
+        // the directory at all, and `require_admin` is what makes that true.
+        //
+        // `require_admin` commits a real `403` rather than answering `200` with an
+        // error body, so the refusal reads as a refusal to clients, caches, and
+        // monitoring — not as a successful render.
+        for (label, role) in [
+            ("client", webapp::people::ViewerRole::Client),
+            ("clerk", webapp::people::ViewerRole::Clerk),
+            ("lawyer", webapp::people::ViewerRole::Lawyer),
+        ] {
+            let (status, html) = render_people_as(&surreal, "/app/admin/people", role).await;
 
-        assert_eq!(
-            status,
-            StatusCode::FORBIDDEN,
-            "a {label} viewer must be refused with a real 403; got: {html}",
-        );
-        assert!(
-            !html.contains("Secret Person"),
-            "a {label} viewer must not see the admin-only directory; got: {html}",
-        );
-        assert!(
-            html.contains("Failed to load people."),
-            "the refused load must render the error state, not the directory; got: {html}",
-        );
-    }
+            assert_eq!(
+                status,
+                StatusCode::FORBIDDEN,
+                "a {label} viewer must be refused with a real 403; got: {html}",
+            );
+            assert!(
+                !html.contains("Secret Person"),
+                "a {label} viewer must not see the admin-only directory; got: {html}",
+            );
+            assert!(
+                html.contains("Failed to load people."),
+                "the refused load must render the error state, not the directory; got: {html}",
+            );
+        }
+    })
+    .await;
 }
