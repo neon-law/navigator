@@ -12,7 +12,7 @@
 //! an embedded database:
 //!
 //! - host `web`, through the port-forward this module's caller opens;
-//! - the in-cluster compatibility worker, through the SurrealDB Service.
+//! - the in-cluster compatibility worker, through the `SurrealDB` Service.
 //!
 //! Per-worktree isolation comes from the per-worktree cluster, exactly
 //! two checkouts have two engines, so their
