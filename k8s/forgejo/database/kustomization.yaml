@@ -12,4 +12,4 @@ configMapGenerator:
 images:
   - name: navigator/postgres
     newName: ghcr.io/neon-law/navigator/postgres
-    digest: sha256:b5c0694f8d012e697738b573f97f83e0f4e156b9dc977df8a99f0eaa32130df3
+    digest: sha256:91638691963fcc81402655b1c9e0201ff6cc0afd665ad716cfe6ce98de4ea7d2
