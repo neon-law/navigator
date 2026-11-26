@@ -125,12 +125,11 @@ A pull request's `gate.yml` also dry-runs `seeds/`. Forgejo ignores `.github/wor
 ### The Project gate on Forgejo
 
 With `NAVIGATOR_FORGE_BACKEND=forgejo` in the operator's shell, `navigator project scaffold` writes
-`.forgejo/workflows/gate.yml` beside the GitHub `ci.yml` and `cd.yml`, and `navigator project repository sync-skills`
-restores it in any checkout that carries `.forgejo/`. Forgejo Actions reads `.forgejo/workflows/` and ignores
-`.github/workflows/` once it exists. The workflow is named `gate` with one job `gate`, so it posts `gate / gate
-(pull_request)`, the context `main`'s protection requires. It runs on every pull request with `enable-openid-connect:
-true`. It checks out the pull request's head, installs the release `navigator.yaml`'s `version:` pins from the public
-distribution host (sha256-verified), and runs `navigator project gate --ci`.
+`.forgejo/workflows/gate.yml`, and `navigator project repository sync-skills` restores it in any checkout that carries
+`.forgejo/`. Forgejo Actions reads `.forgejo/workflows/` and ignores `.github/workflows/` once it exists. The workflow
+posts `gate / gate (pull_request)`, the context `main`'s protection requires. It also runs on pushes to `main` so an
+event on the merged tree supplies the main-gate alert. The job enables OpenID Connect and checks out the event ref. It
+verifies the pinned package's SHA-256, installs it from Forgejo, and runs `navigator project gate --ci`.
 
 The CLI tells the runners apart by `FORGEJO_ACTIONS=true`; Forgejo's runner also sets the `GITHUB_*` compatibility
 variables. On Forgejo it requests the ID token from `ACTIONS_ID_TOKEN_REQUEST_URL` and exchanges it only at `POST
