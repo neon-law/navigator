@@ -3397,15 +3397,18 @@ mod tests {
         }
     }
 
-    /// The firm's contact page is linked from the footer, at its own name.
-    #[test]
-    fn contact_is_a_firm_footer_leaf_at_its_own_name() {
-        let contact = super::firm_footer_nav()
-            .into_iter()
-            .find(|n| n.label == "Contact")
-            .expect("Contact leaf present");
-        assert!(!contact.is_dropdown());
-        assert_eq!(contact.href, "/contact");
+    /// The firm's own site links its contact page directly from its footer.
+    #[tokio::test]
+    async fn guieb_shook_links_its_own_contact_page() {
+        scope(&super::GUIEB_SHOOK_BRANDING, async {
+            let contact = super::firm_footer_nav()
+                .into_iter()
+                .find(|n| n.label == "Contact")
+                .expect("Contact leaf present");
+            assert!(!contact.is_dropdown());
+            assert_eq!(contact.href, "/contact");
+        })
+        .await;
     }
 
     /// The talks catalog is linked from the firm's footer, at its own name.

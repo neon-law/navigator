@@ -1429,10 +1429,10 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
         ),
         contact_copy,
     ));
-    routers.push(if !branding.firm_family.is_empty() {
-        contact.layer(from_fn(redirect_neon_contact))
-    } else {
+    routers.push(if branding.firm_family.is_empty() {
         contact
+    } else {
+        contact.layer(from_fn(redirect_neon_contact))
     });
     routers.push(with_guieb_shook(with_branded(
         dioxus_app::contact_sent_router("/contact/sent", resolve_firm_contact_content(branding)),
