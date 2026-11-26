@@ -148,7 +148,7 @@ async fn the_index_advertises_the_firms_pages() {
         "/accidents",
         "/divorce",
         "/notations",
-        "/contact",
+        "/do-i-need-a-lawyer",
         "/blog",
         "/presentations",
     ] {

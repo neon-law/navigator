@@ -44,6 +44,7 @@ pub const DEFAULT_LOCALE: &str = "en";
 /// gateway page still deserializes as [`MarketingPageCopy`] like `lawyers`
 /// does; only the stem is new.
 pub const KNOWN_PAGES: &[&str] = &[
+    "do-i-need-a-lawyer",
     "fractional-gc",
     "free-resources",
     "gateway-accidents",
@@ -725,6 +726,7 @@ pub fn locale_page_kind(stem: &str) -> Option<LocalePageKind> {
         "free-resources" => Some(LocalePageKind::FreeResources),
         "fractional-gc" => Some(LocalePageKind::Transactional),
         "lawyers"
+        | "do-i-need-a-lawyer"
         | "legal-aid"
         | "notations"
         | "services"

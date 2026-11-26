@@ -32,6 +32,7 @@ const NEON_LITIGATION_YAML: &str = include_str!("../locales/en/neon/litigation.y
 const NEON_FRACTIONAL_GC_YAML: &str = include_str!("../locales/en/neon/fractional-gc.yaml");
 const NEON_NOTATIONS_YAML: &str = include_str!("../locales/en/neon/notations.yaml");
 const NEON_LEGAL_AID_YAML: &str = include_str!("../locales/en/neon/legal-aid.yaml");
+const NEON_LAWYER_GUIDE_YAML: &str = include_str!("../locales/en/neon/do-i-need-a-lawyer.yaml");
 const NEON_LAWYERS_YAML: &str = include_str!("../locales/en/neon/lawyers.yaml");
 const NEON_FREE_RESOURCES_YAML: &str = include_str!("../locales/en/neon/free-resources.yaml");
 /// `/delete-your-debt` — Neon's own gateway to the DeleteYourDebt.com
@@ -197,6 +198,7 @@ pub fn catalog_yaml(key: BrandKey, page: &str) -> Option<&'static str> {
         (BrandKey::Neon, "fractional-gc") => Some(NEON_FRACTIONAL_GC_YAML),
         (BrandKey::Neon, "notations") => Some(NEON_NOTATIONS_YAML),
         (BrandKey::Neon, "legal-aid") => Some(NEON_LEGAL_AID_YAML),
+        (BrandKey::Neon, "do-i-need-a-lawyer") => Some(NEON_LAWYER_GUIDE_YAML),
         (BrandKey::Neon, "lawyers") => Some(NEON_LAWYERS_YAML),
         (BrandKey::Neon, "home-marketing") => Some(NEON_HOME_MARKETING_YAML),
         (BrandKey::Neon, "gateway-delete-your-debt") => Some(NEON_GATEWAY_DELETE_YOUR_DEBT_YAML),
@@ -1508,6 +1510,11 @@ pub fn legal_aid(branding: &views::brand::Branding) -> PageContent {
     marketing_page(load_page(branding, "legal-aid"), None, branding)
 }
 
+/// Neon's public guide to choosing between self-help and representation.
+pub fn lawyer_guide(branding: &views::brand::Branding) -> PageContent {
+    marketing_page(load_page(branding, "do-i-need-a-lawyer"), None, branding)
+}
+
 /// `/lawyers`, from this brand's `lawyers.yaml`.
 pub fn lawyers(branding: &views::brand::Branding) -> PageContent {
     marketing_page(load_page(branding, "lawyers"), None, branding)
@@ -2797,17 +2804,10 @@ mod tests {
                 Band::Cards { .. } => "cards",
                 Band::Steps { .. } => "steps",
                 Band::Downloads { .. } => "downloads",
-                Band::Cta { action, .. } => {
-                    let action = action.as_ref().expect("the closing band links Legal Aid");
-                    assert_eq!(action.href, "/legal-aid");
-                    "cta"
-                }
-                _ => panic!(
-                    "the home publishes only cards, steps, downloads, and a closing call to action"
-                ),
+                _ => panic!("the home publishes only cards, steps, and downloads"),
             })
             .collect();
-        assert_eq!(kinds, ["cards", "steps", "downloads", "cta"]);
+        assert_eq!(kinds, ["cards", "steps", "downloads"]);
         let text = serde_yaml::to_string(&content).expect("home serializes");
         assert!(text.contains("Represent yourself"));
         assert!(text.contains("does not create an attorney-client relationship"));

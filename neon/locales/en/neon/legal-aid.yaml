@@ -21,7 +21,7 @@ bands:
           - Your organization's name, colors, and websites
           - Your own Forgejo instance for Project repositories
           - Hosting, upgrades, backups, and sign-in
-        href: /contact
+        href: https://guiebshook.com/contact
         href_label: Ask about hosting
   - kind: statement
     heading: Learn Navigator

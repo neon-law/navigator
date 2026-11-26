@@ -225,12 +225,14 @@ async fn the_home_presents_agentic_lawyering_for_everyone() {
         body.len()
     );
     for text in [
-        "Agentic lawyering is for anyone",
+        "Agentic lawyering is for everyone",
         "Exacting Agentic Lawyering",
         "Represent yourself",
         r#"href="/notations""#,
         r#"href="/lawyers""#,
-        r#"href="/legal-aid""#,
+        r#"href="/do-i-need-a-lawyer""#,
+        r#"href="https://guiebshook.com/contact""#,
+        "Contact Guieb Shook",
         "<title>Neon Law | Agentic Lawyering for Everyone</title>",
     ] {
         assert!(body.contains(text), "missing {text}: {body}");
@@ -238,6 +240,9 @@ async fn the_home_presents_agentic_lawyering_for_everyone() {
     for retired in [
         r#"href="/business""#,
         "company-pricing",
+        "Considering Legal Aid?",
+        r#"href="/legal-aid""#,
+        ">For anyone<",
         "data-enrollment-intake",
         "What is your legal need?",
     ] {
@@ -285,7 +290,7 @@ async fn the_footer_carries_the_pages_the_header_does_not() {
     const ROW: [&str; 11] = [
         "/api",
         "/blog",
-        "/contact",
+        "https://guiebshook.com/contact",
         "/glossary",
         "/",
         "/notations",
@@ -501,9 +506,7 @@ fn publishes_a_fee(body: &str) -> bool {
 /// The service schedule, company page, and Navigator `SaaS` offer publish fees.
 ///
 /// Litigation, being quoted per engagement, stays unpriced because its scope
-/// is not knowable in advance and a posted number would fit nobody. `/contact`
-/// is here too because it once named a consultation fee. A fee added to any
-/// other page here fails rather than ships.
+/// is not knowable in advance and a posted number would fit nobody.
 #[tokio::test]
 async fn supporting_pages_do_not_publish_separate_fees() {
     let app = site_app().await;
@@ -512,7 +515,7 @@ async fn supporting_pages_do_not_publish_separate_fees() {
         "/",
         "/lawyers",
         "/notations",
-        "/contact",
+        "/do-i-need-a-lawyer",
         "/blog",
         "/privacy",
         "/terms",
@@ -539,7 +542,7 @@ async fn the_home_explains_the_mcp_setup() {
         "https://www.neonlaw.com/app/mcp",
         "Navigator is open source under MIT OR Apache-2.0.",
         r#"href="/lawyers""#,
-        "Agentic lawyering is for anyone.",
+        "Agentic lawyering is for everyone.",
     ] {
         assert!(body.contains(expected), "missing {expected}: {body}");
     }
@@ -982,7 +985,7 @@ async fn legal_aid_page_prices_hosted_navigator_and_links_the_workshops() {
     for retired in ["$50", "Navigator as a service"] {
         assert!(!navigator.contains(retired), "/ still offers {retired}");
     }
-    assert!(navigator.contains(r#"href="/legal-aid""#));
+    assert!(!navigator.contains(r#"href="/legal-aid""#));
     let sitemap = body_string(anon_get(&app, "/sitemap.xml").await).await;
     assert!(sitemap.contains("/legal-aid"));
 }
@@ -1890,51 +1893,43 @@ async fn notations_about_tells_the_format_story_and_returns_to_the_gallery() {
     assert!(!navigator.contains("id=\"notation-flow\""));
 }
 
-// ---- Contact surface (firm-owned, Dioxus SSR port #641 / #730 PR6) ----
-
 #[tokio::test]
-async fn contact_page_lists_the_firm_channel_and_shares_the_card() {
-    // The Dioxus contact port renders the firm's contact channels and the
-    // social-share card the head declares.
+async fn neon_contact_redirects_to_guieb_shook() {
     let app = site_app().await;
-    let resp = anon_get(&app, "/contact").await;
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body = body_string(resp).await;
-    assert!(
-        body.contains("<title>Neon Law | Contact</title>"),
-        "brand-prefixed document title: {body}"
+    let response = anon_get(&app, "/contact").await;
+    assert_eq!(response.status(), StatusCode::MOVED_PERMANENTLY);
+    assert_eq!(
+        response.headers()["location"],
+        "https://guiebshook.com/contact"
     );
-    assert!(
-        body.contains(r#"<meta content="Neon Law | Contact" property="og:title"/>"#),
-        "the share card carries the page title: {body}"
-    );
-    assert!(body.contains("site-header"), "public header chrome");
-    assert!(body.contains("site-footer__legal"), "public legal footer");
+
+    let contact = get_on_host(&app, "/contact", "www.guiebshook.com").await;
+    assert_eq!(contact.status(), StatusCode::OK);
+    assert!(body_string(contact)
+        .await
+        .contains(r#"<article class="contact-page""#));
 }
 
 #[tokio::test]
-async fn contact_returns_contact_page_html() {
+async fn lawyer_guide_offers_self_help_and_representation() {
     let app = site_app().await;
-    let body = body_string(anon_get(&app, "/contact").await).await;
-    assert!(body.contains("<title>Neon Law | Contact</title>"));
-    // The published address, which is `contact@` rather than the `support@`
-    // mailbox some other CTAs write to.
-    assert!(body.contains("contact@neonlaw.com"));
-    assert!(
-        body.contains(r#"href="https://calendar.notion.so/meet/nick-shook/or15n4yy7""#),
-        "the contact CTA reaches the firm: {body}"
-    );
-    // The page's own content, not just chrome that happens to mention contact
-    // — a reader looking for how to reach the firm must find the inbox inside
-    // the page article itself.
-    let article = body
-        .split(r#"<article class="contact-page""#)
-        .nth(1)
-        .expect("the contact page's own content renders");
-    assert!(
-        article.contains("contact@neonlaw.com"),
-        "the contact channel sits inside the page's own article: {article}"
-    );
+    let response = anon_get(&app, "/do-i-need-a-lawyer").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_string(response).await;
+    for expected in [
+        "Do I need a lawyer?",
+        "When you can start on your own",
+        "When to talk to a lawyer",
+        "Check whether representation is required",
+        "valid retainer",
+        r#"href="/notations""#,
+        r#"href="https://guiebshook.com/contact""#,
+    ] {
+        assert!(body.contains(expected), "missing {expected}");
+    }
+
+    let sibling = get_on_host(&app, "/do-i-need-a-lawyer", "www.guiebshook.com").await;
+    assert_eq!(sibling.status(), StatusCode::NOT_FOUND);
 }
 
 /// The shared footer names and links Navigator on every public page, on both
