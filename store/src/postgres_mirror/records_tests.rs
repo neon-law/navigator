@@ -133,6 +133,38 @@ async fn a_table_the_engine_has_not_defined_yet_reads_as_empty() {
 }
 
 #[tokio::test]
+async fn captured_document_comment_remains_readable_for_import() {
+    let surreal = mem_surreal().await;
+    let id = Uuid::now_v7();
+    let communication = Uuid::now_v7();
+    surreal.query("CREATE $id SET review_document_id=$document, person_id=$person, anchor_start=0, anchor_end=1, quoted_text='synthetic', body='synthetic', resolved=false, communication_id=$communication")
+        .bind(("id", crate::surreal::record_id("document_comment", id)))
+        .bind(("document", crate::surreal::record_id("review_document", Uuid::now_v7())))
+        .bind(("person", crate::surreal::record_id("person", Uuid::now_v7())))
+        .bind(("communication", communication))
+        .await.unwrap().check().unwrap();
+    crate::postgres_mirror::from_source(crate::document_comments::clear_communication_links(
+        &surreal,
+        &[communication],
+    ))
+    .await
+    .unwrap();
+    let comment =
+        crate::postgres_mirror::from_source(crate::document_comments::find_by_id(&surreal, id))
+            .await
+            .unwrap()
+            .unwrap();
+    assert_eq!(comment.communication_id, None);
+    let rows = source(&surreal, table("document_comment").unwrap())
+        .await
+        .unwrap();
+    assert!(rows.contains_key(&MirrorKey::Record {
+        table: "document_comment",
+        id
+    }));
+}
+
+#[tokio::test]
 async fn unmapped_source_fields_cannot_disappear_from_parity() {
     let surreal = mem_surreal().await;
     let id = Uuid::new_v4();

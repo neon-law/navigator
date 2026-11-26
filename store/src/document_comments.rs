@@ -2,10 +2,8 @@
 //! within a [`crate::review_documents`] draft, and every query against the
 //! table.
 //!
-//! # This table lives in SurrealDB
-//!
-//! `document_comments` moved with wave five of #1093 (ENG-121), in the
-//! satellite-ring slice.
+//! PostgreSQL owns ordinary comment writes. Explicit Source reads and the
+//! retention link-clear path remain available for historical compatibility.
 //!
 //! The review surface is read-only; a comment is the only thing the client
 //! writes there. The anchor is a character-offset range into the document
@@ -17,9 +15,8 @@
 //!
 //! [`create_with_communication`] writes a comment **and** its
 //! `communications` spine row — the unified privileged conversation log.
-//! A multi-statement Surreal query is not one transaction, so the two
-//! writes are ordered rather than atomic: the spine row goes first and the
-//! satellite second. A failure between them leaves an orphaned spine row
+//! The two writes are ordered rather than atomic: the spine row goes first
+//! and the satellite second. A failure between them leaves an orphaned spine row
 //! with no satellite, which reads as a conversation entry with no anchor —
 //! the recoverable direction. The reverse would be a comment pointing at a
 //! spine row that does not exist.
@@ -56,8 +53,7 @@ pub struct DocumentComment {
     pub resolved: bool,
     /// The `communications` spine row for this comment, when it was
     /// written through [`create_with_communication`]. `None` for a legacy
-    /// Phase A row. Bare `uuid`, not a link — `communications` has not
-    /// moved to SurrealDB yet.
+    /// Phase A row. Stored as a bare `uuid`.
     pub communication_id: Option<Uuid>,
     pub inserted_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -224,9 +220,16 @@ where
     retry::writing(attempt).await
 }
 
+/// Comment creation and resolution require PostgreSQL review authority.
+async fn write_authority() -> Result<crate::postgres::PostgresDb, DocumentCommentError> {
+    authority::authority()
+        .await?
+        .ok_or_else(|| authority::ReviewAuthorityError::Unavailable.into())
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn create_row(
-    db: &SurrealDb,
+    _db: &SurrealDb,
     review_document_id: Uuid,
     person_id: Uuid,
     anchor_start: i32,
@@ -235,60 +238,32 @@ async fn create_row(
     body: &str,
     communication_id: Option<Uuid>,
 ) -> Result<Uuid, DocumentCommentError> {
-    if let Some(pg) = authority::authority().await? {
-        let row = serde_json::json!({
-            "id": Uuid::now_v7(), "review_document_id": review_document_id,
-            "person_id": person_id, "anchor_start": anchor_start,
-            "anchor_end": anchor_end, "quoted_text": quoted_text,
-            "body": body, "resolved": false,
-            "communication_id": communication_id.map(|u| u.to_string()),
-        });
-        let query = sqlx::query(
-            "INSERT INTO document_comment SELECT * FROM \
+    let pg = write_authority().await?;
+    let row = serde_json::json!({
+        "id": Uuid::now_v7(), "review_document_id": review_document_id,
+        "person_id": person_id, "anchor_start": anchor_start,
+        "anchor_end": anchor_end, "quoted_text": quoted_text,
+        "body": body, "resolved": false,
+        "communication_id": communication_id.map(|u| u.to_string()),
+    });
+    let query = sqlx::query(
+        "INSERT INTO document_comment SELECT * FROM \
              jsonb_populate_record(NULL::document_comment, \
              $1 || jsonb_build_object('inserted_at', now(), 'updated_at', now())) \
              RETURNING document_comment.id",
-        )
-        .bind(row);
-        let id: Uuid = authority::maybe_scalar(&pg, query)
-            .await?
-            .ok_or(DocumentCommentError::WriteReturnedNothing)?;
-        return Ok(id);
-    }
-    let id = Uuid::now_v7();
-    let mut response = db
-        .query(format!(
-            "CREATE $id SET \
-             review_document_id = $review_document_id, person_id = $person_id, \
-             anchor_start = $anchor_start, anchor_end = $anchor_end, \
-             quoted_text = $quoted_text, body = $body, resolved = false, \
-             communication_id = $communication_id \
-             RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind((
-            "review_document_id",
-            record_id(crate::review_documents::TABLE, review_document_id),
-        ))
-        .bind(("person_id", record_id("person", person_id)))
-        .bind(("anchor_start", anchor_start))
-        .bind(("anchor_end", anchor_end))
-        .bind(("quoted_text", quoted_text.to_string()))
-        .bind(("body", body.to_string()))
-        .bind(("communication_id", communication_id))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<DocumentCommentRow> = response.take(0)?;
-    Ok(row
-        .and_then(DocumentCommentRow::into_comment)
-        .map_or(id, |c| c.id))
+    )
+    .bind(row);
+    let id: Uuid = authority::maybe_scalar(&pg, query)
+        .await?
+        .ok_or(DocumentCommentError::WriteReturnedNothing)?;
+    Ok(id)
 }
 
 /// Insert one comment (always `resolved = false`), returning its id.
 ///
 /// # Errors
 ///
-/// [`DocumentCommentError::Surreal`] if the insert fails.
+/// [`DocumentCommentError::Postgres`] if the insert fails.
 pub async fn create(db: &SurrealDb, new: &NewComment<'_>) -> Result<Uuid, DocumentCommentError> {
     create_row(
         db,
@@ -312,12 +287,14 @@ pub async fn create(db: &SurrealDb, new: &NewComment<'_>) -> Result<Uuid, Docume
 /// # Errors
 ///
 /// [`DocumentCommentError::Communication`] if the spine insert fails (the
-/// satellite is never attempted), or [`DocumentCommentError::Surreal`] if
+/// satellite is never attempted), or [`DocumentCommentError::Postgres`] if
 /// the satellite insert fails after the spine row is already committed.
 pub async fn create_with_communication(
     surreal: &SurrealDb,
     new: &NewLinkedComment<'_>,
 ) -> Result<CreatedComment, DocumentCommentError> {
+    // Refuse a Source-only request before writing the communication spine.
+    let _pg = write_authority().await?;
     let now = Utc::now().to_rfc3339();
     let ingested = crate::communications::ingest(
         surreal,
@@ -421,33 +398,22 @@ pub async fn for_review_document(
 ///
 /// # Errors
 ///
-/// [`DocumentCommentError::Surreal`] if the write fails.
+/// [`DocumentCommentError::Postgres`] if the write fails.
 pub async fn set_resolved(
-    db: &SurrealDb,
+    _db: &SurrealDb,
     id: Uuid,
     resolved: bool,
 ) -> Result<Option<DocumentComment>, DocumentCommentError> {
-    if let Some(pg) = authority::authority().await? {
-        let query = sqlx::query(
-            "UPDATE document_comment SET resolved = $2, updated_at = now() WHERE id = $1 \
+    let pg = write_authority().await?;
+    let query = sqlx::query(
+        "UPDATE document_comment SET resolved = $2, updated_at = now() WHERE id = $1 \
              RETURNING to_jsonb(document_comment) AS row",
-        )
-        .bind(id)
-        .bind(resolved);
-        return Ok(authority::maybe::<PgDocumentCommentRow>(&pg, query)
-            .await?
-            .and_then(PgDocumentCommentRow::into_comment));
-    }
-    let mut response = writing(|| {
-        db.query(format!(
-            "UPDATE $id SET resolved = $resolved, updated_at = time::now() RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind(("resolved", resolved))
-    })
-    .await?;
-    let row: Option<DocumentCommentRow> = response.take(0)?;
-    Ok(row.and_then(DocumentCommentRow::into_comment))
+    )
+    .bind(id)
+    .bind(resolved);
+    Ok(authority::maybe::<PgDocumentCommentRow>(&pg, query)
+        .await?
+        .and_then(PgDocumentCommentRow::into_comment))
 }
 
 /// Clear `communication_id` on every comment that names one of
@@ -494,7 +460,6 @@ pub async fn clear_communication_links(
 mod tests {
     use super::{create, create_with_communication, for_review_document, set_resolved, NewComment};
     use crate::review_documents::{self, NewReviewDocument};
-    use crate::surreal::test_support::mem;
     use crate::test_support::seed_notation;
 
     async fn seed_review_document(surreal: &crate::surreal::SurrealDb) -> uuid::Uuid {
@@ -523,109 +488,163 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn source_context_refuses_comment_writes() {
+        let db = crate::surreal::SurrealDb::uninitialized();
+        let id = uuid::Uuid::now_v7();
+        crate::postgres_mirror::from_source(async {
+            assert!(matches!(
+                create(
+                    &db,
+                    &NewComment {
+                        review_document_id: id,
+                        person_id: id,
+                        anchor_start: 0,
+                        anchor_end: 1,
+                        quoted_text: "synthetic",
+                        body: "synthetic"
+                    }
+                )
+                .await,
+                Err(super::DocumentCommentError::Postgres(_))
+            ));
+            assert!(matches!(
+                set_resolved(&db, id, true).await,
+                Err(super::DocumentCommentError::Postgres(_))
+            ));
+            assert!(matches!(
+                create_with_communication(
+                    &db,
+                    &super::NewLinkedComment {
+                        project_id: id,
+                        review_document_id: id,
+                        person_id: id,
+                        direction: "inbound",
+                        anchor_start: 0,
+                        anchor_end: 1,
+                        quoted_text: "synthetic",
+                        body: "synthetic"
+                    }
+                )
+                .await,
+                Err(super::DocumentCommentError::Postgres(_))
+            ));
+        })
+        .await;
+    }
+
+    #[tokio::test]
     async fn create_inserts_an_unresolved_comment_readable_by_document() {
-        let surreal = mem().await;
-        let review_document_id = seed_review_document(&surreal).await;
-        let person_id = seed_commenter(&surreal).await;
+        crate::test_support::with_required_postgres(async {
+            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let review_document_id = seed_review_document(&surreal).await;
+            let person_id = seed_commenter(&surreal).await;
 
-        let id = create(
-            &surreal,
-            &NewComment {
-                review_document_id,
-                person_id,
-                anchor_start: 3,
-                anchor_end: 8,
-                quoted_text: "Libra",
-                body: "Should this be my full legal name?",
-            },
-        )
-        .await
-        .unwrap();
-
-        let rows = for_review_document(&surreal, review_document_id)
+            let id = create(
+                &surreal,
+                &NewComment {
+                    review_document_id,
+                    person_id,
+                    anchor_start: 3,
+                    anchor_end: 8,
+                    quoted_text: "Libra",
+                    body: "Should this be my full legal name?",
+                },
+            )
             .await
             .unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].id, id);
-        assert_eq!(rows[0].quoted_text, "Libra");
-        assert_eq!(rows[0].anchor_start, 3);
-        assert!(!rows[0].resolved);
+
+            let rows = for_review_document(&surreal, review_document_id)
+                .await
+                .unwrap();
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0].id, id);
+            assert_eq!(rows[0].quoted_text, "Libra");
+            assert_eq!(rows[0].anchor_start, 3);
+            assert!(!rows[0].resolved);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn create_with_communication_writes_and_links_both_rows() {
         use crate::communications::{channel, direction};
 
-        let surreal = crate::surreal::test_support::mem().await;
-        let review_document_id = seed_review_document(&surreal).await;
-        let notation_id = review_documents::by_id(&surreal, review_document_id)
-            .await
-            .unwrap()
-            .unwrap()
-            .notation_id;
-        let project_id = crate::notations::find_by_id(&surreal, notation_id)
-            .await
-            .unwrap()
-            .unwrap()
-            .project_id;
-        let person_id = seed_commenter(&surreal).await;
+        crate::test_support::with_required_postgres(async {
+            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let review_document_id = seed_review_document(&surreal).await;
+            let notation_id = review_documents::by_id(&surreal, review_document_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .notation_id;
+            let project_id = crate::notations::find_by_id(&surreal, notation_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .project_id;
+            let person_id = seed_commenter(&surreal).await;
 
-        let created = create_with_communication(
-            &surreal,
-            &super::NewLinkedComment {
-                project_id,
-                review_document_id,
-                person_id,
-                direction: direction::INBOUND,
-                anchor_start: 3,
-                anchor_end: 8,
-                quoted_text: "Libra",
-                body: "Should this be my full legal name?",
-            },
-        )
-        .await
-        .unwrap();
-
-        // The satellite carries the anchor and points at the spine.
-        let comment = super::find_by_id(&surreal, created.comment_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(comment.communication_id, Some(created.communication_id));
-        assert_eq!(comment.quoted_text, "Libra");
-
-        // The spine row is in the matter's conversation log.
-        let thread = crate::communications::for_project(&surreal, project_id)
+            let created = create_with_communication(
+                &surreal,
+                &super::NewLinkedComment {
+                    project_id,
+                    review_document_id,
+                    person_id,
+                    direction: direction::INBOUND,
+                    anchor_start: 3,
+                    anchor_end: 8,
+                    quoted_text: "Libra",
+                    body: "Should this be my full legal name?",
+                },
+            )
             .await
             .unwrap();
-        assert_eq!(thread.len(), 1);
-        assert_eq!(thread[0].id, created.communication_id);
-        assert_eq!(thread[0].channel, channel::DOCUMENT_COMMENT);
-        assert_eq!(thread[0].direction, direction::INBOUND);
-        assert_eq!(thread[0].body, "Should this be my full legal name?");
-        assert_eq!(thread[0].author_person_id, Some(person_id));
+
+            // The satellite carries the anchor and points at the spine.
+            let comment = super::find_by_id(&surreal, created.comment_id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(comment.communication_id, Some(created.communication_id));
+            assert_eq!(comment.quoted_text, "Libra");
+
+            // The spine row is in the matter's conversation log.
+            let thread = crate::communications::for_project(&surreal, project_id)
+                .await
+                .unwrap();
+            assert_eq!(thread.len(), 1);
+            assert_eq!(thread[0].id, created.communication_id);
+            assert_eq!(thread[0].channel, channel::DOCUMENT_COMMENT);
+            assert_eq!(thread[0].direction, direction::INBOUND);
+            assert_eq!(thread[0].body, "Should this be my full legal name?");
+            assert_eq!(thread[0].author_person_id, Some(person_id));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn set_resolved_flips_the_flag() {
-        let surreal = mem().await;
-        let review_document_id = seed_review_document(&surreal).await;
-        let person_id = seed_commenter(&surreal).await;
-        let id = create(
-            &surreal,
-            &NewComment {
-                review_document_id,
-                person_id,
-                anchor_start: 0,
-                anchor_end: 1,
-                quoted_text: "I",
-                body: "typo here",
-            },
-        )
-        .await
-        .unwrap();
+        crate::test_support::with_required_postgres(async {
+            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let review_document_id = seed_review_document(&surreal).await;
+            let person_id = seed_commenter(&surreal).await;
+            let id = create(
+                &surreal,
+                &NewComment {
+                    review_document_id,
+                    person_id,
+                    anchor_start: 0,
+                    anchor_end: 1,
+                    quoted_text: "I",
+                    body: "typo here",
+                },
+            )
+            .await
+            .unwrap();
 
-        let updated = set_resolved(&surreal, id, true).await.unwrap().unwrap();
-        assert!(updated.resolved);
+            let updated = set_resolved(&surreal, id, true).await.unwrap().unwrap();
+            assert!(updated.resolved);
+        })
+        .await;
     }
 }
