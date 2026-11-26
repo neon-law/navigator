@@ -547,30 +547,28 @@ pub fn orientation_for(width: u32, height: u32) -> &'static str {
 
 /// Record an uploaded Brand video and its measured display dimensions.
 pub async fn record_video(
-    db: &SurrealDb,
+    _db: &SurrealDb,
     brand_key: &str,
     object_key: &str,
     width: u32,
     height: u32,
 ) -> Result<BlogVideo, PostError> {
+    let pg = authority::authority()
+        .await?
+        .ok_or_else(|| PostError::Db("PostgreSQL video authority is unavailable".into()))?;
     let orientation = orientation_for(width, height);
-    let id = Uuid::now_v7();
-    if let Some(pg) = authority::authority().await? {
-        // `object_key` is unique: a second registration of one upload fails.
-        let query = sqlx::query(
-            "INSERT INTO blog_video (id, brand_key, object_key, width, height, orientation) \
-             VALUES ($1, $2, $3, $4, $5, $6)",
-        )
-        .bind(id)
-        .bind(brand_key.to_owned())
-        .bind(object_key.to_owned())
-        .bind(i64::from(width))
-        .bind(i64::from(height))
-        .bind(orientation);
-        authority::execute(&pg, query).await?;
-    } else {
-        record_video_in_surreal(db, id, brand_key, object_key, width, height).await?;
-    }
+    // `object_key` is unique: a second registration of one upload fails.
+    let query = sqlx::query(
+        "INSERT INTO blog_video (id, brand_key, object_key, width, height, orientation) \
+         VALUES ($1, $2, $3, $4, $5, $6)",
+    )
+    .bind(Uuid::now_v7())
+    .bind(brand_key.to_owned())
+    .bind(object_key.to_owned())
+    .bind(i64::from(width))
+    .bind(i64::from(height))
+    .bind(orientation);
+    authority::execute(&pg, query).await?;
     Ok(BlogVideo {
         brand_key: brand_key.to_string(),
         object_key: object_key.to_string(),
@@ -578,31 +576,6 @@ pub async fn record_video(
         height,
         orientation: orientation.to_string(),
     })
-}
-
-async fn record_video_in_surreal(
-    db: &SurrealDb,
-    id: Uuid,
-    brand_key: &str,
-    object_key: &str,
-    width: u32,
-    height: u32,
-) -> Result<(), PostError> {
-    let orientation = orientation_for(width, height);
-    db.query(
-        "CREATE $id SET brand_key = $brand, object_key = $key, \
-         width = $width, height = $height, orientation = $orientation, inserted_at = time::now()",
-    )
-    .bind(("id", record_id(VIDEO_TABLE, id)))
-    .bind(("brand", brand_key.to_string()))
-    .bind(("key", object_key.to_string()))
-    .bind(("width", i64::from(width)))
-    .bind(("height", i64::from(height)))
-    .bind(("orientation", orientation.to_string()))
-    .await?
-    .check()?;
-    crate::postgres_mirror::after_write(db, crate::postgres_mirror::MirrorKey::BlogVideo(id)).await;
-    Ok(())
 }
 
 /// The registered upload behind a video asset key, from any Brand.
@@ -1466,6 +1439,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn source_context_cannot_register_a_brand_video() {
+        let source = crate::surreal::SurrealDb::uninitialized();
+        let error = crate::postgres_mirror::from_source(super::record_video(
+            &source,
+            "synthetic-brand",
+            "synthetic/video.mp4",
+            1080,
+            1920,
+        ))
+        .await
+        .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("PostgreSQL video authority is unavailable"));
+    }
+
+    #[tokio::test]
     async fn public_links_for_database_posts_include_confirmed_receipts_without_handles_or_seed_edits(
     ) {
         test_support::with_required_postgres(async {
@@ -2169,9 +2159,20 @@ mod tests {
             let portrait = format!("img/{brand}/social/portrait.mp4");
             let landscape = format!("img/{brand}/social/landscape.mp4");
             let foreign = format!("img/{other}/social/foreign.mp4");
-            record_video(&db, &brand, &portrait, 1080, 1920)
+            let registered = record_video(&db, &brand, &portrait, 1080, 1920)
                 .await
                 .unwrap();
+            assert_eq!(
+                (
+                    registered.width,
+                    registered.height,
+                    registered.orientation.as_str()
+                ),
+                (1080, 1920, "vertical")
+            );
+            assert!(record_video(&db, &brand, &portrait, 1080, 1920)
+                .await
+                .is_err());
             record_video(&db, &brand, &landscape, 1920, 1080)
                 .await
                 .unwrap();
