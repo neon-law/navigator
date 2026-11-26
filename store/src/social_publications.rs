@@ -129,18 +129,14 @@ pub fn publication_key(post_id: Uuid, provider: &str) -> String {
 /// Reserve one provider publication. Confirmed and ambiguous outcomes are
 /// never sent again implicitly; only a known failure can be retried.
 pub async fn admit(
-    db: &SurrealDb,
+    _db: &SurrealDb,
     post_id: Uuid,
     provider: &str,
 ) -> Result<Admission, SocialPublicationError> {
-    if let Some(pg) = authority::authority().await? {
-        return Box::pin(admit_pg(&pg, post_id, &supported(provider)?)).await;
-    }
-    let admission = admit_in_surreal(db, post_id, provider).await?;
-    if let Admission::Admitted(publication) = &admission {
-        mirror(db, post_id, &publication.provider).await;
-    }
-    Ok(admission)
+    let pg = authority::authority()
+        .await?
+        .ok_or(SocialAuthorityError::Unavailable)?;
+    Box::pin(admit_pg(&pg, post_id, &supported(provider)?)).await
 }
 
 /// Mirror the publication row into PostgreSQL after a successful write.
@@ -153,70 +149,6 @@ async fn mirror(db: &SurrealDb, post_id: Uuid, provider: &str) {
         },
     )
     .await;
-}
-
-async fn admit_in_surreal(
-    db: &SurrealDb,
-    post_id: Uuid,
-    provider: &str,
-) -> Result<Admission, SocialPublicationError> {
-    let provider = supported(provider)?;
-    let key = publication_key(post_id, &provider);
-    let id = surrealdb::types::RecordId::new(TABLE, key.clone());
-    match read_by_id(db, &id).await? {
-        None => {
-            let result = db
-                .query(format!(
-                    "CREATE $id SET post_id = $post, provider = $provider, state = $state, \
-                     attempt_count = 1, inserted_at = time::now(), updated_at = time::now() RETURN {SELECT}"
-                ))
-                .bind(("id", id.clone()))
-                .bind(("post", record_id("post", post_id)))
-                .bind(("provider", provider))
-                .bind(("state", SENDING.to_string()))
-                .await;
-            match result {
-                Ok(response) => {
-                    let mut response = response.check()?;
-                    let row: Option<PublicationRow> = response.take(0)?;
-                    row.and_then(PublicationRow::into_publication)
-                        .map(Admission::Admitted)
-                        .ok_or(SocialPublicationError::NotFound)
-                }
-                Err(error) => {
-                    // A concurrent first admission can win the stable record
-                    // key. Read its state and fail closed instead of sending
-                    // a second request.
-                    if let Some(publication) = read_by_id(db, &id).await? {
-                        Ok(admission_for_existing(publication))
-                    } else {
-                        Err(SocialPublicationError::Db(error))
-                    }
-                }
-            }
-        }
-        Some(publication) if publication.state == FAILED => {
-            let mut response = db
-                .query(format!(
-                    "UPDATE $id SET state = $sending, attempt_count += 1, provider_task_id = NONE, last_error = NONE, updated_at = time::now() \
-                     WHERE state = $failed RETURN {SELECT}"
-                ))
-                .bind(("id", id.clone()))
-                .bind(("sending", SENDING.to_string()))
-                .bind(("failed", FAILED.to_string()))
-                .await?
-                .check()?;
-            let row: Option<PublicationRow> = response.take(0)?;
-            match row.and_then(PublicationRow::into_publication) {
-                Some(publication) => Ok(Admission::Admitted(publication)),
-                None => match read_by_id(db, &id).await? {
-                    Some(publication) => Ok(admission_for_existing(publication)),
-                    None => Err(SocialPublicationError::NotFound),
-                },
-            }
-        }
-        Some(publication) => Ok(admission_for_existing(publication)),
-    }
 }
 
 /// The provider's lowercase name, when Navigator publishes to it.
@@ -805,210 +737,227 @@ async fn read_by_id(
 #[cfg(test)]
 mod tests {
     use super::{admit, for_posts, mark_confirmed, mark_failed, mark_unknown, Admission};
-    use crate::surreal::{record_id, SurrealDb};
+    use crate::surreal::SurrealDb;
+    use crate::test_support;
     use uuid::Uuid;
 
     #[tokio::test]
     async fn pending_links_selects_only_retained_unlinked_receipts_for_the_provider() {
-        let db = crate::test_support::mem_surreal().await;
-        let pending = post(&db).await;
-        let linked = post(&db).await;
-        let unknown = post(&db).await;
-        let other_provider = post(&db).await;
-        for id in [pending, linked, unknown] {
-            admit(&db, id, "youtube").await.unwrap();
-        }
-        admit(&db, other_provider, "instagram").await.unwrap();
-        mark_confirmed(&db, pending, "youtube", "synthetic-video", None)
+        test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let pending = post(&db).await;
+            let linked = post(&db).await;
+            let unknown = post(&db).await;
+            let other_provider = post(&db).await;
+            for id in [pending, linked, unknown] {
+                admit(&db, id, "youtube").await.unwrap();
+            }
+            admit(&db, other_provider, "instagram").await.unwrap();
+            mark_confirmed(&db, pending, "youtube", "synthetic-video", None)
+                .await
+                .unwrap();
+            mark_confirmed(
+                &db,
+                linked,
+                "youtube",
+                "synthetic-linked",
+                Some("https://www.youtube.com/watch?v=synthetic-linked"),
+            )
             .await
             .unwrap();
-        mark_confirmed(
-            &db,
-            linked,
-            "youtube",
-            "synthetic-linked",
-            Some("https://www.youtube.com/watch?v=synthetic-linked"),
-        )
-        .await
-        .unwrap();
-        mark_unknown(&db, unknown, "youtube", "uncertain upload")
-            .await
-            .unwrap();
-        mark_confirmed(&db, other_provider, "instagram", "synthetic-reel", None)
-            .await
-            .unwrap();
-        let rows = super::pending_links(&db, "youtube", 100).await.unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].post_id, pending);
-        assert_eq!(rows[0].provider_post_id.as_deref(), Some("synthetic-video"));
-        assert!(super::pending_links(&db, "youtube", 0)
-            .await
-            .unwrap()
-            .is_empty());
+            mark_unknown(&db, unknown, "youtube", "uncertain upload")
+                .await
+                .unwrap();
+            mark_confirmed(&db, other_provider, "instagram", "synthetic-reel", None)
+                .await
+                .unwrap();
+            let rows = super::pending_links(&db, "youtube", 100).await.unwrap();
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0].post_id, pending);
+            assert_eq!(rows[0].provider_post_id.as_deref(), Some("synthetic-video"));
+            assert!(super::pending_links(&db, "youtube", 0)
+                .await
+                .unwrap()
+                .is_empty());
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn accepted_task_receipt_is_historical_safe_and_prevents_resending() {
-        let db = crate::test_support::mem_surreal().await;
-        let id = post(&db).await;
-        admit(&db, id, "tiktok").await.unwrap();
-        let historical = for_posts(&db, &[id]).await.unwrap();
-        assert!(historical[0].provider_task_id.is_none());
-        assert!(super::begin_provider_write(&db, id, "tiktok")
-            .await
-            .unwrap());
-        super::record_provider_task(&db, id, "tiktok", "synthetic-task")
-            .await
-            .unwrap();
-        super::record_provider_task(&db, id, "tiktok", "synthetic-task")
-            .await
-            .unwrap();
-        assert!(
-            super::record_provider_task(&db, id, "tiktok", "different-task")
+        test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let id = post(&db).await;
+            admit(&db, id, "tiktok").await.unwrap();
+            let historical = for_posts(&db, &[id]).await.unwrap();
+            assert!(historical[0].provider_task_id.is_none());
+            assert!(super::begin_provider_write(&db, id, "tiktok")
                 .await
-                .is_err()
-        );
-        let resumed = admit(&db, id, "tiktok").await.unwrap();
-        let Admission::ReconciliationRequired(publication) = resumed else {
-            panic!("accepted task cannot be sent again")
-        };
-        assert_eq!(
-            publication.provider_task_id.as_deref(),
-            Some("synthetic-task")
-        );
-        assert!(publication.provider_post_id.is_none());
-        assert!(!super::begin_provider_write(&db, id, "tiktok")
-            .await
-            .unwrap());
-        mark_confirmed(&db, id, "tiktok", "synthetic-public-post", None)
-            .await
-            .unwrap();
-        let rows = for_posts(&db, &[id]).await.unwrap();
-        assert_eq!(rows[0].provider_task_id.as_deref(), Some("synthetic-task"));
-        assert_eq!(
-            rows[0].provider_post_id.as_deref(),
-            Some("synthetic-public-post")
-        );
+                .unwrap());
+            super::record_provider_task(&db, id, "tiktok", "synthetic-task")
+                .await
+                .unwrap();
+            super::record_provider_task(&db, id, "tiktok", "synthetic-task")
+                .await
+                .unwrap();
+            assert!(
+                super::record_provider_task(&db, id, "tiktok", "different-task")
+                    .await
+                    .is_err()
+            );
+            let resumed = admit(&db, id, "tiktok").await.unwrap();
+            let Admission::ReconciliationRequired(publication) = resumed else {
+                panic!("accepted task cannot be sent again")
+            };
+            assert_eq!(
+                publication.provider_task_id.as_deref(),
+                Some("synthetic-task")
+            );
+            assert!(publication.provider_post_id.is_none());
+            assert!(!super::begin_provider_write(&db, id, "tiktok")
+                .await
+                .unwrap());
+            mark_confirmed(&db, id, "tiktok", "synthetic-public-post", None)
+                .await
+                .unwrap();
+            let rows = for_posts(&db, &[id]).await.unwrap();
+            assert_eq!(rows[0].provider_task_id.as_deref(), Some("synthetic-task"));
+            assert_eq!(
+                rows[0].provider_post_id.as_deref(),
+                Some("synthetic-public-post")
+            );
+        })
+        .await;
     }
 
     async fn post(db: &SurrealDb) -> Uuid {
-        let id = Uuid::now_v7();
-        db.query("CREATE $id SET brand_key = 'synthetic', slug = $slug, title = 'Synthetic', description = '', body_html = '', status = 'draft', inserted_at = time::now(), updated_at = time::now()")
-            .bind(("id", record_id("post", id)))
-            .bind(("slug", id.to_string()))
+        test_support::seed_compiled_brands_postgres(db).await;
+        let pg = crate::postgres::PostgresDb::configured()
             .await
             .unwrap()
-            .check()
             .unwrap();
+        let id = Uuid::now_v7();
+        sqlx::query("INSERT INTO post (id,brand_key,slug,title,description,status) VALUES ($1,'neon',$2,'Synthetic','','draft')")
+            .bind(id).bind(id.to_string()).execute(pg.pool()).await.unwrap();
         id
     }
 
     #[tokio::test]
     async fn ambiguous_provider_outcome_requires_reconciliation_before_retry() {
-        let db = crate::test_support::mem_surreal().await;
-        let post_id = post(&db).await;
-        let first = admit(&db, post_id, "instagram").await.unwrap();
-        assert!(
-            matches!(first, Admission::Admitted(publication) if publication.attempt_count == 1)
-        );
-        let uncertain = mark_unknown(&db, post_id, "instagram", "connection timed out")
-            .await
-            .unwrap();
-        assert_eq!(uncertain.state, "unknown");
-        assert!(matches!(
-            admit(&db, post_id, "instagram").await.unwrap(),
-            Admission::ReconciliationRequired(publication) if publication.attempt_count == 1
-        ));
+        test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let post_id = post(&db).await;
+            let first = admit(&db, post_id, "instagram").await.unwrap();
+            assert!(
+                matches!(first, Admission::Admitted(publication) if publication.attempt_count == 1)
+            );
+            let uncertain = mark_unknown(&db, post_id, "instagram", "connection timed out")
+                .await
+                .unwrap();
+            assert_eq!(uncertain.state, "unknown");
+            assert!(matches!(
+                admit(&db, post_id, "instagram").await.unwrap(),
+                Admission::ReconciliationRequired(publication) if publication.attempt_count == 1
+            ));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_claimed_provider_write_is_never_claimed_twice() {
-        let db = crate::test_support::mem_surreal().await;
-        let post_id = post(&db).await;
-        admit(&db, post_id, "threads").await.unwrap();
-        assert!(super::begin_provider_write(&db, post_id, "threads")
+        test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let post_id = post(&db).await;
+            admit(&db, post_id, "threads").await.unwrap();
+            assert!(super::begin_provider_write(&db, post_id, "threads")
+                .await
+                .unwrap());
+            // A replayed step finds the write already claimed.
+            assert!(!super::begin_provider_write(&db, post_id, "threads")
+                .await
+                .unwrap());
+            assert!(matches!(
+                admit(&db, post_id, "threads").await.unwrap(),
+                Admission::ReconciliationRequired(publication)
+                    if publication.last_error.as_deref() == Some(super::AWAITING_PROVIDER)
+            ));
+            let confirmed = mark_confirmed(
+                &db,
+                post_id,
+                "threads",
+                "thread-1",
+                Some("https://www.threads.net/@synthetic/post/abc"),
+            )
             .await
-            .unwrap());
-        // A replayed step finds the write already claimed.
-        assert!(!super::begin_provider_write(&db, post_id, "threads")
-            .await
-            .unwrap());
-        assert!(matches!(
-            admit(&db, post_id, "threads").await.unwrap(),
-            Admission::ReconciliationRequired(publication)
-                if publication.last_error.as_deref() == Some(super::AWAITING_PROVIDER)
-        ));
-        let confirmed = mark_confirmed(
-            &db,
-            post_id,
-            "threads",
-            "thread-1",
-            Some("https://www.threads.net/@synthetic/post/abc"),
-        )
-        .await
-        .unwrap();
-        assert_eq!(confirmed.state, "confirmed");
-        assert_eq!(confirmed.last_error, None);
+            .unwrap();
+            assert_eq!(confirmed.state, "confirmed");
+            assert_eq!(confirmed.last_error, None);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_pending_link_keeps_the_receipt_and_never_reopens_the_send() {
-        let db = crate::test_support::mem_surreal().await;
-        let post_id = post(&db).await;
-        admit(&db, post_id, "instagram").await.unwrap();
-        let confirmed = mark_confirmed(&db, post_id, "instagram", "17890000000000001", None)
+        test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let post_id = post(&db).await;
+            admit(&db, post_id, "instagram").await.unwrap();
+            let confirmed = mark_confirmed(&db, post_id, "instagram", "17890000000000001", None)
+                .await
+                .unwrap();
+            assert_eq!(confirmed.state, "confirmed");
+            assert_eq!(
+                confirmed.provider_post_id.as_deref(),
+                Some("17890000000000001")
+            );
+            assert_eq!(confirmed.permalink, None);
+            assert_eq!(
+                confirmed.last_error.as_deref(),
+                Some(super::PERMALINK_PENDING)
+            );
+            assert!(matches!(
+                admit(&db, post_id, "instagram").await.unwrap(),
+                Admission::AlreadyConfirmed(publication) if publication.permalink.is_none()
+            ));
+            assert!(
+                super::record_permalink(&db, post_id, "instagram", "javascript:alert(1)")
+                    .await
+                    .is_err()
+            );
+            let linked = super::record_permalink(
+                &db,
+                post_id,
+                "instagram",
+                "https://www.instagram.com/reel/SyntheticCode/",
+            )
             .await
             .unwrap();
-        assert_eq!(confirmed.state, "confirmed");
-        assert_eq!(
-            confirmed.provider_post_id.as_deref(),
-            Some("17890000000000001")
-        );
-        assert_eq!(confirmed.permalink, None);
-        assert_eq!(
-            confirmed.last_error.as_deref(),
-            Some(super::PERMALINK_PENDING)
-        );
-        assert!(matches!(
-            admit(&db, post_id, "instagram").await.unwrap(),
-            Admission::AlreadyConfirmed(publication) if publication.permalink.is_none()
-        ));
-        assert!(
-            super::record_permalink(&db, post_id, "instagram", "javascript:alert(1)")
-                .await
-                .is_err()
-        );
-        let linked = super::record_permalink(
-            &db,
-            post_id,
-            "instagram",
-            "https://www.instagram.com/reel/SyntheticCode/",
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            linked.permalink.as_deref(),
-            Some("https://www.instagram.com/reel/SyntheticCode/")
-        );
-        assert_eq!(
-            linked.provider_post_id.as_deref(),
-            Some("17890000000000001")
-        );
-        assert_eq!(linked.last_error, None);
-        // A recorded link is never replaced.
-        assert!(super::record_permalink(
-            &db,
-            post_id,
-            "instagram",
-            "https://www.instagram.com/reel/Other/",
-        )
-        .await
-        .is_err());
+            assert_eq!(
+                linked.permalink.as_deref(),
+                Some("https://www.instagram.com/reel/SyntheticCode/")
+            );
+            assert_eq!(
+                linked.provider_post_id.as_deref(),
+                Some("17890000000000001")
+            );
+            assert_eq!(linked.last_error, None);
+            // A recorded link is never replaced.
+            assert!(super::record_permalink(
+                &db,
+                post_id,
+                "instagram",
+                "https://www.instagram.com/reel/Other/",
+            )
+            .await
+            .is_err());
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn known_failure_can_retry_but_confirmed_publication_cannot() {
-        let db = crate::test_support::mem_surreal().await;
+        test_support::with_required_postgres(async {
+        let db = SurrealDb::uninitialized();
         let post_id = post(&db).await;
         admit(&db, post_id, "youtube").await.unwrap();
         mark_failed(&db, post_id, "youtube", "temporary rejection")
@@ -1039,46 +988,57 @@ mod tests {
         let results = for_posts(&db, &[post_id]).await.unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].state, "confirmed");
+            }).await;
     }
 
     #[tokio::test]
     async fn scheduled_posts_are_listed_and_pre_send_failure_is_recorded() {
-        let db = crate::test_support::mem_surreal().await;
-        let post_id = post(&db).await;
-        let publish_at = chrono::Utc::now() + chrono::Duration::hours(1);
-        db.query("UPDATE $id SET status = 'scheduled', publish_at = $when")
-            .bind(("id", record_id("post", post_id)))
-            .bind(("when", surrealdb::types::Datetime::from(publish_at)))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-        let scheduled = super::due_or_future_scheduled(&db, 10).await.unwrap();
-        assert_eq!(scheduled.len(), 1);
-        assert_eq!(scheduled[0].0, post_id);
-        admit(&db, post_id, "facebook").await.unwrap();
-        let failed = super::mark_failed_before_send(&db, post_id, "facebook", "account revoked")
-            .await
-            .unwrap();
-        assert_eq!(failed.state, "failed");
-        assert_eq!(failed.last_error.as_deref(), Some("account revoked"));
-        assert!(super::for_posts(&db, &[]).await.unwrap().is_empty());
+        test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let post_id = post(&db).await;
+            let publish_at = chrono::Utc::now() + chrono::Duration::hours(1);
+            let pg = crate::postgres::PostgresDb::configured()
+                .await
+                .unwrap()
+                .unwrap();
+            sqlx::query("UPDATE post SET status='scheduled', publish_at=$2 WHERE id=$1")
+                .bind(post_id)
+                .bind(publish_at)
+                .execute(pg.pool())
+                .await
+                .unwrap();
+            let scheduled = super::due_or_future_scheduled(&db, 10).await.unwrap();
+            assert_eq!(scheduled.len(), 1);
+            assert_eq!(scheduled[0].0, post_id);
+            admit(&db, post_id, "facebook").await.unwrap();
+            let failed =
+                super::mark_failed_before_send(&db, post_id, "facebook", "account revoked")
+                    .await
+                    .unwrap();
+            assert_eq!(failed.state, "failed");
+            assert_eq!(failed.last_error.as_deref(), Some("account revoked"));
+            assert!(super::for_posts(&db, &[]).await.unwrap().is_empty());
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn unsupported_provider_and_untrusted_confirmation_are_rejected() {
-        let db = crate::test_support::mem_surreal().await;
-        let post_id = post(&db).await;
-        assert!(admit(&db, post_id, "unsupported").await.is_err());
-        admit(&db, post_id, "facebook").await.unwrap();
-        assert!(mark_confirmed(
-            &db,
-            post_id,
-            "facebook",
-            "provider-id",
-            Some("javascript:alert(1)"),
-        )
-        .await
-        .is_err());
+        test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let post_id = post(&db).await;
+            assert!(admit(&db, post_id, "unsupported").await.is_err());
+            admit(&db, post_id, "facebook").await.unwrap();
+            assert!(mark_confirmed(
+                &db,
+                post_id,
+                "facebook",
+                "provider-id",
+                Some("javascript:alert(1)"),
+            )
+            .await
+            .is_err());
+        })
+        .await;
     }
 }

@@ -64,6 +64,42 @@ async fn captured_notation_template_pins_detect_drift_until_target_repair() {
     })).await;
 }
 
+#[tokio::test]
+async fn captured_notation_clause_import_replays_without_duplicate_rows() {
+    super::super::from_source(super::super::during_initial_copy(async {
+        let Some((options, database)) = fresh_schema().await else {
+            return;
+        };
+        let pg = connect(&options, &database).await;
+        let source = mem_surreal().await;
+        let client = person(&source, Role::Client).await;
+        let project = matter(&source, &pg, "Synthetic clause import").await;
+        let template = Uuid::now_v7();
+        let code = format!("captured-clause-{template}");
+        source.query("CREATE $id SET code=$code,title='Captured',respondent_type='person',is_current=true,current_key=$key")
+            .bind(("id", record_id("template", template)))
+            .bind(("code", code.clone()))
+            .bind(("key", crate::templates::current_key_in(crate::templates::Scope::Shared, &code)))
+            .await.unwrap().check().unwrap();
+        let notation = open(&source, template, client, project).await;
+        assert!(crate::notation_clauses::append(&source, notation, "Source write refused", None)
+            .await
+            .is_err());
+        let clause = Uuid::now_v7();
+        source.query("CREATE $id SET notation_id=$notation, position=0, body_markdown='Synthetic captured clause'")
+            .bind(("id", record_id("notation_clause", clause)))
+            .bind(("notation", record_id("notation", notation)))
+            .await.unwrap().check().unwrap();
+        let key = MirrorKey::NotationClause(clause);
+        assert_eq!(super::super::mirror(&source, &pg, &key).await.unwrap(), Mirrored::Written);
+        assert_eq!(super::super::mirror(&source, &pg, &key).await.unwrap(), Mirrored::Unchanged);
+        let row: (i64, String) = sqlx::query_as("SELECT count(*), min(body_markdown) FROM notation_clause WHERE id=$1")
+            .bind(clause).fetch_one(pg.pool()).await.unwrap();
+        assert_eq!(row, (1, "Synthetic captured clause".into()));
+        pg.pool().close().await;
+    })).await;
+}
+
 async fn person(surreal: &SurrealDb, role: Role) -> Uuid {
     crate::persons::create(
         surreal,
@@ -122,17 +158,16 @@ async fn open(surreal: &SurrealDb, template: Uuid, client: Uuid, project: Uuid) 
 }
 
 async fn question(surreal: &SurrealDb) -> Uuid {
-    crate::questions::create(
-        surreal,
-        &crate::questions::NewQuestion::new(
-            format!("synthetic_{}", Uuid::now_v7().simple()),
-            "Synthetic?",
-            "string",
-        ),
-    )
-    .await
-    .unwrap()
-    .id
+    let id = Uuid::now_v7();
+    surreal
+        .query("CREATE $id SET code=$code,prompt='Synthetic?',answer_type='string',audience='both'")
+        .bind(("id", record_id("question", id)))
+        .bind(("code", format!("synthetic_{}", id.simple())))
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
+    id
 }
 
 async fn answer_at(

@@ -1,9 +1,7 @@
 use super::*;
 use crate::authorities::{AuthorityLookup, AuthorityPatch, NewAuthority};
 use crate::glossary::Term;
-use crate::notation_packages::NewNotationPackage;
 use crate::postgres_mirror::tests::{connect, fresh_schema};
-use crate::questions::NewQuestion;
 use crate::test_support::mem_surreal;
 
 /// Mirror `key` as the first Mirror Backfill, the only copy into the catalog.
@@ -11,6 +9,54 @@ async fn mirrored(surreal: &SurrealDb, pg: &PostgresDb, key: &MirrorKey) -> Mirr
     super::super::during_initial_copy(super::super::mirror(surreal, pg, key))
         .await
         .unwrap()
+}
+
+#[tokio::test]
+async fn captured_package_membership_copies_parents_and_replays() {
+    let Some((options, database)) = fresh_schema().await else {
+        return;
+    };
+    let pg = connect(&options, &database).await;
+    let source = mem_surreal().await;
+    let package = Uuid::now_v7();
+    let template = Uuid::now_v7();
+    let member = Uuid::now_v7();
+    let package_input = crate::notation_packages::NewNotationPackage::new(
+        "source-refused",
+        "Source refused",
+        "simple",
+        100,
+    );
+    assert!(
+        super::super::from_source(crate::notation_packages::create(&source, &package_input))
+            .await
+            .is_err()
+    );
+    assert!(
+        super::super::from_source(crate::notation_packages::add_template(
+            &source, package, template, 0, true
+        ))
+        .await
+        .is_err()
+    );
+    source.query("CREATE $package SET code='captured-package',title='Captured package',complexity='simple',starting_price_cents=100; CREATE $template SET code='captured-package-template',title='Captured template',respondent_type='person',is_current=true,current_key=$current_key; CREATE $member SET package_id=$package,template_id=$template,position=0,required=true")
+        .bind(("package", record_id("notation_package", package)))
+        .bind(("template", record_id("template", template)))
+        .bind(("current_key", crate::templates::current_key_in(crate::templates::Scope::Shared, "captured-package-template")))
+        .bind(("member", record_id("notation_package_template", member)))
+        .await.unwrap().check().unwrap();
+    let key = MirrorKey::NotationPackageTemplate(member);
+    assert_eq!(mirrored(&source, &pg, &key).await, Mirrored::Written);
+    assert_eq!(mirrored(&source, &pg, &key).await, Mirrored::Unchanged);
+    let held: (Uuid, Uuid, i32) = sqlx::query_as(
+        "SELECT package_id, template_id, position FROM notation_package_template WHERE id=$1",
+    )
+    .bind(member)
+    .fetch_one(pg.pool())
+    .await
+    .unwrap();
+    assert_eq!(held, (package, template, 0));
+    pg.pool().close().await;
 }
 
 fn rows(report: &ParityReport) -> Vec<usize> {
@@ -82,6 +128,33 @@ async fn first_global_copy_preserves_captured_rate_identity_and_replay() {
             .await
             .unwrap();
     assert_eq!(copied, (id, "synthetic-first-copy-rate".into(), 1000));
+    let glossary = Uuid::now_v7();
+    let synthetic = term("synthetic-source-refused", "Body.");
+    assert!(
+        super::super::from_source(crate::glossary::materialize(&source, &[synthetic]))
+            .await
+            .is_err()
+    );
+    source.query("CREATE $id SET slug='captured-glossary',title='Captured Glossary',body='Captured definition.'")
+        .bind(("id", record_id("glossary_term", glossary))).await.unwrap().check().unwrap();
+    let glossary_key = MirrorKey::GlossaryTerm(glossary);
+    assert_eq!(
+        mirrored(&source, &pg, &glossary_key).await,
+        Mirrored::Written
+    );
+    assert_eq!(
+        mirrored(&source, &pg, &glossary_key).await,
+        Mirrored::Unchanged
+    );
+    let held: (String, String) = sqlx::query_as("SELECT slug, body FROM glossary_term WHERE id=$1")
+        .bind(glossary)
+        .fetch_one(pg.pool())
+        .await
+        .unwrap();
+    assert_eq!(
+        held,
+        ("captured-glossary".into(), "Captured definition.".into())
+    );
     pg.pool().close().await;
 }
 
@@ -164,81 +237,64 @@ async fn catalog_rows_converge_through_their_lifecycle() {
     assert_eq!(mirrored(&surreal, &pg, &key).await, Mirrored::Written);
 
     // Glossary Term: materialized, then edited in place.
-    crate::glossary::materialize(&surreal, &[term("synthetic-term", "First.")])
-        .await
-        .unwrap();
-    let glossary = crate::glossary::by_slug(&surreal, "synthetic-term")
+    let glossary = Uuid::now_v7();
+    surreal
+        .query("CREATE $id SET slug='synthetic-term',title='Synthetic Term',body='First.'")
+        .bind(("id", record_id("glossary_term", glossary)))
         .await
         .unwrap()
+        .check()
         .unwrap();
-    let key = MirrorKey::GlossaryTerm(glossary.id);
+    let key = MirrorKey::GlossaryTerm(glossary);
     assert_eq!(mirrored(&surreal, &pg, &key).await, Mirrored::Written);
-    crate::glossary::materialize(&surreal, &[term("synthetic-term", "Second.")])
+    surreal
+        .query("UPDATE $id SET body='Second.',updated_at=time::now()")
+        .bind(("id", record_id("glossary_term", glossary)))
         .await
+        .unwrap()
+        .check()
         .unwrap();
     assert_eq!(mirrored(&surreal, &pg, &key).await, Mirrored::Written);
     assert_eq!(mirrored(&surreal, &pg, &key).await, Mirrored::Unchanged);
 
     // Question: created, then narrowed to the lawyer.
-    let question = crate::questions::create(
-        &surreal,
-        &NewQuestion::new("synthetic_question", "Synthetic?", "string"),
-    )
-    .await
-    .unwrap();
-    let key = MirrorKey::Question(question.id);
+    let question = Uuid::now_v7();
+    surreal.query("CREATE $id SET code='synthetic_question',prompt='Synthetic?',answer_type='string',audience='both'")
+        .bind(("id", record_id("question", question))).await.unwrap().check().unwrap();
+    let key = MirrorKey::Question(question);
     assert_eq!(mirrored(&surreal, &pg, &key).await, Mirrored::Written);
-    crate::questions::set_audience(&surreal, "synthetic_question", "lawyer")
+    surreal
+        .query("UPDATE $id SET audience='lawyer',updated_at=time::now()")
+        .bind(("id", record_id("question", question)))
         .await
+        .unwrap()
+        .check()
         .unwrap();
     assert_eq!(mirrored(&surreal, &pg, &key).await, Mirrored::Written);
     let audience: String = sqlx::query_scalar("SELECT audience FROM question WHERE id = $1")
-        .bind(question.id)
+        .bind(question)
         .fetch_one(&pg.0)
         .await
         .unwrap();
     assert_eq!(audience, "lawyer");
 
     // A package template brings its package with it.
-    let package = crate::notation_packages::create(
-        &surreal,
-        &NewNotationPackage::new("synthetic-package", "Synthetic package", "simple", 10_000),
-    )
-    .await
-    .unwrap();
-    let template = crate::templates::save_version(
-        &surreal,
-        None,
-        "onboarding__synthetic_catalog",
-        crate::templates::Version {
-            title: "Synthetic Draft".into(),
-            respondent_type: "person".into(),
-            asset_id: None,
-            form_code: None,
-            kind: None,
-            source_commit_sha: None,
-        },
-    )
-    .await
-    .unwrap()
-    .into_model()
-    .id;
-    crate::notation_packages::add_template(&surreal, package.id, template, 0, true)
-        .await
-        .unwrap();
-    let mut response = surreal
-        .query("SELECT VALUE id FROM notation_package_template")
-        .await
-        .unwrap();
-    let members: Vec<RecordId> = response.take(0).unwrap();
-    let member = record_uuid(&members[0]).unwrap();
+    let package = Uuid::now_v7();
+    let template = Uuid::now_v7();
+    let member = Uuid::now_v7();
+    surreal.query("CREATE $package SET code='synthetic-package', title='Synthetic package', complexity='simple', starting_price_cents=10000; CREATE $template SET code='onboarding__synthetic_catalog', title='Synthetic Draft', respondent_type='person', is_current=true, current_key=$current_key; CREATE $member SET package_id=$package, template_id=$template, position=0, required=true")
+        .bind(("package", record_id("notation_package", package)))
+        .bind(("template", record_id("template", template)))
+        .bind(("current_key", crate::templates::current_key_in(crate::templates::Scope::Shared, "onboarding__synthetic_catalog")))
+        .bind(("member", record_id("notation_package_template", member)))
+        .await.unwrap().check().unwrap();
     let member_key = MirrorKey::NotationPackageTemplate(member);
     assert_eq!(
         mirrored(&surreal, &pg, &member_key).await,
         Mirrored::Written
     );
     assert_eq!(
-        mirrored(&surreal, &pg, &MirrorKey::NotationPackage(package.id)).await,
+        mirrored(&surreal, &pg, &MirrorKey::NotationPackage(package)).await,
         Mirrored::Unchanged
     );
 
@@ -300,17 +356,18 @@ async fn only_the_first_backfill_copies_the_catalog_and_reconcile_stays_unclean_
     let authority = crate::authorities::record(&surreal, &new_authority("2 Synth. 2 (2026)"))
         .await
         .unwrap();
-    crate::glossary::materialize(&surreal, &[term("synthetic-gated", "Body.")])
-        .await
-        .unwrap();
-    let glossary = crate::glossary::by_slug(&surreal, "synthetic-gated")
+    let glossary = Uuid::now_v7();
+    surreal
+        .query("CREATE $id SET slug='synthetic-gated',title='Synthetic Term',body='Body.'")
+        .bind(("id", record_id("glossary_term", glossary)))
         .await
         .unwrap()
+        .check()
         .unwrap();
     let rate = rate(&surreal, "synthetic_gated_rate").await;
     let keys = [
         MirrorKey::Authority(authority.id),
-        MirrorKey::GlossaryTerm(glossary.id),
+        MirrorKey::GlossaryTerm(glossary),
         MirrorKey::NotationRate(rate),
     ];
     for key in &keys {
@@ -361,7 +418,7 @@ async fn only_the_first_backfill_copies_the_catalog_and_reconcile_stays_unclean_
     .await
     .unwrap();
     sqlx::query("DELETE FROM glossary_term WHERE id = $1")
-        .bind(glossary.id)
+        .bind(glossary)
         .execute(&pg.0)
         .await
         .unwrap();
@@ -369,7 +426,7 @@ async fn only_the_first_backfill_copies_the_catalog_and_reconcile_stays_unclean_
     assert!(reconcile(&surreal, &pg).await.unwrap().is_clean());
     let held: bool =
         sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM glossary_term WHERE id = $1)")
-            .bind(glossary.id)
+            .bind(glossary)
             .fetch_one(&pg.0)
             .await
             .unwrap();

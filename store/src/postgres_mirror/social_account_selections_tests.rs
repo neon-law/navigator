@@ -52,6 +52,14 @@ async fn practice(surreal: &SurrealDb, suffix: &str) -> (Uuid, Uuid, String) {
     (firm.id, person.id, brand_key)
 }
 
+async fn captured_selection(surreal: &SurrealDb, firm: Uuid, brand: &str, identity: &str) {
+    surreal.query("UPSERT $id SET brand_key=$brand,firm_id=$firm,provider='facebook',provider_account_id=$identity,updated_at=time::now()")
+        .bind(("id", surrealdb::types::RecordId::new("social_account_selection", format!("{brand}:facebook"))))
+        .bind(("firm", record_id("firm", firm)))
+        .bind(("brand", brand.to_owned())).bind(("identity", identity.to_owned()))
+        .await.unwrap().check().unwrap();
+}
+
 fn postgres_time(value: &str) -> DateTime<Utc> {
     value.parse().unwrap()
 }
@@ -88,6 +96,7 @@ fn selection_mirror_is_registered_after_tenancy() {
 // tenancy, disconnects, source deletion, and global reconciliation in order.
 #[allow(clippy::too_many_lines)]
 async fn selections_replay_update_isolate_and_reconcile_on_real_postgres() {
+    super::super::from_source(super::super::during_initial_copy(async {
     let Some((options, database)) = fresh_schema().await else {
         return;
     };
@@ -100,22 +109,13 @@ async fn selections_replay_update_isolate_and_reconcile_on_real_postgres() {
         .check()
         .unwrap();
     let (firm_id, admin_id, brand_key) = practice(&surreal, "one").await;
-    let (_, other_admin, other_brand) = practice(&surreal, "two").await;
+    let (other_firm, other_admin, other_brand) = practice(&surreal, "two").await;
     let key = MirrorKey::SocialAccountSelection {
         brand_key: brand_key.clone(),
         provider: "facebook".into(),
     };
 
-    crate::social_account_selections::save(
-        &surreal,
-        Role::Admin,
-        admin_id,
-        &brand_key,
-        crate::social_accounts::SocialProvider::Facebook,
-        "page-first",
-    )
-    .await
-    .unwrap();
+    captured_selection(&surreal, firm_id, &brand_key, "page-first").await;
     assert_eq!(
         mirror(&surreal, &pg, &key).await.unwrap(),
         Mirrored::Written
@@ -158,16 +158,7 @@ async fn selections_replay_update_isolate_and_reconcile_on_real_postgres() {
         Some("23505")
     );
 
-    crate::social_account_selections::save(
-        &surreal,
-        Role::Admin,
-        admin_id,
-        &brand_key,
-        crate::social_accounts::SocialProvider::Facebook,
-        "page-updated",
-    )
-    .await
-    .unwrap();
+    captured_selection(&surreal, firm_id, &brand_key, "page-updated").await;
     assert_eq!(
         mirror(&surreal, &pg, &key).await.unwrap(),
         Mirrored::Written
@@ -187,16 +178,7 @@ async fn selections_replay_update_isolate_and_reconcile_on_real_postgres() {
     assert_eq!(updated.1, initial.2);
     assert!(updated.2 >= initial.3);
 
-    crate::social_account_selections::save(
-        &surreal,
-        Role::Admin,
-        other_admin,
-        &other_brand,
-        crate::social_accounts::SocialProvider::Facebook,
-        "other-page",
-    )
-    .await
-    .unwrap();
+    captured_selection(&surreal, other_firm, &other_brand, "other-page").await;
     let other_key = MirrorKey::SocialAccountSelection {
         brand_key: other_brand.clone(),
         provider: "facebook".into(),
@@ -313,10 +295,12 @@ async fn selections_replay_update_isolate_and_reconcile_on_real_postgres() {
         0
     );
     pg.0.close().await;
+    })).await;
 }
 
 #[tokio::test]
 async fn selection_timestamps_keep_source_microseconds_on_real_postgres() {
+    super::super::from_source(super::super::during_initial_copy(async {
     let Some((options, database)) = fresh_schema().await else {
         return;
     };
@@ -353,10 +337,11 @@ async fn selection_timestamps_keep_source_microseconds_on_real_postgres() {
     assert_eq!(target.0, postgres_time("2026-10-21T12:00:00.123456Z"));
     assert_eq!(target.1, postgres_time("2026-10-21T12:00:01.987654Z"));
     pg.0.close().await;
+    })).await;
 }
 
 #[tokio::test]
-async fn saved_selection_write_hook_uses_the_isolated_postgres_database() {
+async fn captured_selection_first_copy_uses_the_isolated_postgres_database() {
     // `fresh_schema()` yields `None` without a Postgres test service; the
     // skip contract here matches the sibling tests above.
     let Some((options, database)) = fresh_schema().await else {
@@ -365,7 +350,7 @@ async fn saved_selection_write_hook_uses_the_isolated_postgres_database() {
     let output = Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
-            "postgres_mirror::social_account_selections::tests::selection_write_hook_probe",
+            "postgres_mirror::social_account_selections::tests::selection_first_copy_probe",
             "--nocapture",
         ])
         .env("NAVIGATOR_SELECTION_HOOK_TEST_CASE", "mirrored")
@@ -387,7 +372,7 @@ async fn saved_selection_write_hook_uses_the_isolated_postgres_database() {
 }
 
 #[tokio::test]
-async fn selection_write_hook_probe() {
+async fn selection_first_copy_probe() {
     if std::env::var("NAVIGATOR_SELECTION_HOOK_TEST_CASE").as_deref() != Ok("mirrored") {
         return;
     }
@@ -398,17 +383,8 @@ async fn selection_write_hook_probe() {
         .unwrap()
         .check()
         .unwrap();
-    let (_, admin_id, brand_key) = practice(&surreal, "hook").await;
-    crate::social_account_selections::save(
-        &surreal,
-        Role::Admin,
-        admin_id,
-        &brand_key,
-        crate::social_accounts::SocialProvider::Facebook,
-        "page-hook",
-    )
-    .await
-    .unwrap();
+    let (firm_id, _, brand_key) = super::super::from_source(practice(&surreal, "hook")).await;
+    captured_selection(&surreal, firm_id, &brand_key, "page-hook").await;
     let options = PgConnectOptions::new()
         .host("127.0.0.1")
         .port(
@@ -425,6 +401,15 @@ async fn selection_write_hook_probe() {
         &std::env::var("NAVIGATOR_POSTGRES_DATABASE").unwrap(),
     )
     .await;
+    let key = MirrorKey::SocialAccountSelection {
+        brand_key: brand_key.clone(),
+        provider: "facebook".into(),
+    };
+    super::super::from_source(super::super::during_initial_copy(mirror(
+        &surreal, &pg, &key,
+    )))
+    .await
+    .unwrap();
     assert_eq!(
         sqlx::query_scalar::<_, String>(
             "SELECT provider_account_id FROM social_account_selection WHERE id=$1"

@@ -1628,8 +1628,8 @@
       },
       {
         "file": "store/src/postgres_mirror/social_account_selections_tests.rs",
-        "function": "saved_selection_write_hook_uses_the_isolated_postgres_database",
-        "proves": "The public save operation reaches its opt-in PostgreSQL hook in an isolated database."
+        "function": "captured_selection_first_copy_uses_the_isolated_postgres_database",
+        "proves": "Captured Source selection reaches an isolated PostgreSQL database through explicit first-copy import."
       },
       {
         "file": "store/src/postgres/social_tests.rs",

@@ -175,6 +175,9 @@ pub enum PlanIntakeError {
     /// The configured PostgreSQL server could not be reached.
     #[error("PostgreSQL: {0}")]
     Postgres(#[from] crate::postgres::PostgresError),
+    /// Source reads cannot stage or decide a referral.
+    #[error("Plan Intake writes require PostgreSQL authority")]
+    PostgresRequired,
     /// A PostgreSQL statement failed.
     #[error("PostgreSQL query: {0}")]
     Sql(#[from] sqlx::Error),
@@ -583,14 +586,19 @@ async fn conflict_report(
     }
 }
 
+async fn write_authority() -> Result<PostgresDb, PlanIntakeError> {
+    PostgresDb::configured()
+        .await?
+        .ok_or(PlanIntakeError::PostgresRequired)
+}
+
 /// Stage one parsed assignment for a person's confirmation. Idempotent per
 /// `StageInput::source_message_id`: a redelivered notice lands on the
 /// already-staged record instead of a second row. Never opens a matter —
 /// a matter exists only through [`accept`].
 ///
-/// `pg` is the firm's PostgreSQL handle when configured; without it the
-/// plan and fee columns stage empty and the review screen asks the
-/// attorney to pick the plan before acceptance.
+/// `pg` supplies the optional plan and fee lookup. Without it those fields
+/// stay empty for attorney review. Staging requires PostgreSQL authority.
 ///
 /// # Errors
 ///
@@ -601,6 +609,7 @@ pub async fn stage(
     pg: Option<&PostgresDb>,
     input: &StageInput,
 ) -> Result<StagedAssignment, PlanIntakeError> {
+    let authority = write_authority().await?;
     if let Some(existing) = find_by_source_message(surreal, input.source_message_id).await? {
         return Ok(existing);
     }
@@ -658,95 +667,7 @@ pub async fn stage(
         inserted_at: now,
         updated_at: now,
     };
-    if let Some(pg) = PostgresDb::configured().await? {
-        return Box::pin(postgres::stage(&pg, &row)).await;
-    }
-    create_surreal(surreal, row).await
-}
-
-/// Write a new staged row to the SurrealDB fallback table.
-async fn create_surreal(
-    surreal: &SurrealDb,
-    row: StagedAssignment,
-) -> Result<StagedAssignment, PlanIntakeError> {
-    let now = row.inserted_at;
-    let mut response = surreal
-        .query(format!(
-            "CREATE $id SET firm_id = $firm_id, conversation_id = $conversation_id, \
-             source_message_id = $source_message_id, provider = $provider, \
-             member_name = $member_name, member_email = $member_email, \
-             member_person_id = $member_person_id, member_entity_id = $member_entity_id, \
-             plan_member_id = $plan_member_id, plan_number = $plan_number, \
-             plan_matter_type = $plan_matter_type, plan_state = $plan_state, \
-             assigned_at = $assigned_at, legal_plan_id = $legal_plan_id, \
-             legal_plan_name = $legal_plan_name, plan_portal_only = $plan_portal_only, \
-             fee_covered_benefit = $fee_covered_benefit, \
-             fee_plan_fee_cents = $fee_plan_fee_cents, \
-             fee_supplemental_flat_cents = $fee_supplemental_flat_cents, \
-             fee_supplemental_hourly_cents = $fee_supplemental_hourly_cents, \
-             fee_effective_on = $fee_effective_on, conflict_summary = $conflict_summary, \
-             conflict_blocking = $conflict_blocking, conflict_checked = $conflict_checked, \
-             status = 'staged', project_id = NONE, accepted_by = NONE, decided_at = NONE, \
-             decline_reason = NONE, inserted_at = $now, updated_at = $now RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, row.id)))
-        .bind(("firm_id", record_id("firm", row.firm_id)))
-        .bind((
-            "conversation_id",
-            record_id("inbox_conversation", row.conversation_id),
-        ))
-        .bind((
-            "source_message_id",
-            record_id("message", row.source_message_id),
-        ))
-        .bind(("provider", row.provider))
-        .bind(("member_name", row.member_name))
-        .bind(("member_email", row.member_email))
-        .bind((
-            "member_person_id",
-            row.member_person_id.map(|id| record_id("person", id)),
-        ))
-        .bind((
-            "member_entity_id",
-            row.member_entity_id.map(|id| record_id("entity", id)),
-        ))
-        .bind(("plan_member_id", row.plan_member_id))
-        .bind(("plan_number", row.plan_number))
-        .bind(("plan_matter_type", row.plan_matter_type))
-        .bind(("plan_state", row.plan_state))
-        .bind((
-            "assigned_at",
-            surrealdb::types::Datetime::from(row.assigned_at),
-        ))
-        .bind(("legal_plan_id", row.legal_plan_id.map(|id| id.to_string())))
-        .bind(("legal_plan_name", row.legal_plan_name))
-        .bind(("plan_portal_only", row.plan_portal_only))
-        .bind(("fee_covered_benefit", row.fee_covered_benefit))
-        .bind(("fee_plan_fee_cents", row.fee_plan_fee_cents))
-        .bind((
-            "fee_supplemental_flat_cents",
-            row.fee_supplemental_flat_cents,
-        ))
-        .bind((
-            "fee_supplemental_hourly_cents",
-            row.fee_supplemental_hourly_cents,
-        ))
-        .bind((
-            "fee_effective_on",
-            row.fee_effective_on.map(|date| date.to_string()),
-        ))
-        .bind(("conflict_summary", row.conflict_summary.join("\n")))
-        .bind(("conflict_blocking", row.conflict_blocking))
-        .bind(("conflict_checked", row.conflict_checked))
-        .bind(("now", surrealdb::types::Datetime::from(now)))
-        .await?
-        .check()?;
-
-    let staged = response
-        .take::<Option<StagedRow>>(0)?
-        .and_then(StagedRow::into_staged)
-        .ok_or(PlanIntakeError::WriteReturnedNothing)?;
-    Ok(staged)
+    Box::pin(postgres::stage(&authority, &row)).await
 }
 
 /// The accepted state of one staged assignment: the opened matter's id
@@ -823,6 +744,7 @@ pub async fn resolve_member(
     name: Option<&str>,
     email: &str,
 ) -> Result<(), PlanIntakeError> {
+    write_authority().await?;
     let _lock = postgres::lock(pg, &format!("plan-intake/{staged_id}")).await?;
     let mut row = scoped_assignment(surreal, staged_id, actor_id, brand).await?;
     if row.status != Status::Staged.as_str() || row.take_started_at.is_some() {
@@ -957,7 +879,7 @@ async fn open_on_acceptance(
 /// Mark the record accepted with the plan columns as filed and return the
 /// updated row.
 async fn mark_accepted(
-    surreal: &SurrealDb,
+    pg: &PostgresDb,
     staged: &StagedAssignment,
     project_id: Uuid,
     input: &AcceptInput,
@@ -966,80 +888,24 @@ async fn mark_accepted(
     accepted_at: DateTime<Utc>,
 ) -> Result<StagedAssignment, PlanIntakeError> {
     let matter_type = validated_matter_type(input)?;
-    if let Some(pg) = PostgresDb::configured().await? {
-        let mut accepted = staged.clone();
-        accepted.status = Status::Accepted.as_str().to_string();
-        accepted.project_id = Some(project_id);
-        accepted.accepted_by = Some(input.acting_person_id);
-        accepted.decided_at = Some(accepted_at);
-        accepted.plan_matter_type = matter_type.map_or("", PlanMatterType::as_str).to_string();
-        accepted.plan_state.clone_from(&input.plan_state);
-        accepted.legal_plan_id = Some(plan.id);
-        accepted.legal_plan_name = Some(plan.name.clone());
-        accepted.plan_portal_only = plan.portal.is_some();
-        accepted.fee_covered_benefit = fee.as_ref().map(|fee| fee.covered_benefit.clone());
-        accepted.fee_plan_fee_cents = fee.as_ref().map(|fee| fee.plan_fee_cents);
-        accepted.fee_supplemental_flat_cents =
-            fee.as_ref().and_then(|fee| fee.supplemental_flat_cents);
-        accepted.fee_supplemental_hourly_cents =
-            fee.as_ref().and_then(|fee| fee.supplemental_hourly_cents);
-        accepted.fee_effective_on = fee.as_ref().map(|fee| fee.effective_on);
-        accepted.updated_at = accepted_at;
-        return Box::pin(postgres::decide(&pg, &accepted)).await;
-    }
-    let mut response = surreal
-        .query(format!(
-            "UPDATE $id SET status = 'accepted', project_id = $project_id, \
-             accepted_by = $accepted_by, decided_at = $decided_at, \
-             plan_matter_type = $plan_matter_type, \
-             plan_state = $plan_state, \
-             legal_plan_id = $legal_plan_id, legal_plan_name = $legal_plan_name, \
-             plan_portal_only = $plan_portal_only, fee_covered_benefit = $fee_covered_benefit, \
-             fee_plan_fee_cents = $fee_plan_fee_cents, \
-             fee_supplemental_flat_cents = $fee_supplemental_flat_cents, \
-             fee_supplemental_hourly_cents = $fee_supplemental_hourly_cents, \
-             fee_effective_on = $fee_effective_on, updated_at = $updated_at RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, staged.id)))
-        .bind(("project_id", record_id("project", project_id)))
-        .bind(("accepted_by", record_id("person", input.acting_person_id)))
-        .bind(("decided_at", surrealdb::types::Datetime::from(accepted_at)))
-        .bind((
-            "plan_matter_type",
-            matter_type.map_or("", PlanMatterType::as_str),
-        ))
-        .bind(("plan_state", input.plan_state.clone()))
-        .bind(("legal_plan_id", Some(plan.id.to_string())))
-        .bind(("legal_plan_name", Some(plan.name.clone())))
-        .bind(("plan_portal_only", plan.portal.is_some()))
-        .bind((
-            "fee_covered_benefit",
-            fee.as_ref().map(|fee| fee.covered_benefit.clone()),
-        ))
-        .bind((
-            "fee_plan_fee_cents",
-            fee.as_ref().map(|fee| fee.plan_fee_cents),
-        ))
-        .bind((
-            "fee_supplemental_flat_cents",
-            fee.as_ref().and_then(|fee| fee.supplemental_flat_cents),
-        ))
-        .bind((
-            "fee_supplemental_hourly_cents",
-            fee.as_ref().and_then(|fee| fee.supplemental_hourly_cents),
-        ))
-        .bind((
-            "fee_effective_on",
-            fee.as_ref().map(|fee| fee.effective_on.to_string()),
-        ))
-        .bind(("updated_at", surrealdb::types::Datetime::from(accepted_at)))
-        .await?
-        .check()?;
-    let staged = response
-        .take::<Option<StagedRow>>(0)?
-        .and_then(StagedRow::into_staged)
-        .ok_or(PlanIntakeError::WriteReturnedNothing)?;
-    Ok(staged)
+    let mut accepted = staged.clone();
+    accepted.status = Status::Accepted.as_str().to_string();
+    accepted.project_id = Some(project_id);
+    accepted.accepted_by = Some(input.acting_person_id);
+    accepted.decided_at = Some(accepted_at);
+    accepted.plan_matter_type = matter_type.map_or("", PlanMatterType::as_str).to_string();
+    accepted.plan_state.clone_from(&input.plan_state);
+    accepted.legal_plan_id = Some(plan.id);
+    accepted.legal_plan_name = Some(plan.name.clone());
+    accepted.plan_portal_only = plan.portal.is_some();
+    accepted.fee_covered_benefit = fee.as_ref().map(|fee| fee.covered_benefit.clone());
+    accepted.fee_plan_fee_cents = fee.as_ref().map(|fee| fee.plan_fee_cents);
+    accepted.fee_supplemental_flat_cents = fee.as_ref().and_then(|fee| fee.supplemental_flat_cents);
+    accepted.fee_supplemental_hourly_cents =
+        fee.as_ref().and_then(|fee| fee.supplemental_hourly_cents);
+    accepted.fee_effective_on = fee.as_ref().map(|fee| fee.effective_on);
+    accepted.updated_at = accepted_at;
+    Box::pin(postgres::decide(pg, &accepted)).await
 }
 
 /// Accept a staged assignment: open the matter on the attorney's
@@ -1097,6 +963,7 @@ where
     if !input.attestation {
         return Err(crate::projects::OpenMatterError::AttestationRequired.into());
     }
+    write_authority().await?;
     let mut lock = postgres::lock(pg, &format!("plan-intake/{staged_id}")).await?;
     let mut staged =
         scoped_assignment(surreal, staged_id, input.acting_person_id, &input.brand).await?;
@@ -1240,7 +1107,7 @@ where
     })
     .await?;
 
-    let staged = mark_accepted(surreal, &staged, project.id, input, plan, fee, accepted_at).await?;
+    let staged = mark_accepted(pg, &staged, project.id, input, plan, fee, accepted_at).await?;
     Ok(Accepted {
         staged,
         project_id: project.id,
@@ -1261,6 +1128,7 @@ pub async fn decline_from_review(
     brand: &str,
     reason: &str,
 ) -> Result<StagedAssignment, PlanIntakeError> {
+    write_authority().await?;
     let _lock = postgres::lock(pg, &format!("plan-intake/{staged_id}")).await?;
     let row = scoped_assignment(surreal, staged_id, actor_id, brand).await?;
     if crate::projects::find_by_id(surreal, row.id)
@@ -1287,6 +1155,7 @@ pub(crate) async fn decline(
     staged_id: Uuid,
     reason: &str,
 ) -> Result<StagedAssignment, PlanIntakeError> {
+    let authority = write_authority().await?;
     let staged = find_by_id(surreal, staged_id)
         .await?
         .ok_or(PlanIntakeError::NotFound)?;
@@ -1294,30 +1163,12 @@ pub(crate) async fn decline(
         return Err(PlanIntakeError::NotStaged);
     }
     let now = Utc::now();
-    if let Some(pg) = PostgresDb::configured().await? {
-        let mut declined = staged;
-        declined.status = Status::Declined.as_str().to_string();
-        declined.decided_at = Some(now);
-        declined.decline_reason = Some(reason.trim().to_string());
-        declined.updated_at = now;
-        return Box::pin(postgres::decide(&pg, &declined)).await;
-    }
-    let mut response = surreal
-        .query(format!(
-            "UPDATE $id SET status = 'declined', decided_at = $decided_at, \
-             decline_reason = $reason, updated_at = $updated_at RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, staged.id)))
-        .bind(("decided_at", surrealdb::types::Datetime::from(now)))
-        .bind(("reason", reason.trim().to_string()))
-        .bind(("updated_at", surrealdb::types::Datetime::from(now)))
-        .await?
-        .check()?;
-
-    response
-        .take::<Option<StagedRow>>(0)?
-        .and_then(StagedRow::into_staged)
-        .ok_or(PlanIntakeError::WriteReturnedNothing)
+    let mut declined = staged;
+    declined.status = Status::Declined.as_str().to_string();
+    declined.decided_at = Some(now);
+    declined.decline_reason = Some(reason.trim().to_string());
+    declined.updated_at = now;
+    Box::pin(postgres::decide(&authority, &declined)).await
 }
 
 /// One staged assignment by id.
@@ -1854,6 +1705,25 @@ mod tests {
         );
         assert_eq!(suggest_code("Dana Sample", None, None), "sample-plan");
         assert_eq!(suggest_code("", None, None), "");
+    }
+
+    #[tokio::test]
+    async fn source_context_cannot_stage_or_decide_an_assignment() {
+        let source = crate::surreal::SurrealDb::uninitialized();
+        let input = arag_input(Uuid::now_v7(), Utc::now());
+        let stage_error = crate::postgres_mirror::from_source(stage(&source, None, &input))
+            .await
+            .unwrap_err();
+        assert!(stage_error
+            .to_string()
+            .contains("Plan Intake writes require PostgreSQL authority"));
+        let decline_error =
+            crate::postgres_mirror::from_source(decline(&source, Uuid::now_v7(), "reason"))
+                .await
+                .unwrap_err();
+        assert!(decline_error
+            .to_string()
+            .contains("Plan Intake writes require PostgreSQL authority"));
     }
 
     #[tokio::test]

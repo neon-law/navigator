@@ -72,8 +72,6 @@ pub enum ServiceError {
     Invalid(String),
     #[error("no such service record")]
     NotFound,
-    #[error("writing a service record returned no usable row")]
-    WriteReturnedNothing,
 }
 
 /// What a new Service needs.
@@ -163,81 +161,20 @@ async fn require_project_document(
 /// [`ServiceError::Invalid`] for a bad method, date, blank name, two
 /// recipient links, or a document from another Project; any database error.
 pub async fn create(surreal: &SurrealDb, new: &NewService) -> Result<ProjectService, ServiceError> {
-    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
-        let normalized = normalize(new)?;
-        require_project_document(surreal, new.project_id, new.document_id).await?;
-        let now = chrono::Utc::now().to_rfc3339();
-        return Ok(crate::postgres::matter::upsert(&pg, TABLE, &serde_json::json!({
-            "id": Uuid::now_v7(), "project_id": new.project_id, "document_id": new.document_id,
-            "recipient": normalized.recipient, "recipient_person_id": new.recipient_person_id,
-            "recipient_entity_id": new.recipient_entity_id, "counsel_for": normalized.counsel_for,
-            "method": normalized.method, "served_on": normalized.served_on, "address": normalized.address,
-            "declarant": normalized.declarant, "declarant_person_id": new.declarant_person_id,
-            "letter_id": new.letter_id, "sent_email_id": new.sent_email_id, "inserted_at": now, "updated_at": now,
-        })).await?);
-    }
-
+    let pg = crate::postgres::matter::authority_for(TABLE)
+        .await?
+        .ok_or(crate::postgres::matter::MatterAuthorityError::Unavailable)?;
     let normalized = normalize(new)?;
     require_project_document(surreal, new.project_id, new.document_id).await?;
-    let id = Uuid::now_v7();
     let now = chrono::Utc::now().to_rfc3339();
-    let mut response = surreal
-        .query(format!(
-            "CREATE $id SET \
-             project_id = $project_id, document_id = $document_id, recipient = $recipient, \
-             recipient_person_id = $recipient_person_id, \
-             recipient_entity_id = $recipient_entity_id, counsel_for = $counsel_for, \
-             method = $method, served_on = $served_on, address = $address, \
-             declarant = $declarant, declarant_person_id = $declarant_person_id, \
-             letter_id = $letter_id, sent_email_id = $sent_email_id, \
-             inserted_at = $now, updated_at = $now \
-             RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind((
-            "project_id",
-            record_id(crate::projects::PROJECT_TABLE, new.project_id),
-        ))
-        .bind((
-            "document_id",
-            record_id(crate::assets::TABLE, new.document_id),
-        ))
-        .bind(("recipient", normalized.recipient))
-        .bind((
-            "recipient_person_id",
-            new.recipient_person_id.map(|p| record_id("person", p)),
-        ))
-        .bind((
-            "recipient_entity_id",
-            new.recipient_entity_id.map(|e| record_id("entity", e)),
-        ))
-        .bind(("counsel_for", normalized.counsel_for))
-        .bind(("method", normalized.method.to_string()))
-        .bind(("served_on", normalized.served_on))
-        .bind(("address", normalized.address))
-        .bind(("declarant", normalized.declarant))
-        .bind((
-            "declarant_person_id",
-            new.declarant_person_id.map(|p| record_id("person", p)),
-        ))
-        .bind(("letter_id", new.letter_id.map(|l| record_id("letter", l))))
-        .bind((
-            "sent_email_id",
-            new.sent_email_id.map(|e| record_id("sent_email", e)),
-        ))
-        .bind(("now", now))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<Row> = response.take(0)?;
-    let service = row
-        .and_then(Row::into_service)
-        .ok_or(ServiceError::WriteReturnedNothing)?;
-    crate::postgres_mirror::after_write(
-        surreal,
-        crate::postgres_mirror::MirrorKey::ProjectService(service.id),
-    )
-    .await;
-    Ok(service)
+    Ok(crate::postgres::matter::upsert(&pg, TABLE, &serde_json::json!({
+        "id": Uuid::now_v7(), "project_id": new.project_id, "document_id": new.document_id,
+        "recipient": normalized.recipient, "recipient_person_id": new.recipient_person_id,
+        "recipient_entity_id": new.recipient_entity_id, "counsel_for": normalized.counsel_for,
+        "method": normalized.method, "served_on": normalized.served_on, "address": normalized.address,
+        "declarant": normalized.declarant, "declarant_person_id": new.declarant_person_id,
+        "letter_id": new.letter_id, "sent_email_id": new.sent_email_id, "inserted_at": now, "updated_at": now,
+    })).await?)
 }
 
 /// Every Service on a Project, earliest served first.
@@ -310,38 +247,21 @@ pub async fn find(
 ///
 /// # Errors
 /// Propagates any database error.
-pub async fn delete_for_project(surreal: &SurrealDb, project_id: Uuid) -> Result<(), ServiceError> {
-    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
-        crate::postgres::matter::delete(&pg, TABLE, serde_json::json!({"project_id": project_id}))
-            .await?;
-        return Ok(());
-    }
-
-    let mut response = surreal
-        .query(format!(
-            "DELETE {TABLE} WHERE project_id = $project RETURN BEFORE"
-        ))
-        .bind((
-            "project",
-            record_id(crate::projects::PROJECT_TABLE, project_id),
-        ))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let deleted: Vec<Row> = response.take(0)?;
-    crate::postgres_mirror::after_writes(
-        surreal,
-        deleted
-            .into_iter()
-            .filter_map(Row::into_service)
-            .map(|service| crate::postgres_mirror::MirrorKey::ProjectService(service.id)),
-    )
-    .await;
+pub async fn delete_for_project(
+    _surreal: &SurrealDb,
+    project_id: Uuid,
+) -> Result<(), ServiceError> {
+    let pg = crate::postgres::matter::authority_for(TABLE)
+        .await?
+        .ok_or(crate::postgres::matter::MatterAuthorityError::Unavailable)?;
+    crate::postgres::matter::delete(&pg, TABLE, serde_json::json!({"project_id": project_id}))
+        .await?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{create, find, list, NewService, ServiceMethod};
+    use super::{create, delete_for_project, find, list, NewService, ServiceMethod};
     use uuid::Uuid;
 
     async fn filed_document(
@@ -394,71 +314,87 @@ mod tests {
 
     #[tokio::test]
     async fn create_list_and_find_round_trip() {
-        let surreal = crate::surreal::test_support::mem().await;
-        let project_id = crate::test_support::seed_project_surreal(&surreal, "service").await;
-        let (document_id, _tmp) = filed_document(&surreal, project_id).await;
-        let mut second = sample(project_id, document_id);
-        second.recipient = "Other Counsel".into();
-        second.method = "e_service".into();
-        second.served_on = "2026-03-04".into();
-        second.address = "other@example.com".into();
-        let later = create(&surreal, &sample(project_id, document_id))
-            .await
-            .unwrap();
-        let earlier = create(&surreal, &second).await.unwrap();
-        assert_eq!(later.method, "mail");
-        assert_eq!(later.counsel_for.as_deref(), Some("Defendant Example Co."));
-        let rows = list(&surreal, project_id).await.unwrap();
-        let ids: Vec<Uuid> = rows.iter().map(|row| row.id).collect();
-        assert_eq!(ids, [earlier.id, later.id], "earliest served first");
-        assert_eq!(
-            find(&surreal, project_id, later.id).await.unwrap(),
-            Some(later.clone())
-        );
-        assert_eq!(
-            find(&surreal, Uuid::now_v7(), later.id).await.unwrap(),
-            None
-        );
-        let record = later.record();
-        assert_eq!(record.method, ServiceMethod::Mail);
-        assert_eq!(record.served_on.to_string(), "2026-03-05");
+        crate::test_support::with_required_postgres(async {
+            let surreal = crate::surreal::SurrealDb::uninitialized();
+            crate::test_support::seed_compiled_brands_postgres(&surreal).await;
+            let project_id = crate::test_support::seed_project_surreal(&surreal, "service").await;
+            let (document_id, _tmp) = filed_document(&surreal, project_id).await;
+            let mut second = sample(project_id, document_id);
+            second.recipient = "Other Counsel".into();
+            second.method = "e_service".into();
+            second.served_on = "2026-03-04".into();
+            second.address = "other@example.com".into();
+            let later = create(&surreal, &sample(project_id, document_id))
+                .await
+                .unwrap();
+            let earlier = create(&surreal, &second).await.unwrap();
+            assert_eq!(later.method, "mail");
+            assert_eq!(later.counsel_for.as_deref(), Some("Defendant Example Co."));
+            let rows = list(&surreal, project_id).await.unwrap();
+            let ids: Vec<Uuid> = rows.iter().map(|row| row.id).collect();
+            assert_eq!(ids, [earlier.id, later.id], "earliest served first");
+            assert_eq!(
+                find(&surreal, project_id, later.id).await.unwrap(),
+                Some(later.clone())
+            );
+            assert_eq!(
+                find(&surreal, Uuid::now_v7(), later.id).await.unwrap(),
+                None
+            );
+            let record = later.record();
+            assert_eq!(record.method, ServiceMethod::Mail);
+            assert_eq!(record.served_on.to_string(), "2026-03-05");
+            delete_for_project(&surreal, Uuid::now_v7()).await.unwrap();
+            assert_eq!(list(&surreal, project_id).await.unwrap().len(), 2);
+            delete_for_project(&surreal, project_id).await.unwrap();
+            assert!(list(&surreal, project_id).await.unwrap().is_empty());
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn an_unknown_method_a_non_date_and_two_recipients_are_refused() {
-        let surreal = crate::surreal::test_support::mem().await;
-        let project_id = crate::test_support::seed_project_surreal(&surreal, "service").await;
-        let (document_id, _tmp) = filed_document(&surreal, project_id).await;
-        let mut unknown = sample(project_id, document_id);
-        unknown.method = "carrier_pigeon".into();
-        let error = create(&surreal, &unknown).await.unwrap_err();
-        assert!(error.to_string().contains("certified_mail"), "{error}");
-        let mut non_date = sample(project_id, document_id);
-        non_date.served_on = "March 5, 2026".into();
-        assert!(create(&surreal, &non_date).await.is_err());
-        let mut both = sample(project_id, document_id);
-        both.recipient_person_id = Some(Uuid::now_v7());
-        both.recipient_entity_id = Some(Uuid::now_v7());
-        let error = create(&surreal, &both).await.unwrap_err();
-        assert!(error.to_string().contains("not both"), "{error}");
-        let mut blank = sample(project_id, document_id);
-        blank.declarant = "  ".into();
-        assert!(create(&surreal, &blank).await.is_err());
+        crate::test_support::with_required_postgres(async {
+            let surreal = crate::surreal::SurrealDb::uninitialized();
+            crate::test_support::seed_compiled_brands_postgres(&surreal).await;
+            let project_id = crate::test_support::seed_project_surreal(&surreal, "service").await;
+            let (document_id, _tmp) = filed_document(&surreal, project_id).await;
+            let mut unknown = sample(project_id, document_id);
+            unknown.method = "carrier_pigeon".into();
+            let error = create(&surreal, &unknown).await.unwrap_err();
+            assert!(error.to_string().contains("certified_mail"), "{error}");
+            let mut non_date = sample(project_id, document_id);
+            non_date.served_on = "March 5, 2026".into();
+            assert!(create(&surreal, &non_date).await.is_err());
+            let mut both = sample(project_id, document_id);
+            both.recipient_person_id = Some(Uuid::now_v7());
+            both.recipient_entity_id = Some(Uuid::now_v7());
+            let error = create(&surreal, &both).await.unwrap_err();
+            assert!(error.to_string().contains("not both"), "{error}");
+            let mut blank = sample(project_id, document_id);
+            blank.declarant = "  ".into();
+            assert!(create(&surreal, &blank).await.is_err());
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_document_from_another_project_is_refused() {
-        let surreal = crate::surreal::test_support::mem().await;
-        let project_id = crate::test_support::seed_project_surreal(&surreal, "service").await;
-        let other = crate::test_support::seed_project_surreal(&surreal, "other").await;
-        let (document_id, _tmp) = filed_document(&surreal, other).await;
-        let error = create(&surreal, &sample(project_id, document_id))
-            .await
-            .unwrap_err();
-        assert!(error.to_string().contains("this Project"), "{error}");
-        let mut nowhere = sample(project_id, document_id);
-        nowhere.document_id = Uuid::now_v7();
-        assert!(create(&surreal, &nowhere).await.is_err());
+        crate::test_support::with_required_postgres(async {
+            let surreal = crate::surreal::SurrealDb::uninitialized();
+            crate::test_support::seed_compiled_brands_postgres(&surreal).await;
+            let project_id = crate::test_support::seed_project_surreal(&surreal, "service").await;
+            let other = crate::test_support::seed_project_surreal(&surreal, "other").await;
+            let (document_id, _tmp) = filed_document(&surreal, other).await;
+            let error = create(&surreal, &sample(project_id, document_id))
+                .await
+                .unwrap_err();
+            assert!(error.to_string().contains("this Project"), "{error}");
+            let mut nowhere = sample(project_id, document_id);
+            nowhere.document_id = Uuid::now_v7();
+            assert!(create(&surreal, &nowhere).await.is_err());
+        })
+        .await;
     }
 
     #[test]

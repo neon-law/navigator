@@ -1,61 +1,9 @@
 use super::*;
 use crate::{
-    brands::NewBrand,
-    firms::NewFirm,
-    persons::{NewPerson, Role},
-    postgres_mirror::tests::{connect, fresh_schema, synthetic_entity},
+    postgres_mirror::tests::{connect, fresh_schema},
     surreal::record_id,
     test_support::mem_surreal,
 };
-use surrealdb::types::SurrealValue;
-
-async fn practice(surreal: &SurrealDb, suffix: &str) -> (Uuid, String) {
-    let person = crate::persons::create(
-        surreal,
-        &NewPerson::with_role(
-            "Synthetic administrator",
-            format!("blog-video-{suffix}@example.test"),
-            Role::Admin,
-        ),
-    )
-    .await
-    .unwrap();
-    let firm = crate::firms::create(
-        surreal,
-        &NewFirm {
-            name: format!("Synthetic Firm {suffix}"),
-            status: "active".into(),
-            entity_id: synthetic_entity(surreal).await,
-            admin_dri_person_id: person.id,
-        },
-    )
-    .await
-    .unwrap();
-    let brand_key = format!("blog-video-{suffix}");
-    crate::brands::create(
-        surreal,
-        Role::Admin,
-        Some(person.id),
-        &NewBrand {
-            name: format!("Synthetic Brand {suffix}"),
-            key: brand_key.clone(),
-            firm_id: Some(firm.id),
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
-    (firm.id, brand_key)
-}
-
-async fn prepare_target(pg: &PostgresDb, surreal: &SurrealDb) {
-    crate::postgres_mirror::identity::reconcile(surreal, pg)
-        .await
-        .unwrap();
-    crate::postgres_mirror::tenancy::reconcile(surreal, pg)
-        .await
-        .unwrap();
-}
 
 #[test]
 fn blog_video_key_names_only_its_source_uuid() {
@@ -88,22 +36,19 @@ async fn video_uploads_mirror_replay_and_reconcile_with_brand_ownership() {
     };
     let pg = connect(&options, &database).await;
     let surreal = mem_surreal().await;
-    let (firm_id, brand_key) = practice(&surreal, "one").await;
-    prepare_target(&pg, &surreal).await;
-
+    let brand_key = format!("synthetic-video-{}", Uuid::now_v7());
+    sqlx::query("INSERT INTO brand (name, brand_key) VALUES ('Synthetic Brand', $1)")
+        .bind(&brand_key)
+        .execute(pg.pool())
+        .await
+        .unwrap();
     let object_key = format!("synthetic/{brand_key}/upload.mp4");
-    let video = crate::posts::record_video(&surreal, &brand_key, &object_key, 1080, 1920)
-        .await
-        .unwrap();
-    let mut source = surreal
-        .query("SELECT id FROM blog_video WHERE object_key = $key LIMIT 1")
+    let id = Uuid::now_v7();
+    surreal.query("CREATE $id SET brand_key=$brand, object_key=$key, width=1080, height=1920, orientation='vertical', inserted_at=time::now()")
+        .bind(("id", record_id("blog_video", id)))
+        .bind(("brand", brand_key.clone()))
         .bind(("key", object_key.clone()))
-        .await
-        .unwrap()
-        .check()
-        .unwrap();
-    let row: Option<SourceId> = source.take(0).unwrap();
-    let id = crate::surreal::record_uuid(&row.unwrap().id).unwrap();
+        .await.unwrap().check().unwrap();
     assert_eq!(
         crate::postgres_mirror::mirror(&surreal, &pg, &MirrorKey::BlogVideo(id))
             .await
@@ -130,7 +75,6 @@ async fn video_uploads_mirror_replay_and_reconcile_with_brand_ownership() {
         (image.3, image.4, image.5.as_str()),
         (1080, 1920, "vertical")
     );
-    assert_eq!(video.width, 1080);
     assert_eq!(
         crate::postgres_mirror::blog_videos::parity(&surreal, &pg)
             .await
@@ -160,7 +104,7 @@ async fn video_uploads_mirror_replay_and_reconcile_with_brand_ownership() {
          VALUES ($1, $2, $3, 1080, 1920, 'vertical')",
     )
     .bind(Uuid::new_v4())
-    .bind(format!("missing-{firm_id}"))
+    .bind(format!("missing-{}", Uuid::now_v7()))
     .bind("synthetic/missing-brand/upload.mp4")
     .execute(&pg.0)
     .await
@@ -185,9 +129,4 @@ async fn video_uploads_mirror_replay_and_reconcile_with_brand_ownership() {
         .unwrap();
     assert_eq!(report.tables[0].source_rows, 0);
     assert_eq!(report.tables[0].target_rows, 0);
-}
-
-#[derive(SurrealValue)]
-struct SourceId {
-    id: surrealdb::types::RecordId,
 }

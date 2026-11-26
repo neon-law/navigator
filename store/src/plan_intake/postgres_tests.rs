@@ -167,5 +167,120 @@ async fn surreal_rows_copy_once_with_their_decision() {
         carried.fee_effective_on,
         NaiveDate::from_ymd_opt(2026, 1, 1)
     );
+    assert_global_retry_after_failed_copy(&surreal, &pg, row.id).await;
     pg.0.close().await;
+}
+
+#[tokio::test]
+async fn source_context_refuses_review_mutations_before_effects() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    crate::test_support::with_postgres(async {
+        let pg = PostgresDb::configured().await.unwrap().unwrap();
+        let source = SurrealDb::uninitialized();
+        let id = Uuid::now_v7();
+        let actor = Uuid::now_v7();
+        let input = AcceptInput {
+            attestation: true,
+            acting_person_id: actor,
+            brand: "synthetic".into(),
+            code: "synthetic-plan".into(),
+            name: None,
+            plan_case_number: Some("CASE-1".into()),
+            plan_matter_type: "will".into(),
+            plan_state: None,
+        };
+        let calls = AtomicUsize::new(0);
+        let error = crate::postgres_mirror::from_source(accept_with_onboarding(
+            &source,
+            &pg,
+            id,
+            &input,
+            |_| async {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            },
+        ))
+        .await
+        .unwrap_err();
+        assert!(matches!(error, PlanIntakeError::PostgresRequired));
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert!(matches!(
+            crate::postgres_mirror::from_source(resolve_member(
+                &source,
+                &pg,
+                id,
+                actor,
+                "synthetic",
+                None,
+                "member@example.test"
+            ))
+            .await,
+            Err(PlanIntakeError::PostgresRequired)
+        ));
+        assert!(matches!(
+            crate::postgres_mirror::from_source(decline_from_review(
+                &source,
+                &pg,
+                id,
+                actor,
+                "synthetic",
+                "reason"
+            ))
+            .await,
+            Err(PlanIntakeError::PostgresRequired)
+        ));
+    })
+    .await;
+}
+
+// A completed global run can still contain a recorded row failure. Once the
+// underlying problem is repaired, a later global run must retry that row.
+async fn assert_global_retry_after_failed_copy(
+    surreal: &crate::surreal::SurrealDb,
+    pg: &PostgresDb,
+    id: Uuid,
+) {
+    surreal
+        .query("DELETE brand")
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
+    sqlx::query("DELETE FROM plan_intake WHERE id = $1")
+        .bind(id)
+        .execute(pg.pool())
+        .await
+        .unwrap();
+    sqlx::query("ALTER TABLE plan_intake ADD CONSTRAINT synthetic_copy_failure CHECK (status <> 'declined') NOT VALID")
+        .execute(pg.pool())
+        .await
+        .unwrap();
+    let first = crate::postgres_backfill::start(surreal, pg, 500, None)
+        .await
+        .unwrap();
+    assert_eq!(first.status, crate::postgres_backfill::RunStatus::Completed);
+    let failures: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM mirror_backfill_failure WHERE run_id=$1 AND row_table='plan_intake' AND row_id=$2",
+    )
+    .bind(first.run_id)
+    .bind(id.to_string())
+    .fetch_one(pg.pool())
+    .await
+    .unwrap();
+    assert_eq!(failures, 1, "the real run records the failed assignment");
+    assert!(postgres::find_by_id(pg, id).await.unwrap().is_none());
+    sqlx::query("ALTER TABLE plan_intake DROP CONSTRAINT synthetic_copy_failure")
+        .execute(pg.pool())
+        .await
+        .unwrap();
+    let retry = crate::postgres_backfill::start(surreal, pg, 500, None)
+        .await
+        .unwrap();
+    assert!(retry.is_clean(), "{retry:?}");
+    let recovered = postgres::find_by_id(pg, id).await.unwrap().unwrap();
+    assert_eq!(recovered.status, "declined");
+    assert_eq!(
+        recovered.decline_reason.as_deref(),
+        Some("Synthetic reason")
+    );
 }
