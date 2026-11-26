@@ -13,7 +13,7 @@ hero_lead: >-
   workshops are for lawyers, operators, and firms.
 hero_cta:
   label: Download Navigator
-  href: "#download"
+  href: "/#download"
 skin: marketing
 bands:
   - kind: project_network
@@ -70,30 +70,6 @@ bands:
     heading: Presentation
     label: Neon Law presentation
     asset_key: img/neon-home/neon-home-presentation.mp4
-  - kind: downloads
-    anchor: download
-    overline: Download
-    heading: Run Navigator yourself
-    description: >-
-      Navigator is open source under MIT OR Apache-2.0. It is built for Macs and for
-      containers in the cloud: download it for Apple silicon macOS or x86_64 Linux.
-      Each release is attached to the public GitHub repository.
-    archive_label: every release
-    package:
-      heading: Install with Homebrew
-      body:
-        - - text: "The formula lives in our own tap, "
-          - text: neon-law/homebrew-navigator
-            href: https://github.com/neon-law/homebrew-navigator
-          - text: ", which is updated by every release."
-        - - text: "Install with the command below, then run "
-          - text: navigator quickstart
-            code: true
-          - text: >-
-              . With Docker running, it brings up the full stack in KIND with a
-              seeded sample firm and three sample matters, each cloned from
-              its own Project repository: Cruller v. Prine, Widget Works, and
-              the Estate of Cornelius Montgomery.
   - kind: cta
     heading: Explore Navigator
     body: >-

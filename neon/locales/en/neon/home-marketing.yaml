@@ -84,6 +84,28 @@ bands:
             - text: My Projects
               href: /app/projects
             - text: "."
+  - kind: downloads
+    anchor: download
+    overline: Download
+    heading: Run Navigator yourself
+    description: >-
+      Navigator is open source under MIT OR Apache-2.0. It is built for Macs and for
+      containers in the cloud: download it for Apple silicon macOS or x86_64 Linux.
+      Each release is attached to the public GitHub repository.
+    archive_label: every release
+    package:
+      heading: Install with Homebrew
+      body:
+        - - text: "The formula lives in our own tap, "
+          - text: neon-law/homebrew-navigator
+            href: https://github.com/neon-law/homebrew-navigator
+          - text: ", which is updated by every release."
+        - - text: "Install with the command below, then run "
+          - text: navigator quickstart
+            code: true
+          - text: >-
+              . With Docker running, it brings up the full stack in KIND with a
+              seeded sample firm and three sample matters.
   - kind: cta
     heading: Considering Legal Aid?
     body: >-

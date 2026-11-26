@@ -2796,15 +2796,18 @@ mod tests {
             .map(|band| match band {
                 Band::Cards { .. } => "cards",
                 Band::Steps { .. } => "steps",
+                Band::Downloads { .. } => "downloads",
                 Band::Cta { action, .. } => {
                     let action = action.as_ref().expect("the closing band links Legal Aid");
                     assert_eq!(action.href, "/legal-aid");
                     "cta"
                 }
-                _ => panic!("the home publishes only cards, steps, and a closing call to action"),
+                _ => panic!(
+                    "the home publishes only cards, steps, downloads, and a closing call to action"
+                ),
             })
             .collect();
-        assert_eq!(kinds, ["cards", "steps", "cta"]);
+        assert_eq!(kinds, ["cards", "steps", "downloads", "cta"]);
         let text = serde_yaml::to_string(&content).expect("home serializes");
         assert!(text.contains("Represent yourself"));
         assert!(text.contains("does not create an attorney-client relationship"));
@@ -2840,7 +2843,6 @@ mod tests {
             .map(|band| match band {
                 Band::ProjectNetwork { .. } => "project_network",
                 Band::Video { .. } => "video",
-                Band::Downloads { .. } => "downloads",
                 Band::Cta { action, .. } => {
                     assert!(action.is_none(), "the closing band links no retired page");
                     "cta"
@@ -2848,9 +2850,8 @@ mod tests {
                 _ => panic!("the lawyers page publishes the connected Project"),
             })
             .collect();
-        assert_eq!(kinds, ["project_network", "video", "downloads", "cta"]);
+        assert_eq!(kinds, ["project_network", "video", "cta"]);
         let text = serde_yaml::to_string(&content).expect("lawyers serializes");
-        assert!(text.contains("open source under MIT OR Apache-2.0"));
         assert!(!text.contains("href: /navigator"));
         assert_eq!(content.tagline, "One connected Project");
         assert_ne!(content.tagline, "Exacting Agentic Lawyering");
