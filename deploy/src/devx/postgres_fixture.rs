@@ -398,11 +398,6 @@ pub(super) fn validate_local_service(service: &serde_json::Value, app: &str) -> 
     Ok(())
 }
 
-pub(super) fn read_environment(root: &Path) -> Result<String> {
-    std::fs::read_to_string(environment_path(root))
-        .context("read the task-owned PostgreSQL fixture environment")
-}
-
 pub(super) fn render_environment(values: &BTreeMap<String, String>) -> String {
     let mut rendered = String::new();
     for (key, value) in values {

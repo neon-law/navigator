@@ -66,7 +66,9 @@ use billing::gcp_cost::CostReport;
 
 use crate::digest::{render_archives_slack_with_failure, DiagnosticReport};
 use crate::postgres::{PostgresExport, POSTGRES_LANE};
-use crate::runner::{cost_phase, open_resources, snapshot_selected, SnapshotSummary};
+use crate::runner::{cost_phase, open_storage, SnapshotSummary};
+#[cfg(feature = "restate-compatibility")]
+use crate::runner::{open_resources, snapshot_selected};
 use crate::snapshot::{APPLICATION_LANE, TELEMETRY_LANE};
 use crate::tables::ALL_TABLES;
 use cloud::{StorageError, StorageService};
@@ -182,20 +184,25 @@ impl ArchivesDbosPhases for ProductionDbosPhases {
         &self,
         scheduled_for: Option<DateTime<Utc>>,
     ) -> Result<SnapshotSummary, ArchivesDbosPhaseError> {
-        let (db, storage) = open_resources().await.map_err(|_| ArchivesDbosPhaseError)?;
-        let mut summary = snapshot_selected(db.as_ref(), storage.as_ref(), scheduled_for).await;
-        summary.postgres = crate::postgres::export_configured(
-            |key| std::env::var(key).ok(),
-            storage.as_ref(),
+        store::postgres::PostgresDb::application()
+            .await
+            .map_err(|_| ArchivesDbosPhaseError)?;
+        let storage = open_storage().await.map_err(|_| ArchivesDbosPhaseError)?;
+        let postgres =
+            crate::postgres::export_admitted(|key| std::env::var(key).ok(), storage.as_ref())
+                .await
+                .or_else(|| {
+                    Some(PostgresExport::Failed {
+                        error: "DBOS Archives requires configured PostgreSQL coverage".into(),
+                    })
+                });
+        Ok(SnapshotSummary {
+            run_date: scheduled_for.unwrap_or_else(Utc::now).date_naive(),
             scheduled_for,
-        )
-        .await
-        .or_else(|| {
-            Some(PostgresExport::Failed {
-                error: "DBOS Archives requires configured PostgreSQL coverage".into(),
-            })
-        });
-        Ok(summary)
+            entries: Vec::new(),
+            failures: Vec::new(),
+            postgres,
+        })
     }
 
     async fn cost(&self) -> Result<(), ArchivesDbosPhaseError> {
@@ -269,10 +276,6 @@ impl DbosContext {
             anyhow::ensure!(
                 dbos_enabled(&lookup).map_err(anyhow::Error::msg)?,
                 "write-only archive scheduling requires selected DBOS"
-            );
-            anyhow::ensure!(
-                lookup("NAVIGATOR_ARCHIVE_SOURCE").is_none_or(|source| source == "postgres"),
-                "write-only archive scheduling accepts only PostgreSQL sources"
             );
             let config = crate::write_only::operations::Config::read(std::path::Path::new(&path))?;
             required("NAVIGATOR_POSTGRES_HOST")?;
@@ -1155,19 +1158,14 @@ mod tests {
                 .channel_id,
             "C-SYNTHETIC"
         );
-        for (key, value) in [
-            (DBOS_ENABLED_ENV, "false"),
-            ("NAVIGATOR_ARCHIVE_SOURCE", "surreal"),
-        ] {
-            assert!(DbosContext::from_lookup(bot(), false, |candidate| {
-                if candidate == key {
-                    Some(value.to_owned())
-                } else {
-                    configured(candidate)
-                }
-            })
-            .is_err());
-        }
+        assert!(DbosContext::from_lookup(bot(), false, |key| {
+            if key == DBOS_ENABLED_ENV {
+                Some("false".to_owned())
+            } else {
+                configured(key)
+            }
+        })
+        .is_err());
         config.capture = crate::write_only::operations::CaptureScope::Paired {
             coverage: serde_json::from_str(
                 r#"{"navigator":{"relations":[]},"forgejo":{"relations":[]}}"#,
@@ -1896,13 +1894,6 @@ impl RunRequest {
                 anyhow::ensure!(
                     dbos_enabled(|key| std::env::var(key).ok()).map_err(anyhow::Error::msg)?,
                     "write-only archive scheduling requires selected DBOS"
-                );
-                anyhow::ensure!(
-                    matches!(
-                        std::env::var("NAVIGATOR_ARCHIVE_SOURCE").as_deref(),
-                        Err(std::env::VarError::NotPresent) | Ok("postgres")
-                    ),
-                    "write-only archive scheduling accepts only PostgreSQL sources"
                 );
                 anyhow::ensure!(
                     !path.trim().is_empty(),

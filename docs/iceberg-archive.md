@@ -4,10 +4,9 @@ The [write-only archive mode](write-only-iceberg.md) seals generations in GCS fo
 directory for operator backups, then creates independent immutable copies in other projects. Its uploader uses
 create-only credentials; verification and recovery use separate identities and evidence.
 
-The scheduled `Archives` workflow exports reviewed PostgreSQL coverage for Navigator and Forgejo by default. Its
-`iceberg_telemetry` phase promotes `otel_logs`, `otel_traces`, and `otel_metrics` from the `telemetry/` lane. Explicit
-`NAVIGATOR_ARCHIVE_SOURCE=all` compatibility runs also snapshot SurrealDB tables into the `application/` lane. This doc
-names the sources, partitioning, object layout, BigQuery wiring, and retention policy.
+The DBOS `Archives` workflow exports reviewed PostgreSQL coverage for Navigator and Forgejo. Its `iceberg_telemetry`
+phase promotes `otel_logs`, `otel_traces`, and `otel_metrics` from the `telemetry/` lane. The retained Restate workflow
+can still snapshot SurrealDB tables into the `application/` lane through its explicit compatibility source setting.
 
 The archive schedule has **05:55 and 17:55 UTC** slots each day. The optional application lane writes a full-table file
 under `application/<table>/data/dt=<date>/run=<HHMM>/snapshot.parquet` for each scheduled time. Promotion selects that
@@ -91,10 +90,8 @@ These are binding records: the snapshot log is never pruned (`expire_before_ms: 
 
 ### PostgreSQL coverage generations
 
-Unset `NAVIGATOR_ARCHIVE_SOURCE` and `postgres` select PostgreSQL alone. Normal scheduled publication requires the
-application's completed storage handoff before object storage is opened; table coverage alone does not establish
-authority. Missing PostgreSQL configuration, incomplete handoff, and unknown source selectors fail closed without
-falling back to SurrealDB.
+DBOS scheduled publication requires the application's completed PostgreSQL storage handoff before object storage opens.
+Missing PostgreSQL configuration or incomplete handoff stops publication.
 
 The `snapshot` step requires reviewed Navigator and Forgejo inventories. Supply `NAVIGATOR_ARCHIVE_COVERAGE` with both
 manifests and the separate `NAVIGATOR_ARCHIVE_FORGEJO_USER` and `NAVIGATOR_ARCHIVE_FORGEJO_PASSWORD` credentials.

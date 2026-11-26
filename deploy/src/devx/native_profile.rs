@@ -248,7 +248,6 @@ pub(super) fn environment(
     values.extend(app);
     values.extend(native_flags(&get)?);
     values.insert("NAVIGATOR_KIND_DEPS_OVERLAY".into(), OVERLAY.into());
-    values.insert("NAVIGATOR_ARCHIVE_SOURCE".into(), "postgres".into());
     values.insert("NAVIGATOR_DBOS_HOST".into(), "127.0.0.1".into());
     values.insert("NAVIGATOR_DBOS_PORT".into(), cfg.postgres_port.to_string());
     values.insert("NAVIGATOR_DBOS_DATABASE".into(), intent.database()?);
@@ -437,13 +436,10 @@ pub(super) fn select_database(
     existing: Option<&str>,
 ) -> Result<String> {
     if let Some(database) = existing {
-        if database == "navigator" {
-            ensure!(
-                Intent::read(root)?.is_none(),
-                "legacy descriptor conflicts with native creation intent"
-            );
-            return Ok(database.into());
-        }
+        ensure!(
+            database != "navigator",
+            "this worktree has a captured KIND tier; use a fresh worktree for PostgreSQL and DBOS"
+        );
         let intent = Intent::read(root)?
             .ok_or_else(|| anyhow!("native descriptor lacks its reserved creation intent"))?;
         intent.verify_target(root, cfg)?;
@@ -681,6 +677,15 @@ mod tests {
             opted["NAVIGATOR_DBOS_BILLING_CANARY_SCHEDULE_ENABLED"],
             "true"
         );
+    }
+
+    #[test]
+    fn captured_kind_descriptor_cannot_start_or_reserve_a_replacement_tier() {
+        let root = tempfile::tempdir().unwrap();
+        let cfg = KindConfig::from_env();
+        let error = select_database(root.path(), &cfg, Some("navigator")).unwrap_err();
+        assert!(error.to_string().contains("use a fresh worktree"));
+        assert!(Intent::read(root.path()).unwrap().is_none());
     }
 
     #[test]

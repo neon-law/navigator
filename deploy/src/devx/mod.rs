@@ -83,11 +83,10 @@ pub use worktree_env::WorktreeEnvCmd;
 // entry points so `dispatch` below and the sibling devx modules reach them
 // as `super::<name>`, exactly as when they lived here.
 use orchestrate::{
-    align_rauthy_public_url, configure_worktree_kubeconfig, down, down_in,
-    hydrate_seaweedfs_environment, kind_down_only, kind_up_only, kustomize_render, logs, print_env,
+    down, down_in, kind_down_only, kind_up_only, kustomize_render, logs, print_env,
     rauthy_deployment_exists, reload_worker as reload_worker_in_kind, require_auth, require_tools,
-    run, status, undeploy, up, up_in, use_kind_context, wait_for_condition, wait_for_tcp,
-    wait_rollout, workspace_root,
+    run, status, undeploy, up, use_kind_context, wait_for_condition, wait_for_tcp, wait_rollout,
+    workspace_root,
 };
 
 // KIND/local defaults. Each pairs with a `KindConfig` field and a
@@ -3953,11 +3952,7 @@ admin_base_url = "https://production-env.example.invalid:9070"
         );
     }
 
-    /// The worktree-env `up` reused-cluster path skips `up_in` and its
-    /// `configure_worktree_kubeconfig` pin, then hydrates `SeaweedFS` over bare
-    /// `kubectl`. The fix pins the context first; this asserts the pin is
-    /// explicit and lands on *this worktree's* isolated KIND context — never
-    /// the ambient one (which on an operator's machine can be prod).
+    /// Local fixture commands pin the worktree’s KIND context.
     #[test]
     fn use_context_pins_the_isolated_kind_context() {
         // A worktree cluster carries a per-checkout suffix; the pin must target

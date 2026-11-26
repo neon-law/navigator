@@ -884,10 +884,9 @@ where
         archives_on_dbos(get),
         "{ARCHIVE_WRITE_ONLY_CONFIG} requires {ARCHIVES_SCHEDULE_ENV} = true"
     );
-    ensure!(path == ARCHIVE_WRITE_ONLY_CONFIG_PATH, "{ARCHIVE_WRITE_ONLY_CONFIG} must name the mounted deployment configuration path {ARCHIVE_WRITE_ONLY_CONFIG_PATH}");
     ensure!(
-        non_empty_env("NAVIGATOR_ARCHIVE_SOURCE", get).is_none_or(|source| source == "postgres"),
-        "write-only Archives requires a PostgreSQL source"
+        path == ARCHIVE_WRITE_ONLY_CONFIG_PATH,
+        "{ARCHIVE_WRITE_ONLY_CONFIG} must name the mounted deployment configuration path {ARCHIVE_WRITE_ONLY_CONFIG_PATH}"
     );
     Ok(true)
 }
@@ -1037,7 +1036,6 @@ where
             "SLACK_MESSAGES_CHANNEL_ID",
             "SLACK_STAGING_MESSAGES_CHANNEL_ID",
             LINEAR_BACKLOG_CHANNEL,
-            "NAVIGATOR_ARCHIVE_SOURCE",
         ] {
             if rendered.contains(&key) {
                 continue;
@@ -9189,16 +9187,14 @@ mod tests {
     }
 
     #[test]
-    fn write_only_archives_refuses_unmounted_paths_and_source_engines() {
-        for (enabled, path, source) in [
-            (false, ARCHIVE_WRITE_ONLY_CONFIG_PATH, "postgres"),
-            (true, "/tmp/archive-config.json", "postgres"),
-            (true, ARCHIVE_WRITE_ONLY_CONFIG_PATH, "surreal"),
+    fn write_only_archives_requires_dbos_and_a_mounted_path() {
+        for (enabled, path) in [
+            (false, ARCHIVE_WRITE_ONLY_CONFIG_PATH),
+            (true, "/tmp/archive-config.json"),
         ] {
             let get = |key: &str| match key {
                 ARCHIVES_SCHEDULE_ENV => Some(enabled.to_string()),
                 ARCHIVE_WRITE_ONLY_CONFIG => Some(path.to_owned()),
-                "NAVIGATOR_ARCHIVE_SOURCE" => Some(source.to_owned()),
                 _ => None,
             };
             assert!(archives_substitutions(&get).is_err());
@@ -9215,10 +9211,12 @@ mod tests {
     fn archives_moves_to_web_with_its_login_and_coverage_manifest() {
         let switched = |key: &str| match key {
             NAVIGATOR_DBOS_ENABLED | ARCHIVES_SCHEDULE_ENV => Some("true".to_owned()),
+            "NAVIGATOR_ARCHIVE_SOURCE" => Some("all".to_owned()),
             _ => env_getter(FULL_ENV)(key),
         };
         let manifests = rendered_manifests(switched);
         let web = manifest_doc(&manifests, "Deployment", WEB_DEPLOYMENT);
+        assert!(web_env_value(&web, "NAVIGATOR_ARCHIVE_SOURCE").is_none());
         assert_eq!(
             web_env_value(&web, ARCHIVES_SCHEDULE_ENV).as_deref(),
             Some("true")

@@ -368,7 +368,7 @@ fn state_dir(root: &Path) -> PathBuf {
 /// see the module docs. `pub_url` is the one value Rauthy uses for
 /// discovery, token issuance, and browser redirects alike, which is why
 /// the cluster lane has a whole patch-and-restart dance
-/// ([`super::super::align_rauthy_public_url`]) for it; on this lane it
+/// ([`super::super::orchestrate::align_rauthy_public_url`]) for it; on this lane it
 /// is written at start.
 fn config_toml(port: u16, raft_port: u16, api_port: u16, bootstrap_dir: &Path) -> String {
     format!(

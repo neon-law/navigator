@@ -296,8 +296,7 @@ fn wait_for_restate(cfg: &KindConfig) -> Result<()> {
         // The Operator places the cluster in its own `restate` namespace
         // (not cfg.namespace) and names the StatefulSet from the CR spec,
         // not literally "restate" — so wait on the RestateCluster CR's
-        // `Ready` condition, the same contract `deploy`'s
-        // wait_for_dep_rollouts uses.
+        // `Ready` condition.
         let (ns, resource, condition) = restate_ready_target();
         eprintln!("    waiting for {resource} {condition} in namespace {ns}");
         wait_for_condition(ns, resource, condition)?;
@@ -305,7 +304,7 @@ fn wait_for_restate(cfg: &KindConfig) -> Result<()> {
     // workflows-service is a RestateDeployment CR (Operator-managed), not a
     // plain Deployment — `deployment/workflows-service` returns NotFound. It
     // lives in cfg.namespace (unlike the cluster). Wait on the CR's `Ready`
-    // condition, the same contract `deploy`'s wait_for_dep_rollouts uses.
+    // condition.
     eprintln!(
         "    waiting for {WORKFLOWS_SERVICE_READY_RESOURCE} Ready in namespace {}",
         cfg.namespace
