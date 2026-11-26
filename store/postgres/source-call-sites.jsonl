@@ -3645,6 +3645,14 @@
 {"file":"store/src/plan_intake/postgres_tests.rs","line":129,"function":"surreal_rows_copy_once_with_their_decision","operation":"bind","sql_operations":[],"tables":["inbox_conversation"],"transaction":false}
 {"file":"store/src/plan_intake/postgres_tests.rs","line":129,"function":"surreal_rows_copy_once_with_their_decision","operation":"bind","sql_operations":[],"tables":["message"],"transaction":false}
 {"file":"store/src/plan_intake/postgres_tests.rs","line":129,"function":"surreal_rows_copy_once_with_their_decision","operation":"query","sql_operations":["SELECT","CREATE"],"tables":[],"transaction":false}
+{"file":"store/src/plan_intake/postgres_tests.rs","line":181,"function":"assert_global_retry_after_failed_copy","operation":"query","sql_operations":["DELETE"],"tables":["brand"],"transaction":false}
+{"file":"store/src/plan_intake/postgres_tests.rs","line":187,"function":"assert_global_retry_after_failed_copy","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
+{"file":"store/src/plan_intake/postgres_tests.rs","line":187,"function":"assert_global_retry_after_failed_copy","operation":"query","sql_operations":["DELETE"],"tables":["plan_intake"],"transaction":false}
+{"file":"store/src/plan_intake/postgres_tests.rs","line":192,"function":"assert_global_retry_after_failed_copy","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
+{"file":"store/src/plan_intake/postgres_tests.rs","line":192,"function":"assert_global_retry_after_failed_copy","operation":"query","sql_operations":[],"tables":[],"transaction":false}
+{"file":"store/src/plan_intake/postgres_tests.rs","line":200,"function":"assert_global_retry_after_failed_copy","operation":"query_scalar","sql_operations":["SELECT"],"tables":[],"transaction":false}
+{"file":"store/src/plan_intake/postgres_tests.rs","line":210,"function":"assert_global_retry_after_failed_copy","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
+{"file":"store/src/plan_intake/postgres_tests.rs","line":210,"function":"assert_global_retry_after_failed_copy","operation":"query","sql_operations":[],"tables":[],"transaction":false}
 {"file":"store/src/plan_metrics.rs","line":246,"function":"matter_counts","operation":"query","sql_operations":["SELECT"],"tables":["project"],"transaction":false}
 {"file":"store/src/plan_metrics.rs","line":292,"function":"acceptance_sla_misses","operation":"query","sql_operations":["SELECT"],"tables":["project"],"transaction":false}
 {"file":"store/src/plan_metrics.rs","line":338,"function":"turnaround_sla_misses","operation":"query","sql_operations":["SELECT"],"tables":["project"],"transaction":false}

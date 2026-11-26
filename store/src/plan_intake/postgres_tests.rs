@@ -167,5 +167,58 @@ async fn surreal_rows_copy_once_with_their_decision() {
         carried.fee_effective_on,
         NaiveDate::from_ymd_opt(2026, 1, 1)
     );
+    assert_global_retry_after_failed_copy(&surreal, &pg, row.id).await;
     pg.0.close().await;
+}
+
+// A completed global run can still contain a recorded row failure. Once the
+// underlying problem is repaired, a later global run must retry that row.
+async fn assert_global_retry_after_failed_copy(
+    surreal: &crate::surreal::SurrealDb,
+    pg: &PostgresDb,
+    id: Uuid,
+) {
+    surreal
+        .query("DELETE brand")
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
+    sqlx::query("DELETE FROM plan_intake WHERE id = $1")
+        .bind(id)
+        .execute(pg.pool())
+        .await
+        .unwrap();
+    sqlx::query("ALTER TABLE plan_intake ADD CONSTRAINT synthetic_copy_failure CHECK (status <> 'declined') NOT VALID")
+        .execute(pg.pool())
+        .await
+        .unwrap();
+    let first = crate::postgres_backfill::start(surreal, pg, 500, None)
+        .await
+        .unwrap();
+    assert_eq!(first.status, crate::postgres_backfill::RunStatus::Completed);
+    let failures: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM mirror_backfill_failure WHERE run_id=$1 AND row_table='plan_intake' AND row_id=$2",
+    )
+    .bind(first.run_id)
+    .bind(id.to_string())
+    .fetch_one(pg.pool())
+    .await
+    .unwrap();
+    assert_eq!(failures, 1, "the real run records the failed assignment");
+    assert!(postgres::find_by_id(pg, id).await.unwrap().is_none());
+    sqlx::query("ALTER TABLE plan_intake DROP CONSTRAINT synthetic_copy_failure")
+        .execute(pg.pool())
+        .await
+        .unwrap();
+    let retry = crate::postgres_backfill::start(surreal, pg, 500, None)
+        .await
+        .unwrap();
+    assert!(retry.is_clean(), "{retry:?}");
+    let recovered = postgres::find_by_id(pg, id).await.unwrap().unwrap();
+    assert_eq!(recovered.status, "declined");
+    assert_eq!(
+        recovered.decline_reason.as_deref(),
+        Some("Synthetic reason")
+    );
 }
