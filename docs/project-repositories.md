@@ -612,11 +612,11 @@ cannot repair it. `navigator project scaffold --resume <code> --dir <checkout>` 
 untracked root licence files that `Y028` refuses, imports the source to the Project's repository, and leaves a tree that
 passes the gate. The next bump then lands it.
 
-Setup fetches or creates the Project's colocated Jujutsu checkout under `~/Work/<code>` without discarding local work.
-If the published manifest has stale coordinates, run `navigator project set --from-live` in that checkout and land the
-change through normal review before retrying setup. Use `navigator project status <code>` to see the source and mirror
-branches and whether a local checkout exists. Setup reports an incomplete step and exits nonzero. The bulk command
-reconciles integration resources and defers local workspace work to single-Project setup.
+Setup fetches or creates the Project's colocated Jujutsu checkout under `<workspace-root>/<code>` without discarding
+local work. If the published manifest has stale coordinates, run `navigator project set --from-live` in that checkout
+and land the change through normal review before retrying setup. Use `navigator project status <code>` to see the source
+and mirror branches and whether a local checkout exists. Setup reports an incomplete step and exits nonzero. The bulk
+command reconciles integration resources and defers local workspace work to single-Project setup.
 
 Setup uses the existing authenticated doors for integrations. The doors enforce their admin, visible-Project, and
 owning-Firm `FirmCapability::UseIntegrations` checks. The text and JSON reports include each resource outcome.
@@ -1291,13 +1291,15 @@ lawyer lens, read from the same skeletons the gate checks.
 ## Local checkouts
 
 `navigator sync --host <host>` keeps the signed-in person's participating open and pitch Projects under the selected
-workspace root, wherever the command runs. A fresh installation uses `~/Projects`; one with only `~/Work` keeps using
-it. When both exist, choose the root with `--dir <path>`. `navigator project create` and `navigator project scaffold
---resume` sync new checkouts through this resolver; scaffold's `--dir` still selects its repository destination.
-`navigator sync`, `project create`, and `project watch` accept `--dir` for the root, and watch defaults to it. Each
-clone includes the Project's committed Agent Skills under `.agents/skills/`. `sync --dry-run` reports checkout presence
-separately from whether a source repository is configured, and the workspace drift below. It does not contact a forge,
-create the root, or change files. A failed checkout leaves the opened Project available for a sync retry.
+workspace root. Run Navigator from that directory for workspace operations. The default is `~/Projects` . Set
+`NAVIGATOR_WORKSPACE_ROOT` to an absolute path or a path relative to your home directory to select another root. An
+explicit `--dir` takes precedence and resolves relative to the current directory. `navigator project create` and
+`navigator project scaffold --resume` sync new checkouts through this resolver; scaffold's `--dir` still selects its
+repository destination. `navigator sync` , `project create` , and `project watch` accept `--dir` for the root, and watch
+defaults to it. Each clone includes the Project's committed Agent Skills under `.agents/skills/` . `sync --dry-run`
+reports checkout presence separately from whether a source repository is configured, and the workspace drift below. It
+does not contact a forge, create the root, or change files. A failed checkout leaves the opened Project available for a
+sync retry.
 
 Sync clones missing checkouts with `jj git clone --colocate` and colocates clean existing Git directories with jj. It
 checks the Project and host in the manifest and fetches bookmarks from the recorded origin. When the host verifies a
@@ -1306,6 +1308,18 @@ mirror is hidden, missing, unconfigured or unavailable, sync reports the status 
 push settings stay in place. The contributor authenticates to the origin with their own forge account. Local edits,
 conflicts and unsafe paths skip that checkout. Closed checkouts stay on disk. Document hydration uses `project sync` or
 `project watch` with the caller's document permissions.
+
+### Move an existing workspace
+
+Keep the current root selected with `NAVIGATOR_WORKSPACE_ROOT` through the release. Before switching roots, stop
+workspace watchers and record any scheduled jobs and Git worktrees that refer to absolute checkout paths. Preserve the
+existing destination separately if it contains files. Move the workspace as a unit so relative skill links stay
+together. Use Git's worktree move or repair command for linked checkouts as applicable.
+
+From the new root, verify Jujutsu and Git status, both forge remotes where configured, and the relative skill links. Run
+`navigator sync --dir . --host <host> --dry-run` and run `navigator project gate` in each checkout. Update scheduled
+paths and the configured root after those checks pass. Keep the preserved destination and original path available until
+verification is complete so you can reverse the move and restore the original setting.
 
 ### The workspace root
 
@@ -1415,8 +1429,8 @@ so a row whose URL names a different repository is drift with no checkout involv
 a machine holding the clones knows what repositories exist. This section is the second half.
 
 ```bash
-navigator project drift --host <host> --dir ~/Work
-navigator project drift --host <host> --dir ~/Work --all --json
+navigator project drift --host <host> --dir .
+navigator project drift --host <host> --dir . --all --json
 ```
 
 The same drift run also reads the caller's participating open and pitch Projects and fails for each missing local

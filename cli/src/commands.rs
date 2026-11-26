@@ -135,7 +135,7 @@ enum Command {
         /// Target Navigator host.
         #[arg(long)]
         host: String,
-        /// Select the directory holding Project checkouts. Defaults to the shared workspace root.
+        /// Select the directory holding Project checkouts. Overrides NAVIGATOR_WORKSPACE_ROOT (default: ~/Projects).
         #[arg(long)]
         dir: Option<PathBuf>,
         /// Report checkout state without changing files or contacting the forge.
@@ -1419,9 +1419,9 @@ pub enum ProjectsCmd {
         #[command(flatten)]
         host: HostOpt,
         /// Directory holding the Project repository checkouts, one per
-        /// repository. Defaults to the current directory.
-        #[arg(long, default_value = ".")]
-        dir: PathBuf,
+        /// repository. Defaults to the configured workspace root.
+        #[arg(long)]
+        dir: Option<PathBuf>,
         /// Also list the repositories that declare they have no live row.
         #[arg(long)]
         all: bool,
@@ -3554,7 +3554,16 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
             all,
             json,
             forge_parity,
-        } => projects::drift::run(host.host.as_deref(), &dir, all, json, forge_parity).await,
+        } => {
+            let dir = match projects::workspace_root::selected(dir.as_deref()) {
+                Ok(dir) => dir,
+                Err(error) => {
+                    eprintln!("navigator project drift: {error:#}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            projects::drift::run(host.host.as_deref(), &dir, all, json, forge_parity).await
+        }
         ProjectsCmd::Gate {
             tracked_files: true,
             ..
