@@ -8,7 +8,7 @@ use std::io::Cursor;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use axum::extract::{DefaultBodyLimit, Extension, FromRef, Multipart, Path, State};
+use axum::extract::{DefaultBodyLimit, Extension, FromRef, Multipart, Path, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::middleware;
 use axum::response::{IntoResponse, Redirect, Response};
@@ -2221,8 +2221,23 @@ async fn admin_person_welcome(
     Redirect::to(&format!("/app/admin/people/{id}?notice={notice}")).into_response()
 }
 
-/// GET opens the preview form on the Project Brand. POST lets a firm member who
-/// can already open this matter inspect its read-only client rendering. The
+/// How long a cross-Brand preview handover stays redeemable.
+const PREVIEW_HANDOVER_TTL_SECS: i64 = 60;
+
+/// The signed note one Brand host gives the Project's own host after checking
+/// the reviewer's form. It names no client; the receiving host resolves that.
+#[derive(serde::Serialize, Deserialize)]
+struct PreviewHandover {
+    person_id: Uuid,
+    code: String,
+    exp: i64,
+}
+
+/// POST lets a firm member who can already open this matter inspect its
+/// read-only client rendering. From another Brand's host the POST hands the
+/// reviewer to the Project's host with a short-lived signed note, and that
+/// host starts the preview when its own session is the same person. A GET
+/// without a valid note shows the form instead of changing the session. The
 /// target is the matter's first client DRI in stable participation order,
 /// never a person id supplied by the browser. Matters open with that DRI, and
 /// if a later edit has left none, the preview is unavailable rather than
@@ -2240,6 +2255,7 @@ async fn project_view_as_client(
     headers: HeaderMap,
     cookies: tower_cookies::Cookies,
     Path(project_code): Path<String>,
+    Query(handover): Query<PreviewHandoverQuery>,
 ) -> Response {
     let Some(Extension(session)) = session else {
         return not_found_response();
@@ -2311,8 +2327,23 @@ async fn project_view_as_client(
             )
                 .into_response();
         };
+        // Only a POST has passed this host's CSRF check, so only a POST
+        // vouches for the reviewer on the Project's host.
+        let note = (method == axum::http::Method::POST)
+            .then_some(session.person_id)
+            .flatten()
+            .map(|person_id| {
+                let note = PreviewHandover {
+                    person_id,
+                    code: project.code.clone(),
+                    exp: crate::session::now_unix_secs() + PREVIEW_HANDOVER_TTL_SECS,
+                };
+                let note = serde_json::to_vec(&note).expect("preview handover serializes");
+                format!("?t={}", state.sessions.encode_signed_bytes(&note))
+            })
+            .unwrap_or_default();
         return Redirect::to(&format!(
-            "{origin}/app/projects/{}/view-as-client",
+            "{origin}/app/projects/{}/view-as-client{note}",
             project.code
         ))
         .into_response();
@@ -2353,7 +2384,16 @@ async fn project_view_as_client(
         }
     };
 
-    if method != axum::http::Method::POST {
+    let handed_over = state
+        .sessions
+        .decode_signed_bytes(&handover.t)
+        .and_then(|bytes| serde_json::from_slice::<PreviewHandover>(&bytes).ok())
+        .is_some_and(|note| {
+            note.exp > crate::session::now_unix_secs()
+                && note.code == project.code
+                && Some(note.person_id) == session.person_id
+        });
+    if method != axum::http::Method::POST && !handed_over {
         return (
             [(header::CACHE_CONTROL, "private, no-store")],
             webapp::portal_project_detail::confirm_client_preview(
@@ -2387,7 +2427,17 @@ async fn project_view_as_client(
         state.sessions.encode(&effective),
         state.secure_cookies,
     ));
-    Redirect::to(&format!("/app/projects/{}", project.code)).into_response()
+    (
+        [(header::REFERRER_POLICY, "no-referrer")],
+        Redirect::to(&format!("/app/projects/{}", project.code)),
+    )
+        .into_response()
+}
+
+#[derive(Deserialize, Default)]
+struct PreviewHandoverQuery {
+    #[serde(default)]
+    t: String,
 }
 
 async fn stop_viewing_as_dri(
@@ -5819,7 +5869,7 @@ mod tests {
 
     // ---- Handler coverage: leads, people, avatars, entities, firms, matters ----
 
-    use axum::extract::{Extension as Ext, Path as P, State as S};
+    use axum::extract::{Extension as Ext, Path as P, Query as Q, State as S};
     use axum::http::StatusCode;
     use axum::response::Response;
 
@@ -7851,6 +7901,7 @@ mod tests {
                 axum::http::HeaderMap::new(),
                 cookies.clone(),
                 P(code),
+                Q(super::PreviewHandoverQuery::default()),
             )
             .await;
             assert_eq!(response.status(), StatusCode::NOT_FOUND);
@@ -7865,6 +7916,7 @@ mod tests {
             axum::http::HeaderMap::new(),
             cookies.clone(),
             P(code.clone()),
+            Q(super::PreviewHandoverQuery::default()),
         )
         .await;
         assert_eq!(location(&entered), format!("/app/projects/{code}"));
@@ -7886,6 +7938,7 @@ mod tests {
             axum::http::HeaderMap::new(),
             tower_cookies::Cookies::default(),
             P(code),
+            Q(super::PreviewHandoverQuery::default()),
         )
         .await;
         assert_eq!(nested.status(), StatusCode::NOT_FOUND);

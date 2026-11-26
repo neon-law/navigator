@@ -140,28 +140,11 @@ impl BrandWebsite {
     }
 }
 
-/// A preview started on another Brand first navigates to the Project's host.
+/// Whether the Project's portal is on another Brand's host, so its client
+/// preview opens there in a new tab.
 #[cfg(feature = "server")]
-pub(crate) async fn client_preview_link(project: &store::projects::Project) -> Option<String> {
-    if crate::app_chrome::request_brand().await.as_str() == project.brand {
-        return None;
-    }
-    let headers = dioxus_fullstack_core::FullstackContext::extract::<axum::http::HeaderMap, _>()
-        .await
-        .ok();
-    // Registered hosts resolve to HTTPS. Local Brand listeners serve HTTP.
-    let origin = headers
-        .as_ref()
-        .and_then(|headers| headers.get(axum::http::header::HOST))
-        .and_then(|host| host.to_str().ok())
-        .and_then(|host| views::brand::project_origin(&project.brand, &format!("http://{host}")))
-        .unwrap_or_default();
-    // A custom host lets the local preview route resolve the deployment's
-    // configured base URL or explain that the Brand has no portal here.
-    Some(format!(
-        "{origin}/app/projects/{}/view-as-client",
-        project.code
-    ))
+pub(crate) async fn client_preview_elsewhere(project: &store::projects::Project) -> bool {
+    crate::app_chrome::request_brand().await.as_str() != project.brand
 }
 
 /// Join attached lines for a Firm's brand keys.

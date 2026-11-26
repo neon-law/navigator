@@ -43,13 +43,13 @@ pub const VIEW_AS_CLIENT_STOP_ACTION: &str = "/app/view-as-client/stop";
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ViewingAsDri(pub Option<ClientDriView>);
 
-/// A cross-Brand preview navigates first. Its POST needs the session and
-/// CSRF token issued on the Project's own host.
+/// A cross-Brand preview opens in a new tab: this host checks the form, then
+/// hands the reviewer to the Project's own host, which starts the session.
 #[component]
 pub fn ViewAsClient(
     code: String,
     csrf: String,
-    portal_link: Option<String>,
+    #[props(default)] new_tab: bool,
     #[props(default)] icon: bool,
 ) -> Element {
     let class = if icon {
@@ -62,19 +62,16 @@ pub fn ViewAsClient(
     } else {
         rsx! { "View as Client" }
     };
-    if let Some(href) = portal_link {
-        return rsx! {
-            a {
-                class, href, target: "_blank", rel: "noopener noreferrer",
-                title: "View as Client (opens in a new tab)", aria_label: "View as Client",
-                {label}
-            }
-        };
-    }
+    let title = if new_tab {
+        "View as Client (opens in a new tab)"
+    } else {
+        "View as Client"
+    };
     rsx! {
         form { class: "lawyer-detail__resource-action-form", method: "post", action: "/app/projects/{code}/view-as-client",
+            target: if new_tab { "_blank" },
             input { r#type: "hidden", name: "_csrf", value: csrf }
-            button { class, title: "View as Client", aria_label: "View as Client", r#type: "submit", {label} }
+            button { class, title, aria_label: "View as Client", r#type: "submit", {label} }
         }
     }
 }

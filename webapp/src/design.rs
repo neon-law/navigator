@@ -1425,7 +1425,7 @@ fn ClientDriViewShowcase() -> Element {
             crate::components::dri_view::ViewAsClient {
                 code: "sample-transactional",
                 csrf: "",
-                portal_link: "/design#client-preview",
+                new_tab: true,
                 icon: true,
             }
             ClientDriViewBanner {

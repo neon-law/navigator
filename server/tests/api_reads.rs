@@ -595,11 +595,35 @@ async fn check_two_brand_portal() {
         .unwrap();
     assert_eq!(source.status(), StatusCode::OK);
     let source = scraper::Html::parse_document(&response_text(source).await);
-    let link = scraper::Selector::parse("a[aria-label='View as Client']").unwrap();
-    let link = source.select(&link).next().expect("branded preview link");
-    assert_eq!(link.attr("target"), Some("_blank"));
-    let href = link.attr("href").unwrap();
-    assert_eq!(href, format!("https://{invited_host}{preview_path}"));
+    let form = scraper::Selector::parse("form[target=_blank][method=post]").unwrap();
+    let form = source.select(&form).next().expect("new-tab preview form");
+    assert_eq!(form.attr("action"), Some(preview_path.as_str()));
+    // This host checks the form, then vouches for the reviewer on the
+    // Project's host for one short-lived, person-bound redirect.
+    let post = |host: &str, session: &portal::SessionData| {
+        fx.app.clone().oneshot(
+            Request::post(&preview_path)
+                .header("host", host)
+                .header(
+                    "cookie",
+                    format!(
+                        "{}={}",
+                        portal::session::SESSION_COOKIE_NAME,
+                        sessions.encode(session)
+                    ),
+                )
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(format!("_csrf={}", session.csrf_token)))
+                .unwrap(),
+        )
+    };
+    let handed = post("www.neonlaw.com", &lawyer).await.unwrap();
+    assert_eq!(handed.status(), StatusCode::SEE_OTHER);
+    assert!(!handed.headers().contains_key("set-cookie"));
+    let handed = url::Url::parse(handed.headers()["location"].to_str().unwrap()).unwrap();
+    assert_eq!(handed.host_str(), Some(invited_host));
+    assert_eq!(handed.path(), preview_path);
+    let handed = format!("{preview_path}?{}", handed.query().unwrap());
     let missing_dri = format!("/app/projects/{}/view-as-client", project.code);
     assert_eq!(
         request("www.neonlaw.com", &missing_dri, &lawyer)
@@ -621,6 +645,16 @@ async fn check_two_brand_portal() {
         .unwrap();
     assert_eq!(landing.status(), StatusCode::OK);
     assert!(!landing.headers().contains_key("set-cookie"));
+    // Another person's note changes nothing; the reviewer's own starts the view.
+    let other_clerk = request(invited_host, &handed, &clerk).await.unwrap();
+    assert_eq!(other_clerk.status(), StatusCode::OK);
+    assert!(!other_clerk.headers().contains_key("set-cookie"));
+    let one_click = request(invited_host, &handed, &brand_session)
+        .await
+        .unwrap();
+    assert_eq!(one_click.status(), StatusCode::SEE_OTHER);
+    assert_eq!(one_click.headers()["location"], url.path());
+    assert!(one_click.headers().contains_key("set-cookie"));
     let page = scraper::Html::parse_document(&response_text(landing).await);
     let form = page
         .select(&scraper::Selector::parse("form[method=post]").unwrap())

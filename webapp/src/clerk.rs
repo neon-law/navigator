@@ -86,7 +86,7 @@ pub struct ClerkProjectDetailView {
     #[serde(default)]
     pub csrf_token: String,
     #[serde(default)]
-    pub client_preview_link: Option<String>,
+    pub client_preview_new_tab: bool,
 }
 
 /// Read the injected viewer tier, defaulting to the least-privileged tier when
@@ -218,7 +218,7 @@ async fn get_clerk_project_data() -> Result<ClerkProjectDetailView, ServerFnErro
             resources: crate::project_resources::ProjectResourcesView::default(),
             role,
             csrf_token: csrf_token.clone(),
-            client_preview_link: None,
+            client_preview_new_tab: false,
         })
     };
     let Some(person_id) = injected_person_id()
@@ -273,7 +273,7 @@ async fn get_clerk_project_data() -> Result<ClerkProjectDetailView, ServerFnErro
     .is_ok_and(|axum::extract::Query(query)| query.review.as_deref() == Some("court-dates"));
     Ok(ClerkProjectDetailView {
         court_date_review,
-        client_preview_link: crate::brand_website::client_preview_link(&project).await,
+        client_preview_new_tab: crate::brand_website::client_preview_elsewhere(&project).await,
         page_tabs,
         tokens_href: crate::app_chrome::app_tokens_href_from_context().await,
         firm_name,
@@ -423,7 +423,7 @@ pub fn ClerkProjectDetail() -> Element {
                         dd { "{project.lawyer_dri}" }
                     }
                     crate::components::dri_view::ViewAsClient {
-                        code: project.code.clone(), csrf: view.csrf_token.clone(), portal_link: view.client_preview_link.clone(),
+                        code: project.code.clone(), csrf: view.csrf_token.clone(), new_tab: view.client_preview_new_tab,
                     }
                     if view.court_date_review {
                         a { class: "nav-link", href: "/app/projects/{project.code}", "Back to Project" }
