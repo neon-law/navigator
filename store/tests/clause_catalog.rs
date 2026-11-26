@@ -6,17 +6,10 @@ use store::postgres::PostgresDb;
 use uuid::Uuid;
 
 async fn database() -> Option<(PostgresDb, PgPool)> {
-    let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {
-        assert_ne!(
-            std::env::var("NAV_REQUIRE_POSTGRES").as_deref(),
-            Ok("1"),
-            "PostgreSQL integration lane requires NAVIGATOR_TEST_POSTGRES_PORT"
-        );
-        return None;
-    };
+    let port = store::test_support::postgres_test_port();
     let options = PgConnectOptions::new()
         .host("127.0.0.1")
-        .port(port.parse().unwrap())
+        .port(port)
         .username("postgres")
         .password("synthetic")
         .database(

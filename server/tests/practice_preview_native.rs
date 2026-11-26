@@ -116,20 +116,9 @@ async fn a_browser_assertion_panic_drains_http_and_drops_only_its_fixture() {
     .catch_unwind()
     .await;
     let Some((database, options, sites)) = observed.lock().unwrap().take() else {
-        assert!(
-            outcome.is_ok(),
-            "preview setup failed before the synthetic browser assertion"
+        std::panic::resume_unwind(
+            outcome.expect_err("configured preview must reach the assertion callback"),
         );
-        assert!(
-            std::env::var("NAVIGATOR_TEST_POSTGRES_PORT").is_err(),
-            "configured preview must reach the assertion callback"
-        );
-        assert_ne!(
-            std::env::var("NAV_REQUIRE_POSTGRES").as_deref(),
-            Ok("1"),
-            "required PostgreSQL preview must not skip"
-        );
-        return;
     };
     assert!(outcome.is_err());
     let admin = PostgresDb::connect(options).await.unwrap();

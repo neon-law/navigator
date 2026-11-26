@@ -244,14 +244,6 @@ async fn configured_folder_tail_uses_owned_bindings_and_real_acl_reconciliation(
     .await;
 }
 
-fn has_postgres() -> bool {
-    if std::env::var_os("NAVIGATOR_TEST_POSTGRES_PORT").is_some() {
-        return true;
-    }
-    assert_ne!(std::env::var("NAV_REQUIRE_POSTGRES").as_deref(), Ok("1"));
-    false
-}
-
 async fn subprocess(test: &str, env: &[(&str, String)]) {
     let output = tokio::process::Command::new(std::env::current_exe().unwrap())
         .args(["--exact", test, "--nocapture"])
@@ -271,9 +263,6 @@ async fn subprocess(test: &str, env: &[(&str, String)]) {
 #[tokio::test]
 async fn plan_seed_public_wrapper_keeps_owned_anchor_and_user_choices_on_replay() {
     const CHILD: &str = "NAVIGATOR_PLAN_SCOPE_PROBE";
-    if !has_postgres() {
-        return;
-    }
     if std::env::var_os(CHILD).is_none() {
         let name = format!(
             "{}::plan_seed_public_wrapper_keeps_owned_anchor_and_user_choices_on_replay",
@@ -330,9 +319,6 @@ const KEY:&str="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIO+kywI2x0e1JcY7eJ50pKflZgKO
 #[tokio::test]
 async fn membership_removal_reconciles_keys_and_stamps_only_the_owning_pool() {
     const CHILD: &str = "NAVIGATOR_SSH_SCOPE_PROBE";
-    if !has_postgres() {
-        return;
-    }
     if std::env::var_os(CHILD).is_none() {
         let server = forgejo_server().await;
         let name = format!(

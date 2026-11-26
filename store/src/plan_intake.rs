@@ -1677,15 +1677,7 @@ mod tests {
 
     /// A PostgreSQL lane when CI has one; none skips the test.
     async fn postgres() -> Option<PostgresDb> {
-        let port = if let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") {
-            port.parse::<u16>().unwrap()
-        } else {
-            assert!(
-                std::env::var("NAV_REQUIRE_POSTGRES").as_deref() != Ok("1"),
-                "PostgreSQL integration lane requires NAVIGATOR_TEST_POSTGRES_PORT"
-            );
-            return None;
-        };
+        let port = crate::test_support::postgres_test_port();
         let options = sqlx::postgres::PgConnectOptions::new()
             .host("127.0.0.1")
             .port(port)

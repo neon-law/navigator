@@ -31,16 +31,10 @@ use store::test_support::{mem_surreal, seed_entity, seed_signed_onboarding, Memo
 use uuid::Uuid;
 
 async fn database() -> Option<PostgresDb> {
-    let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {
-        assert!(
-            std::env::var("NAV_REQUIRE_POSTGRES").as_deref() != Ok("1"),
-            "PostgreSQL fixture required"
-        );
-        return None;
-    };
+    let port = store::test_support::postgres_test_port();
     let options = PgConnectOptions::new()
         .host("127.0.0.1")
-        .port(port.parse().unwrap())
+        .port(port)
         .username("postgres")
         .password("synthetic")
         .database(

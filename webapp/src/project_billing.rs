@@ -1861,20 +1861,13 @@ mod tests {
         /// Runs `test_path` in a child process against a disposable PostgreSQL
         /// database — the same harness the portal's billing end-to-end uses,
         /// because env-driven journal mirroring must stay private to one
-        /// process. Returns `false` (not a failure) when the fixture is
-        /// unavailable locally.
-        async fn run_in_postgres_fixture(child_flag: &str, test_path: &str) -> bool {
-            let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {
-                assert!(
-                    std::env::var("NAV_REQUIRE_POSTGRES").as_deref() != Ok("1"),
-                    "PostgreSQL fixture required"
-                );
-                return false;
-            };
+        /// process.
+        async fn run_in_postgres_fixture(child_flag: &str, test_path: &str) {
+            let port = store::test_support::postgres_test_port();
             let admin = sqlx::PgPool::connect_with(
                 sqlx::postgres::PgConnectOptions::new()
                     .host("127.0.0.1")
-                    .port(port.parse().unwrap())
+                    .port(port)
                     .username("postgres")
                     .password("synthetic")
                     .database("smoke")
@@ -1892,7 +1885,7 @@ mod tests {
                 .env("NAV_BILLING_WEBAPP_CHILD", child_flag)
                 .env("NAVIGATOR_RELEASE_TAG", "26.11.17")
                 .env("NAVIGATOR_POSTGRES_HOST", "127.0.0.1")
-                .env("NAVIGATOR_POSTGRES_PORT", &port)
+                .env("NAVIGATOR_POSTGRES_PORT", port.to_string())
                 .env("NAVIGATOR_POSTGRES_USER", "postgres")
                 .env("NAVIGATOR_POSTGRES_PASSWORD", "synthetic")
                 .env("NAVIGATOR_POSTGRES_DATABASE", &database)
@@ -1913,7 +1906,6 @@ mod tests {
                 status.success(),
                 "the {test_path} child failed — rerun with --nocapture"
             );
-            true
         }
 
         #[tokio::test]

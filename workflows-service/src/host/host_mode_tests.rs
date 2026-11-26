@@ -1,13 +1,10 @@
 fn object_fixture_options() -> Option<sqlx::postgres::PgConnectOptions> {
     use sqlx::postgres::{PgConnectOptions, PgSslMode};
-    let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {
-        assert_ne!(std::env::var("NAV_REQUIRE_POSTGRES").as_deref(), Ok("1"));
-        return None;
-    };
+    let port = store::test_support::postgres_test_port();
     Some(
         PgConnectOptions::new()
             .host("127.0.0.1")
-            .port(port.parse().unwrap())
+            .port(port)
             .username("postgres")
             .password("synthetic")
             .database(

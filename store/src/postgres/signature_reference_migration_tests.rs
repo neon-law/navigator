@@ -5,9 +5,7 @@ use uuid::Uuid;
 
 #[tokio::test]
 async fn signature_parent_constraint_retains_history_and_rejects_new_orphans() {
-    let Some((options, database)) = crate::postgres_mirror::tests::test_postgres() else {
-        return;
-    };
+    let (options, database) = crate::postgres_mirror::tests::test_postgres();
     let mut connection = sqlx::PgConnection::connect_with(&options.database(&database))
         .await
         .unwrap();

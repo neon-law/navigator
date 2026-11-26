@@ -1,5 +1,5 @@
 //! The accounting authority's tests, against the PostgreSQL fixture. Each
-//! test skips when `NAVIGATOR_TEST_POSTGRES_PORT` is unset.
+//! test fails when `NAVIGATOR_TEST_POSTGRES_PORT` is unset.
 use super::*;
 use crate::finance_aggregate::{self, FinanceReport, Money, Parameters};
 use crate::iolta_accounts::{self, UpsertIoltaAccount};

@@ -31,15 +31,6 @@ impl PracticePreview {
         brands: &[BrandKey],
         test: impl for<'a> FnOnce(&'a Self) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>,
     ) {
-        if std::env::var("NAVIGATOR_TEST_POSTGRES_PORT").is_err() {
-            assert_ne!(
-                std::env::var("NAV_REQUIRE_POSTGRES").as_deref(),
-                Ok("1"),
-                "practice previews require the dedicated PostgreSQL fixture server"
-            );
-            eprintln!("skipping browser test: dedicated PostgreSQL fixture server unavailable");
-            return;
-        }
         store::test_support::with_postgres(async {
             let mut preview = Self::start(brands).await;
             let result = std::panic::AssertUnwindSafe(test(&preview))

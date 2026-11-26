@@ -24,8 +24,8 @@ The image pins are read from the recipe and overlay:
 - Base digest: `sha256:0ea6700a3b4f0ae6ce746519073558aed4d88a79d8d07622a9a644946c7319c4`
 - Target digest: `sha256:b5c0694f8d012e697738b573f97f83e0f4e156b9dc977df8a99f0eaa32130df3`
 
-Run the focused Rust tests with `NAVIGATOR_TEST_POSTGRES_PORT` set to the isolated fixture's loopback port and
-`NAV_REQUIRE_POSTGRES=1`. Build the test application, then run:
+Run the focused Rust tests with `NAVIGATOR_TEST_POSTGRES_PORT` set to the isolated fixture's loopback port. Build the
+test application, then run:
 
 ```bash
 cargo build --locked --manifest-path images/postgres/tests/dbos/Cargo.toml

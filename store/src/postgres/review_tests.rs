@@ -1,5 +1,5 @@
 //! The review authority's tests, against the PostgreSQL fixture. Each test
-//! skips when `NAVIGATOR_TEST_POSTGRES_PORT` is unset.
+//! fails when `NAVIGATOR_TEST_POSTGRES_PORT` is unset.
 use super::*;
 use crate::postgres_mirror::tests::{connect, fresh_schema};
 use crate::review_documents::{

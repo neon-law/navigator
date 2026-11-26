@@ -110,17 +110,9 @@ struct StoreEnv {
 
 /// The disposable PostgreSQL tier, in the shape `postgres_mirror`'s fixtures
 /// use: a fresh database per test, the AGE extension, and the canonical
-/// schema. Missing port env skips (or fails when the tier is armed).
+/// schema.
 async fn fresh_postgres() -> Option<(String, String)> {
-    let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {
-        assert_ne!(
-            std::env::var("NAV_REQUIRE_POSTGRES").as_deref(),
-            Ok("1"),
-            "PostgreSQL integration lane requires NAVIGATOR_TEST_POSTGRES_PORT"
-        );
-        eprintln!("skipping the PostgreSQL lane: NAVIGATOR_TEST_POSTGRES_PORT is unset");
-        return None;
-    };
+    let port = store::test_support::postgres_test_port().to_string();
     let admin_database =
         std::env::var("NAVIGATOR_TEST_POSTGRES_DATABASE").unwrap_or_else(|_| "smoke".into());
     let admin = sqlx::PgPool::connect_with(pg_options(&admin_database, &port))
@@ -155,7 +147,7 @@ async fn fresh_postgres() -> Option<(String, String)> {
 fn pg_options(database: &str, port: &str) -> sqlx::postgres::PgConnectOptions {
     sqlx::postgres::PgConnectOptions::new()
         .host("127.0.0.1")
-        .port(port.parse().expect("test postgres port"))
+        .port(port.parse().unwrap())
         .username("postgres")
         .password("synthetic")
         .ssl_mode(sqlx::postgres::PgSslMode::Disable)

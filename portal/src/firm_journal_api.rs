@@ -1319,17 +1319,9 @@ mod tests {
     static FIXTURE_DB: tokio::sync::OnceCell<String> = tokio::sync::OnceCell::const_new();
 
     /// The Postgres handle the import writes through, against a disposable
-    /// database on the synthetic fixture. `None` where the fixture port is
-    /// absent — CI sets `NAV_REQUIRE_POSTGRES=1` so its tests never skip.
+    /// database on the synthetic fixture.
     async fn import_pg() -> Option<store::postgres::PostgresDb> {
-        let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {
-            assert!(
-                std::env::var("NAV_REQUIRE_POSTGRES").as_deref() != Ok("1"),
-                "required PostgreSQL fixture lacks its disposable port"
-            );
-            return None;
-        };
-        let port: u16 = port.parse().expect("test PostgreSQL port is numeric");
+        let port = store::test_support::postgres_test_port();
         let options = |database: &str| {
             sqlx::postgres::PgConnectOptions::new()
                 .host("127.0.0.1")

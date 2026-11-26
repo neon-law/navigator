@@ -7,8 +7,7 @@
 //! under its slot-keyed id and stops when the server drains; with it off, the
 //! server never touches DBOS.
 //!
-//! Without `NAVIGATOR_TEST_POSTGRES_PORT` they skip, unless
-//! `NAV_REQUIRE_POSTGRES=1`.
+//! They fail without `NAVIGATOR_TEST_POSTGRES_PORT`.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -42,16 +41,7 @@ impl TestDatabase {
 
 /// A fresh synthetic database, or `None` when no test PostgreSQL is set.
 async fn database() -> Option<TestDatabase> {
-    let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {
-        assert!(
-            std::env::var("NAV_REQUIRE_POSTGRES").as_deref() != Ok("1"),
-            "PostgreSQL integration lane requires NAVIGATOR_TEST_POSTGRES_PORT"
-        );
-        return None;
-    };
-    let port: u16 = port
-        .parse()
-        .expect("NAVIGATOR_TEST_POSTGRES_PORT is a port");
+    let port = store::test_support::postgres_test_port();
     let options = PgConnectOptions::new()
         .host("127.0.0.1")
         .port(port)

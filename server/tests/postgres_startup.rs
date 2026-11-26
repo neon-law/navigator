@@ -17,13 +17,10 @@ async fn full_native_profile_replays_staged_data_and_manual_workflows_without_so
         portal::hosting::run_with_dbos(neon::brand()).await.unwrap();
         return;
     }
-    let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {
-        assert_ne!(std::env::var("NAV_REQUIRE_POSTGRES").as_deref(), Ok("1"));
-        return;
-    };
+    let port = store::test_support::postgres_test_port();
     let options = sqlx::postgres::PgConnectOptions::new()
         .host("127.0.0.1")
-        .port(port.parse().unwrap())
+        .port(port)
         .username("postgres")
         .password("synthetic")
         .database(
@@ -32,7 +29,7 @@ async fn full_native_profile_replays_staged_data_and_manual_workflows_without_so
         .ssl_mode(sqlx::postgres::PgSslMode::Disable)
         .options([("session_preload_libraries", "age")]);
     let fixture = PostgresFixture::create(options).await.unwrap();
-    let result = exercise(&fixture, &port).await;
+    let result = exercise(&fixture, &port.to_string()).await;
     let closed = fixture.close().await;
     result.unwrap();
     closed.unwrap();

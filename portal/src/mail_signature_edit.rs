@@ -368,15 +368,7 @@ mod tests {
     /// Arm the PostgreSQL test lane the way the store's own integration tests
     /// do: an isolated database per test, `None` (skip) where no lane runs.
     async fn pg_lane() -> Option<PostgresDb> {
-        let port = if let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") {
-            port.parse::<u16>().unwrap()
-        } else {
-            assert!(
-                std::env::var("NAV_REQUIRE_POSTGRES").as_deref() != Ok("1"),
-                "PostgreSQL integration lane requires NAVIGATOR_TEST_POSTGRES_PORT"
-            );
-            return None;
-        };
+        let port = store::test_support::postgres_test_port();
         let options = sqlx::postgres::PgConnectOptions::new()
             .host("127.0.0.1")
             .port(port)

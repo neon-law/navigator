@@ -686,9 +686,7 @@ mod tests {
 
     #[tokio::test]
     async fn iep_intake_retries_and_siblings_keep_firm_scoped_answers() {
-        let Some((options, database)) = crate::postgres_mirror::tests::test_postgres() else {
-            return;
-        };
+        let (options, database) = crate::postgres_mirror::tests::test_postgres();
         let fixture = crate::test_support::PostgresFixture::create(options.database(&database))
             .await
             .unwrap();

@@ -3,24 +3,17 @@ use sha2::Digest as _;
 use sqlx::postgres::PgSslMode;
 use sqlx::SqlSafeStr;
 
-fn options() -> Option<PgConnectOptions> {
-    let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {
-        assert_ne!(std::env::var("NAV_REQUIRE_POSTGRES").as_deref(), Ok("1"));
-        return None;
-    };
-    Some(
-        PgConnectOptions::new()
-            .host("127.0.0.1")
-            .port(port.parse().unwrap())
-            .username("postgres")
-            .password("synthetic")
-            .database(
-                &std::env::var("NAVIGATOR_TEST_POSTGRES_DATABASE")
-                    .unwrap_or_else(|_| "smoke".into()),
-            )
-            .ssl_mode(PgSslMode::Disable)
-            .options([("session_preload_libraries", "age")]),
-    )
+fn options() -> PgConnectOptions {
+    PgConnectOptions::new()
+        .host("127.0.0.1")
+        .port(crate::test_support::postgres_test_port())
+        .username("postgres")
+        .password("synthetic")
+        .database(
+            &std::env::var("NAVIGATOR_TEST_POSTGRES_DATABASE").unwrap_or_else(|_| "smoke".into()),
+        )
+        .ssl_mode(PgSslMode::Disable)
+        .options([("session_preload_libraries", "age")])
 }
 
 fn tier() -> TierBinding {
@@ -56,7 +49,7 @@ fn invalid_tier_and_nil_operation_fail_before_connecting() {
 
 #[tokio::test]
 async fn actual_new_database_acquires_native_authority_without_any_capture_receipts() {
-    let Some(options) = options() else { return };
+    let options = options();
     let operation = Uuid::new_v4();
     let binding = tier();
     let created = create(options.clone(), operation, binding.clone())
@@ -96,7 +89,7 @@ async fn actual_new_database_acquires_native_authority_without_any_capture_recei
 
 #[tokio::test]
 async fn concurrent_creators_never_adopt_an_existing_empty_resource() {
-    let Some(options) = options() else { return };
+    let options = options();
     let operation = Uuid::new_v4();
     let binding = tier();
     let (left, right) = tokio::join!(
@@ -130,7 +123,7 @@ async fn concurrent_creators_never_adopt_an_existing_empty_resource() {
 
 #[tokio::test]
 async fn resume_rejects_foreign_tier_schema_drift_and_mixed_capture_history() {
-    let Some(options) = options() else { return };
+    let options = options();
     let operation = Uuid::new_v4();
     let binding = tier();
     let native = create(options.clone(), operation, binding.clone())
@@ -171,7 +164,7 @@ async fn resume_rejects_foreign_tier_schema_drift_and_mixed_capture_history() {
 
 #[tokio::test]
 async fn restoring_only_origin_rows_cannot_attest_another_database() {
-    let Some(options) = options() else { return };
+    let options = options();
     let source_operation = Uuid::new_v4();
     let source = create(options.clone(), source_operation, tier())
         .await
@@ -311,7 +304,7 @@ async fn assert_runtime_project_delivery(pg: &PostgresDb, runtime: &PostgresDb) 
 
 #[tokio::test]
 async fn actual_runtime_login_admits_without_ledger_read_or_origin_write_rights() {
-    let Some(options) = options() else { return };
+    let options = options();
     let operation = Uuid::new_v4();
     let native = create(options.clone(), operation, tier())
         .await
@@ -400,7 +393,7 @@ async fn actual_runtime_login_admits_without_ledger_read_or_origin_write_rights(
 
 #[tokio::test]
 async fn raw_canonical_schema_accepts_origin_attestation_without_a_sqlx_ledger() {
-    let Some(options) = options() else { return };
+    let options = options();
     let operation = Uuid::new_v4();
     let created = create(options.clone(), operation, tier()).await.unwrap();
     sqlx::raw_sql("CREATE EXTENSION IF NOT EXISTS age; LOAD 'age';")
@@ -451,7 +444,7 @@ async fn native_origin_fences_forced_source_replay_without_claiming_captured_his
         family::{self, Family, ImportMode},
     };
     use crate::postgres_mirror::{self as mirror, MirrorKey, Mirrored};
-    let Some(options) = options() else { return };
+    let options = options();
     let operation = Uuid::new_v4();
     let native = create(options.clone(), operation, tier())
         .await
@@ -617,7 +610,7 @@ async fn assert_completed_upgrade_receipt_and_schema(pg: &PostgresDb) {
 
 #[tokio::test]
 async fn migration_commit_before_upgrade_completion_recovers_only_the_same_bound_operation() {
-    let Some(options) = options() else { return };
+    let options = options();
     let creation = Uuid::new_v4();
     let binding = tier();
     let operation = Uuid::new_v4();
@@ -721,7 +714,7 @@ async fn migration_commit_before_upgrade_completion_recovers_only_the_same_bound
 
 #[tokio::test]
 async fn unregistered_advanced_schema_is_never_adopted_as_an_upgrade() {
-    let Some(options) = options() else { return };
+    let options = options();
     let creation = Uuid::new_v4();
     let binding = tier();
     let native = create(options.clone(), creation, binding.clone())
@@ -779,7 +772,7 @@ fn full_native_lookup() -> std::collections::BTreeMap<&'static str, String> {
 
 #[tokio::test]
 async fn fresh_origin_and_object_epoch_commit_atomically_and_boot_requires_every_native_selector() {
-    let Some(options) = options() else { return };
+    let options = options();
     let operation = Uuid::new_v4();
     let native = create(options.clone(), operation, tier())
         .await
@@ -874,7 +867,7 @@ async fn fresh_origin_and_object_epoch_commit_atomically_and_boot_requires_every
 
 #[tokio::test]
 async fn fresh_fixture_requires_full_native_profile_and_invalid_or_unavailable_epochs_refuse() {
-    let Some(options) = options() else { return };
+    let options = options();
     let inactive = crate::test_support::PostgresFixture::create_capture_target(options.clone())
         .await
         .unwrap();
@@ -958,7 +951,7 @@ async fn fresh_fixture_requires_full_native_profile_and_invalid_or_unavailable_e
 
 #[tokio::test]
 async fn existing_esign_ledger_accepts_earlier_handover_migrations_without_native_origin() {
-    let Some(options) = options() else { return };
+    let options = options();
     let operation = Uuid::new_v4();
     let name = database_name(operation).unwrap();
     let admin = PostgresDb::connect(options.clone()).await.unwrap();
@@ -1053,7 +1046,7 @@ async fn existing_esign_ledger_accepts_earlier_handover_migrations_without_nativ
 #[tokio::test]
 async fn recovery_target_is_bound_pending_and_has_no_fresh_ownership_epoch() {
     use futures::FutureExt as _;
-    let Some(options) = options() else { return };
+    let options = options();
     let creation = Uuid::new_v4();
     let binding = tier();
     let manifest = b"synthetic unverified manifest bytes".to_vec();
@@ -1126,7 +1119,7 @@ fn recovery_input_rejects_nil_empty_and_unbounded_input() {
 #[tokio::test]
 async fn genuine_pre_recovery_origin_upgrades_without_missing_fence_bypass() {
     use futures::FutureExt as _;
-    let Some(options) = options() else { return };
+    let options = options();
     let creation = Uuid::new_v4();
     let binding = tier();
     let old = embedded_migrator()
@@ -1176,7 +1169,7 @@ async fn genuine_pre_recovery_origin_upgrades_without_missing_fence_bypass() {
 async fn native_upgrade_preserves_a_staged_certificate_without_inventing_a_case_number() {
     use futures::FutureExt as _;
 
-    let Some(options) = options() else { return };
+    let options = options();
     let creation = Uuid::new_v4();
     let binding = tier();
     let prior_version = 20_261_122_000_300;
@@ -1251,7 +1244,7 @@ async fn native_upgrade_preserves_a_staged_certificate_without_inventing_a_case_
 #[tokio::test]
 async fn recovery_stale_creation_oid_refuses_before_sealing_same_name_replacement() {
     use futures::FutureExt as _;
-    let Some(options) = options() else { return };
+    let options = options();
     let creation = Uuid::new_v4();
     let recovery_operation = Uuid::new_v4();
     let name = database_name(creation).unwrap();

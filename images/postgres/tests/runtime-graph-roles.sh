@@ -71,6 +71,6 @@ done
 port=$(docker port "$container" 5432/tcp)
 [[ "$port" =~ ^127\.0\.0\.1:([0-9]+)$ ]]
 export GRAPH_ROLE_PORT=${BASH_REMATCH[1]} GRAPH_ROLE_CONTAINER=$container GRAPH_ROLE_SECRET_DIR="$work/secrets"
-export NAV_REQUIRE_POSTGRES=1 NAVIGATOR_FORBID_SURREAL=1
+export NAVIGATOR_FORBID_SURREAL=1
 cd "$root"
 cargo run --locked -p store --features test-support --example runtime_graph_roles 2>&1 | tee "$work/role-proof.log"

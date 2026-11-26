@@ -844,10 +844,10 @@ mod tests {
 
     async fn database() -> Option<PostgresDb> {
         use sqlx::postgres::{PgConnectOptions, PgSslMode};
-        let port = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT").ok()?;
+        let port = store::test_support::postgres_test_port();
         let options = PgConnectOptions::new()
             .host("127.0.0.1")
-            .port(port.parse().unwrap())
+            .port(port)
             .username("postgres")
             .password("synthetic")
             .database(

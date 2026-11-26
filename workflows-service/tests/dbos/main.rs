@@ -1,5 +1,4 @@
 //! DBOS workflow execution and recovery on disposable PostgreSQL databases.
-//! Set `NAV_REQUIRE_POSTGRES=1` to require a configured test server.
 
 mod archives;
 mod billing_canary;

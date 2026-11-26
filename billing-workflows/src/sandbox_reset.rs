@@ -369,21 +369,12 @@ mod tests {
     use store::surreal::test_support::mem;
 
     /// The same Postgres test lane the store's own purchase tests use:
-    /// per-test database, migrated. `None` keeps `cargo test` zero-config
-    /// without the integration tier running (`NAV_REQUIRE_POSTGRES=1`
-    /// turns the skip into a failure).
+    /// per-test database, migrated.
     async fn database() -> Option<store::postgres::PostgresDb> {
-        let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {
-            assert_ne!(
-                std::env::var("NAV_REQUIRE_POSTGRES").as_deref(),
-                Ok("1"),
-                "PostgreSQL integration lane requires NAVIGATOR_TEST_POSTGRES_PORT"
-            );
-            return None;
-        };
+        let port = store::test_support::postgres_test_port();
         let options = PgConnectOptions::new()
             .host("127.0.0.1")
-            .port(port.parse().unwrap())
+            .port(port)
             .username("postgres")
             .password("synthetic")
             .database(

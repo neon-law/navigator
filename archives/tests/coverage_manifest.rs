@@ -8,8 +8,7 @@
 //! that adds a table fails here instead of at the next scheduled run. On
 //! failure it prints a review draft of the observed inventory.
 //!
-//! Without `NAVIGATOR_TEST_POSTGRES_PORT` the PostgreSQL test skips, unless
-//! `NAV_REQUIRE_POSTGRES=1`.
+//! The PostgreSQL test fails without `NAVIGATOR_TEST_POSTGRES_PORT`.
 
 use std::sync::Arc;
 
@@ -75,16 +74,7 @@ fn the_committed_manifest_is_well_formed() {
 
 /// A fresh database, or `None` when no test PostgreSQL is set.
 async fn database() -> Option<(PgConnectOptions, u16, String)> {
-    let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {
-        assert!(
-            std::env::var("NAV_REQUIRE_POSTGRES").as_deref() != Ok("1"),
-            "PostgreSQL integration lane requires NAVIGATOR_TEST_POSTGRES_PORT"
-        );
-        return None;
-    };
-    let port: u16 = port
-        .parse()
-        .expect("NAVIGATOR_TEST_POSTGRES_PORT is a port");
+    let port = store::test_support::postgres_test_port();
     let options = PgConnectOptions::new()
         .host("127.0.0.1")
         .port(port)

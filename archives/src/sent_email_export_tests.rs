@@ -11,17 +11,10 @@ const BASE: &str = "gs://synthetic-archives";
 /// A fresh database with the canonical schema: the store handle the exporter
 /// uses, and a raw pool for the assertions it cannot make.
 async fn database() -> Option<(PostgresDb, PgPool)> {
-    let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {
-        assert_ne!(
-            std::env::var("NAV_REQUIRE_POSTGRES").as_deref(),
-            Ok("1"),
-            "PostgreSQL archive tests require NAVIGATOR_TEST_POSTGRES_PORT"
-        );
-        return None;
-    };
+    let port = store::test_support::postgres_test_port();
     let options = PgConnectOptions::new()
         .host("127.0.0.1")
-        .port(port.parse().unwrap())
+        .port(port)
         .username("postgres")
         .password("synthetic")
         .ssl_mode(PgSslMode::Disable);
