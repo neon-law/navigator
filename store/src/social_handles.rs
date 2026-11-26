@@ -86,7 +86,7 @@ pub fn is_valid_handle(handle: &str) -> bool {
 ///
 /// An unknown provider, an invalid handle, or a database failure.
 pub async fn set(
-    db: &SurrealDb,
+    _db: &SurrealDb,
     brand_key: &str,
     provider: &str,
     handle: &str,
@@ -97,34 +97,17 @@ pub async fn set(
     if !is_valid_handle(handle) {
         return Err(SocialHandleError::InvalidHandle(handle.to_string()));
     }
-    if let Some(pg) = authority::authority().await? {
-        let query = sqlx::query(
-            "INSERT INTO social_handle (brand_key, provider, handle) VALUES ($1, $2, $3) \
-             ON CONFLICT (brand_key, provider) DO UPDATE SET handle = EXCLUDED.handle",
-        )
-        .bind(brand_key.to_owned())
-        .bind(provider.to_owned())
-        .bind(handle.to_owned());
-        authority::execute(&pg, query).await?;
-        return Ok(());
-    }
-    db.query(format!(
-        "DELETE {TABLE} WHERE brand_key = $brand AND provider = $provider; \
-         CREATE {TABLE} SET brand_key = $brand, provider = $provider, handle = $handle"
-    ))
-    .bind(("brand", brand_key.to_string()))
-    .bind(("provider", provider.to_string()))
-    .bind(("handle", handle.to_string()))
-    .await?
-    .check()?;
-    crate::postgres_mirror::after_write(
-        db,
-        crate::postgres_mirror::MirrorKey::SocialHandle {
-            brand_key: brand_key.to_string(),
-            provider: provider.to_string(),
-        },
+    let pg = authority::authority()
+        .await?
+        .ok_or(SocialAuthorityError::Unavailable)?;
+    let query = sqlx::query(
+        "INSERT INTO social_handle (brand_key, provider, handle) VALUES ($1, $2, $3) \
+         ON CONFLICT (brand_key, provider) DO UPDATE SET handle = EXCLUDED.handle",
     )
-    .await;
+    .bind(brand_key.to_owned())
+    .bind(provider.to_owned())
+    .bind(handle.to_owned());
+    authority::execute(&pg, query).await?;
     Ok(())
 }
 
@@ -212,17 +195,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn source_context_refuses_handle_writes() {
+        let db = SurrealDb::uninitialized();
+        let result = crate::postgres_mirror::from_source(set(&db, "neon", "x", "Synthetic")).await;
+        assert!(matches!(result, Err(SocialHandleError::Db(_))));
+    }
+
+    #[tokio::test]
     async fn a_brand_holds_one_handle_per_provider() {
-        let db = test_support::mem_surreal().await;
-        assert!(find(&db, "neon", "x").await.unwrap().is_none());
-        set(&db, "neon", "x", "NeonLawUSA").await.unwrap();
-        set(&db, "neon", "x", "NeonLaw").await.unwrap();
-        let handle = find(&db, "neon", "x").await.unwrap().unwrap();
-        assert_eq!(handle.handle, "NeonLaw");
-        assert!(find(&db, "vesta", "x").await.unwrap().is_none());
-        assert!(matches!(
-            set(&db, "neon", "myspace", "x").await,
-            Err(SocialHandleError::UnknownProvider(_))
-        ));
+        test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            test_support::seed_compiled_brands_postgres(&db).await;
+            assert!(find(&db, "neon", "x").await.unwrap().is_none());
+            set(&db, "neon", "x", "NeonLawUSA").await.unwrap();
+            set(&db, "neon", "x", "NeonLaw").await.unwrap();
+            let handle = find(&db, "neon", "x").await.unwrap().unwrap();
+            assert_eq!(handle.handle, "NeonLaw");
+            assert!(find(&db, "vesta", "x").await.unwrap().is_none());
+            assert!(matches!(
+                set(&db, "neon", "myspace", "x").await,
+                Err(SocialHandleError::UnknownProvider(_))
+            ));
+        })
+        .await;
     }
 }

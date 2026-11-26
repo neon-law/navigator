@@ -1092,6 +1092,61 @@ async fn write_hook_probe() {
 }
 
 #[tokio::test]
+async fn source_social_handle_import_replays_and_deletes() {
+    let Some((options, database)) = fresh_database().await else {
+        return;
+    };
+    let pg = connect(&options, &database).await;
+    let surreal = test_support::mem_surreal().await;
+    let key = MirrorKey::SocialHandle {
+        brand_key: BRAND.into(),
+        provider: "x".into(),
+    };
+    surreal
+        .query("CREATE social_handle SET brand_key=$brand, provider='x', handle='SyntheticOne'")
+        .bind(("brand", BRAND.to_string()))
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
+    assert_eq!(
+        mirror(&surreal, &pg, &key).await.unwrap(),
+        Mirrored::Written
+    );
+    assert_eq!(
+        mirror(&surreal, &pg, &key).await.unwrap(),
+        Mirrored::Unchanged
+    );
+    surreal.query("UPDATE social_handle SET handle='SyntheticTwo' WHERE brand_key=$brand AND provider='x'")
+        .bind(("brand", BRAND.to_string())).await.unwrap().check().unwrap();
+    assert_eq!(
+        mirror(&surreal, &pg, &key).await.unwrap(),
+        Mirrored::Written
+    );
+    let handle: String =
+        sqlx::query_scalar("SELECT handle FROM social_handle WHERE brand_key=$1 AND provider='x'")
+            .bind(BRAND)
+            .fetch_one(&pg.0)
+            .await
+            .unwrap();
+    assert_eq!(handle, "SyntheticTwo");
+    surreal
+        .query("DELETE social_handle")
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
+    assert_eq!(
+        mirror(&surreal, &pg, &key).await.unwrap(),
+        Mirrored::Deleted
+    );
+    assert_eq!(
+        mirror(&surreal, &pg, &key).await.unwrap(),
+        Mirrored::Unchanged
+    );
+}
+
+#[tokio::test]
 #[expect(
     clippy::too_many_lines,
     reason = "one row lifecycle across all three tables reads in order"
@@ -1136,16 +1191,19 @@ async fn create_update_and_delete_converge_and_replays_write_nothing() {
         brand_key: BRAND.into(),
         provider: "x".into(),
     };
-    crate::social_handles::set(&surreal, BRAND, "x", "SyntheticOne")
+    surreal
+        .query("CREATE social_handle SET brand_key=$brand, provider='x', handle='SyntheticOne'")
+        .bind(("brand", BRAND.to_string()))
         .await
+        .unwrap()
+        .check()
         .unwrap();
     assert_eq!(
         mirror(&surreal, &pg, &handle).await.unwrap(),
         Mirrored::Written
     );
-    crate::social_handles::set(&surreal, BRAND, "x", "SyntheticTwo")
-        .await
-        .unwrap();
+    surreal.query("UPDATE social_handle SET handle='SyntheticTwo' WHERE brand_key=$brand AND provider='x'")
+        .bind(("brand", BRAND.to_string())).await.unwrap().check().unwrap();
     assert_eq!(
         mirror(&surreal, &pg, &handle).await.unwrap(),
         Mirrored::Written
