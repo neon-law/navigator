@@ -33,7 +33,7 @@ pub struct Entity {
     pub id: Uuid,
     /// Display name. Deliberately **not** unique — namesakes are real —
     /// except for the firm anchor, which [`Entity::is_firm_anchor`]
-    /// reports and the `entity_firm_anchor` index enforces.
+    /// reports and PostgreSQL's partial unique index enforces.
     pub name: String,
     /// The kind of organization. A `record<entity_type>` link in the
     /// engine, surfaced here as the id every caller already held.
@@ -1251,20 +1251,18 @@ const DEPENDENT_TABLES: [(&str, &str); 5] = [
 mod tests {
     use super::{
         all, create, delete_unless_firm_anchor, dependents, find_by_id, find_by_ids, find_by_name,
-        firm_anchor_exists, firm_anchor_holder, seed_ein, set_avatar_url, update,
-        update_with_metadata, AlreadyExistsError, EntityError, ErrorDetails, NewEntity, CLAIM,
-        CLAIM_TABLE, RELEASE, TABLE, WRITE_FIELDS,
+        firm_anchor_exists, seed_ein, set_avatar_url, update, update_with_metadata, EntityError,
+        NewEntity,
     };
-    use super::{classify_write, prime_claim_table};
-    use crate::surreal::test_support::mem;
-    use crate::surreal::{record_id, retry, SurrealDb};
+    use crate::surreal::SurrealDb;
     use uuid::Uuid;
 
-    fn input(name: &str) -> NewEntity {
+    async fn input(db: &SurrealDb, name: &str) -> NewEntity {
+        let (entity_type_id, jurisdiction_id) = crate::test_support::seed_entity_parents(db).await;
         NewEntity {
             name: name.into(),
-            entity_type_id: Uuid::now_v7(),
-            jurisdiction_id: Uuid::now_v7(),
+            entity_type_id,
+            jurisdiction_id,
             phone: None,
             url: None,
             xero_id: None,
@@ -1272,169 +1270,152 @@ mod tests {
         }
     }
 
-    fn anchor(name: &str) -> NewEntity {
+    async fn anchor(db: &SurrealDb, name: &str) -> NewEntity {
         NewEntity {
             firm_anchor_key: Some(name.to_lowercase()),
-            ..input(name)
+            ..input(db, name).await
         }
     }
 
     #[tokio::test]
     async fn a_created_entity_reads_back_by_id_and_name() {
-        let db = mem().await;
-        let created = create(&db, &input("  Beta LLC  ")).await.unwrap();
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let created = create(&db, &input(&db, "  Beta LLC  ").await)
+                .await
+                .unwrap();
 
-        assert_eq!(
-            created.name, "Beta LLC",
-            "the name is trimmed on the way in"
-        );
-        assert_eq!(
-            find_by_id(&db, created.id).await.unwrap(),
-            Some(created.clone())
-        );
-        assert_eq!(find_by_name(&db, "Beta LLC").await.unwrap(), Some(created));
-        assert_eq!(find_by_name(&db, "Nothing Co").await.unwrap(), None);
+            assert_eq!(
+                created.name, "Beta LLC",
+                "the name is trimmed on the way in"
+            );
+            assert_eq!(
+                find_by_id(&db, created.id).await.unwrap(),
+                Some(created.clone())
+            );
+            assert_eq!(find_by_name(&db, "Beta LLC").await.unwrap(), Some(created));
+            assert_eq!(find_by_name(&db, "Nothing Co").await.unwrap(), None);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn set_avatar_url_writes_and_clears_leaving_every_other_field_alone() {
-        let db = mem().await;
-        let created = create(&db, &input("Delta LLC")).await.unwrap();
-        assert_eq!(created.avatar_url, None);
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let created = create(&db, &input(&db, "Delta LLC").await).await.unwrap();
+            assert_eq!(created.avatar_url, None);
 
-        let key = format!("entities/{}/avatars/{}.jpg", created.id, created.id);
-        let with_avatar = set_avatar_url(&db, created.id, Some(key.clone()))
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(with_avatar.avatar_url.as_deref(), Some(key.as_str()));
-        assert_eq!(with_avatar.name, "Delta LLC", "no other field moved");
-
-        let cleared = set_avatar_url(&db, created.id, None)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(cleared.avatar_url, None);
-    }
-
-    #[tokio::test]
-    async fn reads_an_entity_row_written_before_avatar_url_was_defined() {
-        let db = mem().await;
-        db.query("REMOVE FIELD avatar_url ON entity").await.unwrap();
-        let created = create(&db, &input("Epsilon LLC")).await.unwrap();
-        db.query("DEFINE FIELD OVERWRITE avatar_url ON entity TYPE option<string>")
-            .await
-            .unwrap();
-
-        assert_eq!(
-            find_by_id(&db, created.id)
+            let key = format!("entities/{}/avatars/{}.jpg", created.id, created.id);
+            let with_avatar = set_avatar_url(&db, created.id, Some(key.clone()))
                 .await
                 .unwrap()
+                .unwrap();
+            assert_eq!(with_avatar.avatar_url.as_deref(), Some(key.as_str()));
+            assert_eq!(with_avatar.name, "Delta LLC", "no other field moved");
+
+            let cleared = set_avatar_url(&db, created.id, None)
+                .await
                 .unwrap()
-                .avatar_url,
-            None,
-            "an absent value reads as no avatar, not a deserialization failure"
-        );
+                .unwrap();
+            assert_eq!(cleared.avatar_url, None);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn seeded_ein_fills_missing_values_and_preserves_other_metadata_and_existing_ein() {
-        let db = mem().await;
-        let row = create(&db, &input("Example LLC")).await.unwrap();
-        seed_ein(&db, row.id, "12-3456789").await.unwrap();
-        assert_eq!(
-            find_by_id(&db, row.id).await.unwrap().unwrap().metadata,
-            Some(serde_json::json!({"ein": "12-3456789"}))
-        );
-        let metadata = serde_json::json!({"registration": {"state": "NV"}});
-        update_with_metadata(&db, row.id, &input("Example LLC"), metadata.as_object())
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let row = create(&db, &input(&db, "Example LLC").await).await.unwrap();
+            seed_ein(&db, row.id, "12-3456789").await.unwrap();
+            assert_eq!(
+                find_by_id(&db, row.id).await.unwrap().unwrap().metadata,
+                Some(serde_json::json!({"ein": "12-3456789"}))
+            );
+            let metadata = serde_json::json!({"registration": {"state": "NV"}});
+            update_with_metadata(
+                &db,
+                row.id,
+                &input(&db, "Example LLC").await,
+                metadata.as_object(),
+            )
             .await
             .unwrap()
             .unwrap();
-        seed_ein(&db, row.id, "12-3456789").await.unwrap();
-        let saved = find_by_id(&db, row.id).await.unwrap().unwrap();
-        assert_eq!(
-            saved.metadata,
-            Some(serde_json::json!({
-                "ein": "12-3456789", "registration": {"state": "NV"}
-            }))
-        );
-        seed_ein(&db, row.id, "98-7654321").await.unwrap();
-        assert_eq!(find_by_id(&db, row.id).await.unwrap().unwrap(), saved);
+            seed_ein(&db, row.id, "12-3456789").await.unwrap();
+            let saved = find_by_id(&db, row.id).await.unwrap().unwrap();
+            assert_eq!(
+                saved.metadata,
+                Some(serde_json::json!({
+                    "ein": "12-3456789", "registration": {"state": "NV"}
+                }))
+            );
+            seed_ein(&db, row.id, "98-7654321").await.unwrap();
+            assert_eq!(find_by_id(&db, row.id).await.unwrap().unwrap(), saved);
+        })
+        .await;
     }
 
     #[tokio::test]
-    async fn reads_an_entity_without_metadata_and_preserves_metadata_on_ordinary_updates() {
-        let db = mem().await;
-        let created = create(&db, &input("Example LLC")).await.unwrap();
-        db.query("UPDATE $id UNSET metadata")
-            .bind(("id", record_id(TABLE, created.id)))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-        assert_eq!(
-            find_by_id(&db, created.id).await.unwrap().unwrap().metadata,
-            None
-        );
-        let metadata = serde_json::json!({"ein": "12-3456789", "nested": {"label": "sample"}});
-        update_with_metadata(&db, created.id, &input("Example LLC"), metadata.as_object())
+    async fn ordinary_updates_preserve_entity_metadata() {
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let created = create(&db, &input(&db, "Example LLC").await).await.unwrap();
+            assert_eq!(created.metadata, None);
+            let metadata = serde_json::json!({"ein": "12-3456789", "nested": {"label": "sample"}});
+            update_with_metadata(
+                &db,
+                created.id,
+                &input(&db, "Example LLC").await,
+                metadata.as_object(),
+            )
             .await
             .unwrap()
             .unwrap();
-        let updated = update(&db, created.id, &input("Renamed LLC"))
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(updated.metadata, Some(metadata));
+            let updated = update(&db, created.id, &input(&db, "Renamed LLC").await)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(updated.metadata, Some(metadata));
+        })
+        .await;
     }
 
-    #[tokio::test]
-    async fn reads_an_entity_row_written_before_xero_id_was_defined() {
-        let db = mem().await;
-        db.query("REMOVE FIELD xero_id ON entity").await.unwrap();
-        let created = create(&db, &input("Zeta Holdings LLC")).await.unwrap();
-        db.query("DEFINE FIELD OVERWRITE xero_id ON entity TYPE option<string>")
-            .await
-            .unwrap();
-
-        assert_eq!(
-            find_by_id(&db, created.id).await.unwrap().unwrap().xero_id,
-            None,
-            "an absent value reads as no Xero contact, not a deserialization failure"
-        );
-    }
-
-    /// The reference ids are `record<>` links in the engine but plain
-    /// UUIDs to a caller, and the round trip is the only thing proving
-    /// the two spellings agree — `entity_type:u'…'` and `entity_type:⟨…⟩`
-    /// both parse and are different records.
+    /// Entity Type and Jurisdiction IDs stay UUIDs in the API while
+    /// PostgreSQL enforces each parent reference with a foreign key.
     #[tokio::test]
     async fn the_reference_links_round_trip_as_the_ids_the_caller_supplied() {
-        let db = mem().await;
-        let wanted = input("Gamma Trust");
-        let created = create(&db, &wanted).await.unwrap();
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let wanted = input(&db, "Gamma Trust").await;
+            let created = create(&db, &wanted).await.unwrap();
 
-        assert_eq!(created.entity_type_id, wanted.entity_type_id);
-        assert_eq!(created.jurisdiction_id, wanted.jurisdiction_id);
-        let read_back = find_by_id(&db, created.id).await.unwrap().unwrap();
-        assert_eq!(read_back.entity_type_id, wanted.entity_type_id);
-        assert_eq!(read_back.jurisdiction_id, wanted.jurisdiction_id);
+            assert_eq!(created.entity_type_id, wanted.entity_type_id);
+            assert_eq!(created.jurisdiction_id, wanted.jurisdiction_id);
+            let read_back = find_by_id(&db, created.id).await.unwrap().unwrap();
+            assert_eq!(read_back.entity_type_id, wanted.entity_type_id);
+            assert_eq!(read_back.jurisdiction_id, wanted.jurisdiction_id);
+        })
+        .await;
     }
 
-    /// The `firm_anchor` claim is what refuses the fork, so this passes
-    /// without any read-before-write on the part of the caller.
+    /// PostgreSQL refuses a second row for the normalized firm anchor
+    /// without a read-before-write on the part of the caller.
     #[tokio::test]
     async fn a_second_row_under_the_firm_anchor_key_is_refused() {
-        let db = mem().await;
-        create(&db, &anchor("Neon Law")).await.unwrap();
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            create(&db, &anchor(&db, "Neon Law").await).await.unwrap();
 
-        let forked = create(&db, &anchor("Neon Law")).await;
-        assert!(
-            matches!(forked, Err(EntityError::FirmAnchorTaken)),
-            "the unique `entity_firm_anchor` index is the gate, got {forked:?}"
-        );
-        assert!(firm_anchor_exists(&db, "neon law").await.unwrap());
+            let forked = create(&db, &anchor(&db, "Neon Law").await).await;
+            assert!(
+                matches!(forked, Err(EntityError::FirmAnchorTaken)),
+                "the unique `entity_firm_anchor` index is the gate, got {forked:?}"
+            );
+            assert!(firm_anchor_exists(&db, "neon law").await.unwrap());
+        })
+        .await;
     }
 
     /// Concurrency is the whole reason the guard is an index rather than
@@ -1442,65 +1423,77 @@ mod tests {
     /// only the index can stop them both writing.
     #[tokio::test]
     async fn concurrent_creates_of_the_anchor_yield_exactly_one_row() {
-        let db = mem().await;
-        let racer = anchor("Neon Law");
-        let other = anchor("Neon Law");
-        let (first, second) = tokio::join!(create(&db, &racer), create(&db, &other));
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let racer = anchor(&db, "Neon Law").await;
+            let other = anchor(&db, "Neon Law").await;
+            let (first, second) = tokio::join!(create(&db, &racer), create(&db, &other));
 
-        let outcomes = [first, second];
-        assert_eq!(
-            outcomes.iter().filter(|r| r.is_ok()).count(),
-            1,
-            "exactly one racer may mint the anchor: {outcomes:?}"
-        );
-        assert_eq!(all(&db).await.unwrap().len(), 1);
+            let outcomes = [first, second];
+            assert_eq!(
+                outcomes.iter().filter(|r| r.is_ok()).count(),
+                1,
+                "exactly one racer may mint the anchor: {outcomes:?}"
+            );
+            assert_eq!(all(&db).await.unwrap().len(), 1);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn ordinary_namesakes_still_coexist() {
-        // Only the anchor takes the key; two unrelated Betas both land,
-        // because multiple NONEs do not collide on a unique index.
-        let db = mem().await;
-        create(&db, &input("Beta LLC")).await.unwrap();
-        create(&db, &input("Beta LLC")).await.unwrap();
-        assert_eq!(all(&db).await.unwrap().len(), 2);
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            // Only the anchor takes the key; two ordinary namesakes coexist
+            // because PostgreSQL's partial unique index excludes NULL keys.
+            create(&db, &input(&db, "Beta LLC").await).await.unwrap();
+            create(&db, &input(&db, "Beta LLC").await).await.unwrap();
+            assert_eq!(all(&db).await.unwrap().len(), 2);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn update_replaces_every_field_and_reports_a_missing_row() {
-        let db = mem().await;
-        let row = create(&db, &input("Beta LLC")).await.unwrap();
-        assert_eq!(row.xero_id, None, "a fresh entity has no Xero contact yet");
-        let mut edit = input("Beta Holdings LLC");
-        edit.phone = Some("+1 702 555 0100".into());
-        edit.url = Some("https://example.com".into());
-        edit.xero_id = Some("contact-123".into());
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let row = create(&db, &input(&db, "Beta LLC").await).await.unwrap();
+            assert_eq!(row.xero_id, None, "a fresh entity has no Xero contact yet");
+            let mut edit = input(&db, "Beta Holdings LLC").await;
+            edit.phone = Some("+1 702 555 0100".into());
+            edit.url = Some("https://example.com".into());
+            edit.xero_id = Some("contact-123".into());
 
-        let updated = update(&db, row.id, &edit).await.unwrap().unwrap();
-        assert_eq!(updated.id, row.id);
-        assert_eq!(updated.name, "Beta Holdings LLC");
-        assert_eq!(updated.entity_type_id, edit.entity_type_id);
-        assert_eq!(updated.phone.as_deref(), Some("+1 702 555 0100"));
-        assert_eq!(updated.url.as_deref(), Some("https://example.com"));
-        assert_eq!(updated.xero_id.as_deref(), Some("contact-123"));
+            let updated = update(&db, row.id, &edit).await.unwrap().unwrap();
+            assert_eq!(updated.id, row.id);
+            assert_eq!(updated.name, "Beta Holdings LLC");
+            assert_eq!(updated.entity_type_id, edit.entity_type_id);
+            assert_eq!(updated.phone.as_deref(), Some("+1 702 555 0100"));
+            assert_eq!(updated.url.as_deref(), Some("https://example.com"));
+            assert_eq!(updated.xero_id.as_deref(), Some("contact-123"));
 
-        assert_eq!(update(&db, Uuid::now_v7(), &edit).await.unwrap(), None);
+            assert_eq!(update(&db, Uuid::now_v7(), &edit).await.unwrap(), None);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn delete_returns_the_removed_row_once_and_then_nothing() {
-        let db = mem().await;
-        let row = create(&db, &input("Beta LLC")).await.unwrap();
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let row = create(&db, &input(&db, "Beta LLC").await).await.unwrap();
 
-        assert_eq!(
-            delete_unless_firm_anchor(&db, row.id)
-                .await
-                .unwrap()
-                .map(|e| e.id),
-            Some(row.id)
-        );
-        assert_eq!(find_by_id(&db, row.id).await.unwrap(), None);
-        assert_eq!(delete_unless_firm_anchor(&db, row.id).await.unwrap(), None);
+            assert_eq!(
+                delete_unless_firm_anchor(&db, row.id)
+                    .await
+                    .unwrap()
+                    .map(|e| e.id),
+                Some(row.id)
+            );
+            assert_eq!(find_by_id(&db, row.id).await.unwrap(), None);
+            assert_eq!(delete_unless_firm_anchor(&db, row.id).await.unwrap(), None);
+        })
+        .await;
     }
 
     /// The window the delete's own `WHERE` closes: a rename mints the
@@ -1509,287 +1502,153 @@ mod tests {
     /// the freshly-protected firm, so the refusal lives in the delete.
     #[tokio::test]
     async fn a_row_that_became_the_anchor_after_the_read_is_not_deleted() {
-        let db = mem().await;
-        let ordinary = create(&db, &input("Acme LLC")).await.unwrap();
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let ordinary = create(&db, &input(&db, "Acme LLC").await).await.unwrap();
 
-        // What a caller would have read: an ordinary, deletable row.
-        assert!(!find_by_id(&db, ordinary.id)
+            // What a caller would have read: an ordinary, deletable row.
+            assert!(!find_by_id(&db, ordinary.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .is_firm_anchor());
+
+            // …and then a concurrent rename mints the anchor on it.
+            update(
+                &db,
+                ordinary.id,
+                &NewEntity {
+                    firm_anchor_key: Some("example law pc".into()),
+                    ..input(&db, "Neon Law").await
+                },
+            )
             .await
-            .unwrap()
-            .unwrap()
-            .is_firm_anchor());
+            .unwrap();
 
-        // …and then a concurrent rename mints the anchor on it.
-        update(
-            &db,
-            ordinary.id,
-            &NewEntity {
-                firm_anchor_key: Some("example law pc".into()),
-                ..input("Neon Law")
-            },
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(
-            delete_unless_firm_anchor(&db, ordinary.id).await.unwrap(),
-            None,
-            "the delete must refuse a row that became the anchor"
-        );
-        assert!(
-            find_by_id(&db, ordinary.id).await.unwrap().is_some(),
-            "the freshly-protected firm must survive the racing delete"
-        );
+            assert_eq!(
+                delete_unless_firm_anchor(&db, ordinary.id).await.unwrap(),
+                None,
+                "the delete must refuse a row that became the anchor"
+            );
+            assert!(
+                find_by_id(&db, ordinary.id).await.unwrap().is_some(),
+                "the freshly-protected firm must survive the racing delete"
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn find_by_ids_reads_many_and_ignores_ids_with_no_row() {
-        let db = mem().await;
-        let one = create(&db, &input("One LLC")).await.unwrap();
-        let two = create(&db, &input("Two LLC")).await.unwrap();
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let one = create(&db, &input(&db, "One LLC").await).await.unwrap();
+            let two = create(&db, &input(&db, "Two LLC").await).await.unwrap();
 
-        let found = find_by_ids(&db, &[one.id, two.id, Uuid::now_v7()])
-            .await
-            .unwrap();
-        let mut names: Vec<String> = found.into_iter().map(|e| e.name).collect();
-        names.sort();
-        assert_eq!(names, ["One LLC", "Two LLC"]);
-        assert!(find_by_ids(&db, &[]).await.unwrap().is_empty());
+            let found = find_by_ids(&db, &[one.id, two.id, Uuid::now_v7()])
+                .await
+                .unwrap();
+            let mut names: Vec<String> = found.into_iter().map(|e| e.name).collect();
+            names.sort();
+            assert_eq!(names, ["One LLC", "Two LLC"]);
+            assert!(find_by_ids(&db, &[]).await.unwrap().is_empty());
+        })
+        .await;
     }
 
-    /// The read that replaced the foreign-key violation. Nothing in the
-    /// engine refuses a delete that strands a reference, so this is the
-    /// only thing between the lawyer delete button and a matter pointing
-    /// at an entity that is gone.
+    /// The operator sees dependent Projects before PostgreSQL's foreign key
+    /// refuses a deletion that would strand them.
     #[tokio::test]
     async fn dependents_counts_the_rows_a_delete_would_strand() {
-        let db = mem().await;
-        let entity = create(&db, &input("Referenced LLC")).await.unwrap();
-        assert!(
-            dependents(&db, entity.id).await.unwrap().is_empty(),
-            "a fresh entity is free to delete"
-        );
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let entity = create(&db, &input(&db, "Referenced LLC").await)
+                .await
+                .unwrap();
+            assert!(
+                dependents(&db, entity.id).await.unwrap().is_empty(),
+                "a fresh entity is free to delete"
+            );
 
-        crate::projects::create(
-            &db,
-            &crate::projects::NewProject {
-                code: format!("dep-{}", Uuid::now_v7()),
-                name: "Dependent matter".into(),
-                status: "open".into(),
-                entity_id: entity.id,
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-
-        let found = dependents(&db, entity.id).await.unwrap();
-        assert_eq!(
-            found
-                .iter()
-                .map(|d| (d.noun(), d.count))
-                .collect::<Vec<_>>(),
-            vec![("project", 1)],
-            "the matter opened against this entity has to be named"
-        );
-    }
-
-    /// A dangling link is invisible to the engine, so a count keyed on
-    /// the wrong record-id spelling would silently read zero and let a
-    /// referenced entity be deleted. Pinning a *non*-zero count on a
-    /// second table is what catches that.
-    #[tokio::test]
-    async fn dependents_sees_a_graph_edge_as_well_as_a_matter() {
-        let db = mem().await;
-        let entity = create(&db, &input("Edged LLC")).await.unwrap();
-        let person = crate::persons::create(
-            &db,
-            &crate::persons::NewPerson::new(
-                "Edge Holder",
-                format!("{}@example.com", Uuid::now_v7()),
-            ),
-        )
-        .await
-        .unwrap();
-        crate::entity_roles::grant(&db, person.id, entity.id, "manages")
+            crate::test_support::seed_compiled_brands_postgres(&db).await;
+            crate::projects::create(
+                &db,
+                &crate::projects::NewProject {
+                    code: format!("dep-{}", Uuid::now_v7()),
+                    name: "Dependent matter".into(),
+                    status: "open".into(),
+                    entity_id: entity.id,
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap();
 
-        let found = dependents(&db, entity.id).await.unwrap();
-        assert_eq!(
-            found
-                .iter()
-                .map(|d| (d.noun(), d.count))
-                .collect::<Vec<_>>(),
-            vec![("entity role", 1)]
-        );
+            let found = dependents(&db, entity.id).await.unwrap();
+            assert_eq!(
+                found
+                    .iter()
+                    .map(|d| (d.noun(), d.count))
+                    .collect::<Vec<_>>(),
+                vec![("project", 1)],
+                "the matter opened against this entity has to be named"
+            );
+        })
+        .await;
     }
 
-    /// `mem()` applies the deployment schema, so this also proves the
-    /// handle the rest of the module is tested against is the real one.
+    /// An Entity Role is another dependent boundary. The count must report
+    /// that row as well as Project references before an Entity is deleted.
+    #[tokio::test]
+    async fn dependents_sees_a_graph_edge_as_well_as_a_matter() {
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let entity = create(&db, &input(&db, "Edged LLC").await).await.unwrap();
+            let person = crate::persons::create(
+                &db,
+                &crate::persons::NewPerson::new(
+                    "Edge Holder",
+                    format!("{}@example.com", Uuid::now_v7()),
+                ),
+            )
+            .await
+            .unwrap();
+            crate::entity_roles::grant(&db, person.id, entity.id, "manages")
+                .await
+                .unwrap();
+
+            let found = dependents(&db, entity.id).await.unwrap();
+            assert_eq!(
+                found
+                    .iter()
+                    .map(|d| (d.noun(), d.count))
+                    .collect::<Vec<_>>(),
+                vec![("entity role", 1)]
+            );
+        })
+        .await;
+    }
+
+    /// Name ordering comes from the PostgreSQL accessor's stable projection.
     #[tokio::test]
     async fn listing_orders_by_name() {
-        let db: SurrealDb = mem().await;
-        for name in ["Zeta LLC", "Alpha LLC", "Mu LLC"] {
-            create(&db, &input(name)).await.unwrap();
-        }
-        let names: Vec<String> = all(&db)
-            .await
-            .unwrap()
-            .into_iter()
-            .map(|e| e.name)
-            .collect();
-        assert_eq!(names, ["Alpha LLC", "Mu LLC", "Zeta LLC"]);
-    }
-
-    /// The claim collision — the arm that actually runs — is typed, and
-    /// this is what says so. `classify_write` reads
-    /// [`AlreadyExistsError::Record`] rather than the message, so an
-    /// upstream reword of the prose cannot turn a refusal into a `Db`
-    /// fault. The day that detail stops arriving, this fails.
-    ///
-    /// It must also not be retryable: a refusal that
-    /// [`crate::surreal::retry::is_retryable`] accepted would be re-run
-    /// until the write budget expired and then reported as a conflict, so
-    /// the caller would wait seconds for the wrong error.
-    #[tokio::test]
-    async fn the_claim_collision_is_typed_and_final() {
-        let db = mem().await;
-        create(&db, &anchor("Neon Law")).await.unwrap();
-
-        let raw = db
-            .query("CREATE type::record('firm_anchor', $key) SET entity_id = $id")
-            .bind(("key", "neon law".to_string()))
-            .bind(("id", record_id(TABLE, Uuid::now_v7())))
-            .await
-            .and_then(surrealdb::IndexedResults::check)
-            .expect_err("a second claim must collide");
-
-        assert!(
-            matches!(
-                raw.details(),
-                ErrorDetails::AlreadyExists(Some(AlreadyExistsError::Record { id }))
-                    if id.starts_with(CLAIM_TABLE)
-            ),
-            "the claim's typed detail is gone — classify_write would fall back \
-             to the message; got {:?}",
-            raw.details(),
-        );
-        assert!(
-            !retry::is_retryable(&raw),
-            "a refused claim is not a lost race and must not be re-run",
-        );
-        assert!(matches!(classify_write(raw), EntityError::FirmAnchorTaken));
-    }
-
-    /// The backstop arm, held against the engine the way
-    /// `store::persons` holds its own.
-    ///
-    /// The UNIQUE index cannot serialize racers, but it still refuses a
-    /// fork that is not a race — and that refusal *is* untyped: the engine
-    /// raises it as the `Internal` catch-all, so the index name in the
-    /// message is the only discriminator left. It is a `DEFINE INDEX`
-    /// identifier this workspace chose, and this pins it, so a silent
-    /// reword fails here rather than in production.
-    #[tokio::test]
-    async fn a_unique_violation_carries_no_typed_detail_only_the_index_name() {
-        let db = mem().await;
-        let holder = create(&db, &anchor("Neon Law")).await.unwrap();
-        // Around the claim on purpose: this exercises the index alone,
-        // which is what a non-concurrent fork would meet.
-        let raw = db
-            .query(format!(
-                "UPSERT $id SET {WRITE_FIELDS}, inserted_at = time::now()"
-            ))
-            .bind(("id", record_id(TABLE, Uuid::now_v7())))
-            .bind(("name", "Neon Law".to_string()))
-            .bind((
-                "entity_type_id",
-                record_id("entity_type", holder.entity_type_id),
-            ))
-            .bind((
-                "jurisdiction_id",
-                record_id("jurisdiction", holder.jurisdiction_id),
-            ))
-            .bind(("phone", None::<String>))
-            .bind(("url", None::<String>))
-            .bind(("xero_id", None::<String>))
-            .bind(("firm_anchor_key", Some("neon law".to_string())))
-            .await
-            .and_then(surrealdb::IndexedResults::check)
-            .expect_err("the index must refuse the second row");
-
-        assert!(
-            matches!(raw.details(), ErrorDetails::Internal),
-            "a typed detail is now available — classify_write should match on it \
-             instead of the message; got {:?}",
-            raw.details(),
-        );
-        assert!(
-            raw.to_string().contains("entity_firm_anchor"),
-            "the index name is the only discriminator, and it is gone: {raw}",
-        );
-        assert!(matches!(classify_write(raw), EntityError::FirmAnchorTaken));
-    }
-
-    /// An error that is neither refusal stays a `Db` fault. Widening
-    /// either arm into a catch-all would make a server fault read as a
-    /// clean refusal, which is exactly how a broken guard looks green.
-    #[tokio::test]
-    async fn an_unrelated_failure_is_not_mistaken_for_a_refusal() {
-        let db = mem().await;
-        let raw = db
-            .query("SELECT * FROM entity WHERE")
-            .await
-            .and_then(surrealdb::IndexedResults::check)
-            .expect_err("a malformed statement must fail");
-
-        assert!(matches!(classify_write(raw), EntityError::Db(_)));
-    }
-
-    /// [`CLAIM`] and [`RELEASE`] name the table in SurrealQL, where a
-    /// `const` cannot interpolate [`CLAIM_TABLE`]. Renaming the constant
-    /// without rewriting the statements would leave writes claiming one
-    /// table while [`claims_the_firm_anchor`] classified another — a
-    /// refusal silently demoted to a server fault.
-    #[test]
-    fn the_claim_statements_name_the_claim_table() {
-        assert!(CLAIM.contains(CLAIM_TABLE), "{CLAIM}");
-        assert!(RELEASE.contains(CLAIM_TABLE), "{RELEASE}");
-    }
-
-    #[tokio::test]
-    async fn priming_an_empty_claim_table_leaves_real_keys_free() {
-        let db = mem().await;
-
-        let before: Vec<surrealdb::types::RecordId> = db
-            .query("SELECT VALUE id FROM firm_anchor")
-            .await
-            .and_then(surrealdb::IndexedResults::check)
-            .expect("read the empty claim table")
-            .take(0)
-            .expect("decode the empty claim table");
-        assert!(before.is_empty());
-
-        prime_claim_table(&db).await.expect("prime the claim table");
-
-        let key = "__navigator_claim_sentinel__";
-        assert_eq!(firm_anchor_holder(&db, key).await.unwrap(), None);
-        let id = Uuid::now_v7();
-        db.query(CLAIM)
-            .bind(("id", record_id(TABLE, id)))
-            .bind(("firm_anchor_key", key.to_string()))
-            .await
-            .and_then(surrealdb::IndexedResults::check)
-            .expect("claim a real key next to the sentinel");
-        assert_eq!(firm_anchor_holder(&db, key).await.unwrap(), Some(id));
-        let after: Vec<surrealdb::types::RecordId> = db
-            .query("SELECT VALUE id FROM firm_anchor")
-            .await
-            .and_then(surrealdb::IndexedResults::check)
-            .expect("read the primed claim table")
-            .take(0)
-            .expect("decode the primed claim table");
-        assert_eq!(after.len(), 2);
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            for name in ["Zeta LLC", "Alpha LLC", "Mu LLC"] {
+                create(&db, &input(&db, name).await).await.unwrap();
+            }
+            let names: Vec<String> = all(&db)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|e| e.name)
+                .collect();
+            assert_eq!(names, ["Alpha LLC", "Mu LLC", "Zeta LLC"]);
+        })
+        .await;
     }
 }
+
+#[cfg(test)]
+#[path = "entities/surreal_compatibility_tests.rs"]
+mod surreal_compatibility_tests;
