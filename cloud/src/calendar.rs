@@ -95,6 +95,8 @@ pub enum EventTiming {
     Instant,
     Hearing(u32),
     AllDay(chrono::NaiveDate),
+    /// A private hold on an attorney's booking calendar.
+    BusyUntil(DateTime<FixedOffset>),
 }
 
 /// One event on a Project calendar, as Navigator writes it.
@@ -286,12 +288,13 @@ pub trait CalendarService: Send + Sync {
         email: &str,
     ) -> Result<bool, CalendarError>;
 
-    /// Correct owned event titles on open Projects and revoke only marked guests whose assignment ended.
+    /// Correct owned event titles, remove internal guests from upcoming open-Project events, and revoke expired grants.
     async fn reconcile_project_events(
         &self,
         calendar_id: &str,
         open_project_code: Option<&str>,
         members: &BTreeSet<&str>,
+        internal_domains: &BTreeSet<&str>,
     ) -> Result<(), CalendarError>;
 
     /// Read the complete iCalendar resources on a verified private calendar.
@@ -409,6 +412,40 @@ impl GoogleCalendar {
             }
         })
         .await
+    }
+
+    /// Verify an explicitly registered private secondary calendar under the attorney's account.
+    pub async fn verify_booking_calendar(&self, id: &str) -> Result<(), CalendarError> {
+        if !id.ends_with("@group.calendar.google.com") {
+            return Err(CalendarError::UnverifiedCalendarMetadata);
+        }
+        let action = "verifying the attorney's booking calendar";
+        let marker = format!(
+            "Navigator Booking Availability ({})",
+            self.namespace.unwrap_or("production")
+        );
+        let body = Self::checked(
+            self.http
+                .get(self.url(&["calendars", id]))
+                .bearer_auth(self.token().await?)
+                .query(&[("fields", "id,dataOwner,description")])
+                .send()
+                .await,
+            action,
+        )?
+        .json::<CalendarResource>()
+        .await
+        .map_err(|source| CalendarError::Response { action, source })?;
+        if body.id.as_deref() != Some(id)
+            || body.description.as_deref() != Some(marker.as_str())
+            || !body
+                .data_owner
+                .as_deref()
+                .is_some_and(|owner| owner.eq_ignore_ascii_case(&self.delegated_user))
+        {
+            return Err(CalendarError::UnverifiedCalendarMetadata);
+        }
+        self.verify_private_acl(id).await
     }
 
     async fn from_lookup<F>(get: F) -> Result<Self, CalendarError>
@@ -733,19 +770,39 @@ impl CalendarService for GoogleCalendar {
         calendar_id: &str,
         open_project_code: Option<&str>,
         members: &BTreeSet<&str>,
+        internal_domains: &BTreeSet<&str>,
     ) -> Result<(), CalendarError> {
         let events = self
             .list_events::<MembershipEvent>(
                 calendar_id,
-                "reading Project Calendar titles",
+                "reading Project Calendar events",
                 &[(
                     "fields",
-                    "nextPageToken,items(id,etag,summary,organizer(self),status,locked,attendees,attendeesOmitted,extendedProperties/private)",
+                    "nextPageToken,items(id,etag,summary,organizer(email,self),status,locked,attendees,attendeesOmitted,extendedProperties/private)",
                 )],
             )
             .await?;
+        let upcoming: BTreeSet<_> = if open_project_code.is_some()
+            && !internal_domains.is_empty()
+            && events.iter().any(|event| !event.attendees.is_empty())
+        {
+            let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+            self.list_events::<ProviderEventId>(
+                calendar_id,
+                "reading upcoming Project Calendar events",
+                &[("fields", "nextPageToken,items(id)"), ("timeMin", &now)],
+            )
+            .await?
+            .into_iter()
+            .map(|event| event.id)
+            .collect()
+        } else {
+            BTreeSet::new()
+        };
         for event in events {
-            let Some(patch) = event.membership_patch(open_project_code, members)? else {
+            let guest_domains = upcoming.contains(&event.id).then_some(internal_domains);
+            let Some(patch) = event.membership_patch(open_project_code, members, guest_domains)?
+            else {
                 continue;
             };
             Self::checked(
@@ -1295,6 +1352,7 @@ impl CalendarService for GoogleCalendar {
             self.http
                 .post(self.url(&["calendars", calendar_id, "events"]))
                 .bearer_auth(token)
+                .query(&[("sendUpdates", "none")])
                 .json(&event_body(event))
                 .send()
                 .await,
@@ -1455,6 +1513,12 @@ struct EventPage<T> {
 struct EventOrganizer {
     #[serde(rename = "self", default)]
     owns_event: bool,
+    email: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ProviderEventId {
+    id: String,
 }
 
 #[derive(Deserialize)]
@@ -1480,10 +1544,16 @@ impl MembershipEvent {
         &self,
         code: Option<&str>,
         members: &BTreeSet<&str>,
+        internal_domains: Option<&BTreeSet<&str>>,
     ) -> Result<Option<serde_json::Value>, CalendarError> {
-        if self.status.as_deref() == Some("cancelled")
-            || !self.organizer.as_ref().is_some_and(|o| o.owns_event)
-        {
+        let Some(organizer) = self
+            .organizer
+            .as_ref()
+            .filter(|organizer| organizer.owns_event)
+        else {
+            return Ok(None);
+        };
+        if self.status.as_deref() == Some("cancelled") {
             return Ok(None);
         }
         let mut patch = serde_json::Map::new();
@@ -1496,17 +1566,48 @@ impl MembershipEvent {
                 patch.insert("summary".into(), title.into());
             }
         }
+        let attendees_writable = !self.attendees_omitted && !self.locked;
+        let person_address = |guest: &serde_json::Value| {
+            if guest["organizer"].as_bool() == Some(true)
+                || guest["resource"].as_bool() == Some(true)
+            {
+                return None;
+            }
+            let email = guest["email"].as_str()?.trim().to_ascii_lowercase();
+            (!organizer
+                .email
+                .as_ref()
+                .is_some_and(|owner| owner.eq_ignore_ascii_case(&email)))
+            .then_some(email)
+        };
+        let mut removed = BTreeSet::new();
+        if let Some(domains) = internal_domains.filter(|_| attendees_writable) {
+            removed.extend(
+                self.attendees
+                    .iter()
+                    .filter_map(person_address)
+                    .filter(|email| {
+                        matches!(
+                            email.rsplit_once('@').and_then(|(_, domain)| url::Host::parse(domain).ok()),
+                            Some(url::Host::Domain(domain)) if domains.contains(domain.as_str())
+                        )
+                    }),
+            );
+        }
+
         // A marked guest can retain event access after losing the calendar grant.
-        let mut expired = BTreeSet::new();
         let mut markers = serde_json::Map::new();
         for (key, email) in &self.extended_properties.private {
-            if key.starts_with("nv_invited_") && !members.contains(email.as_str()) {
-                expired.insert(email.to_ascii_lowercase());
+            let address = email.trim().to_ascii_lowercase();
+            if key.starts_with("nv_invited_")
+                && (!members.contains(address.as_str()) || removed.contains(&address))
+            {
+                removed.insert(address);
                 markers.insert(key.clone(), serde_json::Value::Null);
             }
         }
-        if !expired.is_empty() {
-            if self.attendees_omitted || self.locked {
+        if !removed.is_empty() {
+            if !attendees_writable {
                 return Err(CalendarError::Api {
                     action: "revoking expired Project event access",
                     status: 409,
@@ -1516,12 +1617,14 @@ impl MembershipEvent {
                 .attendees
                 .iter()
                 .filter(|guest| {
-                    !guest["email"]
-                        .as_str()
-                        .is_some_and(|email| expired.contains(&email.to_ascii_lowercase()))
+                    !person_address(guest).is_some_and(|email| removed.contains(&email))
                 })
                 .collect();
-            patch.insert("attendees".into(), serde_json::json!(guests));
+            if guests.len() != self.attendees.len() {
+                patch.insert("attendees".into(), serde_json::json!(guests));
+            }
+        }
+        if !markers.is_empty() {
             patch.insert(
                 "extendedProperties".into(),
                 serde_json::json!({"private":markers}),
@@ -1545,6 +1648,8 @@ struct EventExtendedProperties {
 #[serde(rename_all = "camelCase")]
 struct EventBody<'a> {
     summary: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    visibility: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     description: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1601,6 +1706,10 @@ fn event_body(event: &CalendarEvent) -> EventBody<'_> {
             EventTime::Date(day),
             EventTime::Date(day.succ_opt().unwrap_or(day)),
         ),
+        EventTiming::BusyUntil(end) => (
+            EventTime::DateTime(event.start.to_rfc3339()),
+            EventTime::DateTime(end.to_rfc3339()),
+        ),
         timing => {
             let minutes = if let EventTiming::Hearing(minutes) = timing {
                 i64::from(minutes)
@@ -1617,6 +1726,7 @@ fn event_body(event: &CalendarEvent) -> EventBody<'_> {
     };
     EventBody {
         summary: &event.summary,
+        visibility: matches!(event.timing, EventTiming::BusyUntil(_)).then_some("private"),
         description: event.description.as_deref(),
         location: event.location.as_deref(),
         color_id: event.color_id.as_deref(),
@@ -1627,7 +1737,10 @@ fn event_body(event: &CalendarEvent) -> EventBody<'_> {
         } else {
             "confirmed"
         },
-        transparency: if matches!(event.timing, EventTiming::Hearing(_)) {
+        transparency: if matches!(
+            event.timing,
+            EventTiming::Hearing(_) | EventTiming::BusyUntil(_)
+        ) {
             "opaque"
         } else {
             "transparent"
@@ -1654,6 +1767,9 @@ fn event_body(event: &CalendarEvent) -> EventBody<'_> {
 }
 
 const BASELINE: &str = "navigator_event_baseline_v1";
+pub const BOOKING_MARKER: &str = "navigator_booking_availability";
+pub const BOOKING_VERSION: &str = "v1";
+pub const BOOKING_INTERVAL: &str = "navigator_booking_interval";
 
 fn event_etag(resource: &serde_json::Value) -> Option<&str> {
     resource["etag"]
@@ -1703,6 +1819,53 @@ fn contains_meeting_material(resource: &serde_json::Value) -> bool {
         || resource["attendeesOmitted"].as_bool() == Some(true)
 }
 
+// A Google insert can succeed before its ETag baseline is stamped. Recover
+// only the canonical guest-free hold that this reconcile owns.
+fn unstamped_booking_hold(
+    resource: &serde_json::Value,
+    properties: &BTreeMap<String, String>,
+) -> bool {
+    if properties.get(BOOKING_MARKER).map(String::as_str) != Some(BOOKING_VERSION)
+        || properties.len() != 2
+        || resource["summary"] != "Busy"
+        || resource["visibility"] != "private"
+        || resource["status"] != "confirmed"
+        || resource["transparency"]
+            .as_str()
+            .is_some_and(|value| value != "opaque")
+        || resource["reminders"]["useDefault"] != false
+        || resource["reminders"]["overrides"]
+            .as_array()
+            .is_some_and(|values| !values.is_empty())
+        || [
+            "description",
+            "location",
+            "colorId",
+            "recurrence",
+            "recurringEventId",
+        ]
+        .iter()
+        .any(|key| !resource[*key].is_null())
+    {
+        return false;
+    }
+    let time = |field: &str| {
+        resource[field]["dateTime"]
+            .as_str()
+            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+    };
+    let (Some(start), Some(end)) = (time("start"), time("end")) else {
+        return false;
+    };
+    start < end
+        && properties.get(BOOKING_INTERVAL)
+            == Some(&format!(
+                "{}/{}",
+                start.to_utc().to_rfc3339(),
+                end.to_utc().to_rfc3339()
+            ))
+}
+
 fn stored_event(resource: &serde_json::Value) -> Result<StoredEvent, CalendarError> {
     let id = resource["id"]
         .as_str()
@@ -1717,9 +1880,10 @@ fn stored_event(resource: &serde_json::Value) -> Result<StoredEvent, CalendarErr
     let writable_etag = event_etag(resource)
         .filter(|_| !contains_meeting_material(resource))
         .filter(|_| {
-            private_properties
-                .get(BASELINE)
-                .is_some_and(|saved| saved == &event_fingerprint(resource))
+            private_properties.get(BASELINE).map_or_else(
+                || unstamped_booking_hold(resource, &private_properties),
+                |saved| saved == &event_fingerprint(resource),
+            )
         })
         .map(str::to_owned);
     Ok(StoredEvent {
@@ -1892,6 +2056,7 @@ impl CalendarService for FakeCalendar {
         calendar_id: &str,
         open_project_code: Option<&str>,
         _: &BTreeSet<&str>,
+        _: &BTreeSet<&str>,
     ) -> Result<(), CalendarError> {
         let Some(code) = open_project_code else {
             return Ok(());
@@ -1936,6 +2101,7 @@ impl CalendarService for FakeCalendar {
                     event.start < end
                         && event.start + chrono::Duration::minutes(i64::from(minutes)) > start
                 }
+                EventTiming::BusyUntil(ends_at) => event.start < end && ends_at > start,
                 EventTiming::Instant => {
                     event.start < end && event.start + chrono::Duration::minutes(1) > start
                 }
@@ -2696,7 +2862,7 @@ fn overlaps(
 #[cfg(test)]
 mod tests {
     use chrono::DateTime;
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::sync::Arc;
 
     use async_trait::async_trait;
@@ -3097,9 +3263,72 @@ mod tests {
             .mount(&server)
             .await;
         google(&server)
-            .reconcile_project_events("shared", Some("acme"), &std::collections::BTreeSet::new())
+            .reconcile_project_events("shared", Some("acme"), &BTreeSet::new(), &BTreeSet::new())
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn upcoming_owned_events_drop_only_firm_and_brand_guests() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/calendars/shared/events"))
+            .and(wiremock::matchers::query_param_is_missing("timeMin"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"items": [
+                {"id":"upcoming","etag":"one","summary":"sample: Meeting",
+                 "organizer":{"self":true,"email":"owner@firm.example"},
+                 "attendees":[{"email":"owner@firm.example","organizer":true},
+                              {"email":"colleague@FIRM.EXAMPLE","optional":true},
+                              {"email":"team@brand.example"},
+                              {"email":"room@firm.example","resource":true},
+                              {"email":"client@otherfirm.example","responseStatus":"accepted"}],
+                 "extendedProperties":{"private":{"nv_invited_current":"team@brand.example"}}},
+                {"id":"past","etag":"two","summary":"sample: Past","organizer":{"self":true},
+                 "attendees":[{"email":"colleague@firm.example"}]},
+                {"id":"external","etag":"three","organizer":{"self":false},
+                 "attendees":[{"email":"colleague@firm.example"}]},
+                {"id":"incomplete","etag":"four","summary":"sample: Hidden","organizer":{"self":true},
+                 "attendeesOmitted":true,"attendees":[{"email":"colleague@firm.example"}]}
+            ]})))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/calendars/shared/events"))
+            .and(query_param("fields", "nextPageToken,items(id)"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"items": [
+                    {"id":"upcoming"},{"id":"external"},{"id":"incomplete"}
+                ]})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("PATCH"))
+            .and(path("/calendars/shared/events/upcoming"))
+            .and(query_param("sendUpdates", "none"))
+            .and(wiremock::matchers::header("if-match", "one"))
+            .and(body_json(serde_json::json!({
+                "attendees":[{"email":"owner@firm.example","organizer":true},
+                             {"email":"room@firm.example","resource":true},
+                             {"email":"client@otherfirm.example","responseStatus":"accepted"}],
+                "extendedProperties":{"private":{"nv_invited_current":null}}
+            })))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        google(&server)
+            .reconcile_project_events(
+                "shared",
+                Some("sample"),
+                &["team@brand.example"].into_iter().collect(),
+                &["firm.example", "brand.example"].into_iter().collect(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(server.received_requests().await.unwrap().len(), 3);
     }
 
     #[test]
@@ -3111,7 +3340,7 @@ mod tests {
         })).unwrap();
         let members = ["current@example.com"].into_iter().collect();
         assert_eq!(
-            event.membership_patch(None, &members).unwrap(),
+            event.membership_patch(None, &members, None).unwrap(),
             Some(serde_json::json!({
                 "attendees":[{"email":"manual@example.com"},{"email":"current@example.com","responseStatus":"accepted"}],
                 "extendedProperties":{"private":{"nv_invited_old":null}}
@@ -3334,6 +3563,51 @@ mod tests {
                 ("body_sha".to_string(), "abc123".to_string()),
             ]),
         }
+    }
+
+    #[test]
+    fn a_booking_hold_has_no_guests_or_matter_details() {
+        let hold = CalendarEvent {
+            summary: "Busy".into(),
+            description: None,
+            location: None,
+            color_id: None,
+            start: "2026-11-26T12:30:00Z".parse().unwrap(),
+            timing: super::EventTiming::BusyUntil("2026-11-26T12:50:15Z".parse().unwrap()),
+            sequence: 0,
+            cancelled: false,
+            reminder_minutes: Vec::new(),
+            private_properties: BTreeMap::new(),
+        };
+        let body = serde_json::to_value(event_body(&hold)).unwrap();
+        assert_eq!(body["visibility"], "private");
+        assert_eq!(body["transparency"], "opaque");
+        assert_eq!(body["end"]["dateTime"], "2026-11-26T12:50:15+00:00");
+        for key in ["attendees", "description", "location"] {
+            assert!(body.get(key).is_none());
+        }
+        assert_eq!(body["reminders"]["useDefault"], false);
+    }
+
+    #[test]
+    fn a_booking_hold_is_recoverable_if_google_created_it_before_the_baseline_stamp() {
+        let mut record = serde_json::json!({
+            "id": "hold",
+            "etag": "one",
+            "summary": "Busy",
+            "status": "confirmed",
+            "visibility": "private",
+            "start": {"dateTime": "2026-11-26T07:30:00-05:00"},
+            "end": {"dateTime": "2026-11-26T07:45:00-05:00"},
+            "reminders": {"useDefault": false},
+            "extendedProperties": {"private": {
+                (super::BOOKING_MARKER): super::BOOKING_VERSION,
+                (super::BOOKING_INTERVAL): "2026-11-26T12:30:00+00:00/2026-11-26T12:45:00+00:00"
+            }}
+        });
+        assert!(super::stored_event(&record).unwrap().can_write());
+        record["description"] = "A person's own edit".into();
+        assert!(!super::stored_event(&record).unwrap().can_write());
     }
 
     async fn mock_mirror_write(

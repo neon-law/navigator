@@ -24,11 +24,12 @@ the entry, and preserves existing display preferences. It requests no sharing em
 eligible participants' free/busy checks while the Project is open. Mark an event Busy when it should block scheduling.
 Google appointment schedules have their own selection of calendars to check for conflicts.
 
-Create each event once on the shared calendar. Invite people individually when they need to attend or respond. Every
-title begins with the exact Project code and a colon, as in `sample-litigation: Hearing`. The worker corrects editable
-titles on events the open Project Calendar organizes, including recurring series. It requests no guest update and
-preserves attendance. Review existing invitations with the organizer before removing a guest whose attendance is
-unclear.
+Create each event once on the shared calendar. Firm participants use calendar membership. Invite clients and other
+external guests when they need to attend or respond. Every title begins with the exact Project code and a colon, as in
+`sample-litigation: Hearing`. On open Projects, the membership worker corrects editable titles and removes guests on the
+owning Firm's Workspace domain or configured [Brand](brand.md) email domains from upcoming events the Project Calendar
+organizes. It preserves the organizer, calendar resources, and external guests. It requests no guest notifications.
+Google Calendar can accept direct guest edits before the worker reconciles them.
 
 When an assignment ends, the job revokes its reader grant and any event access it marked for that participant. It
 refuses automatic sharing on calendars with public or domain-wide access. An hourly [event

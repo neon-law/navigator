@@ -380,12 +380,31 @@ pub(crate) async fn register_door(
     let kind = match request.kind.as_deref().unwrap_or("primary") {
         "primary" => CalendarKind::Primary,
         "freebusy" => CalendarKind::FreeBusy,
+        "booking" => CalendarKind::Booking,
         _ => {
             return Err(ApiError::MalformedBody(
-                "kind is primary or freebusy".into(),
+                "kind is primary, freebusy, or booking".into(),
             ))
         }
     };
+    if kind == CalendarKind::Booking {
+        let calendar_id = request.calendar_id.as_deref().ok_or_else(|| {
+            ApiError::MalformedBody(
+                "a booking calendar needs an explicit secondary Calendar ID".into(),
+            )
+        })?;
+        let owner = cloud::calendar::GoogleCalendar::for_owner(&email)
+            .await
+            .map_err(|_| ApiError::Db("Google Calendar delegation is unavailable".into()))?;
+        owner
+            .verify_booking_calendar(calendar_id.trim())
+            .await
+            .map_err(|_| {
+                ApiError::MalformedBody(
+                    "use a private secondary calendar owned by your Workspace account".into(),
+                )
+            })?;
+    }
     let calendar_id = request.calendar_id.unwrap_or(email);
     let pg = store::attorney_calendars::postgres()
         .await
@@ -983,6 +1002,9 @@ fn calendar_store(error: store::attorney_calendars::AttorneyCalendarError) -> Ap
         ),
         store::attorney_calendars::AttorneyCalendarError::NotConfigured => {
             ApiError::MalformedBody("PostgreSQL is not configured".into())
+        }
+        store::attorney_calendars::AttorneyCalendarError::BookingAlreadyRegistered => {
+            ApiError::MalformedBody(error.to_string())
         }
         other @ store::attorney_calendars::AttorneyCalendarError::Unavailable => {
             ApiError::Db(other.to_string())

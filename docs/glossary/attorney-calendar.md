@@ -26,6 +26,16 @@ calendar check` exits non-zero when a calendar is unreadable, busy time overlaps
 Calendar coordinates stay off the Project participant list. A caller outside the Firm that owns the Workspace cannot
 read them. The shared [Project Calendar](project-calendar.md) remains the matter calendar.
 
+A booking registration is a separate private secondary Google Calendar. Create it in the attorney's Workspace account
+with the description `Navigator Booking Availability (production)` or `Navigator Booking Availability (staging)` for
+that environment. Register its Calendar ID with `navigator calendar register --booking --calendar <id>`. In the
+attorney's existing Notion Calendar scheduling link, enable **Avoid conflicts** and select that secondary calendar once.
+
+The DBOS reconciliation reads the timed Busy intervals on the attorney's eligible open Project Calendars for the next 90
+days. It writes private `Busy` holds without guests, reminders, or matter details and removes obsolete holds it can
+verify it owns. Incomplete source reads leave existing holds in place. The booking calendar stays out of Navigator's own
+availability reads.
+
 The table is `person_calendar`.
 
 Schema: [`person_calendar`](../../store/postgres/schema.sql).

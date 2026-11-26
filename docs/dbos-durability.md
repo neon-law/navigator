@@ -389,6 +389,11 @@ On startup, each replica submits the most recent due slot. DBOS deduplicates by 
 discovery or submission fails, the host retries within a minute. An accepted membership workflow makes up to three
 attempts for transient failures. Its output reports Person IDs and access readback.
 
+The same calendar scheduler submits one `AttorneyBookingAvailability` workflow per registered booking calendar each hour
+and at startup. It rebuilds the attorney's private Busy holds from verified current Project assignments. The attorney
+selects that calendar once in the Notion booking link. A new Project, reschedule, cancellation, or assignment change
+takes effect on the next successful pass. See [Attorney Calendar](glossary/attorney-calendar.md).
+
 An independent hourly DBOS job reads iCalendar event resources through Google's CalDAV API with the delegated owner's
 credentials. Enable the CalDAV API on the Workspace integration's Google Cloud project. Each new resource revision is
 saved in PostgreSQL and included in the next configured [Iceberg Archive](glossary/iceberg-archive.md) export. A failed

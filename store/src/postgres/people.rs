@@ -585,8 +585,8 @@ const MERGE_UNIQUE_LINKS: &[(&str, &[&str])] = &[
     ("person_calendar", &["calendar_id"]),
 ];
 
-/// Keep the retained Person's primary calendar when moving a duplicate's calendars.
-async fn demote_merged_calendar_primary(
+/// Preserve the retained Person's primary and booking calendar registrations.
+async fn prepare_merged_calendars(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     keep_id: Uuid,
     drop_id: Uuid,
@@ -594,6 +594,15 @@ async fn demote_merged_calendar_primary(
     sqlx::query(
         "UPDATE person_calendar SET kind = 'freebusy' WHERE person_id = $2 AND kind = 'primary' \
          AND EXISTS (SELECT 1 FROM person_calendar WHERE person_id = $1 AND kind = 'primary')",
+    )
+    .bind(keep_id)
+    .bind(drop_id)
+    .execute(&mut **tx)
+    .await
+    .map_err(database)?;
+    sqlx::query(
+        "DELETE FROM person_calendar WHERE person_id = $2 AND kind = 'booking'
+         AND EXISTS (SELECT 1 FROM person_calendar WHERE person_id = $1 AND kind = 'booking')",
     )
     .bind(keep_id)
     .bind(drop_id)
@@ -726,7 +735,7 @@ async fn merge_rows_with_actor(
         .await
         .map_err(database)?;
     }
-    demote_merged_calendar_primary(&mut tx, keep_id, drop_id).await?;
+    prepare_merged_calendars(&mut tx, keep_id, drop_id).await?;
     for (table, others) in MERGE_UNIQUE_LINKS {
         let same = others
             .iter()
