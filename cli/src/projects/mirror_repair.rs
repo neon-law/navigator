@@ -95,10 +95,10 @@ async fn run_inner(dir: &Path, host: Option<&str>, dry_run: bool) -> Result<()> 
                 let verified = mirror_url(&body, &name)?;
                 match remote_action(existing.as_deref(), verified)? {
                     RemoteAction::Add => {
-                        println!("Repair would configure the verified Forgejo remote.")
+                        println!("Repair would configure the verified Forgejo remote.");
                     }
                     RemoteAction::AlreadyConfigured => {
-                        println!("The verified Forgejo remote is already configured.")
+                        println!("The verified Forgejo remote is already configured.");
                     }
                 }
                 println!("Forgejo mirror: {verified}");
