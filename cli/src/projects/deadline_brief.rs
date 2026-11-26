@@ -1,8 +1,7 @@
 //! Read-only cross-Project deadline brief for the signed-in lawyer.
 //!
-//! The inventory door uses the same Firm-scoped open matter set as the lawyer
-//! dashboard. Each matter's existing deadline door is then read independently
-//! so coverage and partial failures remain visible.
+//! The batch read uses the same Firm-scoped open matter set as the lawyer
+//! dashboard. A failed host read remains an incomplete brief.
 
 use std::str::FromStr;
 use std::time::Duration;
@@ -11,7 +10,6 @@ use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, NaiveDate, Utc};
 use chrono_tz::Tz;
 use comfy_table::{presets::UTF8_FULL, Cell, ContentArrangement, Table};
-use futures::{stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -64,6 +62,12 @@ struct ReadFailure {
     message: String,
 }
 
+#[derive(Deserialize)]
+struct DeadlineBatch {
+    projects: Vec<Project>,
+    deadlines: Vec<Deadline>,
+}
+
 fn validate_deadlines(rows: Vec<Deadline>) -> Result<Vec<Deadline>> {
     for row in &rows {
         DateTime::parse_from_rfc3339(&row.due_at)
@@ -72,23 +76,23 @@ fn validate_deadlines(rows: Vec<Deadline>) -> Result<Vec<Deadline>> {
     Ok(rows)
 }
 
-fn partition_reads(
-    reads: Vec<(Project, Result<Vec<Deadline>>)>,
-) -> (Vec<(Project, Vec<Deadline>)>, Vec<ReadFailure>) {
-    let mut good = Vec::new();
-    let mut failed = Vec::new();
-    for (project, result) in reads {
-        match result {
-            Ok(rows) => good.push((project, rows)),
-            Err(error) => failed.push(ReadFailure {
-                project,
-                message: format!("{error:#}"),
-            }),
-        }
+fn partition_batch(batch: DeadlineBatch) -> Result<Vec<(Project, Vec<Deadline>)>> {
+    let mut by_project = batch
+        .projects
+        .into_iter()
+        .map(|project| (project.id, (project, Vec::new())))
+        .collect::<std::collections::HashMap<_, _>>();
+    for row in validate_deadlines(batch.deadlines)? {
+        let project_id = row.project_id;
+        by_project
+            .get_mut(&project_id)
+            .ok_or_else(|| anyhow!("deadline batch contains a Project outside its inventory"))?
+            .1
+            .push(row);
     }
-    good.sort_by(|a, b| a.0.code.cmp(&b.0.code));
-    failed.sort_by(|a, b| a.project.code.cmp(&b.project.code));
-    (good, failed)
+    let mut rows = by_project.into_values().collect::<Vec<_>>();
+    rows.sort_by(|a, b| a.0.code.cmp(&b.0.code));
+    Ok(rows)
 }
 
 #[derive(Clone, Debug, Default)]
@@ -232,26 +236,6 @@ pub(super) async fn list<T: for<'de> Deserialize<'de>>(
         ));
     }
     serde_json::from_str(&body).context("parse Navigator read response")
-}
-
-async fn gather(
-    base: &str,
-    token: &str,
-    projects: Vec<Project>,
-) -> (Vec<(Project, Vec<Deadline>)>, Vec<ReadFailure>) {
-    let client = reqwest::Client::new();
-    let reads = stream::iter(projects.into_iter().map(|project| {
-        let client = client.clone();
-        let token = token.to_owned();
-        async move {
-            let result = project_deadlines(&client, base, &token, project.id).await;
-            (project, result)
-        }
-    }))
-    .buffer_unordered(READ_CONCURRENCY)
-    .collect::<Vec<_>>()
-    .await;
-    partition_reads(reads)
 }
 
 async fn project_deadlines(
@@ -727,17 +711,22 @@ async fn read_host(
     project: Option<&str>,
 ) -> Result<(Vec<(Project, Vec<Deadline>)>, Vec<ReadFailure>)> {
     let client = reqwest::Client::new();
-    let mut projects: Vec<Project> = list(&client, format!("{base}{INVENTORY_PATH}"), token)
-        .await
-        .context("read the dashboard-scoped open Project inventory")?;
+    let batch: DeadlineBatch = list(
+        &client,
+        format!("{base}{INVENTORY_PATH}?include_deadlines=true"),
+        token,
+    )
+    .await
+    .context("read the dashboard-scoped open Project deadline batch")?;
+    let mut projects = partition_batch(batch)?;
     if let Some(code) = project {
-        projects.retain(|row| row.code == code);
+        projects.retain(|(row, _)| row.code == code);
         anyhow::ensure!(
             !projects.is_empty(),
             "no visible open Project has code `{code}`"
         );
     }
-    Ok(gather(base, token, projects).await)
+    Ok((projects, Vec::new()))
 }
 
 pub(super) async fn agenda_rows(
@@ -953,17 +942,25 @@ mod tests {
     }
 
     #[test]
-    fn project_reads_keep_successes_and_report_partial_failures() {
+    fn batch_keeps_empty_projects_and_rejects_out_of_scope_deadlines() {
         let good = project("synthetic-good");
-        let bad = project("synthetic-failed");
-        let (read, failed) = partition_reads(vec![
-            (good, Ok(Vec::new())),
-            (bad, Err(anyhow!("synthetic read failure: HTTP 503"))),
-        ]);
-        assert_eq!(read.len(), 1);
-        assert!(read[0].1.is_empty());
-        assert_eq!(failed.len(), 1);
-        assert!(failed[0].message.contains("503"));
+        let bad = project("synthetic-bad");
+        let mut row = deadline("2028-05-03T12:00:00Z", "open");
+        row.project_id = good.id;
+        let rows = partition_batch(DeadlineBatch {
+            projects: vec![good.clone(), bad],
+            deadlines: vec![row.clone()],
+        })
+        .unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].1.len(), 0);
+        assert_eq!(rows[1].1.len(), 1);
+        row.project_id = Uuid::new_v4();
+        assert!(partition_batch(DeadlineBatch {
+            projects: vec![good],
+            deadlines: vec![row],
+        })
+        .is_err());
     }
 
     #[test]
@@ -1136,6 +1133,7 @@ mod tests {
         let server = wiremock::MockServer::start().await;
         wiremock::Mock::given(method("GET"))
             .and(path(INVENTORY_PATH))
+            .and(wiremock::matchers::query_param("include_deadlines", "true"))
             .and(header("authorization", "Bearer test-token"))
             .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(inventory))
             .mount(&server)
@@ -1143,33 +1141,18 @@ mod tests {
         server
     }
 
-    async fn deadlines(server: &wiremock::MockServer, id: Uuid, status: u16, body: Value) {
-        use wiremock::matchers::{method, path};
-        wiremock::Mock::given(method("GET"))
-            .and(path(format!("/app/api/projects/{id}/deadlines")))
-            .respond_with(wiremock::ResponseTemplate::new(status).set_body_json(body))
-            .mount(server)
-            .await;
-    }
-
     #[tokio::test]
-    async fn a_brief_reads_each_inventory_project_and_fails_when_one_read_fails() {
+    async fn a_brief_reads_one_batch_and_filters_to_one_project() {
         let (good, bad) = (Uuid::new_v4(), Uuid::new_v4());
-        let server = site(json!([
+        let row = json!({"id": Uuid::new_v4(), "project_id": good, "due_at": "2028-05-03T12:00:00Z", "status": "open"});
+        let server = site(json!({"projects": [
             {"id": good, "code": "synthetic-good", "name": "Good", "status": "open"},
             {"id": bad, "code": "synthetic-bad", "name": "Bad", "status": "open"},
-        ]))
+        ], "deadlines": [row]}))
         .await;
-        let row = json!({"id": Uuid::new_v4(), "project_id": good, "due_at": "2028-05-03T12:00:00Z", "status": "open"});
-        deadlines(&server, good, 200, json!([row])).await;
-        deadlines(&server, bad, 503, json!({"error": "unavailable"})).await;
         let _login = crate::projects::test_login::signed_in(&server.uri()).await;
 
-        assert!(!run(options(&server.uri())).await.unwrap());
-        assert_eq!(
-            brief(options(&server.uri())).await,
-            std::process::ExitCode::from(1)
-        );
+        assert!(run(options(&server.uri())).await.unwrap());
 
         let only_good = || BriefOptions {
             project: Some("synthetic-good".into()),
@@ -1179,11 +1162,29 @@ mod tests {
         };
         assert!(run(only_good()).await.unwrap());
         assert_eq!(brief(only_good()).await, std::process::ExitCode::SUCCESS);
+        assert_eq!(server.received_requests().await.unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn a_failed_batch_cannot_report_an_all_clear() {
+        use wiremock::matchers::{method, path};
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(method("GET"))
+            .and(path(INVENTORY_PATH))
+            .respond_with(wiremock::ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+        let _login = crate::projects::test_login::signed_in(&server.uri()).await;
+        assert!(run(options(&server.uri())).await.is_err());
+        assert_eq!(
+            brief(options(&server.uri())).await,
+            std::process::ExitCode::FAILURE
+        );
     }
 
     #[tokio::test]
     async fn all_hosts_reports_expired_sessions_and_still_reads_the_active_host() {
-        let server = site(json!([])).await;
+        let server = site(json!({"projects": [], "deadlines": []})).await;
         let _login = crate::projects::test_login::signed_in(&server.uri()).await;
         let path = crate::credentials::default_credentials_path();
         let mut credentials = crate::credentials::load(&path).unwrap();
@@ -1210,7 +1211,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_brief_refuses_bad_input_before_and_after_the_inventory_read() {
-        let server = site(json!([])).await;
+        let server = site(json!({"projects": [], "deadlines": []})).await;
         let _login = crate::projects::test_login::signed_in(&server.uri()).await;
         let error = run(BriefOptions {
             due_by: Some("June".into()),
@@ -1245,10 +1246,12 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error.to_string().starts_with("HTTP 404"));
-        let unreadable = project("synthetic-unreadable");
-        deadlines(&server, unreadable.id, 200, json!({"not": "a list"})).await;
-        let (read, failed) = gather(&server.uri(), "t", vec![unreadable]).await;
-        assert!(read.is_empty());
-        assert!(failed[0].message.contains("parse Navigator read response"));
+        let malformed = project("synthetic-unreadable");
+        let error = partition_batch(DeadlineBatch {
+            projects: vec![malformed],
+            deadlines: vec![deadline("not-an-instant", "open")],
+        })
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("unreadable due_at"));
     }
 }

@@ -3,7 +3,7 @@
 use assert_cmd::Command;
 use serde_json::{json, Value};
 use tempfile::TempDir;
-use wiremock::matchers::{body_json, header, method, path};
+use wiremock::matchers::{body_json, header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn credentials(root: &std::path::Path, host: &str) -> std::path::PathBuf {
@@ -267,17 +267,12 @@ async fn dated_agenda_keeps_deadlines_when_calendar_access_is_missing() {
     let project = uuid::Uuid::new_v4();
     Mock::given(method("GET"))
         .and(path("/app/api/lawyer/deadline-projects"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
-            {"id": project, "code": "sample-matter", "name": "Sample Matter", "status": "open"}
-        ])))
-        .mount(&server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path(format!("/app/api/projects/{project}/deadlines")))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
-            {"id": uuid::Uuid::new_v4(), "project_id": project, "title": "Synthetic hearing",
-             "due_at": "2099-03-08T15:00:00Z", "status": "open", "category": "hearing"}
-        ])))
+        .and(query_param("include_deadlines", "true"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "projects": [{"id": project, "code": "sample-matter", "name": "Sample Matter", "status": "open"}],
+            "deadlines": [{"id": uuid::Uuid::new_v4(), "project_id": project, "title": "Synthetic hearing",
+             "due_at": "2099-03-08T15:00:00Z", "status": "open", "category": "hearing"}]
+        })))
         .mount(&server)
         .await;
     Mock::given(method("POST"))

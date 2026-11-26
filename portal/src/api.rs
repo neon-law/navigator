@@ -2642,6 +2642,8 @@ async fn onboarding_agreements(
 struct DeadlineProjectQuery {
     #[serde(default)]
     include_pitch: bool,
+    #[serde(default)]
+    include_deadlines: bool,
 }
 
 /// The dashboard inventory for deadline and readiness reporting.
@@ -2680,6 +2682,10 @@ async fn lawyer_deadline_projects(
             &firm_brands,
         )
     });
+    let project_ids = projects
+        .iter()
+        .map(|project| project.id)
+        .collect::<Vec<_>>();
     let rows = projects
         .into_iter()
         .map(|project| {
@@ -2698,6 +2704,14 @@ async fn lawyer_deadline_projects(
             row
         })
         .collect::<Vec<_>>();
+    if query.include_deadlines {
+        let deadlines = store::project_deadlines::list_for_projects(&project_ids)
+            .await
+            .map_err(|error| ApiError::Db(error.to_string()))?;
+        return Ok(
+            Json(serde_json::json!({"projects": rows, "deadlines": deadlines})).into_response(),
+        );
+    }
     if query.include_pitch {
         return Ok(Json(serde_json::json!({"projects": rows})).into_response());
     }

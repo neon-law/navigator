@@ -446,6 +446,25 @@ pub async fn open_for_projects(project_ids: &[Uuid]) -> Result<Vec<Deadline>, De
     .await?)
 }
 
+/// All recorded Deadlines across the authorized Project ids, including
+/// completed and cancelled rows used by the cross-Project status filter.
+pub async fn list_for_projects(project_ids: &[Uuid]) -> Result<Vec<Deadline>, DeadlineError> {
+    if project_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let pg = crate::postgres::matter::authority_for("project_deadlines")
+        .await?
+        .ok_or(crate::postgres::matter::MatterAuthorityError::Unavailable)?;
+    Ok(crate::postgres::matter::select_any(
+        &pg,
+        "project_deadlines",
+        serde_json::json!({}),
+        ("project_id", project_ids),
+        &["due_at", "id"],
+    )
+    .await?)
+}
+
 /// Page upcoming open Deadlines across visible Projects. One lookahead row
 /// exposes a next page without counting every matching Deadline.
 pub async fn upcoming_page_for_projects(
