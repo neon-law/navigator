@@ -2229,6 +2229,14 @@ async fn repair_project_forgejo_mirror_door(
     let forge = connect_project_mirror(&state, firm_id).await?;
     let repair = if method == Method::GET {
         let repository = find_forgejo_mirror(&forge, &project.code).await?;
+        if repository.is_none()
+            && !forge
+                .can_create_repository()
+                .await
+                .map_err(MirrorIssue::from_forge)?
+        {
+            return Err(MirrorIssue::organization_permission().into());
+        }
         let status = if repository.is_some() {
             "present"
         } else {
@@ -2725,13 +2733,33 @@ impl MirrorIssue {
         )
     }
 
+    fn organization_permission() -> Self {
+        Self::new(
+            StatusCode::FORBIDDEN,
+            "unavailable",
+            "organization_permission_denied",
+            "Forgejo did not grant the Firm token permission to create repositories in the configured organization.",
+            "Check the token scopes and grant its account repository creation permission in the Firm organization, then retry.",
+        )
+    }
+
     fn from_forge(error: cloud::forge::ForgeError) -> Self {
         use cloud::forge::ForgeError;
         match error {
-            ForgeError::Authentication => Self::upstream(
+            ForgeError::Authentication => Self::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "unavailable",
+                "credential_rejected",
+                "Forgejo rejected the Firm's stored access token. It may be invalid, expired, or revoked.",
+                "Rotate the Forgejo access token in the Firm's Integration secrets and retry.",
+            ),
+            ForgeError::Api { action: "creating repository", status: 403 } => Self::organization_permission(),
+            ForgeError::Api { status: 403, .. } => Self::new(
+                StatusCode::FORBIDDEN,
+                "unavailable",
                 "access_denied",
-                "Forgejo denied access with the owning Firm's access token.",
-                "Confirm the token and its access to the Firm organization, then update Integration secrets and retry.",
+                "Forgejo denied the requested operation with the Firm's stored access token.",
+                "Check the token scopes and its account's permissions in the configured Forgejo organization, then retry.",
             ),
             ForgeError::NotPrivate { .. } => Self::identity(
                 "repository_not_private",
@@ -12377,56 +12405,63 @@ mod tests {
         let url = format!("{}{repository}", server.uri());
         let forge = cloud::ForgejoForge::new(&server.uri(), "sample-firm", "fixture").unwrap();
         let route = format!("/api/v1/repos{repository}");
+        for (provider_status, expected_status, expected_code) in [
+            (401, StatusCode::UNPROCESSABLE_ENTITY, "credential_rejected"),
+            (403, StatusCode::FORBIDDEN, "access_denied"),
+        ] {
+            Mock::given(method("GET"))
+                .and(path(&route))
+                .and(header("Authorization", "token fixture"))
+                .respond_with(ResponseTemplate::new(provider_status))
+                .expect(2)
+                .mount(&server)
+                .await;
+            let read = super::forgejo_mirror_payload(
+                Some(origin),
+                super::find_forgejo_mirror(&forge, code).await,
+            );
+            assert_eq!(read["forgejo_status"], "unavailable");
+            assert_eq!(read["forgejo_issue"]["code"], expected_code);
+            assert!(read["forgejo"].is_null());
+            let error = super::repair_forgejo_mirror(&forge, code, origin)
+                .await
+                .unwrap_err();
+            let response = error.into_response();
+            assert_eq!(response.status(), expected_status);
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let failure: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(failure["error"], expected_code);
+            assert_eq!(failure["remedy"], read["forgejo_issue"]["remedy"]);
+
+            server.verify().await;
+            server.reset().await;
+        }
+
+        let forge = cloud::ForgejoForge::new(&server.uri(), "sample-firm", "rotated").unwrap();
         Mock::given(method("GET"))
             .and(path(&route))
-            .and(header("Authorization", "token fixture"))
-            .respond_with(ResponseTemplate::new(403))
-            .expect(2)
+            .and(header("Authorization", "token rotated"))
+            .respond_with(ResponseTemplate::new(404))
             .mount(&server)
             .await;
-        let read = super::forgejo_mirror_payload(
-            Some(origin),
-            super::find_forgejo_mirror(&forge, code).await,
-        );
-        assert_eq!(read["forgejo_status"], "unavailable");
-        assert_eq!(read["forgejo_issue"]["code"], "access_denied");
-        assert!(read["forgejo"].is_null());
-        let error = super::repair_forgejo_mirror(&forge, code, origin)
-            .await
-            .unwrap_err();
-        let response = error.into_response();
-        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let failure: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(failure["error"], "access_denied");
-        assert_eq!(failure["remedy"], read["forgejo_issue"]["remedy"]);
-
-        server.verify().await;
-        server.reset().await;
-        Mock::given(method("GET"))
-            .and(path(&route))
-            .and(header("Authorization", "token fixture"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+        Mock::given(method("POST"))
+            .and(path("/api/v1/orgs/sample-firm/repos"))
+            .and(header("Authorization", "token rotated"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
                 "html_url": url,
                 "name": code,
                 "owner": { "login": "sample-firm" },
                 "private": true
             })))
-            .expect(2)
+            .expect(1)
             .mount(&server)
             .await;
-        let read = super::forgejo_mirror_payload(
-            Some(origin),
-            super::find_forgejo_mirror(&forge, code).await,
-        );
-        assert_eq!(read["forgejo_status"], "verified");
-        assert_eq!(read["forgejo"], url);
         let repaired = super::repair_forgejo_mirror(&forge, code, origin)
             .await
             .unwrap();
-        assert_eq!(repaired["mirror_status"], "present");
+        assert_eq!(repaired["mirror_status"], "created");
         assert_eq!(repaired["forgejo_owner"], "sample-firm");
         assert_eq!(repaired["repository_url"], url);
         assert_eq!(repaired["source_repository_url"], origin);

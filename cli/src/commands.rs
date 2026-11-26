@@ -1688,12 +1688,12 @@ pub enum ProjectEnvelopeCmd {
 
 #[derive(Subcommand)]
 pub enum ProjectRepositoryCmd {
-    /// Provision or adopt the Forgejo mirror for a GitHub-backed checkout.
+    /// Create or adopt the Forgejo mirror and synchronize it with GitHub main.
     RepairMirror {
         /// Existing Project repository root. Defaults to the current directory.
         #[arg(long, default_value = ".")]
         dir: PathBuf,
-        /// Check the provider and local remote without making changes.
+        /// Check the Firm token, mirror, and local remote without making changes.
         #[arg(long)]
         dry_run: bool,
         #[command(flatten)]

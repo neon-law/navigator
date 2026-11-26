@@ -134,7 +134,9 @@ pub(super) async fn finish(base: &str, token: &str, id: Uuid, code: &str) -> Res
                     .url
             }
             (status, _) => {
-                bail!("Forgejo mirror is {status}; verify provider access before retrying setup")
+                let detail = mirror_repair::issue_detail(&current.forgejo_issue)
+                    .unwrap_or_else(|| "Verify provider access before retrying setup.".to_owned());
+                bail!("Forgejo mirror is {status}. {detail}")
             }
         };
         let checked = get(base, token, id).await?.repository_remotes;
@@ -455,7 +457,7 @@ async fn verify_project_main(
     Ok(manifest)
 }
 
-async fn sync_mirror(dir: &Path, origin: &str, mirror: &str) -> Result<String> {
+pub(super) async fn sync_mirror(dir: &Path, origin: &str, mirror: &str) -> Result<String> {
     ensure!(
         origin != mirror,
         "Forgejo mirror must be a separate repository"

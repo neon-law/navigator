@@ -85,7 +85,7 @@ async fn run_inner(dir: &Path, host: Option<&str>, dry_run: bool) -> Result<()> 
         match body["mirror_status"].as_str() {
             Some("missing") if existing.is_none() => {
                 println!(
-                    "Forgejo mirror is missing; repair would create it and configure the remote."
+                    "Forgejo mirror is missing. Repair would create it and configure the remote."
                 );
             }
             Some("missing") => {
@@ -105,6 +105,7 @@ async fn run_inner(dir: &Path, host: Option<&str>, dry_run: bool) -> Result<()> 
             }
             _ => bail!("mirror repair preview has no known outcome"),
         }
+        println!("Repair would synchronize Forgejo main with GitHub main.");
         return Ok(());
     }
     let mirror = request(&base, &token, project_id, &owner, &name).await?;
@@ -121,6 +122,8 @@ async fn run_inner(dir: &Path, host: Option<&str>, dry_run: bool) -> Result<()> 
             println!("Forgejo mirror is present and its verified remote is configured.");
         }
     }
+    super::workspace::sync_mirror(dir, source, verified).await?;
+    println!("Forgejo main matches GitHub main.");
     println!("GitHub source: {source}");
     println!("Forgejo mirror: {verified}");
     println!("GitHub remains the source and CI/CD provider.");
@@ -251,25 +254,48 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn repair_adds_the_verified_remote_once_and_refuses_a_different_one() {
+    async fn repair_syncs_main_and_refuses_a_different_remote() {
         let id = uuid::Uuid::new_v4();
         let (server, _login) = site(json!([{"id": id, "code": "sample-matter"}])).await;
         let door = format!("/app/api/project-forgejo-mirrors/{id}");
         answer(&server, "POST", &door, 200, repaired("created")).await;
-        let dir = checkout(MANIFEST, Some(ORIGIN));
+        let dir = checkout(
+            MANIFEST,
+            Some("git@github.com:sample-firm/sample-matter.git"),
+        );
         let host = server.uri();
-        let remote =
-            || crate::projects::lifecycle::git_text(dir.path(), &["remote", "get-url", "forgejo"]);
-
+        let git = |args: &[&str]| crate::projects::lifecycle::git_text(dir.path(), args).unwrap();
+        let repos = tempfile::tempdir().unwrap();
+        let source = repos.path().join("source.git");
+        let mirror = repos.path().join("mirror.git");
+        for (repo, url) in [(&source, ORIGIN), (&mirror, MIRROR)] {
+            git(&["init", "--bare", repo.to_str().unwrap()]);
+            git(&["config", &format!("url.{}.insteadOf", repo.display()), url]);
+        }
+        git(&[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "--no-gpg-sign",
+            "--allow-empty",
+            "-m",
+            "Initial source",
+        ]);
+        git(&["push", source.to_str().unwrap(), "main"]);
         assert_eq!(run(dir.path(), Some(&host), false).await, ExitCode::SUCCESS);
-        assert_eq!(remote().unwrap(), MIRROR);
-        assert_eq!(run(dir.path(), Some(&host), false).await, ExitCode::SUCCESS);
+        assert_eq!(git(&["config", "remote.forgejo.url"]), MIRROR);
+        assert_eq!(
+            git(&["ls-remote", MIRROR, "refs/heads/main"]),
+            git(&["ls-remote", ORIGIN, "refs/heads/main"])
+        );
 
         let other = "https://forge.example.test/other/sample-matter";
         crate::projects::lifecycle::git_text(dir.path(), &["remote", "set-url", "forgejo", other])
             .unwrap();
         assert_eq!(run(dir.path(), Some(&host), false).await, ExitCode::FAILURE);
-        assert_eq!(remote().unwrap(), other);
+        assert_eq!(git(&["remote", "get-url", "forgejo"]), other);
     }
 
     #[tokio::test]
