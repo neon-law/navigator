@@ -3175,7 +3175,7 @@ async fn upload_and_file_eml(
         "received_at": parsed.occurred_at,
         "subject": parsed.subject,
     });
-    let (source_slug, source_pointer) = source
+    let (source_slug, source_pointer, evidence) = source
         .upload(client, parsed, bytes, kind, provenance.clone())
         .await?;
     let attachments = email_attachment::upload_all(
@@ -3185,6 +3185,7 @@ async fn upload_and_file_eml(
         source.checkout,
         kind,
         provenance,
+        &evidence,
     )
     .await?;
     let attachment_ids: Vec<_> = attachments
@@ -3207,7 +3208,17 @@ async fn upload_and_file_eml(
     });
     let filed = post_eml(client.base(), client.token(), client.project_id(), &request).await?;
     if let Some(root) = source.checkout {
-        for (slug, pointer) in std::iter::once((source_slug, source_pointer)).chain(attachments) {
+        for (slug, mut pointer) in std::iter::once((source_slug, source_pointer)).chain(attachments)
+        {
+            // The upload can return existing bytes. A filed pointer still
+            // records the message date and any known Gmail thread.
+            let recorded = pointer.evidence.get_or_insert_with(Default::default);
+            recorded.dated_at = evidence.dated_at;
+            if recorded.source.is_none()
+                || evidence.source.as_deref() != Some(parsed.source_ref.as_str())
+            {
+                recorded.source.clone_from(&evidence.source);
+            }
             let path = crate::document_sync::write_uploaded_pointer(root, &slug, &pointer)?;
             println!("Filed pointer {}", path.display());
         }
@@ -6184,6 +6195,7 @@ SYNTHETIC-DOCX-BYTES\r\n\
             .unwrap()
             .unwrap();
         assert_eq!(attachment_pointer.current_version.asset_id, attachment_id);
+        assert_mail_pointer_evidence(&attachment_pointer);
         assert_eq!(
             attachment_pointer.current_version.sha256,
             model::documents::sha256_hex(attachment_bytes)
@@ -6196,10 +6208,7 @@ SYNTHETIC-DOCX-BYTES\r\n\
             pointer.current_version.asset_id.to_string(),
             filing_body["source_document"]
         );
-        assert_eq!(
-            pointer.evidence.unwrap().source.as_deref(),
-            Some("Gmail thread abc123")
-        );
+        assert_mail_pointer_evidence(&pointer);
         assert_eq!(pointer.folder.unwrap().as_str(), "Mail (Correspondence)");
     }
 
@@ -6214,6 +6223,7 @@ SYNTHETIC-DOCX-BYTES\r\n\
         assert_eq!(source["content_type"], "message/rfc822");
         assert_eq!(source["visibility"], "internal");
         assert_eq!(source["evidence"]["source"], "Gmail thread abc123");
+        assert_eq!(source["evidence"]["dated_at"], "2025-10-09");
         assert_eq!(source["mail_provenance"]["message_id"], parsed.source_ref);
         assert_eq!(
             source["mail_provenance"]["subject"],
@@ -6231,11 +6241,21 @@ SYNTHETIC-DOCX-BYTES\r\n\
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         );
         assert_eq!(attachment["mail_provenance"]["attachment"], true);
+        assert_eq!(attachment["evidence"], source["evidence"]);
         // Attachments carry the message's provenance — the marker that
         // scopes the door's retry dedup to the mail lane.
         assert_eq!(
             attachment["mail_provenance"]["message_id"],
             parsed.source_ref
+        );
+    }
+
+    fn assert_mail_pointer_evidence(pointer: &model::document_pointers::DocumentPointer) {
+        let evidence = pointer.evidence.as_ref().unwrap();
+        assert_eq!(evidence.source.as_deref(), Some("Gmail thread abc123"));
+        assert_eq!(
+            evidence.dated_at,
+            chrono::NaiveDate::from_ymd_opt(2025, 10, 9)
         );
     }
 
