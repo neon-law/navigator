@@ -6,9 +6,8 @@ description: Open release update PRs for a Navigator workspace or land a publish
 # Navigator version bump
 
 Run `/navigator-version-bump <release>` from the workspace holding the Project checkouts. Use the workspace named in the
-request or the current workspace root. Navigator selects `~/Projects` on a fresh installation and retains a sole
-existing `~/Work`. When both exist, pass the intended root explicitly to commands with a workspace `--dir`. Check the
-installed CLI's help for each verb.
+request, or use the configured root. Navigator defaults to `~/Projects`; set `NAVIGATOR_WORKSPACE_ROOT` to use another
+directory. An explicit workspace `--dir` overrides the setting. Check the installed CLI's help for each verb.
 
 1. Read the published release notes and linked migration instructions. Verify the exact tag and
    `navigator --version` before generating files. Obtain explicit authorization before promoting a release candidate to

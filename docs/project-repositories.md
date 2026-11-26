@@ -1311,15 +1311,17 @@ conflicts and unsafe paths skip that checkout. Closed checkouts stay on disk. Do
 
 ### Move an existing workspace
 
-Keep the current root selected with `NAVIGATOR_WORKSPACE_ROOT` through the release. Before switching roots, stop
-workspace watchers and record any scheduled jobs and Git worktrees that refer to absolute checkout paths. Preserve the
-existing destination separately if it contains files. Move the workspace as a unit so relative skill links stay
-together. Use Git's worktree move or repair command for linked checkouts as applicable.
+Keep the current root selected with `NAVIGATOR_WORKSPACE_ROOT` until the new release is installed. Before switching
+roots, stop workspace watchers and record scheduled jobs and Git worktrees that refer to absolute checkout paths. At
+cutover, move any existing destination aside so its contents remain available while you verify the move. Move the
+workspace as a unit so relative skill links stay together. Use Git's worktree move or repair command for linked
+checkouts as applicable.
 
 From the new root, verify Jujutsu and Git status, both forge remotes where configured, and the relative skill links. Run
 `navigator sync --dir . --host <host> --dry-run` and run `navigator project gate` in each checkout. Update scheduled
-paths and the configured root after those checks pass. Keep the preserved destination and original path available until
-verification is complete so you can reverse the move and restore the original setting.
+paths and the configured root after those checks pass. Keep the preserved destination and original path during
+verification so you can reverse the move and restore the original setting. Once the new release and the migrated
+workspace pass these checks, remove the old destination only after retaining any files you still need.
 
 ### The workspace root
 

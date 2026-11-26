@@ -23,11 +23,17 @@ pub fn resolve(home: &Path, explicit: Option<&Path>, configured: Option<&Path>) 
     let selected = configured
         .filter(|path| !path.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("Projects"));
-    Ok(if selected.is_absolute() {
+    let root = if selected.is_absolute() {
         selected.to_path_buf()
     } else {
         home.join(selected)
-    })
+    };
+    match std::fs::symlink_metadata(&root) {
+        Ok(metadata) => ensure!(metadata.is_dir(), "{} is not a directory", root.display()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error).with_context(|| format!("inspect {}", root.display())),
+    }
+    Ok(root)
 }
 
 pub fn selected(explicit: Option<&Path>) -> Result<PathBuf> {
@@ -75,6 +81,15 @@ mod tests {
             resolve(home.path(), Some(Path::new(".")), Some(Path::new("custom"))).unwrap(),
             std::env::current_dir().unwrap().join(".")
         );
+    }
+
+    #[test]
+    fn configured_root_rejects_a_link_to_another_directory() {
+        let home = tempfile::tempdir().unwrap();
+        let link = home.path().join("linked");
+        std::os::unix::fs::symlink(home.path(), &link).unwrap();
+        let error = resolve(home.path(), None, Some(&link)).unwrap_err();
+        assert!(error.to_string().contains("is not a directory"));
     }
 
     #[test]

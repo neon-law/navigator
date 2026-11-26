@@ -497,12 +497,11 @@ than on their first real upload.
 
 ### Work in a Project with Jujutsu
 
-Use `~/Work/<project-code>` for each local checkout. Jujutsu (`jj`) can work alongside Git in a colocated checkout, so
-the Project keeps its Git remote and Navigator commands still run from the same folder.
+Keep each local checkout directly under the configured workspace root. Start in that top-level folder for workspace
+commands. Jujutsu (`jj`) can work alongside Git in a colocated checkout, so the Project keeps its Git remote.
 
 ```bash
-mkdir -p ~/Work
-cd ~/Work/sample-litigation
+cd sample-litigation
 jj git init --colocate
 jj status
 jj log
