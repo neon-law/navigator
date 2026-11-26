@@ -59,19 +59,6 @@ fn user_message_names_the_rule_for_the_create_form_s_two_refusals() {
         "You may not make this change."
     );
 }
-/// ENG-499: creation is atomic with the first Admin DRI. There is no
-/// setup state — the moment the Firm row exists, so does exactly one
-/// `person_firm_role` row carrying `membership = admin, is_dri = true`.
-/// Creation refuses every ineligible tier: Lawyer, Clerk, and Client all
-/// fail the same way a dangling person id would.
-/// An Owner may hold the Admin DRI designation: opened as a Firm's first
-/// DRI, or appointed onto a Firm they hold no membership on — which grants
-/// the `admin` membership in the same transaction. Either way the
-/// invariant report finds nothing to flag.
-
-/// Owner appoints and transfers the designation; every other tier,
-/// including the Firm's own Admin, is refused. The transfer clears the
-/// outgoing DRI and sets the incoming one atomically.
 #[derive(Clone)]
 struct TelemetryBuf(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
 impl std::io::Write for TelemetryBuf {
