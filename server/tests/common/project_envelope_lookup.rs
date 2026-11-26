@@ -10,7 +10,7 @@ use std::sync::Arc;
 use store::{persons::Role, surreal::SurrealDb};
 use uuid::Uuid;
 use wiremock::{
-    matchers::{header, method, path},
+    matchers::{body_json, header, method, path},
     Mock, MockServer, ResponseTemplate,
 };
 
@@ -165,6 +165,7 @@ async fn reads_an_unregistered_demo_draft_only_on_the_signers_project() {
 /// from the DocuSign web app — by its ID, and learns which Project it
 /// matches or why none, with nothing written.
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // one Firm fixture walks every read and void outcome
 async fn a_firm_lawyer_reads_an_unrecorded_envelope_by_id_and_learns_its_match() {
     let http = MockServer::start().await;
     let account = Uuid::now_v7();
@@ -259,9 +260,73 @@ async fn a_firm_lawyer_reads_an_unrecorded_envelope_by_id_and_learns_its_match()
     let response = fx.get(&route, Some(Role::Client), Some(signer)).await;
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 
+    // LAW-430: void refuses a completed envelope and an empty reason, voids
+    // one out for signature, and deletes a held draft.
+    let void = |id: Uuid, reason: &str| {
+        post_json(&fx, format!("/app/api/envelopes/{id}/void"), json!({"reason": reason}))
+    };
+    let response = void(envelope, "Declined").await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(json(response).await["error"], "envelope_closed");
+    assert_eq!(void(envelope, "  ").await.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let (sent, draft) = (Uuid::now_v7(), Uuid::now_v7());
+    for (id, status) in [(sent, "sent"), (draft, "created")] {
+        let base = format!("/v2.1/accounts/{account}/envelopes/{id}");
+        Mock::given(method("GET"))
+            .and(path(base.clone()))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"envelopeId":id,"status":status})))
+            .mount(&http)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("{base}/recipients")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"signers":[]})))
+            .mount(&http)
+            .await;
+    }
+    Mock::given(method("PUT"))
+        .and(path(format!("/v2.1/accounts/{account}/envelopes/{sent}")))
+        .and(body_json(json!({"status":"voided","voidedReason":"Pitch declined"})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"envelopeId":sent})))
+        .expect(1)
+        .mount(&http)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path(format!("/v2.1/accounts/{account}/folders/recyclebin")))
+        .and(body_json(json!({"envelopeIds":[draft]})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+        .expect(1)
+        .mount(&http)
+        .await;
+    let response = void(sent, "Pitch declined").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(json(response).await["status"], "voided");
+    let response = void(draft, "Stale render").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(json(response).await["status"], "deleted");
+
     let writes: i64 = sqlx::query_scalar("SELECT (SELECT count(*) FROM signature)+(SELECT count(*) FROM project_envelope)+(SELECT count(*) FROM asset)+(SELECT count(*) FROM notation)")
         .fetch_one(pool).await.unwrap();
     assert_eq!(writes, 0);
+}
+
+async fn post_json(
+    fx: &Fixture,
+    route: String,
+    body: serde_json::Value,
+) -> axum::response::Response {
+    use tower::ServiceExt as _;
+    let mut session = portal::session::SessionData::fresh("synthetic", Role::Lawyer);
+    session.person_id = Some(fx.lawyer);
+    let token =
+        portal::SessionStore::new(portal::test_support::TEST_SESSION_KEY).encode(&session);
+    let request = axum::http::Request::post(route)
+        .header("authorization", format!("Bearer {token}"))
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap();
+    store::postgres::PostgresDb::with_test_db(fx.pg.clone(), fx.app.clone().oneshot(request))
+        .await
+        .unwrap()
 }
 
 async fn fx_code(fx: &Fixture) -> String {

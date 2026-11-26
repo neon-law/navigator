@@ -2158,6 +2158,49 @@ impl DocuSignSignatureProvider {
         ))
     }
 
+    /// Void an envelope out for signature. DocuSign emails each recipient
+    /// the reason.
+    pub async fn void_envelope(&self, id: Uuid, reason: &str) -> Result<(), SignatureError> {
+        let url = self.request_url(&format!("v2.1/accounts/{}/envelopes/{id}", self.account_id))?;
+        let body = serde_json::json!({ "status": "voided", "voidedReason": reason });
+        self.put_ok(url, &body, "void").await
+    }
+
+    /// Move a held draft to the recycle bin. DocuSign voids only sent
+    /// envelopes; a draft was never shown to anyone, so it is deleted.
+    pub async fn delete_draft(&self, id: Uuid) -> Result<(), SignatureError> {
+        let url = self.request_url(&format!(
+            "v2.1/accounts/{}/folders/recyclebin",
+            self.account_id
+        ))?;
+        let body = serde_json::json!({ "envelopeIds": [id] });
+        self.put_ok(url, &body, "draft delete").await
+    }
+
+    async fn put_ok(
+        &self,
+        url: reqwest::Url,
+        body: &serde_json::Value,
+        what: &str,
+    ) -> Result<(), SignatureError> {
+        let response = self
+            .http
+            .put(url)
+            .bearer_auth(self.bearer_token().await?)
+            .json(body)
+            .send()
+            .await
+            .map_err(|error| SignatureError::Provider(error.to_string()))?;
+        let status = response.status();
+        if status.is_success() {
+            return Ok(());
+        }
+        let detail = response.text().await.unwrap_or_default();
+        Err(SignatureError::Provider(format!(
+            "docusign envelope {what} responded {status}: {detail}"
+        )))
+    }
+
     /// PUT an existing envelope's status to `sent` — the dispatch of a
     /// draft a previous prepare created.
     async fn dispatch_envelope(&self, envelope_id: &str) -> Result<(), SignatureError> {

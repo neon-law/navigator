@@ -1,4 +1,4 @@
-//! `navigator project envelope read` (LAW-501): reach any
+//! `navigator project envelope read|void` (LAW-501, LAW-430): reach any
 //! envelope in the caller's Firm `DocuSign` account by its ID or a `DocuSign`
 //! notification link, whether or not a Project records it.
 
@@ -26,6 +26,18 @@ pub async fn read(host: Option<&str>, envelope: &str) -> ExitCode {
             );
         }
     })
+}
+
+/// Void a sent envelope, or delete a held draft.
+pub async fn void(host: Option<&str>, envelope: &str, reason: &str) -> ExitCode {
+    let result = async {
+        let id = envelope_id_from(envelope)?;
+        let (base, token) = remote::resolve(host)?;
+        let body = serde_json::json!({ "reason": reason });
+        request(&base, &token, reqwest::Method::POST, &format!("{id}/void"), Some(body)).await
+    }
+    .await;
+    finish("void", result, |_| {})
 }
 
 fn finish(
@@ -91,7 +103,7 @@ async fn request(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::matchers::{header, method, path};
+    use wiremock::matchers::{body_json, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[test]
@@ -115,12 +127,13 @@ mod tests {
     async fn a_refusal_carries_the_servers_reason() {
         let server = MockServer::start().await;
         let envelope = uuid::Uuid::new_v4();
-        Mock::given(method("GET"))
-            .and(path(format!("/app/api/envelopes/{envelope}")))
+        Mock::given(method("POST"))
+            .and(path(format!("/app/api/envelopes/{envelope}/void")))
             .and(header("authorization", "Bearer test-token"))
-            .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
-                "error": "envelope_not_found",
-                "message": "Envelope is not in your Firm's DocuSign account",
+            .and(body_json(serde_json::json!({"reason": "Declined"})))
+            .respond_with(ResponseTemplate::new(409).set_body_json(serde_json::json!({
+                "error": "envelope_closed",
+                "message": "Envelope is completed; only a draft or an envelope out for signature can be voided",
             })))
             .expect(1)
             .mount(&server)
@@ -128,13 +141,13 @@ mod tests {
         let error = request(
             &server.uri(),
             "test-token",
-            reqwest::Method::GET,
-            &envelope.to_string(),
-            None,
+            reqwest::Method::POST,
+            &format!("{envelope}/void"),
+            Some(serde_json::json!({"reason": "Declined"})),
         )
         .await
         .unwrap_err();
-        assert!(error.to_string().contains("404"), "{error}");
-        assert!(error.to_string().contains("not in your Firm's"), "{error}");
+        assert!(error.to_string().contains("409"), "{error}");
+        assert!(error.to_string().contains("is completed"), "{error}");
     }
 }

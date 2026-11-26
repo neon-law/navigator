@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # DocuSign demo rehearsal. --check-draft creates and reads an unsent envelope.
+# --check-void sends one to embedded sandbox recipients (no email), voids it,
+# and deletes a second draft.
 # With no arguments, start the local signing ceremony.
 #
 # What this script does: rehearse the REAL send against DocuSign demo on
@@ -30,12 +32,14 @@ fail() {
     exit 1
 }
 
-if [[ ${1:-} == --check-draft ]]; then
+if [[ ${1:-} == --check-draft || ${1:-} == --check-void ]]; then
+    test_name=sandbox_reads_an_unregistered_draft_by_id
+    [[ $1 == --check-void ]] && test_name=sandbox_voids_a_sent_envelope_and_deletes_a_draft
     shift
     if [[ $# -eq 2 && $1 == --project-id && -n $2 ]]; then
         project=$2
     elif [[ $# -gt 0 ]]; then
-        fail "usage: $0 --check-draft [--project-id <staging-project>]"
+        fail "usage: $0 --check-draft|--check-void [--project-id <staging-project>]"
     else
         project=
     fi
@@ -67,9 +71,9 @@ if [[ ${1:-} == --check-draft ]]; then
         source .env.local
         set +a
     fi
-    exec "$test_bin" --ignored --exact sandbox_reads_an_unregistered_draft_by_id --nocapture
+    exec "$test_bin" --ignored --exact "$test_name" --nocapture
 fi
-[[ $# -eq 0 ]] || fail "usage: $0 [--check-draft [--project-id <staging-project>]]"
+[[ $# -eq 0 ]] || fail "usage: $0 [--check-draft|--check-void [--project-id <staging-project>]]"
 
 # The local ceremony uses the worktree's environment and optional private overrides.
 [[ -f .env || -f .env.local ]] || fail "configure .env or .env.local for the demo ceremony"

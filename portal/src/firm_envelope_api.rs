@@ -1,4 +1,4 @@
-//! `/app/api/envelopes/{envelope_id}` (LAW-501): read one
+//! `/app/api/envelopes/{envelope_id}` (LAW-501, LAW-430): read or void one
 //! envelope in the caller's Firm DocuSign account by its ID, whether or not
 //! a Project records it — an envelope sent from the DocuSign web app
 //! included.
@@ -16,9 +16,13 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
+use serde::Deserialize;
 use serde_json::json;
 use store::firm_capability::FirmCapability;
 use uuid::Uuid;
+
+/// DocuSign's limit on `voidedReason`.
+const VOID_REASON_MAX: usize = 200;
 
 pub(super) async fn read(
     State(state): State<ApiState>,
@@ -81,6 +85,50 @@ pub(super) async fn read(
         "reason": reason,
     });
     Ok(Json(body).into_response())
+}
+
+#[derive(Deserialize)]
+pub(super) struct VoidRequest {
+    reason: String,
+}
+
+/// Void a sent envelope, or move a held draft to DocuSign's recycle bin.
+pub(super) async fn void(
+    State(state): State<ApiState>,
+    lawyer: LawyerSession,
+    Path(envelope_id): Path<Uuid>,
+    Json(input): Json<VoidRequest>,
+) -> Result<Response, ApiError> {
+    let reason = input.reason.trim();
+    if reason.is_empty() || reason.chars().count() > VOID_REASON_MAX {
+        return Ok(refusal(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "void_reason",
+            &format!("Give a reason of 1 to {VOID_REASON_MAX} characters; DocuSign shows it to the recipients"),
+        ));
+    }
+    let (_, provider, envelope) = match locate(&state, &lawyer, envelope_id).await? {
+        Ok(found) => found,
+        Err(refusal) => return Ok(refusal),
+    };
+    let outcome = match envelope.status.as_str() {
+        "created" => provider.delete_draft(envelope_id).await.map(|()| "deleted"),
+        "sent" | "delivered" | "correct" => provider
+            .void_envelope(envelope_id, reason)
+            .await
+            .map(|()| "voided"),
+        status => {
+            return Ok(refusal(
+                StatusCode::CONFLICT,
+                "envelope_closed",
+                &format!("Envelope {envelope_id} is {status}; only a draft or an envelope out for signature can be voided"),
+            ))
+        }
+    };
+    match outcome {
+        Ok(status) => Ok(Json(json!({"envelopeId": envelope_id, "status": status})).into_response()),
+        Err(error) => Err(ApiError::SignatureUnavailable(error)),
+    }
 }
 
 /// Find the envelope in the first Firm account the caller may reach that

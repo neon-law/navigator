@@ -1642,6 +1642,17 @@ pub enum ProjectEnvelopeCmd {
         #[command(flatten)]
         host: HostOpt,
     },
+    /// Void an envelope out for signature in your Firm's `DocuSign` account, or delete a
+    /// held draft. Refuses a completed, declined, or already voided envelope.
+    Void {
+        /// The envelope ID, or a `DocuSign` notification link whose `m=` value is the ID.
+        envelope: String,
+        /// Why it is voided; `DocuSign` emails this to every recipient.
+        #[arg(long)]
+        reason: String,
+        #[command(flatten)]
+        host: HostOpt,
+    },
     /// Refresh recorded envelopes, or read one directly from the Firm account by ID.
     Status {
         project_code: String,
@@ -2720,6 +2731,11 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
             ProjectEnvelopeCmd::Read { envelope, host } => {
                 projects::firm_envelope::read(host.host.as_deref(), &envelope).await
             }
+            ProjectEnvelopeCmd::Void {
+                envelope,
+                reason,
+                host,
+            } => projects::firm_envelope::void(host.host.as_deref(), &envelope, &reason).await,
             ProjectEnvelopeCmd::Status {
                 project_code,
                 envelope_id,

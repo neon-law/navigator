@@ -2338,12 +2338,20 @@ ci_matter_content_denied if {
     evidence_share_management
 }
 
-# Read one envelope in the caller's Firm DocuSign account; the
+# Read or void one envelope in the caller's Firm DocuSign account; the
 # handler checks firm_envelopes on each Firm it reaches.
 route_allow if {
     count(input.path) == 4
     array.slice(input.path, 0, 3) == ["app", "api", "envelopes"]
     input.method == "GET"
+    is_lawyer(input.session)
+}
+
+route_allow if {
+    count(input.path) == 5
+    array.slice(input.path, 0, 3) == ["app", "api", "envelopes"]
+    input.path[4] == "void"
+    input.method == "POST"
     is_lawyer(input.session)
 }
 

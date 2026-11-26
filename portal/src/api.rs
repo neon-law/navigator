@@ -1128,6 +1128,11 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             get(firm_envelope_api::read),
         ),
         (
+            "POST",
+            "/app/api/envelopes/{envelope_id}/void",
+            post(firm_envelope_api::void),
+        ),
+        (
             "GET",
             "/app/api/projects/{id}/envelopes/{envelope_id}",
             get(lookup_project_envelope),

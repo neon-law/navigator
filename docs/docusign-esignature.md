@@ -184,6 +184,19 @@ status. A pending envelope keeps a pitch pending. On completion, Navigator files
 Completion with their DocuSign envelope ID and records the provider's completion date. A verified Connect completion
 updates the linked envelope, and rerunning the command refreshes it directly from DocuSign.
 
+## Void an envelope
+
+Void an envelope that is out for signature, for example after a pitch is declined. DocuSign emails the reason to every
+recipient. A held draft was never shown to anyone, so it moves to DocuSign's recycle bin instead. A completed, declined,
+or already voided envelope is refused with `envelope_closed`.
+
+```bash
+navigator project envelope void "$envelope_id_or_link" --reason "Engagement declined" --host "$host"
+```
+
+Run it only after the lawyer approves voiding that envelope. Refresh a recorded envelope afterwards with `navigator
+project envelope status <code> --host <host>` so the matter shows it voided.
+
 ## Upload an executed onboarding letter
 
 To file a letter already executed in the Firm's DocuSign account, supply its envelope UUID.

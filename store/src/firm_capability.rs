@@ -69,8 +69,8 @@ pub enum FirmCapability {
     /// Firm admits it. A caller with no membership on that Firm cannot spend
     /// the deployment's delegation.
     ReadAttorneyCalendars,
-    /// Read an envelope in the Firm's own DocuSign account by its ID,
-    /// whether or not a Project records it. An Admin or Lawyer membership
+    /// Read or void an envelope in the Firm's own DocuSign account by its
+    /// ID, whether or not a Project records it. An Admin or Lawyer membership
     /// on the Firm admits it, as a seat in the Firm's DocuSign account would.
     FirmEnvelopes,
     /// Create or replace a Firm's presentation and public brand assets. Only
