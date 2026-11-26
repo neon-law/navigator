@@ -563,34 +563,16 @@ async fn write_hook_probe() {
         .await
         .unwrap();
     let incoming_id = Uuid::new_v4();
-    crate::letters::record_with_id(
-        &surreal,
-        incoming_id,
-        &crate::letters::NewLetter {
-            mailroom_id: mailroom.id,
-            project_id: None,
-            direction: "incoming".into(),
-            sender: "Synthetic Sender".into(),
-            recipient: "Synthetic Recipient".into(),
-            summary: "Synthetic incoming summary".into(),
-        },
-    )
-    .await
-    .unwrap();
+    let outgoing_id = Uuid::new_v4();
     let dangling_project_id = Uuid::new_v4();
-    let outgoing = crate::letters::record(
-        &surreal,
-        &crate::letters::NewLetter {
-            mailroom_id: mailroom.id,
-            project_id: Some(dangling_project_id),
-            direction: "outgoing".into(),
-            sender: "Synthetic Sender".into(),
-            recipient: "Synthetic Recipient".into(),
-            summary: "Synthetic outgoing summary".into(),
-        },
-    )
-    .await
-    .unwrap();
+    surreal.query("CREATE $incoming SET mailroom_id=$mailroom, direction='incoming', sender='Synthetic Sender', recipient='Synthetic Recipient', summary='Synthetic incoming summary'; CREATE $outgoing SET mailroom_id=$mailroom, project_id=$project, direction='outgoing', sender='Synthetic Sender', recipient='Synthetic Recipient', summary='Synthetic outgoing summary'")
+        .bind(("incoming", crate::surreal::record_id("letter", incoming_id)))
+        .bind(("outgoing", crate::surreal::record_id("letter", outgoing_id)))
+        .bind(("mailroom", crate::surreal::record_id("mailroom", mailroom.id)))
+        .bind(("project", crate::surreal::record_id("project", dangling_project_id)))
+        .await.unwrap().check().unwrap();
+    after_write(&surreal, MirrorKey::Letter(incoming_id)).await;
+    after_write(&surreal, MirrorKey::Letter(outgoing_id)).await;
     let replay = after_write(&surreal, MirrorKey::Post(post)).await;
     match case.as_str() {
         "disabled" => {
@@ -609,7 +591,7 @@ async fn write_hook_probe() {
             assert!(mail.is_clean(), "{mail:?}");
             let stored: (Option<Uuid>, String) =
                 sqlx::query_as("SELECT project_id,direction FROM letter WHERE id=$1")
-                    .bind(outgoing.id)
+                    .bind(outgoing_id)
                     .fetch_one(&pg.0)
                     .await
                     .unwrap();
