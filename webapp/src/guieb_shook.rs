@@ -15,7 +15,7 @@ const ASSETS: &str = "/assets/img/guieb-shook";
 const CSS: &str = "/public/css/guieb-shook-website.css";
 const SCRIPT: &str = "/public/js/guieb-shook-website.js";
 const CONTACT: &str = "/contact";
-const STORY: &str = "/our-story.html";
+const STORY: &str = "/our-story";
 const EMAIL: &str = "info@guiebshook.com";
 
 #[derive(Deserialize, PartialEq)]
@@ -235,7 +235,7 @@ pub fn WebsitePage(
 
 #[component]
 fn Header(site: Arc<Website>, home: bool, utility: Vec<ChromeNavLink>) -> Element {
-    let about = vec![(STORY, "Our Story"), ("/our-story.html#name", "Our Name")];
+    let about = vec![(STORY, "Our Story"), ("/our-story#name", "Our Name")];
     let practice = site
         .practice
         .iter()
@@ -676,7 +676,7 @@ fn Contact(phone: String, consent: String, lead: LeadCaptureContext) -> Element 
                         }
                     }
                     p { class: "form-disclaimer", "Sending this form doesn’t by itself create an attorney–client relationship. Please don’t include confidential information until we’ve confirmed we can take your matter. "
-                        a { href: "/legal/privacy-policy.html", "Privacy Policy" }
+                        a { href: "/legal/privacy-policy", "Privacy Policy" }
                     }
                     if let Some(sitekey) = lead.hcaptcha_sitekey { HCaptchaWidget { sitekey } }
                     button { class: "nav-contact-submit btn", r#type: "submit", "Send" }

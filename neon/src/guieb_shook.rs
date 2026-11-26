@@ -30,7 +30,7 @@ static WEBSITE: LazyLock<Arc<Website>> = LazyLock::new(|| {
 });
 
 pub(crate) fn public_pages() -> impl Iterator<Item = (&'static str, Page)> {
-    std::iter::once(("/our-story.html", Page::Story))
+    std::iter::once(("/our-story", Page::Story))
         .chain(
             WEBSITE
                 .practice
@@ -57,7 +57,13 @@ pub(crate) fn public_pages() -> impl Iterator<Item = (&'static str, Page)> {
 pub(crate) fn new_routes(branding: &'static Branding, state: &AppState) -> Router {
     public_pages()
         .fold(Router::new(), |router, (path, page)| {
-            router.merge(page_router(path, page, branding, state))
+            // Earlier links carried `.html`; send them to the clean path.
+            router
+                .merge(page_router(path, page, branding, state))
+                .route(
+                    &format!("{path}.html"),
+                    get(move || async move { Redirect::permanent(path) }),
+                )
         })
         .route("/index.html", get(|| async { Redirect::permanent("/") }))
         .route(
