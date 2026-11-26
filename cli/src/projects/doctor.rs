@@ -455,8 +455,15 @@ fn now_secs() -> i64 {
 /// namespace. Generic skill links (no Firm slug) contribute nothing. Empty
 /// when no Firm link is present.
 fn linked_firms(checkout: &std::path::Path) -> Vec<String> {
-    use crate::projects::workspace_skills::{FIRM_DIRECTORY, PROJECT_LINK};
+    use crate::projects::workspace_skills::{
+        codex_override_firm, CODEX_OVERRIDE, FIRM_DIRECTORY, PROJECT_LINK,
+    };
     let mut slugs = std::collections::BTreeSet::new();
+    if let Ok(contents) = std::fs::read_to_string(checkout.join(CODEX_OVERRIDE)) {
+        if let Some(slug) = codex_override_firm(&contents) {
+            slugs.insert(slug.to_owned());
+        }
+    }
     for dir in [".claude/rules", ".claude/skills"] {
         for entry in std::fs::read_dir(checkout.join(dir))
             .into_iter()

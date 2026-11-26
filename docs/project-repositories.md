@@ -1326,6 +1326,10 @@ only Firm that host lists. Each Firm's library is cloned or fast-forwarded with 
 A Firm skill replaces the generic skill of the same name inside that Firm's checkouts, and sync reports the override. A
 checkout never links another Firm's skills.
 
+Codex loads the Project contract and its Firm rules from the ignored `AGENTS.override.md` in the checkout. Claude loads
+the Firm rules through its local rules link. Sync checks that Git ignores the override before writing it and keeps
+custom local overrides. Run `navigator project repository sync-skills` to refresh a checkout's ignore rules.
+
 Each Firm fails closed alone: an unreadable host, a Firm with no library, or an unreachable repository is named under
 `missing:` while the generic layer and every other Firm still install. A Firm skill without a `SKILL.md`, or one naming
 a Project code in the workspace, is not linked. Removing a Firm's last checkout removes its library and links on the
