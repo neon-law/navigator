@@ -366,6 +366,20 @@ pub const SEEDED_TEMPLATES: &[SeededTemplate] = &[
         markdown: canonical::TEMPLATE_ONBOARDING_LETTER,
     },
     SeededTemplate {
+        label: "notations/neon_law/firm/onboarding__arag.md",
+        markdown: include_str!("../../templates/notations/neon_law/firm/onboarding__arag.md"),
+    },
+    SeededTemplate {
+        label: "notations/neon_law/firm/onboarding__legalease.md",
+        markdown: include_str!("../../templates/notations/neon_law/firm/onboarding__legalease.md"),
+    },
+    SeededTemplate {
+        label: "notations/neon_law/firm/engagement_scope_amendment.md",
+        markdown: include_str!(
+            "../../templates/notations/neon_law/firm/engagement_scope_amendment.md"
+        ),
+    },
+    SeededTemplate {
         label: "notations/neon_law/offboarding__letter.md",
         markdown: canonical::TEMPLATE_OFFBOARDING_LETTER,
     },
@@ -1636,6 +1650,16 @@ pub async fn seed_canonical(
     let mut r = SeedReport::default();
     seed_canonical_into(surreal, storage, &mut r).await?;
     Ok(r)
+}
+
+#[cfg(feature = "test-support")]
+pub(crate) async fn seed_notation_catalog(
+    surreal: &SurrealDb,
+    storage: &std::sync::Arc<dyn cloud::StorageService>,
+) -> anyhow::Result<()> {
+    let mut report = SeedReport::default();
+    seed_questions(surreal, &mut report).await?;
+    seed_templates(surreal, storage, &mut report).await
 }
 
 /// Apply the compiled sample-matter fixture on top of the canonical seed.

@@ -444,7 +444,7 @@ fn resolve_template(base: &Path, file: &Path) -> Result<Resolved> {
             .or_else(|| {
                 entries.iter().find(|entry| {
                     std::fs::read_to_string(entry.path())
-                        .is_ok_and(|src| template_kind_matches(&src, &wanted))
+                        .is_ok_and(|src| template_kind_matches(entry.path(), &src, &wanted))
                 })
             });
         if let Some(entry) = found {
@@ -487,8 +487,9 @@ fn bundled_template(wanted: &str) -> Option<Resolved> {
         .iter()
         .find(|(path, _)| normalized_stem(Path::new(path)) == wanted)
         .or_else(|| {
-            templates.iter().find(|(_, bytes)| {
-                std::str::from_utf8(bytes).is_ok_and(|src| template_kind_matches(src, wanted))
+            templates.iter().find(|(path, bytes)| {
+                std::str::from_utf8(bytes)
+                    .is_ok_and(|src| template_kind_matches(Path::new(path), src, wanted))
             })
         });
     found.and_then(|(path, bytes)| {
@@ -500,7 +501,11 @@ fn bundled_template(wanted: &str) -> Option<Resolved> {
     })
 }
 
-fn template_kind_matches(src: &str, wanted: &str) -> bool {
+fn template_kind_matches(path: &Path, src: &str, wanted: &str) -> bool {
+    // Firm templates require a code or path because they carry specific engagement terms.
+    if rules::template_catalog::is_firm_template_path(path) {
+        return false;
+    }
     rules::frontmatter::extract(src)
         .and_then(|fm| rules::frontmatter::field(fm, "kind"))
         .is_some_and(|kind| normalized_stem(Path::new(&kind)) == wanted)
@@ -649,6 +654,13 @@ mod tests {
             Path::new("notations/neon_law/onboarding__letter.md")
         );
         assert!(!found.src.contains("code:"));
+
+        let carrier = resolve_template(empty.path(), Path::new("onboarding__legalease"))
+            .expect("the carrier template resolves by its code");
+        assert_eq!(
+            carrier.path,
+            Path::new("notations/neon_law/firm/onboarding__legalease.md")
+        );
     }
 
     /// The checkout wins. An author editing a template previews the file

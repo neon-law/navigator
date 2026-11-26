@@ -222,6 +222,8 @@ pub enum PlanIntakeError {
     Jurisdiction(#[from] crate::jurisdictions::JurisdictionError),
     #[error(transparent)]
     LegalPlan(#[from] crate::legal_plans::LegalPlanError),
+    #[error("start Legal Plan Onboarding: {0}")]
+    Onboarding(String),
 }
 
 #[derive(SurrealValue)]
@@ -1053,16 +1055,45 @@ async fn mark_accepted(
 ///
 /// Returns an error for an inaccessible or declined notice, an unresolved
 /// member or Legal Plan, or a Project open that fails its checks.
-#[expect(
-    clippy::too_many_lines,
-    reason = "the ordered take steps share one reservation and its retry boundary"
-)]
 pub async fn accept(
     surreal: &SurrealDb,
     pg: &PostgresDb,
     staged_id: Uuid,
     input: &AcceptInput,
 ) -> Result<Accepted, PlanIntakeError> {
+    accept_with_onboarding(surreal, pg, staged_id, input, |_| async { Ok(()) }).await
+}
+
+/// The verified referral and fee schedule provided to the onboarding step.
+pub struct PlanOnboarding {
+    pub provider: String,
+    pub project_id: Uuid,
+    pub person_id: Uuid,
+    pub fee: Option<crate::legal_plans::PlanFeeSchedule>,
+}
+
+/// Take a referral and start its onboarding under the Project reservation.
+///
+/// The onboarding step runs before the intake is recorded as accepted. A
+/// failure leaves the same Project reserved for retry. An accepted referral
+/// returns its existing Project without reopening onboarding.
+///
+/// # Errors
+/// Returns the same refusals as [`accept`] or a failure to start onboarding.
+#[expect(
+    clippy::too_many_lines,
+    reason = "the ordered take steps share one reservation and its retry boundary"
+)]
+pub async fn accept_with_onboarding<F>(
+    surreal: &SurrealDb,
+    pg: &PostgresDb,
+    staged_id: Uuid,
+    input: &AcceptInput,
+    start_onboarding: impl FnOnce(PlanOnboarding) -> F,
+) -> Result<Accepted, PlanIntakeError>
+where
+    F: std::future::Future<Output = Result<(), PlanIntakeError>> + Send,
+{
     if !input.attestation {
         return Err(crate::projects::OpenMatterError::AttestationRequired.into());
     }
@@ -1199,6 +1230,14 @@ pub async fn accept(
         &project.code,
         accepted_at,
     )
+    .await?;
+
+    start_onboarding(PlanOnboarding {
+        provider: staged.provider.clone(),
+        project_id: project.id,
+        person_id,
+        fee: fee.clone(),
+    })
     .await?;
 
     let staged = mark_accepted(surreal, &staged, project.id, input, plan, fee, accepted_at).await?;

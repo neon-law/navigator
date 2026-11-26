@@ -1224,12 +1224,24 @@ async fn accepted_plan_notices_open_one_pitch_per_provider_case() {
                 sqlx::query("ALTER TABLE project_deadlines DROP CONSTRAINT synthetic_turnaround_fault")
                     .execute(pg.pool()).await.unwrap();
             }
+            let onboarding_count = std::sync::atomic::AtomicUsize::new(0);
+            let start_onboarding = |plan: plan_intake::PlanOnboarding| {
+                let count = &onboarding_count;
+                let project_id = staged.id;
+                async move {
+                    assert_eq!(plan.project_id, project_id);
+                    assert_eq!(plan.provider, provider.as_str());
+                    count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    Ok(())
+                }
+            };
             let (first, retry) = tokio::join!(
-                plan_intake::accept(&source, &pg, staged.id, &input),
-                plan_intake::accept(&source, &pg, staged.id, &input)
+                plan_intake::accept_with_onboarding(&source, &pg, staged.id, &input, start_onboarding),
+                plan_intake::accept_with_onboarding(&source, &pg, staged.id, &input, start_onboarding)
             );
             let accepted = first.unwrap();
             assert_eq!(retry.unwrap(), accepted);
+            assert_eq!(onboarding_count.load(std::sync::atomic::Ordering::Relaxed), 1);
             let opened = projects::find_by_id(&source, accepted.project_id).await.unwrap().unwrap();
             assert_eq!(opened.status, "open");
             assert!(opened.plan_matter_type.is_none());

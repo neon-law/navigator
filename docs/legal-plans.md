@@ -66,8 +66,10 @@ directory. A Firm member without directory access can run `list` with the UUID.
    member's name and verified email if the notice lacks an identified Person. Review conflicts, confirm the Project
    code, and take the referral after the Firm decides to accept it. The Pitch records the Firm's Legal Plan, the
    provider's case number, and any member ID. If a staged row lacks a case number, verify it against the original
-   notice. Confirm the type of work or leave it unclassified when the notice does not establish a supported type. Taking
-   the referral sends no correspondence. The lawyer handles provider confirmation and member contact separately.
+   notice. Confirm the type of work or leave it unclassified when the notice does not establish a supported type.
+
+   ARAG and LegalEASE referrals open a [Legal Plan Onboarding](glossary/legal-plan-onboarding.md) Notation for lawyer
+   review. The lawyer handles provider confirmation and member contact separately.
 
    For an existing Project, add the Firm's plan name under `project` in its private `navigator.yaml`.
 

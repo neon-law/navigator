@@ -48,14 +48,16 @@ templates/
 └── README.md
 ```
 
-Every legal notation lives under `notations/`, which itself has two shelves — `notations/forms/` and
-`notations/neon_law/`:
+Legal notations live under `notations/forms/` and `notations/neon_law/`.
 
 ```text
 templates/notations/
 ├── forms/
 └── neon_law/
+    └── firm/
 ```
+
+`notations/neon_law/firm/` holds Firm workflow templates. Use the code or path to preview them in Hudson.
 
 `notations/forms/` holds government form-backed templates. Its paths (below `notations/`) mirror the public assets
 bucket. If the blank PDF is stored at `gs://<assets-bucket>/forms/united_states/nevada/state/nv__llc_formation.pdf`, the

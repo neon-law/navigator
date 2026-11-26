@@ -217,6 +217,7 @@ pub fn bundled_spec_yaml(code: &str) -> Option<&'static str> {
 /// catalog.
 ///
 /// Most templates have their own standalone YAML in [`BUNDLED_SPEC_YAML`].
+/// Seeded templates can also carry their spec in their Markdown frontmatter.
 /// A project-scoped onboarding-letter variant (`onboarding__letter_<something>`)
 /// intentionally shares the [`RETAINER_SCOPED_SPEC_YAML`]
 /// questionnaire/workflow: its legal prose varies per matter, but the intake,
@@ -224,10 +225,12 @@ pub fn bundled_spec_yaml(code: &str) -> Option<&'static str> {
 /// until one needs a distinct questionnaire.
 #[must_use]
 pub fn catalog_spec_yaml(code: &str) -> Option<&'static str> {
-    bundled_spec_yaml(code).or_else(|| {
-        code.strip_prefix("onboarding__letter_")
-            .map(|_| RETAINER_SCOPED_SPEC_YAML)
-    })
+    bundled_spec_yaml(code)
+        .or_else(|| store::seed::seeded_template_markdown(code).and_then(extract_frontmatter))
+        .or_else(|| {
+            code.strip_prefix("onboarding__letter_")
+                .map(|_| RETAINER_SCOPED_SPEC_YAML)
+        })
 }
 
 /// Parsed `retainer_intake` workflow spec, sourced from the

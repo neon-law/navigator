@@ -9,3 +9,6 @@ One kind covers that act of opening the matter.
 
 In conversation and with clients this is the **onboarding letter** — see [Engagement /
 Retainer](engagement--retainer.md) for that client-facing shape. The codebase and the workflow runtime speak Onboarding.
+
+[Legal Plan Onboarding](legal-plan-onboarding.md) uses a plan-specific letter for a referred individual. Use a signed
+[Scope Amendment](scope-amendment.md) to add work outside the agreed scope.

@@ -9,9 +9,9 @@ Workflow, and rendering its document.
 
 The **engagement is a matter's first Notation**: a [Project](project.md) is opened first (its own step — `navigator
 project create` — which seeds the client and lawyer participation), then the engagement is created on it like any other
-Notation (`navigator site notation create <retainer_code> --project <code>`). Opening a Project never opens a Notation
-with it; no door creates a retainer alongside the matter. An open Project with no Notations is a pitch and may start
-with an offboarding Notation so it can be closed without an engagement.
+Notation (`navigator site notation create <retainer_code> --project <code>`). Accepting an ARAG or LegalEASE referral
+opens the Project and its [Legal Plan Onboarding](legal-plan-onboarding.md) Notation. An open Project with no Notations
+is a pitch and may start with an offboarding Notation so it can be closed without an engagement.
 
 Projects whose stored code begins with `navigator` may start directly with a working Notation. The prefix exempts them
 from onboarding. Authorization and the evidence needed to mark an engagement signed still apply.
@@ -30,9 +30,9 @@ agent may bind a filing or letter as a matter's first Notation; gating the agent
 use. What constrains Navigator MCP is authorization, not kind: the actor must be lawyer and in scope for the Project
 (`store::projects::can_access_as_lawyer_in_surreal`), and the respondent is always the Project's client-side DRI.
 
-A **Retainer** is the same idea, narrowed: an Engagement whose bound Template is the firm's onboarding letter,
-`onboarding__letter`. The `portal::retainer_walk` walker, the [`docs/retainer_intake`](../retainer_intake.md) state
-machine, and the firm's "signed retainer" disclaimer all refer to that specific kind of Notation.
+A **Retainer** is an Engagement whose bound Template is an onboarding letter. A [Scope Amendment](scope-amendment.md)
+records additional work after the Retainer is signed. The [retainer intake workflow](../retainer_intake.md) leads to
+lawyer review and signature.
 
 The schema noun in both cases is `Notation`. Client-facing copy speaks Engagement and Retainer because clients do; the
 database and the workflow runtime speak Notation.

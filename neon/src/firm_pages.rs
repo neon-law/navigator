@@ -2385,6 +2385,9 @@ mod notation_catalog_tests {
     fn collect_markdown_paths(root: &Path, base: &Path, paths: &mut BTreeSet<String>) {
         for entry in fs::read_dir(root).expect("read legal template shelf") {
             let path = entry.expect("read legal template directory entry").path();
+            if rules::template_catalog::is_firm_template_path(&path) {
+                continue;
+            }
             if path.is_dir() {
                 collect_markdown_paths(&path, base, paths);
             } else if path.extension().is_some_and(|extension| extension == "md") {
@@ -2504,8 +2507,7 @@ mod notation_catalog_tests {
         let templates_root = repository_root.join("templates");
         let notations_root = templates_root.join("notations");
         let mut intended_paths = BTreeSet::new();
-        // These are the legal-template shelves. The GitHub shelf and prose such
-        // as templates/README.md are deliberately outside this catalog.
+        // These shelves supply the public previews. Firm workflows live in their own subdirectory.
         for shelf in ["forms", "neon_law"] {
             collect_markdown_paths(
                 &notations_root.join(shelf),
@@ -2569,7 +2571,7 @@ mod notation_catalog_tests {
         assert_eq!(
             intended_paths,
             preview_paths.iter().cloned().collect(),
-            "the public catalog must contain every legal template exactly once"
+            "the public catalog must contain every public preview template exactly once"
         );
 
         for preview in previews {
@@ -2603,15 +2605,9 @@ mod notation_catalog_tests {
         }
     }
 
-    /// The fail-loud sweep: every legal-shelf template — `forms/` and
-    /// `neon_law/` — must yield a readable, non-empty questionnaire with at
-    /// least one interactive step, and a non-empty compiled body. A template
-    /// that declares a questionnaire it cannot parse used to preview as a
-    /// silently empty demo (the reported "no questions" symptom); now the
-    /// typed parse failure surfaces here and in the preview's visible panel
-    /// instead.
+    /// Every public preview template yields a compilable body and an interactive questionnaire.
     #[test]
-    fn every_legal_shelf_template_yields_a_live_questionnaire_and_body() {
+    fn every_public_preview_template_yields_a_live_questionnaire_and_body() {
         let repository_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
         let templates_root = repository_root.join("templates");
         let notations_root = templates_root.join("notations");
