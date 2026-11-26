@@ -126,7 +126,9 @@ pub(super) async fn void(
         }
     };
     match outcome {
-        Ok(status) => Ok(Json(json!({"envelopeId": envelope_id, "status": status})).into_response()),
+        Ok(status) => {
+            Ok(Json(json!({"envelopeId": envelope_id, "status": status})).into_response())
+        }
         Err(error) => Err(ApiError::SignatureUnavailable(error)),
     }
 }

@@ -34,7 +34,14 @@ pub async fn void(host: Option<&str>, envelope: &str, reason: &str) -> ExitCode 
         let id = envelope_id_from(envelope)?;
         let (base, token) = remote::resolve(host)?;
         let body = serde_json::json!({ "reason": reason });
-        request(&base, &token, reqwest::Method::POST, &format!("{id}/void"), Some(body)).await
+        request(
+            &base,
+            &token,
+            reqwest::Method::POST,
+            &format!("{id}/void"),
+            Some(body),
+        )
+        .await
     }
     .await;
     finish("void", result, |_| {})
@@ -47,7 +54,10 @@ fn finish(
 ) -> ExitCode {
     match result {
         Ok(value) => {
-            println!("{}", serde_json::to_string_pretty(&value).unwrap_or_default());
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&value).unwrap_or_default()
+            );
             after(&value);
             ExitCode::SUCCESS
         }
@@ -118,7 +128,10 @@ mod tests {
         ] {
             assert_eq!(envelope_id_from(&input).unwrap(), expected, "{input}");
         }
-        for input in ["not-an-id", "https://na4.docusign.net/Member/EmailStart.aspx?a=x"] {
+        for input in [
+            "not-an-id",
+            "https://na4.docusign.net/Member/EmailStart.aspx?a=x",
+        ] {
             assert!(envelope_id_from(input).is_err(), "{input}");
         }
     }

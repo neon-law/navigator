@@ -193,12 +193,27 @@ async fn a_firm_lawyer_reads_an_unrecorded_envelope_by_id_and_learns_its_match()
     let pool = fx.pg.pool();
     let firm = Uuid::now_v7();
     let signer = Uuid::now_v7();
-    sqlx::query("INSERT INTO firm(id,name,slug,status) VALUES($1,'Test Firm','test-firm','active')")
-        .bind(firm).execute(pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO firm(id,name,slug,status) VALUES($1,'Test Firm','test-firm','active')",
+    )
+    .bind(firm)
+    .execute(pool)
+    .await
+    .unwrap();
     sqlx::query("UPDATE project SET firm_id=$1 WHERE id=$2")
-        .bind(firm).bind(fx.project).execute(pool).await.unwrap();
-    sqlx::query("INSERT INTO person_firm_role(person_id,firm_id,membership) VALUES($1,$2,'lawyer')")
-        .bind(fx.lawyer).bind(firm).execute(pool).await.unwrap();
+        .bind(firm)
+        .bind(fx.project)
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO person_firm_role(person_id,firm_id,membership) VALUES($1,$2,'lawyer')",
+    )
+    .bind(fx.lawyer)
+    .bind(firm)
+    .execute(pool)
+    .await
+    .unwrap();
     sqlx::query("INSERT INTO person(id,name,email,role) VALUES($1,'Test Signer','client@example.com','client')").bind(signer).execute(pool).await.unwrap();
     sqlx::query("INSERT INTO person_project_role(person_id,project_id,participation,is_client_dri) VALUES($1,$2,'client',true)").bind(signer).bind(fx.project).execute(pool).await.unwrap();
 
@@ -210,7 +225,10 @@ async fn a_firm_lawyer_reads_an_unrecorded_envelope_by_id_and_learns_its_match()
             json!({"signers":[{"name":"Test Signer","email":"client@example.com","status":"completed","routingOrder":"1"}]}),
         ),
         ("/custom_fields", json!({"textCustomFields":[]})),
-        ("/documents", json!({"envelopeDocuments":[{"name":"substitution.pdf"}]})),
+        (
+            "/documents",
+            json!({"envelopeDocuments":[{"name":"substitution.pdf"}]}),
+        ),
     ] {
         Mock::given(method("GET"))
             .and(path(format!("{base}{suffix}")))
@@ -219,8 +237,13 @@ async fn a_firm_lawyer_reads_an_unrecorded_envelope_by_id_and_learns_its_match()
             .await;
     }
     Mock::given(method("GET"))
-        .and(path(format!("/v2.1/accounts/{account}/envelopes/{unknown}")))
-        .respond_with(ResponseTemplate::new(404).set_body_json(json!({"errorCode":"ENVELOPE_DOES_NOT_EXIST"})))
+        .and(path(format!(
+            "/v2.1/accounts/{account}/envelopes/{unknown}"
+        )))
+        .respond_with(
+            ResponseTemplate::new(404)
+                .set_body_json(json!({"errorCode":"ENVELOPE_DOES_NOT_EXIST"})),
+        )
         .mount(&http)
         .await;
 
@@ -241,15 +264,25 @@ async fn a_firm_lawyer_reads_an_unrecorded_envelope_by_id_and_learns_its_match()
     assert_eq!(body["navigator"]["reason"], serde_json::Value::Null);
 
     // The client is no longer the designated signer: the reason says so.
-    sqlx::query("UPDATE person_project_role SET is_client_dri=false WHERE project_id=$1 AND person_id=$2")
-        .bind(fx.project).bind(signer).execute(pool).await.unwrap();
+    sqlx::query(
+        "UPDATE person_project_role SET is_client_dri=false WHERE project_id=$1 AND person_id=$2",
+    )
+    .bind(fx.project)
+    .bind(signer)
+    .execute(pool)
+    .await
+    .unwrap();
     let body = json(as_lawyer().await).await;
     assert_eq!(body["navigator"]["project"], serde_json::Value::Null);
     assert_eq!(body["navigator"]["reason"], "no_project_match");
 
     // An ID outside the Firm's account answers with DocuSign's reason.
     let response = fx
-        .get(&format!("/app/api/envelopes/{unknown}"), Some(Role::Lawyer), Some(fx.lawyer))
+        .get(
+            &format!("/app/api/envelopes/{unknown}"),
+            Some(Role::Lawyer),
+            Some(fx.lawyer),
+        )
         .await;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
     let body = json(response).await;
@@ -263,18 +296,27 @@ async fn a_firm_lawyer_reads_an_unrecorded_envelope_by_id_and_learns_its_match()
     // LAW-430: void refuses a completed envelope and an empty reason, voids
     // one out for signature, and deletes a held draft.
     let void = |id: Uuid, reason: &str| {
-        post_json(&fx, format!("/app/api/envelopes/{id}/void"), json!({"reason": reason}))
+        post_json(
+            &fx,
+            format!("/app/api/envelopes/{id}/void"),
+            json!({"reason": reason}),
+        )
     };
     let response = void(envelope, "Declined").await;
     assert_eq!(response.status(), StatusCode::CONFLICT);
     assert_eq!(json(response).await["error"], "envelope_closed");
-    assert_eq!(void(envelope, "  ").await.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        void(envelope, "  ").await.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
     let (sent, draft) = (Uuid::now_v7(), Uuid::now_v7());
     for (id, status) in [(sent, "sent"), (draft, "created")] {
         let base = format!("/v2.1/accounts/{account}/envelopes/{id}");
         Mock::given(method("GET"))
             .and(path(base.clone()))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"envelopeId":id,"status":status})))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({"envelopeId":id,"status":status})),
+            )
             .mount(&http)
             .await;
         Mock::given(method("GET"))
@@ -285,7 +327,9 @@ async fn a_firm_lawyer_reads_an_unrecorded_envelope_by_id_and_learns_its_match()
     }
     Mock::given(method("PUT"))
         .and(path(format!("/v2.1/accounts/{account}/envelopes/{sent}")))
-        .and(body_json(json!({"status":"voided","voidedReason":"Pitch declined"})))
+        .and(body_json(
+            json!({"status":"voided","voidedReason":"Pitch declined"}),
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"envelopeId":sent})))
         .expect(1)
         .mount(&http)
@@ -317,8 +361,7 @@ async fn post_json(
     use tower::ServiceExt as _;
     let mut session = portal::session::SessionData::fresh("synthetic", Role::Lawyer);
     session.person_id = Some(fx.lawyer);
-    let token =
-        portal::SessionStore::new(portal::test_support::TEST_SESSION_KEY).encode(&session);
+    let token = portal::SessionStore::new(portal::test_support::TEST_SESSION_KEY).encode(&session);
     let request = axum::http::Request::post(route)
         .header("authorization", format!("Bearer {token}"))
         .header("content-type", "application/json")

@@ -93,16 +93,25 @@ async fn sandbox_voids_a_sent_envelope_and_deletes_a_draft() {
         .dispatch_prepared(&portal::signature::SignatureRequestId(sent.to_string()))
         .await
         .expect("send the sandbox envelope");
-    assert_eq!(provider.read_external_envelope(sent).await.unwrap().status, "sent");
+    assert_eq!(
+        provider.read_external_envelope(sent).await.unwrap().status,
+        "sent"
+    );
     provider
         .void_envelope(sent, "Navigator sandbox void check")
         .await
         .expect("void the sent envelope");
-    assert_eq!(provider.read_external_envelope(sent).await.unwrap().status, "voided");
+    assert_eq!(
+        provider.read_external_envelope(sent).await.unwrap().status,
+        "voided"
+    );
     eprintln!("voided DocuSign demo envelope {sent}");
 
     let draft = prepare_and_read_draft(&provider).await;
-    provider.delete_draft(draft).await.expect("delete the draft");
+    provider
+        .delete_draft(draft)
+        .await
+        .expect("delete the draft");
     let after = provider.read_external_envelope(draft).await;
     eprintln!(
         "deleted DocuSign demo draft {draft}; a read now answers {:?}",

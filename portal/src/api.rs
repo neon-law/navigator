@@ -4,10 +4,10 @@
 mod billing_report_api;
 #[path = "firm_assumptions_api.rs"]
 mod firm_assumptions_api;
-#[path = "firm_journal_api.rs"]
-mod firm_journal_api;
 #[path = "firm_envelope_api.rs"]
 mod firm_envelope_api;
+#[path = "firm_journal_api.rs"]
+mod firm_journal_api;
 #[path = "legal_plans_api.rs"]
 mod legal_plans_api;
 #[path = "plan_claims_api.rs"]
