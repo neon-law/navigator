@@ -195,7 +195,7 @@ pub fn WebsitePage(
         document::Title { "{title}" }
         document::Meta { name: "description", content: "{description}" }
         document::Meta { name: "viewport", content: "width=device-width, initial-scale=1" }
-        document::Link { rel: "icon", href: "{ASSETS}/favicon.svg", r#type: "image/svg+xml" }
+        document::Link { rel: "icon", href: "/public/brand/guieb-shook/favicon.svg", r#type: "image/svg+xml" }
         document::Link { rel: "apple-touch-icon", href: "{ASSETS}/apple-touch-icon.png" }
         document::Link {
             rel: "preload", as: "font", href: "{ASSETS}/fonts/instrument-sans-latin.woff2",

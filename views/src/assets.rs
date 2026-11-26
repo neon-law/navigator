@@ -126,7 +126,6 @@ pub const GUIEB_SHOOK_WEBSITE_ASSETS: &[&str] = &[
     "img/guieb-shook/Guieb-Shook-wordmark-navy.svg",
     "img/guieb-shook/apple-touch-icon.png",
     "img/guieb-shook/brooklyn-bridge-autumn-street.jpg",
-    "img/guieb-shook/favicon.svg",
     "img/guieb-shook/fonts/archivo-latin.woff2",
     "img/guieb-shook/fonts/cormorant-garamond-italic-subset.woff2",
     "img/guieb-shook/fonts/instrument-sans-italic-latin.woff2",

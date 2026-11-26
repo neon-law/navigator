@@ -342,7 +342,7 @@ pub(crate) async fn dioxus_document_head(req: Request, next: Next) -> Response {
     let same_day_app = path == views::brand::SAME_DAY_LEGAL_APP_PATH
         && views::brand::brand_key() == views::brand::BrandKey::SameDayLegal;
     let navigator_favicon = if is_navigator_page(&path) && !same_day_app {
-        navigator_favicon_fragment()
+        navigator_favicon_fragment(views::brand::brand_key())
     } else {
         ""
     };
@@ -540,9 +540,15 @@ fn is_navigator_page(path: &str) -> bool {
         .any(|prefix| path == *prefix || path.starts_with(&format!("{prefix}/")))
 }
 
-/// The favicon link for Navigator's platform and authenticated pages.
-fn navigator_favicon_fragment() -> &'static str {
-    r#"<link rel="icon" type="image/svg+xml" href="/public/navigator-wheel.svg">"#
+/// The favicon link for Navigator's platform and authenticated pages: the
+/// wheel, or the Firm's own mark where its signed-in pages carry it.
+fn navigator_favicon_fragment(brand: views::brand::BrandKey) -> &'static str {
+    match brand {
+        views::brand::BrandKey::GuiebShook => {
+            r#"<link rel="icon" type="image/svg+xml" href="/public/brand/guieb-shook/favicon.svg">"#
+        }
+        _ => r#"<link rel="icon" type="image/svg+xml" href="/public/navigator-wheel.svg">"#,
+    }
 }
 
 /// Insert `script` as the last thing before `</body>`.
@@ -6223,11 +6229,11 @@ mod tests {
             );
         }
         assert!(
-            portal_html.contains(navigator_favicon_fragment()),
+            portal_html.contains(navigator_favicon_fragment(views::brand::brand_key())),
             "the authenticated Navigator page uses the wheel favicon: {portal_html}"
         );
         assert!(
-            !public_html.contains(navigator_favicon_fragment()),
+            !public_html.contains(navigator_favicon_fragment(views::brand::brand_key())),
             "public pages keep their firm-branded favicon: {public_html}"
         );
     }
@@ -6474,8 +6480,12 @@ mod tests {
             assert!(!is_navigator_page(path), "non-Navigator path: {path}");
         }
         assert_eq!(
-            navigator_favicon_fragment(),
+            navigator_favicon_fragment(views::brand::BrandKey::Neon),
             r#"<link rel="icon" type="image/svg+xml" href="/public/navigator-wheel.svg">"#
+        );
+        assert_eq!(
+            navigator_favicon_fragment(views::brand::BrandKey::GuiebShook),
+            r#"<link rel="icon" type="image/svg+xml" href="/public/brand/guieb-shook/favicon.svg">"#
         );
     }
 
