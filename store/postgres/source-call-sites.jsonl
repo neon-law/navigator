@@ -816,11 +816,11 @@
 {"file":"deploy/src/surreal_archive.rs","line":594,"function":"a_server_backed_restore_drill_rebuilds_the_draft_projection","operation":"query","sql_operations":["UPDATE"],"tables":["template"],"transaction":false}
 {"file":"deploy/src/surreal_free_tests.rs","line":180,"function":"path_attribute_modules","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"deploy/src/surreal_free_tests.rs","line":204,"function":"test_targets","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"deploy/src/surreal_free_tests.rs","line":240,"function":"binary_starts_engine","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"deploy/src/surreal_free_tests.rs","line":390,"function":"select","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"deploy/src/surreal_free_tests.rs","line":400,"function":"select","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"deploy/src/surreal_free_tests.rs","line":408,"function":"select","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"deploy/src/surreal_free_tests.rs","line":426,"function":"select","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"deploy/src/surreal_free_tests.rs","line":244,"function":"binary_starts_engine","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"deploy/src/surreal_free_tests.rs","line":396,"function":"select","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"deploy/src/surreal_free_tests.rs","line":406,"function":"select","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"deploy/src/surreal_free_tests.rs","line":414,"function":"select","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"deploy/src/surreal_free_tests.rs","line":432,"function":"select","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"ephemeris/src/chart_provider.rs","line":445,"function":"provider","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"ephemeris/src/loader.rs","line":142,"function":"validate","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"features/src/webdriver.rs","line":132,"function":"new_client_with","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
