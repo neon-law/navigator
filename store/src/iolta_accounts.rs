@@ -463,7 +463,6 @@ mod tests {
         resolve_jurisdiction_scope, upsert, IoltaAccountError, UpsertIoltaAccount,
     };
     use crate::jurisdictions::NewJurisdiction;
-    use crate::surreal::test_support::mem;
     use crate::surreal::SurrealDb;
     use chrono::{TimeZone, Utc};
     use uuid::Uuid;
@@ -476,6 +475,7 @@ mod tests {
     }
 
     async fn project_in(db: &SurrealDb, code: &str, jurisdiction_id: Option<Uuid>) -> Uuid {
+        crate::test_support::seed_compiled_brands_postgres(db).await;
         let entity_id = crate::test_support::seed_entity(db).await;
         crate::projects::create(
             db,
@@ -509,41 +509,47 @@ mod tests {
     /// with its own Xero account.
     #[tokio::test]
     async fn two_states_carry_two_pooled_accounts() {
-        let db = mem().await;
-        let nevada = state(&db, "Nevada", "NV").await;
-        let california = state(&db, "California", "CA").await;
+        crate::test_support::with_required_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            let nevada = state(&db, "Nevada", "NV").await;
+            let california = state(&db, "California", "CA").await;
 
-        upsert(&db, &mirror(nevada, "xero-nv", "IOLTA NV — Trust"))
-            .await
-            .unwrap();
-        upsert(&db, &mirror(california, "xero-ca", "IOLTA CA — Trust"))
-            .await
-            .unwrap();
+            upsert(&db, &mirror(nevada, "xero-nv", "IOLTA NV — Trust"))
+                .await
+                .unwrap();
+            upsert(&db, &mirror(california, "xero-ca", "IOLTA CA — Trust"))
+                .await
+                .unwrap();
 
-        let nv = for_jurisdiction(&db, nevada).await.unwrap().unwrap();
-        let ca = for_jurisdiction(&db, california).await.unwrap().unwrap();
-        assert_eq!(nv.xero_account_id, "xero-nv");
-        assert_eq!(ca.xero_account_id, "xero-ca");
-        assert_eq!(all(&db).await.unwrap().len(), 2);
+            let nv = for_jurisdiction(&db, nevada).await.unwrap().unwrap();
+            let ca = for_jurisdiction(&db, california).await.unwrap().unwrap();
+            assert_eq!(nv.xero_account_id, "xero-nv");
+            assert_eq!(ca.xero_account_id, "xero-ca");
+            assert_eq!(all(&db).await.unwrap().len(), 2);
+        })
+        .await;
     }
 
     /// A re-run of the nightly mirror refreshes the one row rather than
     /// adding a second master balance for the same state.
     #[tokio::test]
     async fn re_mirroring_the_same_account_refreshes_one_row() {
-        let db = mem().await;
-        let nevada = state(&db, "Nevada", "NV").await;
-        upsert(&db, &mirror(nevada, "xero-nv", "IOLTA NV — Trust"))
-            .await
-            .unwrap();
+        crate::test_support::with_required_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            let nevada = state(&db, "Nevada", "NV").await;
+            upsert(&db, &mirror(nevada, "xero-nv", "IOLTA NV — Trust"))
+                .await
+                .unwrap();
 
-        let mut refreshed = mirror(nevada, "xero-nv", "IOLTA NV — Trust");
-        refreshed.balance_cents = 750_000;
-        upsert(&db, &refreshed).await.unwrap();
+            let mut refreshed = mirror(nevada, "xero-nv", "IOLTA NV — Trust");
+            refreshed.balance_cents = 750_000;
+            upsert(&db, &refreshed).await.unwrap();
 
-        let accounts = all(&db).await.unwrap();
-        assert_eq!(accounts.len(), 1, "one state, one pooled account");
-        assert_eq!(accounts[0].balance_cents, 750_000);
+            let accounts = all(&db).await.unwrap();
+            assert_eq!(accounts.len(), 1, "one state, one pooled account");
+            assert_eq!(accounts[0].balance_cents, 750_000);
+        })
+        .await;
     }
 
     /// One pooled account per state: a *different* Xero account claiming a
@@ -551,52 +557,61 @@ mod tests {
     /// than quietly replacing it.
     #[tokio::test]
     async fn a_second_xero_account_for_one_state_is_refused() {
-        let db = mem().await;
-        let nevada = state(&db, "Nevada", "NV").await;
-        upsert(&db, &mirror(nevada, "xero-nv", "IOLTA NV — Trust"))
-            .await
-            .unwrap();
+        crate::test_support::with_required_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            let nevada = state(&db, "Nevada", "NV").await;
+            upsert(&db, &mirror(nevada, "xero-nv", "IOLTA NV — Trust"))
+                .await
+                .unwrap();
 
-        let second = upsert(&db, &mirror(nevada, "xero-nv-2", "IOLTA NV — Second")).await;
-        assert!(
-            matches!(
-                second,
-                Err(IoltaAccountError::JurisdictionTaken { ref existing, .. })
-                    if existing == "xero-nv"
-            ),
-            "unexpected upsert result shape"
-        );
-        assert_eq!(all(&db).await.unwrap().len(), 1);
+            let second = upsert(&db, &mirror(nevada, "xero-nv-2", "IOLTA NV — Second")).await;
+            assert!(
+                matches!(
+                    second,
+                    Err(IoltaAccountError::JurisdictionTaken { ref existing, .. })
+                        if existing == "xero-nv"
+                ),
+                "unexpected upsert result shape"
+            );
+            assert_eq!(all(&db).await.unwrap().len(), 1);
+        })
+        .await;
     }
 
     /// IOLTA pools by state. A country jurisdiction has no pooled trust
     /// account, so attaching one is refused rather than mapped onto a state.
     #[tokio::test]
     async fn a_country_jurisdiction_cannot_hold_a_pooled_account() {
-        let db = mem().await;
-        let us = crate::jurisdictions::create(
-            &db,
-            &NewJurisdiction::new("United States", "US", "country"),
-        )
-        .await
-        .unwrap()
-        .id;
+        crate::test_support::with_required_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            let us = crate::jurisdictions::create(
+                &db,
+                &NewJurisdiction::new("United States", "US", "country"),
+            )
+            .await
+            .unwrap()
+            .id;
 
-        let attached = upsert(&db, &mirror(us, "IOLTA US — Trust", "IOLTA US — Trust")).await;
-        assert!(
-            matches!(attached, Err(IoltaAccountError::NotAState { .. })),
-            "expected NotAState error"
-        );
+            let attached = upsert(&db, &mirror(us, "IOLTA US — Trust", "IOLTA US — Trust")).await;
+            assert!(
+                matches!(attached, Err(IoltaAccountError::NotAState { .. })),
+                "expected NotAState error"
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn an_unknown_jurisdiction_is_refused() {
-        let db = mem().await;
-        let attached = upsert(&db, &mirror(Uuid::now_v7(), "xero-x", "IOLTA XX")).await;
-        assert!(
-            matches!(attached, Err(IoltaAccountError::NoSuchJurisdiction(_))),
-            "expected NoSuchJurisdiction error"
-        );
+        crate::test_support::with_required_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            let attached = upsert(&db, &mirror(Uuid::now_v7(), "xero-x", "IOLTA XX")).await;
+            assert!(
+                matches!(attached, Err(IoltaAccountError::NoSuchJurisdiction(_))),
+                "expected NoSuchJurisdiction error"
+            );
+        })
+        .await;
     }
 
     /// A matter reaches its pooled account through its *general* governing
@@ -604,52 +619,58 @@ mod tests {
     /// attached to a nearby state.
     #[tokio::test]
     async fn a_matter_resolves_its_account_through_its_jurisdiction() {
-        let db = mem().await;
-        let nevada = state(&db, "Nevada", "NV").await;
-        let california = state(&db, "California", "CA").await;
-        upsert(&db, &mirror(nevada, "xero-nv", "IOLTA NV — Trust"))
-            .await
-            .unwrap();
-
-        let nv_matter = project_in(&db, "nv-matter", Some(nevada)).await;
-        let ca_matter = project_in(&db, "ca-matter", Some(california)).await;
-        let unscoped_matter = project_in(&db, "no-jurisdiction", None).await;
-
-        assert_eq!(
-            for_project(&db, nv_matter)
+        crate::test_support::with_required_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            let nevada = state(&db, "Nevada", "NV").await;
+            let california = state(&db, "California", "CA").await;
+            upsert(&db, &mirror(nevada, "xero-nv", "IOLTA NV — Trust"))
                 .await
-                .unwrap()
-                .map(|a| a.xero_account_id),
-            Some("xero-nv".to_string())
-        );
-        assert_eq!(
-            for_project(&db, ca_matter).await.unwrap(),
-            None,
-            "California has no mirrored account yet — nothing is invented"
-        );
-        assert_eq!(
-            for_project(&db, unscoped_matter).await.unwrap(),
-            None,
-            "a matter with no jurisdiction has no pooled account"
-        );
-        assert_eq!(for_project(&db, Uuid::now_v7()).await.unwrap(), None);
+                .unwrap();
+
+            let nv_matter = project_in(&db, "nv-matter", Some(nevada)).await;
+            let ca_matter = project_in(&db, "ca-matter", Some(california)).await;
+            let unscoped_matter = project_in(&db, "no-jurisdiction", None).await;
+
+            assert_eq!(
+                for_project(&db, nv_matter)
+                    .await
+                    .unwrap()
+                    .map(|a| a.xero_account_id),
+                Some("xero-nv".to_string())
+            );
+            assert_eq!(
+                for_project(&db, ca_matter).await.unwrap(),
+                None,
+                "California has no mirrored account yet — nothing is invented"
+            );
+            assert_eq!(
+                for_project(&db, unscoped_matter).await.unwrap(),
+                None,
+                "a matter with no jurisdiction has no pooled account"
+            );
+            assert_eq!(for_project(&db, Uuid::now_v7()).await.unwrap(), None);
+        })
+        .await;
     }
 
     /// A matter governed by a country — a federal matter — has no pooled
     /// state account, and is skipped rather than guessed at.
     #[tokio::test]
     async fn a_country_scoped_matter_has_no_pooled_account() {
-        let db = mem().await;
-        let us = crate::jurisdictions::create(
-            &db,
-            &NewJurisdiction::new("United States", "US", "country"),
-        )
-        .await
-        .unwrap()
-        .id;
-        let federal_matter = project_in(&db, "federal", Some(us)).await;
+        crate::test_support::with_required_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            let us = crate::jurisdictions::create(
+                &db,
+                &NewJurisdiction::new("United States", "US", "country"),
+            )
+            .await
+            .unwrap()
+            .id;
+            let federal_matter = project_in(&db, "federal", Some(us)).await;
 
-        assert_eq!(for_project(&db, federal_matter).await.unwrap(), None);
+            assert_eq!(for_project(&db, federal_matter).await.unwrap(), None);
+        })
+        .await;
     }
 
     #[test]
@@ -683,35 +704,41 @@ mod tests {
 
     #[tokio::test]
     async fn an_account_naming_an_unknown_or_non_state_code_is_unscoped() {
-        let db = mem().await;
-        state(&db, "Nevada", "NV").await;
-        crate::jurisdictions::create(&db, &NewJurisdiction::new("United States", "US", "country"))
+        crate::test_support::with_required_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            state(&db, "Nevada", "NV").await;
+            crate::jurisdictions::create(
+                &db,
+                &NewJurisdiction::new("United States", "US", "country"),
+            )
             .await
             .unwrap();
 
-        assert!(resolve_jurisdiction_scope(&db, "IOLTA NV — Trust")
-            .await
-            .unwrap()
-            .is_some());
-        assert_eq!(
-            resolve_jurisdiction_scope(&db, "IOLTA ZZ — Trust")
+            assert!(resolve_jurisdiction_scope(&db, "IOLTA NV — Trust")
                 .await
-                .unwrap(),
-            None,
-            "a code no jurisdiction carries is unscoped"
-        );
-        assert_eq!(
-            resolve_jurisdiction_scope(&db, "IOLTA US — Trust")
-                .await
-                .unwrap(),
-            None,
-            "a country code names no pooled state account"
-        );
-        assert_eq!(
-            resolve_jurisdiction_scope(&db, "Business Checking")
-                .await
-                .unwrap(),
-            None
-        );
+                .unwrap()
+                .is_some());
+            assert_eq!(
+                resolve_jurisdiction_scope(&db, "IOLTA ZZ — Trust")
+                    .await
+                    .unwrap(),
+                None,
+                "a code no jurisdiction carries is unscoped"
+            );
+            assert_eq!(
+                resolve_jurisdiction_scope(&db, "IOLTA US — Trust")
+                    .await
+                    .unwrap(),
+                None,
+                "a country code names no pooled state account"
+            );
+            assert_eq!(
+                resolve_jurisdiction_scope(&db, "Business Checking")
+                    .await
+                    .unwrap(),
+                None
+            );
+        })
+        .await;
     }
 }
