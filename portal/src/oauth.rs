@@ -3596,7 +3596,6 @@ mod tests {
     use crate::test_support::{oidc_verifier, sign_id_token, sign_id_token_with_kid};
     use axum::extract::FromRequest;
     use jsonwebtoken::Algorithm;
-    use uuid::Uuid;
 
     /// Apple posts a browser-supplied JSON `user` field on a first
     /// authorization, carrying a name and an email address. `CallbackQuery`
@@ -3694,7 +3693,6 @@ mod tests {
     }
     use base64::Engine;
     use store::persons::Role;
-    use store::test_support::mem_surreal;
 
     /// A throwaway P-256 key in PKCS#8 PEM, generated per call. Apple's real
     /// `.p8` is a deployment secret and never reaches a test or a fixture.
@@ -3788,7 +3786,7 @@ mod tests {
         );
     }
 
-    fn unknown_claims(email: &str) -> IdTokenClaims {
+    pub(super) fn unknown_claims(email: &str) -> IdTokenClaims {
         IdTokenClaims {
             sub: format!("sub-{email}"),
             iss: None,
@@ -4052,77 +4050,89 @@ mod tests {
 
     #[tokio::test]
     async fn a_second_tenant_with_the_same_address_cannot_take_over_a_linked_identity() {
-        let surreal = mem_surreal().await;
-        let first = foreign_claims(TENANT_A, "s1", "sam@client.test");
-        let (id, _, _) =
-            resolve_person_from_claims(&surreal, Some(ProviderId::Microsoft), &first, None)
+        store::test_support::with_required_postgres(async {
+            let surreal = store::surreal::SurrealDb::uninitialized();
+            let first = foreign_claims(TENANT_A, "s1", "sam@client.test");
+            let (id, _, _) =
+                resolve_person_from_claims(&surreal, Some(ProviderId::Microsoft), &first, None)
+                    .await
+                    .expect("first tenant creates the client");
+            // Same address and even the same pairwise subject string, other tenant.
+            let second = foreign_claims(TENANT_B, "s1", "sam@client.test");
+            let refused =
+                resolve_person_from_claims(&surreal, Some(ProviderId::Microsoft), &second, None)
+                    .await
+                    .expect_err("a different tenant is a different identity");
+            assert!(matches!(refused, ResolveError::AddressInUse));
+            let row = store::persons::find_by_microsoft_subject(&surreal, &first.sub)
                 .await
-                .expect("first tenant creates the client");
-        // Same address and even the same pairwise subject string, other tenant.
-        let second = foreign_claims(TENANT_B, "s1", "sam@client.test");
-        let refused =
-            resolve_person_from_claims(&surreal, Some(ProviderId::Microsoft), &second, None)
-                .await
-                .expect_err("a different tenant is a different identity");
-        assert!(matches!(refused, ResolveError::AddressInUse));
-        let row = store::persons::find_by_microsoft_subject(&surreal, &first.sub)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(row.id, id, "the first tenant's identity is untouched");
+                .unwrap()
+                .unwrap();
+            assert_eq!(row.id, id, "the first tenant's identity is untouched");
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_foreign_tenant_cannot_mint_the_bootstrap_owner() {
-        let surreal = mem_surreal().await;
-        let claims = foreign_claims(TENANT_A, "s1", "owner@firm.test");
-        let refused = resolve_person_from_claims(
-            &surreal,
-            Some(ProviderId::Microsoft),
-            &claims,
-            Some("OWNER@firm.test"),
-        )
-        .await
-        .expect_err("the bootstrap address is not claimable from a foreign tenant");
-        assert!(matches!(refused, ResolveError::AddressInUse));
-        assert!(
-            store::persons::find_by_email_ci(&surreal, "owner@firm.test")
-                .await
-                .unwrap()
-                .is_none()
-        );
+        store::test_support::with_required_postgres(async {
+            let surreal = store::surreal::SurrealDb::uninitialized();
+            let claims = foreign_claims(TENANT_A, "s1", "owner@firm.test");
+            let refused = resolve_person_from_claims(
+                &surreal,
+                Some(ProviderId::Microsoft),
+                &claims,
+                Some("OWNER@firm.test"),
+            )
+            .await
+            .expect_err("the bootstrap address is not claimable from a foreign tenant");
+            assert!(matches!(refused, ResolveError::AddressInUse));
+            assert!(
+                store::persons::find_by_email_ci(&surreal, "owner@firm.test")
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_foreign_tenant_without_a_usable_upn_is_refused_not_created() {
-        let surreal = mem_surreal().await;
-        let mut claims = entra_claims(TENANT_A, None, Some("only-email@client.test"));
-        claims.foreign_tenant = true;
-        scope_foreign_tenant_identity(&mut claims);
-        let refused =
-            resolve_person_from_claims(&surreal, Some(ProviderId::Microsoft), &claims, None)
-                .await
-                .expect_err("no verified-domain address, no new person");
-        assert!(matches!(refused, ResolveError::NotPreSeeded));
+        store::test_support::with_required_postgres(async {
+            let surreal = store::surreal::SurrealDb::uninitialized();
+            let mut claims = entra_claims(TENANT_A, None, Some("only-email@client.test"));
+            claims.foreign_tenant = true;
+            scope_foreign_tenant_identity(&mut claims);
+            let refused =
+                resolve_person_from_claims(&surreal, Some(ProviderId::Microsoft), &claims, None)
+                    .await
+                    .expect_err("no verified-domain address, no new person");
+            assert!(matches!(refused, ResolveError::NotPreSeeded));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_trusted_tenant_still_links_by_upn_as_before() {
-        let surreal = mem_surreal().await;
-        let seeded = store::persons::create(
-            &surreal,
-            &store::persons::NewPerson::new("Seeded Client", "sam@client.test"),
-        )
-        .await
-        .expect("seed");
-        let mut claims = entra_claims("allowed-tenant", Some("sam@client.test"), None);
-        claims.email = ProviderId::Microsoft.identity_address(&claims);
-        let (id, _, meta) =
-            resolve_person_from_claims(&surreal, Some(ProviderId::Microsoft), &claims, None)
-                .await
-                .expect("allowlisted tenants keep linking by address");
-        assert_eq!(id, seeded.id);
-        assert!(meta.first_link);
+        store::test_support::with_required_postgres(async {
+            let surreal = store::surreal::SurrealDb::uninitialized();
+            let seeded = store::persons::create(
+                &surreal,
+                &store::persons::NewPerson::new("Seeded Client", "sam@client.test"),
+            )
+            .await
+            .expect("seed");
+            let mut claims = entra_claims("allowed-tenant", Some("sam@client.test"), None);
+            claims.email = ProviderId::Microsoft.identity_address(&claims);
+            let (id, _, meta) =
+                resolve_person_from_claims(&surreal, Some(ProviderId::Microsoft), &claims, None)
+                    .await
+                    .expect("allowlisted tenants keep linking by address");
+            assert_eq!(id, seeded.id);
+            assert!(meta.first_link);
+        })
+        .await;
     }
 
     #[test]
@@ -4553,89 +4563,98 @@ mod tests {
 
     #[tokio::test]
     async fn an_unknown_verified_email_creates_a_client() {
-        let surreal = mem_surreal().await;
-        let claims = unknown_claims("stranger@example.com");
-        let (person_id, role, resolution) =
-            resolve_person_from_claims(&surreal, Some(ProviderId::Primary), &claims, None)
+        store::test_support::with_required_postgres(async {
+            let surreal = store::surreal::SurrealDb::uninitialized();
+            let claims = unknown_claims("stranger@example.com");
+            let (person_id, role, resolution) =
+                resolve_person_from_claims(&surreal, Some(ProviderId::Primary), &claims, None)
+                    .await
+                    .expect("an unknown verified email creates a client");
+            assert_eq!(role, Role::Client);
+            assert!(resolution.fresh.is_some());
+            assert!(resolution.first_link);
+            let person = store::persons::find_by_email_ci(&surreal, "stranger@example.com")
                 .await
-                .expect("an unknown verified email creates a client");
-        assert_eq!(role, Role::Client);
-        assert!(resolution.fresh.is_some());
-        assert!(resolution.first_link);
-        let person = store::persons::find_by_email_ci(&surreal, "stranger@example.com")
-            .await
-            .unwrap()
-            .expect("the client row exists");
-        assert_eq!(person.id, person_id);
+                .unwrap()
+                .expect("the client row exists");
+            assert_eq!(person.id, person_id);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn an_apple_email_match_adds_apple_subject_without_changing_primary_subject() {
-        let surreal = mem_surreal().await;
-        let person = store::persons::create(
-            &surreal,
-            &store::persons::NewPerson {
-                oidc_subject: Some("primary-subject".into()),
-                ..store::persons::NewPerson::new("Admitted Person", "person@example.com")
-            },
-        )
-        .await
-        .expect("seed admitted person");
-        let mut claims = unknown_claims("person@example.com");
-        claims.sub = "apple-subject".into();
-
-        let (resolved_id, _, first_resolution) =
-            resolve_person_from_claims(&surreal, Some(ProviderId::Apple), &claims, None)
-                .await
-                .expect("the admitted email match resolves");
-
-        assert_eq!(resolved_id, person.id);
-        assert!(first_resolution.first_link);
-        assert!(first_resolution.fresh.is_none());
-        let stored = store::persons::find_by_id(&surreal, person.id)
+        store::test_support::with_required_postgres(async {
+            let surreal = store::surreal::SurrealDb::uninitialized();
+            let person = store::persons::create(
+                &surreal,
+                &store::persons::NewPerson {
+                    oidc_subject: Some("primary-subject".into()),
+                    ..store::persons::NewPerson::new("Admitted Person", "person@example.com")
+                },
+            )
             .await
-            .unwrap()
-            .expect("the Person row remains present");
-        assert_eq!(stored.oidc_subject.as_deref(), Some("primary-subject"));
-        assert_eq!(stored.apple_subject.as_deref(), Some("apple-subject"));
-        assert_eq!(stored.microsoft_subject, None);
+            .expect("seed admitted person");
+            let mut claims = unknown_claims("person@example.com");
+            claims.sub = "apple-subject".into();
 
-        let (_, _, repeat_resolution) =
-            resolve_person_from_claims(&surreal, Some(ProviderId::Apple), &claims, None)
+            let (resolved_id, _, first_resolution) =
+                resolve_person_from_claims(&surreal, Some(ProviderId::Apple), &claims, None)
+                    .await
+                    .expect("the admitted email match resolves");
+
+            assert_eq!(resolved_id, person.id);
+            assert!(first_resolution.first_link);
+            assert!(first_resolution.fresh.is_none());
+            let stored = store::persons::find_by_id(&surreal, person.id)
                 .await
-                .expect("the linked Apple subject resolves on repeat sign-in");
-        assert!(!repeat_resolution.first_link);
-        assert!(repeat_resolution.fresh.is_none());
+                .unwrap()
+                .expect("the Person row remains present");
+            assert_eq!(stored.oidc_subject.as_deref(), Some("primary-subject"));
+            assert_eq!(stored.apple_subject.as_deref(), Some("apple-subject"));
+            assert_eq!(stored.microsoft_subject, None);
+
+            let (_, _, repeat_resolution) =
+                resolve_person_from_claims(&surreal, Some(ProviderId::Apple), &claims, None)
+                    .await
+                    .expect("the linked Apple subject resolves on repeat sign-in");
+            assert!(!repeat_resolution.first_link);
+            assert!(repeat_resolution.fresh.is_none());
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn an_apple_subject_resolves_a_repeat_claim_without_email() {
-        let surreal = mem_surreal().await;
-        let person = store::persons::create(
-            &surreal,
-            &store::persons::NewPerson {
-                apple_subject: Some("apple-subject".into()),
-                ..store::persons::NewPerson::new("Admitted Person", "person@example.com")
-            },
-        )
-        .await
-        .expect("seed Apple-linked person");
-        let mut claims = unknown_claims("person@example.com");
-        claims.sub = "apple-subject".into();
-        claims.email = None;
-
-        let (resolved_id, _, _) =
-            resolve_person_from_claims(&surreal, Some(ProviderId::Apple), &claims, None)
-                .await
-                .expect("the stored Apple subject resolves without email");
-
-        assert_eq!(resolved_id, person.id);
-        let stored = store::persons::find_by_id(&surreal, person.id)
+        store::test_support::with_required_postgres(async {
+            let surreal = store::surreal::SurrealDb::uninitialized();
+            let person = store::persons::create(
+                &surreal,
+                &store::persons::NewPerson {
+                    apple_subject: Some("apple-subject".into()),
+                    ..store::persons::NewPerson::new("Admitted Person", "person@example.com")
+                },
+            )
             .await
-            .unwrap()
-            .expect("the Person row remains present");
-        assert_eq!(stored.apple_subject.as_deref(), Some("apple-subject"));
-        assert_eq!(stored.oidc_subject, None);
+            .expect("seed Apple-linked person");
+            let mut claims = unknown_claims("person@example.com");
+            claims.sub = "apple-subject".into();
+            claims.email = None;
+
+            let (resolved_id, _, _) =
+                resolve_person_from_claims(&surreal, Some(ProviderId::Apple), &claims, None)
+                    .await
+                    .expect("the stored Apple subject resolves without email");
+
+            assert_eq!(resolved_id, person.id);
+            let stored = store::persons::find_by_id(&surreal, person.id)
+                .await
+                .unwrap()
+                .expect("the Person row remains present");
+            assert_eq!(stored.apple_subject.as_deref(), Some("apple-subject"));
+            assert_eq!(stored.oidc_subject, None);
+        })
+        .await;
     }
 
     /// The reproducer from the review that found this: seed the row exactly as
@@ -4646,35 +4665,38 @@ mod tests {
     /// provisioned.
     #[tokio::test]
     async fn an_apple_first_row_written_before_the_split_still_resolves_without_email() {
-        let surreal = mem_surreal().await;
-        let person = store::persons::create(
-            &surreal,
-            &store::persons::NewPerson {
-                oidc_subject: Some("apple-sub".into()),
-                ..store::persons::NewPerson::new("Admitted Person", "person@example.com")
-            },
-        )
-        .await
-        .expect("seed a person carrying an Apple subject in the generic slot");
-        let mut claims = unknown_claims("person@example.com");
-        claims.sub = "apple-sub".into();
-        claims.email = None;
-
-        let (resolved_id, _, resolution) =
-            resolve_person_from_claims(&surreal, Some(ProviderId::Apple), &claims, None)
-                .await
-                .expect("a pre-split Apple row resolves without an email claim");
-
-        assert_eq!(resolved_id, person.id);
-        // Not a signup: the row was already there, it only converged.
-        assert!(resolution.fresh.is_none());
-        assert!(resolution.first_link);
-        let stored = store::persons::find_by_id(&surreal, person.id)
+        store::test_support::with_required_postgres(async {
+            let surreal = store::surreal::SurrealDb::uninitialized();
+            let person = store::persons::create(
+                &surreal,
+                &store::persons::NewPerson {
+                    oidc_subject: Some("apple-sub".into()),
+                    ..store::persons::NewPerson::new("Admitted Person", "person@example.com")
+                },
+            )
             .await
-            .unwrap()
-            .expect("the Person row remains present");
-        assert_eq!(stored.apple_subject.as_deref(), Some("apple-sub"));
-        assert_eq!(stored.oidc_subject, None);
+            .expect("seed a person carrying an Apple subject in the generic slot");
+            let mut claims = unknown_claims("person@example.com");
+            claims.sub = "apple-sub".into();
+            claims.email = None;
+
+            let (resolved_id, _, resolution) =
+                resolve_person_from_claims(&surreal, Some(ProviderId::Apple), &claims, None)
+                    .await
+                    .expect("a pre-split Apple row resolves without an email claim");
+
+            assert_eq!(resolved_id, person.id);
+            // Not a signup: the row was already there, it only converged.
+            assert!(resolution.fresh.is_none());
+            assert!(resolution.first_link);
+            let stored = store::persons::find_by_id(&surreal, person.id)
+                .await
+                .unwrap()
+                .expect("the Person row remains present");
+            assert_eq!(stored.apple_subject.as_deref(), Some("apple-sub"));
+            assert_eq!(stored.oidc_subject, None);
+        })
+        .await;
     }
 
     /// The convergence is one-way: once the identifier has moved, the row is
@@ -4683,32 +4705,35 @@ mod tests {
     /// waits on before deleting it.
     #[tokio::test]
     async fn a_converged_row_resolves_through_the_provider_column_on_the_next_sign_in() {
-        let surreal = mem_surreal().await;
-        let person = store::persons::create(
-            &surreal,
-            &store::persons::NewPerson {
-                oidc_subject: Some("apple-sub".into()),
-                ..store::persons::NewPerson::new("Admitted Person", "person@example.com")
-            },
-        )
-        .await
-        .expect("seed a person carrying an Apple subject in the generic slot");
-        let mut claims = unknown_claims("person@example.com");
-        claims.sub = "apple-sub".into();
-        claims.email = None;
-
-        for _ in 0..2 {
-            let (resolved_id, _, _) =
-                resolve_person_from_claims(&surreal, Some(ProviderId::Apple), &claims, None)
-                    .await
-                    .expect("both sign-ins resolve the same row");
-            assert_eq!(resolved_id, person.id);
-        }
-
-        assert!(store::persons::find_by_oidc_subject(&surreal, "apple-sub")
+        store::test_support::with_required_postgres(async {
+            let surreal = store::surreal::SurrealDb::uninitialized();
+            let person = store::persons::create(
+                &surreal,
+                &store::persons::NewPerson {
+                    oidc_subject: Some("apple-sub".into()),
+                    ..store::persons::NewPerson::new("Admitted Person", "person@example.com")
+                },
+            )
             .await
-            .unwrap()
-            .is_none());
+            .expect("seed a person carrying an Apple subject in the generic slot");
+            let mut claims = unknown_claims("person@example.com");
+            claims.sub = "apple-sub".into();
+            claims.email = None;
+
+            for _ in 0..2 {
+                let (resolved_id, _, _) =
+                    resolve_person_from_claims(&surreal, Some(ProviderId::Apple), &claims, None)
+                        .await
+                        .expect("both sign-ins resolve the same row");
+                assert_eq!(resolved_id, person.id);
+            }
+
+            assert!(store::persons::find_by_oidc_subject(&surreal, "apple-sub")
+                .await
+                .unwrap()
+                .is_none());
+        })
+        .await;
     }
 
     /// The primary slot's meaning did not change, so reading it for a primary
@@ -4716,31 +4741,34 @@ mod tests {
     /// and must never clear that column.
     #[tokio::test]
     async fn the_legacy_branch_does_not_fire_for_the_primary_provider() {
-        let surreal = mem_surreal().await;
-        let person = store::persons::create(
-            &surreal,
-            &store::persons::NewPerson {
-                oidc_subject: Some("primary-sub".into()),
-                ..store::persons::NewPerson::new("Admitted Person", "person@example.com")
-            },
-        )
-        .await
-        .expect("seed a primary-linked person");
-        let mut claims = unknown_claims("person@example.com");
-        claims.sub = "primary-sub".into();
-        claims.email = None;
-
-        let (resolved_id, _, _) =
-            resolve_person_from_claims(&surreal, Some(ProviderId::Primary), &claims, None)
-                .await
-                .expect("the primary subject resolves through its own lookup");
-
-        assert_eq!(resolved_id, person.id);
-        let stored = store::persons::find_by_id(&surreal, person.id)
+        store::test_support::with_required_postgres(async {
+            let surreal = store::surreal::SurrealDb::uninitialized();
+            let person = store::persons::create(
+                &surreal,
+                &store::persons::NewPerson {
+                    oidc_subject: Some("primary-sub".into()),
+                    ..store::persons::NewPerson::new("Admitted Person", "person@example.com")
+                },
+            )
             .await
-            .unwrap()
-            .expect("the Person row remains present");
-        assert_eq!(stored.oidc_subject.as_deref(), Some("primary-sub"));
+            .expect("seed a primary-linked person");
+            let mut claims = unknown_claims("person@example.com");
+            claims.sub = "primary-sub".into();
+            claims.email = None;
+
+            let (resolved_id, _, _) =
+                resolve_person_from_claims(&surreal, Some(ProviderId::Primary), &claims, None)
+                    .await
+                    .expect("the primary subject resolves through its own lookup");
+
+            assert_eq!(resolved_id, person.id);
+            let stored = store::persons::find_by_id(&surreal, person.id)
+                .await
+                .unwrap()
+                .expect("the Person row remains present");
+            assert_eq!(stored.oidc_subject.as_deref(), Some("primary-sub"));
+        })
+        .await;
     }
 
     /// A claim that carries an email creates its own client when the email is
@@ -4748,34 +4776,37 @@ mod tests {
     /// address to a different existing row through a historical subject.
     #[tokio::test]
     async fn a_claim_with_an_unmatched_email_creates_a_client_without_reaching_the_legacy_slot() {
-        let surreal = mem_surreal().await;
-        let person = store::persons::create(
-            &surreal,
-            &store::persons::NewPerson {
-                oidc_subject: Some("apple-sub".into()),
-                ..store::persons::NewPerson::new("Admitted Person", "person@example.com")
-            },
-        )
-        .await
-        .expect("seed a person carrying an Apple subject in the generic slot");
-        let mut claims = unknown_claims("someone-else@privaterelay.appleid.com");
-        claims.sub = "apple-sub".into();
-
-        let (created_id, role, resolution) =
-            resolve_person_from_claims(&surreal, Some(ProviderId::Apple), &claims, None)
-                .await
-                .expect("an unmatched email creates its own client");
-
-        assert_eq!(role, Role::Client);
-        assert!(resolution.fresh.is_some());
-        assert!(resolution.first_link);
-        assert_ne!(created_id, person.id);
-        let stored = store::persons::find_by_id(&surreal, person.id)
+        store::test_support::with_required_postgres(async {
+            let surreal = store::surreal::SurrealDb::uninitialized();
+            let person = store::persons::create(
+                &surreal,
+                &store::persons::NewPerson {
+                    oidc_subject: Some("apple-sub".into()),
+                    ..store::persons::NewPerson::new("Admitted Person", "person@example.com")
+                },
+            )
             .await
-            .unwrap()
-            .expect("the Person row remains present");
-        assert_eq!(stored.oidc_subject.as_deref(), Some("apple-sub"));
-        assert_eq!(stored.apple_subject, None);
+            .expect("seed a person carrying an Apple subject in the generic slot");
+            let mut claims = unknown_claims("someone-else@privaterelay.appleid.com");
+            claims.sub = "apple-sub".into();
+
+            let (created_id, role, resolution) =
+                resolve_person_from_claims(&surreal, Some(ProviderId::Apple), &claims, None)
+                    .await
+                    .expect("an unmatched email creates its own client");
+
+            assert_eq!(role, Role::Client);
+            assert!(resolution.fresh.is_some());
+            assert!(resolution.first_link);
+            assert_ne!(created_id, person.id);
+            let stored = store::persons::find_by_id(&surreal, person.id)
+                .await
+                .unwrap()
+                .expect("the Person row remains present");
+            assert_eq!(stored.oidc_subject.as_deref(), Some("apple-sub"));
+            assert_eq!(stored.apple_subject, None);
+        })
+        .await;
     }
 
     /// A row already linked to the presenting provider under a different
@@ -4783,35 +4814,39 @@ mod tests {
     /// alone rather than overwrite the link it holds.
     #[tokio::test]
     async fn the_legacy_branch_skips_a_row_already_linked_to_the_presenting_provider() {
-        let surreal = mem_surreal().await;
-        let person = store::persons::create(
-            &surreal,
-            &store::persons::NewPerson {
-                oidc_subject: Some("legacy-sub".into()),
-                apple_subject: Some("a-different-apple-sub".into()),
-                ..store::persons::NewPerson::new("Admitted Person", "person@example.com")
-            },
-        )
-        .await
-        .expect("seed a person linked to Apple under another subject");
-        let mut claims = unknown_claims("person@example.com");
-        claims.sub = "legacy-sub".into();
-        claims.email = None;
-
-        let refused = resolve_person_from_claims(&surreal, Some(ProviderId::Apple), &claims, None)
+        store::test_support::with_required_postgres(async {
+            let surreal = store::surreal::SurrealDb::uninitialized();
+            let person = store::persons::create(
+                &surreal,
+                &store::persons::NewPerson {
+                    oidc_subject: Some("legacy-sub".into()),
+                    apple_subject: Some("a-different-apple-sub".into()),
+                    ..store::persons::NewPerson::new("Admitted Person", "person@example.com")
+                },
+            )
             .await
-            .expect_err("an already-linked row is not a convergence candidate");
+            .expect("seed a person linked to Apple under another subject");
+            let mut claims = unknown_claims("person@example.com");
+            claims.sub = "legacy-sub".into();
+            claims.email = None;
 
-        assert!(matches!(refused, ResolveError::NotPreSeeded));
-        let stored = store::persons::find_by_id(&surreal, person.id)
-            .await
-            .unwrap()
-            .expect("the Person row remains present");
-        assert_eq!(stored.oidc_subject.as_deref(), Some("legacy-sub"));
-        assert_eq!(
-            stored.apple_subject.as_deref(),
-            Some("a-different-apple-sub")
-        );
+            let refused =
+                resolve_person_from_claims(&surreal, Some(ProviderId::Apple), &claims, None)
+                    .await
+                    .expect_err("an already-linked row is not a convergence candidate");
+
+            assert!(matches!(refused, ResolveError::NotPreSeeded));
+            let stored = store::persons::find_by_id(&surreal, person.id)
+                .await
+                .unwrap()
+                .expect("the Person row remains present");
+            assert_eq!(stored.oidc_subject.as_deref(), Some("legacy-sub"));
+            assert_eq!(
+                stored.apple_subject.as_deref(),
+                Some("a-different-apple-sub")
+            );
+        })
+        .await;
     }
 
     /// Admission is decided on the row, not on how it was found. A converged
@@ -4819,128 +4854,102 @@ mod tests {
     /// other path.
     #[tokio::test]
     async fn a_converged_row_that_is_not_admitted_is_still_refused() {
-        let surreal = mem_surreal().await;
-        let person = store::persons::create(
-            &surreal,
-            &store::persons::NewPerson {
-                oidc_subject: Some("apple-sub".into()),
-                ..store::persons::NewPerson::new("Barred Person", "barred@example.com")
-            },
-        )
-        .await
-        .expect("seed a person carrying an Apple subject in the generic slot");
-        store::persons::set_admitted(&surreal, person.id, false)
+        store::test_support::with_required_postgres(async {
+            let surreal = store::surreal::SurrealDb::uninitialized();
+            let person = store::persons::create(
+                &surreal,
+                &store::persons::NewPerson {
+                    oidc_subject: Some("apple-sub".into()),
+                    ..store::persons::NewPerson::new("Barred Person", "barred@example.com")
+                },
+            )
             .await
-            .expect("withdraw admission");
-        let mut claims = unknown_claims("barred@example.com");
-        claims.sub = "apple-sub".into();
-        claims.email = None;
+            .expect("seed a person carrying an Apple subject in the generic slot");
+            store::persons::set_admitted(&surreal, person.id, false)
+                .await
+                .expect("withdraw admission");
+            let mut claims = unknown_claims("barred@example.com");
+            claims.sub = "apple-sub".into();
+            claims.email = None;
 
-        let refused = resolve_person_from_claims(&surreal, Some(ProviderId::Apple), &claims, None)
-            .await
-            .expect_err("a row that is not admitted cannot sign in");
+            let refused =
+                resolve_person_from_claims(&surreal, Some(ProviderId::Apple), &claims, None)
+                    .await
+                    .expect_err("a row that is not admitted cannot sign in");
 
-        assert!(matches!(refused, ResolveError::NotAdmitted));
+            assert!(matches!(refused, ResolveError::NotAdmitted));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn an_unmatched_apple_relay_email_creates_a_client_with_its_subject() {
-        let surreal = mem_surreal().await;
-        let person = store::persons::create(
-            &surreal,
-            &store::persons::NewPerson::new("Admitted Person", "person@example.com"),
-        )
-        .await
-        .expect("seed admitted person");
-        let mut claims = unknown_claims("person@privaterelay.appleid.com");
-        claims.sub = "unknown-apple-subject".into();
-
-        let (created_id, role, resolution) =
-            resolve_person_from_claims(&surreal, Some(ProviderId::Apple), &claims, None)
-                .await
-                .expect("an unmatched relay email creates a client");
-        assert_eq!(role, Role::Client);
-        assert!(resolution.fresh.is_some());
-        assert!(resolution.first_link);
-        let created = store::persons::find_by_email_ci(&surreal, "person@privaterelay.appleid.com")
-            .await
-            .unwrap()
-            .expect("the relay client row exists");
-        assert_eq!(created.id, created_id);
-        assert_eq!(
-            created.apple_subject.as_deref(),
-            Some("unknown-apple-subject")
-        );
-        let stored = store::persons::find_by_id(&surreal, person.id)
-            .await
-            .unwrap()
-            .expect("the admitted Person row remains present");
-        assert_eq!(stored.apple_subject, None);
-    }
-
-    #[tokio::test]
-    async fn a_historical_person_keeps_primary_subject_after_schema_apply() {
-        let surreal = store::surreal::test_support::unmigrated().await;
-        let historical_id = Uuid::now_v7();
-        surreal
-            .query(
-                "CREATE $id SET name = 'Historical Person', \
-                 email = 'historical@example.com', role = 'client', is_admitted = true, \
-                 oidc_subject = 'primary-subject', \
-                 inserted_at = type::datetime('2020-01-01T00:00:00Z'), \
-                 updated_at = type::datetime('2020-01-01T00:00:00Z')",
+        store::test_support::with_required_postgres(async {
+            let surreal = store::surreal::SurrealDb::uninitialized();
+            let person = store::persons::create(
+                &surreal,
+                &store::persons::NewPerson::new("Admitted Person", "person@example.com"),
             )
-            .bind(("id", store::surreal::record_id("person", historical_id)))
             .await
-            .unwrap()
-            .check()
-            .unwrap();
-        store::schema::apply(&surreal)
-            .await
-            .expect("the schema converges over the historical Person row");
-        let mut claims = unknown_claims("historical@example.com");
-        claims.sub = "primary-subject".into();
-        claims.email = None;
+            .expect("seed admitted person");
+            let mut claims = unknown_claims("person@privaterelay.appleid.com");
+            claims.sub = "unknown-apple-subject".into();
 
-        let (resolved_id, _, _) =
-            resolve_person_from_claims(&surreal, Some(ProviderId::Primary), &claims, None)
+            let (created_id, role, resolution) =
+                resolve_person_from_claims(&surreal, Some(ProviderId::Apple), &claims, None)
+                    .await
+                    .expect("an unmatched relay email creates a client");
+            assert_eq!(role, Role::Client);
+            assert!(resolution.fresh.is_some());
+            assert!(resolution.first_link);
+            let created =
+                store::persons::find_by_email_ci(&surreal, "person@privaterelay.appleid.com")
+                    .await
+                    .unwrap()
+                    .expect("the relay client row exists");
+            assert_eq!(created.id, created_id);
+            assert_eq!(
+                created.apple_subject.as_deref(),
+                Some("unknown-apple-subject")
+            );
+            let stored = store::persons::find_by_id(&surreal, person.id)
                 .await
-                .expect("the historical primary-provider subject still resolves");
-
-        let stored = store::persons::find_by_id(&surreal, resolved_id)
-            .await
-            .unwrap()
-            .expect("the historical Person row remains present");
-        assert_eq!(stored.oidc_subject.as_deref(), Some("primary-subject"));
-        assert_eq!(stored.apple_subject, None);
-        assert_eq!(stored.microsoft_subject, None);
+                .unwrap()
+                .expect("the admitted Person row remains present");
+            assert_eq!(stored.apple_subject, None);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn an_unadmitted_person_is_refused_even_when_the_subject_is_linked() {
-        let surreal = mem_surreal().await;
-        let claims = unknown_claims("withdrawn@example.com");
-        let person = store::persons::create(
-            &surreal,
-            &store::persons::NewPerson {
-                oidc_subject: Some(claims.sub.clone()),
-                ..store::persons::NewPerson::with_role(
-                    "Withdrawn Person",
-                    "withdrawn@example.com",
-                    Role::Client,
-                )
-            },
-        )
-        .await
-        .expect("seed linked person");
-        store::persons::set_admitted(&surreal, person.id, false)
+        store::test_support::with_required_postgres(async {
+            let surreal = store::surreal::SurrealDb::uninitialized();
+            let claims = unknown_claims("withdrawn@example.com");
+            let person = store::persons::create(
+                &surreal,
+                &store::persons::NewPerson {
+                    oidc_subject: Some(claims.sub.clone()),
+                    ..store::persons::NewPerson::with_role(
+                        "Withdrawn Person",
+                        "withdrawn@example.com",
+                        Role::Client,
+                    )
+                },
+            )
             .await
-            .expect("withdraw person");
+            .expect("seed linked person");
+            store::persons::set_admitted(&surreal, person.id, false)
+                .await
+                .expect("withdraw person");
 
-        let err = resolve_person_from_claims(&surreal, Some(ProviderId::Primary), &claims, None)
-            .await
-            .expect_err("an unadmitted linked row must not resolve");
-        assert!(matches!(err, ResolveError::NotAdmitted));
+            let err =
+                resolve_person_from_claims(&surreal, Some(ProviderId::Primary), &claims, None)
+                    .await
+                    .expect_err("an unadmitted linked row must not resolve");
+            assert!(matches!(err, ResolveError::NotAdmitted));
+        })
+        .await;
     }
 
     #[tokio::test]
@@ -5011,208 +5020,237 @@ mod tests {
 
     #[tokio::test]
     async fn a_new_client_has_an_empty_portfolio() {
-        let surreal = mem_surreal().await;
-        let claims = unknown_claims("trainee@example.com");
-        let (person_id, role, resolution) =
-            resolve_person_from_claims(&surreal, Some(ProviderId::Primary), &claims, None)
+        store::test_support::with_required_postgres(async {
+            let surreal = store::surreal::SurrealDb::uninitialized();
+            let claims = unknown_claims("trainee@example.com");
+            let (person_id, role, resolution) =
+                resolve_person_from_claims(&surreal, Some(ProviderId::Primary), &claims, None)
+                    .await
+                    .expect("first sign-in creates the person");
+            // A client, treated as a fresh signup (drives the welcome workflow).
+            assert_eq!(role, Role::Client);
+            assert!(
+                resolution.fresh.is_some(),
+                "a newly created client is a fresh signup"
+            );
+            assert!(resolution.first_link);
+            let person = store::persons::find_by_email_ci(&surreal, "trainee@example.com")
                 .await
-                .expect("first sign-in creates the person");
-        // A client, treated as a fresh signup (drives the welcome workflow).
-        assert_eq!(role, Role::Client);
-        assert!(
-            resolution.fresh.is_some(),
-            "a newly created client is a fresh signup"
-        );
-        assert!(resolution.first_link);
-        let person = store::persons::find_by_email_ci(&surreal, "trainee@example.com")
-            .await
-            .unwrap()
-            .expect("the client row exists");
-        assert_eq!(person.id, person_id);
-        assert_eq!(person.role, Role::Client);
-        // Empty portfolio: no participation rows until an admin assigns them.
-        let participations = store::projects::participations_for_person(&surreal, person_id)
-            .await
-            .unwrap()
-            .len();
-        assert_eq!(participations, 0, "a new client has an empty portfolio");
+                .unwrap()
+                .expect("the client row exists");
+            assert_eq!(person.id, person_id);
+            assert_eq!(person.role, Role::Client);
+            // Empty portfolio: no participation rows until an admin assigns them.
+            let participations = store::projects::participations_for_person(&surreal, person_id)
+                .await
+                .unwrap()
+                .len();
+            assert_eq!(participations, 0, "a new client has an empty portfolio");
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn bootstrap_owner_is_created() {
-        let surreal = mem_surreal().await;
-        let claims = unknown_claims("boss@example.com");
-        let (_, role, resolution) = resolve_person_from_claims(
-            &surreal,
-            Some(ProviderId::Primary),
-            &claims,
-            Some("boss@example.com"),
-        )
-        .await
-        .expect("bootstrap Owner is always JIT-created");
-        assert_eq!(role, Role::Owner);
-        assert!(resolution.fresh.is_some());
-        assert!(resolution.first_link);
+        store::test_support::with_required_postgres(async {
+            let surreal = store::surreal::SurrealDb::uninitialized();
+            let claims = unknown_claims("boss@example.com");
+            let (_, role, resolution) = resolve_person_from_claims(
+                &surreal,
+                Some(ProviderId::Primary),
+                &claims,
+                Some("boss@example.com"),
+            )
+            .await
+            .expect("bootstrap Owner is always JIT-created");
+            assert_eq!(role, Role::Owner);
+            assert!(resolution.fresh.is_some());
+            assert!(resolution.first_link);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn reconcile_bootstrap_owner_promotes_the_match_and_demotes_the_stale_owner() {
-        let surreal = mem_surreal().await;
-        // A stale bootstrap identity from a previous env-var value, still
-        // sitting at `Owner` because nothing signed it in to get demoted.
-        let stale = store::persons::create(
-            &surreal,
-            &store::persons::NewPerson::with_role("Old Boss", "old@example.com", Role::Owner),
-        )
-        .await
-        .unwrap();
-        // The row the env var now names — seeded with a different role, the
-        // way an operator promotes a person to Admin ahead of a cutover.
-        let next = store::persons::create(
-            &surreal,
-            &store::persons::NewPerson::with_role("New Boss", "new@example.com", Role::Admin),
-        )
-        .await
-        .unwrap();
-
-        reconcile_bootstrap_owner(&surreal, Some("new@example.com"))
+        store::test_support::with_required_postgres(async {
+            let surreal = store::surreal::SurrealDb::uninitialized();
+            // A stale bootstrap identity from a previous env-var value, still
+            // sitting at `Owner` because nothing signed it in to get demoted.
+            let stale = store::persons::create(
+                &surreal,
+                &store::persons::NewPerson::with_role("Old Boss", "old@example.com", Role::Owner),
+            )
+            .await
+            .unwrap();
+            // The row the env var now names — seeded with a different role, the
+            // way an operator promotes a person to Admin ahead of a cutover.
+            let next = store::persons::create(
+                &surreal,
+                &store::persons::NewPerson::with_role("New Boss", "new@example.com", Role::Admin),
+            )
             .await
             .unwrap();
 
-        let stale = store::persons::find_by_id(&surreal, stale.id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            stale.role,
-            store::persons::Role::Client,
-            "the previous bootstrap identity is demoted, not left at Owner",
-        );
-        let next = store::persons::find_by_id(&surreal, next.id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            next.role,
-            Role::Owner,
-            "the configured email is promoted immediately, without waiting for a sign-in",
-        );
+            reconcile_bootstrap_owner(&surreal, Some("new@example.com"))
+                .await
+                .unwrap();
+
+            let stale = store::persons::find_by_id(&surreal, stale.id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                stale.role,
+                store::persons::Role::Client,
+                "the previous bootstrap identity is demoted, not left at Owner",
+            );
+            let next = store::persons::find_by_id(&surreal, next.id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                next.role,
+                Role::Owner,
+                "the configured email is promoted immediately, without waiting for a sign-in",
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn reconcile_bootstrap_owner_is_a_no_op_with_no_configured_email() {
-        let surreal = mem_surreal().await;
-        let owner = store::persons::create(
-            &surreal,
-            &store::persons::NewPerson::with_role("Boss", "boss@example.com", Role::Owner),
-        )
-        .await
-        .unwrap();
-
-        // The carve-out disabled (`None`) must not touch an existing Owner —
-        // there is no configured identity to reconcile against.
-        reconcile_bootstrap_owner(&surreal, None).await.unwrap();
-
-        let owner = store::persons::find_by_id(&surreal, owner.id)
+        store::test_support::with_required_postgres(async {
+            let surreal = store::surreal::SurrealDb::uninitialized();
+            let owner = store::persons::create(
+                &surreal,
+                &store::persons::NewPerson::with_role("Boss", "boss@example.com", Role::Owner),
+            )
             .await
-            .unwrap()
             .unwrap();
-        assert_eq!(owner.role, Role::Owner);
+
+            // The carve-out disabled (`None`) must not touch an existing Owner —
+            // there is no configured identity to reconcile against.
+            reconcile_bootstrap_owner(&surreal, None).await.unwrap();
+
+            let owner = store::persons::find_by_id(&surreal, owner.id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(owner.role, Role::Owner);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn resolve_existing_after_race_finds_the_row_by_subject_then_email() {
-        let surreal = mem_surreal().await;
-        let claims = unknown_claims("racer@example.com");
-        // Seed the row the "winning" request would have committed.
-        let (person_id, _, _) =
-            resolve_person_from_claims(&surreal, Some(ProviderId::Primary), &claims, None)
-                .await
-                .expect("first sign-in creates the person");
+        store::test_support::with_required_postgres(async {
+            let surreal = store::surreal::SurrealDb::uninitialized();
+            let claims = unknown_claims("racer@example.com");
+            // Seed the row the "winning" request would have committed.
+            let (person_id, _, _) =
+                resolve_person_from_claims(&surreal, Some(ProviderId::Primary), &claims, None)
+                    .await
+                    .expect("first sign-in creates the person");
 
-        // Matches on the provider subject (the first lookup the recovery tries).
-        let by_subject = resolve_existing_after_race(
-            &surreal,
-            Some(ProviderId::Primary),
-            &claims.sub,
-            "racer@example.com",
-        )
-        .await
-        .unwrap()
-        .expect("the winner's row resolves by subject");
-        assert_eq!(by_subject.id, person_id);
-
-        // Falls back to case-insensitive email when the subject differs.
-        let by_email = resolve_existing_after_race(
-            &surreal,
-            Some(ProviderId::Primary),
-            "some-other-subject",
-            "RACER@example.com",
-        )
-        .await
-        .unwrap()
-        .expect("the winner's row resolves by email when the subject misses");
-        assert_eq!(by_email.id, person_id);
-
-        // An identity that never signed up resolves to nothing.
-        assert!(
-            resolve_existing_after_race(
+            // Matches on the provider subject (the first lookup the recovery tries).
+            let by_subject = resolve_existing_after_race(
                 &surreal,
                 Some(ProviderId::Primary),
-                "ghost",
-                "ghost@example.com",
+                &claims.sub,
+                "racer@example.com",
             )
             .await
             .unwrap()
-            .is_none(),
-            "an unknown identity has no row to recover",
-        );
+            .expect("the winner's row resolves by subject");
+            assert_eq!(by_subject.id, person_id);
+
+            // Falls back to case-insensitive email when the subject differs.
+            let by_email = resolve_existing_after_race(
+                &surreal,
+                Some(ProviderId::Primary),
+                "some-other-subject",
+                "RACER@example.com",
+            )
+            .await
+            .unwrap()
+            .expect("the winner's row resolves by email when the subject misses");
+            assert_eq!(by_email.id, person_id);
+
+            // An identity that never signed up resolves to nothing.
+            assert!(
+                resolve_existing_after_race(
+                    &surreal,
+                    Some(ProviderId::Primary),
+                    "ghost",
+                    "ghost@example.com",
+                )
+                .await
+                .unwrap()
+                .is_none(),
+                "an unknown identity has no row to recover",
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn concurrent_first_sign_in_converges_on_one_client_without_a_500() {
-        let surreal = mem_surreal().await;
+        store::test_support::with_required_postgres(async {
+            let surreal = store::surreal::SurrealDb::uninitialized();
 
-        // Fire several identical first logins at once (`unknown_claims` is
-        // deterministic per email, so every task presents the same subject
-        // and email). Whichever insert wins, the losers must recover the
-        // winner's row rather than propagate the unique-index violation as a
-        // `ResolveError::Db` (a 500 at the callback).
-        let mut handles = Vec::new();
-        for _ in 0..8 {
-            // The handle is a cheap clone around one shared engine, so
-            // every task races against the same database.
-            let surreal = surreal.clone();
-            handles.push(tokio::spawn(async move {
-                let claims = unknown_claims("stampede@example.com");
-                resolve_person_from_claims(&surreal, Some(ProviderId::Primary), &claims, None).await
-            }));
-        }
+            // Fire several identical first logins at once (`unknown_claims` is
+            // deterministic per email, so every task presents the same subject
+            // and email). Whichever insert wins, the losers must recover the
+            // winner's row rather than propagate the unique-index violation as a
+            // `ResolveError::Db` (a 500 at the callback).
+            let pg = store::postgres::PostgresDb::from_env().await.unwrap();
+            let mut handles = Vec::new();
+            for _ in 0..8 {
+                // Each task enters the same task-owned PostgreSQL scope, so
+                // every task races against the same database.
+                let surreal = surreal.clone();
+                let pg = pg.clone();
+                handles.push(tokio::spawn(store::postgres::PostgresDb::with_test_db(
+                    pg,
+                    async move {
+                        let claims = unknown_claims("stampede@example.com");
+                        resolve_person_from_claims(
+                            &surreal,
+                            Some(ProviderId::Primary),
+                            &claims,
+                            None,
+                        )
+                        .await
+                    },
+                )));
+            }
 
-        let mut ids = Vec::new();
-        for handle in handles {
-            let (person_id, role, _) = handle
+            let mut ids = Vec::new();
+            for handle in handles {
+                let (person_id, role, _) = handle
+                    .await
+                    .expect("the resolve task must not panic")
+                    .expect("a concurrent first sign-in must never 500");
+                assert_eq!(role, Role::Client);
+                ids.push(person_id);
+            }
+
+            // Every request resolved to the same client, and exactly one row exists.
+            let first = ids[0];
+            assert!(
+                ids.iter().all(|id| *id == first),
+                "all concurrent logins must converge on one client, got {ids:?}",
+            );
+            let rows = store::persons::search(&surreal, None, Some("stampede@example.com"), 10)
                 .await
-                .expect("the resolve task must not panic")
-                .expect("a concurrent first sign-in must never 500");
-            assert_eq!(role, Role::Client);
-            ids.push(person_id);
-        }
-
-        // Every request resolved to the same client, and exactly one row exists.
-        let first = ids[0];
-        assert!(
-            ids.iter().all(|id| *id == first),
-            "all concurrent logins must converge on one client, got {ids:?}",
-        );
-        let rows = store::persons::search(&surreal, None, Some("stampede@example.com"), 10)
-            .await
-            .unwrap();
-        assert_eq!(
-            rows.len(),
-            1,
-            "the race must create exactly one persons row"
-        );
+                .unwrap();
+            assert_eq!(
+                rows.len(),
+                1,
+                "the race must create exactly one persons row"
+            );
+        })
+        .await;
     }
 
     #[test]
@@ -5808,3 +5846,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "oauth_legacy_tests.rs"]
+mod legacy_tests;

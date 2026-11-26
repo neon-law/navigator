@@ -574,6 +574,17 @@ mod tests {
         assert!(!selection.nextest_filter.contains("surreal_free_tests::"));
     }
     #[test]
+    fn oauth_compatibility_does_not_suppress_native_identity_tests() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let selection = select(root).unwrap();
+        assert!(selection
+            .nextest_filter
+            .contains("test(/^oauth::legacy_tests::/)"));
+        assert!(!selection.nextest_filter.contains("test(/^oauth::/)"));
+        assert!(!selection.nextest_filter.contains("test(/^oauth::tests::/)"));
+    }
+
+    #[test]
     fn compatibility_tests_do_not_suppress_mock_http_tiktok_tests() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
         let selection = select(root).unwrap();
