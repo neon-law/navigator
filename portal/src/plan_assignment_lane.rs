@@ -179,8 +179,7 @@ pub(crate) async fn stage_for_review(
         provider: (*provider).to_string(),
         assignment: assignment.clone(),
     };
-    // PostgreSQL is resolved on demand: an unconfigured or unreachable
-    // database stages the notice with an unresolved plan and fee quote.
+    // Fee lookup is optional; staging itself requires PostgreSQL authority.
     let pg = store::postgres::PostgresDb::from_env().await.ok();
     match store::plan_intake::stage(db, pg.as_ref(), &input).await {
         Ok(staged) => {

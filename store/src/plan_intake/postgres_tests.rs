@@ -169,3 +169,65 @@ async fn surreal_rows_copy_once_with_their_decision() {
     );
     pg.0.close().await;
 }
+
+#[tokio::test]
+async fn source_context_refuses_review_mutations_before_effects() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    crate::test_support::with_postgres(async {
+        let pg = PostgresDb::configured().await.unwrap().unwrap();
+        let source = SurrealDb::uninitialized();
+        let id = Uuid::now_v7();
+        let actor = Uuid::now_v7();
+        let input = AcceptInput {
+            attestation: true,
+            acting_person_id: actor,
+            brand: "synthetic".into(),
+            code: "synthetic-plan".into(),
+            name: None,
+            plan_case_number: Some("CASE-1".into()),
+            plan_matter_type: "will".into(),
+            plan_state: None,
+        };
+        let calls = AtomicUsize::new(0);
+        let error = crate::postgres_mirror::from_source(accept_with_onboarding(
+            &source,
+            &pg,
+            id,
+            &input,
+            |_| async {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            },
+        ))
+        .await
+        .unwrap_err();
+        assert!(matches!(error, PlanIntakeError::PostgresRequired));
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert!(matches!(
+            crate::postgres_mirror::from_source(resolve_member(
+                &source,
+                &pg,
+                id,
+                actor,
+                "synthetic",
+                None,
+                "member@example.test"
+            ))
+            .await,
+            Err(PlanIntakeError::PostgresRequired)
+        ));
+        assert!(matches!(
+            crate::postgres_mirror::from_source(decline_from_review(
+                &source,
+                &pg,
+                id,
+                actor,
+                "synthetic",
+                "reason"
+            ))
+            .await,
+            Err(PlanIntakeError::PostgresRequired)
+        ));
+    })
+    .await;
+}
