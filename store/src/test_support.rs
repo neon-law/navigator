@@ -40,6 +40,13 @@ pub async fn with_source_import<T>(test: impl std::future::Future<Output = T>) -
     crate::postgres_mirror::from_source(test).await
 }
 
+/// An inert store handle for tests that prove a PostgreSQL accessor never
+/// touches the legacy source engine.
+#[must_use]
+pub fn uninitialized_store() -> crate::surreal::SurrealDb {
+    crate::surreal::SurrealDb::uninitialized()
+}
+
 /// Synthetic Twilio registry and credential fixtures shared by route tests.
 pub mod twilio;
 
