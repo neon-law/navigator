@@ -85,8 +85,8 @@ pub use worktree_env::WorktreeEnvCmd;
 use orchestrate::{
     down, down_in, kind_down_only, kind_up_only, kustomize_render, logs, print_env,
     rauthy_deployment_exists, reload_worker as reload_worker_in_kind, require_auth, require_tools,
-    run, status, undeploy, up, use_kind_context, wait_for_condition, wait_for_tcp,
-    wait_rollout, workspace_root,
+    run, status, undeploy, up, use_kind_context, wait_for_condition, wait_for_tcp, wait_rollout,
+    workspace_root,
 };
 
 // KIND/local defaults. Each pairs with a `KindConfig` field and a

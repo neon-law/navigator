@@ -3,6 +3,7 @@
 //! This is not a claim about a deployed Forgejo schema or physical recovery.
 use super::*;
 use crate::coverage::{export_pair, inventory, CoverageManifest, DatabaseSource, Rule};
+use crate::runner::snapshot_selected;
 use crate::test_support::CollisionStorage;
 use cloud::{ImmutableObject, ObjectListing, StorageError, StorageService, StoredObject};
 use futures::{FutureExt as _, TryStreamExt as _};

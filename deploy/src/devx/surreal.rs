@@ -12,8 +12,7 @@
 //! an embedded database:
 //!
 //! - host `web`, through the port-forward this module's caller opens;
-//! - the in-cluster `workflows-service` worker, at
-//!   [`IN_CLUSTER_ENDPOINT`].
+//! - the in-cluster compatibility worker, through the SurrealDB Service.
 //!
 //! Per-worktree isolation comes from the per-worktree cluster, exactly
 //! two checkouts have two engines, so their
@@ -22,11 +21,6 @@
 use store::surreal::{AuthScope, SurrealAuth, SurrealConfig};
 
 use super::{KindConfig, SURREAL_LOCAL_PASSWORD, SURREAL_LOCAL_USER, SURREAL_NAMESPACE};
-
-/// Where a pod inside the cluster reaches the engine. The host uses a
-/// port-forward; in-cluster callers use the Service, which needs no
-/// forward and survives a pod restart.
-pub(super) const IN_CLUSTER_ENDPOINT: &str = "ws://surreal.navigator.svc.cluster.local:8000";
 
 /// The Service's port, in-cluster. The host-side port is a
 /// `KindConfig` field because it varies per worktree slot; this one
@@ -50,7 +44,7 @@ pub(super) fn host_config(cfg: &KindConfig, database: &str) -> SurrealConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::{host_config, IN_CLUSTER_ENDPOINT, SERVICE_PORT};
+    use super::{host_config, SERVICE_PORT};
     use std::path::Path;
     use store::surreal::{AuthScope, SurrealAuth};
 
@@ -80,10 +74,6 @@ mod tests {
         assert!(
             manifest.contains(&format!("containerPort: {SERVICE_PORT}")),
             "the container must listen on {SERVICE_PORT}"
-        );
-        assert_eq!(
-            IN_CLUSTER_ENDPOINT,
-            format!("ws://surreal.navigator.svc.cluster.local:{SERVICE_PORT}")
         );
     }
 
