@@ -177,7 +177,7 @@ async fn every_firm_footer_destination_publishes_the_complete_footer() {
 }
 
 #[tokio::test]
-async fn vesta_shows_starting_price_and_shared_booking_calendar() {
+async fn vesta_shows_what_a_plan_includes_and_directs_visitors_to_contact() {
     let html = preview(BrandKey::Vesta, "/").await;
     for expected in [
         "Your estate plan",
@@ -187,7 +187,8 @@ async fn vesta_shows_starting_price_and_shared_booking_calendar() {
         "Available by request",
         "individual trustee appointment",
         "trustee appointment",
-        "https://calendar.notion.so/meet/nick-shook/or15n4yy7",
+        "Contact us to learn more",
+        "href=\"/contact\"",
         "/public/brand/vesta.svg",
         "Guieb &#38; Shook PC",
         "site-footer",
@@ -195,6 +196,11 @@ async fn vesta_shows_starting_price_and_shared_booking_calendar() {
         assert!(html.contains(expected), "missing {expected}");
     }
     assert!(html.contains("do not replace the signatures"));
+
+    let contact = preview(BrandKey::Vesta, "/contact").await;
+    assert!(contact.contains("contact@vestaestateplanning.com"));
+    assert!(contact.contains(r#"href="https://calendar.notion.so/meet/nick-shook/or15n4yy7""#));
+    assert!(contact.contains(r#"href="tel:+15108002090""#));
 }
 
 #[tokio::test]
@@ -211,7 +217,7 @@ async fn vesta_administration_is_a_separate_contact_engagement() {
         "Custom engagement",
         "Contact us about trust administration",
         "before agreeing on work in writing",
-        "href=\"https://calendar.notion.so/meet/nick-shook/or15n4yy7\"",
+        "href=\"/contact\"",
         "href=\"/services#trust-administration\"",
     ] {
         assert!(administration.contains(expected), "missing {expected}");
@@ -222,7 +228,7 @@ async fn vesta_administration_is_a_separate_contact_engagement() {
     let services = preview(BrandKey::Vesta, "/services").await;
     for expected in [
         "id=\"trust-administration\"",
-        "Custom scope and fees",
+        "Start your administration engagement",
         "identify who we represent",
         "conflict review",
         "written engagement",
@@ -263,12 +269,18 @@ async fn vesta_leads_with_tailored_planning_and_explains_nevada_trusts() {
 }
 
 #[tokio::test]
-async fn vesta_services_describe_tailored_planning_with_a_starting_price() {
+async fn vesta_services_describe_tailored_planning_without_prices() {
     let html = preview(BrandKey::Vesta, "/services").await;
     assert!(html.contains("We listen to what matters to you"));
-    assert!(html.contains("Basic estate plans for one person start from $1,111"));
+    assert!(html.contains("Contact us to learn more"));
     let home = preview(BrandKey::Vesta, "/").await;
-    assert!(home.contains("From $1,111"));
+    for price in ["$1,111", "$29/mo", "$290/year"] {
+        assert!(
+            !html.contains(price) && !home.contains(price),
+            "found {price}"
+        );
+    }
+    assert!(!home.contains("testimonial-section"), "no published quotes");
     assert!(html.contains("Nicholas Shook may accept appointment"));
     assert!(html.contains("qualified Nevada trustee"));
     assert!(html.contains("Life-insurance trusts"));
@@ -335,7 +347,7 @@ async fn vesta_process_keeps_engagement_readings_and_later_help_distinct() {
         previous = position;
     }
     for expected in [
-        "For a basic estate plan for one person",
+        "A basic estate plan for one person",
         "A will and financial power of attorney",
         "A health-care directive and health-care power of attorney",
         "One round of revisions before signing",
@@ -425,7 +437,7 @@ async fn vesta_cosmos_keeps_rotating_planets_and_reflection_available_without_sc
     assert!(!html.contains("Still the cosmos"));
     assert_eq!(html.matches("class=\"vesta-theme\"").count(), 8);
     assert_eq!(html.matches("name=\"vesta-reflections\"").count(), 8);
-    assert!(html.find("vesta-cosmos").unwrap() < html.find("vesta-offer").unwrap());
+    assert!(html.find("vesta-cosmos").unwrap() < html.find("id=\"estate-plan\"").unwrap());
 }
 
 #[tokio::test]

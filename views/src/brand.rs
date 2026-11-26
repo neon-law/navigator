@@ -942,8 +942,8 @@ pub static DAYBRIDGE_BRANDING: Branding = Branding {
     base_url: "",
     primary_domain: "daybridgedivorce.com",
     firm_disclaimer: "Attorney advertisement. Nothing here is legal advice without a signed retainer for an active project. Past results do not guarantee future outcomes.",
-    mission_description: "Daybridge Divorce Law is operated by Guieb & Shook PC for people ending a marriage, whether they agree or not. The fee is $500 if you agree. $5,000 for up to two years if you do not. After two years, continued representation costs $5 a day. Court fees and discovery expenses, including expert fees, are separate. Joint representation of an agreed divorce is subject to applicable rules, conflict review, and informed written consent. Attorney advertisement; no result is promised.",
-    service_description: "Divorce through Daybridge Divorce Law, operated by Guieb & Shook PC. $500 if you agree. $5,000 for up to two years if you do not. After two years, continued representation costs $5 a day. Court fees and discovery expenses, including expert fees, are separate. The written retainer defines the work.",
+    mission_description: "Daybridge Divorce Law is operated by Guieb & Shook PC for people ending a marriage, whether they agree or not. Court fees and discovery expenses, including expert fees, are separate. Joint representation of an agreed divorce is subject to applicable rules, conflict review, and informed written consent. Attorney advertisement; no result is promised.",
+    service_description: "Divorce through Daybridge Divorce Law, operated by Guieb & Shook PC. Court fees and discovery expenses, including expert fees, are separate. The written retainer defines the work.",
     portal_only: false,
     brand_key: BrandKey::Daybridge,
 };

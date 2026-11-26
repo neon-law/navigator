@@ -72,7 +72,7 @@ async fn the_gateway_renders_on_neon_hosts_with_neon_chrome_and_the_approved_cop
             r#"content="Neon Law | Divorce" property="og:title""#,
             "Daybridge Divorce Law",
             "Guieb &#38; Shook PC",
-            "$500 if you agree",
+            "agreed and contested divorce",
             "No result or timeline is promised",
             "Visit Daybridge Divorce Law",
             "site-footer",
@@ -80,6 +80,7 @@ async fn the_gateway_renders_on_neon_hosts_with_neon_chrome_and_the_approved_cop
         ] {
             assert!(body.contains(expected), "{host:?} is missing {expected:?}");
         }
+        assert!(!body.contains("$500") && !body.contains("$5,000"));
         assert!(
             body.contains(r#"href="https://www.daybridgedivorce.com""#),
             "{host:?}: the CTA does not open the production Daybridge destination: {body}"

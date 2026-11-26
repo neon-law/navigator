@@ -59,14 +59,13 @@ Daybridge Divorce Law (`daybridge/`):
 
 | File | Page |
 | --- | --- |
-| `neon/locales/en/daybridge/home.yaml` | `/` agreed divorce for couples |
-| `neon/locales/en/daybridge/services.yaml` | `/services` scope, timing, and cost disclosures |
+| `neon/locales/en/daybridge/home.yaml` | `/` agreed and contested divorce |
+| `neon/locales/en/daybridge/services.yaml` | `/services` scope, timing, and representation disclosures |
 
-Daybridge charges $500 for an agreed divorce or $5,000 for up to two years of contested representation. After two years,
-continued contested representation costs $5 a day. Motions are included. Court fees and discovery expenses, including
-expert fees, are separate. The homepage offers a consultation and account creation. Its header links to published
-testimonials. The sibling-practice card links to Vesta Estate Planning for a review after divorce under a separate
-engagement. The services page explains the limits on joint representation.
+Daybridge's homepage and services page invite visitors to contact the firm about agreed or contested divorce. The
+contact page offers booking, phone, and email. The homepage features published Daybridge testimonials when available and
+links to Vesta Estate Planning for a review after divorce under a separate engagement. The services page explains the
+limits on joint representation and identifies expenses that are separate from the written retainer.
 
 [Nevada conflict rules](https://www.leg.state.nv.us/courtrules/rpc.html) restrict claims between clients in the same
 proceeding. The copy preserves that limit.
@@ -92,19 +91,20 @@ service biography.
 
 Vesta's `home.yaml` leads with support in life and death and welcomes the person's values and spiritual beliefs. It
 explains that Nevada Asset Protection Trust planning may fit after reviewing the person's circumstances and applicable
-law. The basic plan starts from $1,111; services and fees are agreed in writing. The basic package for one person
-includes a will, financial power of attorney, health-care directive, health-care power of attorney, a planning meeting,
-attorney preparation and review, one round of revisions before signing, and signing guidance. Living trusts, advanced
-planning, property transfers, probate, administration, and later updates require a separate quote. The home page puts an
-optional astrology reading during the get-to-know-you session, followed by written engagement, the planning meeting,
-document preparation, and a return meeting for signing with required witnesses and notarization. Probate has its own
-section and separate scope and fees. Readings are optional personal reflection; the person's wishes guide the legal
-plan. The booking link uses Vesta's `consultation_url`, matching the Notion calendar for Neon Law. Its services page
-describes estate planning, Nevada trust planning, custom trust administration, and possible individual trustee
-appointments under written terms. Navigator access is not an appointment, and the copy preserves the
-Nevada-qualified-trustee, tax, conflict, and execution-formality limits. Blockchain recording is fulfilled on request
-while the automated backend in [`solana-attestation`](solana-attestation.md) remains unshipped; a record does not
-replace required signing or notarization.
+law. Services and fees are agreed in writing. The basic plan for one person includes a will, financial power of
+attorney, health-care directive, health-care power of attorney, a planning meeting, attorney preparation and review, one
+round of revisions before signing, and signing guidance. Living trusts, advanced planning, property transfers, probate,
+administration, and later updates require a separate quote. The home page puts an optional astrology reading during the
+get-to-know-you session, followed by written engagement, the planning meeting, document preparation, and a return
+meeting for signing with required witnesses and notarization. Probate has its own section and separate scope and fees.
+Readings are optional personal reflection; the person's wishes guide the legal plan. The homepage features published
+Vesta testimonials when available. The homepage and services page direct visitors to the Vesta contact page, which
+offers booking, phone, and email. The services page describes estate planning, Nevada trust planning, custom trust
+administration, and possible individual trustee appointments under written terms. Navigator access is not an
+appointment, and the copy preserves the Nevada-qualified-trustee, tax, conflict, and execution-formality limits.
+Blockchain recording is fulfilled on request while the automated backend in
+[`solana-attestation`](solana-attestation.md) remains unshipped; a record does not replace required signing or
+notarization.
 
 Neon's estate-planning gateway introduces Vesta's estate planning and Nevada trust work. The gateway directs visitors to
 Vesta for the service details and written engagement terms.
@@ -113,10 +113,9 @@ Source review dated October 13, 2026: [Simon Law Group's process
 guide](https://www.simonattorneys.com/nj-trust-estate-planning-process-timeline) separates the consultation, drafting,
 review, and signing stages. [Jeffrey Burr's planning
 overview](https://jeffreyburr.com/proper-estate-planning-is-a-process-not-an-event/) connects document preparation with
-later administration. These inform the page structure; Vesta's meeting sequence, optional readings, and basic-plan
-starting price follow its own offering. The [Nevada courts' probate
-overview](https://selfhelp.nvcourts.gov/pro/overview) supports the distinction between probate help and court
-proceedings required for a particular estate.
+later administration. These guides inform the page structure. Vesta's meeting sequence and optional readings follow its
+own offering. The [Nevada courts' probate overview](https://selfhelp.nvcourts.gov/pro/overview) supports the distinction
+between probate help and court proceedings required for a particular estate.
 
 ### Vesta Nevada trust planning
 

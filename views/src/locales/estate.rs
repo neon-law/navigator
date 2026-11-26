@@ -4,10 +4,8 @@ use serde::{Deserialize, Serialize};
 /// Vesta's one-page offer, authored in the brand's home catalog.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EstateCopy {
-    pub eyebrow: String,
     pub process_link: String,
     pub plan_label: String,
-    pub price: String,
     pub plan_description: String,
     pub features: Vec<String>,
     pub fee_note: String,

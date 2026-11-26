@@ -70,22 +70,16 @@ fn assert_own_brand_head(html: &str, host: &str) {
 }
 
 #[tokio::test]
-async fn daybridge_home_is_plain_spoken_and_features_both_prices() {
+async fn daybridge_home_leads_with_contact_and_keeps_account_access() {
     for host in HOSTS {
         let html = page(host, "/").await;
         assert_own_brand_head(&html, host);
         for expected in [
             "Daybridge Divorce Law",
             "Prefer to write first?",
-            r#"href="https://calendar.notion.so/meet/nick-shook/or15n4yy7""#,
-            r#"href="tel:+15108002090""#,
+            "Contact us to learn more",
             r#"href="/auth/signup?return_to=/app/projects""#,
             r#"href="/auth/login?return_to=/app/projects""#,
-            "Book Consultation",
-            "$500",
-            "$5,000",
-            "flat fee for up to two years, then $5 a day while we represent you",
-            "discovery expenses, including expert fees",
             "/public/brand/daybridge/crossing.svg",
             "/public/brand/daybridge/logo.svg",
             "/public/css/daybridge.css",
@@ -107,36 +101,50 @@ async fn daybridge_home_is_plain_spoken_and_features_both_prices() {
         assert!(footer.contains("www.guiebshook.com"), "{host}: {footer}");
         assert!(!footer.contains("Lex Tecnica"), "{host}: {footer}");
         let main = html.split("<footer").next().expect("page body");
+        assert!(main.contains(r#"href="/contact""#), "{host}");
+        assert!(
+            !html.contains("testimonial-section"),
+            "{host} has no published quotes"
+        );
         assert!(
             !main.contains("<ol") && !main.contains("<li"),
             "{host} home must not use list views"
         );
         let lower = html.to_lowercase();
-        for forbidden in ["guaranteed result", "without delay", "$333", "mutual split"] {
+        for forbidden in [
+            "guaranteed result",
+            "without delay",
+            "$500",
+            "$5,000",
+            "$5 a day",
+        ] {
             assert!(!lower.contains(forbidden), "{host} publishes {forbidden:?}");
         }
     }
 }
 
 #[tokio::test]
-async fn daybridge_services_explain_scope_timing_and_costs() {
+async fn daybridge_services_explain_scope_and_direct_visitors_to_contact() {
     for host in HOSTS {
         let html = page(host, "/services").await;
         assert_own_brand_head(&html, host);
         for expected in [
-            "Divorce, at a fair price",
+            "A brighter way through divorce.",
             "Your agreement in writing",
             "The court sets its",
             "Papers and filing steps",
             "Joint representation starts with clarity",
             "separate counsel",
-            "Two plain prices",
-            "$500 if you agree. $5,000 for up to two years if you do not.",
-            "not a particular result",
+            "What your engagement covers",
+            "discovery expenses, including expert fees",
+            "Contact us to learn more",
         ] {
             assert!(html.contains(expected), "{host} missing {expected:?}");
         }
-        assert!(!html.contains("Setup and daily fees") && !html.contains("$5,000 per day"));
+        assert!(html.contains(r#"href="/contact""#), "{host}");
+        for price in ["$500", "$5,000", "$5 a day", "$1,000"] {
+            assert!(!html.contains(price), "{host} still publishes {price}");
+        }
     }
 }
 
@@ -155,6 +163,8 @@ async fn daybridge_contact_publishes_its_own_mailbox_and_head() {
             html.contains("contact@daybridgedivorce.com"),
             "{host} must publish its own mailbox: {html}"
         );
+        assert!(html.contains(r#"href="https://calendar.notion.so/meet/nick-shook/or15n4yy7""#));
+        assert!(html.contains(r#"href="tel:+15108002090""#));
         assert!(
             !html.contains("contact@neonlaw.com"),
             "{host} must not publish Neon Law's mailbox: {html}"
@@ -176,8 +186,8 @@ async fn daybridge_llms_txt_indexes_its_own_pages() {
             "{host} llms.txt must name Daybridge as its own site: {body}"
         );
         assert!(
-            body.contains("$500 if you agree"),
-            "{host} llms.txt summary must state the prices: {body}"
+            body.contains("conflict review") && !body.contains('$'),
+            "{host} llms.txt must describe the practice without quoting fees: {body}"
         );
         assert!(
             body.contains(&format!("https://{host}/)")),

@@ -1,24 +1,16 @@
-head_title: "{site_name} | Agreed divorce services"
+head_title: "{site_name} | Divorce services"
 meta_description: >-
-  $500 if you agree. $5,000 for up to two years if you do not. After two years, continued representation costs
-  $5 a day. Court fees and discovery expenses, including expert fees, are separate.
-  Attorney advertisement.
-title: Divorce, at a fair price
-hero_mark: scales
-tagline: A shared plan for separate futures.
-hero_lines:
-  - text: A brighter way
-    accent_words: 2
-  - text: to move on
-    accent_words: 0
+  Learn about agreed and contested divorce representation, court filing, and
+  the conditions for joint representation. Attorney advertisement.
+title: Divorce services
+tagline: A brighter way through divorce.
 hero_lead: >-
   You can talk with a lawyer about the decisions ahead. Where both of you agree, joint representation may be
-  permitted
-  after conflict review and informed written consent. Guieb & Shook PC is the law
+  permitted after conflict review and informed written consent. Guieb & Shook PC is the law
   firm you would retain.
 hero_cta:
-  href: https://calendar.notion.so/meet/nick-shook/or15n4yy7
-  label: Book Consultation
+  href: /contact
+  label: Contact us to learn more
 skin: practice
 bands:
   - kind: cards
@@ -70,16 +62,12 @@ bands:
                 engagement. A contested divorce is a separate engagement for one
                 of you.
   - kind: statement
-    heading: Two plain prices
-    lead: $500 if you agree. $5,000 for up to two years if you do not. After two years, continued representation costs $5 a day.
+    heading: What your engagement covers
     body:
       - - text: >-
-            The $1,000 upfront retainer counts toward the contested flat fee. Motions are included.
-            We refund any unused retainer. Court fees and discovery expenses, including expert fees, are
-            separate.
-            Your
-            written retainer defines the work. The fee pays for legal work, not a
-            particular result.
+            Your written retainer defines the work and fees. Contested representation
+            includes motions. Court fees and discovery expenses, including expert
+            fees, are separate.
   - kind: cards
     anchor: about
     overline: About

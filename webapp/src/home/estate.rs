@@ -2,7 +2,6 @@
 use super::sibling_practice::{SiblingPractice, SiblingPractices};
 use super::HomeContent;
 use crate::components::aster::{AsterArtwork, AsterPose};
-use crate::components::is_external_href;
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -15,10 +14,8 @@ use serde::{Deserialize, Serialize};
 /// onto this one at the one seam that already reads the YAML.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct EstateContent {
-    pub eyebrow: String,
     pub process_link: String,
     pub plan_label: String,
-    pub price: String,
     pub plan_description: String,
     pub features: Vec<String>,
     pub fee_note: String,
@@ -79,7 +76,6 @@ pub(super) fn EstateHome(
     #[props(default)] video_posts: Vec<super::HomeVideoPost>,
     #[props(default)] testimonials: Vec<crate::components::TestimonialCard>,
 ) -> Element {
-    let contact_external = is_external_href(&content.contact_href);
     rsx! {
         div { class: "vesta-home",
             section { class: "vesta-hero", "aria-labelledby": "vesta-title",
@@ -87,16 +83,12 @@ pub(super) fn EstateHome(
                     h1 { id: "vesta-title", "{content.heading}" }
                     p { class: "vesta-lead", "{content.lead}" }
                     div { class: "vesta-actions",
-                        super::HeroCall { content: content.clone() }
                         a {
-                            class: "{content.cta_class()}",
+                            class: "nav-btn nav-btn--primary",
                             href: "{content.contact_href}",
-                            target: if contact_external { Some("_blank") } else { None },
-                            rel: if contact_external { Some("noopener noreferrer") } else { None },
                             "{content.contact_label}"
                         }
                         a { class: "vesta-text-link", href: "#estate-plan", "{estate.process_link}" }
-                        a { class: "vesta-text-link", href: "#astrology", "{estate.astrology_label}" }
                     }
                 }
                 div { class: "vesta-cosmos", "aria-labelledby": "vesta-cosmos-label",
@@ -116,38 +108,18 @@ pub(super) fn EstateHome(
                     p { class: "vesta-cosmos-note vesta-cosmos-note--sky", "{estate.cosmos_note}" }
                 }
             }
-            section { id: "astrology", class: "vesta-reflection", "aria-labelledby": "vesta-astrology-title",
-                AsterArtwork { class: "vesta-aster vesta-aster--illustrate", src: estate.aster_image.clone(), pose: AsterPose::Illustrate }
-                p { class: "vesta-eyebrow", "{estate.astrology_label}" }
-                h2 { id: "vesta-astrology-title", "{estate.astrology_heading}" }
-                p { "{estate.astrology_body}" }
-                div { class: "vesta-themes",
-                    for theme in &estate.cosmos_themes {
-                        details { class: "vesta-theme", "name": "vesta-reflections",
-                            summary {
-                                span { class: "vesta-theme__symbol", "aria-hidden": "true", "{theme[0]}" }
-                                span { "{theme[1]}" }
-                            }
-                            div { class: "vesta-theme__body",
-                                h3 { "{theme[2]}" }
-                                p { "{theme[3]}" }
-                            }
-                        }
-                    }
-                }
+            crate::components::TestimonialSection {
+                heading: estate.testimonials_label.clone(), lead: String::new(), cards: testimonials,
             }
-            section { id: "estate-plan", class: "vesta-offer", "aria-label": "{estate.plan_label}",
-                aside { class: "vesta-plan", "aria-label": "{estate.plan_label}",
-                    p { class: "vesta-eyebrow", "{estate.plan_label}" }
-                    p { class: "vesta-plan__price", "{estate.price}" }
-                    p { class: "vesta-plan__term", "{estate.plan_description}" }
-                    ul { for feature in &estate.features { li { "{feature}" } } }
-                    p { class: "vesta-note", "{estate.fee_note}" }
-                    div { class: "vesta-actions",
-                        a { class: "vesta-text-link", href: "#nevada-trusts", "{estate.nevada_label}" }
-                        a { class: "vesta-text-link", href: "#trust-administration", "{estate.administration_label}" }
-                        a { class: "vesta-text-link", href: "#probate", "{estate.probate_label}" }
-                    }
+            section { id: "estate-plan", class: "vesta-plan", "aria-labelledby": "vesta-plan-title",
+                h2 { id: "vesta-plan-title", "{estate.plan_label}" }
+                p { class: "vesta-plan__term", "{estate.plan_description}" }
+                ul { for feature in &estate.features { li { "{feature}" } } }
+                p { class: "vesta-note", "{estate.fee_note}" }
+                div { class: "vesta-actions",
+                    a { class: "vesta-text-link", href: "#nevada-trusts", "{estate.nevada_label}" }
+                    a { class: "vesta-text-link", href: "#trust-administration", "{estate.administration_label}" }
+                    a { class: "vesta-text-link", href: "#probate", "{estate.probate_label}" }
                 }
             }
             section { id: "your-plan", class: "vesta-process", "aria-labelledby": "vesta-process-title",
@@ -216,8 +188,6 @@ pub(super) fn EstateHome(
                         a {
                             class: "nav-btn nav-btn--primary",
                             href: "{content.contact_href}",
-                            target: if contact_external { Some("_blank") } else { None },
-                            rel: if contact_external { Some("noopener noreferrer") } else { None },
                             "{estate.administration_contact_label}"
                         }
                     }
@@ -231,6 +201,26 @@ pub(super) fn EstateHome(
                 div {
                     p { "{estate.probate_body}" }
                     a { class: "vesta-text-link", href: "/probate", "{estate.probate_details_label}" }
+                }
+            }
+            section { id: "astrology", class: "vesta-reflection", "aria-labelledby": "vesta-astrology-title",
+                AsterArtwork { class: "vesta-aster vesta-aster--illustrate", src: estate.aster_image.clone(), pose: AsterPose::Illustrate }
+                p { class: "vesta-eyebrow", "{estate.astrology_label}" }
+                h2 { id: "vesta-astrology-title", "{estate.astrology_heading}" }
+                p { "{estate.astrology_body}" }
+                div { class: "vesta-themes",
+                    for theme in &estate.cosmos_themes {
+                        details { class: "vesta-theme", "name": "vesta-reflections",
+                            summary {
+                                span { class: "vesta-theme__symbol", "aria-hidden": "true", "{theme[0]}" }
+                                span { "{theme[1]}" }
+                            }
+                            div { class: "vesta-theme__body",
+                                h3 { "{theme[2]}" }
+                                p { "{theme[3]}" }
+                            }
+                        }
+                    }
                 }
             }
             section { class: "vesta-record", "aria-labelledby": "vesta-record-title",
@@ -283,9 +273,6 @@ pub(super) fn EstateHome(
                     }
                 }
             }
-            crate::components::TestimonialSection {
-                heading: estate.testimonials_label.clone(), lead: String::new(), cards: testimonials,
-            }
             section { class: "vesta-closing", "aria-labelledby": "vesta-closing-title",
                 AsterArtwork { class: "vesta-aster vesta-aster--closing", src: estate.aster_image.clone(), pose: AsterPose::Guide }
                 div {
@@ -295,8 +282,6 @@ pub(super) fn EstateHome(
                 a {
                     class: "nav-btn nav-btn--primary",
                     href: "{content.contact_href}",
-                    target: if contact_external { Some("_blank") } else { None },
-                    rel: if contact_external { Some("noopener noreferrer") } else { None },
                     "{content.contact_label}"
                 }
             }
@@ -346,8 +331,10 @@ mod tests {
         assert!(html.contains("Watch on TikTok"));
         assert!(html.contains(r#"data-social-mark="Facebook""#));
         assert!(html.contains(r#"data-social-mark="TikTok""#));
+        let plan = html.find(r#"id="estate-plan""#).unwrap();
         for index in 0..8 {
-            assert!(html.contains(&format!("Synthetic quote {index}")));
+            let quote = html.find(&format!("Synthetic quote {index}")).unwrap();
+            assert!(quote < plan, "{html}");
         }
         assert!(!html.contains("<iframe"));
     }

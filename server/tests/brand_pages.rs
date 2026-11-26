@@ -68,7 +68,7 @@ async fn vesta_publishes_estate_planning_home_and_services() {
         "staging.vestaestateplanning.com",
         "<title>Vesta Estate Planning | Home</title>",
         "Your life is part of a larger story.",
-        "Custom scope and fees",
+        "Start your administration engagement",
         "/public/css/brand-vesta-tokens.css",
         "Guieb &#38; Shook PC",
     )

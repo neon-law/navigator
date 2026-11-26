@@ -13,12 +13,12 @@
 .vesta-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 1.5rem; margin-top: 2rem; }
 .nav-theme .vesta-home a.vesta-text-link { color: var(--nav-color-text); text-decoration: underline; text-underline-offset: .3em; }
 .vesta-home .nav-btn { border-radius: 3px; }
-.vesta-plan { position: relative; border-top: 1px solid var(--vesta-rule); padding: clamp(1.5rem, 3vw, 3rem) 0; }
-.vesta-plan__term { margin: 0 0 2rem; font-size: 1.1rem; }
-.vesta-plan ul { list-style: none; padding: 0; margin: 0; }
+.vesta-plan { border-top: 1px solid var(--vesta-rule); padding: clamp(2.5rem, 5vw, 4rem) 0; scroll-margin-top: 6rem; }
+.vesta-plan__term { margin: 0 0 1rem; font-size: 1.1rem; }
+.vesta-plan ul { list-style: none; padding: 0; margin: 0; max-width: 42rem; }
 .vesta-plan li { padding: .8rem 0; }
 .vesta-plan li + li { border-top: 1px solid var(--vesta-rule); }
-.vesta-plan li::before { content: '✦'; color: var(--nav-color-primary); margin-right: .75rem; }
+.vesta-plan > .vesta-note { max-width: 42rem; }
 .vesta-note { font-size: .85rem; color: var(--nav-color-text-muted); }
 .vesta-nevada, .vesta-administration { display: grid; grid-template-columns: 1fr 1fr; gap: clamp(2rem, 6vw, 5rem); padding: clamp(3rem, 6vw, 6rem) 0; border-top: 1px solid var(--vesta-rule); scroll-margin-top: 6rem; }
 .vesta-nevada__intro > p:not(.vesta-eyebrow) { max-width: 36rem; color: var(--nav-color-text-muted); }
@@ -39,7 +39,6 @@
 .vesta-steps h3 { font-size: 1.8rem; margin: 1.25rem 0 .75rem; }
 .vesta-steps p { color: var(--nav-color-text-muted); margin: 0; }
 .vesta-record { display: grid; grid-template-columns: 1fr 1.65fr; gap: 4rem; border-block: 1px solid var(--vesta-rule); padding: 3rem 0; }
-.vesta-record__price { font-family: var(--brand-font-display); font-size: 5rem; line-height: 1; margin: 1rem 0 .5rem; }
 .vesta-status { display: inline-block; border: 1px solid var(--vesta-rule); border-radius: 2px; padding: .35rem .6rem; font-size: .75rem; }
 .vesta-record h2 { font-size: clamp(2rem, 3.3vw, 3rem); }
 .vesta-home .sibling-practices { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2rem; border-bottom: 1px solid var(--vesta-rule); padding: 3rem 0; }
@@ -169,12 +168,6 @@
 .vesta-theme__body { padding: .5rem .75rem 1.5rem; }
 .vesta-theme__body h3 { font-size: 1.5rem; line-height: 1.15; }
 .vesta-theme__body p { color: #c1b9ad; font-size: 1rem; }
-.vesta-offer { padding: 2rem 0 5rem; }
-.vesta-offer .vesta-plan { display: grid; grid-template-columns: 1fr 1.6fr; gap: 1rem 4rem; border: 1px solid var(--vesta-rule); padding: clamp(1.5rem, 4vw, 3.5rem); background: linear-gradient(120deg, #deb3820d, #0b111c); }
-.vesta-offer .vesta-plan > .vesta-eyebrow, .vesta-offer .vesta-plan__term { grid-column: 1; margin: 0; }
-.vesta-offer .vesta-plan ul { grid-column: 2; grid-row: 1 / 4; }
-.vesta-offer .vesta-note { grid-column: 1 / -1; margin-top: 1rem; }
-.vesta-offer .vesta-actions { grid-column: 1 / -1; margin-top: 0; }
 .vesta-process { padding: 5rem 0; }
 .vesta-steps { gap: 3rem 4rem; }
 .vesta-steps li::before { border: 1px solid var(--vesta-rule); border-radius: 2rem; display: inline-block; padding: .35rem 1rem; }
@@ -186,8 +179,6 @@
   .vesta-cosmos { width: 100%; max-width: 32rem; justify-self: center; }
 }
 @media (max-width: 600px) {
-  .vesta-offer .vesta-plan { display: block; }
-  .vesta-offer .vesta-plan > * + * { margin-top: 1.25rem; }
   .vesta-hero h1 { font-size: clamp(3.2rem, 14vw, 5rem); }
   .vesta-actions { gap: 1rem; }
   .vesta-cosmos { padding-top: 1rem; }
@@ -196,7 +187,6 @@
   .vesta-orbit { animation: none; }
 }
 
-.vesta-offer { scroll-margin-top: 6rem; }
 
 /* Keep the invitation in view beside the sky on an ordinary laptop. */
 .vesta-hero { min-height: auto; padding-block: 3rem 4rem; }
@@ -227,5 +217,3 @@
   .vesta-aster--illustrate, .vesta-aster--explore { float: none; width: 13rem; margin: 0 auto 1.5rem; }
   .vesta-closing .vesta-aster--closing { align-self: center; width: 10rem; }
 }
-
-.vesta-offer .vesta-plan__price { grid-column: 1; margin: 0; font-size: clamp(2.5rem, 5vw, 4rem); line-height: 1.1; }
