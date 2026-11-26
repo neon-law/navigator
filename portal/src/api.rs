@@ -2393,7 +2393,8 @@ async fn firm_forgejo_parity_door(
     if viewer.scope.is_some() || !may_use_mirror(&state, &viewer, firm).await? {
         return Err(ApiError::NotFound);
     }
-    const PAGE_SIZE: usize = 8;
+    let page_size = 8_u16;
+    let max_projects = usize::from(page_size);
     let pg = store::postgres::PostgresDb::configured()
         .await
         .map_err(|error| ApiError::Db(error.to_string()))?
@@ -2402,12 +2403,12 @@ async fn firm_forgejo_parity_door(
         &pg,
         firm,
         page.after,
-        (PAGE_SIZE + 1) as i64,
+        i64::from(page_size) + 1,
     )
     .await
     .map_err(|error| ApiError::Db(error.to_string()))?;
-    let next = (projects.len() > PAGE_SIZE).then(|| projects[PAGE_SIZE - 1].id);
-    projects.truncate(PAGE_SIZE);
+    let next = (projects.len() > max_projects).then(|| projects[max_projects - 1].id);
+    projects.truncate(max_projects);
     let forgejo = connect_project_mirror(&state, firm).await;
     let github = cloud::forge::GitHubForge::from_env().ok();
     let enrolled = std::env::var("NAVIGATOR_MAINTENANCE_GITHUB_MIRRORS")
@@ -2434,7 +2435,7 @@ async fn firm_forgejo_parity_door(
                 serde_json::json!({"code": project.code, "result": result})
             }
         })
-        .buffered(PAGE_SIZE)
+        .buffered(max_projects)
         .collect::<Vec<_>>()
         .await;
     Ok(Json(serde_json::json!({"projects": rows, "next": next})).into_response())
