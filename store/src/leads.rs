@@ -661,16 +661,13 @@ async fn find_by_key(
 
 #[cfg(test)]
 mod tests {
-    use chrono::Utc;
+    use chrono::{SubsecRound, Utc};
 
     use super::{
         consent_history, convert, find, latest_consent_event, link_person, list, mask_phone,
         record, record_consent_event, set_status, LeadError, LeadStatus, NewConsentEvent, NewLead,
-        CONSENT_TABLE,
     };
     use crate::persons::{self, NewPerson, Role};
-    use crate::surreal::record_id;
-    use crate::test_support::mem_surreal;
     use uuid::Uuid;
 
     fn lead(email: &str, brand_key: &str) -> NewLead {
@@ -769,52 +766,62 @@ mod tests {
 
     #[tokio::test]
     async fn record_uses_random_ids_and_preserves_identity_on_repeat() {
-        let db = mem_surreal().await;
-        let input = lead("first@example.test", "synthetic-brand");
-        let first = record(&db, &input).await.unwrap();
-        let other = record(&db, &lead("second@example.test", "synthetic-brand"))
-            .await
-            .unwrap();
-        let repeated = record(&db, &input).await.unwrap();
+        crate::test_support::with_required_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
 
-        assert_eq!(first.id.get_version_num(), 4);
-        assert_eq!(other.id.get_version_num(), 4);
-        assert_ne!(first.id, other.id);
-        assert_eq!(repeated.id, first.id);
-        assert_eq!(repeated.inserted_at, first.inserted_at);
-        assert_eq!(repeated.submissions, 2);
+            let input = lead("first@example.test", "synthetic-brand");
+            let first = record(&db, &input).await.unwrap();
+            let other = record(&db, &lead("second@example.test", "synthetic-brand"))
+                .await
+                .unwrap();
+            let repeated = record(&db, &input).await.unwrap();
+
+            assert_eq!(first.id.get_version_num(), 7);
+            assert_eq!(other.id.get_version_num(), 7);
+            assert_ne!(first.id, other.id);
+            assert_eq!(repeated.id, first.id);
+            assert_eq!(repeated.inserted_at, first.inserted_at);
+            assert_eq!(repeated.submissions, 2);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn consent_creation_uses_random_ids_and_preserves_the_lead() {
-        let db = mem_surreal().await;
-        let input = lead("consent@example.test", "synthetic-brand");
-        let event = NewConsentEvent {
-            consented_at: input.consented_at,
-            phone: None,
-            source_path: input.source_path.clone(),
-            sms_consent_version: "synthetic-disclosure".into(),
-            sms_policy_version: "synthetic-policy".into(),
-            sms_opt_in: true,
-            call_consent_version: "call disclosure".into(),
-            call_opt_in: true,
-        };
-        let first = record_consent_event(&db, &input, &event).await.unwrap();
-        let repeated = record_consent_event(&db, &input, &event).await.unwrap();
-        let history = consent_history(&db, first.id).await.unwrap();
+        crate::test_support::with_required_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
 
-        assert_eq!(first.id.get_version_num(), 4);
-        assert_eq!(repeated.id, first.id);
-        assert_eq!(repeated.inserted_at, first.inserted_at);
-        assert_eq!(history.len(), 2);
-        assert!(history.iter().all(|entry| entry.id.get_version_num() == 4));
-        assert!(history.iter().all(|entry| entry.lead_id == first.id));
-        assert_ne!(history[0].id, history[1].id);
+            let input = lead("consent@example.test", "synthetic-brand");
+            let event = NewConsentEvent {
+                consented_at: input.consented_at,
+                phone: None,
+                source_path: input.source_path.clone(),
+                sms_consent_version: "synthetic-disclosure".into(),
+                sms_policy_version: "synthetic-policy".into(),
+                sms_opt_in: true,
+                call_consent_version: "call disclosure".into(),
+                call_opt_in: true,
+            };
+            let first = record_consent_event(&db, &input, &event).await.unwrap();
+            let repeated = record_consent_event(&db, &input, &event).await.unwrap();
+            let history = consent_history(&db, first.id).await.unwrap();
+
+            assert_eq!(first.id.get_version_num(), 7);
+            assert_eq!(repeated.id, first.id);
+            assert_eq!(repeated.inserted_at, first.inserted_at);
+            assert_eq!(history.len(), 2);
+            assert!(history.iter().all(|entry| entry.id.get_version_num() == 7));
+            assert!(history.iter().all(|entry| entry.lead_id == first.id));
+            assert_ne!(history[0].id, history[1].id);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn consent_order_uses_microsecond_instants_with_uuid_ties() {
-        let db = mem_surreal().await;
+        crate::test_support::with_required_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+
         let parent = record(&db, &lead("history@example.test", "synthetic-brand"))
             .await
             .unwrap();
@@ -826,23 +833,18 @@ mod tests {
         let newer_at = "2026-10-21T12:00:00.123456900Z"
             .parse::<chrono::DateTime<Utc>>()
             .unwrap();
+        let pg = crate::postgres::PostgresDb::application().await.unwrap();
         for (id, at) in [(older_id, older_at), (newer_id, newer_at)] {
-            db.query("CREATE $id SET lead_id = $lead, consented_at = $at, phone = NONE, source_path = '/contact', sms_consent_version = 'synthetic-disclosure', sms_policy_version = 'synthetic-policy', sms_opt_in = true")
-                .bind(("id", record_id(CONSENT_TABLE, id)))
-                .bind(("lead", record_id("lead", parent.id)))
-                .bind(("at", surrealdb::types::Datetime::from(at)))
-                .await
-                .unwrap()
-                .check()
-                .unwrap();
+            sqlx::query("INSERT INTO lead_consent (id, lead_id, consented_at, phone, source_path, sms_consent_version, sms_policy_version, sms_opt_in) VALUES ($1,$2,$3,NULL,'/contact','synthetic-disclosure','synthetic-policy',true)")
+                .bind(id).bind(parent.id).bind(at).execute(pg.pool()).await.unwrap();
         }
         let history = consent_history(&db, parent.id).await.unwrap();
         assert_eq!(
             history.iter().map(|entry| entry.id).collect::<Vec<_>>(),
             vec![newer_id, older_id]
         );
-        assert_eq!(history[0].consented_at, newer_at);
-        assert_eq!(history[1].consented_at, older_at);
+            assert_eq!(history[0].consented_at, newer_at.trunc_subsecs(6));
+            assert_eq!(history[1].consented_at, older_at.trunc_subsecs(6));
         assert!(
             history
                 .iter()
@@ -857,144 +859,143 @@ mod tests {
                 .id,
             older_id
         );
+        }).await;
     }
 
     #[tokio::test]
     async fn records_a_lead_without_creating_a_person() {
-        let db = mem_surreal().await;
-        let written = record(&db, &lead("Visitor@example.com", "neon"))
-            .await
-            .unwrap();
+        crate::test_support::with_required_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
 
-        assert_eq!(written.email_lower, "visitor@example.com");
-        assert_eq!(written.status, "new");
-        assert_eq!(written.submissions, 1);
-        assert!(crate::persons::find_by_email_ci(&db, "visitor@example.com")
-            .await
-            .unwrap()
-            .is_none());
+            let written = record(&db, &lead("Visitor@example.com", "neon"))
+                .await
+                .unwrap();
+
+            assert_eq!(written.email_lower, "visitor@example.com");
+            assert_eq!(written.status, "new");
+            assert_eq!(written.submissions, 1);
+            assert!(crate::persons::find_by_email_ci(&db, "visitor@example.com")
+                .await
+                .unwrap()
+                .is_none());
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn consent_events_preserve_each_submission_tuple_and_opt_out() {
-        let db = mem_surreal().await;
-        let mut first = lead("visitor@example.com", "neon");
-        first.phone = Some("+1 (555) 010-1111".to_string());
-        first.source_path = "/services".to_string();
-        first.consent_version = "first email disclosure".to_string();
-        let first_at = Utc::now();
-        record_consent_event(
-            &db,
-            &first,
-            &NewConsentEvent {
-                consented_at: first_at,
-                phone: first.phone.clone(),
-                source_path: first.source_path.clone(),
-                sms_consent_version: "phone disclosure v0".to_string(),
-                sms_policy_version: "2026-01-01".to_string(),
-                sms_opt_in: true,
-                call_consent_version: "call disclosure".into(),
-                call_opt_in: true,
-            },
-        )
-        .await
-        .unwrap();
-        let mut repeat = lead("VISITOR@example.com", "neon");
-        repeat.phone = Some("+1 (555) 010-2222".to_string());
-        repeat.source_path = "/contact".to_string();
-        repeat.consent_version = "second email disclosure".to_string();
-        let second_at = first_at + chrono::Duration::seconds(1);
-        record_consent_event(
-            &db,
-            &repeat,
-            &NewConsentEvent {
-                consented_at: second_at,
-                phone: repeat.phone.clone(),
-                source_path: repeat.source_path.clone(),
-                sms_consent_version: "phone disclosure v1".to_string(),
-                sms_policy_version: "2026-09-18".to_string(),
-                sms_opt_in: true,
-                call_consent_version: "call disclosure".into(),
-                call_opt_in: true,
-            },
-        )
-        .await
-        .unwrap();
-        let mut unchecked = lead("visitor@example.com", "neon");
-        unchecked.phone = Some("+1 (555) 010-3333".to_string());
-        unchecked.source_path = "/contact".to_string();
-        let third_at = second_at + chrono::Duration::seconds(1);
-        let written = record_consent_event(
-            &db,
-            &unchecked,
-            &NewConsentEvent {
-                consented_at: third_at,
-                phone: unchecked.phone.clone(),
-                source_path: unchecked.source_path.clone(),
-                sms_consent_version: "phone disclosure v2".to_string(),
-                sms_policy_version: "2026-09-18".to_string(),
-                sms_opt_in: false,
-                call_consent_version: "call disclosure".into(),
-                call_opt_in: false,
-            },
-        )
-        .await
-        .unwrap();
+        crate::test_support::with_required_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            let pg = crate::postgres::PostgresDb::application().await.unwrap();
 
-        assert_eq!(written.submissions, 3);
-        assert_eq!(written.phone.as_deref(), Some("+1 (555) 010-3333"));
-        assert_eq!(written.consent_version, "first email disclosure");
-        let history = consent_history(&db, written.id).await.unwrap();
-        assert_eq!(history.len(), 3);
-        assert_eq!(history[0].consented_at, first_at);
-        assert_eq!(history[0].phone.as_deref(), Some("+1 (555) 010-1111"));
-        assert!(history[0].call_opt_in);
-        assert!(!history[2].call_opt_in);
-        assert_eq!(history[0].source_path, "/services");
-        assert_eq!(history[0].sms_consent_version, "phone disclosure v0");
-        assert!(history[0].sms_opt_in);
-        assert_eq!(history[1].phone.as_deref(), Some("+1 (555) 010-2222"));
-        assert_eq!(history[1].source_path, "/contact");
-        assert!(history[1].sms_opt_in);
-        assert_eq!(history[2].phone.as_deref(), Some("+1 (555) 010-3333"));
-        assert_eq!(history[2].sms_consent_version, "phone disclosure v2");
-        assert_eq!(history[2].sms_policy_version, "2026-09-18");
-        assert!(!history[2].sms_opt_in);
-        assert_eq!(
-            latest_consent_event(&db, written.id)
-                .await
-                .unwrap()
-                .unwrap()
-                .id,
-            history[2].id
-        );
-        let rejected = db
-            .query("UPDATE $id SET sms_opt_in = false")
-            .bind(("id", record_id(CONSENT_TABLE, history[0].id)))
+            let mut first = lead("visitor@example.com", "neon");
+            first.phone = Some("+1 (555) 010-1111".to_string());
+            first.source_path = "/services".to_string();
+            first.consent_version = "first email disclosure".to_string();
+            let first_at = Utc::now();
+            record_consent_event(
+                &db,
+                &first,
+                &NewConsentEvent {
+                    consented_at: first_at,
+                    phone: first.phone.clone(),
+                    source_path: first.source_path.clone(),
+                    sms_consent_version: "phone disclosure v0".to_string(),
+                    sms_policy_version: "2026-01-01".to_string(),
+                    sms_opt_in: true,
+                    call_consent_version: "call disclosure".into(),
+                    call_opt_in: true,
+                },
+            )
             .await
-            .unwrap()
-            .check();
-        assert!(rejected.is_err(), "consent events must be immutable");
-        assert_eq!(list(&db).await.unwrap().len(), 1);
+            .unwrap();
+            let mut repeat = lead("VISITOR@example.com", "neon");
+            repeat.phone = Some("+1 (555) 010-2222".to_string());
+            repeat.source_path = "/contact".to_string();
+            repeat.consent_version = "second email disclosure".to_string();
+            let second_at = first_at + chrono::Duration::seconds(1);
+            record_consent_event(
+                &db,
+                &repeat,
+                &NewConsentEvent {
+                    consented_at: second_at,
+                    phone: repeat.phone.clone(),
+                    source_path: repeat.source_path.clone(),
+                    sms_consent_version: "phone disclosure v1".to_string(),
+                    sms_policy_version: "2026-09-18".to_string(),
+                    sms_opt_in: true,
+                    call_consent_version: "call disclosure".into(),
+                    call_opt_in: true,
+                },
+            )
+            .await
+            .unwrap();
+            let mut unchecked = lead("visitor@example.com", "neon");
+            unchecked.phone = Some("+1 (555) 010-3333".to_string());
+            unchecked.source_path = "/contact".to_string();
+            let third_at = second_at + chrono::Duration::seconds(1);
+            let written = record_consent_event(
+                &db,
+                &unchecked,
+                &NewConsentEvent {
+                    consented_at: third_at,
+                    phone: unchecked.phone.clone(),
+                    source_path: unchecked.source_path.clone(),
+                    sms_consent_version: "phone disclosure v2".to_string(),
+                    sms_policy_version: "2026-09-18".to_string(),
+                    sms_opt_in: false,
+                    call_consent_version: "call disclosure".into(),
+                    call_opt_in: false,
+                },
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(written.submissions, 3);
+            assert_eq!(written.phone.as_deref(), Some("+1 (555) 010-3333"));
+            assert_eq!(written.consent_version, "first email disclosure");
+            let history = consent_history(&db, written.id).await.unwrap();
+            assert_eq!(history.len(), 3);
+            assert_eq!(history[0].consented_at, first_at);
+            assert_eq!(history[0].phone.as_deref(), Some("+1 (555) 010-1111"));
+            assert!(history[0].call_opt_in);
+            assert!(!history[2].call_opt_in);
+            assert_eq!(history[0].source_path, "/services");
+            assert_eq!(history[0].sms_consent_version, "phone disclosure v0");
+            assert!(history[0].sms_opt_in);
+            assert_eq!(history[1].phone.as_deref(), Some("+1 (555) 010-2222"));
+            assert_eq!(history[1].source_path, "/contact");
+            assert!(history[1].sms_opt_in);
+            assert_eq!(history[2].phone.as_deref(), Some("+1 (555) 010-3333"));
+            assert_eq!(history[2].sms_consent_version, "phone disclosure v2");
+            assert_eq!(history[2].sms_policy_version, "2026-09-18");
+            assert!(!history[2].sms_opt_in);
+            assert_eq!(
+                latest_consent_event(&db, written.id)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .id,
+                history[2].id
+            );
+            let rejected = sqlx::query("UPDATE lead_consent SET sms_opt_in = false WHERE id = $1")
+                .bind(history[0].id)
+                .execute(pg.pool())
+                .await;
+            assert!(rejected.is_err(), "consent events must be immutable");
+            assert_eq!(list(&db).await.unwrap().len(), 1);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn reads_a_historical_lead_without_sms_consent_fields() {
-        let db = mem_surreal().await;
+        crate::test_support::with_required_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
         let historical_id = Uuid::now_v7();
-        db.query(
-            "CREATE $id SET email = 'historical@example.com', \
-             email_lower = 'historical@example.com', phone = NONE, brand_key = 'neon', \
-             source_path = '/contact', consent_version = 'email disclosure', \
-             consented_at = time::now(), status = 'new', \
-             unsubscribed_at = NONE, person_id = NONE, submissions = 1, \
-             inserted_at = time::now(), updated_at = time::now()",
-        )
-        .bind(("id", record_id("lead", historical_id)))
-        .await
-        .unwrap()
-        .check()
-        .unwrap();
+        let pg = crate::postgres::PostgresDb::application().await.unwrap();
+        sqlx::query("INSERT INTO lead (id,email,email_lower,brand_key,source_path,consent_version,consented_at,status,submissions,inserted_at,updated_at) VALUES ($1,'historical@example.com','historical@example.com','neon','/contact','email disclosure',now(),'new',1,now(),now())")
+            .bind(historical_id).execute(pg.pool()).await.unwrap();
 
         let leads = list(&db).await.unwrap();
         assert_eq!(leads.len(), 1);
@@ -1003,124 +1004,146 @@ mod tests {
             .unwrap();
         assert_eq!(repeated.id, historical_id);
         assert_eq!(repeated.inserted_at, leads[0].inserted_at);
+        }).await;
     }
 
     #[tokio::test]
     async fn the_same_mailbox_on_two_brands_is_two_leads() {
-        let db = mem_surreal().await;
-        record(&db, &lead("visitor@example.com", "neon"))
-            .await
-            .unwrap();
-        record(&db, &lead("visitor@example.com", "delete-your-data"))
-            .await
-            .unwrap();
+        crate::test_support::with_required_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
 
-        assert_eq!(list(&db).await.unwrap().len(), 2);
+            record(&db, &lead("visitor@example.com", "neon"))
+                .await
+                .unwrap();
+            record(&db, &lead("visitor@example.com", "delete-your-data"))
+                .await
+                .unwrap();
+
+            assert_eq!(list(&db).await.unwrap().len(), 2);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn status_transitions_persist_and_unsubscribe_stamps_once() {
-        let db = mem_surreal().await;
-        let lead = record(&db, &lead("visitor@example.com", "neon"))
-            .await
-            .unwrap();
+        crate::test_support::with_required_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
 
-        let contacted = set_status(&db, lead.id, LeadStatus::Contacted)
-            .await
-            .unwrap();
-        assert_eq!(contacted.status, "contacted");
-        assert!(contacted.unsubscribed_at.is_none());
+            let lead = record(&db, &lead("visitor@example.com", "neon"))
+                .await
+                .unwrap();
 
-        let first = set_status(&db, lead.id, LeadStatus::Unsubscribed)
-            .await
-            .unwrap();
-        assert_eq!(first.status, "unsubscribed");
-        let stamped = first.unsubscribed_at.expect("unsubscribe stamps the row");
+            let contacted = set_status(&db, lead.id, LeadStatus::Contacted)
+                .await
+                .unwrap();
+            assert_eq!(contacted.status, "contacted");
+            assert!(contacted.unsubscribed_at.is_none());
 
-        let again = set_status(&db, lead.id, LeadStatus::Unsubscribed)
-            .await
-            .unwrap();
-        assert_eq!(again.unsubscribed_at, Some(stamped));
+            let first = set_status(&db, lead.id, LeadStatus::Unsubscribed)
+                .await
+                .unwrap();
+            assert_eq!(first.status, "unsubscribed");
+            let stamped = first.unsubscribed_at.expect("unsubscribe stamps the row");
 
-        let declined = set_status(&db, lead.id, LeadStatus::Declined)
-            .await
-            .unwrap();
-        assert_eq!(declined.status, "declined");
-        assert_eq!(declined.unsubscribed_at, Some(stamped));
-        assert_eq!(
-            find(&db, lead.id).await.unwrap().unwrap().unsubscribed_at,
-            Some(stamped)
-        );
+            let again = set_status(&db, lead.id, LeadStatus::Unsubscribed)
+                .await
+                .unwrap();
+            assert_eq!(again.unsubscribed_at, Some(stamped));
 
-        assert!(matches!(
-            set_status(&db, lead.id, LeadStatus::Converted).await,
-            Err(LeadError::ConvertedWithoutPerson)
-        ));
+            let declined = set_status(&db, lead.id, LeadStatus::Declined)
+                .await
+                .unwrap();
+            assert_eq!(declined.status, "declined");
+            assert_eq!(declined.unsubscribed_at, Some(stamped));
+            assert_eq!(
+                find(&db, lead.id).await.unwrap().unwrap().unsubscribed_at,
+                Some(stamped)
+            );
+
+            assert!(matches!(
+                set_status(&db, lead.id, LeadStatus::Converted).await,
+                Err(LeadError::ConvertedWithoutPerson)
+            ));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn conversion_writes_person_id_and_retries_an_unlinked_person() {
-        let db = mem_surreal().await;
-        let mut incoming = lead("visitor@example.com", "neon");
-        incoming.phone = Some("+1 (555) 010-9876".to_string());
-        let written = record(&db, &incoming).await.unwrap();
+        crate::test_support::with_required_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
 
-        let converted = convert(&db, written.id).await.unwrap();
-        let person_id = converted.person_id.expect("conversion links a person");
-        assert_eq!(converted.status, "converted");
-        let person = persons::find_by_id(&db, person_id).await.unwrap().unwrap();
-        assert_eq!(person.email, "visitor@example.com");
-        assert_eq!(person.role, Role::Client);
-        assert_eq!(person.phone.as_deref(), Some("+1 (555) 010-9876"));
+            let mut incoming = lead("visitor@example.com", "neon");
+            incoming.phone = Some("+1 (555) 010-9876".to_string());
+            let written = record(&db, &incoming).await.unwrap();
 
-        let duplicate = record(&db, &lead("visitor@example.com", "delete-your-data"))
-            .await
-            .unwrap();
-        let linked = convert(&db, duplicate.id).await.unwrap();
-        assert_eq!(linked.status, "converted");
-        assert_eq!(linked.person_id, Some(person_id));
+            let converted = convert(&db, written.id).await.unwrap();
+            let person_id = converted.person_id.expect("conversion links a person");
+            assert_eq!(converted.status, "converted");
+            let person = persons::find_by_id(&db, person_id).await.unwrap().unwrap();
+            assert_eq!(person.email, "visitor@example.com");
+            assert_eq!(person.role, Role::Client);
+            assert_eq!(person.phone.as_deref(), Some("+1 (555) 010-9876"));
+
+            let duplicate = record(&db, &lead("visitor@example.com", "delete-your-data"))
+                .await
+                .unwrap();
+            let linked = convert(&db, duplicate.id).await.unwrap();
+            assert_eq!(linked.status, "converted");
+            assert_eq!(linked.person_id, Some(person_id));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn link_copies_a_missing_phone_onto_the_person_and_leaves_an_existing_number() {
-        let db = mem_surreal().await;
-        let without_phone = persons::create(&db, &NewPerson::new("Existing", "link@example.com"))
-            .await
-            .unwrap();
-        let mut incoming = lead("link@example.com", "neon");
-        incoming.phone = Some("+1 (555) 010-1111".to_string());
-        let written = record(&db, &incoming).await.unwrap();
+        crate::test_support::with_required_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
 
-        link_person(&db, written.id).await.unwrap();
-        let person = persons::find_by_id(&db, without_phone.id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(person.phone.as_deref(), Some("+1 (555) 010-1111"));
+            let without_phone =
+                persons::create(&db, &NewPerson::new("Existing", "link@example.com"))
+                    .await
+                    .unwrap();
+            let mut incoming = lead("link@example.com", "neon");
+            incoming.phone = Some("+1 (555) 010-1111".to_string());
+            let written = record(&db, &incoming).await.unwrap();
 
-        let mut other = NewPerson::new("Kept", "kept@example.com");
-        other.phone = Some("+1 (555) 010-2222".to_string());
-        let kept = persons::create(&db, &other).await.unwrap();
-        let mut second = lead("kept@example.com", "neon");
-        second.phone = Some("+1 (555) 010-3333".to_string());
-        let second_lead = record(&db, &second).await.unwrap();
-        link_person(&db, second_lead.id).await.unwrap();
-        let person = persons::find_by_id(&db, kept.id).await.unwrap().unwrap();
-        assert_eq!(person.phone.as_deref(), Some("+1 (555) 010-2222"));
+            link_person(&db, written.id).await.unwrap();
+            let person = persons::find_by_id(&db, without_phone.id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(person.phone.as_deref(), Some("+1 (555) 010-1111"));
+
+            let mut other = NewPerson::new("Kept", "kept@example.com");
+            other.phone = Some("+1 (555) 010-2222".to_string());
+            let kept = persons::create(&db, &other).await.unwrap();
+            let mut second = lead("kept@example.com", "neon");
+            second.phone = Some("+1 (555) 010-3333".to_string());
+            let second_lead = record(&db, &second).await.unwrap();
+            link_person(&db, second_lead.id).await.unwrap();
+            let person = persons::find_by_id(&db, kept.id).await.unwrap().unwrap();
+            assert_eq!(person.phone.as_deref(), Some("+1 (555) 010-2222"));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn convert_links_an_already_seeded_mailbox() {
-        let db = mem_surreal().await;
-        persons::create(&db, &NewPerson::new("Existing", "already@example.com"))
-            .await
-            .unwrap();
-        let written = record(&db, &lead("already@example.com", "neon"))
-            .await
-            .unwrap();
-        let linked = convert(&db, written.id).await.unwrap();
-        assert_eq!(linked.status, "converted");
-        assert!(linked.person_id.is_some());
+        crate::test_support::with_required_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+
+            persons::create(&db, &NewPerson::new("Existing", "already@example.com"))
+                .await
+                .unwrap();
+            let written = record(&db, &lead("already@example.com", "neon"))
+                .await
+                .unwrap();
+            let linked = convert(&db, written.id).await.unwrap();
+            assert_eq!(linked.status, "converted");
+            assert!(linked.person_id.is_some());
+        })
+        .await;
     }
 
     #[test]
