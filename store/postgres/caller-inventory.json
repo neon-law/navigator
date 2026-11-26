@@ -2404,11 +2404,11 @@
       7762,
       7763,
       7819,
-      7984,
-      8016,
-      8020,
-      8164,
-      8166
+      7990,
+      8022,
+      8026,
+      8170,
+      8172
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -2819,7 +2819,7 @@
       1820,
       1831,
       7047,
-      8035
+      8041
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -3030,9 +3030,9 @@
       1601,
       4283,
       4285,
-      7956,
-      7967,
-      7969
+      7962,
+      7973,
+      7975
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -4574,11 +4574,11 @@
       5941,
       5948,
       5949,
-      8087,
-      8089,
-      8104,
+      8093,
+      8095,
       8110,
-      8113
+      8116,
+      8119
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -4744,7 +4744,7 @@
       5950,
       5951,
       5952,
-      8111
+      8117
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -5287,10 +5287,10 @@
       7825,
       7826,
       7837,
-      7915,
-      7948,
-      8052,
-      8069
+      7921,
+      7954,
+      8058,
+      8075
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -5573,9 +5573,9 @@
       7792,
       7825,
       7838,
-      7914,
-      7947,
-      8050
+      7920,
+      7953,
+      8056
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -7113,11 +7113,11 @@
       7811,
       7825,
       7835,
-      7925,
-      7929,
-      8017,
-      8019,
-      8165
+      7931,
+      7935,
+      8023,
+      8025,
+      8171
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -7844,7 +7844,7 @@
       6520,
       6523,
       7441,
-      8184
+      8190
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -8726,9 +8726,9 @@
       7791,
       7825,
       7839,
-      7913,
-      7946,
-      8048
+      7919,
+      7952,
+      8054
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -10311,12 +10311,12 @@
       7444,
       7445,
       7447,
-      8134,
-      8136,
-      8138,
       8140,
       8142,
-      8185
+      8144,
+      8146,
+      8148,
+      8191
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -10724,6 +10724,7 @@
       "store/src/template_source.rs",
       "store/src/templates.rs",
       "store/src/test_support.rs",
+      "store/src/testimonials.rs",
       "store/src/trust.rs",
       "telemetry/src/lib.rs",
       "views/src/brand.rs",
@@ -10956,7 +10957,7 @@
       7596,
       7599,
       7602,
-      8032
+      8038
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -12718,12 +12719,14 @@
       7854,
       7863,
       7869,
-      7901,
-      7912,
-      7945,
-      7957,
-      8054,
-      8068
+      7873,
+      7877,
+      7907,
+      7918,
+      7951,
+      7963,
+      8060,
+      8074
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -13406,11 +13409,11 @@
       7772,
       7796,
       7831,
-      7874,
-      7918,
-      7943,
-      7951,
-      7953
+      7880,
+      7924,
+      7949,
+      7957,
+      7959
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -14134,15 +14137,15 @@
       7687,
       7695,
       7697,
-      8156,
-      8158,
-      8160,
       8162,
+      8164,
+      8166,
       8168,
-      8170,
-      8180,
-      8182,
-      8232
+      8174,
+      8176,
+      8186,
+      8188,
+      8238
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -15340,12 +15343,13 @@
       7855,
       7864,
       7870,
-      7878,
-      7905,
-      7916,
-      7927,
-      7949,
-      7991
+      7875,
+      7884,
+      7911,
+      7922,
+      7933,
+      7955,
+      7997
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -16007,7 +16011,7 @@
       7310,
       7311,
       7313,
-      8034
+      8040
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -17002,7 +17006,7 @@
       7641,
       7643,
       7646,
-      8167
+      8173
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -18005,7 +18009,7 @@
       7802,
       7811,
       7821,
-      8030
+      8036
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -18287,13 +18291,13 @@
       1606,
       4283,
       5034,
-      7955,
-      7958,
-      7960,
       7961,
-      7963,
       7964,
-      7966
+      7966,
+      7967,
+      7969,
+      7970,
+      7972
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -18423,14 +18427,14 @@
       "workflows-service/src/host/local_providers/tests.rs"
     ],
     "query_call_ids": [
-      7971,
       7977,
-      7978,
-      7980,
-      7982,
-      7985,
+      7983,
+      7984,
+      7986,
       7988,
-      8131
+      7991,
+      7994,
+      8137
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
