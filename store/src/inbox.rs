@@ -6311,8 +6311,7 @@ let world = world(&db).await;
             Err(InboxError::Empty)
         ));
 
-        let (conversation_id, first_message) =
-            open(world.owner, "+15555550123", true).await.unwrap();
+        let (conversation_id, first_message) = open(world.owner, "+15555550123", true).await.unwrap();
         let (again, _) = open(world.owner, "+15555550123", true).await.unwrap();
         assert_eq!(conversation_id, again);
         let conversation = conversation_by_id(&db, conversation_id)
