@@ -90,6 +90,9 @@ notation envelope send <notation-id>` dispatches, stamping the returned envelope
 `navigator notation envelope status <notation-id>` reads per-signer state and the provider's signer names and email
 addresses.
 
+If the questionnaire or lawyer approval is still pending, preparation returns HTTP 409 and tells the lawyer which step
+to complete. The rendered PDF must be ready before Navigator prepares an envelope.
+
 After preparing a draft, open the sender-view URL printed by the CLI to review the placed fields. Add `--open` to
 `navigator notation envelope prepare <notation-id>` to launch the browser. Continue back to Navigator, then run
 `navigator notation envelope send <notation-id>` to dispatch.
