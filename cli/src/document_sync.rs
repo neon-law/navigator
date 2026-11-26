@@ -967,7 +967,23 @@ pub fn write_uploaded_pointer(
         std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
     ensure_documents_tree_is_safe(&blobs)?;
-    ensure_document_path_is_safe(root, &path, true, false)?;
+    ensure_document_path_is_safe(root, &path, true, true)?;
+    let mut pointer = pointer.clone();
+    let recorded_evidence = read_pointer(&path)?
+        .filter(|existing| {
+            existing.current_version.asset_id == pointer.current_version.asset_id
+                && existing.current_version.sha256 == pointer.current_version.sha256
+        })
+        .and_then(|existing| existing.evidence);
+    if let Some(local) = recorded_evidence {
+        let evidence = pointer.evidence.get_or_insert_with(Default::default);
+        evidence.dated_at = evidence.dated_at.or(local.dated_at);
+        evidence.source = evidence.source.take().or(local.source);
+        evidence.confidence = evidence.confidence.or(local.confidence);
+        if evidence.supports.is_empty() {
+            evidence.supports = local.supports;
+        }
+    }
     write_pointer_atomically(&path, &pointer.to_yaml()?)?;
     Ok(path)
 }

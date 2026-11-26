@@ -7538,7 +7538,7 @@ mod tests {
     /// LAW-189: `--folder` names the matter folder on the pointer, which
     /// lands under `blobs/`.
     #[tokio::test(flavor = "current_thread")]
-    async fn document_upload_with_folder_records_it_on_the_blob() {
+    async fn document_upload_with_folder_repairs_the_same_revision_and_preserves_evidence() {
         let _lock = CREDENTIALS_ENV_LOCK.lock().await;
         let server = MockServer::start().await;
         let server_uri = server.uri();
@@ -7554,14 +7554,16 @@ mod tests {
             .await;
         Mock::given(method("POST"))
             .and(path(format!("/app/api/projects/{project_id}/documents")))
-            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "kind": "unclassified",
                 "visibility": "internal",
+                "folder": "Mail (Correspondence)",
+                "evidence": {"source": "Gmail thread synthetic-thread"},
                 "current_version": {
                     "version": 1,
                     "asset_id": document_id,
                     "created_at": "2026-09-05T12:00:00Z",
-                    "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                    "sha256": model::documents::sha256_hex(b"test document"),
                     "size_bytes": 13
                 }
             })))
@@ -7587,6 +7589,19 @@ mod tests {
             "project:\n  host: navigator.example.com\n  name: acme\n",
         )
         .unwrap();
+        let blob = dir.path().join("blobs/rogs.pdf.yaml");
+        std::fs::create_dir_all(blob.parent().unwrap()).unwrap();
+        std::fs::write(
+            &blob,
+            format!(
+                "kind: unclassified\nvisibility: internal\nfolder: Mail (Correspondence)\n\
+                 current_version:\n  version: 1\n  asset_id: {document_id}\n  \
+                 created_at: 2026-09-05T12:00:00Z\n  sha256: {}\n  size_bytes: 13\n\
+                 evidence:\n  dated_at: 2026-09-04\n  supports: [synthetic claim]\n",
+                model::documents::sha256_hex(b"test document"),
+            ),
+        )
+        .unwrap();
 
         assert_eq!(
             document_upload_from(
@@ -7606,12 +7621,24 @@ mod tests {
             .await,
             ExitCode::SUCCESS
         );
-        let raw = std::fs::read_to_string(dir.path().join("blobs/rogs.pdf.yaml")).unwrap();
+        let raw = std::fs::read_to_string(blob).unwrap();
         let pointer = store::document_pointers::DocumentPointer::from_yaml(&raw).unwrap();
         assert_eq!(
             pointer.folder,
             Some(store::document_pointers::MatterFolder::Discovery)
         );
+        assert_eq!(pointer.current_version.version, 1);
+        assert_eq!(pointer.current_version.asset_id, document_id);
+        let evidence = pointer.evidence.unwrap();
+        assert_eq!(
+            evidence.dated_at,
+            chrono::NaiveDate::from_ymd_opt(2026, 9, 4)
+        );
+        assert_eq!(
+            evidence.source.as_deref(),
+            Some("Gmail thread synthetic-thread")
+        );
+        assert_eq!(evidence.supports, ["synthetic claim"]);
         assert!(raw.contains("folder: Discovery\n"), "{raw}");
     }
 
