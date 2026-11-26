@@ -863,7 +863,7 @@ mod tests {
                 .await
                 .unwrap()
                 .id;
-                set_inserted_at(id, 1_700_000_000 + index as i64).await;
+                set_inserted_at(id, 1_700_000_000 + i64::try_from(index).unwrap()).await;
                 ids.push(id);
             }
             assert!(ids.iter().all(|id| id.get_version_num() == 4));
@@ -1039,7 +1039,7 @@ mod tests {
                 )
                 .await
                 .unwrap();
-                set_inserted_at(answer.id, 1_700_000_000 + index as i64).await;
+                set_inserted_at(answer.id, 1_700_000_000 + i64::try_from(index).unwrap()).await;
             }
             record(
                 &db,
@@ -1154,7 +1154,7 @@ mod tests {
                 )
                 .await
                 .unwrap();
-                set_inserted_at(answer.id, 1_700_000_000 + index as i64).await;
+                set_inserted_at(answer.id, 1_700_000_000 + i64::try_from(index).unwrap()).await;
             }
             record(
                 &db,
