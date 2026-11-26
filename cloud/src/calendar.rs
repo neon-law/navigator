@@ -92,7 +92,10 @@ pub struct CalendarMember {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EventTiming {
+    /// A one-minute Free marker for a timed Deadline that is no longer open.
     Instant,
+    /// A one-minute Busy marker for an open timed Deadline, so booking links skip it.
+    Due,
     Hearing(u32),
     AllDay(chrono::NaiveDate),
     /// A private hold on an attorney's booking calendar.
@@ -101,7 +104,8 @@ pub enum EventTiming {
 
 /// One event on a Project calendar, as Navigator writes it.
 ///
-/// Civil dates display as Free all-day events. A hearing holds Busy time.
+/// Civil dates display as Free all-day events. A hearing and an open timed
+/// Deadline hold Busy time.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CalendarEvent {
     pub summary: String,
@@ -1739,7 +1743,7 @@ fn event_body(event: &CalendarEvent) -> EventBody<'_> {
         },
         transparency: if matches!(
             event.timing,
-            EventTiming::Hearing(_) | EventTiming::BusyUntil(_)
+            EventTiming::Due | EventTiming::Hearing(_) | EventTiming::BusyUntil(_)
         ) {
             "opaque"
         } else {
@@ -2102,7 +2106,7 @@ impl CalendarService for FakeCalendar {
                         && event.start + chrono::Duration::minutes(i64::from(minutes)) > start
                 }
                 EventTiming::BusyUntil(ends_at) => event.start < end && ends_at > start,
-                EventTiming::Instant => {
+                EventTiming::Instant | EventTiming::Due => {
                     event.start < end && event.start + chrono::Duration::minutes(1) > start
                 }
             };
@@ -3525,6 +3529,21 @@ mod tests {
             json["end"]["dateTime"],
             (event.start + chrono::Duration::hours(1)).to_rfc3339()
         );
+    }
+
+    #[test]
+    fn an_open_timed_deadline_is_a_busy_minute_and_a_closed_one_is_free() {
+        let mut event = event();
+        event.timing = super::EventTiming::Due;
+        let json = serde_json::to_value(super::event_body(&event)).unwrap();
+        assert_eq!(json["transparency"], "opaque");
+        assert_eq!(
+            json["end"]["dateTime"],
+            (event.start + chrono::Duration::minutes(1)).to_rfc3339()
+        );
+        event.timing = super::EventTiming::Instant;
+        let json = serde_json::to_value(super::event_body(&event)).unwrap();
+        assert_eq!(json["transparency"], "transparent");
     }
 
     #[test]
