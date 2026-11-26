@@ -7069,6 +7069,9 @@ struct UploadMailProvenance {
     sender: String,
     received_at: String,
     subject: Option<String>,
+    /// A named attachment has its own identity inside the message's directory.
+    #[serde(default)]
+    attachment: bool,
 }
 
 /// Reserve provider evidence for server writes and verify completion in the Firm account.
@@ -7494,17 +7497,14 @@ async fn upload_document_door(
         }
         None => None,
     };
-    // The mail lane's retry safety (LAW-470): a partially-failed batch
-    // re-filing the same message re-uses the document the matter already
-    // holds — the same (project, filename, sha256) key the sync lane's
-    // `already_filed` probe uses — instead of writing a second copy under
-    // the mail slug. Identical bytes under a different filename remain a
-    // different document, per `find_filed_copy`'s contract. The probe is
-    // scoped to uploads that carry mail provenance: that marker is the mail
-    // lane, and every other upload keeps the door's create-always behavior
-    // (the docusign lifecycle deliberately files a second copy of the same
-    // bytes with different semantics).
-    if input.mail_provenance.is_some() {
+    // The original mail document may already live under a different slug.
+    // A named attachment belongs to one message, and its explicit slug
+    // governs retries even when another message carries the same attachment.
+    if input
+        .mail_provenance
+        .as_ref()
+        .is_some_and(|provenance| !provenance.attachment)
+    {
         let sha_hex = store::assets::sha256_hex(&bytes);
         match store::assets::find_filed_copy(&state.surreal, id, filename, &sha_hex).await {
             Ok(Some(existing)) => {
