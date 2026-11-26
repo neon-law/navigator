@@ -46,7 +46,15 @@ async fn the_new_site_publish_routes_and_navigator_entry_points_are_brand_scoped
             .unwrap();
         let html = std::str::from_utf8(&bytes).unwrap();
         assert!(html.contains(marker), "{path} is missing {marker}");
-        assert!(html.contains(r#"href="/auth/login""#));
+        let nav = html
+            .split_once(r#"id="primary-nav""#)
+            .and_then(|(_, rest)| rest.split_once("</nav>"))
+            .map(|(nav, _)| nav)
+            .expect("primary navigation");
+        assert!(
+            nav.contains(r#"href="/auth/login""#),
+            "{path} keeps Sign in in the primary navigation row"
+        );
         assert!(html.contains("guieb-shook-website.css"));
         assert!(!html.contains(r#".html""#), "{path} links a .html path");
         if path == "/" {
