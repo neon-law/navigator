@@ -390,7 +390,7 @@ pub(crate) async fn ingest_threaded_on(
         channel::EMAIL => inbound_counterparty_on(pg, db, inbound).await?,
         _ => None,
     };
-    let ingested = ingest_on(
+    ingest_on(
         pg,
         direction::INBOUND,
         None,
@@ -398,16 +398,7 @@ pub(crate) async fn ingest_threaded_on(
         inbound,
         thread,
     )
-    .await?;
-    crate::inbox::record_association_log(
-        db,
-        ingested.conversation_id,
-        ingested.person_linked.then_some(sender_person_id).flatten(),
-        inbound.channel,
-        inbound.external_address,
-    )
-    .await;
-    Ok(ingested)
+    .await
 }
 
 /// The direction-aware ingest entry. Inbound traffic behaves exactly like
@@ -482,23 +473,27 @@ async fn ingest_on(
         Some(existing) => existing,
         None => match find_open_thread_on(&mut *tx, inbound).await? {
             Some(existing) => existing,
-            None => create_conversation_on(&mut *tx, inbound, sender_person_id).await?,
+            None => create_conversation_on(&mut *tx, inbound, None).await?,
         },
     };
-    let person_linked = sender_person_id.is_some() && conversation.person_id.is_none();
-    if let (true, Some(person_id)) = (person_linked, sender_person_id) {
-        // First association wins: an existing link is never overwritten,
-        // and the WHERE guard keeps a concurrent ingest from double-writing.
-        sqlx::query(
-            "UPDATE inbox_conversation SET person_id = $2, updated_at = now() \
+    let person_linked =
+        if let Some(person_id) = sender_person_id.filter(|_| conversation.person_id.is_none()) {
+            // First association wins: record provenance only for the transaction
+            // that actually installs the link, including a newly created thread.
+            sqlx::query(
+                "UPDATE inbox_conversation SET person_id = $2, updated_at = now() \
              WHERE id = $1 AND person_id IS NULL",
-        )
-        .bind(conversation.id)
-        .bind(person_id)
-        .execute(&mut *tx)
-        .await
-        .map_err(db_error)?;
-    }
+            )
+            .bind(conversation.id)
+            .bind(person_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(db_error)?
+            .rows_affected()
+                > 0
+        } else {
+            false
+        };
     if let Some(email_conversation_id) = inbound.email_conversation_id {
         if conversation.email_conversation_id.is_none() {
             sqlx::query(
@@ -589,6 +584,17 @@ async fn ingest_on(
         return Err(InboxError::Db(
             "ingress conflict without a readable winner".into(),
         ));
+    }
+    if let Some(person_id) = sender_person_id.filter(|_| person_linked) {
+        let entry = inbox::association_log(
+            conversation.id,
+            person_id,
+            inbound.channel,
+            inbound.external_address,
+        );
+        crate::relationship_logs::record_on(&mut *tx, Uuid::now_v7(), &entry)
+            .await
+            .map_err(db_error)?;
     }
     tx.commit().await.map_err(db_error)?;
 
@@ -1713,7 +1719,7 @@ pub(crate) async fn dispatch_queued_on(
     Ok(report)
 }
 
-async fn set_delivery_on(
+pub(crate) async fn set_delivery_on(
     pg: &PostgresDb,
     message_id: Uuid,
     state: &str,

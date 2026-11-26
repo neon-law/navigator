@@ -1337,11 +1337,26 @@ pub(crate) async fn resolve_or_create_sender(
     Ok(Some(created.id))
 }
 
-/// Appends the Relationship Log entry for a conversation's first Person
-/// association — advisory, post-commit, best-effort: a failed entry warns
-/// and never fails the ingest, and an identical replay entry is skipped
-/// (the `exists` dedup the seed import uses). `person_id` is None when no
-/// link was newly made (guard rejection, non-email channel, replay).
+pub(crate) fn association_log(
+    conversation_id: Uuid,
+    person_id: Uuid,
+    channel: &str,
+    address: &str,
+) -> crate::relationship_logs::NewRelationshipLog {
+    crate::relationship_logs::NewRelationshipLog {
+        actor_person_id: None,
+        subject_type: crate::relationship_logs::PERSON_SUBJECT.to_string(),
+        subject_id: person_id,
+        action: INBOUND_ASSOCIATION_ACTION.to_string(),
+        detail: format!("inbox_conversation:{conversation_id} {channel} sender {address}"),
+        project_id: None,
+    }
+}
+
+/// Append a best-effort Relationship Log entry for Source ingestion or
+/// explicit backfill. Native PostgreSQL ingestion appends the same entry in
+/// its transaction. An identical replay is skipped; `person_id` is None
+/// when no link was newly made (guard rejection, non-email channel, replay).
 pub(crate) async fn record_association_log(
     db: &SurrealDb,
     conversation_id: Uuid,
@@ -1352,14 +1367,7 @@ pub(crate) async fn record_association_log(
     let Some(person_id) = person_id else {
         return;
     };
-    let entry = crate::relationship_logs::NewRelationshipLog {
-        actor_person_id: None,
-        subject_type: crate::relationship_logs::PERSON_SUBJECT.to_string(),
-        subject_id: person_id,
-        action: INBOUND_ASSOCIATION_ACTION.to_string(),
-        detail: format!("inbox_conversation:{conversation_id} {channel} sender {address}"),
-        project_id: None,
-    };
+    let entry = association_log(conversation_id, person_id, channel, address);
     match crate::relationship_logs::exists(db, &entry).await {
         Ok(true) => {}
         Ok(false) => {
@@ -4902,7 +4910,7 @@ mod tests {
     use crate::firms::{self, FirmMembership, NewFirm, NewPersonFirmRole};
     use crate::persons::{self, NewPerson};
     use crate::projects::{self, NewProject};
-    use crate::test_support::{mem_surreal, seed_entity};
+    use crate::test_support::seed_entity;
 
     struct RecordingTransport {
         calls: Mutex<Vec<OutboundEnvelope>>,
@@ -4933,8 +4941,8 @@ mod tests {
         }
     }
 
-    struct World {
-        firm: Uuid,
+    pub(super) struct World {
+        pub(super) firm: Uuid,
         other_firm: Uuid,
         project: Uuid,
         other_project: Uuid,
@@ -4949,7 +4957,7 @@ mod tests {
         clerk_participation: Uuid,
     }
 
-    async fn world(db: &SurrealDb) -> World {
+    pub(super) async fn world(db: &SurrealDb) -> World {
         let owner = person(db, "Owner", "owner@example.com", Role::Owner).await;
         let admin = person(db, "Admin", "admin@example.com", Role::Admin).await;
         let other_admin = person(db, "Other Admin", "other-admin@example.com", Role::Admin).await;
@@ -5250,6 +5258,109 @@ let world = world(&db).await;
     }
 
     #[tokio::test]
+    async fn failed_association_log_rolls_back_inbound_ingest() {
+        with_native_inbox_fixture!(db, pg, {
+            let world = world(&db).await;
+            persons::create(
+                &db,
+                &NewPerson::new("Sender", "rollback-sender@example.com"),
+            )
+            .await
+            .unwrap();
+            sqlx::query(
+                "ALTER TABLE relationship_log ADD CONSTRAINT reject_inbox_log \
+                 CHECK (action <> 'inbound_email_associated')",
+            )
+            .execute(pg.pool())
+            .await
+            .unwrap();
+            let message = inbound(
+                world.firm,
+                channel::EMAIL,
+                "fixture-account",
+                "rollback-log",
+                "rollback-sender@example.com",
+            );
+            assert!(ingest_inbound(&db, &message).await.is_err());
+            let conversations: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM inbox_conversation WHERE external_address = $1",
+            )
+            .bind("rollback-sender@example.com")
+            .fetch_one(pg.pool())
+            .await
+            .unwrap();
+            let messages: i64 =
+                sqlx::query_scalar("SELECT count(*) FROM message WHERE provider_message_id = $1")
+                    .bind("rollback-log")
+                    .fetch_one(pg.pool())
+                    .await
+                    .unwrap();
+            assert_eq!(conversations, 0);
+            assert_eq!(messages, 0);
+        });
+    }
+
+    #[tokio::test]
+    async fn concurrent_replays_commit_one_sender_association_and_log() {
+        with_native_inbox_fixture!(db, pg, {
+            let world = world(&db).await;
+            let sender = persons::create(
+                &db,
+                &NewPerson::new("Concurrent Sender", "concurrent-sender@example.com"),
+            )
+            .await
+            .unwrap();
+            let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(8));
+            let mut tasks = Vec::new();
+            for _ in 0..8 {
+                let pg = pg.clone();
+                let barrier = barrier.clone();
+                let firm = world.firm;
+                tasks.push(tokio::spawn(crate::postgres::PostgresDb::with_test_db(
+                    pg,
+                    async move {
+                        let db = SurrealDb::uninitialized();
+                        let message = inbound(
+                            firm,
+                            channel::EMAIL,
+                            "fixture-account",
+                            "concurrent-replay",
+                            "concurrent-sender@example.com",
+                        );
+                        barrier.wait().await;
+                        ingest_inbound(&db, &message).await.unwrap()
+                    },
+                )));
+            }
+            let mut deliveries = Vec::new();
+            for task in tasks {
+                deliveries.push(task.await.unwrap());
+            }
+            let first = &deliveries[0];
+            assert!(deliveries
+                .iter()
+                .all(|item| item.message_id == first.message_id));
+            assert!(deliveries
+                .iter()
+                .all(|item| item.conversation_id == first.conversation_id));
+            assert_eq!(deliveries.iter().filter(|item| !item.deduped).count(), 1);
+            let conversation = conversation_by_id(&db, first.conversation_id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(conversation.person_id, Some(sender.id));
+            let logs = crate::relationship_logs::all(&db).await.unwrap();
+            assert_eq!(
+                logs.iter()
+                    .filter(|log| log.action == INBOUND_ASSOCIATION_ACTION
+                        && log.subject_id == sender.id)
+                    .count(),
+                1
+            );
+        });
+    }
+
+    #[tokio::test]
     async fn a_reingest_from_the_same_address_creates_no_second_person_or_log() {
         #[rustfmt::skip]
         with_native_inbox_fixture!(db, pg, {
@@ -5452,7 +5563,8 @@ let world = world(&db).await;
 
     #[tokio::test]
     async fn trash_hides_a_conversation_until_restore_or_new_mail() {
-        let db = mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_inbox_fixture!(db, pg, {
         let world = world(&db).await;
         let first = inbound(
             world.firm,
@@ -5483,7 +5595,7 @@ let world = world(&db).await;
             0
         );
         // Nothing is removed: the thread and its messages still read.
-        assert_eq!(messages_for(&db, id).await.unwrap().len(), 1);
+        assert_eq!(crate::postgres::inbox::messages_for_on(&pg, id).await.unwrap().len(), 1);
 
         set_trashed(&db, world.clerk, id, false).await.unwrap();
         assert!(!trashed(&db, world.owner, id).await);
@@ -5502,6 +5614,7 @@ let world = world(&db).await;
             id
         );
         assert!(!trashed(&db, world.owner, id).await);
+        });
     }
 
     #[tokio::test]
@@ -5531,8 +5644,9 @@ let world = world(&db).await;
             // The menu never offers a matter that is not open, and the door
             // refuses a hand-crafted POST into one — the same rule twice.
             let menu = projects_in_firm(&db, world.firm).await.unwrap();
-            assert!(
-                menu.iter().all(|project| project.id != world.project),
+            assert_eq!(
+                menu.iter().any(|project| project.id == world.project),
+                status == "Open ",
                 "{status}: {menu:?}"
             );
             let outcome =
@@ -7072,7 +7186,8 @@ let world = world(&db).await;
 
     #[tokio::test]
     async fn a_direct_message_cannot_queue_a_public_reply() {
-        let db = mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_inbox_fixture!(db, pg, {
         let world = world(&db).await;
         let mut incoming = inbound(world.firm, channel::INSTAGRAM, "account", "dm-1", "sender");
         incoming.interaction_type = Some("direct_message");
@@ -7084,7 +7199,7 @@ let world = world(&db).await;
                 .is_err()
         );
         assert_eq!(
-            messages_for(&db, saved.conversation_id)
+            crate::postgres::inbox::messages_for_on(&pg, saved.conversation_id)
                 .await
                 .unwrap()
                 .len(),
@@ -7093,6 +7208,7 @@ let world = world(&db).await;
         queue_social_reply(&db, world.owner, saved.conversation_id, "Reply", "private")
             .await
             .unwrap();
+        });
     }
 
     #[tokio::test]
@@ -7170,7 +7286,8 @@ let world = world(&db).await;
 
     #[tokio::test]
     async fn a_later_callback_can_deliver_unknown_without_regressing() {
-        let db = mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_inbox_fixture!(db, pg, {
         let world = world(&db).await;
         let conversation_id = assigned_sms(&db, &world).await;
         let reply = queue_reply(
@@ -7182,7 +7299,7 @@ let world = world(&db).await;
         )
         .await
         .unwrap();
-        set_delivery(&db, reply, delivery::UNKNOWN, Some("provider-9"))
+        crate::postgres::inbox::set_delivery_on(&pg, reply, delivery::UNKNOWN, Some("provider-9"))
             .await
             .unwrap();
         apply_delivery(
@@ -7260,6 +7377,7 @@ let world = world(&db).await;
             delivery::DELIVERED,
             "a late callback must not regress delivery"
         );
+        });
     }
 
     #[tokio::test]
@@ -7403,7 +7521,7 @@ let world = world(&db).await;
         );
     }
 
-    async fn ingest_for(db: &SurrealDb, firm: Uuid, provider_id: &str) -> Uuid {
+    pub(super) async fn ingest_for(db: &SurrealDb, firm: Uuid, provider_id: &str) -> Uuid {
         let message = inbound(
             firm,
             channel::EMAIL,
@@ -7459,32 +7577,6 @@ let world = world(&db).await;
         assert_eq!(ids, vec![second, first]);
 
         });
-    }
-
-    #[tokio::test]
-    async fn messages_written_before_process_fields_read_as_unprocessed() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
-        let message_id = ingest_for(&db, world.firm, "process-historical-1").await;
-        // A row written before the process fields existed carries none.
-        db.query("UPDATE $id UNSET route, processed_at, nef_outcome")
-            .bind(("id", record_id(MESSAGE, message_id)))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-
-        let state = process_state(&db, message_id).await.unwrap().unwrap();
-        assert_eq!(state.processed_at, None);
-        assert_eq!(state.route, None);
-        assert_eq!(state.nef_outcome, None);
-
-        // And the tolerant read still lets a process run record the route.
-        mark_processed(&db, message_id, route::OTHER, Utc::now(), None)
-            .await
-            .unwrap();
-        let state = process_state(&db, message_id).await.unwrap().unwrap();
-        assert_eq!(state.route.as_deref(), Some(route::OTHER));
     }
 
     #[tokio::test]
@@ -7650,3 +7742,7 @@ let world = world(&db).await;
         });
     }
 }
+
+#[cfg(test)]
+#[path = "inbox_legacy_tests.rs"]
+mod legacy_tests;
