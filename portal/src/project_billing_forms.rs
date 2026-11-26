@@ -242,11 +242,33 @@ pub(crate) async fn set_matter_rate(
 pub(crate) struct DailyBillingForm {
     project: String,
     description: String,
-    hours: String,
+    hours: Option<String>,
+    minutes: Option<String>,
+    billable: Option<String>,
     performed_on: chrono::NaiveDate,
 }
 
-/// Manual billing accepts exact tenths and stores the corresponding whole minutes.
+impl DailyBillingForm {
+    fn minutes_and_billable(&self) -> Result<(i32, bool), &'static str> {
+        match (self.minutes.as_deref(), self.hours.as_deref()) {
+            (Some(raw), None) => {
+                let minutes = raw
+                    .trim()
+                    .parse::<i32>()
+                    .ok()
+                    .filter(|n| (1..=1440).contains(n))
+                    .ok_or("Enter whole minutes from 1 to 1440.")?;
+                Ok((minutes, self.billable.as_deref() == Some("on")))
+            }
+            (None, Some(hours)) => daily_billing_minutes(hours)
+                .map(|minutes| (minutes, true))
+                .ok_or("Enter hours in 0.1 increments, from 0.1 to 24."),
+            _ => Err("Submit one duration in whole minutes."),
+        }
+    }
+}
+
+/// The hours form submits billable time in exact tenths.
 fn daily_billing_minutes(hours: &str) -> Option<i32> {
     let hours = hours.trim();
     let (whole, fraction) = hours.split_once('.').unwrap_or((hours, ""));
@@ -299,8 +321,8 @@ pub(crate) async fn daily_billing(
     let Some(person_id) = actor.person_id else {
         return not_found_response();
     };
-    let result = match daily_billing_minutes(&form.hours) {
-        Some(minutes) => {
+    let result = match form.minutes_and_billable() {
+        Ok((minutes, billable)) => {
             record_manual_time(
                 &db,
                 project.id,
@@ -308,11 +330,11 @@ pub(crate) async fn daily_billing(
                 form.performed_on,
                 minutes,
                 form.description,
-                true,
+                billable,
             )
             .await
         }
-        None => Err("Enter hours in 0.1 increments, from 0.1 to 24.".into()),
+        Err(error) => Err(error.to_owned()),
     };
     let (key, message) = match &result {
         Ok(()) => ("flash", "Time logged."),
@@ -1128,6 +1150,33 @@ mod tests {
             rendered(InvoiceGenerationError::NoMatter),
             "The billing record is unavailable right now — try again shortly."
         );
+    }
+
+    #[tokio::test]
+    async fn daily_billing_decodes_minutes_and_keeps_hours_submissions_billable() {
+        use axum::extract::FromRequest;
+        for (fields, expected) in [
+            ("hours=0.1", Some((6, true))),
+            ("minutes=4", Some((4, false))),
+            ("minutes=4&billable=on", Some((4, true))),
+            ("minutes=1440", Some((1440, false))),
+            ("hours=0.1&minutes=4", None),
+            ("minutes=1.5", None),
+            ("minutes=0", None),
+            ("minutes=1441", None),
+            ("", None),
+        ] {
+            let body =
+                format!("project=sample&description=Review&performed_on=2001-11-15&{fields}");
+            let request = axum::http::Request::post("/app/lawyer/billing")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(axum::body::Body::from(body))
+                .unwrap();
+            let Form(form) = Form::<super::DailyBillingForm>::from_request(request, &())
+                .await
+                .unwrap();
+            assert_eq!(form.minutes_and_billable().ok(), expected, "{fields}");
+        }
     }
 
     #[test]

@@ -1107,8 +1107,107 @@ async fn daily_billing_groups_interleaved_project_entries_after_saving() {
         return;
     };
     login_as_lawyer(&c).await;
-    let db = postgres_browser_store().await.unwrap();
+    billing_clock_on_central_evening(&c).await;
+    let day = chrono::NaiveDate::from_ymd_opt(2001, 11, 15).unwrap();
+    let next_day = day.succ_opt().unwrap();
     let pg = store::postgres::PostgresDb::application().await.unwrap();
+    let [first, second, other_host] = daily_billing_projects(&pg, day).await;
+    c.goto(&format!("{}/app/lawyer", base_url())).await.unwrap();
+    scroll_and_js_click(&c, "a[href='/app/lawyer/billing']").await;
+    c.wait()
+        .at_most(Duration::from_secs(15))
+        .for_element(Locator::Css(".daily-billing__entry"))
+        .await
+        .unwrap();
+    assert_form_csrf(&c, ".daily-billing__entry").await;
+    let other_option = format!("select[name=project] option[value='{}']", other_host.code);
+    assert!(c
+        .find_all(Locator::Css(&other_option))
+        .await
+        .unwrap()
+        .is_empty());
+    for selector in ["input[name=day]", "input[name=performed_on]"] {
+        assert_eq!(
+            c.find(Locator::Css(selector))
+                .await
+                .unwrap()
+                .prop("value")
+                .await
+                .unwrap(),
+            Some(day.to_string())
+        );
+    }
+    submit_daily_time(&c, &second.code, "Checked the draft", "4", true).await;
+    wait_for_text(&c, "set your hourly rate", Duration::from_secs(10)).await;
+    assert!(store::time_entries::list_for_project(&pg, second.id)
+        .await
+        .unwrap()
+        .is_empty());
+    for (project, description, minutes, billable) in [
+        (&first, "Reviewed the correspondence", "30", true),
+        (&second, "Checked the draft", "4", false),
+        (&first, "Revised the response", "6", true),
+    ] {
+        submit_daily_time(&c, &project.code, description, minutes, billable).await;
+        wait_for_text(&c, description, Duration::from_secs(10)).await;
+    }
+    let free = store::time_entries::list_for_project(&pg, second.id)
+        .await
+        .unwrap();
+    assert_eq!(free.len(), 1);
+    assert_eq!(
+        (
+            free[0].minutes,
+            free[0].billable,
+            free[0].rate_cents_per_hour,
+            free[0].performed_on
+        ),
+        (4, false, 0, day)
+    );
+    for (project, subtotal) in [(&first, "$180.00"), (&second, "$0.00")] {
+        let selector = format!(
+            "tbody:has(a[href='/app/projects/{}/billing']) .daily-billing__subtotal",
+            project.code
+        );
+        let rows = c.find_all(Locator::Css(&selector)).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].text().await.unwrap().contains(subtotal));
+    }
+    // An explicitly selected service date prices and saves at the new rate.
+    c.execute(
+        "document.querySelector('input[name=day]').value = arguments[0]",
+        vec![serde_json::json!(next_day)],
+    )
+    .await
+    .unwrap();
+    scroll_and_js_click(&c, ".daily-billing__filters button").await;
+    wait_for_text(&c, "$420.00/hr", Duration::from_secs(10)).await;
+    submit_daily_time(&c, &first.code, "Reviewed the draft", "5", true).await;
+    wait_for_text(&c, "$35.00", Duration::from_secs(10)).await;
+    let entries = store::time_entries::list_for_project(&pg, first.id)
+        .await
+        .unwrap();
+    let mut snapshots: Vec<_> = entries
+        .iter()
+        .map(|e| (e.performed_on, e.minutes, e.rate_cents_per_hour, e.billable))
+        .collect();
+    snapshots.sort_unstable();
+    assert_eq!(
+        snapshots,
+        [
+            (day, 6, 30000, true),
+            (day, 30, 30000, true),
+            (next_day, 5, 42000, true)
+        ]
+    );
+    c.close().await.unwrap();
+}
+
+async fn daily_billing_projects(
+    pg: &store::postgres::PostgresDb,
+    day: chrono::NaiveDate,
+) -> [store::projects::Project; 3] {
+    let db = postgres_browser_store().await.unwrap();
     let lawyer = store::persons::find_by_email_ci(&db, "lawyer@neonlaw.com")
         .await
         .unwrap()
@@ -1132,72 +1231,67 @@ async fn daily_billing_groups_interleaved_project_entries_after_saving() {
     store::projects::add_participation(&db, other_host.id, lawyer.id, "lawyer")
         .await
         .unwrap();
-    let day = chrono::Utc::now().date_naive();
-    for (project, rate) in [(&first, 30000), (&second, 25000)] {
+    let next_day = day.succ_opt().unwrap();
+    for project in [&first, &second] {
         store::projects::add_participation(&db, project.id, lawyer.id, "lawyer")
             .await
             .unwrap();
+    }
+    for (project, rate, effective_on) in [
+        (&first, 30000, day),
+        (&first, 42000, next_day),
+        (&second, 25000, next_day),
+    ] {
         store::attorney_rates::set_hourly_rate(
-            &pg,
+            pg,
             store::attorney_rates::NewAttorneyRate {
                 person_id: lawyer.id,
                 project_id: Some(project.id),
                 hourly_rate_cents: rate,
-                effective_on: day,
+                effective_on,
             },
         )
         .await
         .unwrap();
     }
-    c.goto(&format!("{}/app/lawyer", base_url())).await.unwrap();
-    scroll_and_js_click(&c, "a[href='/app/lawyer/billing']").await;
-    c.wait()
-        .at_most(Duration::from_secs(15))
-        .for_element(Locator::Css(".daily-billing__entry"))
-        .await
-        .unwrap();
-    assert_form_csrf(&c, ".daily-billing__entry").await;
-    let other_option = format!("select[name=project] option[value='{}']", other_host.code);
-    assert!(c
-        .find_all(Locator::Css(&other_option))
+    [first, second, other_host]
+}
+
+async fn billing_clock_on_central_evening(c: &Client) {
+    // At 02:30 UTC on the 16th the lawyer is still working on the 15th in Chicago.
+    c.issue_cmd(Cdp {
+        command: "Emulation.setTimezoneOverride",
+        params: serde_json::json!({ "timezoneId": "America/Chicago" }),
+    })
+    .await
+    .unwrap();
+    c.issue_cmd(Cdp {
+        command: "Page.addScriptToEvaluateOnNewDocument",
+        params: serde_json::json!({ "source": "window.Date = class extends Date { constructor(...args) { super(...(args.length ? args : ['2001-11-16T02:30:00Z'])); } };" }),
+    })
+    .await
+    .unwrap();
+}
+
+async fn submit_daily_time(
+    c: &Client,
+    project: &str,
+    description: &str,
+    minutes: &str,
+    billable: bool,
+) {
+    c.find(Locator::Css("select[name=project]"))
         .await
         .unwrap()
-        .is_empty());
-    for (project, description, hours) in [
-        (&first, "Reviewed the correspondence", "0.5"),
-        (&second, "Prepared the first draft", "0.6"),
-        (&first, "Revised the response", "0.1"),
-    ] {
-        c.find(Locator::Css("select[name=project]"))
-            .await
-            .unwrap()
-            .select_by_value(&project.code)
-            .await
-            .unwrap();
-        fill_text_field(&c, "textarea[name=description]", description).await;
-        fill_text_field(&c, "input[name=hours]", hours).await;
-        scroll_and_js_click(&c, ".daily-billing__entry button").await;
-        let saved = format!(
-            "tbody:has(a[href='/app/projects/{}/billing'])",
-            project.code
-        );
-        c.wait()
-            .at_most(Duration::from_secs(10))
-            .for_element(Locator::Css(&saved))
-            .await
-            .unwrap();
-        wait_for_text(&c, description, Duration::from_secs(10)).await;
+        .select_by_value(project)
+        .await
+        .unwrap();
+    fill_text_field(c, "textarea[name=description]", description).await;
+    fill_text_field(c, "input[name=minutes]", minutes).await;
+    if !billable {
+        scroll_and_js_click(c, "input[name=billable]").await;
     }
-    for (project, subtotal) in [(first, "$180.00"), (second, "$150.00")] {
-        let selector = format!(
-            "tbody:has(a[href='/app/projects/{}/billing']) .daily-billing__subtotal",
-            project.code
-        );
-        let rows = c.find_all(Locator::Css(&selector)).await.unwrap();
-        assert_eq!(rows.len(), 1);
-        assert!(rows[0].text().await.unwrap().contains(subtotal));
-    }
-    c.close().await.unwrap();
+    scroll_and_js_click(c, ".daily-billing__entry button").await;
 }
 
 /// The Billing tab on the stock KIND deployment (which carries no app-side
