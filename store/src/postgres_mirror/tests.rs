@@ -868,21 +868,14 @@ async fn write_hook_probe() {
             .await
             .unwrap()
             .id;
-            crate::notation_events::append_event(
-                &surreal,
-                crate::notation_events::TransitionRecord {
-                    notation_id: notation,
-                    acting_person_id: None,
-                    machine_kind: crate::notation_events::MACHINE_QUESTIONNAIRE,
-                    from_state: "BEGIN",
-                    to_state: "END",
-                    condition: "_",
-                    payload_json: None,
-                    recorded_at: "2026-01-02T00:00:00+00:00",
-                },
-            )
-            .await
-            .unwrap();
+            let event = Uuid::now_v7();
+            surreal.query("CREATE $id SET notation_id=$notation, acting_person_id=$actor, template_version_id=$template, machine_kind='questionnaire', from_state='BEGIN', to_state='END', condition='_', recorded_at='2026-01-02T00:00:00+00:00'")
+                .bind(("id", crate::surreal::record_id("notation_event", event)))
+                .bind(("notation", crate::surreal::record_id("notation", notation)))
+                .bind(("actor", crate::surreal::record_id("person", admin)))
+                .bind(("template", crate::surreal::record_id("template", replacement)))
+                .await.unwrap().check().unwrap();
+            after_write(&surreal, MirrorKey::NotationEvent(event)).await;
             crate::answers::record(
                 &surreal,
                 &crate::answers::NewAnswer::new(
