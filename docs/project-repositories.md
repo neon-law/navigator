@@ -778,6 +778,9 @@ resolves the given code to an id through `GET /app/api/projects` (the same looku
 never opens a database connection of its own, even against a local deployment. Project participation is never copied
 onto the forge.
 
+Use `navigator project repository repair-mirror --dry-run` from the checkout to preview mirror creation or adoption. The
+preview reads the provider and checks the local remote without changing either repository.
+
 For a GitHub-backed Project whose secondary mirror is missing, run `navigator project repository repair-mirror --dir
 <checkout> [--host <site>]`. The admin API checks the caller's `use_integrations` access on the owning Firm, then
 creates or adopts the private Forgejo repository with that Firm's credential and returns Forgejo's verified repository

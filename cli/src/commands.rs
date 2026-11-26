@@ -1674,6 +1674,9 @@ pub enum ProjectRepositoryCmd {
         /// Existing Project repository root. Defaults to the current directory.
         #[arg(long, default_value = ".")]
         dir: PathBuf,
+        /// Check the provider and local remote without making changes.
+        #[arg(long)]
+        dry_run: bool,
         #[command(flatten)]
         host: HostOpt,
     },
@@ -3596,8 +3599,8 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
         ProjectsCmd::Skill { action } => run_project_skill(action).await,
         ProjectsCmd::Jj { action } => projects::jj_commands::run(action).await,
         ProjectsCmd::Repository { action } => match action {
-            ProjectRepositoryCmd::RepairMirror { dir, host } => {
-                projects::mirror_repair::run(&dir, host.host.as_deref()).await
+            ProjectRepositoryCmd::RepairMirror { dir, host, dry_run } => {
+                projects::mirror_repair::run(&dir, host.host.as_deref(), dry_run).await
             }
             ProjectRepositoryCmd::Reconcile { dir, review } => {
                 match projects::push::reconcile(&dir, review).await {
