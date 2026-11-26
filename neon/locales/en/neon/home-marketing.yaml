@@ -18,8 +18,8 @@ skin: marketing
 bands:
   - kind: cards
     anchor: anyone
-    overline: For anyone
-    heading: Agentic lawyering is for anyone.
+    overline: ""
+    heading: Agentic lawyering is for everyone.
     description: >-
       Prepare papers in chat, fill a public template, or ask a lawyer to review.
       Using the public catalog does not create an attorney-client relationship.
@@ -27,13 +27,16 @@ bands:
       - title: Represent yourself
         body:
           - - text: Find a public template and enter your details. You review what you file or send.
+          - - text: Do I need a lawyer?
+              href: /do-i-need-a-lawyer
         href: /notations
         href_label: Browse templates
       - title: Talk to a lawyer
         body:
-          - - text: Ask about representation or a separate document review. A written engagement sets the scope.
-        href: /contact
-        href_label: Contact the firm
+          - - text: Ask the creators of Navigator to represent you.
+          - - text: Navigator provides general information. Guieb Shook gives legal advice under a valid retainer.
+        href: https://guiebshook.com/contact
+        href_label: Contact Guieb Shook
       - title: For lawyers
         body:
           - - text: See how firms connect matter work, documents, and tools around a Project.
@@ -106,11 +109,3 @@ bands:
           - text: >-
               . With Docker running, it brings up the full stack in KIND with a
               seeded sample firm and three sample matters.
-  - kind: cta
-    heading: Considering Legal Aid?
-    body: >-
-      Check eligibility and see which services the firm offers through its Legal Aid program.
-    email: "{firm_email}"
-    action:
-      href: /legal-aid
-      label: Legal Aid

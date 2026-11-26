@@ -1718,7 +1718,7 @@ async fn the_firm_marketing_surface_serves_at_the_site_root() {
         empty_state().await,
         std::path::Path::new(portal::DEFAULT_PUBLIC_DIR),
     );
-    for uri in ["/blog", "/notations", "/contact"] {
+    for uri in ["/blog", "/notations", "/do-i-need-a-lawyer"] {
         let resp = app
             .clone()
             .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
@@ -11525,7 +11525,7 @@ async fn host_brand_path_matrix_resolves_every_combination() {
     // `og:site_name`; the unknown host's redirect target renders the
     // default brand's chrome, not merely a 301.
     for (host, path, brand) in [
-        (default_host, "/contact", "Neon Law"),
+        (default_host, "/do-i-need-a-lawyer", "Neon Law"),
         (delete_your_data_host, "/contact", "DeleteYourData.com"),
         (holding_host, "/contact", "Guieb & Shook"),
     ] {
@@ -11543,8 +11543,13 @@ async fn host_brand_path_matrix_resolves_every_combination() {
         }
     }
     let followed =
-        assert_unregistered_host_redirects(&app, "/contact", default_host, unknown_host).await;
-    assert_eq!(followed.status(), StatusCode::OK, "followed /contact");
+        assert_unregistered_host_redirects(&app, "/do-i-need-a-lawyer", default_host, unknown_host)
+            .await;
+    assert_eq!(
+        followed.status(),
+        StatusCode::OK,
+        "followed the lawyer guide"
+    );
     let followed_body = body_string(followed).await;
     assert!(
         page_declares_og_site_name(&followed_body, "Neon Law"),
@@ -11956,7 +11961,7 @@ async fn a_holding_page_rejects_unpublished_paths_without_a_cross_brand_redirect
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     // An unknown host with no `CANONICAL_HOST` still falls through to the
     // default brand, unchanged.
-    let resp = get_on_host(&unenforced, "/contact", "unregistered.example").await;
+    let resp = get_on_host(&unenforced, "/do-i-need-a-lawyer", "unregistered.example").await;
     assert_eq!(resp.status(), StatusCode::OK);
 }
 

@@ -145,13 +145,15 @@ const FIRM_NAV: &[NavLink] = &[
     NavLink::leaf("Book Consultation", SHOOK_CONSULTATION_URL),
 ];
 
+/// Guieb & Shook's public contact page.
+pub const GUIEB_SHOOK_CONTACT_URL: &str = "https://guiebshook.com/contact";
+
 /// Neon's header names its pages: Notations, the document format; Lawyers, the
-/// connected Project; and Legal Aid. The shared footer row still links Navigator
-/// and Notations for every brand.
+/// connected Project; and a guide to choosing when to get legal help.
 const NEON_NAV: &[NavLink] = &[
     NavLink::leaf("Notations", "/notations"),
     NavLink::leaf("Lawyers", "/lawyers"),
-    NavLink::leaf("Legal Aid", "/legal-aid"),
+    NavLink::leaf("Do I need a lawyer?", "/do-i-need-a-lawyer"),
 ];
 
 /// Public footer pages. `firm_footer_nav` adds Contact, Testimonials, Privacy,
@@ -1365,6 +1367,9 @@ impl BrandKey {
                 .iter()
                 .any(|(route, _)| *route == path);
         }
+        if path == "/do-i-need-a-lawyer" {
+            return self == Self::Neon;
+        }
         // Every house-brand home accepts contact requests through `/leads`.
         if path == "/contact/sent" {
             return true;
@@ -2308,8 +2313,8 @@ pub fn firm_family() -> &'static [BrandKey] {
 /// looking for "how do I reach them" gets a page naming the firm's inbox and
 /// voice line rather than having to find a CTA on some other page first.
 /// Every brand publishes its own channels there — see `firm_email`.
-/// Most brands link `/contact`. Aegis and Groundwork use their configured
-/// consultation calendar for Contact in both navigation rows.
+/// Neon links Guieb & Shook’s contact page. Aegis and Groundwork link their
+/// consultation calendar. Other brands link `/contact`.
 #[must_use]
 pub fn firm_footer_nav() -> Vec<NavLink> {
     let branding = current();
@@ -2356,12 +2361,15 @@ pub fn firm_footer_nav() -> Vec<NavLink> {
         }));
     }
     nav.push(NavLink::leaf("Testimonials", "/testimonials"));
-    let contact_href = if matches!(branding.brand_key, BrandKey::Aegis | BrandKey::Groundwork) {
-        branding.consultation_url
-    } else {
-        "/contact"
-    };
-    nav.push(NavLink::leaf("Contact", contact_href));
+    nav.push(match branding.brand_key {
+        BrandKey::Neon if !branding.firm_family.is_empty() => {
+            NavLink::leaf("Contact Guieb Shook", GUIEB_SHOOK_CONTACT_URL)
+        }
+        BrandKey::Aegis | BrandKey::Groundwork => {
+            NavLink::leaf("Contact", branding.consultation_url)
+        }
+        _ => NavLink::leaf("Contact", "/contact"),
+    });
     nav.push(NavLink::leaf("Privacy", branding.privacy_url));
     nav.push(NavLink::leaf("Terms", branding.terms_url));
     nav.sort_by(|a, b| a.label.cmp(b.label));
@@ -3134,7 +3142,7 @@ mod tests {
             [
                 ("Notations", "/notations"),
                 ("Lawyers", "/lawyers"),
-                ("Legal Aid", "/legal-aid"),
+                ("Do I need a lawyer?", "/do-i-need-a-lawyer"),
             ]
         );
     }
@@ -3150,7 +3158,7 @@ mod tests {
             [
                 "API",
                 "Blog",
-                "Contact",
+                "Contact Guieb Shook",
                 "Design",
                 "Glossary",
                 "Navigator",
@@ -3290,10 +3298,11 @@ mod tests {
                 .map(|n| n.label)
                 .collect::<Vec<_>>()
         };
-        let neon = labels();
+        let mut firm_labels = labels();
+        firm_labels[2] = "Contact";
         for branding in [&super::GUIEB_SHOOK_BRANDING] {
             scope(branding, async {
-                assert_eq!(labels(), neon, "every brand shares Neon's footer row");
+                assert_eq!(labels(), firm_labels);
                 let nav = super::firm_footer_nav();
                 let href = |label: &str| nav.iter().find(|n| n.label == label).unwrap().href;
                 assert_eq!(href("Glossary"), "https://www.neonlaw.com/glossary");
@@ -3310,16 +3319,16 @@ mod tests {
         }
     }
 
-    /// Neon's own footer links its pages relatively, except Team, which
-    /// publishes on Guieb & Shook. On any other brand only Contact,
+    /// Neon links Contact and Team to Guieb & Shook. On any other brand only Contact,
     /// Testimonials, Blog, Design, Privacy, and Terms are local routes;
     /// Neon's unique pages link to their published destinations, and Team
     /// links to Guieb & Shook.
     #[tokio::test]
-    async fn contact_testimonials_and_blog_are_internal_footer_links() {
+    async fn footer_links_resolve_to_the_publishing_brand() {
         for link in super::firm_footer_nav() {
             match link.label {
-                "Contact" | "Testimonials" | "Blog" => assert!(link.href.starts_with('/')),
+                "Contact Guieb Shook" => assert_eq!(link.href, super::GUIEB_SHOOK_CONTACT_URL),
+                "Testimonials" | "Blog" => assert!(link.href.starts_with('/')),
                 "Privacy" => assert_eq!(link.href, "/privacy"),
                 "Terms" => assert_eq!(link.href, "/terms"),
                 "Team" => assert_eq!(link.href, "https://www.guiebshook.com/team"),
@@ -3388,15 +3397,18 @@ mod tests {
         }
     }
 
-    /// The firm's contact page is linked from the footer, at its own name.
-    #[test]
-    fn contact_is_a_firm_footer_leaf_at_its_own_name() {
-        let contact = super::firm_footer_nav()
-            .into_iter()
-            .find(|n| n.label == "Contact")
-            .expect("Contact leaf present");
-        assert!(!contact.is_dropdown());
-        assert_eq!(contact.href, "/contact");
+    /// The firm's own site links its contact page directly from its footer.
+    #[tokio::test]
+    async fn guieb_shook_links_its_own_contact_page() {
+        scope(&super::GUIEB_SHOOK_BRANDING, async {
+            let contact = super::firm_footer_nav()
+                .into_iter()
+                .find(|n| n.label == "Contact")
+                .expect("Contact leaf present");
+            assert!(!contact.is_dropdown());
+            assert_eq!(contact.href, "/contact");
+        })
+        .await;
     }
 
     /// The talks catalog is linked from the firm's footer, at its own name.

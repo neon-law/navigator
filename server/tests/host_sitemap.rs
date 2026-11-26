@@ -192,7 +192,7 @@ async fn the_sitemap_advertises_the_firms_pages() {
         "/notations/about",
         "/lawyers",
         "/legal-aid",
-        "/contact",
+        "/do-i-need-a-lawyer",
         "/blog",
         "/presentations",
     ] {

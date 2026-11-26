@@ -65,6 +65,7 @@ pub const PUBLIC_PATHS: &[&str] = &[
     // product links keep resolving.
     "/navigator",
     "/legal-aid",
+    "/do-i-need-a-lawyer",
     "/lawyers",
     // The Neon-hosted gateway to the DeleteYourDebt.com practice. Neon-only —
     // 404s on every other registered brand host; see
@@ -168,7 +169,12 @@ pub const PUBLIC_PATHS: &[&str] = &[
 /// they are states of a session, not documents.
 #[must_use]
 pub fn sitemap_paths(state: &AppState, key: BrandKey) -> std::collections::BTreeSet<String> {
-    sitemap_for(state.workshops.materials(), key)
+    let mut paths = sitemap_for(state.workshops.materials(), key);
+    if key == BrandKey::Neon && views::brand::firm_family().is_empty() {
+        paths.remove("/do-i-need-a-lawyer");
+        paths.insert("/contact".to_string());
+    }
+    paths
 }
 
 /// [`sitemap_paths`] over the catalog's materials alone.
@@ -230,6 +236,7 @@ pub fn sitemap_for(
         BrandKey::Neon => {
             let mut paths: std::collections::BTreeSet<String> = [
                 "/",
+                "/do-i-need-a-lawyer",
                 "/legal-aid",
                 "/lawyers",
                 "/delete-your-debt",
@@ -248,7 +255,6 @@ pub fn sitemap_for(
                 "/divorce",
                 "/notations",
                 "/notations/about",
-                "/contact",
                 "/blog",
                 "/presentations",
                 "/testimonials",
@@ -321,7 +327,18 @@ fn practice_brand_llms_txt(key: BrandKey) -> portal::LlmsTxt {
 /// [`sitemap_paths`] rather than curated here.
 #[must_use]
 pub fn llms_txt(state: &AppState, key: BrandKey) -> portal::LlmsTxt {
-    llms_for(state.workshops.materials(), key)
+    let mut index = llms_for(state.workshops.materials(), key);
+    if key == BrandKey::Neon && views::brand::firm_family().is_empty() {
+        index
+            .pages
+            .retain(|page| page.path != "/do-i-need-a-lawyer");
+        index.pages.push(indexed_page(
+            "Contact",
+            "/contact",
+            "How to reach the firm about a matter.",
+        ));
+    }
+    index
 }
 
 /// [`llms_txt`] over the catalog's materials alone.
@@ -499,9 +516,9 @@ fn indexed_pages(mark: &str) -> Vec<portal::LlmsTxtLink> {
             "The firm's sample engagement letters and the government forms Navigator files.",
         ),
         indexed_page(
-            "Contact",
-            "/contact",
-            "How to reach the firm about a matter, and what to include in the first email.",
+            "Do I need a lawyer?",
+            "/do-i-need-a-lawyer",
+            "When to start with a template and when to seek legal advice or representation.",
         ),
     ]);
     pages

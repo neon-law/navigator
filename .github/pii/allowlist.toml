@@ -38,6 +38,10 @@ reason = "Generated Swiss house-validation angles for a fixed synthetic ARMC/lat
 values = ["ephemeris/fixtures/swisseph_house_reference.json"]
 
 [[names]]
+reason = "The public Guieb Shook firm name and the contact link label used on Neon Law."
+values = ["Guieb Shook", "Contact Guieb Shook"]
+
+[[names]]
 reason = "Birth Time is the glossary's calculation-input concept, not a person's name."
 values = ["Birth Time"]
 

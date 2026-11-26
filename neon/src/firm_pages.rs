@@ -1420,7 +1420,7 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
     let contact_copy = branded_map(branding, "/contact", |resolved| {
         webapp::contact_page::InjectedContact(resolve_firm_contact_content(resolved))
     });
-    routers.push(with_guieb_shook(with_branded(
+    let contact = with_guieb_shook(with_branded(
         dioxus_app::contact_router(
             "/contact",
             resolve_firm_contact_content(branding),
@@ -1428,7 +1428,12 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
             portal::secure_cookies(state),
         ),
         contact_copy,
-    )));
+    ));
+    routers.push(if branding.firm_family.is_empty() {
+        contact
+    } else {
+        contact.layer(from_fn(redirect_neon_contact))
+    });
     routers.push(with_guieb_shook(with_branded(
         dioxus_app::contact_sent_router("/contact/sent", resolve_firm_contact_content(branding)),
         branded_map(branding, "/contact/sent", |resolved| {
@@ -1596,6 +1601,14 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
         state.sessions.clone(),
         portal::secure_cookies(state),
     ));
+    if !branding.firm_family.is_empty() {
+        routers.push(dioxus_app::marketing_page_router(
+            "/do-i-need-a-lawyer",
+            locales::lawyer_guide(branding),
+            state.sessions.clone(),
+            portal::secure_cookies(state),
+        ));
+    }
     routers.push(dioxus_app::marketing_page_router(
         "/lawyers",
         firm_copy::lawyers(branding),
@@ -1899,6 +1912,28 @@ async fn inject_branded<T: Clone + Send + Sync + 'static>(
         req.extensions_mut().insert(value);
     }
     next.run(req).await
+}
+
+async fn redirect_neon_contact(req: Request, next: Next) -> Response {
+    use axum::http::{header::LOCATION, Method};
+
+    if req
+        .extensions()
+        .get::<BrandKey>()
+        .copied()
+        .unwrap_or_default()
+        != BrandKey::Neon
+    {
+        return next.run(req).await;
+    }
+    match *req.method() {
+        Method::GET | Method::HEAD => (
+            StatusCode::MOVED_PERMANENTLY,
+            [(LOCATION, views::brand::GUIEB_SHOOK_CONTACT_URL)],
+        )
+            .into_response(),
+        _ => next.run(req).await,
+    }
 }
 
 async fn reject_unpublished_firm_path(req: Request, next: Next) -> Response {
