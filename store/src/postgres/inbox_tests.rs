@@ -1563,7 +1563,10 @@ async fn ingress_count(pg: &PostgresDb) -> i64 {
 /// lawyer-tier guard applied on both legs.
 #[tokio::test]
 async fn ingest_persists_the_alias_resolved_sender_person() {
-    let Some(f) = fixture().await else { return };
+    with_native_fi_fixture(assert_alias_resolved_sender_person).await;
+}
+
+async fn assert_alias_resolved_sender_person(f: Fixture) {
     let client = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO person (id,name,email,role) VALUES ($1,'Client','client@example.com','client')",
@@ -1604,9 +1607,33 @@ async fn ingest_persists_the_alias_resolved_sender_person() {
         channel::EMAIL,
         "fixture-account",
         "pg-lawyer-sender",
-        "lawyer@example.com",
+        "lawyer@example.test",
     );
     let saved = pg_inbox::ingest_inbound_on(&f.pg, &f.db, &lawyer_mail)
+        .await
+        .unwrap();
+    let conversation = pg_inbox::conversation_by_id_on(&f.pg, saved.conversation_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(conversation.person_id, None);
+
+    let clerk = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO person (id,name,email,role) VALUES ($1,'Clerk','clerk@example.com','clerk')",
+    )
+    .bind(clerk)
+    .execute(&f.pg.0)
+    .await
+    .unwrap();
+    let clerk_mail = inbound(
+        f.firm,
+        channel::EMAIL,
+        "fixture-account",
+        "pg-clerk-sender",
+        "clerk@example.com",
+    );
+    let saved = pg_inbox::ingest_inbound_on(&f.pg, &f.db, &clerk_mail)
         .await
         .unwrap();
     let conversation = pg_inbox::conversation_by_id_on(&f.pg, saved.conversation_id)
@@ -2173,9 +2200,10 @@ async fn attachment_slot_is_first_wins() {
 /// address.
 #[tokio::test]
 async fn promotional_opt_out_suppresses_queued_sends() {
-    let Some(fixture) = fixture().await else {
-        return;
-    };
+    with_native_fi_fixture(assert_promotional_opt_out_suppresses_only_promotional).await;
+}
+
+async fn assert_promotional_opt_out_suppresses_only_promotional(fixture: Fixture) {
     let ingested = pg_inbox::ingest_inbound_on(
         &fixture.pg,
         &fixture.db,
@@ -2221,11 +2249,47 @@ async fn promotional_opt_out_suppresses_queued_sends() {
     .await
     .unwrap();
     assert_eq!(suppressed, 1);
+
+    assert!(pg_inbox::queue_reply_on(
+        &fixture.pg,
+        &fixture.db,
+        fixture.lawyer,
+        ingested.conversation_id,
+        "Another webinar",
+        purpose::PROMOTIONAL,
+    )
+    .await
+    .is_err());
+    let matter = pg_inbox::queue_reply_on(
+        &fixture.pg,
+        &fixture.db,
+        fixture.lawyer,
+        ingested.conversation_id,
+        "A matter update",
+        purpose::MATTER,
+    )
+    .await
+    .unwrap();
+    let transport = CapturingTransport::default();
+    let report = pg_inbox::dispatch_queued_on(&fixture.pg, &fixture.db, &transport, None)
+        .await
+        .unwrap();
+    assert_eq!(report.suppressed, 0, "opt-out suppresses before dispatch");
+    assert_eq!(report.submitted, 1);
+    assert_eq!(transport.0.lock().unwrap().len(), 1);
     let message = crate::postgres::inbox::message_by_id_on(&fixture.pg, message_id)
         .await
         .unwrap()
         .expect("message row");
     assert_eq!(message.delivery_state, delivery::SUPPRESSED);
+    assert_eq!(
+        crate::postgres::inbox::message_by_id_on(&fixture.pg, matter)
+            .await
+            .unwrap()
+            .unwrap()
+            .delivery_state,
+        delivery::SUBMITTED
+    );
 }
 
 /// The Slack notice lifecycle: one reserve wins, the second loses, a recorded
@@ -2307,9 +2371,10 @@ async fn unsupported_channels_are_refused() {
 
 #[tokio::test]
 async fn targeted_ingest_preserves_project_scope_and_all_attachments() {
-    let Some(fixture) = fixture().await else {
-        return;
-    };
+    with_native_fi_fixture(assert_targeted_ingest_preserves_project_attachments).await;
+}
+
+async fn assert_targeted_ingest_preserves_project_attachments(fixture: Fixture) {
     let mut input = inbound(
         fixture.firm,
         channel::SCRAPER,
@@ -2346,6 +2411,25 @@ async fn targeted_ingest_preserves_project_scope_and_all_attachments() {
         (conversation.project_id, links),
         (Some(fixture.project), 2),
         "targeted ingest retains its Project and every provider attachment"
+    );
+    pg_inbox::link_message_assets_on(
+        &fixture.pg,
+        fixture.firm,
+        first.message_id,
+        &input.attachments,
+    )
+    .await
+    .unwrap();
+    let linked = pg_inbox::message_assets_on(&fixture.pg, fixture.firm, first.message_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        linked
+            .iter()
+            .map(|asset| asset.position)
+            .collect::<Vec<_>>(),
+        vec![0, 1],
+        "relinking the same attachments is idempotent and keeps order"
     );
     let replay = pg_inbox::ingest_inbound_on(&fixture.pg, &fixture.db, &input)
         .await
@@ -2636,6 +2720,44 @@ async fn native_dispatch_retains_each_outcome_and_never_resends_uncertain_messag
 }
 
 #[tokio::test]
+async fn native_concurrent_dispatchers_send_one_provider_request() {
+    with_native_fi_fixture(assert_native_concurrent_dispatchers_send_one_provider_request).await;
+}
+
+async fn assert_native_concurrent_dispatchers_send_one_provider_request(fixture: Fixture) {
+    let ingested = assigned_email(&fixture, "native-concurrent-dispatch").await;
+    let message_id = pg_inbox::queue_reply_on(
+        &fixture.pg,
+        &fixture.db,
+        fixture.lawyer,
+        ingested.conversation_id,
+        "Synthetic reply",
+        purpose::MATTER,
+    )
+    .await
+    .unwrap();
+    let transport = CapturingTransport::default();
+    let (first, second) = tokio::join!(
+        pg_inbox::dispatch_queued_on(&fixture.pg, &fixture.db, &transport, None),
+        pg_inbox::dispatch_queued_on(&fixture.pg, &fixture.db, &transport, None),
+    );
+    assert_eq!(
+        first.unwrap().submitted + second.unwrap().submitted,
+        1,
+        "one dispatcher reserves and submits the queued message"
+    );
+    assert_eq!(transport.0.lock().unwrap().len(), 1);
+    assert_eq!(
+        pg_inbox::message_by_id_on(&fixture.pg, message_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .delivery_state,
+        delivery::SUBMITTED
+    );
+}
+
+#[tokio::test]
 async fn native_project_queries_preserve_scope_and_read_markers() {
     let Some(fixture) = fixture().await else {
         return;
@@ -2741,9 +2863,10 @@ async fn native_project_queries_preserve_scope_and_read_markers() {
 
 #[tokio::test]
 async fn native_processing_and_acknowledgment_lifecycles_are_replay_safe() {
-    let Some(fixture) = fixture().await else {
-        return;
-    };
+    with_native_fi_fixture(assert_native_processing_and_acknowledgment_lifecycles).await;
+}
+
+async fn assert_native_processing_and_acknowledgment_lifecycles(fixture: Fixture) {
     let ingested = assigned_email(&fixture, "native-processing").await;
     assert!(pg_inbox::process_state_on(&fixture.pg, Uuid::now_v7())
         .await
@@ -2777,6 +2900,10 @@ async fn native_processing_and_acknowledgment_lifecycles_are_replay_safe() {
         .unwrap();
     assert_eq!(processed.route.as_deref(), Some("other"));
     assert_eq!(processed.processed_at, Some(now));
+    assert!(matches!(
+        crate::inbox::mark_processed(&fixture.db, ingested.message_id, "garbage", now, None).await,
+        Err(InboxError::InvalidRoute(_))
+    ));
     assert!(pg_inbox::unprocessed_inbox_on(&fixture.pg, None)
         .await
         .unwrap()
@@ -2979,9 +3106,10 @@ async fn seed_native_attachment(
 
 #[tokio::test]
 async fn native_attachments_and_intake_details_follow_firm_and_project_scope() {
-    let Some(fixture) = fixture().await else {
-        return;
-    };
+    with_native_fi_fixture(assert_native_attachment_scope).await;
+}
+
+async fn assert_native_attachment_scope(fixture: Fixture) {
     let ingested = assigned_email(&fixture, "native-attachment-scope").await;
     firms::add_membership(
         &fixture.db,
@@ -3654,21 +3782,42 @@ async fn existing_x_rows_survive_the_linkedin_import_migration() {
 
 #[tokio::test]
 async fn native_voice_ingest_deduplicates_and_projects_to_the_call_spine() {
-    let Some(f) = fixture().await else { return };
-    let input = inbound(
+    with_native_fi_fixture(assert_native_voice_ingest_deduplicates_and_projects).await;
+}
+
+async fn assert_native_voice_ingest_deduplicates_and_projects(f: Fixture) {
+    let mut input = inbound(
         f.firm,
         channel::VOICE,
         "+15555550123",
         "CAnative-voice",
         "+15555550456",
     );
+    input.brand_key = Some("neon");
     let first = pg_inbox::ingest_inbound_on(&f.pg, &f.db, &input)
         .await
         .unwrap();
+    assert!(!first.deduped);
     let repeated = pg_inbox::ingest_inbound_on(&f.pg, &f.db, &input)
         .await
         .unwrap();
     assert_eq!(first.message_id, repeated.message_id);
+    assert!(repeated.deduped);
+    let mut later_call = input.clone();
+    later_call.provider_message_id = "CAnative-voice-follow-up";
+    let follow_up = pg_inbox::ingest_inbound_on(&f.pg, &f.db, &later_call)
+        .await
+        .unwrap();
+    assert!(!follow_up.deduped);
+    assert_eq!(follow_up.conversation_id, first.conversation_id);
+    let row = pg_inbox::list_intake_on(&f.pg, &f.db, f.owner)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|row| row.id == first.conversation_id)
+        .expect("the call appears in native intake");
+    assert_eq!(row.channel, channel::VOICE);
+    assert_eq!(row.brand_key.as_deref(), Some("neon"));
     pg_inbox::assign_on(&f.pg, &f.db, f.owner, first.conversation_id, f.project)
         .await
         .unwrap();
@@ -4235,8 +4384,7 @@ async fn assert_native_live_sms_review_moves(f: &Fixture, admin: Uuid, other: Uu
     );
 }
 
-async fn voice_reply_fixture() -> Option<(Fixture, Uuid, Uuid)> {
-    let f = fixture().await?;
+async fn native_voice_reply_fixture(f: &Fixture) -> (Uuid, Uuid) {
     let clerk = persons::create(
         &f.db,
         &NewPerson::with_role("Voice Clerk", "voice-clerk@example.com", Role::Clerk),
@@ -4264,14 +4412,16 @@ async fn voice_reply_fixture() -> Option<(Fixture, Uuid, Uuid)> {
     let saved = pg_inbox::ingest_inbound_on(&f.pg, &f.db, &input)
         .await
         .unwrap();
-    Some((f, clerk, saved.conversation_id))
+    (clerk, saved.conversation_id)
 }
 
 #[tokio::test]
 async fn native_voice_threads_allow_internal_notes_without_offering_replies() {
-    let Some((f, clerk, conversation)) = voice_reply_fixture().await else {
-        return;
-    };
+    with_native_fi_fixture(assert_native_voice_threads_allow_internal_notes).await;
+}
+
+async fn assert_native_voice_threads_allow_internal_notes(f: Fixture) {
+    let (clerk, conversation) = native_voice_reply_fixture(&f).await;
     for actor in [f.lawyer, clerk] {
         let view = pg_inbox::project_thread_on(&f.pg, &f.db, actor, f.project, conversation)
             .await
@@ -4311,9 +4461,11 @@ async fn native_voice_threads_allow_internal_notes_without_offering_replies() {
 
 #[tokio::test]
 async fn native_voice_reply_refusal_creates_no_pending_outbound_message() {
-    let Some((f, clerk, conversation)) = voice_reply_fixture().await else {
-        return;
-    };
+    with_native_fi_fixture(assert_native_voice_reply_refusal).await;
+}
+
+async fn assert_native_voice_reply_refusal(f: Fixture) {
+    let (clerk, conversation) = native_voice_reply_fixture(&f).await;
     for actor in [f.lawyer, clerk] {
         assert!(
             matches!(
@@ -4346,9 +4498,11 @@ async fn native_voice_reply_refusal_creates_no_pending_outbound_message() {
 
 #[tokio::test]
 async fn native_existing_voice_outbound_rows_never_reach_the_transport() {
-    let Some((f, _, conversation)) = voice_reply_fixture().await else {
-        return;
-    };
+    with_native_fi_fixture(assert_native_existing_voice_outbound_rows).await;
+}
+
+async fn assert_native_existing_voice_outbound_rows(f: Fixture) {
+    let (_, conversation) = native_voice_reply_fixture(&f).await;
     let mut ids = Vec::new();
     for state in [delivery::FAILED, delivery::QUEUED] {
         let id = Uuid::now_v7();
@@ -4821,9 +4975,10 @@ async fn fi_reviewed_state(
 
 #[tokio::test]
 async fn a_backfill_links_unassociated_conversations_and_reruns_without_effect() {
-    let Some(f) = fixture().await else {
-        return;
-    };
+    with_native_fi_fixture(assert_backfill_links_unassociated_conversations).await;
+}
+
+async fn assert_backfill_links_unassociated_conversations(f: Fixture) {
     let saved = pg_inbox::ingest_inbound_on(
         &f.pg,
         &f.db,
