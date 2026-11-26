@@ -6,22 +6,10 @@
 //! its own confidence and its own provenance, because a finding must
 //! let lawyers judge an edge rather than trust it.
 //!
-//! # Each end is a link, not a kind string beside a UUID
-//!
-//! Each end is a native `record<person|entity>` link and the engine
-//! enforces the endpoint kinds, so a `from_type: "persn"` typo cannot be
-//! written at all and no reader has to re-check one.
-//!
-//! As with [`crate::entity_roles`], the edge carries no surrogate `id`:
-//! nothing addresses a single edge, and `source_id` points *out* of this
-//! table rather than into it.
-//!
-//! # `confidence_pct` is the engine's, the floors are Rust's
-//!
-//! The 0–100 range is a schema ASSERT, so an out-of-range edge is
-//! refused at write time. `REVIEW_FLOOR_PCT` and `BLOCK_FLOOR_PCT` stay
-//! in `store::conflicts`: they decide which paths are worth following,
-//! and that is a judgment about conflicts rather than about graphs.
+//! Endpoint kinds, confidence, and provenance are validated before the
+//! PostgreSQL row and AGE edge are committed together. Captured Source rows
+//! remain readable for historical import. Conflict review floors live in
+//! `store::conflicts`.
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -31,11 +19,9 @@ use uuid::Uuid;
 
 use crate::postgres::PostgresDb;
 use crate::postgres_graph::{ensure_vertices, graph_authority, load_edge};
-use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
+use crate::surreal::{record_uuid, SurrealDb};
 
 const TABLE: &str = "relationship";
-const DISCLOSURE_TABLE: &str = "disclosure";
-const RELATIONSHIP_LOG_TABLE: &str = "relationship_log";
 
 /// Relationship kind: one node is legally adverse to the other. The
 /// strongest conflict signal — a confident `adverse_to` edge between
@@ -56,9 +42,7 @@ pub const SOURCE_RELATIONSHIP_LOG: &str = "relationship_log";
 /// at lower `confidence_pct` and are always shown as such in findings.
 pub const SOURCE_LLM: &str = "llm";
 
-/// Which table an endpoint names. The engine enforces this through the
-/// relation's `FROM person|entity TO person|entity`, so an unknown kind
-/// is a write-time error rather than a row to skip on read.
+/// Which table an endpoint names.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize)]
 pub enum Endpoint {
     Person,
@@ -159,20 +143,10 @@ const SELECT: &str =
 pub enum RelationshipError {
     #[error("database: {0}")]
     Db(#[from] surrealdb::Error),
-    /// A write reported success but returned no row, or one this module
-    /// could not read back.
-    #[error("writing a relationship returned no usable row")]
-    WriteReturnedNothing,
-    /// The edge the Surreal schema's relation shape and ASSERTs refuse:
-    /// an endpoint kind the relation does not admit, a `confidence_pct`
-    /// outside 0–100, or a `source_kind` outside its closed set. The
-    /// Surreal engine refused these in its schema; the authoritative
-    /// PostgreSQL path carries the same rules in Rust, and both engines
-    /// share the one check.
+    /// The input does not meet the Relationship validation rules.
     #[error("{0}")]
     Invalid(String),
-    /// PostgreSQL is configured but unreachable. A record fails rather
-    /// than guessing a store.
+    /// PostgreSQL graph authority or an endpoint lookup is unavailable.
     #[error("{0}")]
     Engine(String),
     /// The authoritative PostgreSQL store refused the write.
@@ -186,42 +160,28 @@ pub enum RelationshipError {
     Graph(#[from] crate::postgres_graph::GraphError),
 }
 
-/// Record one typed edge: in PostgreSQL (the relational row, then the
-/// graph's `RELATIONSHIP` edge) wherever it is configured, else in
-/// SurrealDB ([`graph_authority`]).
-///
-/// The shared validation carries the Surreal schema's rules — the
-/// endpoint kinds the relation admits, the 0–100 confidence ASSERT, the
-/// provenance closed set — to both engines, so one refusal message
-/// covers one rule wherever the row lands.
+/// Record a typed edge in PostgreSQL and the AGE graph in one transaction.
 ///
 /// # Errors
 ///
-/// [`RelationshipError::Invalid`] for an edge the relation's shape
-/// refuses, [`RelationshipError::Db`] if the Surreal write fails,
-/// [`RelationshipError::Postgres`] or [`RelationshipError::Sqlx`] if the
-/// authoritative PostgreSQL write fails, or
-/// [`RelationshipError::Engine`] if PostgreSQL is configured but unreachable.
+/// Returns an error if validation fails, PostgreSQL graph authority is
+/// unavailable, or the relational or graph write fails.
 pub async fn record(
     db: &SurrealDb,
     input: &NewRelationship,
 ) -> Result<Relationship, RelationshipError> {
     validate_new_relationship(input)?;
-    match authority().await? {
-        None => record_in_surreal(db, input).await,
-        Some(postgres) => record_in_postgres(db, &postgres, input).await,
-    }
+    let postgres = authority().await?.ok_or_else(|| {
+        RelationshipError::Engine("Relationship writes require PostgreSQL graph authority".into())
+    })?;
+    record_in_postgres(db, &postgres, input).await
 }
 
 async fn authority() -> Result<Option<PostgresDb>, RelationshipError> {
     graph_authority().await.map_err(RelationshipError::Engine)
 }
 
-/// The rules the Surreal schema enforced on every `relationship` row:
-/// `TYPE RELATION FROM person|entity TO person|entity`, the confidence
-/// ASSERT, and the provenance closed set. The PostgreSQL table carries
-/// no CHECK constraints — the schema's parity posture keeps them
-/// application-side — so the check runs here, for both engines.
+/// Validate confidence and provenance before either representation is written.
 fn validate_new_relationship(input: &NewRelationship) -> Result<(), RelationshipError> {
     if !(0..=100).contains(&input.confidence_pct) {
         return Err(RelationshipError::Invalid(format!(
@@ -239,47 +199,6 @@ fn validate_new_relationship(input: &NewRelationship) -> Result<(), Relationship
         }
     }
     Ok(())
-}
-
-/// The SurrealDB write for a deployment without PostgreSQL: its only
-/// write path, and the seam the fixtures seed the Surreal graph with.
-pub(crate) async fn record_in_surreal(
-    db: &SurrealDb,
-    input: &NewRelationship,
-) -> Result<Relationship, RelationshipError> {
-    let mut response = retry::writing(|| {
-        db.query(format!(
-            "RELATE $from->{TABLE}->$to \
-             SET kind = $kind, confidence_pct = $confidence_pct, \
-                 source_kind = $source_kind, source_id = $source_id, detail = $detail, \
-                 inserted_at = time::now(), updated_at = time::now() \
-             RETURN {SELECT}"
-        ))
-        .bind(("from", record_id(input.from.table(), input.from_id)))
-        .bind(("to", record_id(input.to.table(), input.to_id)))
-        .bind(("kind", input.kind.clone()))
-        .bind(("confidence_pct", input.confidence_pct))
-        .bind(("source_kind", input.source_kind.clone()))
-        .bind((
-            "source_id",
-            input.source_id.map(|id| {
-                let table = if input.source_kind == SOURCE_DISCLOSURE {
-                    DISCLOSURE_TABLE
-                } else {
-                    RELATIONSHIP_LOG_TABLE
-                };
-                record_id(table, id)
-            }),
-        ))
-        .bind(("detail", input.detail.clone()))
-    })
-    .await?;
-
-    let rows: Vec<RelationshipRow> = response.take(0)?;
-    rows.into_iter()
-        .next()
-        .and_then(RelationshipRow::into_relationship)
-        .ok_or(RelationshipError::WriteReturnedNothing)
 }
 
 /// Commit the authoritative relational row and its AGE edge together.
@@ -549,6 +468,23 @@ mod tests {
             source_id: None,
             detail: None,
         }
+    }
+
+    #[tokio::test]
+    async fn recording_requires_postgres_graph_authority() {
+        let db = SurrealDb::uninitialized();
+        let input = edge(
+            Endpoint::Person,
+            Uuid::now_v7(),
+            Endpoint::Entity,
+            Uuid::now_v7(),
+        );
+        let error = crate::postgres_mirror::from_source(record(&db, &input))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, super::RelationshipError::Engine(message) if message.contains("require PostgreSQL graph authority"))
+        );
     }
 
     #[tokio::test]

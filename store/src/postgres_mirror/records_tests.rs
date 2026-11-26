@@ -523,63 +523,32 @@ async fn relationship_typed_endpoints_and_provenance_round_trip_from_surreal_on_
     };
     let pg = connect(&options, &database).await;
     let surreal = mem_surreal().await;
-    let person = crate::persons::create(
-        &surreal,
-        &crate::persons::NewPerson::with_role(
-            "Synthetic relationship person",
-            format!("relationship-{}@example.test", Uuid::now_v7()),
-            crate::persons::Role::Lawyer,
-        ),
-    )
-    .await
-    .unwrap();
-    let entity_id = crate::test_support::seed_entity(&surreal).await;
-    let log = crate::relationship_logs::record(
-        &surreal,
-        &crate::relationship_logs::NewRelationshipLog {
-            actor_person_id: Some(person.id),
-            subject_type: "entity".into(),
-            subject_id: entity_id,
-            action: "synthetic relationship provenance".into(),
-            detail: "synthetic fixture only".into(),
-            project_id: None,
-        },
-    )
-    .await
-    .unwrap();
-    crate::relationships::record(
-        &surreal,
-        &crate::relationships::NewRelationship {
-            from: crate::relationships::Endpoint::Person,
-            from_id: person.id,
-            to: crate::relationships::Endpoint::Entity,
-            to_id: entity_id,
-            kind: crate::relationships::KIND_ADVERSE_TO.into(),
-            confidence_pct: 91,
-            source_kind: crate::relationships::SOURCE_LLM.into(),
-            source_id: Some(log.id),
-            detail: Some("synthetic typed-link fixture".into()),
-        },
-    )
-    .await
-    .unwrap();
+    let person_id = Uuid::now_v7();
+    let entity_id = Uuid::now_v7();
+    let log_id = Uuid::now_v7();
+    // A captured Source edge is independent of the application writer.
+    surreal.query("RELATE $person->relationship->$entity SET kind='adverse_to', confidence_pct=91, source_kind='llm', source_id=$log, detail='synthetic typed-link fixture', inserted_at=time::now(), updated_at=time::now()")
+        .bind(("person", crate::surreal::record_id("person", person_id)))
+        .bind(("entity", crate::surreal::record_id("entity", entity_id)))
+        .bind(("log", crate::surreal::record_id("relationship_log", log_id)))
+        .await.unwrap().check().unwrap();
 
     let relation_table = table("relationship").unwrap();
     let mut source_rows = source(&surreal, relation_table).await.unwrap();
     assert_eq!(source_rows.len(), 1);
     let (key, expected) = source_rows.pop_first().unwrap();
     assert_eq!(expected["in"]["tb"], "person");
-    assert_eq!(expected["in"]["id"]["Uuid"], person.id.to_string());
+    assert_eq!(expected["in"]["id"]["Uuid"], person_id.to_string());
     assert_eq!(expected["out"]["tb"], "entity");
     assert_eq!(expected["out"]["id"]["Uuid"], entity_id.to_string());
     assert_eq!(expected["source_id"]["tb"], "relationship_log");
-    assert_eq!(expected["source_id"]["id"]["Uuid"], log.id.to_string());
+    assert_eq!(expected["source_id"]["id"]["Uuid"], log_id.to_string());
 
     let MirrorKey::RecordString { id, .. } = &key else {
         panic!("relationship record has a string identity");
     };
     assert_eq!(
-        mirror_string(&surreal, &pg, relation_table.name, id)
+        super::super::during_initial_copy(mirror_string(&surreal, &pg, relation_table.name, id))
             .await
             .unwrap(),
         Mirrored::Written
@@ -587,6 +556,12 @@ async fn relationship_typed_endpoints_and_provenance_round_trip_from_surreal_on_
     assert_eq!(
         target(&pg, relation_table).await.unwrap().get(&key),
         Some(&expected)
+    );
+    assert_eq!(
+        super::super::during_initial_copy(mirror_string(&surreal, &pg, relation_table.name, id))
+            .await
+            .unwrap(),
+        Mirrored::Unchanged
     );
     pg.0.close().await;
 }
