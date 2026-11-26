@@ -86,6 +86,19 @@ Association (AAA) arbitration. `dispute_resolution@1` serves agreements under th
 `nevada_engagement_arbitration@2` serves the Nevada engagement letter. The earlier JAMS wording stays as
 `nevada_engagement_arbitration@1` for history and is not used.
 
+## Technology and Legal Plan inputs
+
+| Source | Bindings |
+| --- | --- |
+| `engagement_technology@1` | `law` binds a jurisdiction or a single choice. |
+| `legal_plan_arag@1` | `benefit` selects flat-fee or consultation coverage. `plan_fee` is the authorized amount. |
+| `legal_plan_legalease@1` | `cap_shape` and `member_billing` independently select coverage and billing terms. |
+
+LegalEASE hourly and dollar caps use `plan_cap`, `plan_rate`, and `paralegal_rate`. A contested and uncontested benefit
+uses `contested_cap`, `uncontested_cap`, and `current_scope` in place of `plan_cap`. Bind `overage_rate` for the
+discounted overage branch. Bind every amount to a `custom_usd` state. The questionnaire can skip amount states that its
+selected benefit does not use.
+
 ## Conditional supplements
 
 A Clause may wrap its prose in `{{#if applies}}…{{/if}}` and take a `custom_yes_no` input named `applies`, so a notation

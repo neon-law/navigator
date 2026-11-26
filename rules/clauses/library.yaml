@@ -136,6 +136,106 @@ engagement_arbitration@1:
     By signing, you and we each give up the right to a jury trial and to have a covered dispute decided in court, including
     a claim that we did our work negligently. Because this section governs how a future dispute between you and your lawyers
     is handled, you may consult independent counsel before agreeing to it.
+
+engagement_technology@1:
+  kind: onboarding
+  inputs:
+    law:
+      types:
+      - jurisdiction
+      - custom_single_choice
+      prompt: Which jurisdiction's professional obligations apply to this engagement?
+  body: |-
+    We use cloud storage, document management, legal research, communication, and artificial-intelligence tools
+    in this work, including your matter page. By signing, you consent to those uses, subject to our professional
+    obligations in {{law}}. Where a vendor offers the setting, we choose the one that keeps your data out of
+    its generally available training models. No third-party system can be made risk-free. A lawyer reviews what
+    these tools produce before it becomes advice to you or goes into a filing.
+
+legal_plan_arag@1:
+  kind: onboarding
+  inputs:
+    benefit:
+      types: [custom_single_choice]
+      prompt: Which benefit does ARAG confirm?
+    plan_fee:
+      types: [custom_usd]
+      prompt: What fee does ARAG authorize for the covered benefit?
+  body: |-
+    ARAG decides which services your plan covers. This letter states the coverage we will rely on for this
+    engagement. Earlier statements about coverage do not change these terms. ARAG pays no costs. We will discuss
+    any costs you may need to pay before incurring them.
+
+    {{#if benefit=flat_fee}}
+    ARAG pays {{plan_fee}} as a flat fee for the services it confirms are covered.
+    {{else if benefit=consult_only}}
+    ARAG pays {{plan_fee}} for the initial consultation. The benefit ends with that consultation.
+    {{/if}}
+
+    We will agree with you in writing on the scope and fees before undertaking any additional work.
+
+legal_plan_legalease@1:
+  kind: onboarding
+  inputs:
+    cap_shape:
+      types: [custom_single_choice]
+      prompt: Which type of cap does LegalEASE authorize?
+    member_billing:
+      types: [custom_single_choice]
+      prompt: How does LegalEASE authorize fees beyond the covered benefit?
+    plan_cap:
+      types: [custom_usd]
+      prompt: What is the authorized benefit limit in dollars?
+    plan_rate:
+      types: [custom_usd]
+      prompt: What hourly lawyer rate does LegalEASE authorize?
+    paralegal_rate:
+      types: [custom_usd]
+      prompt: What hourly paralegal rate does LegalEASE authorize?
+    overage_rate:
+      types: [custom_usd]
+      prompt: What hourly rate does the member pay beyond the covered benefit?
+    contested_cap:
+      types: [custom_usd]
+      prompt: What is the contested benefit cap in dollars?
+    uncontested_cap:
+      types: [custom_usd]
+      prompt: What is the uncontested benefit cap in dollars?
+    current_scope:
+      types: [custom_single_choice]
+      prompt: Which scope does LegalEASE confirm applies now?
+  body: |-
+    LegalEASE decides which services your plan covers. This letter states the coverage we will rely on for this
+    engagement. Earlier statements about coverage do not change these terms. LegalEASE pays no costs. We will
+    discuss any costs you may need to pay before incurring them.
+
+    {{#if cap_shape=hourly_cap}}
+    LegalEASE covers the authorized hours at {{plan_rate}} per lawyer hour and {{paralegal_rate}} per paralegal
+    hour. The dollar value of the authorized time is limited to {{plan_cap}}.
+    {{else if cap_shape=dollar_cap}}
+    LegalEASE pays up to {{plan_cap}} for covered work, at {{plan_rate}} per lawyer hour and {{paralegal_rate}}
+    per paralegal hour.
+    {{else if cap_shape=contested_uncontested}}
+    The uncontested cap is {{uncontested_cap}}. The contested cap is {{contested_cap}}.
+    {{#if current_scope=uncontested}}
+    The uncontested cap applies now.
+    {{else if current_scope=contested}}
+    The contested cap applies now.
+    {{/if}}
+    We will tell you in writing if the matter becomes contested. The plan rates are {{plan_rate}} per lawyer
+    hour and {{paralegal_rate}} per paralegal hour.
+    {{else if cap_shape=consult_only}}
+    LegalEASE covers only the initial consultation.
+    {{/if}}
+
+    LegalEASE must approve work beyond the benefit in advance. We will agree with you in writing before we
+    undertake that work.
+    {{#if member_billing=paid_in_full}}
+    We will not bill you for legal fees on this matter.
+    {{else if member_billing=overage_at_discount}}
+    Your discounted rate for authorized work beyond the benefit is {{overage_rate}} per hour.
+    {{/if}}
+
 nevada_engagement_arbitration@1:
   retired_at: 2026-10-27T00:00:00Z
   kind: letter
