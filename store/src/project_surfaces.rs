@@ -857,20 +857,13 @@ async fn record_provisioned_repository(
 mod tests {
     #[tokio::test]
     async fn forgejo_namespace_uses_the_recorded_organization_for_the_selected_firm() {
-        use crate::postgres::PostgresDb;
-        use crate::postgres_mirror::tests::{connect, fresh_schema};
-
-        let Some((options, database)) = fresh_schema().await else {
-            return;
-        };
-        let pg = connect(&options, &database).await;
-        let first = uuid::Uuid::new_v4();
-        let second = uuid::Uuid::new_v4();
-        sqlx::query("INSERT INTO firm (id, name, slug, status) VALUES ($1, 'Synthetic A', 'synthetic-a', 'active'), ($2, 'Synthetic B', 'synthetic-b', 'active')")
-            .bind(first).bind(second).execute(pg.pool()).await.unwrap();
-        sqlx::query("INSERT INTO firm_forgejo_organization (firm_id, organization, forgejo_id, owner_login) VALUES ($1, 'verified-a', 1, 'fixture')")
-            .bind(first).execute(pg.pool()).await.unwrap();
-        PostgresDb::with_test_db(pg, async {
+        crate::test_support::with_native_application_fixture(|_, pg| async move {
+            let first = uuid::Uuid::new_v4();
+            let second = uuid::Uuid::new_v4();
+            sqlx::query("INSERT INTO firm (id, name, slug, status) VALUES ($1, 'Synthetic A', 'synthetic-a', 'active'), ($2, 'Synthetic B', 'synthetic-b', 'active')")
+                .bind(first).bind(second).execute(pg.pool()).await.unwrap();
+            sqlx::query("INSERT INTO firm_forgejo_organization (firm_id, organization, forgejo_id, owner_login) VALUES ($1, 'verified-a', 1, 'fixture')")
+                .bind(first).execute(pg.pool()).await.unwrap();
             assert_eq!(
                 super::forgejo_namespace(first, "synthetic-a".into())
                     .await
