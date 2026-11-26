@@ -1273,7 +1273,7 @@ mod tests {
         assert_eq!(error.to_string(), "checkout root is a symlink");
 
         let signed_out = Some("signed-out.example.test");
-        assert_eq!(run(Some(&root), signed_out).await, ExitCode::from(2));
+        assert_eq!(run(Some(&root), signed_out, false).await, ExitCode::from(2));
         assert_eq!(
             run_sync("signed-out.example.test", Some(&root), true, false).await,
             ExitCode::from(2)
