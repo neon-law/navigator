@@ -395,9 +395,38 @@ mod tests {
     use super::*;
 
     use axum::{body::Body, http::Request as HttpRequest, Router};
-    use std::time::Duration;
+    use std::{
+        io::Write,
+        sync::{Arc, Mutex},
+        time::Duration,
+    };
     use tower::ServiceExt;
     use tower_cookies::CookieManagerLayer;
+    use tracing_subscriber::fmt::MakeWriter;
+    use wiremock::matchers::{body_string_contains, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[derive(Clone)]
+    struct TestTracingBuffer(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for TestTracingBuffer {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for TestTracingBuffer {
+        type Writer = Self;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
 
     const CONSENT: &str = "By sending this, you agree that Neon Law may email you about this inquiry. Sending it does not make you a client, and nothing on this page is legal advice. See our Privacy Policy.";
     fn encoded(fields: &[(&str, &str)]) -> String {
@@ -583,8 +612,6 @@ mod tests {
     async fn a_configured_hcaptcha_stores_only_leads_whose_token_it_redeems() {
         store::test_support::with_required_postgres(async {
             let db = store::surreal::SurrealDb::uninitialized();
-            use wiremock::matchers::{body_string_contains, method};
-            use wiremock::{Mock, MockServer, ResponseTemplate};
 
             let siteverify = MockServer::start().await;
             Mock::given(method("POST"))
@@ -898,33 +925,12 @@ mod tests {
     async fn audit_contains_the_lead_id_and_source_but_not_the_email() {
         store::test_support::with_required_postgres(async {
             let db = store::surreal::SurrealDb::uninitialized();
-            use std::io::Write;
-            use std::sync::{Arc, Mutex};
-            use tracing_subscriber::fmt::MakeWriter;
-
-            #[derive(Clone)]
-            struct Buffer(Arc<Mutex<Vec<u8>>>);
-            impl Write for Buffer {
-                fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-                    self.0.lock().unwrap().extend_from_slice(bytes);
-                    Ok(bytes.len())
-                }
-                fn flush(&mut self) -> std::io::Result<()> {
-                    Ok(())
-                }
-            }
-            impl<'a> MakeWriter<'a> for Buffer {
-                type Writer = Buffer;
-                fn make_writer(&'a self) -> Buffer {
-                    self.clone()
-                }
-            }
 
             crate::test_tracing::ensure_callsite_interest();
             let output = Arc::new(Mutex::new(Vec::new()));
             let subscriber = tracing_subscriber::fmt()
                 .with_ansi(false)
-                .with_writer(Buffer(output.clone()))
+                .with_writer(TestTracingBuffer(output.clone()))
                 .finish();
             let _guard = tracing::subscriber::set_default(subscriber);
 
@@ -981,8 +987,6 @@ mod tests {
     async fn a_successful_submission_fires_exactly_one_conversion_with_no_personal_data() {
         store::test_support::with_required_postgres(async {
             let db = store::surreal::SurrealDb::uninitialized();
-            use wiremock::matchers::{method, path};
-            use wiremock::{Mock, MockServer, ResponseTemplate};
 
             let server = MockServer::start().await;
             Mock::given(method("POST"))
@@ -1024,8 +1028,6 @@ mod tests {
     async fn rejected_submissions_fire_no_conversion() {
         store::test_support::with_required_postgres(async {
             let db = store::surreal::SurrealDb::uninitialized();
-            use wiremock::matchers::{method, path};
-            use wiremock::{Mock, MockServer, ResponseTemplate};
 
             let server = MockServer::start().await;
             Mock::given(method("POST"))
@@ -1065,9 +1067,6 @@ mod tests {
 
     #[tokio::test]
     async fn a_storage_failure_fires_no_conversion() {
-        use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/api/event"))
