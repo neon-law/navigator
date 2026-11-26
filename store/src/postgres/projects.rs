@@ -343,17 +343,19 @@ pub(crate) enum Column<'a> {
     Text(&'static str, Option<&'a str>),
     Id(&'static str, Option<Uuid>),
     Date(&'static str, Option<NaiveDate>),
+    Integer(&'static str, Option<i32>),
+    /// Retain benefit terms while both identifying fields still describe the same benefit.
+    KeepPlanBenefit(&'static str, Option<Uuid>, Option<&'a str>),
 }
 
 /// Update only `columns` on one Project and return the committed row, or
-/// `None` when no Project has that id. With `within_firm`, the update applies
-/// only while the Project still belongs to that Firm and the Firm still wears
-/// that Brand, so a concurrent move between Firms is never overwritten.
+/// `None` when no Project matches. A Firm guard prevents overwriting a
+/// concurrent transfer. A supplied Brand must still belong to that Firm.
 pub(crate) async fn update_on(
     pg: &PostgresDb,
     id: Uuid,
     columns: &[Column<'_>],
-    within_firm: Option<(Uuid, &str)>,
+    within_firm: Option<(Uuid, Option<&str>)>,
 ) -> Result<Option<Project>, ProjectError> {
     let mut builder =
         QueryBuilder::<Postgres>::new("UPDATE project SET updated_at=clock_timestamp()");
@@ -362,18 +364,30 @@ pub(crate) async fn update_on(
             Column::Text(name, value) => builder.push(format_args!(", {name}=")).push_bind(value),
             Column::Id(name, value) => builder.push(format_args!(", {name}=")).push_bind(value),
             Column::Date(name, value) => builder.push(format_args!(", {name}=")).push_bind(value),
+            Column::Integer(name, value) => {
+                builder.push(format_args!(", {name}=")).push_bind(value)
+            }
+            Column::KeepPlanBenefit(name, plan, benefit) => builder
+                .push(format_args!(
+                    ", {name}=CASE WHEN legal_plan_id IS NOT DISTINCT FROM "
+                ))
+                .push_bind(plan)
+                .push(" AND benefit_code IS NOT DISTINCT FROM ")
+                .push_bind(benefit)
+                .push(format_args!(" THEN {name} END")),
         };
     }
     builder.push(" WHERE id=").push_bind(id);
     if let Some((firm_id, brand)) = within_firm {
-        builder
-            .push(" AND firm_id=")
-            .push_bind(firm_id)
-            .push(" AND EXISTS (SELECT 1 FROM firm_brand WHERE firm_brand.firm_id=")
-            .push_bind(firm_id)
-            .push(" AND firm_brand.brand_key=")
-            .push_bind(brand)
-            .push(")");
+        builder.push(" AND firm_id=").push_bind(firm_id);
+        if let Some(brand) = brand {
+            builder
+                .push(" AND EXISTS (SELECT 1 FROM firm_brand WHERE firm_brand.firm_id=")
+                .push_bind(firm_id)
+                .push(" AND firm_brand.brand_key=")
+                .push_bind(brand)
+                .push(")");
+        }
     }
     builder.push(" RETURNING *");
     builder

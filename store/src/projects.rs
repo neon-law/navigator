@@ -734,7 +734,7 @@ async fn patch_in_postgres(
     pg: &PostgresDb,
     project_id: Uuid,
     columns: &[crate::postgres::projects::Column<'_>],
-    within_firm: Option<(Uuid, &str)>,
+    within_firm: Option<(Uuid, Option<&str>)>,
 ) -> Result<Option<Project>, ProjectStoreError> {
     let Some(project) = Box::pin(crate::postgres::projects::update_on(
         pg,
@@ -3082,25 +3082,7 @@ pub(crate) fn valid_plan_case_number(text: &str) -> bool {
     (1..=64).contains(&text.chars().count()) && text.chars().all(|c| c.is_ascii_graphic())
 }
 
-/// Writes the legal-plan panel columns onto one Project in one patch
-/// (ENG-1269). Passing `None` for a field clears it, so the same setter
-/// stages an assignment, records acceptance, and records the applied kit.
-/// A plan id must name one of the Firm's own `legal_plan` rows; the matter
-/// type and state follow the same closed rules `plan_fee_schedule` enforces.
-///
-/// # Errors
-/// [`ProjectCommandError::Invalid`] for a matter type outside the closed
-/// vocabulary, a malformed state or date, or a plan of another Firm, and
-/// propagates a database error.
-///
-/// [`ProjectCommandError::Invalid`] names the field; the PostgreSQL foreign
-/// key is the backstop for a writer that skips this accessor.
-pub async fn set_plan_columns(
-    surreal: &SurrealDb,
-    pg: &PostgresDb,
-    project_id: Uuid,
-    columns: &PlanColumns,
-) -> Result<Option<Project>, ProjectCommandError> {
+fn check_plan_columns(columns: &PlanColumns) -> Result<(), ProjectCommandError> {
     if let Some(matter_type) = &columns.plan_matter_type {
         if crate::legal_plans::PlanMatterType::parse(matter_type).is_err() {
             return Err(ProjectCommandError::Invalid(PLAN_MATTER_TYPE_INVALID));
@@ -3128,6 +3110,51 @@ pub async fn set_plan_columns(
             return Err(ProjectCommandError::Invalid(PLAN_DATE_INVALID));
         }
     }
+    Ok(())
+}
+
+/// Writes the legal-plan panel columns onto one Project in one patch
+/// (ENG-1269). Passing `None` for a field clears it, so the same setter
+/// stages an assignment, records acceptance, and records the applied kit.
+/// A plan id must name one of the Firm's own `legal_plan` rows; the matter
+/// type and state follow the same closed rules `plan_fee_schedule` enforces.
+///
+/// # Errors
+/// [`ProjectCommandError::Invalid`] for a matter type outside the closed
+/// vocabulary, a malformed state or date, or a plan of another Firm, and
+/// propagates a database error.
+///
+/// [`ProjectCommandError::Invalid`] names the field; the PostgreSQL foreign
+/// key is the backstop for a writer that skips this accessor.
+pub async fn set_plan_columns(
+    surreal: &SurrealDb,
+    pg: &PostgresDb,
+    project_id: Uuid,
+    columns: &PlanColumns,
+) -> Result<Option<Project>, ProjectCommandError> {
+    set_plan_columns_with_benefit(surreal, pg, project_id, columns, None).await
+}
+
+/// Update the plan and its verified benefit in the same Project write.
+///
+/// # Errors
+/// Refuses inconsistent benefit terms, a plan outside the Firm, and database failures.
+pub async fn set_plan_columns_with_benefit(
+    surreal: &SurrealDb,
+    pg: &PostgresDb,
+    project_id: Uuid,
+    columns: &PlanColumns,
+    terms: Option<&model::plan_benefit::PlanBenefitTerms>,
+) -> Result<Option<Project>, ProjectCommandError> {
+    if let Some(terms) = terms {
+        terms.validate().map_err(ProjectCommandError::Invalid)?;
+        if columns.legal_plan_id.is_none() || columns.benefit_code.is_none() {
+            return Err(ProjectCommandError::Invalid(
+                "benefit terms require a Legal Plan and benefit code",
+            ));
+        }
+    }
+    check_plan_columns(columns)?;
     let Some(project) = find_by_id(surreal, project_id)
         .await
         .map_err(|error| ProjectCommandError::Db(error.to_string()))?
@@ -3147,25 +3174,28 @@ pub async fn set_plan_columns(
     if let Some(authority) = authority().await? {
         use crate::postgres::projects::Column::{Date, Id, Text};
         let date = |text: &Option<String>| text.as_deref().and_then(|text| text.parse().ok());
-        return Ok(patch_in_postgres(
-            surreal,
-            &authority,
-            project_id,
-            &[
-                Id("legal_plan_id", columns.legal_plan_id),
-                Text("plan_member_id", columns.plan_member_id.as_deref()),
-                Text("plan_case_number", columns.plan_case_number.as_deref()),
-                Text("benefit_code", columns.benefit_code.as_deref()),
-                Text("plan_matter_type", columns.plan_matter_type.as_deref()),
-                Text("plan_state", columns.plan_state.as_deref()),
-                Date("plan_assigned_on", date(&columns.plan_assigned_on)),
-                Date("plan_accepted_on", date(&columns.plan_accepted_on)),
-                Date("plan_closed_on", date(&columns.plan_closed_on)),
-                Text("kit_version", columns.kit_version.as_deref()),
-            ],
-            None,
-        )
-        .await?);
+        let mut updates = vec![
+            Id("legal_plan_id", columns.legal_plan_id),
+            Text("plan_member_id", columns.plan_member_id.as_deref()),
+            Text("plan_case_number", columns.plan_case_number.as_deref()),
+            Text("benefit_code", columns.benefit_code.as_deref()),
+            Text("plan_matter_type", columns.plan_matter_type.as_deref()),
+            Text("plan_state", columns.plan_state.as_deref()),
+            Date("plan_assigned_on", date(&columns.plan_assigned_on)),
+            Date("plan_accepted_on", date(&columns.plan_accepted_on)),
+            Date("plan_closed_on", date(&columns.plan_closed_on)),
+            Text("kit_version", columns.kit_version.as_deref()),
+        ];
+        updates.extend(plan_benefit_columns(columns, terms));
+        let within_firm = project.firm_id.map(|firm| (firm, None));
+        return Ok(
+            patch_in_postgres(surreal, &authority, project_id, &updates, within_firm).await?,
+        );
+    }
+    if terms.is_some() {
+        return Err(ProjectCommandError::Invalid(
+            "benefit terms require PostgreSQL Project storage",
+        ));
     }
     let mut response = surreal
         .query(format!(
@@ -3197,6 +3227,37 @@ pub async fn set_plan_columns(
         .take(0)
         .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
     Ok(mirrored(surreal, updated.and_then(ProjectRow::into_project)).await?)
+}
+
+fn plan_benefit_columns<'a>(
+    columns: &'a PlanColumns,
+    terms: Option<&model::plan_benefit::PlanBenefitTerms>,
+) -> [crate::postgres::projects::Column<'a>; 6] {
+    use crate::postgres::projects::Column::{Integer, KeepPlanBenefit, Text};
+
+    if let Some(terms) = terms {
+        [
+            Text("plan_cap_shape", Some(terms.cap_shape.as_str())),
+            Integer("plan_cap_cents", terms.cap_cents),
+            Integer("plan_cap_minutes", terms.cap_minutes),
+            Integer("plan_contested_cap_cents", terms.contested_cap_cents),
+            Integer("plan_rate_cents_per_hour", terms.plan_rate_cents_per_hour),
+            Integer(
+                "plan_paralegal_rate_cents_per_hour",
+                terms.paralegal_rate_cents_per_hour,
+            ),
+        ]
+    } else {
+        [
+            "plan_cap_shape",
+            "plan_cap_cents",
+            "plan_cap_minutes",
+            "plan_contested_cap_cents",
+            "plan_rate_cents_per_hour",
+            "plan_paralegal_rate_cents_per_hour",
+        ]
+        .map(|name| KeepPlanBenefit(name, columns.legal_plan_id, columns.benefit_code.as_deref()))
+    }
 }
 
 /// Link a manifest's Firm-owned Legal Plan, leaving existing plan details intact.
@@ -3955,7 +4016,7 @@ async fn update_project_in_postgres(
     );
     let within_firm = firm_brand
         .filter(|_| keep_firm)
-        .map(|(firm_id, brand)| (*firm_id, brand.as_str()));
+        .map(|(firm_id, brand)| (*firm_id, Some(brand.as_str())));
     patch_in_postgres(surreal, pg, id, &columns, within_firm)
         .await?
         .ok_or(ProjectCommandError::NotFound)

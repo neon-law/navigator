@@ -192,6 +192,41 @@ pub(super) async fn set_at(dir: &Path, request: SetRequest<'_>) -> Result<Vec<St
     Ok(changed)
 }
 
+/// Copy the site's plan name into the enclosing Project manifest.
+pub(crate) fn declare_legal_plan(dir: &Path, code: &str, name: Option<&str>) -> Result<()> {
+    use std::io::Write;
+
+    for root in dir.ancestors() {
+        let path = root.join(manifest::FILE);
+        if path.is_file() {
+            let contents = std::fs::read_to_string(&path).context("read navigator.yaml")?;
+            let parsed = manifest::parse(&contents).map_err(|error| anyhow!(error))?;
+            anyhow::ensure!(
+                parsed.project.as_deref() == Some(code),
+                "the site returned a different Project"
+            );
+            let updated = match name {
+                Some(name) => replace_project_key(&contents, "legal_plan", name)?,
+                None => remove_project_key(&contents, "legal_plan"),
+            };
+            if updated != contents {
+                validate_manifest_update(&path, &updated)?;
+                let mut staged = tempfile::NamedTempFile::new_in(root)?;
+                staged
+                    .as_file()
+                    .set_permissions(std::fs::metadata(&path)?.permissions())?;
+                staged.write_all(updated.as_bytes())?;
+                staged.persist(path).context("write navigator.yaml")?;
+            }
+            return Ok(());
+        }
+        if root.join(".git").exists() || root.join(".jj").exists() {
+            break;
+        }
+    }
+    Err(anyhow!("this directory has no navigator.yaml"))
+}
+
 /// Write the Firm and brand into the manifest text, and with `--from-live`
 /// report the diff and apply the host the live brand is registered for.
 fn apply_ownership(
@@ -764,6 +799,32 @@ mod tests {
                 "{check:?}"
             );
         }
+    }
+
+    #[test]
+    fn declaration_writes_the_site_name_only_in_the_matching_project() {
+        let input = concat!(
+            "version: 26.10.6\nproject:\n  host: neonlaw.com\n  name: synthetic-project\n",
+            "  lawyer_dri: lawyer@neonlaw.com\n  client_dri: client@example.test\n",
+            "  private_slack_channel: not provisioned\n  private_notion_page: not provisioned\n",
+        );
+        let (dir, path) = checkout(input);
+        assert!(
+            super::declare_legal_plan(dir.path(), "another-project", Some("Legal Ease")).is_err()
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), input);
+        super::declare_legal_plan(dir.path(), "synthetic-project", Some("Legal Ease")).unwrap();
+        let updated = std::fs::read_to_string(&path).unwrap();
+        assert!(updated.contains("private_notion_page: not provisioned"));
+        assert_eq!(
+            super::manifest::parse(&updated)
+                .unwrap()
+                .legal_plan
+                .as_deref(),
+            Some("Legal Ease")
+        );
+        super::declare_legal_plan(dir.path(), "synthetic-project", None).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), input);
     }
 
     #[test]

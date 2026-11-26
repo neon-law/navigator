@@ -102,7 +102,7 @@ async fn a_brand_change_within_the_firm_refuses_a_brand_another_firm_wears() {
         &pg,
         created.id,
         &[Column::Text("brand", Some("second-brand"))],
-        Some((firm, "second-brand")),
+        Some((firm, Some("second-brand"))),
     )
     .await
     .unwrap()
@@ -114,7 +114,7 @@ async fn a_brand_change_within_the_firm_refuses_a_brand_another_firm_wears() {
             &pg,
             created.id,
             &[Column::Text("brand", Some(brand))],
-            Some((within, brand)),
+            Some((within, Some(brand))),
         )
         .await
         .unwrap()

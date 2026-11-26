@@ -10,7 +10,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use store::firm_capability::FirmCapability;
-use store::legal_plans::{self, LegalPlan, LegalPlanError, NewLegalPlan};
+use store::legal_plans::{self, LegalPlan, LegalPlanError, NewLegalPlan, PlanBenefitTerms};
 use store::projects::{PlanColumns, Project, ProjectCommandError};
 use uuid::Uuid;
 
@@ -109,6 +109,7 @@ struct ProjectPlan {
     project_id: Uuid,
     code: String,
     legal_plan: Option<LegalPlan>,
+    benefit_terms: Option<PlanBenefitTerms>,
     plan_case_number: Option<String>,
     plan_member_id: Option<String>,
     benefit_code: Option<String>,
@@ -138,16 +139,23 @@ pub(super) async fn firm_project(
 /// The matter's plan columns beside its Firm plan row. PostgreSQL is read
 /// only for a matter that links a plan.
 async fn project_plan_view(firm: Uuid, project: Project) -> Result<ProjectPlan, Response> {
-    let legal_plan = match project.legal_plan_id {
-        Some(id) => legal_plans::find(&plan_store().await?, firm, id)
+    let (legal_plan, benefit_terms) = if let Some(id) = project.legal_plan_id {
+        let pg = plan_store().await?;
+        let legal_plan = legal_plans::find(&pg, firm, id)
             .await
-            .map_err(|e| plan_error(&e))?,
-        None => None,
+            .map_err(|e| plan_error(&e))?;
+        let benefit_terms = legal_plans::project_benefit_terms(&pg, firm, project.id)
+            .await
+            .map_err(|e| plan_error(&e))?;
+        (legal_plan, benefit_terms)
+    } else {
+        (None, None)
     };
     Ok(ProjectPlan {
         project_id: project.id,
         code: project.code,
         legal_plan,
+        benefit_terms,
         plan_case_number: project.plan_case_number,
         plan_member_id: project.plan_member_id,
         benefit_code: project.benefit_code,
@@ -187,6 +195,7 @@ pub(super) async fn project(
 #[serde(deny_unknown_fields)]
 pub(super) struct ProjectPlanPatch {
     legal_plan: Option<String>,
+    benefit_terms: Option<PlanBenefitTerms>,
     plan_case_number: Option<String>,
     plan_member_id: Option<String>,
     benefit_code: Option<String>,
@@ -328,9 +337,15 @@ pub(super) async fn set_project(
     overlay(&mut columns.plan_assigned_on, patch.plan_assigned_on);
     overlay(&mut columns.plan_accepted_on, patch.plan_accepted_on);
     overlay(&mut columns.plan_closed_on, patch.plan_closed_on);
-    let updated = store::projects::set_plan_columns(&state.surreal, &pg, project_id, &columns)
-        .await?
-        .ok_or(ApiError::NotFound)?;
+    let updated = store::projects::set_plan_columns_with_benefit(
+        &state.surreal,
+        &pg,
+        project_id,
+        &columns,
+        patch.benefit_terms.as_ref(),
+    )
+    .await?
+    .ok_or(ApiError::NotFound)?;
     Ok(match project_plan_view(firm, updated).await {
         Ok(view) => Json(view).into_response(),
         Err(refused) => refused,

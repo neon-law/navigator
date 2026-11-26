@@ -10,6 +10,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use chrono::NaiveDate;
 use clap::{Args, Subcommand, ValueEnum};
+use model::plan_benefit::{PlanBenefitTerms, PlanCapShape};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
@@ -74,6 +75,24 @@ pub struct PlanFields {
     /// The benefit code the plan assigned.
     #[arg(long)]
     pub benefit_code: Option<String>,
+    /// Verified benefit shape: hourly-cap, dollar-cap, contested-uncontested, consult-only, or flat-fee.
+    #[arg(long)]
+    pub cap_shape: Option<PlanCapShape>,
+    /// Dollar cap, flat fee, or uncontested cap, in cents.
+    #[arg(long, requires = "cap_shape")]
+    pub cap_cents: Option<i32>,
+    /// Hourly cap, in minutes.
+    #[arg(long, requires = "cap_shape")]
+    pub cap_minutes: Option<i32>,
+    /// Contested cap, in cents, when the plan gives both caps.
+    #[arg(long, requires = "cap_shape")]
+    pub contested_cap_cents: Option<i32>,
+    /// Verified plan rate, in cents per hour.
+    #[arg(long, requires = "cap_shape")]
+    pub plan_rate_cents_per_hour: Option<i32>,
+    /// Verified paralegal rate, in cents per hour.
+    #[arg(long, requires = "cap_shape")]
+    pub paralegal_rate_cents_per_hour: Option<i32>,
     /// `document_review`, `letter`, `uncontested_divorce`, `court_appearance`,
     /// `contested_divorce`, `custody`, or `probate`.
     #[arg(long)]
@@ -94,8 +113,8 @@ pub struct PlanFields {
 
 impl PlanFields {
     /// The `PATCH` body: only the flags given, under the API's names.
-    fn patch(&self) -> Map<String, Value> {
-        [
+    fn patch(&self) -> Result<Map<String, Value>> {
+        let mut body: Map<String, Value> = [
             ("legal_plan", &self.plan),
             ("plan_case_number", &self.case_number),
             ("plan_member_id", &self.member_id),
@@ -108,7 +127,20 @@ impl PlanFields {
         ]
         .into_iter()
         .filter_map(|(key, value)| value.as_ref().map(|v| (key.to_string(), v.clone().into())))
-        .collect()
+        .collect();
+        if let Some(cap_shape) = self.cap_shape {
+            let terms = PlanBenefitTerms {
+                cap_shape,
+                cap_cents: self.cap_cents,
+                cap_minutes: self.cap_minutes,
+                contested_cap_cents: self.contested_cap_cents,
+                plan_rate_cents_per_hour: self.plan_rate_cents_per_hour,
+                paralegal_rate_cents_per_hour: self.paralegal_rate_cents_per_hour,
+            };
+            terms.validate().map_err(|diagnostic| anyhow!(diagnostic))?;
+            body.insert("benefit_terms".into(), serde_json::to_value(terms)?);
+        }
+        Ok(body)
     }
 }
 
@@ -251,21 +283,36 @@ pub async fn show(host: Option<&str>, project: Option<&str>) -> ExitCode {
 /// `navigator project legal-plan set`: change only the fields given.
 pub async fn set(host: Option<&str>, project: Option<&str>, fields: &PlanFields) -> ExitCode {
     let result = async {
-        let patch = fields.patch();
+        let patch = fields.patch()?;
         if patch.is_empty() {
             return Err(anyhow!(
                 "name at least one field to set, for example --case-number"
             ));
         }
         let (route, token, _) = project_route(host, project).await?;
-        call(
+        let updated = call(
             reqwest::Client::new()
                 .patch(format!("{route}/legal-plan"))
                 .bearer_auth(token)
                 .json(&patch),
             "set",
         )
-        .await
+        .await?;
+        if let Some(plan) = fields.plan.as_deref().filter(|_| project.is_none() && host.is_none()) {
+            let name = if plan.trim().is_empty() && updated.get("legal_plan") == Some(&Value::Null) {
+                None
+            } else {
+                Some(updated.pointer("/legal_plan/name").and_then(Value::as_str)
+                    .context("the site did not return the Legal Plan name")?)
+            };
+            crate::projects::set::declare_legal_plan(
+                &std::env::current_dir()?,
+                updated["code"].as_str().context("the site did not return the Project code")?,
+                name,
+            )
+            .context("the site updated the Legal Plan. Rerun from this Project checkout to write navigator.yaml")?;
+        }
+        Ok(updated)
     }
     .await;
     finish("project legal-plan", result)
@@ -596,14 +643,40 @@ mod tests {
             ..PlanFields::default()
         };
         assert_eq!(
-            serde_json::Value::Object(fields.patch()),
+            serde_json::Value::Object(fields.patch().unwrap()),
             serde_json::json!({
                 "legal_plan": "ARAG",
                 "plan_case_number": "4900000-001",
                 "plan_closed_on": "",
             })
         );
-        assert!(PlanFields::default().patch().is_empty());
+        assert!(PlanFields::default().patch().unwrap().is_empty());
+    }
+
+    #[test]
+    fn verified_terms_use_the_benefit_shape_and_units() {
+        let fields = PlanFields {
+            plan: Some("LegalEASE".into()),
+            benefit_code: Some("SAMPLE-BENEFIT".into()),
+            cap_shape: Some(model::plan_benefit::PlanCapShape::HourlyCap),
+            cap_minutes: Some(240),
+            plan_rate_cents_per_hour: Some(9000),
+            paralegal_rate_cents_per_hour: Some(4500),
+            ..PlanFields::default()
+        };
+        let patch = fields.patch().unwrap();
+        assert_eq!(patch["legal_plan"], "LegalEASE");
+        assert_eq!(patch["benefit_code"], "SAMPLE-BENEFIT");
+        let terms = &patch["benefit_terms"];
+        assert_eq!(terms["cap_shape"], "hourly_cap");
+        assert_eq!(terms["cap_minutes"], 240);
+        assert_eq!(terms["plan_rate_cents_per_hour"], 9000);
+        assert_eq!(terms["paralegal_rate_cents_per_hour"], 4500);
+        let wrong_units = PlanFields {
+            cap_cents: Some(5000),
+            ..fields
+        };
+        assert!(wrong_units.patch().is_err());
     }
 
     #[tokio::test]

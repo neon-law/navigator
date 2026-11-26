@@ -399,4 +399,47 @@ async fn run() {
         .0,
         StatusCode::NOT_FOUND
     );
+    verify_legal_ease_benefit(&app, &owner, &plans, &link).await;
+}
+
+async fn verify_legal_ease_benefit(
+    app: &Router,
+    owner: &portal::SessionData,
+    plans: &str,
+    link: &str,
+) {
+    let (status, created) = send(
+        app,
+        owner,
+        "POST",
+        plans,
+        Some(json!({"name": "Legal Ease"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let terms = json!({
+        "cap_shape": "hourly_cap",
+        "cap_minutes": 240,
+        "cap_cents": null,
+        "contested_cap_cents": null,
+        "plan_rate_cents_per_hour": 9000,
+        "paralegal_rate_cents_per_hour": 4500
+    });
+    let (status, updated) = send(
+        app,
+        owner,
+        "PATCH",
+        link,
+        Some(json!({
+            "legal_plan": "LegalEASE",
+            "benefit_code": "SAMPLE-BENEFIT",
+            "benefit_terms": terms
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(updated["legal_plan"]["name"], "Legal Ease");
+    assert_eq!(updated["benefit_code"], "SAMPLE-BENEFIT");
+    assert_eq!(updated["benefit_terms"], terms);
+    assert_eq!(send(app, owner, "GET", link, None).await, (status, updated));
 }

@@ -162,6 +162,48 @@
       "table": "plan_intake"
     },
     {
+      "extra_column": "plan_cap_cents",
+      "extra_table": null,
+      "missing_column": null,
+      "missing_table": null,
+      "table": "project"
+    },
+    {
+      "extra_column": "plan_cap_minutes",
+      "extra_table": null,
+      "missing_column": null,
+      "missing_table": null,
+      "table": "project"
+    },
+    {
+      "extra_column": "plan_cap_shape",
+      "extra_table": null,
+      "missing_column": null,
+      "missing_table": null,
+      "table": "project"
+    },
+    {
+      "extra_column": "plan_contested_cap_cents",
+      "extra_table": null,
+      "missing_column": null,
+      "missing_table": null,
+      "table": "project"
+    },
+    {
+      "extra_column": "plan_paralegal_rate_cents_per_hour",
+      "extra_table": null,
+      "missing_column": null,
+      "missing_table": null,
+      "table": "project"
+    },
+    {
+      "extra_column": "plan_rate_cents_per_hour",
+      "extra_table": null,
+      "missing_column": null,
+      "missing_table": null,
+      "table": "project"
+    },
+    {
       "extra_column": "self_serve",
       "extra_table": null,
       "missing_column": null,
@@ -5683,10 +5725,16 @@
           "onboarding_jurisdiction": "TEXT",
           "plan_accepted_on": "DATE",
           "plan_assigned_on": "DATE",
+          "plan_cap_cents": "INTEGER",
+          "plan_cap_minutes": "INTEGER",
+          "plan_cap_shape": "TEXT",
           "plan_case_number": "TEXT",
           "plan_closed_on": "DATE",
+          "plan_contested_cap_cents": "INTEGER",
           "plan_matter_type": "TEXT",
           "plan_member_id": "TEXT",
+          "plan_paralegal_rate_cents_per_hour": "INTEGER",
+          "plan_rate_cents_per_hour": "INTEGER",
           "plan_state": "TEXT",
           "private_notion_page_url": "TEXT",
           "repository_url": "TEXT",
