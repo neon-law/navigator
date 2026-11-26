@@ -6043,30 +6043,19 @@ Content-Type: text/plain\r\n\
 Can I sign electronically?\r\n\
 --BOUND\r\n\
 Content-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document\r\n\
-Content-Disposition: attachment; filename=\"Sample Notebook.docx\"\r\n\
+Content-Disposition: attachment; filename=\"sample notebook.docx\"\r\n\
 \r\n\
 SYNTHETIC-DOCX-BYTES\r\n\
 --BOUND--\r\n";
 
-    #[tokio::test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the message and attachment assertions share one synthetic filing"
-    )]
-    async fn a_reference_filing_uploads_documents_and_files_only_references() {
+    async fn mock_signing_documents(server: &wiremock::MockServer, documents_door: &str) -> Uuid {
         use wiremock::matchers::{body_partial_json, method, path, query_param};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
+        use wiremock::{Mock, ResponseTemplate};
 
-        let server = MockServer::start().await;
-        let project_id = Uuid::now_v7();
-        let client = crate::remote::DocumentClient::for_check_tests(server.uri(), project_id);
-        let documents_door = format!("/app/api/projects/{project_id}/documents");
-        let eml_door = format!("/app/api/projects/{project_id}/mail/eml");
         let raw = SIGNING_QUESTION;
-        let parsed = parse_eml_for_filing(raw).expect("the message parses");
-        assert_eq!(parsed.attachments.len(), 1);
         let attachment_slug = "mail/signing-1-example.test/2025.10.09_sample-notebook.docx";
         let attachment_id = Uuid::now_v7();
+        let parsed = parse_eml_for_filing(raw).expect("the synthetic message parses");
         let attachment_bytes = &parsed.attachments[0].bytes;
         let attachment_version = json!({
             "asset_id": attachment_id, "version": 1, "created_at": "2026-11-20T12:00:00Z",
@@ -6085,13 +6074,13 @@ SYNTHETIC-DOCX-BYTES\r\n\
                 ResponseTemplate::new(200)
                     .set_body_json(json!({"kind":"letter", "revisions":[attachment_revision]})),
             )
-            .mount(&server)
+            .mount(server)
             .await;
         Mock::given(method("POST"))
-            .and(path(&documents_door))
+            .and(path(documents_door))
             .and(body_partial_json(json!({"slug": attachment_slug})))
             .respond_with(ResponseTemplate::new(201).set_body_json(attachment_response))
-            .mount(&server)
+            .mount(server)
             .await;
         let revision = json!({
             "asset_id": Uuid::now_v7(), "version": 1, "created_at": "2026-11-20T12:00:00Z",
@@ -6108,22 +6097,41 @@ SYNTHETIC-DOCX-BYTES\r\n\
                 ResponseTemplate::new(200)
                     .set_body_json(json!({"kind":"letter", "revisions":[revision]})),
             )
-            .mount(&server)
+            .mount(server)
             .await;
         Mock::given(method("GET"))
-            .and(path(&documents_door))
+            .and(path(documents_door))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
-            .mount(&server)
+            .mount(server)
             .await;
         Mock::given(method("PATCH"))
             .respond_with(ResponseTemplate::new(200))
-            .mount(&server)
+            .mount(server)
             .await;
         Mock::given(method("POST"))
-            .and(path(&documents_door))
+            .and(path(documents_door))
             .respond_with(ResponseTemplate::new(201).set_body_json(source_response))
-            .mount(&server)
+            .mount(server)
             .await;
+        attachment_id
+    }
+
+    #[tokio::test]
+    async fn a_reference_filing_uploads_documents_and_files_only_references() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let project_id = Uuid::now_v7();
+        let client = crate::remote::DocumentClient::for_check_tests(server.uri(), project_id);
+        let documents_door = format!("/app/api/projects/{project_id}/documents");
+        let eml_door = format!("/app/api/projects/{project_id}/mail/eml");
+        let raw = SIGNING_QUESTION;
+        let parsed = parse_eml_for_filing(raw).expect("the message parses");
+        assert_eq!(parsed.attachments.len(), 1);
+        let attachment_slug = "mail/signing-1-example.test/2025.10.09_sample-notebook.docx";
+        let attachment_id = mock_signing_documents(&server, &documents_door).await;
+        let attachment_bytes = &parsed.attachments[0].bytes;
         Mock::given(method("POST"))
             .and(path(&eml_door))
             .respond_with(ResponseTemplate::new(201).set_body_json(json!({
@@ -7635,26 +7643,8 @@ Date: Fri, 30 Oct 2026 14:03:00 +0000\r\nSubject: Follow-up\r\n\r\nOwn message."
             let unseen = [&upload[..], &["sample-estate"]].concat();
             let error = desk.run(&unseen).await.unwrap_err();
             assert_eq!(error.to_string(), "document upload failed");
-            let revision = json!({
-                "asset_id": Uuid::now_v7(), "version": 1, "created_at": "2026-11-20T12:00:00Z",
-                "sha256": model::documents::sha256_hex(SIGNING_QUESTION),
-                "size_bytes": SIGNING_QUESTION.len()
-            });
-            let pointer =
-                json!({ "kind": "letter", "visibility": "internal", "current_version": revision });
-            let mut head = revision;
-            head["filename"] = json!("message.eml");
-            head["operative"] = json!(true);
             let documents = desk.door("documents");
-            let revisions = json!({ "kind": "letter", "revisions": [head] });
-            desk.answer("GET", &format!("{documents}/revisions"), revisions)
-                .await;
-            desk.answer("GET", &documents, json!([])).await;
-            Mock::given(method("PATCH"))
-                .respond_with(ResponseTemplate::new(200))
-                .mount(&desk.server)
-                .await;
-            desk.answer("POST", &documents, pointer).await;
+            mock_signing_documents(&desk.server, &documents).await;
             let filed = json!({ "source_ref": "eml:signing-1@example.test", "deduped": false });
             desk.answer("POST", &desk.door("mail/eml"), filed).await;
             let saved = write_file(
@@ -7716,6 +7706,8 @@ Date: Fri, 30 Oct 2026 14:03:00 +0000\r\nSubject: Follow-up\r\n\r\nOwn message."
 
         #[tokio::test]
         async fn attachments_writes_only_the_selected_files() {
+            const NOTEBOOK: &str = "sample notebook.docx";
+
             let desk = Desk::open().await;
             let raw = json!({ "raw": encoded(SIGNING_QUESTION) });
             desk.message("message-01", "raw", raw).await;
@@ -7725,9 +7717,9 @@ Date: Fri, 30 Oct 2026 14:03:00 +0000\r\nSubject: Follow-up\r\n\r\nOwn message."
             desk.run(&[&all[..], &["--only", "*.png"]].concat())
                 .await
                 .unwrap();
-            assert!(!dir.join("retainer.pdf").exists());
+            assert!(!dir.join(NOTEBOOK).exists());
             desk.run(&all).await.unwrap();
-            assert!(dir.join("retainer.pdf").is_file());
+            assert!(dir.join(NOTEBOOK).is_file());
         }
 
         #[tokio::test]
