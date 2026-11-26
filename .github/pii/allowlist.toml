@@ -13,6 +13,24 @@
 # person). An email is allowed on a listed domain or any subdomain of one.
 
 [[paths]]
+reason = "The Guieb & Shook website's minified stylesheet and SVG marks: single lines of style rules and path data, past the analyzer's line limit, with no prose (approved by Waleed Amer, 2026-11-26)."
+values = [
+  "server/sites/guieb-shook/styles.css",
+  "server/sites/guieb-shook/assets/*.svg",
+]
+
+# Names and phones in this file count everywhere, so the website's own people are
+# exempted by page, never by value: a client who shares a name or number with them
+# is still found (Waleed Amer, 2026-11-26).
+[[paths]]
+reason = "Pages of the Guieb & Shook website that name its people on purpose: the Our Story page tells where the firm's name comes from (Waleed Amer's grandfather, Nicholas Shook's parents), and each attorney page gives that attorney's direct business line and education (approved by Waleed Amer, 2026-11-26)."
+values = [
+  "server/sites/guieb-shook/our-story.html",
+  "server/sites/guieb-shook/attorneys/waleed-amer.html",
+  "server/sites/guieb-shook/attorneys/nicholas-shook.html",
+]
+
+[[paths]]
 reason = "Vendored third-party code, generated inventories, and the scanner itself."
 values = [
   "cargo.lock",

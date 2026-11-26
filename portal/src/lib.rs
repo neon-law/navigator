@@ -172,6 +172,7 @@ pub mod github_oidc;
 pub mod glossary;
 pub mod google_oauth;
 pub mod gov_forms;
+pub mod guieb_shook_site;
 pub mod hcaptcha;
 pub mod host_handoff;
 pub mod hosting;
@@ -1068,6 +1069,13 @@ pub fn bootstrap_with_forgejo_oidc(
             views::brand::Branding::from_manifest(&bundle.manifest)
         });
     let brand_bundle = state.brand_bundle.clone();
+    // The site's videos are read through the same bucket route every host serves.
+    let guieb_shook_site = guieb_shook_site::GuiebShookSite::from_env(
+        state.sessions.clone(),
+        Router::new()
+            .route("/assets/{*key}", get(public_asset))
+            .with_state(state.clone()),
+    );
     let static_files = tower::ServiceBuilder::new()
         .layer(SetResponseHeaderLayer::if_not_present(
             header::CACHE_CONTROL,
@@ -2441,7 +2449,13 @@ pub fn bootstrap_with_forgejo_oidc(
     // has already run.
     // Session renewal sits *inside* the cookie manager so the cookie it
     // re-issues is serialized into the response's `Set-Cookie` header.
+    // The Guieb & Shook static site sits innermost: the brand is resolved and the
+    // cookies are parsed by the time it decides whether a path is the site's.
     Ok(router
+        .layer(axum::middleware::from_fn_with_state(
+            guieb_shook_site,
+            guieb_shook_site::serve,
+        ))
         .layer(axum::middleware::from_fn_with_state(
             session_renew,
             session_renew::renew_session,

@@ -247,6 +247,9 @@ COPY --from=builder /src/server/public  /app/public
 # serves it from `/app/public/dioxus` to hydrate the `/dioxus-demo` page.
 COPY --from=builder /dioxus-bundle   /app/public/dioxus
 COPY --from=builder /src/server/content /app/content
+# The Guieb & Shook website, served as the firm approved it (portal/src/guieb_shook_site.rs). Its videos are not in
+# the image; they are read from the public assets bucket.
+COPY --from=builder /src/server/sites/guieb-shook /app/sites/guieb-shook
 COPY --from=builder /src/templates    /app/templates
 
 # Identify the build. The daily `deploy.yml` publish job passes
@@ -267,6 +270,7 @@ ENV NAVIGATOR_RELEASE_TAG=$RELEASE_TAG \
 # Tell the binary where to find its assets. Override at deploy time
 # if you mount these in from a ConfigMap or PVC.
 ENV NAVIGATOR_PUBLIC_DIR=/app/public \
+    NAVIGATOR_GUIEB_SHOOK_SITE_DIR=/app/sites/guieb-shook \
     NAVIGATOR_WORKSHOPS_DIR=/app/content/workshops \
     APP_ENV=production \
     PORT=3001

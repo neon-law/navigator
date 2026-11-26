@@ -110,3 +110,7 @@ server/public/same-day/
 
 # Python bytecode from local tooling.
 __pycache__/
+
+# The Guieb & Shook site's videos live in the public assets bucket (img/guieb-shook/site/video/), not in Git or the
+# image; a local copy here is served directly. See portal/src/guieb_shook_site.rs.
+/server/sites/guieb-shook/assets/video/*.mp4

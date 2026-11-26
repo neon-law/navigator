@@ -160,13 +160,16 @@ fn parse_header<'a>(headers: &'a str, name: &str) -> Option<&'a str> {
 /// marker and both attribute-order spellings `features/tests/brand_routing.rs`
 /// and `server/tests/routes.rs` already assert against.
 /// An SSR renderer escapes `&` in attribute values (Dioxus writes `&#38;`),
-/// so "Guieb & Shook" is matched in every spelling a page may carry.
+/// so "Guieb & Shook" is matched in every spelling a page may carry. A page
+/// may also follow the name with its entity suffix: the Guieb & Shook static
+/// site (`portal::guieb_shook_site`) declares "Guieb & Shook P.C.".
 fn declares_brand(body: &str, site_name: &str) -> bool {
     ["&", "&amp;", "&#38;"]
         .iter()
         .map(|amp| site_name.replace('&', amp))
         .any(|name| {
             body.contains(&format!("og:site_name\" content=\"{name}\""))
+                || body.contains(&format!("og:site_name\" content=\"{name} "))
                 || body.contains(&format!("content=\"{name}\" property=\"og:site_name\""))
         })
 }
@@ -623,6 +626,7 @@ mod tests {
             r#"<meta content="Guieb &#38; Shook" property="og:site_name"/>"#,
             r#"<meta property="og:site_name" content="Guieb &amp; Shook">"#,
             r#"<meta property="og:site_name" content="Guieb & Shook">"#,
+            r#"<meta property="og:site_name" content="Guieb &amp; Shook P.C.">"#,
         ] {
             let mut runner = ScriptedRunner::new(vec![ok_headers_and_body(200, body)]);
             let report = check_host(
