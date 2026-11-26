@@ -300,9 +300,50 @@ impl ForgejoForge {
         let response = response.map_err(|source| ForgeError::Request { action, source })?;
         match response.status().as_u16() {
             200..=299 => Ok(response),
-            401 | 403 => Err(ForgeError::Authentication),
+            401 => Err(ForgeError::Authentication),
             status => Err(ForgeError::Api { action, status }),
         }
+    }
+
+    /// Read the token identity and its repository creation permission in this organization.
+    ///
+    /// # Errors
+    /// Returns the Forgejo error when identity or permission lookup fails.
+    pub async fn can_create_repository(&self) -> Result<bool, ForgeError> {
+        #[derive(Deserialize)]
+        struct Account {
+            login: String,
+        }
+        #[derive(Deserialize)]
+        struct Permissions {
+            can_create_repository: bool,
+        }
+
+        let action = "reading the Forgejo token identity";
+        let account = Self::checked(
+            self.request(self.http.get(format!("{}/user", self.api_base)))
+                .send()
+                .await,
+            action,
+        )?
+        .json::<Account>()
+        .await
+        .map_err(|source| ForgeError::Response { action, source })?;
+        let action = "reading the Firm organization permissions";
+        let mut url = url::Url::parse(&self.api_base)
+            .map_err(|_| ForgeError::InvalidConfig(NAVIGATOR_FORGEJO_ROOT_URL_ENV))?;
+        url.path_segments_mut()
+            .map_err(|()| ForgeError::InvalidConfig(NAVIGATOR_FORGEJO_ROOT_URL_ENV))?
+            .extend(["users", &account.login, "orgs", &self.owner, "permissions"]);
+        let response = self.request(self.http.get(url)).send().await;
+        if response.as_ref().is_ok_and(|r| r.status().as_u16() == 404) {
+            return Ok(false);
+        }
+        let permissions = Self::checked(response, action)?
+            .json::<Permissions>()
+            .await
+            .map_err(|source| ForgeError::Response { action, source })?;
+        Ok(permissions.can_create_repository)
     }
 
     /// Verify the forge's description of a repository before adopting it.
@@ -616,7 +657,9 @@ impl ForgeService for ForgejoForge {
                 .ok()
                 .and_then(|reply| reply.commit)
                 .and_then(|commit| commit.sha),
-            Err(ForgeError::Authentication) => return Err(ForgeError::Authentication),
+            Err(error @ (ForgeError::Authentication | ForgeError::Api { status: 403, .. })) => {
+                return Err(error)
+            }
             // The write may have landed before the failure; the head settles it.
             Err(error) => {
                 tracing::warn!(%error, project_code, "initial source write outcome unknown");
@@ -1196,6 +1239,48 @@ mod tests {
                 .await,
             Err(ForgeError::RepositoryNotEmpty { .. })
         ));
+    }
+
+    #[tokio::test]
+    async fn preview_reads_the_token_accounts_organization_creation_permission() {
+        let server = MockServer::start().await;
+        for allowed in [false, true] {
+            Mock::given(method("GET"))
+                .and(wiremock::matchers::header(
+                    "authorization",
+                    "token synthetic-token",
+                ))
+                .and(path("/api/v1/user"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!({"login":"operator"})),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(wiremock::matchers::header(
+                    "authorization",
+                    "token synthetic-token",
+                ))
+                .and(path("/api/v1/users/operator/orgs/firm-a/permissions"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!({"can_create_repository":allowed})),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            assert_eq!(
+                forge(&server, "firm-a")
+                    .can_create_repository()
+                    .await
+                    .unwrap(),
+                allowed
+            );
+            server.verify().await;
+            server.reset().await;
+        }
     }
 
     #[tokio::test]

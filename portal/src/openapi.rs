@@ -2687,17 +2687,17 @@ fn canonical_document(base: &str) -> Value {
           "get": {
             "operationId": "previewProjectForgejoMirrorRepair",
             "summary": "Preview a GitHub Project's Forgejo mirror repair",
-            "description": "Read-only. Returns the verified Forgejo repository URL when present, or a missing status with a null URL. Requires an interactive administrator with Firm integration access.",
+            "description": "Read-only. Returns the verified Forgejo repository URL when present, or a missing status with a null URL after checking the token account can create repositories in the Firm organization. Requires an interactive administrator with Firm integration access.",
             "parameters": [
               { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
             ],
             "responses": {
               "200": { "description": "The verified repository or missing status", "content": { "application/json": { "schema": { "type": "object" } } } },
               "401": { "description": "No authenticated session" },
-              "403": { "description": "Caller is not an interactive administrator" },
+              "403": { "description": "Caller lacks administrator access or Forgejo denied the Firm token permission" },
               "404": { "description": "Project unavailable to this caller" },
               "409": { "description": "Forgejo could not verify the private repository identity or URL" },
-              "422": { "description": "Forgejo configuration is incomplete" },
+              "422": { "description": "Forgejo configuration is incomplete or Forgejo rejected the Firm token" },
               "503": { "description": "The Firm credential or Forgejo request is unavailable" }
             }
           },
@@ -2710,10 +2710,10 @@ fn canonical_document(base: &str) -> Value {
             "responses": {
               "200": { "description": "The verified Forgejo repository URL", "content": { "application/json": { "schema": { "type": "object" } } } },
               "401": { "description": "No authenticated session", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
-              "403": { "description": "Authenticated caller is not admin-tier", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "403": { "description": "Caller lacks administrator access or Forgejo denied the Firm token permission", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
               "404": { "description": "Project is unavailable or the caller lacks Firm integration access", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
               "409": { "description": "Forgejo could not verify private repository identity or URL. Includes a recovery step.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
-              "422": { "description": "Forgejo configuration is incomplete. Includes a recovery step.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "422": { "description": "Forgejo configuration is incomplete or Forgejo rejected the Firm token. Includes a recovery step.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
               "503": { "description": "The Firm credential or Forgejo request is unavailable. Includes a recovery step.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }
             }
           }
