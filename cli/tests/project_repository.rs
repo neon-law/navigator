@@ -18,6 +18,8 @@ use assert_cmd::Command;
 use predicates::{prelude::PredicateBooleanExt, str};
 use tempfile::TempDir;
 
+use project_scaffold::ROOT_GITIGNORE;
+
 fn navigator() -> Command {
     let mut command = Command::cargo_bin("navigator").unwrap();
     command.env_remove("GITHUB_REPOSITORY");
