@@ -151,13 +151,6 @@ pub async fn mem_surreal() -> crate::surreal::SurrealDb {
     crate::surreal::test_support::mem().await
 }
 
-/// A disconnected handle for PostgreSQL-authority tests that retain the existing store facade.
-#[cfg(test)]
-#[must_use]
-pub fn uninitialized_store() -> crate::surreal::SurrealDb {
-    crate::surreal::SurrealDb::uninitialized()
-}
-
 /// A SurrealDB reachable from *another process*, plus the coordinates to
 /// point that process at it — see [`server_surreal`].
 pub struct ServerSurreal {
