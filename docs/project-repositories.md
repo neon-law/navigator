@@ -454,6 +454,11 @@ its pointer to `blobs/` in the file's own checkout rather than the working direc
 carried their extension (a chain filed as `summons`, pointed at by `blobs/summons.pdf.yaml`) is named by its path, as
 `project sync` and the gate already name it; `reslug` makes the chain's slug match.
 
+**An explicit upload folder repairs a filed document.** Re-upload the original bytes with the existing `--slug` and
+`--kind` and the intended `--folder`. With matching bytes, the live row moves in place and the checkout pointer retains
+locally recorded evidence for that revision. Use `--folder "Correspondence (Served)"` for a message that belongs under
+served correspondence. Verify the pointer and live row with `navigator project gate --check`.
+
 **Upload a directory as a batch.** `navigator site document upload --project acme --dir exhibits --kind exhibit` files
 regular files in filename order without recursing or following file symlinks. Choose exactly one of `--dir` and
 `--file`; `--slug` applies only to `--file`. Each file uses the same Pointer resolver, folder, visibility, and extension
