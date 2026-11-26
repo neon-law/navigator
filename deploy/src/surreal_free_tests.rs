@@ -631,6 +631,20 @@ mod tests {
     }
 
     #[test]
+    fn native_matter_record_tests_are_selected() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let selection = select(root).unwrap();
+        for module in ["cap_table_holdings", "fiduciary_roles"] {
+            assert!(!selection.nextest_filter.contains(&format!(
+                "(package(store) & not kind(test) & test(/^{module}::/))"
+            )));
+            assert!(selection.nextest_filter.contains(&format!(
+                "(package(store) & not kind(test) & test(/^{module}::compatibility_tests::/))"
+            )));
+        }
+    }
+
+    #[test]
     fn native_people_and_clerk_ssr_tests_are_selected() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
         let selection = select(root).unwrap();

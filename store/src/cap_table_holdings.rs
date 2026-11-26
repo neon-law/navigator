@@ -149,12 +149,18 @@ async fn validate(
             "shares must be zero or more".into(),
         ));
     }
-    require_project(surreal, project_id)
-        .await
-        .map_err(CapTableHoldingError::Invalid)?;
-    require_party(surreal, "holder", fields.holder)
-        .await
-        .map_err(CapTableHoldingError::Invalid)?;
+    if let Some(pg) = matter::authority().await? {
+        crate::matter_record_links::require_project_on(&pg, project_id)
+            .await
+            .map_err(CapTableHoldingError::Invalid)?;
+    } else {
+        require_project(surreal, project_id)
+            .await
+            .map_err(CapTableHoldingError::Invalid)?;
+        require_party(surreal, "holder", fields.holder)
+            .await
+            .map_err(CapTableHoldingError::Invalid)?;
+    }
     Ok(CapTableHoldingFields {
         holder: fields.holder,
         share_class,
@@ -422,33 +428,16 @@ pub async fn delete_for_project(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::persons::{NewPerson, Role};
-    use crate::test_support::{mem_surreal, seed_entity};
 
-    async fn project(surreal: &SurrealDb, code: &str) -> Uuid {
-        crate::projects::create(
-            surreal,
-            &crate::projects::NewProject {
-                code: code.into(),
-                name: "Sample outside counsel".into(),
-                status: "open".into(),
-                entity_id: seed_entity(surreal).await,
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap()
-        .id
-    }
-
-    async fn person(surreal: &SurrealDb, email: &str) -> Uuid {
-        crate::persons::create(
-            surreal,
-            &NewPerson::with_role("Sample Holder", email, Role::Client),
-        )
-        .await
-        .unwrap()
-        .id
+    macro_rules! with_postgres {
+        ($pg:ident, $surreal:ident, $body:block) => {{
+            let Some($pg) = crate::postgres::matter::tests::database().await else {
+                return;
+            };
+            let $surreal = SurrealDb::uninitialized();
+            crate::postgres::matter::with_test_db($pg.clone(), async $body).await;
+            $pg.0.close().await;
+        }};
     }
 
     fn holding(holder: Uuid, share_class: &str, shares: i64) -> CapTableHoldingFields {
@@ -462,158 +451,162 @@ mod tests {
 
     #[tokio::test]
     async fn insert_list_update_and_delete_round_trip() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal, "sample-cap-table").await;
-        let founder = person(&surreal, "founder@example.com").await;
-        let fund = seed_entity(&surreal).await;
+        with_postgres!(pg, surreal, {
+            let project_id =
+                crate::postgres::matter::tests::postgres_project(&pg, "sample-cap-table").await;
+            let founder =
+                crate::postgres::matter::tests::postgres_person(&pg, "founder@example.com").await;
+            let fund = crate::postgres::matter::tests::postgres_entity(&pg).await;
 
-        let common = insert(
-            &surreal,
-            project_id,
-            &holding(founder, " Common ", 6_000_000),
-        )
-        .await
-        .unwrap();
-        assert_eq!(common.share_class, "Common");
-        let preferred = insert(
-            &surreal,
-            project_id,
-            &CapTableHoldingFields {
-                holder: Party::entity(fund),
-                ..holding(founder, "Series Seed Preferred", 1_500_000)
-            },
-        )
-        .await
-        .unwrap();
-        let options = insert(
-            &surreal,
-            project_id,
-            &CapTableHoldingFields {
-                vesting_note: Some("Four years, one-year cliff".into()),
-                ..holding(
-                    person(&surreal, "employee@example.com").await,
-                    "Common",
-                    250_000,
-                )
-            },
-        )
-        .await
-        .unwrap();
-
-        let table: Vec<Uuid> = list(&surreal, project_id)
+            let common = insert(
+                &surreal,
+                project_id,
+                &holding(founder, " Common ", 6_000_000),
+            )
             .await
-            .unwrap()
-            .into_iter()
-            .map(|row| row.id)
-            .collect();
-        assert_eq!(table, vec![common.id, options.id, preferred.id]);
+            .unwrap();
+            assert_eq!(common.share_class, "Common");
+            let preferred = insert(
+                &surreal,
+                project_id,
+                &CapTableHoldingFields {
+                    holder: Party::entity(fund),
+                    ..holding(founder, "Series Seed Preferred", 1_500_000)
+                },
+            )
+            .await
+            .unwrap();
+            let employee =
+                crate::postgres::matter::tests::postgres_person(&pg, "employee@example.com").await;
+            let options = insert(
+                &surreal,
+                project_id,
+                &CapTableHoldingFields {
+                    vesting_note: Some("Four years, one-year cliff".into()),
+                    ..holding(employee, "Common", 250_000)
+                },
+            )
+            .await
+            .unwrap();
 
-        let updated = update(
-            &surreal,
-            project_id,
-            common.id,
-            &holding(founder, "Common", 5_750_000),
-        )
-        .await
-        .unwrap();
-        assert_eq!(updated.shares, 5_750_000);
-        assert_eq!(updated.inserted_at, common.inserted_at);
+            let table: Vec<Uuid> = list(&surreal, project_id)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|row| row.id)
+                .collect();
+            assert_eq!(table, vec![common.id, options.id, preferred.id]);
 
-        delete(&surreal, project_id, options.id).await.unwrap();
-        assert_eq!(list(&surreal, project_id).await.unwrap().len(), 2);
-        assert!(matches!(
-            delete(&surreal, project_id, options.id).await,
-            Err(CapTableHoldingError::NotFound)
-        ));
+            let updated = update(
+                &surreal,
+                project_id,
+                common.id,
+                &holding(founder, "Common", 5_750_000),
+            )
+            .await
+            .unwrap();
+            assert_eq!(updated.shares, 5_750_000);
+            assert_eq!(updated.inserted_at, common.inserted_at);
+
+            delete(&surreal, project_id, options.id).await.unwrap();
+            assert_eq!(list(&surreal, project_id).await.unwrap().len(), 2);
+            assert!(matches!(
+                delete(&surreal, project_id, options.id).await,
+                Err(CapTableHoldingError::NotFound)
+            ));
+        });
     }
 
     #[tokio::test]
     async fn a_holder_with_no_row_behind_it_is_refused() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal, "sample-cap-holder").await;
-        for holder in [Party::person(Uuid::now_v7()), Party::entity(Uuid::now_v7())] {
-            let error = insert(
-                &surreal,
-                project_id,
-                &CapTableHoldingFields {
-                    holder,
-                    ..holding(Uuid::now_v7(), "Common", 1)
-                },
-            )
-            .await
-            .unwrap_err();
-            assert!(matches!(error, CapTableHoldingError::Invalid(_)), "{error}");
-        }
-        assert!(list(&surreal, project_id).await.unwrap().is_empty());
+        with_postgres!(pg, surreal, {
+            let project_id =
+                crate::postgres::matter::tests::postgres_project(&pg, "sample-cap-holder").await;
+            for holder in [Party::person(Uuid::now_v7()), Party::entity(Uuid::now_v7())] {
+                let error = insert(
+                    &surreal,
+                    project_id,
+                    &CapTableHoldingFields {
+                        holder,
+                        ..holding(Uuid::now_v7(), "Common", 1)
+                    },
+                )
+                .await
+                .unwrap_err();
+                assert!(matches!(error, CapTableHoldingError::Invalid(_)), "{error}");
+            }
+            assert!(list(&surreal, project_id).await.unwrap().is_empty());
+        });
     }
 
     #[tokio::test]
     async fn negative_shares_or_a_blank_class_is_refused() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal, "sample-cap-refusals").await;
-        let person_id = person(&surreal, "refused@example.com").await;
-        for bad in [
-            holding(person_id, "Common", -1),
-            holding(person_id, "  ", 10),
-        ] {
-            assert!(matches!(
-                insert(&surreal, project_id, &bad).await.unwrap_err(),
-                CapTableHoldingError::Invalid(_)
-            ));
-        }
+        with_postgres!(pg, surreal, {
+            let project_id =
+                crate::postgres::matter::tests::postgres_project(&pg, "sample-cap-refusals").await;
+            let person_id =
+                crate::postgres::matter::tests::postgres_person(&pg, "refused@example.com").await;
+            for bad in [
+                holding(person_id, "Common", -1),
+                holding(person_id, "  ", 10),
+            ] {
+                assert!(matches!(
+                    insert(&surreal, project_id, &bad).await.unwrap_err(),
+                    CapTableHoldingError::Invalid(_)
+                ));
+            }
+        });
     }
 
     #[tokio::test]
     async fn one_row_holds_each_holder_and_class() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal, "sample-cap-line").await;
-        let person_id = person(&surreal, "line@example.com").await;
-        let other = person(&surreal, "line-other@example.com").await;
-        insert(&surreal, project_id, &holding(person_id, "Common", 100))
-            .await
-            .unwrap();
-        insert(&surreal, project_id, &holding(other, "Common", 100))
-            .await
-            .unwrap();
-        let error = insert(&surreal, project_id, &holding(person_id, "Common", 5))
-            .await
-            .unwrap_err();
-        assert!(matches!(error, CapTableHoldingError::Invalid(_)), "{error}");
-        let found = find_by_line(&surreal, project_id, Party::person(person_id), " Common")
-            .await
-            .unwrap()
-            .expect("the line");
-        assert_eq!(found.shares, 100);
-    }
-
-    #[tokio::test]
-    async fn the_engine_refuses_negative_shares() {
-        let surreal = mem_surreal().await;
-        let project_id = project(&surreal, "sample-cap-engine").await;
-        let result = surreal
-            .query(
-                "CREATE cap_table_holding SET project_id = $project_id, holder_id = $holder, \
-                 share_class = 'Common', shares = -5, inserted_at = '', updated_at = ''",
-            )
-            .bind(("project_id", record_id("project", project_id)))
-            .bind(("holder", record_id("entity", seed_entity(&surreal).await)))
-            .await
-            .and_then(surrealdb::IndexedResults::check);
-        assert!(result.is_err());
+        with_postgres!(pg, surreal, {
+            let project_id =
+                crate::postgres::matter::tests::postgres_project(&pg, "sample-cap-line").await;
+            let person_id =
+                crate::postgres::matter::tests::postgres_person(&pg, "line@example.com").await;
+            let other =
+                crate::postgres::matter::tests::postgres_person(&pg, "line-other@example.com")
+                    .await;
+            insert(&surreal, project_id, &holding(person_id, "Common", 100))
+                .await
+                .unwrap();
+            insert(&surreal, project_id, &holding(other, "Common", 100))
+                .await
+                .unwrap();
+            let error = insert(&surreal, project_id, &holding(person_id, "Common", 5))
+                .await
+                .unwrap_err();
+            assert!(matches!(error, CapTableHoldingError::Invalid(_)), "{error}");
+            let found = find_by_line(&surreal, project_id, Party::person(person_id), " Common")
+                .await
+                .unwrap()
+                .expect("the line");
+            assert_eq!(found.shares, 100);
+        });
     }
 
     #[tokio::test]
     async fn rows_are_scoped_to_their_project() {
-        let surreal = mem_surreal().await;
-        let mine = project(&surreal, "sample-cap-mine").await;
-        let other = project(&surreal, "sample-cap-other").await;
-        let person_id = person(&surreal, "cap-scoped@example.com").await;
-        let stored = insert(&surreal, mine, &holding(person_id, "Common", 10))
-            .await
-            .unwrap();
-        assert!(list(&surreal, other).await.unwrap().is_empty());
-        assert!(find(&surreal, other, stored.id).await.unwrap().is_none());
-        delete_for_project(&surreal, mine).await.unwrap();
-        assert!(list(&surreal, mine).await.unwrap().is_empty());
+        with_postgres!(pg, surreal, {
+            let mine =
+                crate::postgres::matter::tests::postgres_project(&pg, "sample-cap-mine").await;
+            let other =
+                crate::postgres::matter::tests::postgres_project(&pg, "sample-cap-other").await;
+            let person_id =
+                crate::postgres::matter::tests::postgres_person(&pg, "cap-scoped@example.com")
+                    .await;
+            let stored = insert(&surreal, mine, &holding(person_id, "Common", 10))
+                .await
+                .unwrap();
+            assert!(list(&surreal, other).await.unwrap().is_empty());
+            assert!(find(&surreal, other, stored.id).await.unwrap().is_none());
+            delete_for_project(&surreal, mine).await.unwrap();
+            assert!(list(&surreal, mine).await.unwrap().is_empty());
+        });
     }
 }
+
+#[cfg(test)]
+#[path = "cap_table_holdings/compatibility_tests.rs"]
+mod compatibility_tests;

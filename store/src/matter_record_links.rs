@@ -25,6 +25,23 @@ pub(crate) async fn require_project(
     }
 }
 
+/// The Project exists in PostgreSQL.
+pub(crate) async fn require_project_on(
+    pg: &crate::postgres::PostgresDb,
+    project_id: Uuid,
+) -> Result<(), LinkRefusal> {
+    let found: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM public.project WHERE id=$1)")
+        .bind(project_id)
+        .fetch_one(pg.pool())
+        .await
+        .map_err(|error| LinkRefusal::from(error.to_string()))?;
+    if found {
+        Ok(())
+    } else {
+        Err("no such Project".into())
+    }
+}
+
 /// The Person or Entity `party` names exists. `noun` names the link in the
 /// refusal ("fiduciary", "holder").
 pub(crate) async fn require_party(
@@ -95,6 +112,25 @@ pub(crate) async fn require_project_notation(
         Ok(Some(_)) => Err("the instrument Notation is not on this Project".into()),
         Ok(None) => Err("no such instrument Notation".into()),
         Err(error) => Err(error.to_string()),
+    }
+}
+
+/// The Notation exists in PostgreSQL and belongs to this Project.
+pub(crate) async fn require_project_notation_on(
+    pg: &crate::postgres::PostgresDb,
+    project_id: Uuid,
+    notation_id: Uuid,
+) -> Result<(), LinkRefusal> {
+    let notation_project: Option<Uuid> =
+        sqlx::query_scalar("SELECT project_id FROM public.notation WHERE id=$1")
+            .bind(notation_id)
+            .fetch_optional(pg.pool())
+            .await
+            .map_err(|error| LinkRefusal::from(error.to_string()))?;
+    match notation_project {
+        Some(owner) if owner == project_id => Ok(()),
+        Some(_) => Err("the instrument Notation is not on this Project".into()),
+        None => Err("no such instrument Notation".into()),
     }
 }
 
