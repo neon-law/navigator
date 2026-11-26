@@ -188,6 +188,41 @@ pub async fn all_on(pg: &PostgresDb) -> Result<Vec<Project>, ProjectError> {
         .collect()
 }
 
+/// The repository coordinates of Projects explicitly owned by the selected Firm.
+#[derive(Debug)]
+pub struct FirmProjectSource {
+    pub id: Uuid,
+    pub code: String,
+    pub repository_url: Option<String>,
+}
+
+/// List a Firm's Projects in stable order, including closed and unprovisioned Projects.
+pub async fn firm_project_sources_on(
+    pg: &PostgresDb,
+    firm_id: Uuid,
+    after: Option<Uuid>,
+    limit: i64,
+) -> Result<Vec<FirmProjectSource>, ProjectError> {
+    let rows: Vec<(Uuid, String, Option<String>)> = sqlx::query_as(
+        "SELECT id, code, repository_url FROM project
+         WHERE firm_id = $1 AND ($2::uuid IS NULL OR id > $2)
+         ORDER BY id LIMIT $3",
+    )
+    .bind(firm_id)
+    .bind(after)
+    .bind(limit)
+    .fetch_all(pg.pool())
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, code, repository_url)| FirmProjectSource {
+            id,
+            code,
+            repository_url,
+        })
+        .collect())
+}
+
 /// Create a Project with a fresh UUIDv4 and database-maintained timestamps.
 pub async fn create_on(pg: &PostgresDb, input: &NewProject) -> Result<Project, ProjectError> {
     write_on(pg, Uuid::new_v4(), input, false).await

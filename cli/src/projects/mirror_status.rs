@@ -19,6 +19,100 @@ use super::lifecycle::{git_text, github_origin};
 use super::mirror::{self, Relation};
 use super::{manifest, workspace_root, workspace_skills};
 
+#[derive(serde::Deserialize)]
+struct FirmParityPage {
+    projects: Vec<FirmParityRow>,
+    next: Option<uuid::Uuid>,
+}
+
+#[derive(serde::Deserialize, Serialize)]
+struct FirmParityRow {
+    code: String,
+    result: FirmParityResult,
+}
+
+#[derive(serde::Deserialize, Serialize)]
+struct FirmParityResult {
+    status: String,
+    github_main: Option<String>,
+    forgejo_main: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    issue: Option<serde_json::Value>,
+}
+
+async fn firm_rows(base: &str, token: &str, firm: uuid::Uuid) -> Result<Vec<FirmParityRow>> {
+    let client = reqwest::Client::new();
+    let url = format!("{base}/app/api/firms/{firm}/forgejo-parity");
+    let mut rows = Vec::new();
+    let mut cursor = None;
+    loop {
+        let request = client
+            .get(&url)
+            .bearer_auth(token)
+            .timeout(std::time::Duration::from_secs(30));
+        let request = match cursor {
+            Some(after) => request.query(&[("after", after)]),
+            None => request,
+        };
+        let page: FirmParityPage = request
+            .send()
+            .await
+            .context("read Firm Forgejo parity")?
+            .error_for_status()
+            .context("read Firm Forgejo parity")?
+            .json()
+            .await
+            .context("parse Firm Forgejo parity")?;
+        rows.extend(page.projects);
+        let Some(next) = page.next else {
+            return Ok(rows);
+        };
+        ensure!(
+            Some(next) > cursor,
+            "Firm Forgejo parity cursor did not advance"
+        );
+        cursor = Some(next);
+    }
+}
+
+pub async fn run_firm(host: Option<&str>, firm: &str, json: bool) -> ExitCode {
+    let result = async {
+        let (base, token) = crate::remote::resolve(host)?;
+        let firm = match uuid::Uuid::parse_str(firm) {
+            Ok(id) => id,
+            Err(_) => crate::remote::resolve_firm(&base, &token, firm, None).await?,
+        };
+        let rows = firm_rows(&base, &token, firm).await?;
+        if json {
+            println!("{}", serde_json::to_string_pretty(&rows)?);
+        } else {
+            println!("PROJECT  STATUS  FORGEJO MAIN  GITHUB MAIN");
+            for row in &rows {
+                println!(
+                    "{}  {}  {}  {}",
+                    row.code,
+                    row.result.status,
+                    row.result.forgejo_main.as_deref().unwrap_or("—"),
+                    row.result.github_main.as_deref().unwrap_or("—")
+                );
+            }
+        }
+        Ok::<_, anyhow::Error>(
+            rows.iter()
+                .all(|row| matches!(row.result.status.as_str(), "equal" | "forgejo_only")),
+        )
+    }
+    .await;
+    match result {
+        Ok(true) => ExitCode::SUCCESS,
+        Ok(false) => ExitCode::FAILURE,
+        Err(error) => {
+            eprintln!("navigator project mirror-status: {error:#}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 const MAIN: &str = "refs/heads/main";
 
 /// One Project's mirror standing.
@@ -163,6 +257,41 @@ pub async fn run(dir: Option<&Path>, json: bool) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn firm_inventory_reads_every_page_without_a_checkout() {
+        use wiremock::matchers::{header, method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let firm = uuid::Uuid::from_u128(1);
+        let after = uuid::Uuid::from_u128(2);
+        let route = format!("/app/api/firms/{firm}/forgejo-parity");
+        Mock::given(method("GET"))
+            .and(path(route.as_str()))
+            .and(header("authorization", "Bearer session"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "projects": [{"code": "first", "result": {"status": "equal"}}],
+                "next": after
+            })))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(route.as_str()))
+            .and(query_param("after", after.to_string()))
+            .and(header("authorization", "Bearer session"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "projects": [{"code": "second", "result": {"status": "forgejo_missing"}}],
+                "next": null
+            })))
+            .mount(&server)
+            .await;
+        let rows = firm_rows(&server.uri(), "session", firm).await.unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].code, "first");
+        assert_eq!(rows[1].result.status, "forgejo_missing");
+    }
 
     fn run_git(dir: &Path, args: &[&str]) -> String {
         let output = std::process::Command::new("git")

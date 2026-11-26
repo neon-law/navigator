@@ -56,6 +56,42 @@ pub(super) async fn fixture() -> Option<Fixture> {
 }
 
 #[tokio::test]
+async fn firm_source_inventory_pages_through_closed_and_unprovisioned_projects() {
+    use super::projects::{create_on, firm_project_sources_on};
+
+    let Some(Fixture { pg, input }) = fixture().await else {
+        return;
+    };
+    let firm = input.firm_id.unwrap();
+    let open = create_on(&pg, &input).await.unwrap();
+    let closed = create_on(
+        &pg,
+        &NewProject {
+            code: "synthetic-closed".into(),
+            status: "closed".into(),
+            ..input
+        },
+    )
+    .await
+    .unwrap();
+    let first = firm_project_sources_on(&pg, firm, None, 1).await.unwrap();
+    assert_eq!(first.len(), 1);
+    let second = firm_project_sources_on(&pg, firm, Some(first[0].id), 1)
+        .await
+        .unwrap();
+    assert_eq!(second.len(), 1);
+    let mut expected = [open.id, closed.id];
+    expected.sort();
+    assert_eq!([first[0].id, second[0].id], expected);
+    assert!(first[0].repository_url.is_none());
+    assert!(second[0].repository_url.is_none());
+    assert!(firm_project_sources_on(&pg, Uuid::new_v4(), None, 1)
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
 async fn visible_project_lists_and_code_lookups_respect_participation_side() {
     use crate::access::{visible_firm_project_by_code, visible_projects};
     use crate::persons::Role;

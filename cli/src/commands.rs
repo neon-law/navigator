@@ -1065,6 +1065,11 @@ pub enum ProjectsCmd {
         /// Emit the rows as JSON.
         #[arg(long)]
         json: bool,
+        /// Read the live parity report for every Project in this Firm (name or UUID).
+        #[arg(long, conflicts_with = "dir")]
+        firm: Option<String>,
+        #[command(flatten)]
+        host: HostOpt,
     },
     /// Read the Project's onboarding status: optional, pitch, or official.
     Lifecycle {
@@ -3318,9 +3323,17 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
                 .await
             }
         },
-        ProjectsCmd::MirrorStatus { dir, json } => {
-            projects::mirror_status::run(dir.as_deref(), json).await
-        }
+        ProjectsCmd::MirrorStatus {
+            dir,
+            json,
+            firm,
+            host,
+        } => match firm {
+            Some(firm) => {
+                projects::mirror_status::run_firm(host.host.as_deref(), &firm, json).await
+            }
+            None => projects::mirror_status::run(dir.as_deref(), json).await,
+        },
         ProjectsCmd::Status {
             host,
             project_code,
