@@ -396,7 +396,10 @@ pub async fn list(pg: &PostgresDb, project: Uuid, firm: Uuid) -> Result<Vec<Clai
         .execute(&mut *tx)
         .await?;
     let rows = claim_rows(&mut tx, project, firm).await?;
-    let mut claims = rows.into_iter().map(Claim::from).collect::<Vec<_>>();
+    let mut claims = rows
+        .into_iter()
+        .map(|(row, _)| Claim::from(row))
+        .collect::<Vec<_>>();
     for claim in &mut claims {
         read_evidence(&mut tx, claim).await?;
     }
@@ -408,9 +411,11 @@ async fn claim_rows(
     connection: &mut sqlx::PgConnection,
     project: Uuid,
     firm: Uuid,
-) -> Result<Vec<ClaimRow>, ClaimError> {
-    Ok(sqlx::query_as(
-        "SELECT c.id, c.project_id, c.legal_plan_id, c.plan_case_number, c.state
+) -> Result<Vec<(ClaimRow, String)>, ClaimError> {
+    use sqlx::{FromRow, Row};
+
+    Ok(sqlx::query(
+        "SELECT c.id, c.project_id, c.legal_plan_id, c.plan_case_number, c.state, l.name AS plan_name
          FROM legal_plan_claim c JOIN legal_plan l ON l.id = c.legal_plan_id
          JOIN project p ON p.id = c.project_id
          WHERE c.project_id = $1 AND l.firm_id = $2 AND p.firm_id = $2
@@ -418,8 +423,39 @@ async fn claim_rows(
     )
     .bind(project)
     .bind(firm)
+    .try_map(|row| Ok((ClaimRow::from_row(&row)?, row.try_get("plan_name")?)))
     .fetch_all(connection)
     .await?)
+}
+
+/// Recorded claim amounts and the Time Entries already included in its actual minutes.
+pub struct MatterClaim {
+    pub plan_name: String,
+    pub plan_case_number: String,
+    pub attorney_minutes: Option<i32>,
+    pub time_entry_ids: Vec<Uuid>,
+    pub billing: model::billing_report::ClaimBilling,
+}
+
+/// Read claim snapshots for a Project after its participation and Firm capability checks.
+pub async fn for_matter_billing(
+    connection: &mut sqlx::PgConnection,
+    project: &crate::projects::Project,
+    firm: Uuid,
+) -> Result<Vec<MatterClaim>, ClaimError> {
+    claim_rows(connection, project.id, firm)
+        .await?
+        .into_iter()
+        .map(|((id, _, _, plan_case_number, state), plan_name)| {
+            Ok(MatterClaim {
+                billing: state.billing(id, &project.code)?,
+                plan_name,
+                plan_case_number,
+                attorney_minutes: state.work.attorney_minutes,
+                time_entry_ids: state.0.work.time_entry_ids,
+            })
+        })
+        .collect()
 }
 
 pub(crate) async fn billing_rows(
@@ -427,14 +463,11 @@ pub(crate) async fn billing_rows(
     project: &crate::projects::Project,
     firm: Uuid,
 ) -> Result<Vec<(model::billing_report::ClaimBilling, Vec<Uuid>)>, ClaimError> {
-    claim_rows(connection, project.id, firm)
+    Ok(for_matter_billing(connection, project, firm)
         .await?
         .into_iter()
-        .map(|(id, _, _, _, state)| {
-            let billing = state.billing(id, &project.code)?;
-            Ok((billing, state.0.work.time_entry_ids))
-        })
-        .collect()
+        .map(|row| (row.billing, row.time_entry_ids))
+        .collect())
 }
 
 impl ClaimState {
