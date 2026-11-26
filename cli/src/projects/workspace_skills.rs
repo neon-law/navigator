@@ -7,12 +7,16 @@
 //! names each Firm's library from the Firm's own record
 //! (`GET /app/api/firm-libraries`), so no repository URL is compiled in.
 //!
-//! A Project checkout sees the generic layer plus its own Firm's skills, and
-//! never another Firm's: its git-ignored `.claude/skills/` holds one relative
-//! link per skill. A Firm skill replaces a generic skill of the same name, and
+//! A Project checkout sees the generic layer plus its own Firm's skills and
+//! rules, and never another Firm's: its git-ignored `.claude/skills/` holds
+//! one relative link per skill, and its `.claude/rules/AGENTS.md` links the
+//! Firm Library's `AGENTS.md` — that checkout's Firm's rules, and no other
+//! Firm's. A Firm skill replaces a generic skill of the same name, and
 //! sync reports the override. Each Firm fails closed on its own: an unreadable
 //! host or an unreachable library leaves the generic layer and every other
-//! Firm in place, and sync names what is missing.
+//! Firm in place, and sync names what is missing. A checkout whose Firm
+//! cannot be resolved keeps the Firm links it already has rather than losing
+//! them to a pass that cannot re-derive them.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -35,9 +39,15 @@ pub const FIRM_DIRECTORY: &str = ".firm";
 const OWNED_FILE: &str = ".navigator-owned";
 const SKILLS: &str = ".agents/skills";
 const CLAUDE_SKILLS: &str = ".claude/skills";
-/// Relative link prefixes sync writes, and so recognizes as its own.
+/// The git-ignored folder where each checkout's own Firm's rules load: one
+/// link, `AGENTS.md`, into `.firm/<that checkout's Firm slug>/AGENTS.md`.
+const CLAUDE_RULES: &str = ".claude/rules";
+/// Relative link prefixes sync writes, and so recognizes as its own. The
+/// rules prefix reaches a checkout's `.claude/rules/AGENTS.md` into the Firm
+/// Library checkout itself, `<root>/.firm/<slug>/AGENTS.md`.
 const ROOT_LINK: &str = "../../.agents/skills/";
-const PROJECT_LINK: &str = "../../../.agents/skills/";
+pub(crate) const PROJECT_LINK: &str = "../../../.agents/skills/";
+const FIRM_RULES_LINK: &str = "../../../.firm/";
 
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
@@ -113,12 +123,16 @@ impl Report {
 }
 
 /// Write the generic layer, link each present Firm library, and scope every
-/// checkout's `.claude/skills/`. `project_firms` maps a checkout's code to its
-/// Firm slug; a checkout absent from it gets the generic layer only.
+/// checkout's `.claude/skills/` and `.claude/rules/`. `project_firms` maps a
+/// checkout's code to its Firm slug; a checkout absent from it gets the
+/// generic layer only. `preserve` names checkouts whose Firm could not be
+/// resolved this pass: they keep the Firm skill and rules links they already
+/// have rather than losing them to a pass that cannot re-derive them.
 pub fn materialize(
     root: &Path,
     generic: &[(&str, &str)],
     project_firms: &BTreeMap<String, String>,
+    preserve: &BTreeSet<String>,
     dry_run: bool,
 ) -> Result<Report> {
     let mut report = Report::default();
@@ -158,6 +172,7 @@ pub fn materialize(
             &wanted,
             "../../../",
             &format!("{SKILLS}/{slug}"),
+            "SKILL.md",
         )?;
         now_owned.insert(format!("firm:{slug}"));
     }
@@ -189,42 +204,112 @@ pub fn materialize(
         &root_links,
         ROOT_LINK,
         CLAUDE_SKILLS,
+        "SKILL.md",
     )?;
 
     for checkout in checkouts(root) {
-        let firm = project_firms.get(&checkout.code);
-        let mut links: BTreeMap<String, String> = generic
-            .iter()
-            .map(|(name, _)| ((*name).to_string(), format!("{PROJECT_LINK}{name}")))
-            .collect();
-        if let Some(names) = firm.and_then(|slug| firms.get(slug).map(|names| (slug, names))) {
-            let (slug, names) = names;
-            for name in names {
-                if links.contains_key(name) {
-                    io.report.notes.push(format!(
-                        "{}: Firm skill {slug}/{name} overrides the generic {name}",
-                        checkout.code
-                    ));
-                }
-                links.insert(name.clone(), format!("{PROJECT_LINK}{slug}/{name}"));
-            }
-        }
-        if !ignores_claude_skills(&checkout.dir) {
-            io.report.missing.push(format!(
-                "{}: `.gitignore` lacks `{CLAUDE_SKILLS}/`; run `navigator project repository sync-skills` there",
-                checkout.code
-            ));
-            continue;
-        }
-        let label = format!("{}/{CLAUDE_SKILLS}", checkout.code);
-        io.links(
-            &checkout.dir.join(CLAUDE_SKILLS),
-            &links,
-            PROJECT_LINK,
-            &label,
+        link_checkout(
+            &mut io,
+            root,
+            &checkout,
+            generic,
+            &firms,
+            project_firms,
+            preserve,
         )?;
     }
     Ok(report)
+}
+
+/// Scope one checkout's `.claude/skills/` and `.claude/rules/` to the generic
+/// layer plus its own Firm's skills and rules — never another Firm's.
+#[allow(clippy::too_many_arguments)]
+fn link_checkout(
+    io: &mut Writer<'_>,
+    root: &Path,
+    checkout: &Checkout,
+    generic: &[(&str, &str)],
+    firms: &BTreeMap<String, Vec<String>>,
+    project_firms: &BTreeMap<String, String>,
+    preserve: &BTreeSet<String>,
+) -> Result<()> {
+    let firm = project_firms.get(&checkout.code);
+    let mut links: BTreeMap<String, String> = generic
+        .iter()
+        .map(|(name, _)| ((*name).to_string(), format!("{PROJECT_LINK}{name}")))
+        .collect();
+    if let Some((slug, names)) = firm.and_then(|slug| firms.get(slug).map(|names| (slug, names))) {
+        for name in names {
+            if links.contains_key(name) {
+                io.report.notes.push(format!(
+                    "{}: Firm skill {slug}/{name} overrides the generic {name}",
+                    checkout.code
+                ));
+            }
+            links.insert(name.clone(), format!("{PROJECT_LINK}{slug}/{name}"));
+        }
+    } else if preserve.contains(&checkout.code) {
+        links.extend(existing_firm_links(&checkout.dir.join(CLAUDE_SKILLS)));
+    }
+    // This checkout's own Firm's rules, loaded the same way its skills
+    // are: one link into `.firm/<its slug>/AGENTS.md`. A Firm with no
+    // rules file links none, and no checkout ever links another Firm's.
+    let mut rules = BTreeMap::new();
+    if let Some(slug) = firm.filter(|slug| {
+        root.join(FIRM_DIRECTORY)
+            .join(slug)
+            .join("AGENTS.md")
+            .is_file()
+    }) {
+        rules.insert(
+            "AGENTS.md".to_string(),
+            format!("{FIRM_RULES_LINK}{slug}/AGENTS.md"),
+        );
+    } else if preserve.contains(&checkout.code) {
+        rules.extend(existing_firm_links(&checkout.dir.join(CLAUDE_RULES)));
+    }
+    if !ignores_synced_agent_state(&checkout.dir) {
+        io.report.missing.push(format!(
+            "{}: `.gitignore` lacks `{CLAUDE_SKILLS}/` and `{CLAUDE_RULES}/`; \
+             run `navigator project repository sync-skills` there",
+            checkout.code
+        ));
+        return Ok(());
+    }
+    let label = format!("{code}/{CLAUDE_SKILLS}", code = checkout.code);
+    io.links(
+        &checkout.dir.join(CLAUDE_SKILLS),
+        &links,
+        PROJECT_LINK,
+        &label,
+        "SKILL.md",
+    )?;
+    io.links(
+        &checkout.dir.join(CLAUDE_RULES),
+        &rules,
+        FIRM_RULES_LINK,
+        &format!("{}/{}", checkout.code, CLAUDE_RULES),
+        "AGENTS.md",
+    )
+}
+
+/// The sync-written links in `dir` that reach into a Firm library, name →
+/// target. A checkout whose Firm cannot be resolved keeps exactly these,
+/// rather than losing them to a pass that cannot re-derive them.
+fn existing_firm_links(dir: &Path) -> BTreeMap<String, String> {
+    let mut found = BTreeMap::new();
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let Ok(target) = std::fs::read_link(entry.path()) else {
+            continue;
+        };
+        let target = target.to_string_lossy().into_owned();
+        // Sync's own two conventions: checkout skill links into the
+        // `.agents/skills/` namespace and rules links into `.firm/`.
+        if target.starts_with(PROJECT_LINK) || target.contains(FIRM_DIRECTORY) {
+            found.insert(entry.file_name().to_string_lossy().into_owned(), target);
+        }
+    }
+    found
 }
 
 /// Each present Firm library's skills, by slug. A skill without a `SKILL.md`,
@@ -300,11 +385,16 @@ fn read_owned(skills: &Path) -> BTreeSet<String> {
         .collect()
 }
 
-fn ignores_claude_skills(checkout: &Path) -> bool {
-    std::fs::read_to_string(checkout.join(".gitignore"))
-        .unwrap_or_default()
-        .lines()
-        .any(|line| matches!(line.trim(), ".claude/skills/" | "/.claude/skills/"))
+/// Whether the checkout's `.gitignore` hides the git-ignored agent state sync
+/// maintains there: the skill links and the Firm rules link.
+fn ignores_synced_agent_state(checkout: &Path) -> bool {
+    let gitignore = std::fs::read_to_string(checkout.join(".gitignore")).unwrap_or_default();
+    let hides = |path: &str| {
+        gitignore
+            .lines()
+            .any(|line| matches!(line.trim(), seen if seen == path || seen == format!("/{path}")))
+    };
+    hides(&format!("{CLAUDE_SKILLS}/")) && hides(&format!("{CLAUDE_RULES}/"))
 }
 
 struct Writer<'a> {
@@ -352,6 +442,7 @@ impl Writer<'_> {
         wanted: &BTreeMap<String, String>,
         ours: &str,
         label: &str,
+        resolves: &str,
     ) -> Result<()> {
         if let Ok(entries) = std::fs::read_dir(dir) {
             for entry in entries.flatten() {
@@ -397,10 +488,14 @@ impl Writer<'_> {
             }
             std::fs::create_dir_all(dir)?;
             symlink(target, &path).with_context(|| format!("link {}", path.display()))?;
-            if !path.join("SKILL.md").is_file() {
+            // A skill link reaches a skill directory (check for `resolves`
+            // inside it); a rules link reaches the document itself.
+            let link_ok = std::fs::metadata(&path)
+                .is_ok_and(|meta| meta.is_file() || path.join(resolves).is_file());
+            if !link_ok {
                 self.report
                     .missing
-                    .push(format!("{label}/{name} does not resolve to a SKILL.md"));
+                    .push(format!("{label}/{name} does not resolve to {resolves}"));
             }
         }
         Ok(())
@@ -431,53 +526,23 @@ pub async fn sync(root: &Path, default_host: &str, dry_run: bool) -> Result<Repo
 
     let mut project_firms = BTreeMap::new();
     let mut libraries: BTreeMap<String, Option<String>> = BTreeMap::new();
+    // Checkouts whose Firm this pass cannot resolve, and every Firm slug a
+    // manifest names whether or not it resolved. Neither may cost a checkout
+    // its existing Firm links, or a named Firm its checked-out library.
+    let mut unresolved: BTreeSet<String> = BTreeSet::new();
+    let named_firms: BTreeSet<String> = all
+        .iter()
+        .filter_map(|checkout| checkout.firm.clone())
+        .collect();
     let mut every_host_read = true;
     for (host, members) in &hosts {
-        let listed = match firm_libraries(host).await {
-            Ok(listed) => listed,
-            Err(error) => {
-                every_host_read = false;
-                report
-                    .missing
-                    .push(format!("could not read {host}: {error:#}"));
-                continue;
-            }
-        };
-        for checkout in members {
-            let firm = match (&checkout.firm, listed.as_slice()) {
-                (Some(slug), _) if listed.iter().any(|firm| &firm.slug == slug) => slug.clone(),
-                (Some(slug), _) => {
-                    report.missing.push(format!(
-                        "{}: Firm `{slug}` is not one of your Firms on {host}",
-                        checkout.code
-                    ));
-                    continue;
-                }
-                (None, [only]) => only.slug.clone(),
-                (None, _) => {
-                    report.missing.push(format!(
-                        "{}: navigator.yaml names no `firm` and {host} lists {} Firms for you",
-                        checkout.code,
-                        listed.len()
-                    ));
-                    continue;
-                }
-            };
-            let url = listed
-                .iter()
-                .find(|library| library.slug == firm)
-                .and_then(|library| library.repository_url.clone());
-            match libraries.get(&firm) {
-                Some(seen) if *seen != url => report.missing.push(format!(
-                    "Firm `{firm}` names two different libraries across hosts; using the first"
-                )),
-                Some(_) => {}
-                None => {
-                    libraries.insert(firm.clone(), url);
-                }
-            }
-            project_firms.insert(checkout.code.clone(), firm);
+        let (firms, libs, unresolved_here) =
+            resolve_host_firms(host, members, &mut report, &mut every_host_read).await;
+        for (firm, url) in libs {
+            merge_library(&mut libraries, &mut report, firm, url);
         }
+        project_firms.extend(firms);
+        unresolved.extend(unresolved_here);
     }
 
     let firm_root = root.join(FIRM_DIRECTORY);
@@ -504,13 +569,14 @@ pub async fn sync(root: &Path, default_host: &str, dry_run: bool) -> Result<Repo
         }
     }
     if every_host_read {
-        remove_unused_libraries(&firm_root, &libraries, dry_run, &mut report).await;
+        remove_unused_libraries(&firm_root, &libraries, &named_firms, dry_run, &mut report).await;
     }
 
     let mut materialized = materialize(
         root,
         project_scaffold::WORKSPACE_SKILLS,
         &project_firms,
+        &unresolved,
         dry_run,
     )?;
     report.changes.append(&mut materialized.changes);
@@ -530,6 +596,97 @@ async fn firm_libraries(host: &str) -> Result<Vec<FirmLibrary>> {
         .await?
         .error_for_status()?;
     Ok(response.json().await?)
+}
+
+/// Resolve one host's checkouts against its Firm listing: checkout code →
+/// Firm slug, Firm slug → library repository URL, and the codes left
+/// unresolved (their Firm is refused or the host could not be read). The
+/// caller preserves unresolved checkouts' existing links.
+async fn resolve_host_firms(
+    host: &str,
+    members: &[&Checkout],
+    report: &mut Report,
+    every_host_read: &mut bool,
+) -> (
+    BTreeMap<String, String>,
+    Vec<(String, Option<String>)>,
+    BTreeSet<String>,
+) {
+    let mut project_firms = BTreeMap::new();
+    let mut libraries = Vec::new();
+    let mut unresolved = BTreeSet::new();
+    let listed = match firm_libraries(host).await {
+        Ok(listed) => listed,
+        Err(error) => {
+            *every_host_read = false;
+            unresolved.extend(members.iter().map(|checkout| checkout.code.clone()));
+            report
+                .missing
+                .push(format!("could not read {host}: {error:#}"));
+            return (project_firms, libraries, unresolved);
+        }
+    };
+    for checkout in members {
+        let firm = match (&checkout.firm, listed.as_slice()) {
+            (Some(slug), _) if listed.iter().any(|firm| &firm.slug == slug) => slug.clone(),
+            (Some(slug), []) => {
+                unresolved.insert(checkout.code.clone());
+                report.missing.push(format!(
+                    "{}: {host} lists no Firms for your session; run \
+                     `navigator site login --host {host}` — if you do belong to Firm \
+                     `{slug}`, its admin or the deployment's Owner must add you there",
+                    checkout.code
+                ));
+                continue;
+            }
+            (Some(slug), _) => {
+                unresolved.insert(checkout.code.clone());
+                report.missing.push(format!(
+                    "{}: you are not a member of Firm `{slug}` on {host}; a Firm admin \
+                     or the deployment's Owner must add you on the site (there is no \
+                     self-serve join), then run `navigator sync` again",
+                    checkout.code
+                ));
+                continue;
+            }
+            (None, [only]) => only.slug.clone(),
+            (None, _) => {
+                unresolved.insert(checkout.code.clone());
+                report.missing.push(format!(
+                    "{}: navigator.yaml names no `firm` and {host} lists {} Firms for you",
+                    checkout.code,
+                    listed.len()
+                ));
+                continue;
+            }
+        };
+        let url = listed
+            .iter()
+            .find(|library| library.slug == firm)
+            .and_then(|library| library.repository_url.clone());
+        libraries.push((firm.clone(), url));
+        project_firms.insert(checkout.code.clone(), firm);
+    }
+    (project_firms, libraries, unresolved)
+}
+
+/// Record a Firm's library repository URL, flagging a Firm whose hosts
+/// disagree (the first URL seen wins).
+fn merge_library(
+    libraries: &mut BTreeMap<String, Option<String>>,
+    report: &mut Report,
+    firm: String,
+    url: Option<String>,
+) {
+    match libraries.get(&firm) {
+        Some(seen) if *seen != url => report.missing.push(format!(
+            "Firm `{firm}` names two different libraries across hosts; using the first"
+        )),
+        Some(_) => {}
+        None => {
+            libraries.insert(firm, url);
+        }
+    }
 }
 
 /// Clone a Firm library into `.firm/<slug>`, or fast-forward an existing one
@@ -588,10 +745,12 @@ async fn checkout_library(firm_root: &Path, slug: &str, url: &str) -> Result<()>
 }
 
 /// Remove a `.firm/<slug>` whose Firm no longer backs any checkout, unless it
-/// holds local edits.
+/// holds local edits or a manifest still names it: a checkout whose Firm this
+/// pass could not resolve must not cost its Firm the checked-out library.
 async fn remove_unused_libraries(
     firm_root: &Path,
     wanted: &BTreeMap<String, Option<String>>,
+    named: &BTreeSet<String>,
     dry_run: bool,
     report: &mut Report,
 ) {
@@ -600,7 +759,11 @@ async fn remove_unused_libraries(
     };
     for entry in entries.flatten() {
         let slug = entry.file_name().to_string_lossy().into_owned();
-        if slug.starts_with('.') || wanted.contains_key(&slug) || !entry.path().is_dir() {
+        if slug.starts_with('.')
+            || wanted.contains_key(&slug)
+            || named.contains(&slug)
+            || !entry.path().is_dir()
+        {
             continue;
         }
         let edits =
@@ -647,7 +810,7 @@ mod tests {
             format!("project: {code}\nhost: https://example.test\nfirm: {firm}\n"),
         )
         .unwrap();
-        std::fs::write(dir.join(".gitignore"), ".claude/skills/\n").unwrap();
+        std::fs::write(dir.join(".gitignore"), ".claude/skills/\n.claude/rules/\n").unwrap();
     }
 
     fn firm_skill(root: &Path, slug: &str, name: &str, body: &str) {
@@ -683,7 +846,7 @@ mod tests {
             None => format!("project: {code}\n"),
         };
         std::fs::write(dir.join("navigator.yaml"), manifest).unwrap();
-        std::fs::write(dir.join(".gitignore"), ".claude/skills/\n").unwrap();
+        std::fs::write(dir.join(".gitignore"), ".claude/skills/\n.claude/rules/\n").unwrap();
     }
 
     #[tokio::test]
@@ -712,7 +875,11 @@ mod tests {
         report.print(true);
         for expected in [
             "could not read https://signed-out.example.test: ".to_string(),
-            format!("beta: Firm `unlisted-firm` is not one of your Firms on {host}"),
+            format!(
+                "beta: you are not a member of Firm `unlisted-firm` on {host}; a Firm admin \
+                 or the deployment's Owner must add you on the site (there is no \
+                 self-serve join), then run `navigator sync` again"
+            ),
             format!("gamma: navigator.yaml names no `firm` and {host} lists 3 Firms for you"),
             format!("eta: navigator.yaml names no `firm` and {host} lists 3 Firms for you"),
             "Firm `bare-firm` has no Firm Library repository on its host".to_string(),
@@ -851,7 +1018,14 @@ mod tests {
     fn an_empty_root_gets_agents_skills_and_relative_claude_links() {
         let root = tempfile::tempdir().unwrap();
         let catalog = project_scaffold::WORKSPACE_SKILLS;
-        let report = materialize(root.path(), catalog, &BTreeMap::new(), false).unwrap();
+        let report = materialize(
+            root.path(),
+            catalog,
+            &BTreeMap::new(),
+            &BTreeSet::new(),
+            false,
+        )
+        .unwrap();
         assert_eq!(
             std::fs::read_to_string(root.path().join("AGENTS.md")).unwrap(),
             WORKSPACE_AGENTS
@@ -866,20 +1040,41 @@ mod tests {
             skill_text(&root.path().join(SKILLS).join("today"))
         );
         assert!(report.missing.is_empty(), "{:?}", report.missing);
-        let again = materialize(root.path(), catalog, &BTreeMap::new(), false).unwrap();
+        let again = materialize(
+            root.path(),
+            catalog,
+            &BTreeMap::new(),
+            &BTreeSet::new(),
+            false,
+        )
+        .unwrap();
         assert!(again.changes.is_empty(), "{:?}", again.changes);
     }
 
     #[test]
     fn a_drifted_owned_skill_is_restored_a_stale_one_removed_and_a_local_one_kept() {
         let root = tempfile::tempdir().unwrap();
-        materialize(root.path(), GENERIC, &BTreeMap::new(), false).unwrap();
+        materialize(
+            root.path(),
+            GENERIC,
+            &BTreeMap::new(),
+            &BTreeSet::new(),
+            false,
+        )
+        .unwrap();
         let skills = root.path().join(SKILLS);
         std::fs::write(skills.join("records-subpoena/SKILL.md"), "edited").unwrap();
         std::fs::create_dir_all(skills.join("my-notes")).unwrap();
         std::fs::write(skills.join("my-notes/SKILL.md"), "mine").unwrap();
 
-        let dry = materialize(root.path(), &GENERIC[..1], &BTreeMap::new(), true).unwrap();
+        let dry = materialize(
+            root.path(),
+            &GENERIC[..1],
+            &BTreeMap::new(),
+            &BTreeSet::new(),
+            true,
+        )
+        .unwrap();
         assert!(dry
             .changes
             .contains(&format!("restore {SKILLS}/records-subpoena")));
@@ -891,7 +1086,14 @@ mod tests {
             "edited"
         );
 
-        materialize(root.path(), &GENERIC[..1], &BTreeMap::new(), false).unwrap();
+        materialize(
+            root.path(),
+            &GENERIC[..1],
+            &BTreeMap::new(),
+            &BTreeSet::new(),
+            false,
+        )
+        .unwrap();
         assert_eq!(skill_text(&skills.join("records-subpoena")), GENERIC[0].1);
         assert!(!skills.join("email-draft").exists());
         assert!(
@@ -907,7 +1109,14 @@ mod tests {
     fn a_hand_written_agents_file_is_left_alone() {
         let root = tempfile::tempdir().unwrap();
         std::fs::write(root.path().join("AGENTS.md"), "Firm rules\n").unwrap();
-        let report = materialize(root.path(), GENERIC, &BTreeMap::new(), false).unwrap();
+        let report = materialize(
+            root.path(),
+            GENERIC,
+            &BTreeMap::new(),
+            &BTreeSet::new(),
+            false,
+        )
+        .unwrap();
         assert_eq!(
             std::fs::read_to_string(root.path().join("AGENTS.md")).unwrap(),
             "Firm rules\n"
@@ -930,6 +1139,7 @@ mod tests {
             root.path(),
             GENERIC,
             &firms(&[("alpha-matter", "firm-a"), ("beta-matter", "firm-b")]),
+            &BTreeSet::new(),
             false,
         )
         .unwrap();
@@ -970,9 +1180,9 @@ mod tests {
         project(root.path(), "alpha-matter", "firm-a");
         firm_skill(root.path(), "firm-a", "certified-mail", "A vendor\n");
         let scope = firms(&[("alpha-matter", "firm-a")]);
-        materialize(root.path(), GENERIC, &scope, false).unwrap();
+        materialize(root.path(), GENERIC, &scope, &BTreeSet::new(), false).unwrap();
         std::fs::remove_dir_all(root.path().join(FIRM_DIRECTORY).join("firm-a")).unwrap();
-        materialize(root.path(), GENERIC, &scope, false).unwrap();
+        materialize(root.path(), GENERIC, &scope, &BTreeSet::new(), false).unwrap();
         assert!(!root.path().join(SKILLS).join("firm-a").exists());
         let alpha = root.path().join("alpha-matter").join(CLAUDE_SKILLS);
         assert!(std::fs::symlink_metadata(alpha.join("certified-mail")).is_err());
@@ -1000,6 +1210,7 @@ mod tests {
             root.path(),
             GENERIC,
             &firms(&[("alpha-matter", "firm-a")]),
+            &BTreeSet::new(),
             false,
         )
         .unwrap();
@@ -1020,7 +1231,14 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         project(root.path(), "alpha-matter", "firm-a");
         std::fs::write(root.path().join("alpha-matter/.gitignore"), "/documents/\n").unwrap();
-        let report = materialize(root.path(), GENERIC, &BTreeMap::new(), false).unwrap();
+        let report = materialize(
+            root.path(),
+            GENERIC,
+            &BTreeMap::new(),
+            &BTreeSet::new(),
+            false,
+        )
+        .unwrap();
         assert!(!root
             .path()
             .join("alpha-matter")
@@ -1030,5 +1248,211 @@ mod tests {
             .missing
             .iter()
             .any(|m| m.contains("lacks `.claude/skills/`")));
+    }
+
+    /// LAW-551: two Firms, each with distinct skills and rules, and two
+    /// checkouts pointing at different Firms — each checkout resolves exactly
+    /// its own Firm's skills and rules, and none of the other Firm's.
+    #[test]
+    fn each_checkout_loads_only_its_own_firms_rules_and_skills() {
+        let root = tempfile::tempdir().unwrap();
+        project(root.path(), "alpha-matter", "firm-a");
+        project(root.path(), "beta-matter", "firm-b");
+        firm_skill(root.path(), "firm-a", "intake", "A intake\n");
+        firm_skill(root.path(), "firm-b", "intake", "B intake\n");
+        for (slug, voice) in [("firm-a", "A rules\n"), ("firm-b", "B rules\n")] {
+            let dir = root.path().join(FIRM_DIRECTORY).join(slug);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("AGENTS.md"), voice).unwrap();
+        }
+        let report = materialize(
+            root.path(),
+            GENERIC,
+            &firms(&[("alpha-matter", "firm-a"), ("beta-matter", "firm-b")]),
+            &BTreeSet::new(),
+            false,
+        )
+        .unwrap();
+        assert!(report.missing.is_empty(), "{:?}", report.missing);
+
+        let rules = |code: &str, slug: &str| {
+            let link = root.path().join(code).join(CLAUDE_RULES).join("AGENTS.md");
+            assert_eq!(
+                std::fs::read_link(&link).unwrap(),
+                Path::new(&format!("{FIRM_RULES_LINK}{slug}/AGENTS.md"))
+            );
+            std::fs::read_to_string(link).unwrap()
+        };
+        assert_eq!(rules("alpha-matter", "firm-a"), "A rules\n");
+        assert_eq!(rules("beta-matter", "firm-b"), "B rules\n");
+        let alpha = root.path().join("alpha-matter").join(CLAUDE_SKILLS);
+        assert_eq!(skill_text(&alpha.join("intake")), "A intake\n");
+        let beta = root.path().join("beta-matter").join(CLAUDE_SKILLS);
+        assert_eq!(skill_text(&beta.join("intake")), "B intake\n");
+
+        // The links are idempotent: a second pass writes nothing.
+        let again = materialize(
+            root.path(),
+            GENERIC,
+            &firms(&[("alpha-matter", "firm-a"), ("beta-matter", "firm-b")]),
+            &BTreeSet::new(),
+            false,
+        )
+        .unwrap();
+        assert!(again.changes.is_empty(), "{:?}", again.changes);
+    }
+
+    /// LAW-550: a checkout whose Firm cannot be resolved this pass keeps the
+    /// Firm skill and rules links it already has. Without preservation the
+    /// same pass unlinks them.
+    #[test]
+    fn a_checkout_whose_firm_cannot_be_resolved_keeps_its_firm_links() {
+        let root = tempfile::tempdir().unwrap();
+        project(root.path(), "alpha-matter", "firm-a");
+        let skills = root.path().join("alpha-matter").join(CLAUDE_SKILLS);
+        std::fs::create_dir_all(&skills).unwrap();
+        symlink(
+            "../../../.agents/skills/firm-a/certified-mail",
+            skills.join("certified-mail"),
+        )
+        .unwrap();
+        let rules = root.path().join("alpha-matter").join(CLAUDE_RULES);
+        std::fs::create_dir_all(&rules).unwrap();
+        symlink("../../../.firm/firm-a/AGENTS.md", rules.join("AGENTS.md")).unwrap();
+
+        let kept = materialize(
+            root.path(),
+            GENERIC,
+            &BTreeMap::new(),
+            &BTreeSet::from(["alpha-matter".to_string()]),
+            false,
+        )
+        .unwrap();
+        assert!(std::fs::symlink_metadata(skills.join("certified-mail")).is_ok());
+        assert_eq!(
+            std::fs::read_link(rules.join("AGENTS.md")).unwrap(),
+            Path::new("../../../.firm/firm-a/AGENTS.md")
+        );
+        assert!(
+            !kept
+                .changes
+                .iter()
+                .any(|change| change.contains("unlink") || change.contains("remove")),
+            "{:?}",
+            kept.changes
+        );
+
+        let unkept = materialize(
+            root.path(),
+            GENERIC,
+            &BTreeMap::new(),
+            &BTreeSet::new(),
+            false,
+        )
+        .unwrap();
+        assert!(unkept
+            .changes
+            .iter()
+            .any(|change| change.contains("unlink")));
+        assert!(std::fs::symlink_metadata(skills.join("certified-mail")).is_err());
+        assert!(std::fs::symlink_metadata(rules.join("AGENTS.md")).is_err());
+    }
+
+    /// A checkout bound to `host` naming Firm `sample-firm`, seeded with the
+    /// sync-written links a resolved pass leaves behind plus its checked-out
+    /// library directory.
+    fn refused_checkout(
+        host: &str,
+    ) -> (
+        std::path::PathBuf,
+        std::path::PathBuf,
+        std::path::PathBuf,
+        tempfile::TempDir,
+    ) {
+        let root = tempfile::tempdir().unwrap();
+        hosted(root.path(), "alpha", Some((host, Some("sample-firm"))));
+        let skills = root.path().join("alpha").join(CLAUDE_SKILLS);
+        std::fs::create_dir_all(&skills).unwrap();
+        symlink(
+            "../../../.agents/skills/sample-firm/intake",
+            skills.join("intake"),
+        )
+        .unwrap();
+        let rules = root.path().join("alpha").join(CLAUDE_RULES);
+        std::fs::create_dir_all(&rules).unwrap();
+        symlink(
+            "../../../.firm/sample-firm/AGENTS.md",
+            rules.join("AGENTS.md"),
+        )
+        .unwrap();
+        let library = root.path().join(FIRM_DIRECTORY).join("sample-firm");
+        std::fs::create_dir_all(&library).unwrap();
+        (skills, rules, library, root)
+    }
+
+    /// LAW-550: an empty Firm listing reads as a session problem, not as the
+    /// plain non-member refusal, and the checkout keeps its existing Firm
+    /// links and its checked-out library.
+    #[tokio::test]
+    async fn an_empty_listing_points_at_the_session_and_keeps_the_links_and_library() {
+        use crate::projects::test_login::{answer, site};
+        let (server, _login) = site(serde_json::json!([])).await;
+        let host = server.uri();
+        let (skills, _rules, library, root) = refused_checkout(&host);
+        answer(
+            &server,
+            "GET",
+            "/app/api/firm-libraries",
+            200,
+            serde_json::json!([]),
+        )
+        .await;
+        let report = sync(root.path(), &host, false).await.unwrap();
+        assert!(
+            report
+                .missing
+                .iter()
+                .any(|line| line.contains("lists no Firms for your session")
+                    && line.contains("site login")),
+            "{:?}",
+            report.missing
+        );
+        assert!(!report
+            .missing
+            .iter()
+            .any(|line| line.contains("you are not a member of Firm `sample-firm`")));
+        assert!(std::fs::symlink_metadata(skills.join("intake")).is_ok());
+        assert!(library.is_dir());
+    }
+
+    /// LAW-550: a listing that legitimately omits the checkout's Firm is
+    /// refused with the fix named — an Owner/admin must add the caller, since
+    /// there is no self-serve join — and neither the links nor the library
+    /// are removed.
+    #[tokio::test]
+    async fn an_omitted_firm_is_refused_with_the_fix_and_keeps_its_links_and_library() {
+        use crate::projects::test_login::{answer, site};
+        let (server, _login) = site(serde_json::json!([])).await;
+        let host = server.uri();
+        let (skills, rules, library, root) = refused_checkout(&host);
+        answer(
+            &server,
+            "GET",
+            "/app/api/firm-libraries",
+            200,
+            serde_json::json!([{"slug": "other-firm", "repository_url": null}]),
+        )
+        .await;
+        let report = sync(root.path(), &host, false).await.unwrap();
+        assert!(
+            report.missing.iter().any(|line| line
+                .contains("you are not a member of Firm `sample-firm`")
+                && line.contains("no self-serve join")),
+            "{:?}",
+            report.missing
+        );
+        assert!(std::fs::symlink_metadata(skills.join("intake")).is_ok());
+        assert!(std::fs::symlink_metadata(rules.join("AGENTS.md")).is_ok());
+        assert!(library.is_dir());
     }
 }

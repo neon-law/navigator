@@ -283,9 +283,11 @@ pub struct Location {
     pub repository_url: Option<String>,
 }
 
-/// Every Firm `person_id` belongs to — a Firm role (`person_firm_role`) or
-/// participation in a Project the Firm owns (`project.firm_id`) — with its
-/// library's [`Location`], sorted by slug. No other Firm is ever listed.
+/// Every Firm `person_id` belongs to — a Firm role (`person_firm_role`),
+/// participation in a Project the Firm owns (`project.firm_id`), or the
+/// deployment-wide Owner tier (`person.role = 'owner'`, which is never a
+/// per-Firm row; see `store::firms`) — with its library's [`Location`],
+/// sorted by slug. No other Firm is ever listed.
 ///
 /// `forgejo_root` is the deployment's Forgejo root URL
 /// (`NAVIGATOR_FORGEJO_ROOT_URL`); the organization is the Firm's own
@@ -304,7 +306,8 @@ pub async fn locations_for_person(
          WHERE f.slug IS NOT NULL AND ( \
            EXISTS (SELECT 1 FROM person_firm_role r WHERE r.firm_id = f.id AND r.person_id = $1) \
            OR EXISTS (SELECT 1 FROM person_project_role pr JOIN project p ON p.id = pr.project_id \
-                      WHERE p.firm_id = f.id AND pr.person_id = $1)) \
+                      WHERE p.firm_id = f.id AND pr.person_id = $1) \
+           OR EXISTS (SELECT 1 FROM person p WHERE p.id = $1 AND p.role = 'owner')) \
          ORDER BY f.slug",
     )
     .bind(person_id)
@@ -570,18 +573,23 @@ mod tests {
             return;
         };
         let pg = crate::postgres_mirror::tests::connect(&options, &database).await;
-        let [member, participant, outsider, firm_a, firm_b, firm_c, entity] =
+        let [member, participant, outsider, owner, firm_a, firm_b, firm_c, firm_d, entity] =
             std::array::from_fn(|_| Uuid::now_v7());
         // Firm A and Firm B each have an organization; `member` holds a Firm
         // role in A only. `participant` holds no Firm role, only a Project of
-        // Firm C, which has no organization.
+        // Firm C, which has no organization. `owner` holds no membership row
+        // at all: Owner is a deployment-wide tier on `person.role` (see
+        // `store::firms`), never a per-Firm row.
         let seed = format!(
             "INSERT INTO person (id,name,email) VALUES \
                ('{member}','Synthetic Person','{member}@example.com'), \
                ('{participant}','Synthetic Person','{participant}@example.com'), \
-               ('{outsider}','Synthetic Person','{outsider}@example.com'); \
+               ('{outsider}','Synthetic Person','{outsider}@example.com'), \
+               ('{owner}','Synthetic Person','{owner}@example.com'); \
+             UPDATE person SET role = 'owner' WHERE id = '{owner}'; \
              INSERT INTO firm (id,name,slug,status) VALUES ('{firm_a}','example-a','example-a','active'), \
-               ('{firm_b}','example-b','example-b','active'), ('{firm_c}','example-c','example-c','active'); \
+               ('{firm_b}','example-b','example-b','active'), ('{firm_c}','example-c','example-c','active'), \
+               ('{firm_d}','example-d','example-d','active'); \
              INSERT INTO firm_forgejo_organization (firm_id,organization,forgejo_id,owner_login) VALUES \
                ('{firm_a}','example-a',1,'synthetic-owner'), ('{firm_b}','example-b',2,'synthetic-owner'); \
              INSERT INTO person_firm_role (person_id,firm_id,membership) VALUES ('{member}','{firm_a}','lawyer'); \
@@ -620,6 +628,28 @@ mod tests {
             .await
             .unwrap()
             .is_empty());
+        assert_eq!(
+            locations_for_person(&pg, owner, root).await.unwrap(),
+            vec![
+                Location {
+                    slug: "example-a".into(),
+                    repository_url: Some("https://forge.example.test/example-a/library.git".into()),
+                },
+                Location {
+                    slug: "example-b".into(),
+                    repository_url: Some("https://forge.example.test/example-b/library.git".into()),
+                },
+                Location {
+                    slug: "example-c".into(),
+                    repository_url: None,
+                },
+                Location {
+                    slug: "example-d".into(),
+                    repository_url: None,
+                },
+            ],
+            "the deployment-wide Owner sees every Firm, with no membership row"
+        );
         assert_eq!(
             locations_for_person(&pg, member, None).await.unwrap()[0].repository_url,
             None,
