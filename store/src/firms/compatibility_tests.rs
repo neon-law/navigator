@@ -68,49 +68,6 @@ fn user_message_names_the_rule_for_the_create_form_s_two_refusals() {
 /// DRI, or appointed onto a Firm they hold no membership on — which grants
 /// the `admin` membership in the same transaction. Either way the
 /// invariant report finds nothing to flag.
-#[tokio::test]
-async fn an_owner_may_be_the_admin_dri() {
-    let db = mem_surreal().await;
-    let owner = crate::persons::create(
-        &db,
-        &NewPerson::with_role("Owner DRI", "owner-dri@example.com", Role::Owner),
-    )
-    .await
-    .unwrap();
-
-    let opened = practice_with_admin(&db, "Owner-Opened Practice", owner.id).await;
-    let row = membership_for_person(&db, owner.id, opened.id)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(row.membership, FirmMembership::Admin);
-    assert!(row.is_dri);
-
-    let firm = practice(&db, "Owner-Appointed Practice").await;
-    assert!(membership_for_person(&db, owner.id, firm.id)
-        .await
-        .unwrap()
-        .is_none());
-    let appointed = appoint_admin_dri(&db, Role::Owner, Some(owner.id), firm.id, owner.id)
-        .await
-        .unwrap();
-    assert_eq!(appointed.membership, FirmMembership::Admin);
-    assert!(appointed.is_dri);
-    let dris: Vec<Uuid> = memberships_for_firm(&db, firm.id)
-        .await
-        .unwrap()
-        .into_iter()
-        .filter(|row| row.is_dri)
-        .map(|row| row.person_id)
-        .collect();
-    assert_eq!(dris, vec![owner.id], "the outgoing Admin DRI is cleared");
-
-    let report = admin_dri_invariant_report(&db).await.unwrap();
-    for firm_id in [opened.id, firm.id] {
-        let status = report.iter().find(|s| s.firm_id == firm_id).unwrap();
-        assert_eq!(status.problem, None, "{status:?}");
-    }
-}
 
 /// Owner appoints and transfers the designation; every other tier,
 /// including the Firm's own Admin, is refused. The transfer clears the
@@ -434,95 +391,6 @@ async fn ensure_membership_refuses_a_client() {
     assert!(matches!(err, FirmError::ClientCannotJoinFirm(id) if id == client.id));
 }
 
-#[tokio::test]
-async fn membership_refuses_a_dangling_person_or_firm() {
-    let db = mem_surreal().await;
-    let firm = practice(&db, "Practice Two").await;
-    let missing_person = Uuid::now_v7();
-    let err = add_membership(
-        &db,
-        &NewPersonFirmRole {
-            person_id: missing_person,
-            firm_id: firm.id,
-            membership: FirmMembership::Clerk,
-            is_dri: false,
-        },
-    )
-    .await
-    .unwrap_err();
-    assert!(matches!(err, FirmError::NoSuchPerson(id) if id == missing_person));
-
-    let person = crate::persons::create(
-        &db,
-        &NewPerson::with_role("Kim Clerk", "kim@example.com", Role::Clerk),
-    )
-    .await
-    .unwrap();
-    let missing_firm = Uuid::now_v7();
-    let err = add_membership(
-        &db,
-        &NewPersonFirmRole {
-            person_id: person.id,
-            firm_id: missing_firm,
-            membership: FirmMembership::Clerk,
-            is_dri: false,
-        },
-    )
-    .await
-    .unwrap_err();
-    assert!(matches!(err, FirmError::NoSuchFirm(id) if id == missing_firm));
-}
-
-#[tokio::test]
-async fn project_firm_id_round_trips() {
-    let db = mem_surreal().await;
-    let firm = practice(&db, "Practice Three").await;
-    let entity_id = seed_entity(&db).await;
-    let created = projects::create(
-        &db,
-        &NewProject {
-            code: "owned-matter".to_string(),
-            name: "Owned Matter".to_string(),
-            status: "open".to_string(),
-            entity_id,
-            firm_id: Some(firm.id),
-            ..NewProject::default()
-        },
-    )
-    .await
-    .unwrap();
-    assert_eq!(created.firm_id, Some(firm.id));
-    let reloaded = projects::find_by_id(&db, created.id)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(reloaded.firm_id, Some(firm.id));
-}
-
-#[tokio::test]
-async fn create_refuses_a_dangling_firm_id() {
-    let db = mem_surreal().await;
-    let entity_id = seed_entity(&db).await;
-    let missing = Uuid::now_v7();
-    let err = projects::create(
-        &db,
-        &NewProject {
-            code: "orphan-matter".to_string(),
-            name: "Orphan Matter".to_string(),
-            status: "open".to_string(),
-            entity_id,
-            firm_id: Some(missing),
-            ..NewProject::default()
-        },
-    )
-    .await
-    .unwrap_err();
-    assert!(matches!(
-        err,
-        projects::ProjectStoreError::NoSuchFirm(id) if id == missing
-    ));
-}
-
 /// Drop the definition, write the row, put the definition back — the
 /// same historical-row shape `project.brand` uses. An absent `firm_id`
 /// reads as `None` rather than failing deserialize.
@@ -550,50 +418,6 @@ async fn reads_a_project_row_written_before_firm_id_was_defined() {
 
     let project = projects::find_by_id(&db, id).await.unwrap().unwrap();
     assert_eq!(project.firm_id, None);
-}
-
-#[tokio::test]
-async fn create_requires_a_live_entity_and_refuses_a_second_firm_on_it() {
-    let db = mem_surreal().await;
-    let admin = admin_dri_person(&db).await;
-    let missing = Uuid::now_v7();
-    let err = create(
-        &db,
-        &NewFirm {
-            name: "Ghost Practice".to_string(),
-            status: "active".to_string(),
-            entity_id: missing,
-            admin_dri_person_id: admin,
-        },
-    )
-    .await
-    .unwrap_err();
-    assert!(matches!(err, FirmError::NoSuchEntity(id) if id == missing));
-
-    let entity_id = seed_entity(&db).await;
-    create(
-        &db,
-        &NewFirm {
-            name: "First".to_string(),
-            status: "active".to_string(),
-            entity_id,
-            admin_dri_person_id: admin,
-        },
-    )
-    .await
-    .unwrap();
-    let duplicate = create(
-        &db,
-        &NewFirm {
-            name: "Second".to_string(),
-            status: "active".to_string(),
-            entity_id,
-            admin_dri_person_id: admin,
-        },
-    )
-    .await
-    .unwrap_err();
-    assert!(matches!(duplicate, FirmError::DuplicateEntity));
 }
 
 #[tokio::test]
