@@ -927,8 +927,8 @@
 {"file":"portal/src/admin.rs","line":1841,"function":"persist_person_avatar","operation":"delete","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/admin.rs","line":1882,"function":"stream_avatar","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/admin.rs","line":1886,"function":"stream_avatar","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"portal/src/admin.rs","line":6239,"function":"admin_avatar_download_redirects_urls_streams_keys_and_hides_the_missing","operation":"delete","sql_operations":[],"tables":[],"transaction":false}
-{"file":"portal/src/admin.rs","line":6427,"function":"avatar_clears_reset_the_row_for_admin_and_self_service_doors","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"portal/src/admin.rs","line":6289,"function":"admin_avatar_download_redirects_urls_streams_keys_and_hides_the_missing","operation":"delete","sql_operations":[],"tables":[],"transaction":false}
+{"file":"portal/src/admin.rs","line":6477,"function":"avatar_clears_reset_the_row_for_admin_and_self_service_doors","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/admin_csv.rs","line":40,"function":"into_response","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/admin_csv.rs","line":51,"function":"into_response","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/api.rs","line":4506,"function":"update_project","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
