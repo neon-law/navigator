@@ -108,6 +108,19 @@ fn surreal_and_postgres_rows_normalize_to_one_image() {
 #[tokio::test]
 async fn a_table_the_engine_has_not_defined_yet_reads_as_empty() {
     let surreal = mem_surreal().await;
+    let person = Uuid::now_v7();
+    surreal
+        .query("CREATE $id SET person_id=$person, e164='+15555550123', label='mobile', is_primary=true")
+        .bind(("id", crate::surreal::record_id("person_phone", Uuid::now_v7())))
+        .bind(("person", crate::surreal::record_id("person", person)))
+        .await.unwrap().check().unwrap();
+    let found = crate::postgres_mirror::from_source(crate::person_phones::person_ids_for_phone(
+        &surreal,
+        "+15555550123",
+    ))
+    .await
+    .unwrap();
+    assert_eq!(found, vec![person]);
     surreal
         .query("REMOVE TABLE person_phone")
         .await
