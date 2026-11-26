@@ -234,6 +234,10 @@ fn test_targets(manifest: &toml::Value, crate_dir: &Path) -> BTreeMap<PathBuf, S
 /// Whether a test binary rooted at `root` reaches an engine through the
 /// modules it declares (`mod x;` or `#[path = "..."] mod x;`), at any depth.
 fn binary_starts_engine(root: &Path) -> bool {
+    // This test names the engine helpers to count them; it never starts one.
+    if root.ends_with("cli/tests/embedded_surreal_ratchet.rs") {
+        return false;
+    }
     let mut seen = BTreeSet::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(file) = stack.pop() {
@@ -343,8 +347,10 @@ fn select(root: &Path) -> Result<Selection> {
         let mounted = path_attribute_modules(&crate_dir.join("src"));
         let mut surreal_targets = BTreeSet::new();
         for path in rust_files(&crate_dir) {
-            // This file names every engine helper in `ENGINE_CALLS`.
-            if path.ends_with("deploy/src/surreal_free_tests.rs") {
+            // These scanners name engine helpers without starting an engine.
+            if path.ends_with("deploy/src/surreal_free_tests.rs")
+                || path.ends_with("cli/tests/embedded_surreal_ratchet.rs")
+            {
                 continue;
             }
             let source = fs::read_to_string(&path).unwrap_or_default();
@@ -573,6 +579,15 @@ mod tests {
         }
         assert!(!selection.nextest_filter.contains("surreal_free_tests::"));
     }
+    #[test]
+    fn embedded_start_ratchet_runs_in_the_surreal_free_lane() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let selection = select(root).unwrap();
+        assert!(!selection
+            .nextest_filter
+            .contains("(package(cli) & kind(test) & binary(=embedded_surreal_ratchet))"));
+    }
+
     #[test]
     fn oauth_compatibility_does_not_suppress_native_identity_tests() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();

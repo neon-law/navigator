@@ -280,7 +280,28 @@ async fn handle_callback_socket(
     base: &str,
 ) -> Result<String> {
     let mut buf = [0u8; 8192];
-    let n = socket.read(&mut buf).await.context("read callback")?;
+    let n = tokio::time::timeout(Duration::from_secs(10), async {
+        let mut used = 0;
+        while used < buf.len() {
+            let read = socket
+                .read(&mut buf[used..])
+                .await
+                .context("read callback")?;
+            if read == 0 {
+                break;
+            }
+            used += read;
+            if buf[..used].contains(&b'\n') {
+                break;
+            }
+        }
+        if used == buf.len() && !buf[..used].contains(&b'\n') {
+            return Err(anyhow!("callback request line is too long"));
+        }
+        Ok(used)
+    })
+    .await
+    .map_err(|_| anyhow!("timed out reading callback request"))??;
     let request = std::str::from_utf8(&buf[..n]).context("non-utf8 in callback request")?;
     let first_line = request
         .lines()
@@ -422,6 +443,28 @@ mod tests {
     }
 
     const TEST_BASE: &str = "https://staging.neonlaw.com";
+
+    #[tokio::test]
+    async fn fragmented_callback_waits_for_the_complete_request_line() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server =
+            tokio::spawn(async move { wait_for_token(listener, "the-nonce", TEST_BASE).await });
+        let mut socket = tokio::net::TcpStream::connect(addr).await.unwrap();
+        socket.write_all(b"GET /cb?token=sess.blob").await.unwrap();
+        let mut byte = [0u8; 1];
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), socket.read(&mut byte))
+                .await
+                .is_err(),
+            "callback was processed before the request line arrived"
+        );
+        socket
+            .write_all(b"&state=the-nonce HTTP/1.1\r\n\r\n")
+            .await
+            .unwrap();
+        assert_eq!(server.await.unwrap().unwrap(), "sess.blob");
+    }
 
     #[tokio::test]
     async fn a_callback_that_is_not_the_minted_redirect_is_refused() {
