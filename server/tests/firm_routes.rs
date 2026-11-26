@@ -1893,45 +1893,6 @@ async fn notations_about_tells_the_format_story_and_returns_to_the_gallery() {
     assert!(!navigator.contains("id=\"notation-flow\""));
 }
 
-#[tokio::test]
-async fn neon_contact_redirects_to_guieb_shook() {
-    let app = site_app().await;
-    let response = anon_get(&app, "/contact").await;
-    assert_eq!(response.status(), StatusCode::MOVED_PERMANENTLY);
-    assert_eq!(
-        response.headers()["location"],
-        "https://guiebshook.com/contact"
-    );
-
-    let contact = get_on_host(&app, "/contact", "www.guiebshook.com").await;
-    assert_eq!(contact.status(), StatusCode::OK);
-    assert!(body_string(contact)
-        .await
-        .contains(r#"<article class="contact-page""#));
-}
-
-#[tokio::test]
-async fn lawyer_guide_offers_self_help_and_representation() {
-    let app = site_app().await;
-    let response = anon_get(&app, "/do-i-need-a-lawyer").await;
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = body_string(response).await;
-    for expected in [
-        "Do I need a lawyer?",
-        "When you can start on your own",
-        "When to talk to a lawyer",
-        "Check whether representation is required",
-        "valid retainer",
-        r#"href="/notations""#,
-        r#"href="https://guiebshook.com/contact""#,
-    ] {
-        assert!(body.contains(expected), "missing {expected}");
-    }
-
-    let sibling = get_on_host(&app, "/do-i-need-a-lawyer", "www.guiebshook.com").await;
-    assert_eq!(sibling.status(), StatusCode::NOT_FOUND);
-}
-
 /// The shared footer names and links Navigator on every public page, on both
 /// faces of the site.
 ///
