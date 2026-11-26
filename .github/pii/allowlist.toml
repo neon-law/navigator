@@ -127,6 +127,10 @@ reason = "The firm's published voice line."
 values = ["+1 510 800 2090"]
 
 [[phones]]
+reason = "Guieb & Shook attorneys' direct business lines, published on their pages of the firm's website (server/sites/guieb-shook/attorneys/)."
+values = ["+1 917 409 7950", "+1 775 471 4068"]
+
+[[phones]]
 reason = "The published voice line of Lex Tecnica, Ltd. (lextecnica.com/contact/)."
 values = ["+1 725 239 8413"]
 

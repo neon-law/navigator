@@ -182,3 +182,21 @@ reason = "Explicitly requested release wasm client built from repository source;
 class = "binary"
 paths = ["server/public/dioxus/assets/webapp_bg-dxh9cd41e725e6d6ad9.wasm"]
 reason = "Explicitly requested release wasm client built from repository source; inspected module has only target_features custom metadata and contains no runtime birth data."
+
+# --- Guieb & Shook website (server/sites/guieb-shook) ------------------------
+
+[[allow]]
+class = "phone"
+match = "(?:9174097950|7754714068)"
+paths = ["server/sites/guieb-shook/attorneys/", ".github/pii/allowlist.toml"]
+reason = "Each attorney's direct business line, published on that attorney's page of the firm's own website (approved by Waleed Amer, 2026-11-26)."
+
+[[allow]]
+class = "binary-metadata"
+paths = ["server/sites/guieb-shook/assets/"]
+reason = "The firm's approved website images, served byte for byte. Checked 2026-11-26: the portraits and share image carry only EXIF resolution fields, and the video stills only the encoder comment (Lavc); no camera, GPS, date or author."
+
+[[allow]]
+class = "binary"
+paths = ["server/sites/guieb-shook/favicon.ico"]
+reason = "The website's ICO favicon, a format the audit cannot read for metadata; drawn from the firm's SVG mark."
