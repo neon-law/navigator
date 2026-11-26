@@ -170,7 +170,7 @@ pub const PUBLIC_PATHS: &[&str] = &[
 #[must_use]
 pub fn sitemap_paths(state: &AppState, key: BrandKey) -> std::collections::BTreeSet<String> {
     let mut paths = sitemap_for(state.workshops.materials(), key);
-    if key == BrandKey::Neon && views::brand::current().firm_family.is_empty() {
+    if key == BrandKey::Neon && views::brand::firm_family().is_empty() {
         paths.remove("/do-i-need-a-lawyer");
         paths.insert("/contact".to_string());
     }
@@ -328,7 +328,7 @@ fn practice_brand_llms_txt(key: BrandKey) -> portal::LlmsTxt {
 #[must_use]
 pub fn llms_txt(state: &AppState, key: BrandKey) -> portal::LlmsTxt {
     let mut index = llms_for(state.workshops.materials(), key);
-    if key == BrandKey::Neon && views::brand::current().firm_family.is_empty() {
+    if key == BrandKey::Neon && views::brand::firm_family().is_empty() {
         index
             .pages
             .retain(|page| page.path != "/do-i-need-a-lawyer");
