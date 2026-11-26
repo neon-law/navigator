@@ -5,8 +5,8 @@ description: Triage Gmail and Microsoft 365 inboxes one email at a time from the
 
 # Triage email
 
-Run `/triage-email` from the workspace that holds the Project checkouts. Use the selected root (`~/Projects` or
-`~/Work`) throughout. Discover Projects from immediate child checkouts with a `navigator.yaml`.
+Run `/triage-email` from the top-level workspace that holds the Project checkouts. Use the configured root throughout.
+Discover Projects from immediate child checkouts with a `navigator.yaml`.
 
 Connect to the user's Gmail and Microsoft 365 mailboxes. Use the Gmail MCP connector for all Gmail mailbox operations.
 Use the Outlook Email connector for Microsoft 365, or the user's signed-in Outlook on the web when needed. Identify
