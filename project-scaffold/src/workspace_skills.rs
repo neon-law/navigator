@@ -39,10 +39,6 @@ pub const WORKSPACE_SKILLS: &[(&str, &str)] = &[
         include_str!("../../.agents/skills/clark-county-wa-efiling/SKILL.md"),
     ),
     (
-        "deadline",
-        include_str!("../../.agents/skills/deadline/SKILL.md"),
-    ),
-    (
         "delaware-bankruptcy-ecf",
         include_str!("../../.agents/skills/delaware-bankruptcy-ecf/SKILL.md"),
     ),
@@ -95,10 +91,6 @@ pub const WORKSPACE_SKILLS: &[(&str, &str)] = &[
         include_str!("../../.agents/skills/outlook-triage/SKILL.md"),
     ),
     (
-        "push-changes",
-        include_str!("../../.agents/skills/push-changes/SKILL.md"),
-    ),
-    (
         "records-subpoena",
         include_str!("../../.agents/skills/records-subpoena/SKILL.md"),
     ),
@@ -127,6 +119,62 @@ pub const WORKSPACE_SKILLS: &[(&str, &str)] = &[
         "washoe-county-nv-efiling",
         include_str!("../../.agents/skills/washoe-county-nv-efiling/SKILL.md"),
     ),
+    (
+        "analyze-memo",
+        include_str!("../../.agents/skills/analyze-memo/SKILL.md"),
+    ),
+    (
+        "case-timeline",
+        include_str!("../../.agents/skills/case-timeline/SKILL.md"),
+    ),
+    (
+        "client-council",
+        include_str!("../../.agents/skills/client-council/SKILL.md"),
+    ),
+    (
+        "council",
+        include_str!("../../.agents/skills/council/SKILL.md"),
+    ),
+    (
+        "court-filing-drafts",
+        include_str!("../../.agents/skills/court-filing-drafts/SKILL.md"),
+    ),
+    (
+        "legal-council",
+        include_str!("../../.agents/skills/legal-council/SKILL.md"),
+    ),
+    ("ocr", include_str!("../../.agents/skills/ocr/SKILL.md")),
+    (
+        "opposing-communication-review",
+        include_str!("../../.agents/skills/opposing-communication-review/SKILL.md"),
+    ),
+    (
+        "record-search",
+        include_str!("../../.agents/skills/record-search/SKILL.md"),
+    ),
+    (
+        "word-editing",
+        include_str!("../../.agents/skills/word-editing/SKILL.md"),
+    ),
+];
+
+/// Workspace skills that Project checkouts can still carry as previously synced copies.
+pub const MIGRATED_WORKSPACE_SKILLS: &[&str] = &[
+    "analyze-memo",
+    "browser-handoff",
+    "calendar-conflict-check",
+    "case-timeline",
+    "client-council",
+    "council",
+    "court-filing-drafts",
+    "human-readable",
+    "legal-council",
+    "legal-writing",
+    "message-processing",
+    "ocr",
+    "opposing-communication-review",
+    "record-search",
+    "word-editing",
 ];
 
 #[cfg(test)]
@@ -143,7 +191,10 @@ mod tests {
 
     #[test]
     fn every_workspace_skill_declares_its_own_name_once() {
-        let mut seen = HashSet::new();
+        let mut seen = crate::SYNCED_SKILLS
+            .iter()
+            .map(|(name, _)| *name)
+            .collect::<HashSet<_>>();
         for (name, contents) in WORKSPACE_SKILLS {
             assert_eq!(frontmatter_name(contents).as_deref(), Some(*name));
             assert!(seen.insert(*name), "{name} is listed twice");

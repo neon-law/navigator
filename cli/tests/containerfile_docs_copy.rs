@@ -944,7 +944,7 @@ fn images_that_copy_cli_also_copy_the_root_files_it_embeds() {
     );
 }
 
-/// `project-scaffold/src/lib.rs` embeds the Project-repository review
+/// `project-scaffold/src/workspace_skills.rs` embeds the workspace review
 /// councils with `include_str!("../../.agents/skills/council/SKILL.md")`
 /// (and its `legal-council`/`client-council` siblings) from the canonical
 /// skill catalog, which lives outside that crate directory. Any
@@ -965,8 +965,8 @@ fn images_that_copy_cli_also_copy_the_root_files_it_embeds() {
 /// still caught by the `k8s`/`examples` pair `cli` embeds with `include_dir!`.
 #[test]
 fn every_containerfile_that_builds_project_scaffold_also_copies_dot_agents() {
-    let scaffold_lib_rs =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../project-scaffold/src/lib.rs");
+    let scaffold_lib_rs = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../project-scaffold/src/workspace_skills.rs");
     let scaffold_body = fs::read_to_string(&scaffold_lib_rs)
         .unwrap_or_else(|e| panic!("read {}: {e}", scaffold_lib_rs.display()));
     assert!(
