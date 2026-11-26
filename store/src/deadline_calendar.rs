@@ -423,6 +423,8 @@ pub fn deadline_event(
                     .as_ref()
                     .map_or(60, model::project_deadlines::Hearing::minutes),
             )
+        } else if deadline.status == project_deadlines::STATUS_OPEN {
+            cloud::calendar::EventTiming::Due
         } else {
             cloud::calendar::EventTiming::Instant
         },
@@ -571,6 +573,10 @@ pub fn body_sha(deadline: &Deadline, project_code: &str, base_url: Option<&str>)
     }
     if let Some(hearing) = &deadline.hearing {
         payload["hearing"] = serde_json::json!(hearing);
+    }
+    // Open timed Deadlines hold Busy time; the key rewrites events mirrored while they showed as Free.
+    if deadline.due_on.is_none() && deadline.status == project_deadlines::STATUS_OPEN {
+        payload["busy"] = serde_json::json!(true);
     }
     let digest = Sha256::digest(payload.to_string().as_bytes());
     let mut hex = String::with_capacity(digest.len() * 2);
@@ -1306,6 +1312,16 @@ mod tests {
         let event = deadline_event(&deadline, "mirror-code", None).unwrap();
         assert!(event.cancelled);
         assert!(event.reminder_minutes.is_empty());
+    }
+
+    #[test]
+    fn an_open_timed_deadline_holds_busy_time_and_a_completed_one_does_not() {
+        let mut deadline = stored(sample(Uuid::now_v7()));
+        let open = deadline_event(&deadline, "mirror-code", None).unwrap();
+        assert_eq!(open.timing, cloud::calendar::EventTiming::Due);
+        deadline.status = project_deadlines::STATUS_COMPLETE.into();
+        let done = deadline_event(&deadline, "mirror-code", None).unwrap();
+        assert_eq!(done.timing, cloud::calendar::EventTiming::Instant);
     }
 
     #[test]

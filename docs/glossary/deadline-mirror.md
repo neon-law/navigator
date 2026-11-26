@@ -11,9 +11,10 @@ the two from drifting apart silently.
 
 The mirror and ICS export put the Project code first, followed by a colon, a known category label, and the action. Civil
 dates appear as all-day events. A supplied cutoff appears in the description. A hearing reserves Busy time for the
-supplied duration, or one hour when its duration is unknown. The court-supplied address appears in Location. Other
-Deadline events show as Free. Open court Deadlines carry popup reminders seven, three, and one day before, plus any
-distinct internal lead. Google reminder settings are personal to the calendar user.
+supplied duration, or one hour when its duration is unknown. The court-supplied address appears in Location. An open
+timed Deadline holds one Busy minute so booking links skip that slot. Other Deadline events show as Free. Open court
+Deadlines carry popup reminders seven, three, and one day before, plus any distinct internal lead. Google reminder
+settings are personal to the calendar user.
 
 The mirror records the Deadline ID, a hash of its source fields, and a fingerprint of the event Google returned after
 the last write. Before updating or deleting the event, Navigator checks that fingerprint and sends Google the version it
