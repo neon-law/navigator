@@ -3690,3 +3690,13 @@ test_project_labels_deny_a_scoped_ci_owner if {
         not authz.allow with input as {"path": ["app", "api", "projects", "p1", "labels"], "method": method, "session": ci_session}
     }
 }
+
+test_firm_forgejo_parity_admits_unscoped_administrators if {
+    path := ["app", "api", "firms", "sample", "forgejo-parity"]
+    authz.allow with input as {"path": path, "method": "GET", "session": owner_session}
+    authz.allow with input as {"path": path, "method": "GET", "session": admin_session}
+    not authz.allow with input as {"path": path, "method": "GET", "session": lawyer_session}
+    not authz.allow with input as {"path": path, "method": "GET", "session": client_session}
+    ci := object.union(admin_session, {"source": "ci"})
+    not authz.allow with input as {"path": path, "method": "GET", "session": ci}
+}

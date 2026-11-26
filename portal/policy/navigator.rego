@@ -2457,3 +2457,11 @@ ci_matter_content_denied if {
     billing_report_path
     input.session.source == "ci"
 }
+
+# Firm parity contains private Project repository coordinates.
+ci_matter_content_denied if {
+    count(input.path) == 5
+    array.slice(input.path, 0, 3) == ["app", "api", "firms"]
+    input.path[4] == "forgejo-parity"
+    input.session.source == "ci"
+}

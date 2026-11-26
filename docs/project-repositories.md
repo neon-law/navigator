@@ -812,6 +812,11 @@ Forgejo `main` and the mirror's relation to GitHub: `equal`, `behind` (a landing
 `diverged`. It reads refs with `git ls-remote`, so it needs the credentials git already holds and no Forgejo API token,
 and it writes nothing.
 
+Run `navigator project mirror-status --firm <name-or-uuid> --host <host>` for the live Firm inventory. It includes
+Projects without local checkouts. A Firm administrator with integration access can see the live `main` revisions and
+whether each source is readable. Forgejo-primary Projects without an enrolled GitHub mirror report their own `main`
+revision. An unavailable mirror or different revisions produce a failing status.
+
 A Forgejo-primary checkout uses Forgejo as the reference. Pass `--forgejo-first` during the transition to compare
 against the verified Forgejo repository while the recorded primary still owns review and merge. The report flags that
 cutover gap. Navigator verifies the identity, private visibility and write access of each destination before publishing

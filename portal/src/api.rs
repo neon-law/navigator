@@ -251,6 +251,11 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             delete(crate::firm_admin_api::delete_brand),
         ),
         (
+            "GET",
+            "/app/api/firms/{id}/forgejo-parity",
+            get(firm_forgejo_parity_door),
+        ),
+        (
             "POST",
             "/app/api/firms/{id}/forgejo-organization",
             post(crate::firm_forgejo_api::provision),
@@ -2370,6 +2375,130 @@ async fn repository_remotes(
         )),
     };
     Ok(forgejo_mirror_payload(origin, mirror))
+}
+
+#[derive(Deserialize)]
+struct ForgeParityPage {
+    after: Option<Uuid>,
+}
+
+async fn firm_forgejo_parity_door(
+    State(state): State<ApiState>,
+    AdminSession(viewer): AdminSession,
+    Path(firm): Path<Uuid>,
+    Query(page): Query<ForgeParityPage>,
+) -> Result<Response, ApiError> {
+    use futures::{stream, StreamExt};
+
+    if viewer.scope.is_some() || !may_use_mirror(&state, &viewer, firm).await? {
+        return Err(ApiError::NotFound);
+    }
+    const PAGE_SIZE: usize = 8;
+    let pg = store::postgres::PostgresDb::configured()
+        .await
+        .map_err(|error| ApiError::Db(error.to_string()))?
+        .ok_or_else(|| ApiError::Db("Project storage is unavailable".into()))?;
+    let mut projects = store::postgres::projects::firm_project_sources_on(
+        &pg,
+        firm,
+        page.after,
+        (PAGE_SIZE + 1) as i64,
+    )
+    .await
+    .map_err(|error| ApiError::Db(error.to_string()))?;
+    let next = (projects.len() > PAGE_SIZE).then(|| projects[PAGE_SIZE - 1].id);
+    projects.truncate(PAGE_SIZE);
+    let forgejo = connect_project_mirror(&state, firm).await;
+    let github = cloud::forge::GitHubForge::from_env().ok();
+    let enrolled = std::env::var("NAVIGATOR_MAINTENANCE_GITHUB_MIRRORS")
+        .ok()
+        .and_then(|value| {
+            serde_json::from_str::<std::collections::HashMap<Uuid, String>>(&value).ok()
+        })
+        .unwrap_or_default();
+    let rows = stream::iter(projects)
+        .map(|project| {
+            let forgejo = &forgejo;
+            let github = github.as_ref();
+            let enrolled = enrolled.get(&project.id);
+            async move {
+                let result = match tokio::time::timeout(
+                    std::time::Duration::from_secs(8),
+                    read_forge_parity(&project, forgejo, github, enrolled.map(String::as_str)),
+                )
+                .await
+                {
+                    Ok(result) => result,
+                    Err(_) => serde_json::json!({"status": "probe_timeout"}),
+                };
+                serde_json::json!({"code": project.code, "result": result})
+            }
+        })
+        .buffered(PAGE_SIZE)
+        .collect::<Vec<_>>()
+        .await;
+    Ok(Json(serde_json::json!({"projects": rows, "next": next})).into_response())
+}
+
+async fn read_forge_parity(
+    project: &store::postgres::projects::FirmProjectSource,
+    forgejo: &Result<cloud::ForgejoForge, MirrorIssue>,
+    github: Option<&cloud::forge::GitHubForge>,
+    enrolled: Option<&str>,
+) -> serde_json::Value {
+    use cloud::ForgeService;
+    use serde_json::json;
+
+    let forgejo = match forgejo {
+        Ok(forgejo) => forgejo,
+        Err(issue) => return json!({"status": "forgejo_unavailable", "issue": issue}),
+    };
+    match find_forgejo_mirror(forgejo, &project.code).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return json!({"status": "forgejo_missing"}),
+        Err(issue) => return json!({"status": "forgejo_unavailable", "issue": issue}),
+    }
+    let forgejo_main = match forgejo.head_commit_sha(&project.code).await {
+        Ok(Some(sha)) => sha,
+        Ok(None) => return json!({"status": "forgejo_main_missing"}),
+        Err(_) => return json!({"status": "forgejo_unavailable"}),
+    };
+    let Some(primary) = project.repository_url.as_deref() else {
+        return json!({"status": "primary_unrecorded", "forgejo_main": forgejo_main});
+    };
+    if !valid_git_main(&forgejo_main) {
+        return json!({"status": "forgejo_invalid_main"});
+    }
+    let forgejo_primary = forgejo.verify_repository_url(&project.code, primary);
+    let github_source = match (forgejo_primary, enrolled) {
+        (true, None) => return json!({"status": "forgejo_only", "forgejo_main": forgejo_main}),
+        (true, Some(url)) => url,
+        (false, _) => primary,
+    };
+    let Some(github) = github else {
+        return json!({"status": "github_unavailable", "forgejo_main": forgejo_main});
+    };
+    let github_main = match github.private_main_sha(&project.code, github_source).await {
+        Ok(Some(sha)) => sha,
+        Ok(None) => return json!({"status": "github_main_missing", "forgejo_main": forgejo_main}),
+        Err(cloud::forge::ForgeError::ForeignRepository { .. }) => {
+            return json!({"status": "unverified_source", "forgejo_main": forgejo_main});
+        }
+        Err(_) => return json!({"status": "github_unavailable", "forgejo_main": forgejo_main}),
+    };
+    if !valid_git_main(&github_main) {
+        return json!({"status": "github_invalid_main", "forgejo_main": forgejo_main});
+    }
+    let status = if github_main.eq_ignore_ascii_case(&forgejo_main) {
+        "equal"
+    } else {
+        "different"
+    };
+    json!({"status": status, "forgejo_main": forgejo_main, "github_main": github_main})
+}
+
+fn valid_git_main(sha: &str) -> bool {
+    sha.len() == 40 && sha.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 async fn may_use_mirror(
@@ -12275,6 +12404,46 @@ mod tests {
         assert_eq!(repaired["forgejo_owner"], "sample-firm");
         assert_eq!(repaired["repository_url"], url);
         assert_eq!(repaired["source_repository_url"], origin);
+    }
+
+    #[tokio::test]
+    async fn forgejo_primary_reports_the_verified_main_without_a_github_mirror() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let source = format!("{}/sample-firm/sample-matter", server.uri());
+        let forge = Ok(cloud::ForgejoForge::new(&server.uri(), "sample-firm", "fixture").unwrap());
+        Mock::given(method("GET"))
+            .and(path("/api/v1/repos/sample-firm/sample-matter"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "html_url": source,
+                "name": "sample-matter",
+                "owner": {"login": "sample-firm"},
+                "private": true
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let sha = "a".repeat(40);
+        Mock::given(method("GET"))
+            .and(path(
+                "/api/v1/repos/sample-firm/sample-matter/branches/main",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "commit": {"id": sha}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let project = store::postgres::projects::FirmProjectSource {
+            id: Uuid::from_u128(1),
+            code: "sample-matter".into(),
+            repository_url: Some(source),
+        };
+        let report = super::read_forge_parity(&project, &forge, None, None).await;
+        assert_eq!(report["status"], "forgejo_only");
+        assert_eq!(report["forgejo_main"], sha);
     }
 
     #[test]
