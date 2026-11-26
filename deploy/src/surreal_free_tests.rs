@@ -635,6 +635,21 @@ mod tests {
     }
 
     #[test]
+    fn inbox_compatibility_does_not_suppress_native_tests() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let selection = select(root).unwrap();
+        assert!(selection
+            .nextest_filter
+            .contains("(package(store) & not kind(test) & test(/^inbox::legacy_tests::/))"));
+        assert!(!selection
+            .nextest_filter
+            .contains("(package(store) & not kind(test) & test(/^inbox::/))"));
+        assert!(!selection
+            .nextest_filter
+            .contains("(package(store) & not kind(test) & test(/^inbox::tests::/))"));
+    }
+
+    #[test]
     fn compatibility_tests_do_not_suppress_mock_http_tiktok_tests() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
         let selection = select(root).unwrap();

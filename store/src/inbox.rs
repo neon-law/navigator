@@ -1337,11 +1337,26 @@ pub(crate) async fn resolve_or_create_sender(
     Ok(Some(created.id))
 }
 
-/// Appends the Relationship Log entry for a conversation's first Person
-/// association — advisory, post-commit, best-effort: a failed entry warns
-/// and never fails the ingest, and an identical replay entry is skipped
-/// (the `exists` dedup the seed import uses). `person_id` is None when no
-/// link was newly made (guard rejection, non-email channel, replay).
+pub(crate) fn association_log(
+    conversation_id: Uuid,
+    person_id: Uuid,
+    channel: &str,
+    address: &str,
+) -> crate::relationship_logs::NewRelationshipLog {
+    crate::relationship_logs::NewRelationshipLog {
+        actor_person_id: None,
+        subject_type: crate::relationship_logs::PERSON_SUBJECT.to_string(),
+        subject_id: person_id,
+        action: INBOUND_ASSOCIATION_ACTION.to_string(),
+        detail: format!("inbox_conversation:{conversation_id} {channel} sender {address}"),
+        project_id: None,
+    }
+}
+
+/// Append a best-effort Relationship Log entry for Source ingestion or
+/// explicit backfill. Native PostgreSQL ingestion appends the same entry in
+/// its transaction. An identical replay is skipped; `person_id` is None
+/// when no link was newly made (guard rejection, non-email channel, replay).
 pub(crate) async fn record_association_log(
     db: &SurrealDb,
     conversation_id: Uuid,
@@ -1352,14 +1367,7 @@ pub(crate) async fn record_association_log(
     let Some(person_id) = person_id else {
         return;
     };
-    let entry = crate::relationship_logs::NewRelationshipLog {
-        actor_person_id: None,
-        subject_type: crate::relationship_logs::PERSON_SUBJECT.to_string(),
-        subject_id: person_id,
-        action: INBOUND_ASSOCIATION_ACTION.to_string(),
-        detail: format!("inbox_conversation:{conversation_id} {channel} sender {address}"),
-        project_id: None,
-    };
+    let entry = association_log(conversation_id, person_id, channel, address);
     match crate::relationship_logs::exists(db, &entry).await {
         Ok(true) => {}
         Ok(false) => {
@@ -4902,7 +4910,7 @@ mod tests {
     use crate::firms::{self, FirmMembership, NewFirm, NewPersonFirmRole};
     use crate::persons::{self, NewPerson};
     use crate::projects::{self, NewProject};
-    use crate::test_support::{mem_surreal, seed_entity};
+    use crate::test_support::seed_entity;
 
     struct RecordingTransport {
         calls: Mutex<Vec<OutboundEnvelope>>,
@@ -4933,8 +4941,8 @@ mod tests {
         }
     }
 
-    struct World {
-        firm: Uuid,
+    pub(super) struct World {
+        pub(super) firm: Uuid,
         other_firm: Uuid,
         project: Uuid,
         other_project: Uuid,
@@ -4949,7 +4957,7 @@ mod tests {
         clerk_participation: Uuid,
     }
 
-    async fn world(db: &SurrealDb) -> World {
+    pub(super) async fn world(db: &SurrealDb) -> World {
         let owner = person(db, "Owner", "owner@example.com", Role::Owner).await;
         let admin = person(db, "Admin", "admin@example.com", Role::Admin).await;
         let other_admin = person(db, "Other Admin", "other-admin@example.com", Role::Admin).await;
@@ -5108,12 +5116,33 @@ mod tests {
         }
     }
 
+    macro_rules! with_native_inbox_fixture {
+        ($db:ident, $pg:ident, $body:block) => {
+            crate::test_support::with_native_application_fixture(|$db, fixture_pg| async move {
+                #[allow(unused_variables)]
+                let $pg = fixture_pg;
+                $body
+            })
+            .await
+        };
+    }
+
     #[tokio::test]
     async fn attachments_ingest_as_ordered_assets() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
+        #[rustfmt::skip]
+        with_native_inbox_fixture!(db, pg, {
+let world = world(&db).await;
         let first = Uuid::now_v7();
         let second = Uuid::now_v7();
+        for (asset_id, sha256) in [(first, "sha-complaint"), (second, "sha-contract")] {
+            sqlx::query("INSERT INTO asset (id, project_id, storage_key, content_type, byte_size, sha256_hex) VALUES ($1, $2, 'synthetic/inbox-test', 'application/pdf', 1, $3)")
+                .bind(asset_id)
+                .bind(world.project)
+                .bind(sha256)
+                .execute(pg.pool())
+                .await
+                .unwrap();
+        }
         let mut message = inbound(
             world.firm,
             channel::EMAIL,
@@ -5144,12 +5173,15 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(stored.attachment_asset_id, Some(first));
+
+        });
     }
 
     #[tokio::test]
     async fn an_alias_sender_resolves_to_the_mailbox_holder() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
+        #[rustfmt::skip]
+        with_native_inbox_fixture!(db, pg, {
+let world = world(&db).await;
         persons::add_alias(&db, world.client, "client-alias@example.com")
             .await
             .unwrap();
@@ -5170,28 +5202,25 @@ mod tests {
         assert_eq!(conversation.person_id, Some(world.client));
         let contact = sender_identity(&db, &conversation).await.unwrap().unwrap();
         assert_eq!(contact.person_id, world.client);
+
+        });
     }
 
     /// Counts Person rows holding an exact email — the auto-create dedup
     /// probe for the tests below.
-    async fn person_count(db: &SurrealDb, email: &str) -> i64 {
-        let mut response = db
-            .query("SELECT VALUE count() FROM person WHERE email = $email GROUP ALL")
-            .bind(("email", email))
+    async fn person_count(pg: &crate::postgres::PostgresDb, email: &str) -> i64 {
+        sqlx::query_scalar("SELECT count(*) FROM person WHERE lower(email) = lower($1)")
+            .bind(email)
+            .fetch_one(pg.pool())
             .await
             .expect("person count query")
-            .check()
-            .expect("person count check");
-        // `SELECT VALUE count()` yields bare numbers — one per GROUP ALL
-        // group, and no row at all when nothing matches, which is zero.
-        let counts: Vec<i64> = response.take(0).expect("person count decode");
-        counts.first().copied().unwrap_or(0)
     }
 
     #[tokio::test]
     async fn an_unknown_sender_persists_a_created_person_and_one_relationship_log() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
+        #[rustfmt::skip]
+        with_native_inbox_fixture!(db, pg, {
+let world = world(&db).await;
         let message = inbound(
             world.firm,
             channel::EMAIL,
@@ -5211,7 +5240,7 @@ mod tests {
             .unwrap()
             .expect("created person");
         assert_eq!(conversation.person_id, Some(created.id));
-        assert_eq!(person_count(&db, "new-counterparty@example.com").await, 1);
+        assert_eq!(person_count(&pg, "new-counterparty@example.com").await, 1);
         assert_eq!(created.name, "Sender");
         assert_eq!(created.role, Role::Client);
         // One Relationship Log entry — the lawyer-acknowledged feed — and
@@ -5224,12 +5253,118 @@ mod tests {
         assert_eq!(associations.len(), 1);
         assert_eq!(associations[0].subject_type, "person");
         assert_eq!(associations[0].subject_id, created.id);
+
+        });
+    }
+
+    #[tokio::test]
+    async fn failed_association_log_rolls_back_inbound_ingest() {
+        with_native_inbox_fixture!(db, pg, {
+            let world = world(&db).await;
+            persons::create(
+                &db,
+                &NewPerson::new("Sender", "rollback-sender@example.com"),
+            )
+            .await
+            .unwrap();
+            sqlx::query(
+                "ALTER TABLE relationship_log ADD CONSTRAINT reject_inbox_log \
+                 CHECK (action <> 'inbound_email_associated')",
+            )
+            .execute(pg.pool())
+            .await
+            .unwrap();
+            let message = inbound(
+                world.firm,
+                channel::EMAIL,
+                "fixture-account",
+                "rollback-log",
+                "rollback-sender@example.com",
+            );
+            assert!(ingest_inbound(&db, &message).await.is_err());
+            let conversations: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM inbox_conversation WHERE external_address = $1",
+            )
+            .bind("rollback-sender@example.com")
+            .fetch_one(pg.pool())
+            .await
+            .unwrap();
+            let messages: i64 =
+                sqlx::query_scalar("SELECT count(*) FROM message WHERE provider_message_id = $1")
+                    .bind("rollback-log")
+                    .fetch_one(pg.pool())
+                    .await
+                    .unwrap();
+            assert_eq!(conversations, 0);
+            assert_eq!(messages, 0);
+        });
+    }
+
+    #[tokio::test]
+    async fn concurrent_replays_commit_one_sender_association_and_log() {
+        with_native_inbox_fixture!(db, pg, {
+            let world = world(&db).await;
+            let sender = persons::create(
+                &db,
+                &NewPerson::new("Concurrent Sender", "concurrent-sender@example.com"),
+            )
+            .await
+            .unwrap();
+            let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(8));
+            let mut tasks = Vec::new();
+            for _ in 0..8 {
+                let pg = pg.clone();
+                let barrier = barrier.clone();
+                let firm = world.firm;
+                tasks.push(tokio::spawn(crate::postgres::PostgresDb::with_test_db(
+                    pg,
+                    async move {
+                        let db = SurrealDb::uninitialized();
+                        let message = inbound(
+                            firm,
+                            channel::EMAIL,
+                            "fixture-account",
+                            "concurrent-replay",
+                            "concurrent-sender@example.com",
+                        );
+                        barrier.wait().await;
+                        ingest_inbound(&db, &message).await.unwrap()
+                    },
+                )));
+            }
+            let mut deliveries = Vec::new();
+            for task in tasks {
+                deliveries.push(task.await.unwrap());
+            }
+            let first = &deliveries[0];
+            assert!(deliveries
+                .iter()
+                .all(|item| item.message_id == first.message_id));
+            assert!(deliveries
+                .iter()
+                .all(|item| item.conversation_id == first.conversation_id));
+            assert_eq!(deliveries.iter().filter(|item| !item.deduped).count(), 1);
+            let conversation = conversation_by_id(&db, first.conversation_id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(conversation.person_id, Some(sender.id));
+            let logs = crate::relationship_logs::all(&db).await.unwrap();
+            assert_eq!(
+                logs.iter()
+                    .filter(|log| log.action == INBOUND_ASSOCIATION_ACTION
+                        && log.subject_id == sender.id)
+                    .count(),
+                1
+            );
+        });
     }
 
     #[tokio::test]
     async fn a_reingest_from_the_same_address_creates_no_second_person_or_log() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
+        #[rustfmt::skip]
+        with_native_inbox_fixture!(db, pg, {
+let world = world(&db).await;
         for message_id in ["unknown-sender-2", "unknown-sender-3"] {
             let message = inbound(
                 world.firm,
@@ -5248,7 +5383,7 @@ mod tests {
         // The resolver dedups: one Person and one Relationship Log entry no
         // matter how many deliveries arrive from the same address.
         assert_eq!(
-            person_count(&db, "repeat-counterparty@example.com").await,
+            person_count(&pg, "repeat-counterparty@example.com").await,
             1
         );
         let logs = crate::relationship_logs::all(&db).await.unwrap();
@@ -5258,6 +5393,8 @@ mod tests {
                 .count(),
             1
         );
+
+        });
     }
 
     /// Scraped notices enter the same ingest door as email and SMS: the
@@ -5265,8 +5402,16 @@ mod tests {
     /// notice identity, and triage sees it like any other intake.
     #[tokio::test]
     async fn scraper_channel_ingests_and_dedupes_like_other_intake() {
-        let db = mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_inbox_fixture!(db, pg, {
         let world = world(&db).await;
+        let asset_id = Uuid::now_v7();
+        sqlx::query("INSERT INTO asset (id, project_id, storage_key, content_type, byte_size, sha256_hex) VALUES ($1, $2, 'synthetic/notice.pdf', 'application/pdf', 3, 'sha-dkt')")
+            .bind(asset_id)
+            .bind(world.project)
+            .execute(pg.pool())
+            .await
+            .unwrap();
         let mut message = inbound(
             world.firm,
             channel::SCRAPER,
@@ -5275,7 +5420,7 @@ mod tests {
             "0004",
         );
         message.attachments = vec![attachment(
-            Uuid::now_v7(),
+            asset_id,
             "DKT 0004 - Notice of Hearing.pdf",
             "sha-dkt",
         )];
@@ -5286,12 +5431,14 @@ mod tests {
         let second = ingest_inbound(&db, &message).await.unwrap();
         assert!(second.deduped);
         assert_eq!(second.message_id, first.message_id);
+        });
     }
 
     #[tokio::test]
     async fn ingest_time_project_attribution_scopes_thread_matching() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
+        #[rustfmt::skip]
+        with_native_inbox_fixture!(db, pg, {
+let world = world(&db).await;
         let mut attributed = inbound(
             world.firm,
             channel::EMAIL,
@@ -5336,6 +5483,8 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(own_thread.project_id, None);
+
+        });
     }
 
     async fn assigned_sms(db: &SurrealDb, world: &World) -> Uuid {
@@ -5359,8 +5508,9 @@ mod tests {
 
     #[tokio::test]
     async fn owner_assigns_inside_the_firm_and_projects_communications() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
+        #[rustfmt::skip]
+        with_native_inbox_fixture!(db, pg, {
+let world = world(&db).await;
         let ingested = ingest_inbound(
             &db,
             &inbound(
@@ -5397,6 +5547,8 @@ mod tests {
         assert_eq!(audit.len(), 1);
         assert_eq!(audit[0].to_project_id, world.project);
         assert!(audit[0].from_project_id.is_none());
+
+        });
     }
 
     async fn trashed(db: &SurrealDb, actor: Uuid, conversation: Uuid) -> bool {
@@ -5411,7 +5563,8 @@ mod tests {
 
     #[tokio::test]
     async fn trash_hides_a_conversation_until_restore_or_new_mail() {
-        let db = mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_inbox_fixture!(db, pg, {
         let world = world(&db).await;
         let first = inbound(
             world.firm,
@@ -5442,7 +5595,7 @@ mod tests {
             0
         );
         // Nothing is removed: the thread and its messages still read.
-        assert_eq!(messages_for(&db, id).await.unwrap().len(), 1);
+        assert_eq!(crate::postgres::inbox::messages_for_on(&pg, id).await.unwrap().len(), 1);
 
         set_trashed(&db, world.clerk, id, false).await.unwrap();
         assert!(!trashed(&db, world.owner, id).await);
@@ -5461,12 +5614,14 @@ mod tests {
             id
         );
         assert!(!trashed(&db, world.owner, id).await);
+        });
     }
 
     #[tokio::test]
     async fn the_project_menu_offers_only_open_projects_and_the_door_denies_the_rest() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
+        #[rustfmt::skip]
+        with_native_inbox_fixture!(db, pg, {
+let world = world(&db).await;
         let ingested = ingest_inbound(
             &db,
             &inbound(
@@ -5480,18 +5635,18 @@ mod tests {
         .await
         .unwrap();
         for status in ["closed", "archived", "Open "] {
-            db.query("UPDATE $id SET status = $status")
-                .bind(("id", record_id(projects::PROJECT_TABLE, world.project)))
-                .bind(("status", status.trim()))
+            sqlx::query("UPDATE project SET status = $1 WHERE id = $2")
+                .bind(status.trim())
+                .bind(world.project)
+                .execute(pg.pool())
                 .await
-                .unwrap()
-                .check()
                 .unwrap();
             // The menu never offers a matter that is not open, and the door
             // refuses a hand-crafted POST into one — the same rule twice.
             let menu = projects_in_firm(&db, world.firm).await.unwrap();
-            assert!(
-                menu.iter().all(|project| project.id != world.project),
+            assert_eq!(
+                menu.iter().any(|project| project.id == world.project),
+                status == "Open ",
                 "{status}: {menu:?}"
             );
             let outcome =
@@ -5503,12 +5658,15 @@ mod tests {
                 assert!(matches!(outcome, Err(InboxError::Denied)), "{status}");
             }
         }
+
+        });
     }
 
     #[tokio::test]
     async fn ordinary_assignment_authorization_uses_source_roles_and_supervised_participation() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
+        #[rustfmt::skip]
+        with_native_inbox_fixture!(db, pg, {
+let world = world(&db).await;
         for actor in [world.owner, world.lawyer, world.clerk] {
             require_assignment_authorization(&db, actor, world.firm, world.project)
                 .await
@@ -5547,12 +5705,15 @@ mod tests {
             require_assignment_authorization(&db, world.clerk, world.firm, world.project).await,
             Err(InboxError::Denied)
         ));
+
+        });
     }
 
     #[tokio::test]
     async fn cross_firm_assignment_is_denied_and_non_owners_cannot_assign() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
+        #[rustfmt::skip]
+        with_native_inbox_fixture!(db, pg, {
+let world = world(&db).await;
         let ingested = ingest_inbound(
             &db,
             &inbound(
@@ -5587,12 +5748,15 @@ mod tests {
         }
         assert!(list_intake(&db, world.admin).await.is_ok());
         assert!(list_intake(&db, world.lawyer).await.is_ok());
+
+        });
     }
 
     #[tokio::test]
     async fn outsiders_and_clients_cannot_read_an_assigned_thread() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
+        #[rustfmt::skip]
+        with_native_inbox_fixture!(db, pg, {
+let world = world(&db).await;
         let conversation_id = assigned_sms(&db, &world).await;
         assert!(
             project_thread(&db, world.outsider, world.project, conversation_id)
@@ -5604,12 +5768,15 @@ mod tests {
                 .await
                 .is_err()
         );
+
+        });
     }
 
     #[tokio::test]
     async fn a_participant_lists_the_project_inbox_and_a_client_cannot() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
+        #[rustfmt::skip]
+        with_native_inbox_fixture!(db, pg, {
+let world = world(&db).await;
         let conversation_id = assigned_sms(&db, &world).await;
         for actor in [world.client, world.outsider] {
             let error = list_project(&db, actor, world.project).await.unwrap_err();
@@ -5625,6 +5792,8 @@ mod tests {
             .unwrap();
         assert_eq!(lawyer_rows.len(), 1);
         assert_eq!(lawyer_rows[0].next_action, "Send a reply");
+
+        });
     }
 
     #[test]
@@ -5679,8 +5848,9 @@ mod tests {
 
     #[tokio::test]
     async fn a_participating_lawyer_can_reply_and_elevated_roles_cannot_send() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
+        #[rustfmt::skip]
+        with_native_inbox_fixture!(db, pg, {
+let world = world(&db).await;
         let conversation_id = assigned_sms(&db, &world).await;
         let lawyer = project_thread(&db, world.lawyer, world.project, conversation_id)
             .await
@@ -5720,12 +5890,15 @@ mod tests {
                 "{actor}"
             );
         }
+
+        });
     }
 
     #[tokio::test]
     async fn a_lawyer_who_does_not_participate_cannot_reply() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
+        #[rustfmt::skip]
+        with_native_inbox_fixture!(db, pg, {
+let world = world(&db).await;
         let conversation_id = assigned_sms(&db, &world).await;
         assert!(queue_reply(
             &db,
@@ -5736,12 +5909,15 @@ mod tests {
         )
         .await
         .is_err());
+
+        });
     }
 
     #[tokio::test]
     async fn a_clerk_send_omits_the_internal_note() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
+        #[rustfmt::skip]
+        with_native_inbox_fixture!(db, pg, {
+let world = world(&db).await;
         let conversation_id = assigned_sms(&db, &world).await;
         post_note(&db, world.lawyer, conversation_id, "Private strategy.")
             .await
@@ -5786,12 +5962,15 @@ mod tests {
         assert!(client_view
             .iter()
             .any(|row| row.body == "We received your message."));
+
+        });
     }
 
     #[tokio::test]
     async fn reassignment_moves_history_and_revokes_the_old_project() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
+        #[rustfmt::skip]
+        with_native_inbox_fixture!(db, pg, {
+let world = world(&db).await;
         let ingested = ingest_inbound(
             &db,
             &inbound(
@@ -5833,12 +6012,15 @@ mod tests {
         assert_eq!(audit.len(), 2);
         assert_eq!(audit[1].from_project_id, Some(world.project));
         assert_eq!(audit[1].to_project_id, world.other_project);
+
+        });
     }
 
     #[tokio::test]
     async fn revoked_participation_suppresses_a_queued_send() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
+        #[rustfmt::skip]
+        with_native_inbox_fixture!(db, pg, {
+let world = world(&db).await;
         let ingested = ingest_inbound(
             &db,
             &inbound(
@@ -5880,12 +6062,15 @@ mod tests {
                 .delivery_state,
             delivery::SUPPRESSED
         );
+
+        });
     }
 
     #[tokio::test]
     async fn revoked_lawyer_participation_suppresses_a_queued_send() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
+        #[rustfmt::skip]
+        with_native_inbox_fixture!(db, pg, {
+let world = world(&db).await;
         let ingested = ingest_inbound(
             &db,
             &inbound(
@@ -5933,12 +6118,15 @@ mod tests {
                 .delivery_state,
             delivery::SUPPRESSED
         );
+
+        });
     }
 
     #[tokio::test]
     async fn duplicate_webhooks_do_not_create_a_second_message() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
+        #[rustfmt::skip]
+        with_native_inbox_fixture!(db, pg, {
+let world = world(&db).await;
         let first = ingest_inbound(
             &db,
             &inbound(
@@ -5992,12 +6180,15 @@ mod tests {
         .await
         .unwrap();
         assert!(!other_firm.deduped);
+
+        });
     }
 
     #[tokio::test]
     async fn tiktok_public_comment_reply_projects_explicit_channels_and_refuses_private_audience() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
+        #[rustfmt::skip]
+        with_native_inbox_fixture!(db, pg, {
+let world = world(&db).await;
         let mut input = inbound(
             world.firm,
             channel::TIKTOK,
@@ -6063,6 +6254,8 @@ mod tests {
         assert!(rows
             .iter()
             .any(|row| row.channel == communications::channel::TIKTOK_OUTBOUND));
+
+        });
     }
 
     async fn assert_instagram_replies_are_attributed(
@@ -6120,8 +6313,9 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::too_many_lines)]
     async fn social_comment_keeps_brand_post_thread_and_projects_explicit_channel() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
+        #[rustfmt::skip]
+        with_native_inbox_fixture!(db, pg, {
+let world = world(&db).await;
         let mut inbound = inbound(
             world.firm,
             channel::INSTAGRAM,
@@ -6171,12 +6365,15 @@ mod tests {
                 && message.source_ref.as_deref()
                     == Some(format!("inbox:{}", received.message_id).as_str())
         }));
+
+        });
     }
 
     #[tokio::test]
     async fn owner_opens_a_text_with_consent_and_replies_in_the_same_thread() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
+        #[rustfmt::skip]
+        with_native_inbox_fixture!(db, pg, {
+let world = world(&db).await;
         let open = |actor: Uuid, to: &'static str, consent: bool| {
             let db = db.clone();
             let firm = world.firm;
@@ -6228,8 +6425,7 @@ mod tests {
             Err(InboxError::Empty)
         ));
 
-        let (conversation_id, first_message) =
-            open(world.owner, "+15555550123", true).await.unwrap();
+        let (conversation_id, first_message) = open(world.owner, "+15555550123", true).await.unwrap();
         let (again, _) = open(world.owner, "+15555550123", true).await.unwrap();
         assert_eq!(conversation_id, again);
         let conversation = conversation_by_id(&db, conversation_id)
@@ -6278,12 +6474,15 @@ mod tests {
                 && call.account == "+15550100000"
                 && call.to == "+15555550123"
         }));
+
+        });
     }
 
     #[tokio::test]
     async fn brand_scoping_keeps_the_firm_scope_when_narrowing() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
+        #[rustfmt::skip]
+        with_native_inbox_fixture!(db, pg, {
+let world = world(&db).await;
         let mut branded = inbound(
             world.firm,
             channel::EMAIL,
@@ -6367,12 +6566,15 @@ mod tests {
             intake_brands(&db, world.client).await.unwrap_err(),
             InboxError::Denied
         ));
+
+        });
     }
 
     #[tokio::test]
     async fn sender_identity_resolves_each_channel_through_its_address_book() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
+        #[rustfmt::skip]
+        with_native_inbox_fixture!(db, pg, {
+let world = world(&db).await;
 
         // Email resolves by the address a Person records — and an unknown
         // sender grows the CRM: the ingest itself created Pat's Person, so
@@ -6478,6 +6680,8 @@ mod tests {
             row.contact.as_ref().map(|c| c.role.as_str()),
             Some("client")
         );
+
+        });
     }
 
     #[test]
@@ -6496,20 +6700,18 @@ mod tests {
 
     #[tokio::test]
     async fn rows_carry_the_latest_message_preview_and_the_persisted_person() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
-        let first = ingest_inbound(
-            &db,
-            &inbound(
-                world.firm,
-                channel::EMAIL,
-                "fixture-account",
-                "email-preview-1",
-                "client@example.com",
-            ),
-        )
-        .await
-        .unwrap();
+        #[rustfmt::skip]
+        with_native_inbox_fixture!(db, pg, {
+let world = world(&db).await;
+        let mut first_message = inbound(
+            world.firm,
+            channel::EMAIL,
+            "fixture-account",
+            "email-preview-1",
+            "client@example.com",
+        );
+        first_message.provider_thread_ref = Some("email-preview-thread");
+        let first = ingest_inbound(&db, &first_message).await.unwrap();
         // A second message on the same conversation moves the preview to it.
         let mut reply = inbound(
             world.firm,
@@ -6520,7 +6722,7 @@ mod tests {
         );
         reply.body = "A later reply.";
         reply.occurred_at = "2026-10-01T12:00:00Z";
-        reply.email_conversation_id = Some(first.conversation_id);
+        reply.provider_thread_ref = Some("email-preview-thread");
         let _ = ingest_inbound(&db, &reply).await.unwrap();
 
         let rows = list_intake(&db, world.owner).await.unwrap();
@@ -6565,12 +6767,15 @@ mod tests {
             .unwrap();
         assert_eq!(row.person, None);
         assert_eq!(row.preview.as_deref(), Some("Hello from outside."));
+
+        });
     }
 
     #[tokio::test]
     async fn an_acknowledgment_neither_previews_nor_counts_as_sent() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
+        #[rustfmt::skip]
+        with_native_inbox_fixture!(db, pg, {
+let world = world(&db).await;
         let ingested = ingest_inbound(
             &db,
             &inbound(
@@ -6612,12 +6817,15 @@ mod tests {
         let listed = row(list_intake(&db, world.owner).await.unwrap());
         assert_eq!(listed.preview.as_deref(), Some("A lawyer wrote this."));
         assert!(listed.sent);
+
+        });
     }
 
     #[tokio::test]
     async fn a_sender_identity_never_satisfies_a_dispatch_or_privilege_check() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
+        #[rustfmt::skip]
+        with_native_inbox_fixture!(db, pg, {
+let world = world(&db).await;
         let mut incoming = inbound(
             world.firm,
             channel::FACEBOOK,
@@ -6676,12 +6884,15 @@ mod tests {
             crate::inbox_triage::PrivilegeLabel::NotPrivileged
         );
         assert!(!crate::inbox_triage::classifier_may_run(channel::FACEBOOK));
+
+        });
     }
 
     #[tokio::test]
     async fn a_text_shows_which_person_owns_the_number_once_it_is_linked() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
+        #[rustfmt::skip]
+        with_native_inbox_fixture!(db, pg, {
+let world = world(&db).await;
         let text = ingest_inbound(
             &db,
             &inbound(
@@ -6760,12 +6971,15 @@ mod tests {
             .await,
             Err(InboxError::Contact(_))
         ));
+
+        });
     }
 
     #[tokio::test]
     async fn linking_a_number_refuses_unknown_emails_other_phones_and_outsiders() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
+        #[rustfmt::skip]
+        with_native_inbox_fixture!(db, pg, {
+let world = world(&db).await;
         let text = ingest_inbound(
             &db,
             &inbound(
@@ -6833,12 +7047,15 @@ mod tests {
             .await,
             Err(InboxError::Denied)
         ));
+
+        });
     }
 
     #[tokio::test]
     async fn an_email_conversation_refuses_a_text_reply() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
+        #[rustfmt::skip]
+        with_native_inbox_fixture!(db, pg, {
+let world = world(&db).await;
         let email = ingest_inbound(
             &db,
             &inbound(
@@ -6855,12 +7072,15 @@ mod tests {
             queue_sms_reply(&db, world.owner, email.conversation_id, "Hi").await,
             Err(InboxError::Denied)
         ));
+
+        });
     }
 
     #[tokio::test]
     async fn social_reply_allows_owner_and_own_firm_admin_without_weakening_matter_replies() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
+        #[rustfmt::skip]
+        with_native_inbox_fixture!(db, pg, {
+let world = world(&db).await;
         firms::ensure_membership(
             &db,
             &NewPersonFirmRole {
@@ -6960,11 +7180,14 @@ mod tests {
         )
         .await
         .is_err());
+
+        });
     }
 
     #[tokio::test]
     async fn a_direct_message_cannot_queue_a_public_reply() {
-        let db = mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_inbox_fixture!(db, pg, {
         let world = world(&db).await;
         let mut incoming = inbound(world.firm, channel::INSTAGRAM, "account", "dm-1", "sender");
         incoming.interaction_type = Some("direct_message");
@@ -6976,7 +7199,7 @@ mod tests {
                 .is_err()
         );
         assert_eq!(
-            messages_for(&db, saved.conversation_id)
+            crate::postgres::inbox::messages_for_on(&pg, saved.conversation_id)
                 .await
                 .unwrap()
                 .len(),
@@ -6985,12 +7208,14 @@ mod tests {
         queue_social_reply(&db, world.owner, saved.conversation_id, "Reply", "private")
             .await
             .unwrap();
+        });
     }
 
     #[tokio::test]
     async fn comments_and_direct_messages_have_separate_transcripts() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
+        #[rustfmt::skip]
+        with_native_inbox_fixture!(db, pg, {
+let world = world(&db).await;
         let mut comment = inbound(
             world.firm,
             channel::INSTAGRAM,
@@ -7007,12 +7232,15 @@ mod tests {
         dm.provider_message_id = "private-id";
         let private = ingest_inbound(&db, &dm).await.unwrap();
         assert_ne!(public.conversation_id, private.conversation_id);
+
+        });
     }
 
     #[tokio::test]
     async fn private_history_blocks_both_queueing_and_previously_queued_public_sends() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
+        #[rustfmt::skip]
+        with_native_inbox_fixture!(db, pg, {
+let world = world(&db).await;
         let mut incoming = inbound(
             world.firm,
             channel::INSTAGRAM,
@@ -7032,11 +7260,10 @@ mod tests {
         )
         .await
         .unwrap();
-        db.query("UPDATE $id SET visibility = 'private'")
-            .bind(("id", record_id(MESSAGE, saved.message_id)))
+        sqlx::query("UPDATE message SET visibility = 'private' WHERE id = $1")
+            .bind(saved.message_id)
+            .execute(pg.pool())
             .await
-            .unwrap()
-            .check()
             .unwrap();
         assert!(queue_social_reply(
             &db,
@@ -7053,11 +7280,14 @@ mod tests {
             1
         );
         assert!(transport.calls().is_empty());
+
+        });
     }
 
     #[tokio::test]
     async fn a_later_callback_can_deliver_unknown_without_regressing() {
-        let db = mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_inbox_fixture!(db, pg, {
         let world = world(&db).await;
         let conversation_id = assigned_sms(&db, &world).await;
         let reply = queue_reply(
@@ -7069,7 +7299,7 @@ mod tests {
         )
         .await
         .unwrap();
-        set_delivery(&db, reply, delivery::UNKNOWN, Some("provider-9"))
+        crate::postgres::inbox::set_delivery_on(&pg, reply, delivery::UNKNOWN, Some("provider-9"))
             .await
             .unwrap();
         apply_delivery(
@@ -7147,13 +7377,21 @@ mod tests {
             delivery::DELIVERED,
             "a late callback must not regress delivery"
         );
+        });
     }
 
     #[tokio::test]
     async fn attachment_access_follows_the_reader() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
+        #[rustfmt::skip]
+        with_native_inbox_fixture!(db, pg, {
+let world = world(&db).await;
         let asset_id = Uuid::now_v7();
+        sqlx::query("INSERT INTO asset (id, project_id, storage_key, content_type, byte_size, sha256_hex) VALUES ($1, $2, 'synthetic/attachment-access', 'application/pdf', 1, 'sha-reader')")
+            .bind(asset_id)
+            .bind(world.project)
+            .execute(pg.pool())
+            .await
+            .unwrap();
         let mut inbound = inbound(
             world.firm,
             channel::EMAIL,
@@ -7197,24 +7435,26 @@ mod tests {
         )
         .await
         .unwrap();
-        db.query("UPDATE $id SET attachment_asset_id = $asset")
-            .bind(("id", record_id(MESSAGE, note)))
-            .bind(("asset", record_id("asset", asset_id)))
+        sqlx::query("UPDATE message SET attachment_asset_id = $1 WHERE id = $2")
+            .bind(asset_id)
+            .bind(note)
+            .execute(pg.pool())
             .await
-            .unwrap()
-            .check()
             .unwrap();
         assert!(readable_attachment(&db, world.client, note).await.is_err());
         assert_eq!(
             readable_attachment(&db, world.clerk, note).await.unwrap(),
             Some(asset_id)
         );
+
+        });
     }
 
     #[tokio::test]
     async fn assigned_intake_hides_bodies_from_an_owner_who_does_not_participate() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
+        #[rustfmt::skip]
+        with_native_inbox_fixture!(db, pg, {
+let world = world(&db).await;
         let ingested = ingest_inbound(
             &db,
             &inbound(
@@ -7245,19 +7485,24 @@ mod tests {
         let listed = list_intake(&db, world.owner).await.unwrap();
         assert_eq!(listed[0].assignee, "Alpha Matter");
         assert_eq!(listed[0].channel, channel::EMAIL);
+
+        });
     }
 
     /// The whitelist stays closed: adding the voice lane admits no others.
     #[tokio::test]
     async fn an_unlisted_channel_is_still_denied() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
+        #[rustfmt::skip]
+        with_native_inbox_fixture!(db, pg, {
+let world = world(&db).await;
         let mut fax = inbound(world.firm, "fax", "+15550100000", "fax-1", "+15555550100");
         fax.brand_key = Some("neon");
         assert!(matches!(
             ingest_inbound(&db, &fax).await,
             Err(InboxError::Denied)
         ));
+
+        });
     }
 
     #[test]
@@ -7276,7 +7521,7 @@ mod tests {
         );
     }
 
-    async fn ingest_for(db: &SurrealDb, firm: Uuid, provider_id: &str) -> Uuid {
+    pub(super) async fn ingest_for(db: &SurrealDb, firm: Uuid, provider_id: &str) -> Uuid {
         let message = inbound(
             firm,
             channel::EMAIL,
@@ -7289,8 +7534,9 @@ mod tests {
 
     #[tokio::test]
     async fn unprocessed_inbox_scopes_by_firm_membership() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
+        #[rustfmt::skip]
+        with_native_inbox_fixture!(db, pg, {
+let world = world(&db).await;
         let firm_message = ingest_for(&db, world.firm, "process-scope-1").await;
         let foreign_message = ingest_for(&db, world.other_firm, "process-scope-2").await;
 
@@ -7308,56 +7554,36 @@ mod tests {
             unprocessed_inbox(&db, world.client).await,
             Err(InboxError::Denied)
         ));
+
+        });
     }
 
     #[tokio::test]
     async fn unprocessed_inbox_orders_oldest_first() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
+        #[rustfmt::skip]
+        with_native_inbox_fixture!(db, pg, {
+let world = world(&db).await;
         let first = ingest_for(&db, world.firm, "process-order-1").await;
         let second = ingest_for(&db, world.firm, "process-order-2").await;
-        db.query("UPDATE $id SET inserted_at = <datetime>'2026-01-01T00:00:00Z'")
-            .bind(("id", record_id(MESSAGE, second)))
+        sqlx::query("UPDATE message SET inserted_at = $1 WHERE id = $2")
+            .bind(chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z").unwrap())
+            .bind(second)
+            .execute(pg.pool())
             .await
-            .unwrap()
-            .check()
             .unwrap();
 
         let listed = unprocessed_inbox(&db, world.lawyer).await.unwrap();
         let ids: Vec<Uuid> = listed.iter().map(|row| row.id).collect();
         assert_eq!(ids, vec![second, first]);
-    }
 
-    #[tokio::test]
-    async fn messages_written_before_process_fields_read_as_unprocessed() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
-        let message_id = ingest_for(&db, world.firm, "process-historical-1").await;
-        // A row written before the process fields existed carries none.
-        db.query("UPDATE $id UNSET route, processed_at, nef_outcome")
-            .bind(("id", record_id(MESSAGE, message_id)))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-
-        let state = process_state(&db, message_id).await.unwrap().unwrap();
-        assert_eq!(state.processed_at, None);
-        assert_eq!(state.route, None);
-        assert_eq!(state.nef_outcome, None);
-
-        // And the tolerant read still lets a process run record the route.
-        mark_processed(&db, message_id, route::OTHER, Utc::now(), None)
-            .await
-            .unwrap();
-        let state = process_state(&db, message_id).await.unwrap().unwrap();
-        assert_eq!(state.route.as_deref(), Some(route::OTHER));
+        });
     }
 
     #[tokio::test]
     async fn process_context_scopes_the_single_message_like_the_backlog() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
+        #[rustfmt::skip]
+        with_native_inbox_fixture!(db, pg, {
+let world = world(&db).await;
         let firm_message = ingest_for(&db, world.firm, "process-ctx-1").await;
         let foreign_message = ingest_for(&db, world.other_firm, "process-ctx-2").await;
         mark_processed(&db, firm_message, route::NEF, Utc::now(), None)
@@ -7395,6 +7621,8 @@ mod tests {
             process_context(&db, world.owner, Uuid::now_v7()).await,
             Err(InboxError::NotFound)
         ));
+
+        });
     }
     /// An inbound message's acknowledgment receipt is its ID with the
     /// sign bit flipped: always distinct from the inbound ID, and
@@ -7478,8 +7706,9 @@ mod tests {
 
     #[tokio::test]
     async fn unread_count_for_project_counts_only_that_matters_unread_threads() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
+        #[rustfmt::skip]
+        with_native_inbox_fixture!(db, pg, {
+let world = world(&db).await;
         // Two unread threads on the matter, one elsewhere, and the count
         // read stays a bare-number decode (SELECT VALUE count()).
         for thread in ["sms-a", "sms-b"] {
@@ -7509,5 +7738,11 @@ mod tests {
                 .unwrap(),
             0
         );
+
+        });
     }
 }
+
+#[cfg(test)]
+#[path = "inbox_legacy_tests.rs"]
+mod legacy_tests;

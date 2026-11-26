@@ -1533,7 +1533,24 @@ mod tests {
     };
     use crate::email::CapturingEmail;
     use crate::inbound_email::{InboundAttachment, InboundEmail};
-    use store::test_support::mem_surreal;
+
+    macro_rules! with_native_email_thread_test {
+        ($db:ident, $body:block) => {
+            store::test_support::with_postgres(async {
+                let pg = store::postgres::PostgresDb::application()
+                    .await
+                    .expect("required PostgreSQL application fixture");
+                store::postgres::PostgresDb::with_application_db(pg, async move {
+                    let $db = store::surreal::SurrealDb::uninitialized();
+                    store::test_support::seed_compiled_brands_postgres(&$db).await;
+                    $body
+                })
+                .await
+                .expect("native PostgreSQL application fixture is admitted");
+            })
+            .await
+        };
+    }
 
     /// A throwaway filesystem-backed `StorageService` for tests. The temp
     /// dir is intentionally leaked so it outlives the test even though the
@@ -1841,7 +1858,8 @@ mod tests {
 
     #[tokio::test]
     async fn first_contact_opens_conversation_and_notifies_lawyer() {
-        let surreal = mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_email_thread_test!(surreal, {
         let cap = CapturingEmail::new();
 
         thread_inbound(
@@ -1871,11 +1889,13 @@ mod tests {
         assert!(reply_to.starts_with('c'));
         // never leak an internal address to a header the client would see
         assert!(note.body.contains("Hi, I have a question."));
+        });
     }
 
     #[tokio::test]
     async fn lawyer_reply_does_not_relay_to_the_external_party() {
-        let surreal = mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_email_thread_test!(surreal, {
         seed_lawyer(&surreal, "nick@neonlaw.com").await;
         let cap = CapturingEmail::new();
         let rt = RecordingRuntime::default();
@@ -1929,6 +1949,7 @@ mod tests {
         assert!(sent
             .iter()
             .all(|message| message.to != "pisces@example.com"));
+        });
     }
 
     #[test]
@@ -2003,7 +2024,8 @@ mod tests {
 
     #[tokio::test]
     async fn lawyer_approve_fires_workflow_signal_and_relays_prose() {
-        let surreal = mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_email_thread_test!(surreal, {
         let notation_id = store::test_support::seed_notation(&surreal).await;
         let lawyer_id = seed_lawyer(&surreal, "nick@neonlaw.com").await;
         let cap = CapturingEmail::new();
@@ -2054,11 +2076,13 @@ mod tests {
         );
         // Approval stays inside the firm. The prose is not an external send.
         assert!(cap.captured().is_empty());
+        });
     }
 
     #[tokio::test]
     async fn lawyer_close_suppresses_relay_and_closes_conversation() {
-        let surreal = mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_email_thread_test!(surreal, {
         seed_lawyer(&surreal, "nick@neonlaw.com").await;
         let cap = CapturingEmail::new();
         let rt = RecordingRuntime::default();
@@ -2103,6 +2127,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(conv.status, "closed");
+        });
     }
 
     /// Resolve a notation's matter (project) id for spine assertions.
@@ -2121,7 +2146,8 @@ mod tests {
     async fn email_exchange_mirrors_into_the_linked_matters_spine() {
         use store::communications::{channel, direction, for_project};
 
-        let surreal = mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_email_thread_test!(surreal, {
         let notation_id = store::test_support::seed_notation(&surreal).await;
         let project_id = project_of(&surreal, notation_id).await;
         seed_lawyer(&surreal, "nick@neonlaw.com").await;
@@ -2209,13 +2235,15 @@ mod tests {
             thread.len(),
             "re-sync must not duplicate spine rows"
         );
+        });
     }
 
     #[tokio::test]
     async fn first_contact_auto_links_known_client_with_one_open_matter() {
         use store::communications::channel;
 
-        let surreal = mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_email_thread_test!(surreal, {
         // seed_notation makes libra@example.com the client on one open matter.
         let notation_id = store::test_support::seed_notation(&surreal).await;
         let project_id = project_of(&surreal, notation_id).await;
@@ -2245,6 +2273,7 @@ mod tests {
         assert_eq!(thread.len(), 1);
         assert_eq!(thread[0].channel, channel::EMAIL_INBOUND);
         assert_eq!(thread[0].body, "Hello, one more thing.");
+        });
     }
 
     async fn for_project_helper(
@@ -2287,7 +2316,8 @@ mod tests {
 
     #[tokio::test]
     async fn dkim_failure_blocks_lawyer_command_and_relay_when_enforced() {
-        let surreal = mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_email_thread_test!(surreal, {
         let notation_id = store::test_support::seed_notation(&surreal).await;
         seed_lawyer(&surreal, "nick@neonlaw.com").await;
         let cap = CapturingEmail::new();
@@ -2327,11 +2357,13 @@ mod tests {
             cap.captured().is_empty(),
             "no content may relay on a DKIM failure"
         );
+        });
     }
 
     #[tokio::test]
     async fn dkim_pass_allows_lawyer_command_when_enforced() {
-        let surreal = mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_email_thread_test!(surreal, {
         let notation_id = store::test_support::seed_notation(&surreal).await;
         seed_lawyer(&surreal, "nick@neonlaw.com").await;
         let cap = CapturingEmail::new();
@@ -2365,6 +2397,7 @@ mod tests {
         assert_eq!(sigs.len(), 1);
         assert_eq!(sigs[0], (notation_id, "approved".to_string(), None));
         assert!(cap.captured().is_empty());
+        });
     }
 
     /// The approval gate must refuse a signature it cannot authenticate.
@@ -2389,7 +2422,8 @@ mod tests {
     /// verify the signer must refuse the signature, not assume it.
     #[tokio::test]
     async fn approval_gate_refuses_a_signature_it_cannot_authenticate() {
-        let surreal = mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_email_thread_test!(surreal, {
         let notation_id = store::test_support::seed_notation(&surreal).await;
         seed_lawyer(&surreal, "nick@neonlaw.com").await;
         let cap = CapturingEmail::new();
@@ -2446,6 +2480,7 @@ mod tests {
             "refusal body has a formatting defect (a run of spaces): {:?}",
             refusal.body
         );
+        });
     }
 
     /// Open a support conversation with no linked matter — the prod state
@@ -2468,7 +2503,8 @@ mod tests {
 
     #[tokio::test]
     async fn link_binds_conversation_and_same_reply_approve_fires() {
-        let surreal = mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_email_thread_test!(surreal, {
         let notation_id = store::test_support::seed_notation(&surreal).await;
         seed_lawyer(&surreal, "nick@neonlaw.com").await;
         let cap = CapturingEmail::new();
@@ -2512,11 +2548,13 @@ mod tests {
             cap.captured().iter().all(|m| m.to != "pisces@example.com"),
             "@link/@approve must not relay to the client"
         );
+        });
     }
 
     #[tokio::test]
     async fn link_to_unknown_matter_leaves_conversation_unlinked() {
-        let surreal = mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_email_thread_test!(surreal, {
         seed_lawyer(&surreal, "nick@neonlaw.com").await;
         let cap = CapturingEmail::new();
         let rt = RecordingRuntime::default();
@@ -2549,6 +2587,7 @@ mod tests {
             .unwrap();
         assert_eq!(conv.notation_id, None);
         assert!(rt.signals.lock().unwrap().is_empty());
+        });
     }
 
     /// A forged reply carrying `@close`. #268 gated only `Command::Signal`,
@@ -2563,7 +2602,8 @@ mod tests {
     /// the notice's recipient, subject prefix, and body.
     #[tokio::test]
     async fn forged_close_does_not_close_and_tells_the_cockpit() {
-        let surreal = mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_email_thread_test!(surreal, {
         seed_lawyer(&surreal, "nick@neonlaw.com").await;
         let cap = CapturingEmail::new();
         let rt = RecordingRuntime::default();
@@ -2636,6 +2676,7 @@ mod tests {
         );
         // Nothing reached the client.
         assert!(sent.iter().all(|m| m.to != "pisces@example.com"));
+        });
     }
 
     /// A forged `@cleared` must not release the RPC 1.10 firm-wide
@@ -2646,7 +2687,8 @@ mod tests {
     /// refusal. Proven end-to-end: a following genuine relay is still held.
     #[tokio::test]
     async fn forged_cleared_does_not_release_the_conflict_hold() {
-        let surreal = mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_email_thread_test!(surreal, {
         seed_lawyer(&surreal, "nick@neonlaw.com").await;
         let cap = CapturingEmail::new();
         let rt = RecordingRuntime::default();
@@ -2712,6 +2754,7 @@ mod tests {
             !super::is_conflict_cleared(&surreal, conv_id).await.unwrap(),
             "a later lawyer reply must not treat the forged clearance as registered"
         );
+        });
     }
 
     /// Forged prose carrying no command at all - the relay path on its own.
@@ -2722,7 +2765,8 @@ mod tests {
     /// firm communication. Both halves are asserted.
     #[tokio::test]
     async fn forged_prose_does_not_relay_or_enter_the_matter_spine() {
-        let surreal = mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_email_thread_test!(surreal, {
         let notation_id = store::test_support::seed_notation(&surreal).await;
         let project_id = store::notations::find_by_id(&surreal, notation_id)
             .await
@@ -2785,6 +2829,7 @@ mod tests {
                 .any(|c| c.body.contains("sign the settlement offer")),
             "attacker prose entered the matter's communications spine as a firm communication"
         );
+        });
     }
 
     /// A forged `@link` is the sharpest verb of the five, not the mildest:
@@ -2795,7 +2840,8 @@ mod tests {
     /// without ever sending `@cleared`.
     #[tokio::test]
     async fn forged_link_leaves_the_conversation_unbound() {
-        let surreal = mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_email_thread_test!(surreal, {
         let notation_id = store::test_support::seed_notation(&surreal).await;
         seed_lawyer(&surreal, "nick@neonlaw.com").await;
         let cap = CapturingEmail::new();
@@ -2833,6 +2879,7 @@ mod tests {
             conv.notation_id, None,
             "a forged @link bound an outsider's thread to a client's matter"
         );
+        });
     }
 
     /// The regression guard for the gate itself: a genuine reply on the
@@ -2844,7 +2891,8 @@ mod tests {
     /// genuine mail, and on it every verb still works.
     #[tokio::test]
     async fn a_genuine_reply_still_links_clears_relays_and_closes() {
-        let surreal = mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_email_thread_test!(surreal, {
         let notation_id = store::test_support::seed_notation(&surreal).await;
         seed_lawyer(&surreal, "nick@neonlaw.com").await;
         let cap = CapturingEmail::new();
@@ -2916,11 +2964,13 @@ mod tests {
             store::email_conversations::STATUS_CLOSED,
             "@close did not close on a genuine reply"
         );
+        });
     }
 
     #[tokio::test]
     async fn first_contact_threads_notification_to_client_message_id() {
-        let surreal = mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_email_thread_test!(surreal, {
         let cap = CapturingEmail::new();
 
         let mut msg = inbound(
@@ -2955,6 +3005,7 @@ mod tests {
             sent[0].references.as_deref(),
             Some("<client-1@mail.example.com>")
         );
+        });
     }
 
     struct SeatedClerk {
@@ -3110,7 +3161,8 @@ mod tests {
 
     #[tokio::test]
     async fn clerk_relay_threads_with_the_full_message_id_chain() {
-        let surreal = mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_email_thread_test!(surreal, {
         let cap = CapturingEmail::new();
         let rt = RecordingRuntime::default();
         let cfg = cfg();
@@ -3170,11 +3222,13 @@ mod tests {
             Some("<client-1@mail> <clerk-1@mail>")
         );
         assert_eq!(relay.in_reply_to.as_deref(), Some("<clerk-1@mail>"));
+        });
     }
 
     #[tokio::test]
     async fn clerk_without_assignment_and_revoked_clerk_do_not_relay() {
-        let surreal = mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_email_thread_test!(surreal, {
         seed_client(&surreal, "pisces@example.com").await;
         let cap = CapturingEmail::new();
         let rt = RecordingRuntime::default();
@@ -3252,11 +3306,13 @@ mod tests {
             .captured()
             .iter()
             .all(|message| message.to != "pisces@example.com"));
+        });
     }
 
     #[tokio::test]
     async fn clerk_relay_to_an_uncleared_prospect_is_held() {
-        let surreal = mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_email_thread_test!(surreal, {
         let cap = CapturingEmail::new();
         let rt = RecordingRuntime::default();
         let cfg = cfg();
@@ -3305,11 +3361,13 @@ mod tests {
                     && message.body.contains("NOT relayed")),
             "clerk relay to an uncleared prospect is held"
         );
+        });
     }
 
     #[tokio::test]
     async fn first_contact_from_unknown_prompts_conflict_check() {
-        let surreal = mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_email_thread_test!(surreal, {
         let cap = CapturingEmail::new();
         // pisces is NOT seeded → a prospective client.
         thread_inbound(
@@ -3335,11 +3393,13 @@ mod tests {
         assert!(sent[0].body.contains("Prospective client"));
         assert!(sent[0].body.contains("conflict check"));
         assert!(sent[0].body.contains("@cleared"));
+        });
     }
 
     #[tokio::test]
     async fn relay_to_uncleared_prospect_is_held() {
-        let surreal = mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_email_thread_test!(surreal, {
         seed_lawyer(&surreal, "nick@neonlaw.com").await;
         let cap = CapturingEmail::new();
         let rt = RecordingRuntime::default();
@@ -3393,6 +3453,7 @@ mod tests {
         assert!(sent
             .iter()
             .all(|message| message.to != "pisces@example.com"));
+        });
     }
 
     /// A refused intake leaves a bare `person` row behind — the project,
@@ -3403,7 +3464,8 @@ mod tests {
     /// cleared. Nobody has run a conflict check here, so the relay holds.
     #[tokio::test]
     async fn a_bare_person_row_does_not_clear_the_relay_gate() {
-        let surreal = mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_email_thread_test!(surreal, {
         seed_lawyer(&surreal, "nick@neonlaw.com").await;
         // Exactly what a refused intake leaves: a person, and nothing else.
         seed_orphan_person(&surreal, "pisces@example.com").await;
@@ -3451,6 +3513,7 @@ mod tests {
             sent.iter().all(|m| m.to != "pisces@example.com"),
             "a refused intake's leftover person row must not release the relay"
         );
+        });
     }
 
     /// The second path to the same residue: `start_post` runs the conflict
@@ -3460,7 +3523,8 @@ mod tests {
     /// the DRI designation is the write ordered *after* the check.
     #[tokio::test]
     async fn a_participation_without_the_client_dri_marker_does_not_clear_the_gate() {
-        let surreal = mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_email_thread_test!(surreal, {
         seed_lawyer(&surreal, "nick@neonlaw.com").await;
         seed_unscreened_participant(&surreal, "pisces@example.com").await;
         let cap = CapturingEmail::new();
@@ -3506,11 +3570,13 @@ mod tests {
             cap.captured().iter().all(|m| m.to != "pisces@example.com"),
             "an un-designated participation must not release the relay"
         );
+        });
     }
 
     #[tokio::test]
     async fn cleared_releases_the_relay_to_a_prospect() {
-        let surreal = mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_email_thread_test!(surreal, {
         seed_lawyer(&surreal, "nick@neonlaw.com").await;
         let cap = CapturingEmail::new();
         let rt = RecordingRuntime::default();
@@ -3573,11 +3639,13 @@ mod tests {
                 .all(|message| message.to != "pisces@example.com"),
             "lawyer clearance is not itself a send"
         );
+        });
     }
 
     #[tokio::test]
     async fn clean_first_contact_forwards_attachment_to_lawyer() {
-        let surreal = mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_email_thread_test!(surreal, {
         let storage = storage().await;
         let cap = CapturingEmail::new();
         let rt = RecordingRuntime::default();
@@ -3610,13 +3678,15 @@ mod tests {
         assert_eq!(sent[0].attachments.len(), 1);
         assert_eq!(sent[0].attachments[0].filename, "intake.pdf");
         assert_eq!(sent[0].attachments[0].bytes, b"%PDF clean");
+        });
     }
 
     #[tokio::test]
     async fn quarantined_first_contact_sends_text_only_notice() {
         use crate::inbound_email::QuarantinedAttachment;
 
-        let surreal = mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_email_thread_test!(surreal, {
         let storage = storage().await;
         let cap = CapturingEmail::new();
         let rt = RecordingRuntime::default();
@@ -3648,11 +3718,13 @@ mod tests {
         assert!(sent[0].attachments.is_empty());
         assert!(sent[0].body.contains("quarantined"));
         assert!(sent[0].body.contains("eicar.txt"));
+        });
     }
 
     #[tokio::test]
     async fn attachment_on_linked_thread_files_a_document_and_notifies() {
-        let surreal = mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_email_thread_test!(surreal, {
         let storage = storage().await;
         let notation_id = store::test_support::seed_notation(&surreal).await;
         let project_id = store::notations::find_by_id(&surreal, notation_id)
@@ -3733,11 +3805,13 @@ mod tests {
         assert_eq!(sent[0].attachments.len(), 1);
         assert_eq!(sent[0].attachments[0].filename, "signed-form.pdf");
         assert_eq!(sent[0].attachments[0].bytes, b"%PDF-1.4 fake");
+        });
     }
 
     #[tokio::test]
     async fn signature_images_and_already_filed_bytes_are_not_filed_again() {
-        let surreal = mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_email_thread_test!(surreal, {
         let storage = storage().await;
         let notation_id = store::test_support::seed_notation(&surreal).await;
         let project_id = store::notations::find_by_id(&surreal, notation_id)
@@ -3809,11 +3883,13 @@ mod tests {
         );
         // The lawyer still receives every attachment with the notification.
         assert_eq!(sent.last().unwrap().attachments.len(), 5);
+        });
     }
 
     #[tokio::test]
     async fn attachment_on_unlinked_thread_is_archived_not_filed() {
-        let surreal = mem_surreal().await;
+        #[rustfmt::skip]
+        with_native_email_thread_test!(surreal, {
         let storage = storage().await;
         let cap = CapturingEmail::new();
         let rt = RecordingRuntime::default();
@@ -3872,5 +3948,6 @@ mod tests {
             .contains("link this thread to a matter to file them"));
         assert_eq!(sent[0].attachments.len(), 1);
         assert_eq!(sent[0].attachments[0].filename, "doc.pdf");
+        });
     }
 }
