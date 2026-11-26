@@ -1240,21 +1240,15 @@ async fn assert_linkedin_lifecycle(fixture: &Fixture) {
 fn admin_options(port: &str) -> PgConnectOptions {
     PgConnectOptions::new()
         .host("127.0.0.1")
-        .port(port.parse().expect("port is a number"))
+        .port(port.parse().unwrap())
         .username("postgres")
         .password("synthetic")
         .ssl_mode(PgSslMode::Disable)
 }
 
 async fn isolated_database() -> Option<(String, String)> {
-    let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {
-        assert!(
-            std::env::var("NAV_REQUIRE_POSTGRES").as_deref() != Ok("1"),
-            "PostgreSQL fixture required"
-        );
-        return None;
-    };
-    let admin = PgPool::connect_with(admin_options(&port))
+    let port = store::test_support::postgres_test_port();
+    let admin = PgPool::connect_with(admin_options(&port.to_string()))
         .await
         .expect("connect admin");
     let database = format!("inbox_import_api_{}", Uuid::new_v4().simple());
@@ -1263,7 +1257,7 @@ async fn isolated_database() -> Option<(String, String)> {
         .await
         .expect("create the isolated database");
     admin.close().await;
-    Some((port, database))
+    Some((port.to_string(), database))
 }
 
 async fn remove_isolated_database(port: &str, database: &str) {

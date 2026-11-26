@@ -6,8 +6,7 @@
 //! Every test drives the same router the deployment mounts, with the
 //! deterministic stub provider in the gateway's seat and the search
 //! backends deliberately unconfigured (the outage posture). The Purchase
-//! ledger is the house fixture's isolated Postgres database, skipped where
-//! the environment has none.
+//! ledger is the house fixture's isolated Postgres database.
 
 use std::sync::Arc;
 
@@ -27,14 +26,13 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 /// The isolated Postgres database the subscriber-path tests read, mirroring
-/// the house fixture: an isolated database off the CI test container, absent
-/// locally, so the caller skips the assertions it cannot serve.
+/// the house fixture: an isolated database off the CI test container.
 async fn database() -> Option<store::postgres::PostgresDb> {
     use sqlx::postgres::{PgConnectOptions, PgSslMode};
-    let port = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT").ok()?;
+    let port = store::test_support::postgres_test_port();
     let options = PgConnectOptions::new()
         .host("127.0.0.1")
-        .port(port.parse().unwrap())
+        .port(port)
         .username("postgres")
         .password("synthetic")
         .database(
@@ -246,7 +244,6 @@ async fn finish(response: axum::response::Response) -> (StatusCode, String, Stri
 #[tokio::test]
 async fn a_prompt_runs_one_metered_completion_and_renders_the_conversation() {
     let Some(fx) = fixture().await else {
-        eprintln!("skipping: no NAVIGATOR_TEST_POSTGRES_PORT");
         return;
     };
     let (person_id, bearer) = seed_subscriber(&fx.surreal, "session-happy@example.com").await;
@@ -296,7 +293,6 @@ async fn a_prompt_runs_one_metered_completion_and_renders_the_conversation() {
 #[tokio::test]
 async fn an_exhausted_subscriber_gets_the_offer_and_no_completion() {
     let Some(fx) = fixture().await else {
-        eprintln!("skipping: no NAVIGATOR_TEST_POSTGRES_PORT");
         return;
     };
     let (person_id, bearer) = seed_subscriber(&fx.surreal, "session-spent@example.com").await;
@@ -324,7 +320,6 @@ async fn an_exhausted_subscriber_gets_the_offer_and_no_completion() {
 #[tokio::test]
 async fn a_low_balance_subscriber_still_completes_with_the_notice() {
     let Some(fx) = fixture().await else {
-        eprintln!("skipping: no NAVIGATOR_TEST_POSTGRES_PORT");
         return;
     };
     let (person_id, bearer) = seed_subscriber(&fx.surreal, "session-low@example.com").await;
@@ -349,7 +344,6 @@ async fn a_low_balance_subscriber_still_completes_with_the_notice() {
 #[tokio::test]
 async fn a_search_outage_degrades_inside_the_session() {
     let Some(fx) = fixture().await else {
-        eprintln!("skipping: no NAVIGATOR_TEST_POSTGRES_PORT");
         return;
     };
     let (person_id, bearer) = seed_subscriber(&fx.surreal, "session-outage@example.com").await;
@@ -390,7 +384,6 @@ async fn a_search_outage_degrades_inside_the_session() {
 #[tokio::test]
 async fn a_preview_callers_post_never_reaches_a_model() {
     let Some(fx) = fixture().await else {
-        eprintln!("skipping: no NAVIGATOR_TEST_POSTGRES_PORT");
         return;
     };
     let (person_id, bearer) = seed_subscriber(&fx.surreal, "session-preview@example.com").await;
@@ -412,7 +405,6 @@ async fn a_preview_callers_post_never_reaches_a_model() {
 #[tokio::test]
 async fn a_failed_completion_charges_nothing_and_flags_the_page() {
     let Some(fx) = fixture().await else {
-        eprintln!("skipping: no NAVIGATOR_TEST_POSTGRES_PORT");
         return;
     };
     let (person_id, bearer) = seed_subscriber(&fx.surreal, "session-failure@example.com").await;
@@ -438,7 +430,6 @@ async fn a_failed_completion_charges_nothing_and_flags_the_page() {
 #[tokio::test]
 async fn the_outbound_request_carries_the_terms_and_no_identity() {
     let Some(fx) = fixture().await else {
-        eprintln!("skipping: no NAVIGATOR_TEST_POSTGRES_PORT");
         return;
     };
     let email = "session-sanitized@example.com";

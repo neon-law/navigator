@@ -96,10 +96,10 @@ records its own database name, MVCC watermark, cutoff, column types, and non-MVC
 does not certify cross-database atomicity or a matching repository/document-byte recovery point.
 
 The synthetic drill in `tests/coverage_postgres.rs` uses separate source and restore databases, reads through Iceberg,
-applies each source's schema procedure, and compares row hashes. Run it with `NAV_REQUIRE_POSTGRES=1` and
-`NAVIGATOR_TEST_POSTGRES_PORT` set to this worktree's PostgreSQL fixture port. It proves the tested schema shapes; full
-Forgejo service boot, DBOS replay, coordinated recovery points, and external-byte restoration require their own drills.
-See [Iceberg Archive](../docs/glossary/iceberg-archive.md).
+applies each source's schema procedure, and compares row hashes. Run it with `NAVIGATOR_TEST_POSTGRES_PORT` set to this
+worktree's PostgreSQL fixture port. It proves the tested schema shapes; full Forgejo service boot, DBOS replay,
+coordinated recovery points, and external-byte restoration require their own drills. See [Iceberg
+Archive](../docs/glossary/iceberg-archive.md).
 
 For the full pinned Forgejo fixture, set `NAVIGATOR_TEST_FORGEJO_PRE_SCHEMA`, `NAVIGATOR_TEST_FORGEJO_DATA`, and
 `NAVIGATOR_TEST_FORGEJO_POST_SCHEMA` to local `pg_dump` sections from this worktree's quiesced synthetic Forgejo. Use

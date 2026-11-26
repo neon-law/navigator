@@ -505,7 +505,7 @@ image_id="$(docker image inspect "$server_image" --format '{{.Id}}')"
 container_id="$image_container_id"
 # An owned process group also contains Nextest/driver descendants on cancellation.
 setsid env NAVIGATOR_TEST_POSTGRES_PORT="$fixture_port" NAVIGATOR_TEST_POSTGRES_DATABASE=smoke \
-    NAV_REQUIRE_POSTGRES=1 NAVIGATOR_FORBID_SURREAL=1 \
+    NAVIGATOR_FORBID_SURREAL=1 \
     NAV_BROWSER_IMAGE_CONTAINER="$container_id" NAV_BROWSER_IMAGE_ID="$image_id" \
     NAV_BROWSER_IMAGE_REPO_ROOT=/tmp/navigator-image-repos \
     target/debug/hudson dev browser-e2e --base-url "$base" > "$private/browser.log" 2>&1 &

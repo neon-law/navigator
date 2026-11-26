@@ -51,9 +51,6 @@ struct Fixture {
 async fn native_authority_routes_the_public_inbox_lifecycle_to_postgres() {
     const CHILD: &str = "NAVIGATOR_TEST_PUBLIC_INBOX_AUTHORITY_CHILD";
     if std::env::var_os(CHILD).is_none() {
-        if crate::postgres_mirror::tests::test_postgres().is_none() {
-            return;
-        }
         let name = format!(
             "{}::native_authority_routes_the_public_inbox_lifecycle_to_postgres",
             module_path!().split_once("::").unwrap().1
@@ -3210,9 +3207,6 @@ async fn assert_native_attachment_scope(fixture: Fixture) {
 async fn legacy_inbox_repair_cannot_replace_native_authority() {
     const CHILD: &str = "NAVIGATOR_TEST_INBOX_REPAIR_AUTHORITY_CHILD";
     if std::env::var_os(CHILD).is_none() {
-        if crate::postgres_mirror::tests::test_postgres().is_none() {
-            return;
-        }
         let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
@@ -3501,9 +3495,6 @@ async fn ensure_receipt_firm_entity(f: &Fixture) {
 async fn native_triage_public_doors_preserve_canonical_inbox_authority() {
     const CHILD: &str = "NAVIGATOR_TEST_NATIVE_TRIAGE_CHILD";
     let Ok(case) = std::env::var(CHILD) else {
-        if crate::postgres_mirror::tests::test_postgres().is_none() {
-            return;
-        }
         let name = format!(
             "{}::native_triage_public_doors_preserve_canonical_inbox_authority",
             module_path!().split_once("::").unwrap().1
@@ -4533,9 +4524,6 @@ async fn assert_native_existing_voice_outbound_rows(f: Fixture) {
 async fn fi_project_destination_is_reserved_before_any_history_commit() {
     const CHILD: &str = "NAVIGATOR_TEST_FI_ATOMIC_DESTINATION_CHILD";
     let Ok(case) = std::env::var(CHILD) else {
-        if crate::postgres_mirror::tests::test_postgres().is_none() {
-            return;
-        }
         let name = format!(
             "{}::fi_project_destination_is_reserved_before_any_history_commit",
             module_path!().split_once("::").unwrap().1

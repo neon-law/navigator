@@ -94,7 +94,6 @@ fn native_browser_checks_isolation_and_executes_the_owned_image_after_host_drain
         "hudson ops postgres ready --json",
         "source .devx/env",
         "hudson dev browser-e2e --base-url",
-        "NAV_REQUIRE_POSTGRES=1",
         "NAVIGATOR_FORBID_SURREAL=1",
         "NAVIGATOR_TEST_POSTGRES_PORT=",
         "k8s/postgres/kustomization.yaml",

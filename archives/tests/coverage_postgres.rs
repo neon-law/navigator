@@ -159,14 +159,7 @@ fn source<'a>(
     reason = "one isolated multi-source recovery drill follows extraction, Iceberg reading, restoration, and failure injection"
 )]
 async fn postgres_paired_sources_fail_closed_and_rehydrate_from_iceberg() {
-    let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {
-        assert_ne!(
-            std::env::var("NAV_REQUIRE_POSTGRES").as_deref(),
-            Ok("1"),
-            "PostgreSQL port required"
-        );
-        return;
-    };
+    let port = store::test_support::postgres_test_port();
     let dump_settings = [
         "NAVIGATOR_TEST_FORGEJO_PRE_SCHEMA",
         "NAVIGATOR_TEST_FORGEJO_DATA",
@@ -183,7 +176,7 @@ async fn postgres_paired_sources_fail_closed_and_rehydrate_from_iceberg() {
     let admin = PgPool::connect_with(
         PgConnectOptions::new()
             .host("127.0.0.1")
-            .port(port.parse().unwrap())
+            .port(port)
             .username("postgres")
             .password("synthetic")
             .database("smoke"),

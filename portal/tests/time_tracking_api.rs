@@ -296,7 +296,7 @@ macro_rules! isolated_scenario {
                 .args(["--exact", stringify!($test_name), "--nocapture"])
                 .env("NAV_TIME_TRACKING_API_CHILD", "1")
                 .env("NAVIGATOR_POSTGRES_HOST", "127.0.0.1")
-                .env("NAVIGATOR_POSTGRES_PORT", &port)
+                .env("NAVIGATOR_POSTGRES_PORT", port.to_string())
                 .env("NAVIGATOR_POSTGRES_USER", "postgres")
                 .env("NAVIGATOR_POSTGRES_PASSWORD", "synthetic")
                 .env("NAVIGATOR_POSTGRES_DATABASE", &database)
@@ -910,16 +910,10 @@ isolated_scenario!(
 );
 
 async fn isolated_database() -> Option<(String, String)> {
-    let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {
-        assert!(
-            std::env::var("NAV_REQUIRE_POSTGRES").as_deref() != Ok("1"),
-            "PostgreSQL fixture required"
-        );
-        return None;
-    };
+    let port = store::test_support::postgres_test_port();
     let options = PgConnectOptions::new()
         .host("127.0.0.1")
-        .port(port.parse().unwrap())
+        .port(port)
         .username("postgres")
         .password("synthetic")
         .database(
@@ -933,7 +927,7 @@ async fn isolated_database() -> Option<(String, String)> {
         .await
         .unwrap();
     admin.close().await;
-    Some((port, database))
+    Some((port.to_string(), database))
 }
 
 async fn remove_isolated_database(port: &str, database: &str) {

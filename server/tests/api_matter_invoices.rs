@@ -8,8 +8,7 @@
 //! (`NAVIGATOR_TEST_POSTGRES_PORT`): each test process builds one
 //! canonical-schema database, points the app's shared `PostgresDb::from_env()`
 //! pool at it, and drives the real handlers through the full router —
-//! embedded Rego policy included. Without the lane they skip, unless
-//! `NAV_REQUIRE_POSTGRES=1` turns the skip into a failure.
+//! embedded Rego policy included. Without the lane they fail.
 //!
 //! The provider is the billing crate's stub, held by the fixture so the
 //! assertions can count actual `create_invoice` calls — the idempotency
@@ -48,19 +47,12 @@ static DATABASE: tokio::sync::OnceCell<Option<String>> = tokio::sync::OnceCell::
 async fn invoice_store() -> Option<&'static str> {
     DATABASE
         .get_or_init(|| async {
-            let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {
-                assert_ne!(
-                    std::env::var("NAV_REQUIRE_POSTGRES").as_deref(),
-                    Ok("1"),
-                    "the PostgreSQL integration lane requires NAVIGATOR_TEST_POSTGRES_PORT"
-                );
-                return None;
-            };
+            let port = store::test_support::postgres_test_port();
             let admin_database = std::env::var("NAVIGATOR_TEST_POSTGRES_DATABASE")
                 .unwrap_or_else(|_| "smoke".into());
             let options = sqlx::postgres::PgConnectOptions::new()
                 .host("127.0.0.1")
-                .port(port.parse().expect("the lane port is a number"))
+                .port(port)
                 .username("postgres")
                 .password("synthetic")
                 .ssl_mode(sqlx::postgres::PgSslMode::Disable);
@@ -94,7 +86,7 @@ async fn invoice_store() -> Option<&'static str> {
             .await;
             setup.pool().close().await;
             std::env::set_var("NAVIGATOR_POSTGRES_HOST", "127.0.0.1");
-            std::env::set_var("NAVIGATOR_POSTGRES_PORT", &port);
+            std::env::set_var("NAVIGATOR_POSTGRES_PORT", port.to_string());
             std::env::set_var("NAVIGATOR_POSTGRES_USER", "postgres");
             std::env::set_var("NAVIGATOR_POSTGRES_PASSWORD", "synthetic");
             std::env::set_var("NAVIGATOR_POSTGRES_DATABASE", &database);

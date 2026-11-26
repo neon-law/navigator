@@ -153,7 +153,6 @@ jobs:
         env:
           KUBECONFIG: /tmp/postgres-kind.config
           NAVIGATOR_TEST_POSTGRES_PORT: '25432'
-          NAV_REQUIRE_POSTGRES: '1'
           NAVIGATOR_FORBID_SURREAL: '1'
           RUST_TEST_THREADS: '2'
           RUST_MIN_STACK: '33554432'
@@ -172,7 +171,6 @@ jobs:
         run: python3 images/postgres/tests/test-runtime-graph-cleanup.py
       - name: Runtime graph writers use genuine native admission and restricted App roles
         env:
-          NAV_REQUIRE_POSTGRES: '1'
           NAVIGATOR_FORBID_SURREAL: '1'
           RUST_MIN_STACK: '33554432'
         run: |
@@ -196,7 +194,6 @@ jobs:
         env:
           KUBECONFIG: /tmp/postgres-kind.config
           NAVIGATOR_TEST_POSTGRES_PORT: '25432'
-          NAV_REQUIRE_POSTGRES: '1'
           NAVIGATOR_FORBID_SURREAL: '1'
           RUST_MIN_STACK: '33554432'
         run: |

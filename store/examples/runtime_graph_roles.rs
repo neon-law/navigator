@@ -199,10 +199,6 @@ async fn controls(fixture: &PostgresFixture, options: PgConnectOptions) -> Resul
 
 async fn run() -> Result<()> {
     anyhow::ensure!(
-        std::env::var("NAV_REQUIRE_POSTGRES").as_deref() == Ok("1"),
-        "required-PG flag missing"
-    );
-    anyhow::ensure!(
         std::env::var("NAVIGATOR_FORBID_SURREAL").as_deref() == Ok("1"),
         "Source refusal missing"
     );

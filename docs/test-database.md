@@ -10,9 +10,9 @@ rather than truncating it; retained or partially initialized history requires ex
 
 PostgreSQL is the storage authority, so tests exercise it directly. The fixture is one disposable container of the
 pinned `navigator/postgres` image on loopback port 25432, with `store/postgres/schema.sql` applied. Tests read the port
-from `NAVIGATOR_TEST_POSTGRES_PORT`. The required native fixture fails when the port is missing. Optional fixture tests
-skip without the port unless `NAV_REQUIRE_POSTGRES=1` is set. Start the fixture locally the way CI does (the `start
-PostgreSQL for covered journal tests` step in `.github/workflows/ci.yml`):
+from `NAVIGATOR_TEST_POSTGRES_PORT`; every PostgreSQL-backed test fails when the port is missing, through
+`store::test_support::postgres_test_port`. Start the fixture locally the way CI does (the `start PostgreSQL for covered
+journal tests` step in `.github/workflows/ci.yml`):
 
 ```bash
 docker run -d --name test-postgres --shm-size=256m -p 127.0.0.1:25432:5432 \
@@ -32,7 +32,7 @@ boundaries, production cutover, or recovery.
 Set `NAVIGATOR_TEST_POSTGRES_PORT` to the test server port. Run the entire DBOS application test binary with:
 
 ```sh
-NAV_REQUIRE_POSTGRES=1 cargo nextest run --locked -p workflows-service --test dbos
+cargo nextest run --locked -p workflows-service --test dbos
 ```
 
 Each case owns its database. Tests that launch application work in new tasks run the worker in a child process with that
@@ -160,8 +160,8 @@ NAV_REQUIRE_SURREAL=1 cargo nextest run --workspace \
 
 ## How CI runs them
 
-The primary Rust coverage job provisions PostgreSQL and sets `NAV_REQUIRE_POSTGRES=1` and `NAVIGATOR_FORBID_SURREAL=1`.
-`hudson ops surreal-free-tests` filters out engine-backed test modules, integration binaries, and Cucumber runners.
-Integration tests that use `with_required_postgres` and reach no Source engine stay in the coverage measurement,
-including tests that pass a disconnected Source handle through application APIs. The KIND gate exercises the browser and
-accessibility suites. Marking a draft pull request ready starts the Rust suite.
+The primary Rust coverage job provisions PostgreSQL and sets `NAVIGATOR_TEST_POSTGRES_PORT` and
+`NAVIGATOR_FORBID_SURREAL=1`. `hudson ops surreal-free-tests` filters out engine-backed test modules, integration
+binaries, and Cucumber runners. Integration tests that use `with_required_postgres` and reach no Source engine stay in
+the coverage measurement, including tests that pass a disconnected Source handle through application APIs. The KIND gate
+exercises the browser and accessibility suites. Marking a draft pull request ready starts the Rust suite.

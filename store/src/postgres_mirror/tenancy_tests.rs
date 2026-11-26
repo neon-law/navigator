@@ -553,7 +553,7 @@ const FIRM_SLUG_MIGRATION: &str =
 
 /// A fresh database holding every migration before the Firm slug.
 async fn database_before_firm_slug() -> Option<sqlx::PgPool> {
-    let (options, admin_database) = crate::postgres_mirror::tests::test_postgres()?;
+    let (options, admin_database) = crate::postgres_mirror::tests::test_postgres();
     let admin = sqlx::PgPool::connect_with(options.clone().database(&admin_database))
         .await
         .unwrap();

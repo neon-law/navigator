@@ -2383,17 +2383,11 @@ mod end_to_end_tests {
             Box::pin(billing_form_doors_end_to_end()).await;
             return;
         }
-        let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {
-            assert!(
-                std::env::var("NAV_REQUIRE_POSTGRES").as_deref() != Ok("1"),
-                "PostgreSQL fixture required"
-            );
-            return;
-        };
+        let port = store::test_support::postgres_test_port();
         let admin = sqlx::PgPool::connect_with(
             sqlx::postgres::PgConnectOptions::new()
                 .host("127.0.0.1")
-                .port(port.parse().unwrap())
+                .port(port)
                 .username("postgres")
                 .password("synthetic")
                 .database("smoke")
@@ -2415,7 +2409,7 @@ mod end_to_end_tests {
             .env("NAV_BILLING_FORM_CHILD", "1")
             .env("NAVIGATOR_RELEASE_TAG", "26.11.17")
             .env("NAVIGATOR_POSTGRES_HOST", "127.0.0.1")
-            .env("NAVIGATOR_POSTGRES_PORT", &port)
+            .env("NAVIGATOR_POSTGRES_PORT", port.to_string())
             .env("NAVIGATOR_POSTGRES_USER", "postgres")
             .env("NAVIGATOR_POSTGRES_PASSWORD", "synthetic")
             .env("NAVIGATOR_POSTGRES_DATABASE", &database)

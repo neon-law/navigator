@@ -1,5 +1,5 @@
 //! The provider-envelope authority's tests, against the PostgreSQL fixture.
-//! Each test skips when `NAVIGATOR_TEST_POSTGRES_PORT` is unset.
+//! Each test fails when `NAVIGATOR_TEST_POSTGRES_PORT` is unset.
 use super::*;
 use crate::notarizations;
 use crate::postgres_mirror::tests::{connect, fresh_schema, notation_fixture};

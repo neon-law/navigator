@@ -4,7 +4,7 @@ use rules::pages::PageEntry;
 use word::matter::Matter;
 
 use super::*;
-use crate::postgres_mirror::tests::{connect, fresh_schema, synthetic_entity, test_postgres};
+use crate::postgres_mirror::tests::{connect, fresh_schema, synthetic_entity};
 use crate::{matter_captions, matter_pages::MatterPage};
 
 fn page(slug: &str, client: Option<&[&str]>) -> PageEntry {
@@ -532,17 +532,11 @@ async fn rows_outside_their_projects_firm_are_refused() {
 /// case runs the probe below in its own child process.
 #[test]
 fn matter_sync_hooks_are_isolated_from_disabled_and_unreachable_postgres() {
-    let mut cases = vec!["disabled", "unreachable"];
-    let database = test_postgres().map(|_| {
-        tokio::runtime::Runtime::new()
-            .unwrap()
-            .block_on(fresh_schema())
-            .unwrap()
-    });
-    if database.is_some() {
-        cases.push("mirrored");
-    }
-    for case in cases {
+    let database = tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(fresh_schema())
+        .unwrap();
+    for case in ["disabled", "unreachable", "mirrored"] {
         let mut child = Command::new(std::env::current_exe().unwrap());
         child
             .args([
@@ -563,7 +557,7 @@ fn matter_sync_hooks_are_isolated_from_disabled_and_unreachable_postgres() {
                 child.env_remove("NAVIGATOR_POSTGRES_HOST");
             }
             "mirrored" => {
-                let (options, name) = database.as_ref().unwrap();
+                let (options, name) = &database;
                 child
                     .env("NAVIGATOR_POSTGRES_PORT", options.get_port().to_string())
                     .env("NAVIGATOR_POSTGRES_DATABASE", name);

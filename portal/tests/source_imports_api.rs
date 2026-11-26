@@ -473,21 +473,17 @@ async fn run_unavailable(mode: &str) {
 }
 
 async fn isolated_database() -> Option<(String, String)> {
-    let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {
-        assert!(
-            std::env::var("NAV_REQUIRE_POSTGRES").as_deref() != Ok("1"),
-            "PostgreSQL fixture required"
-        );
-        return None;
-    };
-    let admin = PgPool::connect_with(admin_options(&port)).await.unwrap();
+    let port = store::test_support::postgres_test_port();
+    let admin = PgPool::connect_with(admin_options(&port.to_string()))
+        .await
+        .unwrap();
     let database = format!("source_import_api_{}", Uuid::new_v4().simple());
     sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {database}")))
         .execute(&admin)
         .await
         .unwrap();
     admin.close().await;
-    Some((port, database))
+    Some((port.to_string(), database))
 }
 
 fn admin_options(port: &str) -> PgConnectOptions {

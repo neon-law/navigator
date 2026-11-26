@@ -388,17 +388,7 @@ mod tests {
     /// A disposable database on the test PostgreSQL server, migrated to
     /// head — the same fixture the workflows-service DBOS lane uses.
     async fn pg() -> Option<PostgresDb> {
-        let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {
-            assert_ne!(
-                std::env::var("NAV_REQUIRE_POSTGRES").as_deref(),
-                Ok("1"),
-                "required PostgreSQL test lacks its disposable port"
-            );
-            return None;
-        };
-        let port = port
-            .parse::<u16>()
-            .expect("test PostgreSQL port is numeric");
+        let port = crate::test_support::postgres_test_port();
         let options = |database: &str| {
             PgConnectOptions::new()
                 .host("127.0.0.1")

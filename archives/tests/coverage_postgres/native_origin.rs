@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 #[tokio::test]
 async fn genuinely_created_origin_roundtrips_as_evidence_without_admitting_logical_target() {
-    let Some(options) = options() else { return };
+    let options = options();
     let admin = PgPool::connect_with(options.clone()).await.unwrap();
     let operation = Uuid::new_v4();
     let created = native_origin::create(options.clone(), operation, tier())
@@ -31,7 +31,7 @@ async fn genuinely_created_origin_roundtrips_as_evidence_without_admitting_logic
 
 #[tokio::test]
 async fn real_upgrade_intent_and_completion_roundtrip_without_fresh_restamping() {
-    let Some(options) = options() else { return };
+    let options = options();
     let admin = PgPool::connect_with(options.clone()).await.unwrap();
     let creation = Uuid::new_v4();
     let created = native_origin::create(options, creation, tier())
@@ -104,24 +104,17 @@ async fn upgrade_rows(pg: &PostgresDb) -> Vec<serde_json::Value> {
     .unwrap()
 }
 
-fn options() -> Option<PgConnectOptions> {
-    let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {
-        assert_ne!(std::env::var("NAV_REQUIRE_POSTGRES").as_deref(), Ok("1"));
-        return None;
-    };
-    Some(
-        PgConnectOptions::new()
-            .host("127.0.0.1")
-            .port(port.parse().unwrap())
-            .username("postgres")
-            .password("synthetic")
-            .database(
-                &std::env::var("NAVIGATOR_TEST_POSTGRES_DATABASE")
-                    .unwrap_or_else(|_| "smoke".into()),
-            )
-            .ssl_mode(PgSslMode::Disable)
-            .options([("session_preload_libraries", "age")]),
-    )
+fn options() -> PgConnectOptions {
+    PgConnectOptions::new()
+        .host("127.0.0.1")
+        .port(store::test_support::postgres_test_port())
+        .username("postgres")
+        .password("synthetic")
+        .database(
+            &std::env::var("NAVIGATOR_TEST_POSTGRES_DATABASE").unwrap_or_else(|_| "smoke".into()),
+        )
+        .ssl_mode(PgSslMode::Disable)
+        .options([("session_preload_libraries", "age")])
 }
 
 fn tier() -> TierBinding {

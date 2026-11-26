@@ -30,9 +30,9 @@ to switch reads. A mirror round trip does not establish equivalent application q
 retains explicit remaining acceptance, including rows with PostgreSQL tables and runtime tests. An empty test list means
 no reviewed reference is linked here; it does not claim that the repository contains no related tests.
 
-Run the referenced tests with a required synthetic PostgreSQL fixture: set `NAVIGATOR_TEST_POSTGRES_PORT` and
-`NAV_REQUIRE_POSTGRES=1`. Otherwise the mirror tests can return early. Most references are store unit tests, selected
-with `cargo test -p store --lib <function>`; references under `store/tests/` use that integration-test target instead.
+Run the referenced tests with the synthetic PostgreSQL fixture: set `NAVIGATOR_TEST_POSTGRES_PORT`, without which they
+fail. Most references are store unit tests, selected with `cargo test -p store --lib <function>`; references under
+`store/tests/` use that integration-test target instead.
 
 Start with the ownership rules in [postgres-tenancy.md](../../docs/postgres-tenancy.md). [ownership
 matrix](ownership.json) maps every source table to a target scope, ownership path, migration slice and parity scenario.

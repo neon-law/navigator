@@ -417,17 +417,7 @@ mod tests {
 
     #[tokio::test]
     async fn firm_secret_migration_upgrades_a_database_with_purchase_applied() {
-        let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {
-            assert_ne!(
-                std::env::var("NAV_REQUIRE_POSTGRES").as_deref(),
-                Ok("1"),
-                "required PostgreSQL upgrade test lacks its disposable port"
-            );
-            return;
-        };
-        let port = port
-            .parse::<u16>()
-            .expect("test PostgreSQL port is numeric");
+        let port = crate::test_support::postgres_test_port();
         let options = |database: &str| {
             PgConnectOptions::new()
                 .host("127.0.0.1")
@@ -520,12 +510,8 @@ mod tests {
     // Environment and the OnceCell belong to each child process. No test mutates
     // another test's environment, and this remains safe under Cargo and nextest.
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "isolated configuration matrix keeps each credential and TLS scenario together"
-    )]
     fn runtime_configuration_isolated() {
-        let mut cases = vec![
+        let cases = [
             "host",
             "port",
             "user",
@@ -537,16 +523,8 @@ mod tests {
             "bootstrap_tls",
             "connection",
             "root_cert",
+            "shared_pool",
         ];
-        if std::env::var_os("NAVIGATOR_TEST_POSTGRES_PORT").is_some() {
-            cases.push("shared_pool");
-        } else {
-            assert_ne!(
-                std::env::var("NAV_REQUIRE_POSTGRES").as_deref(),
-                Ok("1"),
-                "required PostgreSQL connection test lacks its disposable port"
-            );
-        }
         for case in cases {
             let mut child = Command::new(std::env::current_exe().unwrap());
             child
@@ -606,7 +584,7 @@ mod tests {
                     child
                         .env(
                             KEYS[1],
-                            std::env::var("NAVIGATOR_TEST_POSTGRES_PORT").unwrap(),
+                            crate::test_support::postgres_test_port().to_string(),
                         )
                         .env(KEYS[2], "postgres")
                         .env(KEYS[3], "synthetic")

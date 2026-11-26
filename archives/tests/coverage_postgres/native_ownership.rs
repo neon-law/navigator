@@ -30,13 +30,10 @@ struct ProbeError;
 
 #[tokio::test]
 async fn canonical_native_owners_and_deleted_project_audit_restore_with_real_sdk_checkpoints() {
-    let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {
-        assert_ne!(std::env::var("NAV_REQUIRE_POSTGRES").as_deref(), Ok("1"));
-        return;
-    };
+    let port = store::test_support::postgres_test_port();
     let options = PgConnectOptions::new()
         .host("127.0.0.1")
-        .port(port.parse().unwrap())
+        .port(port)
         .username("postgres")
         .password("synthetic")
         .database(
@@ -60,7 +57,7 @@ async fn canonical_native_owners_and_deleted_project_audit_restore_with_real_sdk
         for pool in [&forge,&forge_target] {sqlx::raw_sql(FORGE_SCHEMA).execute(pool).await.unwrap();}
         sqlx::query("INSERT INTO forge.repository VALUES(1,'synthetic',true,decode('00ff','hex'),'{\"native\":true}'::jsonb)")
             .execute(&forge).await.unwrap();
-        roundtrip(fixture.postgres(),&options,&mut owned,&forge,&forge_target,&port,2).await;
+        roundtrip(fixture.postgres(),&options,&mut owned,&forge,&forge_target,&port.to_string(),2).await;
     }).catch_unwind().await;
     let mut cleanup_failed = false;
     for (name, pool) in owned {

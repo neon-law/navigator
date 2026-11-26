@@ -16,7 +16,7 @@
 //!
 //! The subscriber-path tests read a real Purchase ledger. They follow the
 //! house fixture: an isolated database off the CI test container
-//! (`NAVIGATOR_TEST_POSTGRES_PORT`), skipped where it is absent.
+//! (`NAVIGATOR_TEST_POSTGRES_PORT`), required.
 
 use std::sync::Arc;
 
@@ -34,14 +34,13 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 /// The isolated Postgres database the subscriber-path tests read, mirroring
-/// the house fixture: an isolated database off the CI test container, absent
-/// locally, so the caller skips the assertions it cannot serve.
+/// the house fixture: an isolated database off the CI test container.
 async fn database() -> Option<store::postgres::PostgresDb> {
     use sqlx::postgres::{PgConnectOptions, PgSslMode};
-    let port = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT").ok()?;
+    let port = store::test_support::postgres_test_port();
     let options = PgConnectOptions::new()
         .host("127.0.0.1")
-        .port(port.parse().unwrap())
+        .port(port)
         .username("postgres")
         .password("synthetic")
         .database(
@@ -204,7 +203,6 @@ async fn get(app: &Router, bearer: Option<&str>) -> (StatusCode, String, String)
 #[tokio::test]
 async fn an_anonymous_browser_is_sent_through_the_login_door() {
     let Some(fx) = fixture().await else {
-        eprintln!("skipping: no NAVIGATOR_TEST_POSTGRES_PORT");
         return;
     };
     let (status, location, _) = get(&fx.app, None).await;
@@ -215,7 +213,6 @@ async fn an_anonymous_browser_is_sent_through_the_login_door() {
 #[tokio::test]
 async fn a_caller_without_a_subscription_sees_the_preview() {
     let Some(fx) = fixture().await else {
-        eprintln!("skipping: no NAVIGATOR_TEST_POSTGRES_PORT");
         return;
     };
     // Default test state runs the `OIDC_DISABLED` posture: no verifier, the
@@ -232,7 +229,6 @@ async fn a_caller_without_a_subscription_sees_the_preview() {
 #[tokio::test]
 async fn an_unpaid_subscription_still_previews() {
     let Some(fx) = fixture().await else {
-        eprintln!("skipping: no NAVIGATOR_TEST_POSTGRES_PORT");
         return;
     };
     let (person_id, bearer) = seed_subscriber(&fx.surreal, "gate-unpaid@example.com").await;
@@ -258,7 +254,6 @@ async fn an_unpaid_subscription_still_previews() {
 #[tokio::test]
 async fn an_active_subscriber_sees_the_composer() {
     let Some(fx) = fixture().await else {
-        eprintln!("skipping: no NAVIGATOR_TEST_POSTGRES_PORT");
         return;
     };
     let (person_id, bearer) = seed_subscriber(&fx.surreal, "gate-subscriber@example.com").await;
@@ -284,7 +279,6 @@ async fn an_enforced_deployment_admits_a_raw_oidc_bearer_jwt() {
     const SECRET: &str = "gate-secret";
     const SUBJECT: &str = "idp-subject-42";
     let Some(pg) = database().await else {
-        eprintln!("skipping: no NAVIGATOR_TEST_POSTGRES_PORT");
         return;
     };
     let fx = fixture_with(pg, portal::AuthConfig::new(false, Some(SECRET))).await;

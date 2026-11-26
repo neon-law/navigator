@@ -172,24 +172,16 @@ pub(super) fn source<'a>(slug: &'a str, title: &'a str) -> SourcePost<'a> {
     }
 }
 
-pub(crate) fn test_postgres() -> Option<(PgConnectOptions, String)> {
-    let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {
-        assert_ne!(
-            std::env::var("NAV_REQUIRE_POSTGRES").as_deref(),
-            Ok("1"),
-            "PostgreSQL integration lane requires NAVIGATOR_TEST_POSTGRES_PORT"
-        );
-        return None;
-    };
-    Some((
+pub(crate) fn test_postgres() -> (PgConnectOptions, String) {
+    (
         PgConnectOptions::new()
             .host("127.0.0.1")
-            .port(port.parse().unwrap())
+            .port(crate::test_support::postgres_test_port())
             .username("postgres")
             .password("synthetic")
             .ssl_mode(PgSslMode::Disable),
         std::env::var("NAVIGATOR_TEST_POSTGRES_DATABASE").unwrap_or_else(|_| "smoke".into()),
-    ))
+    )
 }
 
 /// A fresh database holding the canonical schema and one synthetic Brand.
@@ -205,7 +197,7 @@ async fn fresh_database() -> Option<(PgConnectOptions, String)> {
 
 /// A fresh database holding only the canonical schema.
 pub(crate) async fn fresh_schema() -> Option<(PgConnectOptions, String)> {
-    let (options, admin_database) = test_postgres()?;
+    let (options, admin_database) = test_postgres();
     let admin = sqlx::PgPool::connect_with(options.clone().database(&admin_database))
         .await
         .unwrap();
@@ -344,15 +336,11 @@ fn errors_and_keys_name_rows_without_values() {
 /// scenario runs in its own child process with its own environment.
 #[test]
 fn the_write_hook_isolated() {
-    let mut cases = vec!["disabled", "unreachable"];
-    let database = test_postgres().map(|_| {
-        let runtime = tokio::runtime::Runtime::new().unwrap();
-        runtime.block_on(fresh_database()).unwrap()
-    });
-    if database.is_some() {
-        cases.push("mirrored");
-    }
-    for case in cases {
+    let database = tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(fresh_database())
+        .unwrap();
+    for case in ["disabled", "unreachable", "mirrored"] {
         let mut child = Command::new(std::env::current_exe().unwrap());
         child
             .args([
@@ -373,7 +361,7 @@ fn the_write_hook_isolated() {
                 child.env_remove("NAVIGATOR_POSTGRES_HOST");
             }
             "mirrored" => {
-                let (_, name) = database.as_ref().unwrap();
+                let (_, name) = &database;
                 child
                     .env(
                         "NAVIGATOR_POSTGRES_PORT",

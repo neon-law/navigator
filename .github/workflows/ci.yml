@@ -842,7 +842,6 @@ jobs:
           # required here. The browser gate requires its own harness.
           NAVIGATOR_FORBID_SURREAL: "1"
           NAVIGATOR_TEST_POSTGRES_PORT: "25432"
-          NAV_REQUIRE_POSTGRES: "1"
           RUST_BACKTRACE: full
           # Coverage-instrumented routes run deep on a test thread; 8 MiB has
           # overflowed under llvm-cov.

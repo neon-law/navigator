@@ -46,16 +46,7 @@ pub async fn database() -> Option<TestDatabase> {
 
 /// Create the same owned fixture with or without application enrollment.
 pub async fn database_with_activation(activated: bool) -> Option<TestDatabase> {
-    let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {
-        assert!(
-            std::env::var("NAV_REQUIRE_POSTGRES").as_deref() != Ok("1"),
-            "PostgreSQL integration lane requires NAVIGATOR_TEST_POSTGRES_PORT"
-        );
-        return None;
-    };
-    let port: u16 = port
-        .parse()
-        .expect("NAVIGATOR_TEST_POSTGRES_PORT is a port");
+    let port = store::test_support::postgres_test_port();
     let options = PgConnectOptions::new()
         .host("127.0.0.1")
         .port(port)

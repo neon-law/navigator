@@ -56,16 +56,7 @@ fn every_failure_names_its_step_without_message_content() {
 /// database even when the test fails mid-body, so long-lived dev
 /// servers never accumulate `dbos_email_summary_*` databases.
 async fn database_url() -> Option<(String, TestDatabaseCleanup)> {
-    let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {
-        assert!(
-            std::env::var("NAV_REQUIRE_POSTGRES").as_deref() != Ok("1"),
-            "PostgreSQL integration lane requires NAVIGATOR_TEST_POSTGRES_PORT"
-        );
-        return None;
-    };
-    let port: u16 = port
-        .parse()
-        .expect("NAVIGATOR_TEST_POSTGRES_PORT is a port");
+    let port = store::test_support::postgres_test_port();
     let options = PgConnectOptions::new()
         .host("127.0.0.1")
         .port(port)

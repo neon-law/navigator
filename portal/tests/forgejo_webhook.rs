@@ -4,8 +4,7 @@
 //! boot-time replay drains exactly what first delivery left behind.
 //!
 //! The journal is PostgreSQL-backed, so each test owns an isolated
-//! database off the CI test container, absent locally — the caller skips
-//! the assertions it cannot serve (the house fixture, as in
+//! database off the CI test container (the house fixture, as in
 //! `legal_sandbox_gate.rs`).
 
 use axum::{
@@ -76,14 +75,13 @@ fn hmac_key() -> String {
 }
 
 /// The isolated Postgres database the receiver's tests read, mirroring
-/// the house fixture: absent locally, so the caller skips the assertions
-/// it cannot serve.
+/// the house fixture.
 async fn database() -> Option<store::postgres::PostgresDb> {
     use sqlx::postgres::{PgConnectOptions, PgSslMode};
-    let port = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT").ok()?;
+    let port = store::test_support::postgres_test_port();
     let options = PgConnectOptions::new()
         .host("127.0.0.1")
-        .port(port.parse().unwrap())
+        .port(port)
         .username("postgres")
         .password("synthetic")
         .database(

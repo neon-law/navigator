@@ -14,7 +14,7 @@
 //! runs is the traversal engine and nothing else: the scoring, the
 //! floors, and the finding shapes are the same Rust for both.
 //!
-//! These tests self-skip without `NAVIGATOR_TEST_POSTGRES_PORT` (see
+//! These tests fail without `NAVIGATOR_TEST_POSTGRES_PORT` (see
 //! `postgres_mirror::tests`), and need the AGE-enabled image; CI's
 //! coverage job arms both.
 

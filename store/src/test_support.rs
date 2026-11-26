@@ -1285,21 +1285,42 @@ async fn prepare_postgres_fixture(
     Ok(pg)
 }
 
+/// The port of the disposable PostgreSQL test server.
+///
+/// Every PostgreSQL-backed test requires it; none skips without it.
+/// `docs/test-database.md` starts the server the way CI does.
+///
+/// # Panics
+/// Panics when `NAVIGATOR_TEST_POSTGRES_PORT` is unset or not a port number.
+#[must_use]
+pub fn postgres_test_port() -> u16 {
+    let port = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT").unwrap_or_else(|_| {
+        panic!(
+            "NAVIGATOR_TEST_POSTGRES_PORT is unset: PostgreSQL-backed tests require the \
+             disposable test server; start it as docs/test-database.md describes"
+        )
+    });
+    port.parse().unwrap_or_else(|_| {
+        panic!("NAVIGATOR_TEST_POSTGRES_PORT={port:?} is not a port; see docs/test-database.md")
+    })
+}
+
 /// Each actor walk uses a genuine fresh-native Origin, with no Source handle.
 pub fn with_postgres(
     test: impl std::future::Future<Output = ()>,
 ) -> impl std::future::Future<Output = ()> {
-    with_postgres_history(test, FixtureHistory::Native, false)
+    with_postgres_history(test, FixtureHistory::Native)
 }
 
-/// Run a native test whose assertions require a PostgreSQL fixture.
+/// [`with_postgres`] under the name `hudson ops surreal-free-tests` reads: an
+/// integration test that calls it keeps its file in the coverage measurement.
 ///
 /// # Panics
 /// Panics when the local test server is unspecified or the fixture fails.
 pub fn with_required_postgres(
     test: impl std::future::Future<Output = ()>,
 ) -> impl std::future::Future<Output = ()> {
-    with_postgres_history(test, FixtureHistory::Native, true)
+    with_postgres(test)
 }
 
 /// Exercise captured-enrollment validation using explicit synthetic history.
@@ -1308,7 +1329,7 @@ pub fn with_required_postgres(
 pub fn with_captured_postgres(
     test: impl std::future::Future<Output = ()>,
 ) -> impl std::future::Future<Output = ()> {
-    with_postgres_history(test, FixtureHistory::Captured, false)
+    with_postgres_history(test, FixtureHistory::Captured)
 }
 
 /// Run an owned, genuinely migrated schema-only target for historical input
@@ -1316,7 +1337,7 @@ pub fn with_captured_postgres(
 pub fn with_unactivated_postgres(
     test: impl std::future::Future<Output = ()>,
 ) -> impl std::future::Future<Output = ()> {
-    with_postgres_history(test, FixtureHistory::SchemaOnly, false)
+    with_postgres_history(test, FixtureHistory::SchemaOnly)
 }
 
 enum FixtureHistory {
@@ -1328,25 +1349,18 @@ enum FixtureHistory {
 fn with_postgres_history(
     test: impl std::future::Future<Output = ()>,
     history: FixtureHistory,
-    required: bool,
 ) -> impl std::future::Future<Output = ()> {
     let test = Box::pin(test);
     async move {
         use crate::postgres::PostgresDb;
         use futures::FutureExt as _;
         use sqlx::postgres::{PgConnectOptions, PgSslMode};
-        let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {
-            assert!(
-                !required && std::env::var("NAV_REQUIRE_POSTGRES").as_deref() != Ok("1"),
-                "this native test requires NAVIGATOR_TEST_POSTGRES_PORT"
-            );
-            return;
-        };
+        let port = postgres_test_port();
         let database =
             std::env::var("NAVIGATOR_TEST_POSTGRES_DATABASE").unwrap_or_else(|_| "smoke".into());
         let options = PgConnectOptions::new()
             .host("127.0.0.1")
-            .port(port.parse().unwrap())
+            .port(port)
             .username("postgres")
             .password("synthetic")
             .database(&database)
