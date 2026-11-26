@@ -83,7 +83,18 @@ directory. A Firm member without directory access can run `list` with the UUID.
    different plan requires review. A new scaffold copies the plan name from Navigator when the Project already has a
    link. `navigator project set --from-live` fills a missing name on an existing checkout.
 
-   Record the Plan Case Number, member ID, and intake dates in Navigator. These details stay out of the manifest.
+   Set a Project's plan and verified benefit from its checkout. This also declares the Firm's canonical plan name in
+   `navigator.yaml`. The Plan Case Number, member ID, intake dates, and verified benefit terms stay in Navigator.
+
+   ```bash
+   navigator project legal-plan set --plan LegalEASE --benefit-code SAMPLE-BENEFIT \
+     --cap-shape hourly-cap --cap-minutes 240 \
+     --plan-rate-cents-per-hour 9000 --paralegal-rate-cents-per-hour 4500
+   ```
+
+   The example uses synthetic terms. When setting a cap shape, enter the complete terms from the verified authorization.
+
+   `navigator project legal-plan show` displays the recorded terms.
 
 4. **Engagement letter.** The fee section says the plan pays, names the Plan Case Number, and states what the plan does
    not cover. The Firm tells the client in writing before doing uncovered work.

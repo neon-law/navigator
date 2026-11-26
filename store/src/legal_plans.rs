@@ -23,6 +23,7 @@
 //! the CEO digest reads. See `docs/glossary/legal-plan.md` and
 //! `docs/glossary/plan-fee-schedule.md`.
 use chrono::{DateTime, NaiveDate, Utc};
+pub use model::plan_benefit::PlanBenefitTerms;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use uuid::Uuid;
@@ -228,7 +229,7 @@ pub async fn find_by_name(
     firm_id: Uuid,
     name: &str,
 ) -> Result<Option<LegalPlan>, LegalPlanError> {
-    sqlx::query(
+    let exact = sqlx::query(
         "SELECT id,firm_id,name,contact,portal,acceptance_sla_hours,turnaround_sla_days, \
          reporting_requirements,inserted_at FROM legal_plan \
          WHERE firm_id=$1 AND lower(name)=lower($2)",
@@ -238,6 +239,50 @@ pub async fn find_by_name(
     .fetch_optional(&pg.0)
     .await?
     .map(|row| plan_from_row(&row))
+    .transpose()?;
+    if exact.is_some()
+        || !matches!(
+            name.trim().to_ascii_lowercase().as_str(),
+            "legalease" | "legal ease"
+        )
+    {
+        return Ok(exact);
+    }
+    let plans = list(pg, firm_id).await?;
+    let provider = crate::plan_assignment::PlanProvider::LegalEase.as_str();
+    Ok(crate::plan_intake::plan_for_provider(&plans, provider).cloned())
+}
+
+/// Read the verified benefit linked to this Firm's Project.
+///
+/// # Errors
+/// Returns a database error if PostgreSQL cannot read the verified benefit.
+pub async fn project_benefit_terms(
+    pg: &PostgresDb,
+    firm_id: Uuid,
+    project_id: Uuid,
+) -> Result<Option<PlanBenefitTerms>, LegalPlanError> {
+    let row = sqlx::query(
+        "SELECT plan_cap_shape,plan_cap_cents,plan_cap_minutes,plan_contested_cap_cents, \
+         plan_rate_cents_per_hour,plan_paralegal_rate_cents_per_hour FROM project \
+         WHERE firm_id=$1 AND id=$2 AND plan_cap_shape IS NOT NULL",
+    )
+    .bind(firm_id)
+    .bind(project_id)
+    .fetch_optional(&pg.0)
+    .await?;
+    row.map(|row| {
+        let shape: &str = row.try_get("plan_cap_shape")?;
+        let cap_shape = shape.parse().map_err(LegalPlanError::Invalid)?;
+        Ok(PlanBenefitTerms {
+            cap_shape,
+            cap_cents: row.try_get("plan_cap_cents")?,
+            cap_minutes: row.try_get("plan_cap_minutes")?,
+            contested_cap_cents: row.try_get("plan_contested_cap_cents")?,
+            plan_rate_cents_per_hour: row.try_get("plan_rate_cents_per_hour")?,
+            paralegal_rate_cents_per_hour: row.try_get("plan_paralegal_rate_cents_per_hour")?,
+        })
+    })
     .transpose()
 }
 

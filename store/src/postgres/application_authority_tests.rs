@@ -1122,6 +1122,92 @@ async fn notation_creation_history_never_skips_unconfigured_or_incomplete_applic
 }
 
 #[tokio::test]
+async fn verified_plan_terms_follow_the_selected_benefit() {
+    use crate::{firms, legal_plans, projects};
+    use model::plan_benefit::{PlanBenefitTerms, PlanCapShape};
+
+    let (pg, _, _, project, firm) = application_fixture().await;
+    PostgresDb::with_test_db(pg.clone(), async {
+        let source = crate::surreal::SurrealDb::uninitialized();
+        let brand: String = sqlx::query_scalar("SELECT brand FROM project WHERE id=$1")
+            .bind(project)
+            .fetch_one(pg.pool())
+            .await
+            .unwrap();
+        firms::ensure_brand(&source, firm, &brand).await.unwrap();
+        let plan = legal_plans::create(
+            &pg,
+            firm,
+            &legal_plans::NewLegalPlan {
+                name: "Legal Ease".into(),
+                contact: None,
+                portal: None,
+                acceptance_sla_hours: None,
+                turnaround_sla_days: None,
+                reporting_requirements: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            legal_plans::find_by_name(&pg, firm, "LegalEASE")
+                .await
+                .unwrap()
+                .unwrap()
+                .id,
+            plan.id
+        );
+        let mut columns = projects::PlanColumns {
+            legal_plan_id: Some(plan.id),
+            benefit_code: Some("SAMPLE-BENEFIT".into()),
+            ..Default::default()
+        };
+        let terms = PlanBenefitTerms {
+            cap_shape: PlanCapShape::HourlyCap,
+            cap_minutes: Some(240),
+            cap_cents: None,
+            contested_cap_cents: None,
+            plan_rate_cents_per_hour: Some(9000),
+            paralegal_rate_cents_per_hour: Some(4500),
+        };
+        let read = || legal_plans::project_benefit_terms(&pg, firm, project);
+        projects::set_plan_columns_with_benefit(&source, &pg, project, &columns, Some(&terms))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(read().await.unwrap(), Some(terms.clone()));
+        columns.plan_member_id = Some("SAMPLE-MEMBER".into());
+        projects::set_plan_columns(&source, &pg, project, &columns)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(read().await.unwrap(), Some(terms.clone()));
+        let invalid = PlanBenefitTerms {
+            cap_cents: Some(5000),
+            ..terms.clone()
+        };
+        assert!(projects::set_plan_columns_with_benefit(
+            &source,
+            &pg,
+            project,
+            &columns,
+            Some(&invalid)
+        )
+        .await
+        .is_err());
+        assert_eq!(read().await.unwrap(), Some(terms));
+        columns.benefit_code = Some("SAMPLE-OTHER".into());
+        projects::set_plan_columns(&source, &pg, project, &columns)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(read().await.unwrap(), None);
+    })
+    .await;
+    pg.pool().close().await;
+}
+
+#[tokio::test]
 #[expect(
     clippy::too_many_lines,
     reason = "the complete provider walks share a native application fixture and verify failure recovery"
