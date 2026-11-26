@@ -1303,9 +1303,15 @@ Sync clones missing checkouts with `jj git clone --colocate` and colocates clean
 checks the Project and host in the manifest and fetches bookmarks from the recorded origin. When the host verifies a
 secondary Forgejo URL, sync configures the mirror, checks both push destinations and fetches both remotes. When the
 mirror is hidden, missing, unconfigured or unavailable, sync reports the status and fetches only from origin. Existing
-push settings stay in place. The contributor authenticates to the origin with their own forge account. Local edits,
-conflicts and unsafe paths skip that checkout. Closed checkouts stay on disk. Document hydration uses `project sync` or
-`project watch` with the caller's document permissions.
+push settings stay in place. The contributor authenticates to the origin with their own forge account. Local edits and
+conflicts prevent working-copy advancement. Unsafe paths skip the checkout. Closed checkouts stay on disk. Document
+hydration uses `project sync` or `project watch` with the caller's document permissions.
+
+Run `navigator project watch --checkouts-only --host <host>` as a login or scheduled process to keep repositories
+current without downloading document revisions. It polls every 30 seconds and advances an empty working copy when its
+parent is the previous source main and the new main descends from it. Checkouts with local work still fetch verified
+remotes. `navigator project status <code>` reports lag against fetched main. Use `navigator sync --verbose` to see
+individual workspace skill and link changes.
 
 ### The workspace root
 

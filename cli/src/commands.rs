@@ -141,6 +141,9 @@ enum Command {
         /// Report checkout state without changing files or contacting the forge.
         #[arg(long)]
         dry_run: bool,
+        /// Show individual workspace skill and link changes.
+        #[arg(long)]
+        verbose: bool,
     },
     /// Interact with a project hosted on a navigator site.
     ///
@@ -642,9 +645,17 @@ fn run() -> ExitCode {
             errors_only,
             ci: _,
         } => run_validate(&dir, fix, errors_only),
-        Command::Sync { host, dir, dry_run } => {
-            runtime().block_on(projects::watch::run_sync(&host, dir.as_deref(), dry_run))
-        }
+        Command::Sync {
+            host,
+            dir,
+            dry_run,
+            verbose,
+        } => runtime().block_on(projects::watch::run_sync(
+            &host,
+            dir.as_deref(),
+            dry_run,
+            verbose,
+        )),
         Command::Projects { action } => runtime().block_on(run_projects(action)),
         Command::Notation {
             action: NotationCmd::Envelope { host, action },
@@ -1184,6 +1195,9 @@ pub enum ProjectsCmd {
         /// Directory holding one checkout per Project. Defaults to the shared workspace root.
         #[arg(long)]
         dir: Option<PathBuf>,
+        /// Keep repositories current without downloading document revisions.
+        #[arg(long)]
+        checkouts_only: bool,
         #[command(flatten)]
         host: HostOpt,
     },
@@ -3411,9 +3425,11 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
             })
             .await
         }
-        ProjectsCmd::Watch { dir, host } => {
-            projects::watch::run(dir.as_deref(), host.host.as_deref()).await
-        }
+        ProjectsCmd::Watch {
+            dir,
+            host,
+            checkouts_only,
+        } => projects::watch::run(dir.as_deref(), host.host.as_deref(), checkouts_only).await,
         ProjectsCmd::Sync {
             dry_run,
             yes,

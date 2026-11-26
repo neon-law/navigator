@@ -220,16 +220,30 @@ pub(super) async fn inspect(status: &serde_json::Value) -> serde_json::Value {
             "waiting for the source repository",
         )
     };
-    let configured = checkout.is_some_and(|path| {
+    let configured = checkout.filter(|path| {
         std::fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.is_dir())
             && path.join(".jj").is_dir()
             && manifest::read(&path).is_some_and(|manifest| manifest.project.as_deref() == code)
     });
+    let checkout_summary = if let Some(checkout) = configured {
+        match watch::checkout_commit(&checkout, "main@origin ~ ::parents(@)").await {
+            Ok(revisions) if revisions.is_empty() => {
+                "Jujutsu checkout is current with fetched main".into()
+            }
+            Ok(revisions) => format!(
+                "Jujutsu checkout is behind by {} from fetched main",
+                revisions.lines().count()
+            ),
+            Err(_) => "Jujutsu checkout is present; fetched main is unavailable".into(),
+        }
+    } else {
+        "missing or incomplete; rerun setup".into()
+    };
     serde_json::json!({
         "source": source,
         "mirror": mirror,
         "branch_protection": "run single-Project setup to verify",
-        "checkout": if configured { "Jujutsu checkout is present; setup verifies its remotes" } else { "missing or incomplete; rerun setup" }
+        "checkout": checkout_summary
     })
 }
 
