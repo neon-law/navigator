@@ -4,6 +4,7 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use comfy_table::Table;
 use futures::{stream, StreamExt};
+use model::billing_report::{BillingAction, BillingReport};
 use model::projects::OnboardingAgreement;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -217,8 +218,85 @@ fn next_deadline(project: &Value) -> String {
     }
 }
 
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+enum BillingException {
+    PendingTime(Uuid),
+    UnallocatedWork,
+    OutstandingClaim(Uuid),
+}
+
+fn billing_exceptions(code: &str, billing: &Value, lines: &mut Vec<String>) {
+    let Ok(report) = BillingReport::deserialize(billing) else {
+        lines.push(format!("{code} · Billing unavailable"));
+        return;
+    };
+
+    // Prefer the action when the same annotation or claim also appears in the detail.
+    let mut exceptions = BTreeMap::new();
+    for action in report
+        .needs_my_action
+        .into_iter()
+        .chain(report.other_claims.into_iter().map(BillingAction::Claim))
+    {
+        let (identity, line) = match action {
+            BillingAction::PendingAnnotation {
+                annotation_id,
+                performed_on,
+                next_action,
+                ..
+            } => (
+                BillingException::PendingTime(annotation_id),
+                format!("Pending time · {performed_on} · {next_action}"),
+            ),
+            BillingAction::UnallocatedWork { next_action, .. } => (
+                BillingException::UnallocatedWork,
+                format!("Completed unallocated work · {next_action}"),
+            ),
+            BillingAction::Claim(claim) => {
+                let Some(cents) = claim.approved_outstanding_cents.filter(|&cents| cents > 0)
+                else {
+                    continue;
+                };
+                let amount = crate::billing::money(Some(cents));
+                let mut row = format!(
+                    "Claim · {} · Approved outstanding {amount} · {}",
+                    claim.benefit, claim.performed_on
+                );
+                if let Some(action) = claim.next_action {
+                    row.push_str(" · ");
+                    row.push_str(&action);
+                }
+                (BillingException::OutstandingClaim(claim.id), row)
+            }
+        };
+        exceptions.entry(identity).or_insert(line);
+    }
+    for time in report
+        .my_time
+        .into_iter()
+        .chain(report.project_time.into_iter().flatten())
+    {
+        if time.status == "pending_review" {
+            exceptions
+                .entry(BillingException::PendingTime(time.id))
+                .or_insert_with(|| {
+                    format!(
+                        "Pending time · {} · {} min",
+                        time.performed_on, time.minutes
+                    )
+                });
+        }
+    }
+    lines.extend(
+        exceptions
+            .into_values()
+            .map(|line| format!("{code} · {line}")),
+    );
+}
+
 fn print(report: &Value) {
     let mut table = Table::new();
+    let mut exceptions = Vec::new();
     table.set_header([
         "Practice",
         "Project",
@@ -239,6 +317,8 @@ fn print(report: &Value) {
             .join(", ");
         let calendar = &project["calendar"]["project_calendar"];
         let billing = &project["billing"];
+        let code = project["code"].as_str().unwrap_or_default();
+        billing_exceptions(code, billing, &mut exceptions);
         let fees = if billing.is_null() || billing.get("error").is_some() {
             "Unavailable".into()
         } else {
@@ -253,7 +333,7 @@ fn print(report: &Value) {
         };
         table.add_row([
             project["practice_area"].as_str().unwrap_or("Unassigned"),
-            project["code"].as_str().unwrap_or_default(),
+            code,
             &next,
             project["status"]["onboarding"]["status"]
                 .as_str()
@@ -272,6 +352,13 @@ fn print(report: &Value) {
         ]);
     }
     println!("{table}");
+    println!("\nDaily billing exceptions");
+    if exceptions.is_empty() {
+        println!("  None");
+    }
+    for line in exceptions {
+        println!("  {line}");
+    }
     if let Some(error) = report["agreement_error"].as_str() {
         println!("Agreement evidence unavailable: {error}");
     }
