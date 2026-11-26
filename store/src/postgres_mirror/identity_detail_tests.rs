@@ -1,5 +1,4 @@
 use super::*;
-use crate::delegations::{Basis, NewDelegation, NoticeChannel};
 use crate::external_identities::ExternalSystem;
 use crate::postgres_mirror::tests::{connect, fresh_schema};
 use crate::postgres_mirror::tests::{
@@ -7,6 +6,23 @@ use crate::postgres_mirror::tests::{
     verified_family_capture as verified_capture,
 };
 use crate::test_support::mem_surreal;
+
+async fn source_delegation(
+    source: &SurrealDb,
+    holder: Uuid,
+    subject: Uuid,
+    notified: Option<&str>,
+) -> Uuid {
+    let id = Uuid::now_v7();
+    source
+        .query("CREATE $id SET delegate_person_id=$holder, subject_person_id=$subject, basis='assistant', granted_by_person_id=$holder, granted_at='2026-01-01T00:00:00Z', subject_notified_at=$notified, inserted_at='2026-01-01T00:00:00Z', updated_at='2026-01-01T00:00:00Z'")
+        .bind(("id", crate::surreal::record_id("person_delegate", id)))
+        .bind(("holder", crate::surreal::record_id("person", holder)))
+        .bind(("subject", crate::surreal::record_id("person", subject)))
+        .bind(("notified", notified.map(str::to_owned)))
+        .await.unwrap().check().unwrap();
+    id
+}
 
 async fn person(source: &SurrealDb) -> Uuid {
     super::super::from_source(crate::persons::create(
@@ -249,21 +265,7 @@ async fn details(
             .bind(("hash", crate::git_access_tokens::hash_token("synthetic-plaintext-token")))
             .bind(("expires", surrealdb::types::Datetime::from(Utc::now() + chrono::Duration::hours(1))))
             .await.unwrap().check().unwrap();
-        let delegate = crate::delegations::grant(
-            source,
-            &NewDelegation {
-                delegate_person_id: holder,
-                subject_person_id: subject,
-                basis: Basis::Assistant,
-                instrument_reference: None,
-                granted_by_person_id: holder,
-                subject_notified_at: None,
-                subject_notified_channel: None,
-            },
-        )
-        .await
-        .unwrap()
-        .id;
+        let delegate = source_delegation(source, holder, subject, None).await;
         let external = crate::external_identities::link(
             source,
             holder,
@@ -403,21 +405,7 @@ async fn scoped_details_refuse_orphan_parents_malformed_ids_and_unparseable_time
         .unwrap();
     let holder = person(&source).await;
     let subject = person(&source).await;
-    let delegate = super::super::from_source(crate::delegations::grant(
-        &source,
-        &NewDelegation {
-            delegate_person_id: holder,
-            subject_person_id: subject,
-            basis: Basis::Assistant,
-            instrument_reference: None,
-            granted_by_person_id: holder,
-            subject_notified_at: Some("yesterday".into()),
-            subject_notified_channel: Some(NoticeChannel::InPerson),
-        },
-    ))
-    .await
-    .unwrap()
-    .id;
+    let delegate = source_delegation(&source, holder, subject, Some("yesterday")).await;
     assert!(matches!(
         import(&source, &pg, &MirrorKey::PersonDelegate(delegate)).await,
         Err(MirrorError::SourceTimestamp)
