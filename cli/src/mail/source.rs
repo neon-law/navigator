@@ -48,6 +48,7 @@ impl SourceFile<'_> {
             None => parsed.source_ref.clone(),
         };
         Ok(Evidence {
+            dated_at: Some(parsed.dated_at),
             source: Some(source),
             ..Evidence::default()
         })
@@ -60,7 +61,7 @@ impl SourceFile<'_> {
         bytes: &[u8],
         kind: &str,
         provenance: serde_json::Value,
-    ) -> Result<(String, DocumentPointer)> {
+    ) -> Result<(String, DocumentPointer, Evidence)> {
         let digest = model::documents::sha256_hex(bytes);
         let evidence = self.evidence(parsed, &digest)?;
         let filename = self
@@ -68,7 +69,7 @@ impl SourceFile<'_> {
             .file_name()
             .and_then(|name| name.to_str())
             .context("missing .eml filename")?;
-        let dated = dated_filename(filename, &parsed.occurred_at)?;
+        let dated = dated_filename(filename, parsed.dated_at);
         let slug_ref = mail_slug_ref(&parsed.message_ref);
         let stored_name = format!("{slug_ref}.eml");
         let target = self
@@ -111,13 +112,7 @@ impl SourceFile<'_> {
                 .await?;
             pointer.folder = Some(folder);
         }
-        let recorded = pointer.evidence.get_or_insert_with(Evidence::default);
-        if recorded.source.is_none()
-            || recorded.source.as_deref() == Some(parsed.source_ref.as_str())
-        {
-            recorded.source = evidence.source;
-        }
-        Ok((target, pointer))
+        Ok((target, pointer, evidence))
     }
 
     async fn source_slug(
@@ -163,9 +158,9 @@ impl SourceFile<'_> {
     }
 }
 
-fn dated_filename(filename: &str, occurred_at: &str) -> Result<String> {
+fn dated_filename(filename: &str, message_date: chrono::NaiveDate) -> String {
     if rules::c004::is_conventional_filename(filename) {
-        return Ok(filename.to_owned());
+        return filename.to_owned();
     }
     let (date, name) = filename
         .split_once('_')
@@ -174,16 +169,13 @@ fn dated_filename(filename: &str, occurred_at: &str) -> Result<String> {
                 .ok()
                 .map(|date| (date, name))
         })
-        .unwrap_or((
-            chrono::DateTime::parse_from_rfc3339(occurred_at)?.date_naive(),
-            filename,
-        ));
+        .unwrap_or((message_date, filename));
     let stem = Path::new(name)
         .file_stem()
         .and_then(|stem| stem.to_str())
         .unwrap_or(name);
     let slug = rules::c004::name_slug(stem).unwrap_or_else(|| "message".into());
-    Ok(format!("{}_{slug}.eml", date.format("%Y.%m.%d")))
+    format!("{}_{slug}.eml", date.format("%Y.%m.%d"))
 }
 
 #[cfg(test)]

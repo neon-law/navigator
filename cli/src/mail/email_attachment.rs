@@ -5,6 +5,7 @@ use std::path::Path;
 
 use anyhow::{ensure, Context, Result};
 use model::document_pointers::DocumentPointer;
+use model::documents::Evidence;
 
 use crate::remote::{DocumentClient, DocumentExecution};
 
@@ -17,6 +18,7 @@ pub(super) async fn upload_all(
     checkout: Option<&Path>,
     kind: &str,
     mut provenance: serde_json::Value,
+    evidence: &Evidence,
 ) -> Result<Vec<(String, DocumentPointer)>> {
     if parsed.attachments.is_empty() {
         return Ok(Vec::new());
@@ -28,6 +30,10 @@ pub(super) async fn upload_all(
     let mut used = HashSet::from([source_name.to_ascii_lowercase()]);
     let inventory = client.list_documents().await?;
     provenance["attachment"] = serde_json::Value::Bool(true);
+    let execution = DocumentExecution {
+        evidence: Some(evidence.clone()),
+        ..DocumentExecution::default()
+    };
     let mut pointers = Vec::with_capacity(parsed.attachments.len());
     for (index, attachment) in parsed.attachments.iter().enumerate() {
         let filename = dated_name(&attachment.filename, parsed.dated_at, &mut used);
@@ -59,7 +65,7 @@ pub(super) async fn upload_all(
                 None,
                 None,
                 None,
-                &DocumentExecution::default(),
+                &execution,
                 Some(provenance.clone()),
             )
             .await?;

@@ -14,7 +14,9 @@ message's attachments into a directory. Filing and exporting use Gmail reads; dr
 
 Parsing a saved `.eml` in its Project checkout writes a pointer for the message and one for each attachment in the same
 directory under `blobs/mail/`. Each attachment uses the message's date and the original filename in the
-`YYYY.MM.DD_name.ext` convention. Attachments with the same normalized name receive distinct suffixes.
+`YYYY.MM.DD_name.ext` convention. Attachments with the same normalized name receive distinct suffixes. Each pointer
+records the calendar date from the message's Date header in `evidence.dated_at` and, when available, the Gmail thread ID
+in `evidence.source`.
 
 The CLI reads the refresh token from the macOS Keychain item whose service is
 `com.neonlaw.navigator.gmail.refresh-token` and whose account is the configured Gmail address. It exchanges that token
