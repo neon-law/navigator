@@ -16,7 +16,7 @@ use std::future::Future;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use chrono::Utc;
 
 use super::forge::{ArmOutcome, CheckVerdict, DeploymentRun, Forge, ReviewRef, ReviewRequest};
