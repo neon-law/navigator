@@ -80,7 +80,6 @@
 //! payload.
 
 use serde::Serialize;
-use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
 use sqlx::{postgres::PgRow, AssertSqlSafe, Row};
@@ -88,10 +87,9 @@ use sqlx::{postgres::PgRow, AssertSqlSafe, Row};
 use crate::persons::Role;
 use crate::postgres::identity::{self as authority, AuthorityError};
 use crate::postgres::PostgresDb;
-use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
+use crate::surreal::SurrealDb;
 
 const TABLE: &str = "person_delegate";
-const PERSON_TABLE: &str = "person";
 const SELECT: &str = "id, delegate_person_id, subject_person_id, basis, \
                       instrument_reference, granted_by_person_id, granted_at, \
                       subject_notified_at, subject_notified_channel, \
@@ -305,8 +303,6 @@ pub struct NewDelegation {
 /// Errors from the delegation seam.
 #[derive(Debug, thiserror::Error)]
 pub enum DelegationError {
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     #[error(transparent)]
     Person(#[from] crate::persons::PersonError),
     #[error("writing a delegation returned no usable row")]
@@ -390,7 +386,6 @@ async fn pg_rows(
 /// Run one delegation write in PostgreSQL and project the row it returns.
 async fn pg_write(
     pg: &PostgresDb,
-    _surreal: &SurrealDb,
     query: sqlx::query::Query<'_, sqlx::Postgres, sqlx::postgres::PgArguments>,
 ) -> Result<Delegation, DelegationError> {
     let row = query
@@ -405,62 +400,11 @@ async fn pg_write(
     Ok(delegation)
 }
 
-#[derive(SurrealValue)]
-struct DelegationRow {
-    id: surrealdb::types::RecordId,
-    delegate_person_id: surrealdb::types::RecordId,
-    subject_person_id: surrealdb::types::RecordId,
-    basis: String,
-    instrument_reference: Option<String>,
-    granted_by_person_id: surrealdb::types::RecordId,
-    granted_at: String,
-    subject_notified_at: Option<String>,
-    subject_notified_channel: Option<String>,
-    revoked_at: Option<String>,
-    revoked_by_person_id: Option<surrealdb::types::RecordId>,
-    inserted_at: String,
-    updated_at: String,
-}
-
-impl DelegationRow {
-    /// `None` when a stored row cannot be read as a [`Delegation`] — a
-    /// non-UUID record key, or a `basis` outside the closed set. Both mean
-    /// a row written around this module rather than through it, and the
-    /// safe reading of an unreadable delegation is that there isn't one.
-    fn into_delegation(self) -> Option<Delegation> {
-        Some(Delegation {
-            id: record_uuid(&self.id)?,
-            delegate_person_id: record_uuid(&self.delegate_person_id)?,
-            subject_person_id: record_uuid(&self.subject_person_id)?,
-            basis: Basis::parse(&self.basis)?,
-            instrument_reference: self.instrument_reference,
-            granted_by_person_id: record_uuid(&self.granted_by_person_id)?,
-            granted_at: self.granted_at,
-            subject_notified_at: self.subject_notified_at,
-            subject_notified_channel: self
-                .subject_notified_channel
-                .as_deref()
-                .and_then(NoticeChannel::parse),
-            revoked_at: self.revoked_at,
-            revoked_by_person_id: self.revoked_by_person_id.as_ref().and_then(record_uuid),
-            inserted_at: self.inserted_at,
-            updated_at: self.updated_at,
-        })
-    }
-}
-
-/// Retry a write the same way every other store module does.
-///
-/// Unlike [`crate::firms`] there is no index violation to classify: the
-/// pair index is deliberately not `UNIQUE` (a revoked row stays on the
-/// table), so the duplicate-grant refusal is a read-back in [`grant`]
-/// rather than an engine error to translate.
-async fn writing<F, Q>(attempt: F) -> Result<surrealdb::IndexedResults, DelegationError>
-where
-    F: FnMut() -> Q,
-    Q: std::future::IntoFuture<Output = Result<surrealdb::IndexedResults, surrealdb::Error>>,
-{
-    retry::writing(attempt).await.map_err(DelegationError::Db)
+/// Delegation accessors operate only on admitted PostgreSQL authority.
+async fn required_authority() -> Result<PostgresDb, DelegationError> {
+    authority::authority().await?.ok_or_else(|| {
+        AuthorityError::Unavailable("delegations are unavailable in Source context".into()).into()
+    })
 }
 
 /// The role of a person who must exist, or [`DelegationError::NoSuchPerson`].
@@ -509,6 +453,7 @@ pub async fn grant(
         ));
     }
 
+    let pg = required_authority().await?;
     let delegate_role = role_of(surreal, input.delegate_person_id).await?;
     if delegate_role != Role::Client {
         return Err(DelegationError::DelegateNotClient(
@@ -536,61 +481,22 @@ pub async fn grant(
         return Err(DelegationError::AlreadyGranted);
     }
 
-    if let Some(pg) = authority::authority().await? {
-        let sql = format!(
-            "INSERT INTO {TABLE} (id, delegate_person_id, subject_person_id, basis, \
+    let sql = format!(
+        "INSERT INTO {TABLE} (id, delegate_person_id, subject_person_id, basis, \
              instrument_reference, granted_by_person_id, granted_at, subject_notified_at, \
              subject_notified_channel) \
              VALUES ($1, $2, $3, $4, $5, $6, now(), $7::timestamptz, $8) RETURNING {SELECT}"
-        );
-        let query = sqlx::query(AssertSqlSafe(sql))
-            .bind(Uuid::now_v7())
-            .bind(input.delegate_person_id)
-            .bind(input.subject_person_id)
-            .bind(input.basis.as_str())
-            .bind(input.instrument_reference.clone())
-            .bind(input.granted_by_person_id)
-            .bind(input.subject_notified_at.clone())
-            .bind(input.subject_notified_channel.map(NoticeChannel::as_str));
-        return Box::pin(pg_write(&pg, surreal, query)).await;
-    }
-    let now = chrono::Utc::now().to_rfc3339();
-    let mut response = writing(|| {
-        surreal
-            .query(format!(
-                "CREATE $id SET delegate_person_id = $delegate, \
-                 subject_person_id = $subject, basis = $basis, \
-                 instrument_reference = $instrument, \
-                 granted_by_person_id = $granted_by, granted_at = $now, \
-                 subject_notified_at = $notified_at, \
-                 subject_notified_channel = $notified_channel, \
-                 revoked_at = NONE, revoked_by_person_id = NONE, \
-                 inserted_at = $now, updated_at = $now RETURN {SELECT}"
-            ))
-            .bind(("id", record_id(TABLE, Uuid::now_v7())))
-            .bind((
-                "delegate",
-                record_id(PERSON_TABLE, input.delegate_person_id),
-            ))
-            .bind(("subject", record_id(PERSON_TABLE, input.subject_person_id)))
-            .bind(("basis", input.basis.as_str().to_string()))
-            .bind(("instrument", input.instrument_reference.clone()))
-            .bind((
-                "granted_by",
-                record_id(PERSON_TABLE, input.granted_by_person_id),
-            ))
-            .bind(("notified_at", input.subject_notified_at.clone()))
-            .bind((
-                "notified_channel",
-                input
-                    .subject_notified_channel
-                    .map(|channel| channel.as_str().to_string()),
-            ))
-            .bind(("now", now.clone()))
-    })
-    .await?;
-    let row: Option<DelegationRow> = response.take(0)?;
-    mirrored(surreal, row).await
+    );
+    let query = sqlx::query(AssertSqlSafe(sql))
+        .bind(Uuid::now_v7())
+        .bind(input.delegate_person_id)
+        .bind(input.subject_person_id)
+        .bind(input.basis.as_str())
+        .bind(input.instrument_reference.clone())
+        .bind(input.granted_by_person_id)
+        .bind(input.subject_notified_at.clone())
+        .bind(input.subject_notified_channel.map(NoticeChannel::as_str));
+    Box::pin(pg_write(&pg, query)).await
 }
 
 /// Withdraw a delegation, naming who withdrew it and when.
@@ -625,32 +531,15 @@ pub async fn revoke(
     {
         return Err(DelegationError::NoSuchPerson(revoked_by_person_id));
     }
-    if let Some(pg) = authority::authority().await? {
-        let sql = format!(
-            "UPDATE {TABLE} SET revoked_at = now(), revoked_by_person_id = $2, \
+    let pg = required_authority().await?;
+    let sql = format!(
+        "UPDATE {TABLE} SET revoked_at = now(), revoked_by_person_id = $2, \
              updated_at = now() WHERE id = $1 RETURNING {SELECT}"
-        );
-        let query = sqlx::query(AssertSqlSafe(sql))
-            .bind(id)
-            .bind(revoked_by_person_id);
-        return Box::pin(pg_write(&pg, surreal, query)).await;
-    }
-
-    let now = chrono::Utc::now().to_rfc3339();
-    let mut response = writing(|| {
-        surreal
-            .query(format!(
-                "UPDATE $id SET revoked_at = $now, \
-                 revoked_by_person_id = $revoked_by, updated_at = $now \
-                 RETURN {SELECT}"
-            ))
-            .bind(("id", record_id(TABLE, id)))
-            .bind(("revoked_by", record_id(PERSON_TABLE, revoked_by_person_id)))
-            .bind(("now", now.clone()))
-    })
-    .await?;
-    let row: Option<DelegationRow> = response.take(0)?;
-    mirrored(surreal, row).await
+    );
+    let query = sqlx::query(AssertSqlSafe(sql))
+        .bind(id)
+        .bind(revoked_by_person_id);
+    Box::pin(pg_write(&pg, query)).await
 }
 
 /// Record that the subject was told about a delegation, and how.
@@ -670,72 +559,31 @@ pub async fn record_subject_notice(
     if find_by_id(surreal, id).await?.is_none() {
         return Err(DelegationError::NoSuchDelegation(id));
     }
-    if let Some(pg) = authority::authority().await? {
-        let sql = format!(
-            "UPDATE {TABLE} SET subject_notified_at = now(), subject_notified_channel = $2, \
+    let pg = required_authority().await?;
+    let sql = format!(
+        "UPDATE {TABLE} SET subject_notified_at = now(), subject_notified_channel = $2, \
              updated_at = now() WHERE id = $1 RETURNING {SELECT}"
-        );
-        let query = sqlx::query(AssertSqlSafe(sql))
-            .bind(id)
-            .bind(channel.as_str());
-        return Box::pin(pg_write(&pg, surreal, query)).await;
-    }
-    let now = chrono::Utc::now().to_rfc3339();
-    let mut response = writing(|| {
-        surreal
-            .query(format!(
-                "UPDATE $id SET subject_notified_at = $now, \
-                 subject_notified_channel = $channel, updated_at = $now \
-                 RETURN {SELECT}"
-            ))
-            .bind(("id", record_id(TABLE, id)))
-            .bind(("channel", channel.as_str().to_string()))
-            .bind(("now", now.clone()))
-    })
-    .await?;
-    let row: Option<DelegationRow> = response.take(0)?;
-    mirrored(surreal, row).await
-}
-
-/// The written row, mirrored into PostgreSQL after its Surreal write. The
-/// mirror never fails the write; see [`crate::postgres_mirror::after_write`].
-async fn mirrored(
-    surreal: &SurrealDb,
-    row: Option<DelegationRow>,
-) -> Result<Delegation, DelegationError> {
-    let delegation = row
-        .and_then(DelegationRow::into_delegation)
-        .ok_or(DelegationError::WriteReturnedNothing)?;
-    crate::postgres_mirror::after_write(
-        surreal,
-        crate::postgres_mirror::MirrorKey::PersonDelegate(delegation.id),
-    )
-    .await;
-    Ok(delegation)
+    );
+    let query = sqlx::query(AssertSqlSafe(sql))
+        .bind(id)
+        .bind(channel.as_str());
+    Box::pin(pg_write(&pg, query)).await
 }
 
 /// One delegation by id, whatever its state.
 ///
 /// # Errors
 ///
-/// [`DelegationError::Db`] if the read fails.
+/// [`DelegationError::Authority`] if the read fails.
 pub async fn find_by_id(
-    surreal: &SurrealDb,
+    _surreal: &SurrealDb,
     id: Uuid,
 ) -> Result<Option<Delegation>, DelegationError> {
-    if let Some(pg) = authority::authority().await? {
-        return Ok(Box::pin(pg_rows(&pg, "id = $1", &[id]))
-            .await?
-            .into_iter()
-            .next());
-    }
-    let mut response = surreal
-        .query(format!("SELECT {SELECT} FROM ONLY $id LIMIT 1"))
-        .bind(("id", record_id(TABLE, id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<DelegationRow> = response.take(0)?;
-    Ok(row.and_then(DelegationRow::into_delegation))
+    let pg = required_authority().await?;
+    Ok(Box::pin(pg_rows(&pg, "id = $1", &[id]))
+        .await?
+        .into_iter()
+        .next())
 }
 
 /// Every delegation row naming this person as the delegate, revoked and
@@ -743,7 +591,7 @@ pub async fn find_by_id(
 ///
 /// # Errors
 ///
-/// [`DelegationError::Db`] if the read fails.
+/// [`DelegationError::Authority`] if the read fails.
 pub async fn all_for_delegate(
     surreal: &SurrealDb,
     delegate_person_id: Uuid,
@@ -760,7 +608,7 @@ pub async fn all_for_delegate(
 ///
 /// # Errors
 ///
-/// [`DelegationError::Db`] if the read fails.
+/// [`DelegationError::Authority`] if the read fails.
 pub async fn all_for_subject(
     surreal: &SurrealDb,
     subject_person_id: Uuid,
@@ -769,26 +617,13 @@ pub async fn all_for_subject(
 }
 
 async fn rows_where(
-    surreal: &SurrealDb,
+    _surreal: &SurrealDb,
     predicate: &str,
     person_id: Uuid,
 ) -> Result<Vec<Delegation>, DelegationError> {
-    if let Some(pg) = authority::authority().await? {
-        let predicate = predicate.replace("$person", "$1");
-        return Box::pin(pg_rows(&pg, &predicate, &[person_id])).await;
-    }
-    let mut response = surreal
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE {predicate} ORDER BY granted_at"
-        ))
-        .bind(("person", record_id(PERSON_TABLE, person_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<DelegationRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(DelegationRow::into_delegation)
-        .collect())
+    let pg = required_authority().await?;
+    let predicate = predicate.replace("$person", "$1");
+    Box::pin(pg_rows(&pg, &predicate, &[person_id])).await
 }
 
 /// The delegations this person may currently act through.
@@ -807,11 +642,12 @@ async fn rows_where(
 ///
 /// # Errors
 ///
-/// [`DelegationError::Db`] if a read fails.
+/// [`DelegationError::Authority`] if a read fails.
 pub async fn live_for_delegate(
     surreal: &SurrealDb,
     delegate_person_id: Uuid,
 ) -> Result<Vec<Delegation>, DelegationError> {
+    let _pg = required_authority().await?;
     let delegate_role = role_of(surreal, delegate_person_id).await?;
     if delegate_role != Role::Client {
         return Ok(Vec::new());
@@ -830,11 +666,12 @@ pub async fn live_for_delegate(
 ///
 /// # Errors
 ///
-/// [`DelegationError::Db`] if a read fails.
+/// [`DelegationError::Authority`] if a read fails.
 pub async fn live_for_subject(
     surreal: &SurrealDb,
     subject_person_id: Uuid,
 ) -> Result<Vec<Delegation>, DelegationError> {
+    let _pg = required_authority().await?;
     let subject_role = role_of(surreal, subject_person_id).await?;
     if subject_role != Role::Client {
         return Ok(Vec::new());
@@ -846,14 +683,7 @@ pub async fn live_for_subject(
 /// clients. Roles are read per row rather than cached: the set is small,
 /// and a stale role here is the exact hole this function exists to close.
 ///
-/// A counterparty who no longer exists makes the row **not live** rather
-/// than making the whole read fail. `record<person>` is not validated
-/// against a live row by the engine — the schema says so of every such
-/// link — and [`crate::persons::delete`] can leave one dangling. Erroring
-/// here would let one deleted counterparty make an unrelated client's
-/// entire delegation list unreadable, which is an availability bug wearing
-/// a safety costume: the safe reading of "may this missing person act?" is
-/// no.
+/// A missing counterparty is not live and does not hide unrelated rows.
 async fn retain_live(
     surreal: &SurrealDb,
     rows: Vec<Delegation>,
@@ -888,42 +718,25 @@ async fn optional_role_of(surreal: &SurrealDb, id: Uuid) -> Result<Option<Role>,
 ///
 /// # Errors
 ///
-/// [`DelegationError::Db`] if a read fails.
+/// [`DelegationError::Authority`] if a read fails.
 pub async fn find_live_for_pair(
-    surreal: &SurrealDb,
+    _surreal: &SurrealDb,
     delegate_person_id: Uuid,
     subject_person_id: Uuid,
 ) -> Result<Vec<Delegation>, DelegationError> {
-    if let Some(pg) = authority::authority().await? {
-        return Box::pin(pg_rows(
-            &pg,
-            "delegate_person_id = $1 AND subject_person_id = $2 AND revoked_at IS NULL",
-            &[delegate_person_id, subject_person_id],
-        ))
-        .await;
-    }
-    let mut response = surreal
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE delegate_person_id = $delegate \
-             AND subject_person_id = $subject AND revoked_at IS NONE \
-             ORDER BY granted_at"
-        ))
-        .bind(("delegate", record_id(PERSON_TABLE, delegate_person_id)))
-        .bind(("subject", record_id(PERSON_TABLE, subject_person_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<DelegationRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(DelegationRow::into_delegation)
-        .collect())
+    let pg = required_authority().await?;
+    Box::pin(pg_rows(
+        &pg,
+        "delegate_person_id = $1 AND subject_person_id = $2 AND revoked_at IS NULL",
+        &[delegate_person_id, subject_person_id],
+    ))
+    .await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::persons::{self, NewPerson};
-    use crate::test_support::mem_surreal;
 
     /// A client, the ordinary case — `NewPerson` defaults to [`Role::Client`].
     async fn client(db: &SurrealDb, name: &str, email: &str) -> Uuid {
@@ -991,6 +804,13 @@ mod tests {
             subject_notified_at: None,
             subject_notified_channel: None,
         }
+    }
+
+    #[tokio::test]
+    async fn source_context_rejects_delegation_reads() {
+        let db = SurrealDb::uninitialized();
+        let result = crate::postgres_mirror::from_source(find_by_id(&db, Uuid::now_v7())).await;
+        assert!(matches!(result, Err(DelegationError::Authority(_))));
     }
 
     #[tokio::test]
@@ -1607,33 +1427,20 @@ mod tests {
         .await;
     }
 
-    /// `record<person>` is not validated against a live row, and
-    /// [`persons::delete`] can leave one dangling. A deleted counterparty
-    /// must make that row not-live without making an unrelated client's
-    /// whole list unreadable.
+    /// A referenced Person cannot be deleted while a delegation exists.
     #[tokio::test]
-    async fn a_deleted_counterparty_drops_its_row_rather_than_failing_the_read() {
-        let db = mem_surreal().await;
-        let h = household(&db).await;
-        let other = client(&db, "Second Subject", "second@example.com").await;
-        grant(&db, &assistant(&h)).await.unwrap();
-        let survivor = grant(
-            &db,
-            &NewDelegation {
-                subject_person_id: other,
-                ..assistant(&h)
-            },
-        )
-        .await
-        .unwrap();
-
-        persons::delete(&db, h.subject).await.unwrap();
-
-        assert_eq!(
-            live_for_delegate(&db, h.delegate).await.unwrap(),
-            vec![survivor],
-            "the dangling row drops out and the other one still reads",
-        );
+    async fn a_referenced_counterparty_cannot_be_deleted() {
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let h = household(&db).await;
+            let recorded = grant(&db, &assistant(&h)).await.unwrap();
+            assert!(persons::delete(&db, h.subject).await.is_err());
+            assert_eq!(
+                live_for_delegate(&db, h.delegate).await.unwrap(),
+                vec![recorded]
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
