@@ -212,6 +212,7 @@ fn plan(path: &str) -> AuditPlan {
         "/team"
             | "/team/nick"
             | "/team/waleed"
+            | "/our-story"
             | "/our-story.html"
             | "/practice/{slug}"
             | "/attorneys/{slug}"

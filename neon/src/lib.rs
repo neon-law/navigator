@@ -114,6 +114,7 @@ pub const PUBLIC_PATHS: &[&str] = &[
     "/contact",
     "/contact.html",
     "/index.html",
+    "/our-story",
     "/our-story.html",
     "/practice/{slug}",
     "/attorneys/{slug}",

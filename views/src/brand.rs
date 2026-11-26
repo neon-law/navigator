@@ -1386,8 +1386,10 @@ impl BrandKey {
         if path == "/team" || path.starts_with("/team/") {
             return self == Self::GuiebShook;
         }
-        if matches!(path, "/our-story.html" | "/contact.html" | "/index.html")
-            || path.starts_with("/practice/")
+        if matches!(
+            path,
+            "/our-story" | "/our-story.html" | "/contact.html" | "/index.html"
+        ) || path.starts_with("/practice/")
             || path.starts_with("/attorneys/")
             || path.starts_with("/legal/")
         {

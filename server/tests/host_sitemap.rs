@@ -401,7 +401,7 @@ async fn the_guieb_shook_sitemap_lists_only_that_brands_pages_under_its_host() {
     for required in [
         "/",
         "/contact",
-        "/our-story.html",
+        "/our-story",
         "/privacy",
         "/terms",
         "/llms.txt",

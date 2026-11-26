@@ -46,7 +46,7 @@ practices:
 
 website:
   practice:
-  - path: /practice/dispute-resolution.html
+  - path: /practice/dispute-resolution
     title: Dispute Resolution
     description: Resolving conflicts efficiently, in negotiation or in court.
     summary: Resolving conflicts efficiently, in negotiation or in court.
@@ -70,7 +70,7 @@ website:
       ## Who we represent
 
       Individuals, founders and businesses, as plaintiffs or defendants.
-  - path: /practice/business-litigation.html
+  - path: /practice/business-litigation
     title: Business Litigation
     description: Litigating complex commercial and securities disputes for companies, shareholders and investors
       in state and federal court.
@@ -100,7 +100,7 @@ website:
       ## Who we represent
 
       Public and private companies and their boards and officers, business owners, shareholders and investors.
-  - path: /practice/corporate-governance.html
+  - path: /practice/corporate-governance
     title: Corporate & Governance
     description: Formation, governance, shareholder agreements and ongoing general counsel.
     summary: Formation, governance, shareholder agreements and ongoing general counsel.
@@ -124,7 +124,7 @@ website:
       ## Who we represent
 
       Owner-led businesses, closely held companies and their owners.
-  - path: /practice/startups-venture.html
+  - path: /practice/startups-venture
     title: Startups & Venture
     description: Entity structuring, equity, fundraising and investor documents.
     summary: Entity structuring, equity, fundraising and investor documents.
@@ -148,7 +148,7 @@ website:
       ## Who we represent
 
       Founders and early-stage companies.
-  - path: /practice/contracts-commercial.html
+  - path: /practice/contracts-commercial
     title: Contracts & Commercial
     description: Drafting and negotiating the agreements your business runs on.
     summary: Drafting and negotiating the agreements your business runs on.
@@ -172,7 +172,7 @@ website:
       ## Who we represent
 
       Businesses of every size, and the individuals who sign on their behalf.
-  - path: /practice/estate-planning-trusts.html
+  - path: /practice/estate-planning-trusts
     title: Estate Planning & Trusts
     description: Wills, trusts and succession planning for families and business owners.
     summary: Wills, trusts and succession planning for families and business owners.
@@ -196,7 +196,7 @@ website:
       ## Who we represent
 
       Individuals, families and business owners.
-  - path: /practice/real-estate.html
+  - path: /practice/real-estate
     title: Real Estate
     description: Residential and commercial transactions, leasing and title matters.
     summary: Residential and commercial transactions, leasing and title matters.
@@ -219,7 +219,7 @@ website:
       ## Who we represent
 
       Buyers, sellers, landlords and tenants, individual and commercial.
-  - path: /practice/privacy-data-protection.html
+  - path: /practice/privacy-data-protection
     title: Privacy & Data Protection
     description: Privacy policies, data compliance and guidance when personal information is at risk.
     summary: Privacy policies, data compliance and guidance when personal information is at risk.
@@ -243,7 +243,7 @@ website:
 
       Businesses that collect or handle personal information.
   attorneys:
-  - path: /attorneys/waleed-amer.html
+  - path: /attorneys/waleed-amer
     title: Waleed Amer
     description: Waleed Amer, Founding Partner, Guieb & Shook P.C. Business and securities litigator representing
       companies and shareholders in commercial disputes.
@@ -274,15 +274,15 @@ website:
     - label: Practice areas
       entries:
       - text: Dispute Resolution
-        href: /practice/dispute-resolution.html
+        href: /practice/dispute-resolution
       - text: Business Litigation
-        href: /practice/business-litigation.html
+        href: /practice/business-litigation
       - text: Contracts & Commercial
-        href: /practice/contracts-commercial.html
+        href: /practice/contracts-commercial
       - text: Corporate & Governance
-        href: /practice/corporate-governance.html
+        href: /practice/corporate-governance
       - text: Startups & Venture
-        href: /practice/startups-venture.html
+        href: /practice/startups-venture
     - label: Bar admissions
       entries:
       - text: New York
@@ -296,7 +296,7 @@ website:
       - text: J.D., New York Law School
       - text: B.S., City University of New York
     email: waleed@guiebshook.com
-  - path: /attorneys/nicholas-shook.html
+  - path: /attorneys/nicholas-shook
     title: Nicholas Shook
     description: Nicholas Shook, Founding Partner, Guieb & Shook P.C. Business litigator and former software engineer
       at Apple.
@@ -322,15 +322,15 @@ website:
     - label: Practice areas
       entries:
       - text: Business Litigation
-        href: /practice/business-litigation.html
+        href: /practice/business-litigation
       - text: Corporate & Governance
-        href: /practice/corporate-governance.html
+        href: /practice/corporate-governance
       - text: Startups & Venture
-        href: /practice/startups-venture.html
+        href: /practice/startups-venture
       - text: Privacy & Data Protection
-        href: /practice/privacy-data-protection.html
+        href: /practice/privacy-data-protection
       - text: Estate Planning & Trusts
-        href: /practice/estate-planning-trusts.html
+        href: /practice/estate-planning-trusts
     - label: Bar admissions
       entries:
       - text: New York
@@ -347,7 +347,7 @@ website:
     offset: true
     email: nick@guiebshook.com
   legal:
-  - path: /legal/attorney-advertising.html
+  - path: /legal/attorney-advertising
     title: Attorney Advertising
     description: Attorney advertising notice for the Guieb & Shook P.C. website.
     lead: This website is attorney advertising. It is labeled “Attorney Advertising” under the New York Rules of
@@ -365,7 +365,7 @@ website:
       ## Admissions
 
       Waleed Amer is admitted to practice law in New York. Nicholas Shook is admitted to practice law in New York, California, Nevada and Washington. No attorney at the firm practices in a jurisdiction where that attorney is not admitted, except as the rules of that jurisdiction allow.
-  - path: /legal/disclaimer.html
+  - path: /legal/disclaimer
     title: Disclaimer
     description: Disclaimer for the Guieb & Shook P.C. website.
     lead: Please read this notice before using this website.
@@ -384,8 +384,8 @@ website:
 
       ## Jurisdictions
 
-      The firm’s attorneys are admitted to practice only in the jurisdictions listed on the [Attorney Advertising](/legal/attorney-advertising.html) page. The firm does not seek to represent anyone in a jurisdiction where this website does not comply with local rules.
-  - path: /legal/privacy-policy.html
+      The firm’s attorneys are admitted to practice only in the jurisdictions listed on the [Attorney Advertising](/legal/attorney-advertising) page. The firm does not seek to represent anyone in a jurisdiction where this website does not comply with local rules.
+  - path: /legal/privacy-policy
     title: Privacy Policy
     description: How Guieb & Shook P.C. handles information from visitors to its website.
     lead: This policy explains what information the firm collects through this website and with whom it may be shared.
@@ -395,7 +395,7 @@ website:
       ## Information you send us
 
       The firm receives the name, contact details, and message you submit through this website. If you sign in, Navigator processes the information needed to authenticate and provide access to your account. The [Navigator privacy policy](/privacy) describes how the platform handles this information, including texting terms.
-  - path: /legal/accessibility.html
+  - path: /legal/accessibility
     title: Accessibility
     description: Accessibility statement for the Guieb & Shook P.C. website.
     lead: Guieb & Shook P.C. wants everyone to be able to use this website, including people who use assistive technology.

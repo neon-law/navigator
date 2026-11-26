@@ -26,10 +26,10 @@ async fn the_new_site_publish_routes_and_navigator_entry_points_are_brand_scoped
     let host = "staging.guiebshook.com";
     for (path, marker) in [
         ("/", "Modern tools."),
-        ("/our-story.html", "Built in New York,"),
-        ("/practice/business-litigation.html", "Business Litigation"),
-        ("/attorneys/nicholas-shook.html", "Nicholas Shook"),
-        ("/legal/privacy-policy.html", "Information you send us"),
+        ("/our-story", "Built in New York,"),
+        ("/practice/business-litigation", "Business Litigation"),
+        ("/attorneys/nicholas-shook", "Nicholas Shook"),
+        ("/legal/privacy-policy", "Information you send us"),
         ("/contact", "How can we help?"),
         ("/contact/sent", "Thank you for reaching out."),
     ] {
@@ -48,6 +48,7 @@ async fn the_new_site_publish_routes_and_navigator_entry_points_are_brand_scoped
         assert!(html.contains(marker), "{path} is missing {marker}");
         assert!(html.contains(r#"href="/auth/login""#));
         assert!(html.contains("guieb-shook-website.css"));
+        assert!(!html.contains(r#".html""#), "{path} links a .html path");
         if path == "/" {
             assert!(html.contains(r#"class="nav-slide-dot is-active""#));
         }
@@ -60,8 +61,19 @@ async fn the_new_site_publish_routes_and_navigator_entry_points_are_brand_scoped
             assert!(html.contains(r#"autocomplete="email""#));
         }
     }
+    for (old, new) in [
+        ("/our-story.html", "/our-story"),
+        (
+            "/practice/business-litigation.html",
+            "/practice/business-litigation",
+        ),
+    ] {
+        let response = get(host, old).await.unwrap();
+        assert_eq!(response.status(), 308, "{old}");
+        assert_eq!(response.headers()["location"], new, "{old}");
+    }
     assert_eq!(
-        get("www.neonlaw.com", "/practice/business-litigation.html")
+        get("www.neonlaw.com", "/practice/business-litigation")
             .await
             .unwrap()
             .status(),
