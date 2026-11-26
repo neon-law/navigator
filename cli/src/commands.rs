@@ -1634,6 +1634,14 @@ pub enum ProjectEnvelopeCmd {
         #[command(flatten)]
         host: HostOpt,
     },
+    /// Read any envelope in your Firm's `DocuSign` account, recorded on a Project or not.
+    /// Read only: nothing is registered or filed.
+    Read {
+        /// The envelope ID, or a `DocuSign` notification link whose `m=` value is the ID.
+        envelope: String,
+        #[command(flatten)]
+        host: HostOpt,
+    },
     /// Refresh recorded envelopes, or read one directly from the Firm account by ID.
     Status {
         project_code: String,
@@ -2708,6 +2716,9 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
             } => {
                 remote::notation_adopt_envelope(host.host.as_deref(), &project, &draft, envelope_id)
                     .await
+            }
+            ProjectEnvelopeCmd::Read { envelope, host } => {
+                projects::firm_envelope::read(host.host.as_deref(), &envelope).await
             }
             ProjectEnvelopeCmd::Status {
                 project_code,

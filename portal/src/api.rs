@@ -6,6 +6,8 @@ mod billing_report_api;
 mod firm_assumptions_api;
 #[path = "firm_journal_api.rs"]
 mod firm_journal_api;
+#[path = "firm_envelope_api.rs"]
+mod firm_envelope_api;
 #[path = "legal_plans_api.rs"]
 mod legal_plans_api;
 #[path = "plan_claims_api.rs"]
@@ -1119,6 +1121,11 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             "POST",
             "/app/api/notations/{id}/intake",
             post(send_notation_intake),
+        ),
+        (
+            "GET",
+            "/app/api/envelopes/{envelope_id}",
+            get(firm_envelope_api::read),
         ),
         (
             "GET",

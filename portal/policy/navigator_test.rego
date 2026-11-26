@@ -1196,6 +1196,18 @@ test_client_clerk_and_ci_cannot_read_attorney_calendars if {
 	not authz.allow with input as {"path": ["app", "api", "calendars", "freebusy"], "method": "POST", "session": session}
 }
 
+test_lawyer_can_read_firm_envelopes if {
+	authz.allow with input as {"path": ["app", "api", "envelopes", "env"], "method": "GET", "session": lawyer_session}
+}
+
+test_client_clerk_and_ci_cannot_reach_firm_envelopes if {
+	not authz.allow with input as {"path": ["app", "api", "envelopes", "env"], "method": "GET", "session": client_session}
+	not authz.allow with input as {"path": ["app", "api", "envelopes", "env"], "method": "GET", "session": clerk_session}
+	not authz.allow with input as {"path": ["app", "api", "envelopes", "env"], "method": "DELETE", "session": lawyer_session}
+	session := object.union(lawyer_session, {"source": "ci", "scope": {"project_id": "synthetic"}})
+	not authz.allow with input as {"path": ["app", "api", "envelopes", "env"], "method": "GET", "session": session}
+}
+
 test_lawyer_denied_integrations if {
 	not authz.allow with input as {"path": ["app", "api", "integrations", "notion", "ensure"], "method": "POST", "session": lawyer_session}
 	not authz.allow with input as {"path": ["app", "api", "integrations", "slack", "notify"], "method": "POST", "session": lawyer_session}

@@ -154,12 +154,20 @@ Use the same Notation ID to send the approved envelope.
 
 ## Adopt an envelope sent from DocuSign
 
-In the Firm's DocuSign account, open the sent envelope and copy its Envelope ID from the envelope details. Run the
-read-only lookup with that ID to see its status and signers before deciding whether to register it.
+Copy the Envelope ID from the envelope details in the Firm's DocuSign account, or copy the "View Completed Document"
+link from a DocuSign notification email (its `m=` value is the Envelope ID). Read the envelope before deciding whether
+to register it.
 
 ```bash
-navigator project envelope status "$project" --host "$host" --envelope-id "$envelope_id"
+navigator project envelope read "$envelope_id_or_link" --host "$host"
 ```
+
+The read reaches any envelope in the DocuSign account of a Firm where you are an Admin or Lawyer (`firm_envelopes`),
+whether or not a Project records it. It prints the provider's status and each signer's step, and writes nothing. Its
+`navigator` block names the Project that records or matches the envelope, when you have firm-side access to it, or a
+`reason`: `no_project_match`, `ambiguous_project_match`, `ambiguous_project_hint`, `client_not_signer` (the Project's
+client DRI is not a signer), or `project_not_visible`. An ID outside the account answers `envelope_not_found` with
+DocuSign's own answer.
 
 For an unregistered envelope, Navigator requires the same unique Project match as automatic completion filing. To
 register the envelope, run the following from the Project checkout after publishing the Draft.

@@ -26,6 +26,13 @@ impl SignatureProvider for FixtureConnection {
     ) -> Result<Option<DocuSignSignatureProvider>, SignatureError> {
         Ok(Some(self.0.clone()))
     }
+    async fn for_firm(
+        &self,
+        _: &SurrealDb,
+        _: Uuid,
+    ) -> Result<Option<DocuSignSignatureProvider>, SignatureError> {
+        Ok(Some(self.0.clone()))
+    }
     async fn send_for_signature(
         &self,
         _: Uuid,
@@ -152,4 +159,115 @@ async fn reads_an_unregistered_demo_draft_only_on_the_signers_project() {
         .fetch_one(pool).await.unwrap();
     assert_eq!(writes, 0);
     assert_eq!(http.received_requests().await.unwrap().len(), 12);
+}
+
+/// LAW-501: a Firm lawyer reads an envelope no Project records — one sent
+/// from the DocuSign web app — by its ID, and learns which Project it
+/// matches or why none, with nothing written.
+#[tokio::test]
+async fn a_firm_lawyer_reads_an_unrecorded_envelope_by_id_and_learns_its_match() {
+    let http = MockServer::start().await;
+    let account = Uuid::now_v7();
+    let envelope = Uuid::now_v7();
+    let unknown = Uuid::now_v7();
+    let provider = DocuSignSignatureProvider::new(
+        http.uri(),
+        account.to_string(),
+        "local-test",
+        "firm@example.com",
+        "Test Firm",
+    );
+    let Some(fx) = Fixture::new(Some(Arc::new(FixtureConnection(provider)))).await else {
+        return;
+    };
+    let route = format!("/app/api/envelopes/{envelope}");
+    let as_lawyer = || fx.get(&route, Some(Role::Lawyer), Some(fx.lawyer));
+
+    // No Firm membership: no account to read, and DocuSign is never called.
+    let response = as_lawyer().await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(json(response).await["error"], "docusign_not_configured");
+    assert!(http.received_requests().await.unwrap().is_empty());
+
+    let pool = fx.pg.pool();
+    let firm = Uuid::now_v7();
+    let signer = Uuid::now_v7();
+    sqlx::query("INSERT INTO firm(id,name,slug,status) VALUES($1,'Test Firm','test-firm','active')")
+        .bind(firm).execute(pool).await.unwrap();
+    sqlx::query("UPDATE project SET firm_id=$1 WHERE id=$2")
+        .bind(firm).bind(fx.project).execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO person_firm_role(person_id,firm_id,membership) VALUES($1,$2,'lawyer')")
+        .bind(fx.lawyer).bind(firm).execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO person(id,name,email,role) VALUES($1,'Test Signer','client@example.com','client')").bind(signer).execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO person_project_role(person_id,project_id,participation,is_client_dri) VALUES($1,$2,'client',true)").bind(signer).bind(fx.project).execute(pool).await.unwrap();
+
+    let base = format!("/v2.1/accounts/{account}/envelopes/{envelope}");
+    for (suffix, body) in [
+        ("", json!({"envelopeId":envelope,"status":"completed"})),
+        (
+            "/recipients",
+            json!({"signers":[{"name":"Test Signer","email":"client@example.com","status":"completed","routingOrder":"1"}]}),
+        ),
+        ("/custom_fields", json!({"textCustomFields":[]})),
+        ("/documents", json!({"envelopeDocuments":[{"name":"substitution.pdf"}]})),
+    ] {
+        Mock::given(method("GET"))
+            .and(path(format!("{base}{suffix}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&http)
+            .await;
+    }
+    Mock::given(method("GET"))
+        .and(path(format!("/v2.1/accounts/{account}/envelopes/{unknown}")))
+        .respond_with(ResponseTemplate::new(404).set_body_json(json!({"errorCode":"ENVELOPE_DOES_NOT_EXIST"})))
+        .mount(&http)
+        .await;
+
+    // A Firm lawyer who is not on the matching Project reads the envelope
+    // but not which Project it belongs to.
+    let response = as_lawyer().await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(body["status"], "completed");
+    assert_eq!(body["signers"][0]["status"], "completed");
+    assert_eq!(body["navigator"]["recorded"], false);
+    assert_eq!(body["navigator"]["project"], serde_json::Value::Null);
+    assert_eq!(body["navigator"]["reason"], "project_not_visible");
+
+    fx.participate().await;
+    let body = json(as_lawyer().await).await;
+    assert_eq!(body["navigator"]["project"], fx_code(&fx).await);
+    assert_eq!(body["navigator"]["reason"], serde_json::Value::Null);
+
+    // The client is no longer the designated signer: the reason says so.
+    sqlx::query("UPDATE person_project_role SET is_client_dri=false WHERE project_id=$1 AND person_id=$2")
+        .bind(fx.project).bind(signer).execute(pool).await.unwrap();
+    let body = json(as_lawyer().await).await;
+    assert_eq!(body["navigator"]["project"], serde_json::Value::Null);
+    assert_eq!(body["navigator"]["reason"], "no_project_match");
+
+    // An ID outside the Firm's account answers with DocuSign's reason.
+    let response = fx
+        .get(&format!("/app/api/envelopes/{unknown}"), Some(Role::Lawyer), Some(fx.lawyer))
+        .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = json(response).await;
+    assert_eq!(body["error"], "envelope_not_found");
+    assert!(body["message"].as_str().unwrap().contains("404"), "{body}");
+
+    // A client never reaches the read.
+    let response = fx.get(&route, Some(Role::Client), Some(signer)).await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let writes: i64 = sqlx::query_scalar("SELECT (SELECT count(*) FROM signature)+(SELECT count(*) FROM project_envelope)+(SELECT count(*) FROM asset)+(SELECT count(*) FROM notation)")
+        .fetch_one(pool).await.unwrap();
+    assert_eq!(writes, 0);
+}
+
+async fn fx_code(fx: &Fixture) -> String {
+    sqlx::query_scalar("SELECT code FROM project WHERE id=$1")
+        .bind(fx.project)
+        .fetch_one(fx.pg.pool())
+        .await
+        .unwrap()
 }

@@ -4273,6 +4273,20 @@ fn canonical_document(base: &str) -> Value {
             }
           }
         },
+        "/app/api/envelopes/{envelope_id}": {
+          "get": {
+            "summary": "Read an envelope from the caller's Firm DocuSign account by ID",
+            "description": "Read only: nothing is registered, filed, or advanced. Works for an envelope no Project records, such as one sent from the DocuSign web app. The `navigator` block names the Project that records or matches the envelope (only when the caller has firm-side access to it), or a `reason`: no_project_match, ambiguous_project_match, ambiguous_project_hint, client_not_signer, or project_not_visible. Authorization: lawyer tier, plus firm_envelopes on the owning Firm.",
+            "parameters": [
+              { "name": "envelope_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+            ],
+            "responses": {
+              "200": { "description": "Provider status, timestamps, ordered signers, and the navigator match block" },
+              "404": { "description": "envelope_not_found: no readable Firm account returned the envelope; the message carries DocuSign's answer" },
+              "503": { "description": "docusign_not_configured: no Firm the caller can read has DocuSign configured" }
+            }
+          }
+        },
         "/app/api/projects/{id}/envelopes/{envelope_id}": {
           "get": {
             "summary": "Read a linked or uniquely matched envelope from the Firm account",

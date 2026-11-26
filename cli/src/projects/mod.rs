@@ -27,6 +27,7 @@ pub mod drive_ingest;
 pub mod efiling;
 pub mod feedback_check;
 pub mod finance;
+pub mod firm_envelope;
 pub mod forge;
 pub mod forge_forgejo;
 pub mod forge_github;

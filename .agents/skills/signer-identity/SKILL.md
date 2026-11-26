@@ -23,7 +23,8 @@ on a Person who will sign.
 ## Before sending or registering an envelope
 
 1. Read the Person's email on the Project (participants, then the Person row).
-2. Read the envelope's signers in the DocuSign web app (Chrome, signed in by the lawyer).
+2. Read the envelope's signers with `navigator project envelope read <envelope-id-or-link> --host <host>`. A
+   `client_not_signer` reason means the Project's client is not among them.
 3. They must match exactly, one signer per client plus the signing lawyer. If not, fix the Person first, then send or
    `navigator project envelope register <envelope-id> --project <code> --draft <draft> --host <host>`.
 4. A 422 `envelope_adoption` with matching emails is a CLI bug. Report it to Navigator by mechanism, with no names,
