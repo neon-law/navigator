@@ -1146,6 +1146,76 @@ async fn source_social_handle_import_replays_and_deletes() {
     );
 }
 
+async fn captured_publication(surreal: &SurrealDb, post: Uuid, provider: &str) {
+    let key = crate::social_publications::publication_key(post, provider);
+    surreal
+        .query("CREATE $id SET post_id=$post,provider=$provider,state='sending',attempt_count=1")
+        .bind((
+            "id",
+            surrealdb::types::RecordId::new("social_publication", key),
+        ))
+        .bind(("post", crate::surreal::record_id("post", post)))
+        .bind(("provider", provider.to_owned()))
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn captured_publication_admission_replays_without_reopening_send() {
+    let Some((options, database)) = fresh_database().await else {
+        return;
+    };
+    let pg = connect(&options, &database).await;
+    let surreal = test_support::mem_surreal().await;
+    let post = Uuid::now_v7();
+    sqlx::query("INSERT INTO post (id,brand_key,slug,title,description,status) VALUES ($1,$2,$3,'Synthetic','','draft')")
+        .bind(post).bind(BRAND).bind(post.to_string()).execute(pg.pool()).await.unwrap();
+    assert!(
+        from_source(crate::social_publications::admit(&surreal, post, "x"))
+            .await
+            .is_err()
+    );
+    captured_publication(&surreal, post, "x").await;
+    let key = MirrorKey::SocialPublication {
+        post_id: post,
+        provider: "x".into(),
+    };
+    during_initial_copy(async {
+        assert_eq!(
+            mirror(&surreal, &pg, &key).await.unwrap(),
+            Mirrored::Written
+        );
+        assert_eq!(
+            mirror(&surreal, &pg, &key).await.unwrap(),
+            Mirrored::Unchanged
+        );
+    })
+    .await;
+    sqlx::query("UPDATE social_publication SET state='unknown' WHERE post_id=$1 AND provider='x'")
+        .bind(post)
+        .execute(pg.pool())
+        .await
+        .unwrap();
+    crate::postgres::social::with_test_db(pg.clone(), async {
+        assert_eq!(
+            mirror(&surreal, &pg, &key).await.unwrap(),
+            Mirrored::Unchanged
+        );
+    })
+    .await;
+    let state: String = sqlx::query_scalar(
+        "SELECT state FROM social_publication WHERE post_id=$1 AND provider='x'",
+    )
+    .bind(post)
+    .fetch_one(pg.pool())
+    .await
+    .unwrap();
+    assert_eq!(state, "unknown");
+    pg.pool().close().await;
+}
+
 #[tokio::test]
 #[expect(
     clippy::too_many_lines,
@@ -1217,9 +1287,7 @@ async fn create_update_and_delete_converge_and_replays_write_nothing() {
         post_id: post,
         provider: "x".into(),
     };
-    crate::social_publications::admit(&surreal, post, "x")
-        .await
-        .unwrap();
+    captured_publication(&surreal, post, "x").await;
     assert_eq!(
         mirror(&surreal, &pg, &publication).await.unwrap(),
         Mirrored::Written
@@ -1433,9 +1501,7 @@ async fn a_reused_slug_replaces_the_stale_postgres_post() {
     mirror(&surreal, &pg, &MirrorKey::Post(first))
         .await
         .unwrap();
-    crate::social_publications::admit(&surreal, first, "x")
-        .await
-        .unwrap();
+    captured_publication(&surreal, first, "x").await;
     mirror(
         &surreal,
         &pg,
