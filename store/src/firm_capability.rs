@@ -69,6 +69,10 @@ pub enum FirmCapability {
     /// Firm admits it. A caller with no membership on that Firm cannot spend
     /// the deployment's delegation.
     ReadAttorneyCalendars,
+    /// Read or void an envelope in the Firm's own DocuSign account by its
+    /// ID, whether or not a Project records it. An Admin or Lawyer membership
+    /// on the Firm admits it, as a seat in the Firm's DocuSign account would.
+    FirmEnvelopes,
     /// Create or replace a Firm's presentation and public brand assets. Only
     /// the Firm's Admin DRI holds this capability.
     ManageBrand,
@@ -118,7 +122,9 @@ impl FirmCapability {
     fn admits(self, membership: FirmMembership) -> bool {
         match self {
             Self::ViewDirectory => true,
-            Self::AccessRelationshipObservations | Self::ReadAttorneyCalendars => {
+            Self::AccessRelationshipObservations
+            | Self::ReadAttorneyCalendars
+            | Self::FirmEnvelopes => {
                 matches!(membership, FirmMembership::Admin | FirmMembership::Lawyer)
             }
             Self::ManageJournal
@@ -155,6 +161,7 @@ impl FirmCapability {
             Self::ViewIntegrationSecretMetadata => "view_integration_secret_metadata",
             Self::UseIntegrations => "use_integrations",
             Self::ReadAttorneyCalendars => "read_attorney_calendars",
+            Self::FirmEnvelopes => "firm_envelopes",
             Self::ManageBrand => "manage_brand",
             Self::ManageBrandContent => "manage_brand_content",
             Self::ManageSummaryApprovals => "manage_summary_approvals",

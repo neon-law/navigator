@@ -535,9 +535,10 @@ fn regorus_matches_every_checked_in_policy_decision() {
     // Court-date review covers browser confirmation, clerk preparation, client and CI denial, and the Forgejo source.
     // Project labels cover lawyer-tier reads and writes and denial to clients, clerks, and scoped CI sessions.
     // The CLax report token route admits Lawyer and denies Client and anonymous callers: 721 + 3 = 724.
+    // Firm envelope read and void admit Lawyer and deny Client, Clerk, CI, and other methods: 724 + 2 = 726.
     assert_eq!(
         test_names.len(),
-        724,
+        726,
         "the policy decision inventory changed; review every new or removed rule"
     );
 

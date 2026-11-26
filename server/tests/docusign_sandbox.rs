@@ -82,6 +82,43 @@ async fn sandbox_reads_an_unregistered_draft_by_id() {
     eprintln!("prepared DocuSign demo draft {id}");
 }
 
+/// LAW-501/LAW-430 live: read by ID, void a sent envelope, delete a draft.
+/// The recipients are embedded (`clientUserId`), so DocuSign emails no one.
+#[tokio::test]
+#[ignore = "sends to embedded sandbox recipients in DocuSign demo, then voids and deletes"]
+async fn sandbox_voids_a_sent_envelope_and_deletes_a_draft() {
+    let provider = demo_provider().expect("configure DocuSign demo JWT credentials");
+    let sent = prepare_and_read_draft(&provider).await;
+    provider
+        .dispatch_prepared(&portal::signature::SignatureRequestId(sent.to_string()))
+        .await
+        .expect("send the sandbox envelope");
+    assert_eq!(
+        provider.read_external_envelope(sent).await.unwrap().status,
+        "sent"
+    );
+    provider
+        .void_envelope(sent, "Navigator sandbox void check")
+        .await
+        .expect("void the sent envelope");
+    assert_eq!(
+        provider.read_external_envelope(sent).await.unwrap().status,
+        "voided"
+    );
+    eprintln!("voided DocuSign demo envelope {sent}");
+
+    let draft = prepare_and_read_draft(&provider).await;
+    provider
+        .delete_draft(draft)
+        .await
+        .expect("delete the draft");
+    let after = provider.read_external_envelope(draft).await;
+    eprintln!(
+        "deleted DocuSign demo draft {draft}; a read now answers {:?}",
+        after.map(|envelope| envelope.status)
+    );
+}
+
 async fn prepare_and_read_draft(provider: &DocuSignSignatureProvider) -> Uuid {
     let (body, fields) = expand_signatures(
         "Navigator sandbox consent.\n\n{{client.signature}}\n\n{{firm.signature}}",

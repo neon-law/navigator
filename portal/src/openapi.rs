@@ -4273,6 +4273,42 @@ fn canonical_document(base: &str) -> Value {
             }
           }
         },
+        "/app/api/envelopes/{envelope_id}": {
+          "get": {
+            "summary": "Read an envelope from the caller's Firm DocuSign account by ID",
+            "description": "Read only: nothing is registered, filed, or advanced. Works for an envelope no Project records, such as one sent from the DocuSign web app. The `navigator` block names the Project that records or matches the envelope (only when the caller has firm-side access to it), or a `reason`: no_project_match, ambiguous_project_match, ambiguous_project_hint, client_not_signer, or project_not_visible. Authorization: lawyer tier, plus firm_envelopes on the owning Firm.",
+            "parameters": [
+              { "name": "envelope_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+            ],
+            "responses": {
+              "200": { "description": "Provider status, timestamps, ordered signers, and the navigator match block" },
+              "404": { "description": "envelope_not_found: no readable Firm account returned the envelope; the message carries DocuSign's answer" },
+              "503": { "description": "docusign_not_configured: no Firm the caller can read has DocuSign configured" }
+            }
+          }
+        },
+        "/app/api/envelopes/{envelope_id}/void": {
+          "post": {
+            "summary": "Void an envelope in the caller's Firm DocuSign account",
+            "description": "Voids a sent or delivered envelope with the given reason, which DocuSign shows its recipients. A held draft (`created`) is never sent, so it moves to DocuSign's recycle bin instead. Works for an envelope sent from the DocuSign web app. Authorization: lawyer tier, plus firm_envelopes on the owning Firm.",
+            "parameters": [
+              { "name": "envelope_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+            ],
+            "requestBody": { "required": true, "content": { "application/json": { "schema": {
+              "type": "object", "required": ["reason"],
+              "properties": { "reason": { "type": "string", "maxLength": 200 } }
+            } } } },
+            "responses": {
+              "200": { "description": "`status` is `voided`, or `deleted` for a held draft" },
+              "401": { "description": "No authenticated session" },
+              "403": { "description": "Lawyer tier required" },
+              "404": { "description": "envelope_not_found" },
+              "409": { "description": "envelope_closed: a completed, declined, or voided envelope cannot be voided" },
+              "422": { "description": "void_reason: the reason is empty or longer than 200 characters" },
+              "503": { "description": "docusign_not_configured" }
+            }
+          }
+        },
         "/app/api/projects/{id}/envelopes/{envelope_id}": {
           "get": {
             "summary": "Read a linked or uniquely matched envelope from the Firm account",
