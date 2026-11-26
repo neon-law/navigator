@@ -218,34 +218,37 @@ mod tests {
 
     #[tokio::test]
     async fn plan_assignment_mail_stages_once_and_never_takes_a_generic_receipt() {
-        let db = store::test_support::mem_surreal().await;
-        store::test_support::seed_firm_with_brand(&db, "neon").await;
-        let service = crate::email::CapturingEmail::new();
-        let storage = crate::test_support::fs_storage().await;
-        let mut email = sample_email();
-        email.from = "ARAG <assignments@notice.arag.com>".into();
-        email.to = "staging@neonlaw.com".into();
-        email.subject = store::plan_assignment::fixtures::ARAG_SUBJECT.into();
-        email.text = store::plan_assignment::fixtures::arag_case_request_text();
-        email.message_id = Some("<plan-notice-1@notice.arag.com>".into());
-        receive(&db, &storage, &service, &email).await.unwrap();
-        assert!(service.captured().is_empty());
-        // A redelivery stages the same record once, not twice.
-        receive(&db, &storage, &service, &email).await.unwrap();
-        assert!(service.captured().is_empty());
-        let firm_id = store::firms::firm_id_for_brand_key(&db, "neon")
-            .await
-            .unwrap()
-            .unwrap();
-        let queue = store::plan_intake::list_by_firm(&db, firm_id)
-            .await
-            .unwrap();
-        assert_eq!(queue.len(), 1);
-        assert_eq!(
-            queue[0].source_message_id,
-            inbound_message_id(&db, &email).await,
-            "the staged record anchors the ingested message"
-        );
+        store::test_support::with_required_postgres(async {
+            let db = store::surreal::SurrealDb::uninitialized();
+            store::test_support::seed_firm_with_new_brand(&db, "neon").await;
+            let service = crate::email::CapturingEmail::new();
+            let storage = crate::test_support::fs_storage().await;
+            let mut email = sample_email();
+            email.from = "ARAG <assignments@notice.arag.com>".into();
+            email.to = "staging@neonlaw.com".into();
+            email.subject = store::plan_assignment::fixtures::ARAG_SUBJECT.into();
+            email.text = store::plan_assignment::fixtures::arag_case_request_text();
+            email.message_id = Some("<plan-notice-1@notice.arag.com>".into());
+            receive(&db, &storage, &service, &email).await.unwrap();
+            assert!(service.captured().is_empty());
+            // A redelivery stages the same record once, not twice.
+            receive(&db, &storage, &service, &email).await.unwrap();
+            assert!(service.captured().is_empty());
+            let firm_id = store::firms::firm_id_for_brand_key(&db, "neon")
+                .await
+                .unwrap()
+                .unwrap();
+            let queue = store::plan_intake::list_by_firm(&db, firm_id)
+                .await
+                .unwrap();
+            assert_eq!(queue.len(), 1);
+            assert_eq!(
+                queue[0].source_message_id,
+                inbound_message_id(&db, &email).await,
+                "the staged record anchors the ingested message"
+            );
+        })
+        .await;
     }
 
     async fn inbound_message_id(
@@ -262,161 +265,182 @@ mod tests {
 
     #[tokio::test]
     async fn unparseable_plan_mail_skips_the_generic_receipt_and_stays_in_triage() {
-        let db = store::test_support::mem_surreal().await;
-        store::test_support::seed_firm_with_brand(&db, "neon").await;
-        let service = crate::email::CapturingEmail::new();
-        let storage = crate::test_support::fs_storage().await;
-        let mut email = sample_email();
-        email.from = "mail@legalshield.com".into();
-        email.to = "staging@neonlaw.com".into();
-        email.text = "please call us".into();
-        receive(&db, &storage, &service, &email).await.unwrap();
-        assert!(service.captured().is_empty());
+        store::test_support::with_required_postgres(async {
+            let db = store::surreal::SurrealDb::uninitialized();
+            store::test_support::seed_firm_with_new_brand(&db, "neon").await;
+            let service = crate::email::CapturingEmail::new();
+            let storage = crate::test_support::fs_storage().await;
+            let mut email = sample_email();
+            email.from = "mail@legalshield.com".into();
+            email.to = "staging@neonlaw.com".into();
+            email.text = "please call us".into();
+            receive(&db, &storage, &service, &email).await.unwrap();
+            assert!(service.captured().is_empty());
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn support_email_is_saved_before_one_branded_receipt_across_retries() {
-        let db = store::test_support::mem_surreal().await;
-        store::test_support::seed_firm_with_brand(&db, "neon").await;
-        let service = crate::email::CapturingEmail::new();
-        let storage = crate::test_support::fs_storage().await;
-        let mut email = sample_email();
-        email.to = "staging@neonlaw.com".into();
-        email.message_id = Some("fixture-message@example.com".into());
-        receive(&db, &storage, &service, &email).await.unwrap();
-        receive(&db, &storage, &service, &email).await.unwrap();
-        let inbound = ingest_support_email(&db, &storage, &email)
-            .await
-            .unwrap()
-            .unwrap();
-        let saved = store::inbox::message_by_id(&db, inbound.message_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(saved.body, "Hello");
-        assert!(inbound.deduped);
-        let sent = service.captured();
-        assert_eq!(sent.len(), 1);
-        assert_eq!(sent[0].to, "sender@example.com");
-        assert_eq!(sent[0].from.as_deref(), Some("staging@neonlaw.com"));
-        assert_eq!(sent[0].body, ACKNOWLEDGMENT);
-        assert!(sent[0].auto_submitted);
-        assert!(sent[0].html_body.as_ref().unwrap().contains("<img"));
-        assert_eq!(
-            sent[0].in_reply_to.as_deref(),
-            Some("<fixture-message@example.com>")
-        );
-        let receipt = store::inbox::acknowledgment_for(&db, inbound.message_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(receipt.delivery_state, store::inbox::delivery::SUBMITTED);
+        store::test_support::with_required_postgres(async {
+            let db = store::surreal::SurrealDb::uninitialized();
+            store::test_support::seed_firm_with_new_brand(&db, "neon").await;
+            let service = crate::email::CapturingEmail::new();
+            let storage = crate::test_support::fs_storage().await;
+            let mut email = sample_email();
+            email.to = "staging@neonlaw.com".into();
+            email.message_id = Some("fixture-message@example.com".into());
+            receive(&db, &storage, &service, &email).await.unwrap();
+            receive(&db, &storage, &service, &email).await.unwrap();
+            let inbound = ingest_support_email(&db, &storage, &email)
+                .await
+                .unwrap()
+                .unwrap();
+            let saved = store::inbox::message_by_id(&db, inbound.message_id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(saved.body, "Hello");
+            assert!(inbound.deduped);
+            let sent = service.captured();
+            assert_eq!(sent.len(), 1);
+            assert_eq!(sent[0].to, "sender@example.com");
+            assert_eq!(sent[0].from.as_deref(), Some("staging@neonlaw.com"));
+            assert_eq!(sent[0].body, ACKNOWLEDGMENT);
+            assert!(sent[0].auto_submitted);
+            assert!(sent[0].html_body.as_ref().unwrap().contains("<img"));
+            assert_eq!(
+                sent[0].in_reply_to.as_deref(),
+                Some("<fixture-message@example.com>")
+            );
+            let receipt = store::inbox::acknowledgment_for(&db, inbound.message_id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(receipt.delivery_state, store::inbox::delivery::SUBMITTED);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn suppressed_automatic_mail_is_still_saved() {
-        let db = store::test_support::mem_surreal().await;
-        store::test_support::seed_firm_with_brand(&db, "neon").await;
-        let service = crate::email::CapturingEmail::new();
-        let storage = crate::test_support::fs_storage().await;
-        let mut email = sample_email();
-        email.to = "support@neonlaw.com".into();
-        email.raw = b"Auto-Submitted: auto-replied\r\n\r\nHello".to_vec();
-        receive(&db, &storage, &service, &email).await.unwrap();
-        assert!(service.captured().is_empty());
-        assert!(
-            ingest_support_email(&db, &storage, &email)
-                .await
-                .unwrap()
-                .unwrap()
-                .deduped
-        );
+        store::test_support::with_required_postgres(async {
+            let db = store::surreal::SurrealDb::uninitialized();
+            store::test_support::seed_firm_with_new_brand(&db, "neon").await;
+            let service = crate::email::CapturingEmail::new();
+            let storage = crate::test_support::fs_storage().await;
+            let mut email = sample_email();
+            email.to = "support@neonlaw.com".into();
+            email.raw = b"Auto-Submitted: auto-replied\r\n\r\nHello".to_vec();
+            receive(&db, &storage, &service, &email).await.unwrap();
+            assert!(service.captured().is_empty());
+            assert!(
+                ingest_support_email(&db, &storage, &email)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .deduped
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn public_support_mail_from_a_lawyer_is_saved_and_acknowledged() {
-        let db = store::test_support::mem_surreal().await;
-        store::test_support::seed_firm_with_brand(&db, "neon").await;
-        store::persons::create(
-            &db,
-            &store::persons::NewPerson::with_role(
-                "Fixture Lawyer",
-                "sender@example.com",
-                store::persons::Role::Lawyer,
-            ),
-        )
-        .await
-        .unwrap();
-        let service = crate::email::CapturingEmail::new();
-        let storage = crate::test_support::fs_storage().await;
-        let mut email = sample_email();
-        email.to = "support@neonlaw.com".into();
-        receive(&db, &storage, &service, &email).await.unwrap();
-        assert_eq!(service.captured().len(), 1);
-        assert!(
-            ingest_support_email(&db, &storage, &email)
-                .await
-                .unwrap()
-                .unwrap()
-                .deduped
-        );
+        store::test_support::with_required_postgres(async {
+            let db = store::surreal::SurrealDb::uninitialized();
+            store::test_support::seed_firm_with_new_brand(&db, "neon").await;
+            store::persons::create(
+                &db,
+                &store::persons::NewPerson::with_role(
+                    "Fixture Lawyer",
+                    "sender@example.com",
+                    store::persons::Role::Lawyer,
+                ),
+            )
+            .await
+            .unwrap();
+            let service = crate::email::CapturingEmail::new();
+            let storage = crate::test_support::fs_storage().await;
+            let mut email = sample_email();
+            email.to = "support@neonlaw.com".into();
+            receive(&db, &storage, &service, &email).await.unwrap();
+            assert_eq!(service.captured().len(), 1);
+            assert!(
+                ingest_support_email(&db, &storage, &email)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .deduped
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn concurrent_receipts_reserve_one_send() {
-        let db = store::test_support::mem_surreal().await;
-        store::test_support::seed_firm_with_brand(&db, "neon").await;
-        let service = crate::email::CapturingEmail::new();
-        let storage = crate::test_support::fs_storage().await;
-        let mut email = sample_email();
-        email.to = "support@neonlaw.com".into();
-        let inbound = ingest_support_email(&db, &storage, &email)
-            .await
-            .unwrap()
-            .unwrap();
-        let (first, second) = tokio::join!(
-            acknowledge(&db, &service, &email, "support@neonlaw.com", &inbound),
-            acknowledge(&db, &service, &email, "support@neonlaw.com", &inbound),
-        );
-        first.unwrap();
-        second.unwrap();
-        assert_eq!(service.captured().len(), 1);
+        store::test_support::with_required_postgres(async {
+            let db = store::surreal::SurrealDb::uninitialized();
+            store::test_support::seed_firm_with_new_brand(&db, "neon").await;
+            let service = crate::email::CapturingEmail::new();
+            let storage = crate::test_support::fs_storage().await;
+            let mut email = sample_email();
+            email.to = "support@neonlaw.com".into();
+            let inbound = ingest_support_email(&db, &storage, &email)
+                .await
+                .unwrap()
+                .unwrap();
+            let (first, second) = tokio::join!(
+                acknowledge(&db, &service, &email, "support@neonlaw.com", &inbound),
+                acknowledge(&db, &service, &email, "support@neonlaw.com", &inbound),
+            );
+            first.unwrap();
+            second.unwrap();
+            assert_eq!(service.captured().len(), 1);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn messages_without_ids_dedupe_by_content_instead_of_subject() {
-        let db = store::test_support::mem_surreal().await;
-        store::test_support::seed_firm_with_brand(&db, "neon").await;
-        let service = crate::email::CapturingEmail::new();
-        let storage = crate::test_support::fs_storage().await;
-        let mut email = sample_email();
-        email.to = "support@neonlaw.com".into();
-        receive(&db, &storage, &service, &email).await.unwrap();
-        receive(&db, &storage, &service, &email).await.unwrap();
-        email.text = "A different message".into();
-        receive(&db, &storage, &service, &email).await.unwrap();
-        assert_eq!(service.captured().len(), 2);
+        store::test_support::with_required_postgres(async {
+            let db = store::surreal::SurrealDb::uninitialized();
+            store::test_support::seed_firm_with_new_brand(&db, "neon").await;
+            let service = crate::email::CapturingEmail::new();
+            let storage = crate::test_support::fs_storage().await;
+            let mut email = sample_email();
+            email.to = "support@neonlaw.com".into();
+            receive(&db, &storage, &service, &email).await.unwrap();
+            receive(&db, &storage, &service, &email).await.unwrap();
+            email.text = "A different message".into();
+            receive(&db, &storage, &service, &email).await.unwrap();
+            assert_eq!(service.captured().len(), 2);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn messages_without_ids_keep_distinct_attachments() {
-        let db = store::test_support::mem_surreal().await;
-        store::test_support::seed_firm_with_brand(&db, "neon").await;
-        let service = crate::email::CapturingEmail::new();
-        let storage = crate::test_support::fs_storage().await;
-        let mut email = sample_email();
-        email.to = "support@neonlaw.com".into();
-        email
-            .attachments
-            .push(crate::inbound_email::InboundAttachment {
-                filename: "fixture.txt".into(),
-                content_type: "text/plain".into(),
-                bytes: b"First".to_vec(),
-            });
-        receive(&db, &storage, &service, &email).await.unwrap();
-        email.attachments[0].bytes = b"Second".to_vec();
-        receive(&db, &storage, &service, &email).await.unwrap();
-        assert_eq!(service.captured().len(), 2);
+        store::test_support::with_required_postgres(async {
+            let db = store::surreal::SurrealDb::uninitialized();
+            store::test_support::seed_firm_with_new_brand(&db, "neon").await;
+            let service = crate::email::CapturingEmail::new();
+            let storage = crate::test_support::fs_storage().await;
+            let mut email = sample_email();
+            email.to = "support@neonlaw.com".into();
+            email
+                .attachments
+                .push(crate::inbound_email::InboundAttachment {
+                    filename: "fixture.txt".into(),
+                    content_type: "text/plain".into(),
+                    bytes: b"First".to_vec(),
+                });
+            receive(&db, &storage, &service, &email).await.unwrap();
+            email.attachments[0].bytes = b"Second".to_vec();
+            receive(&db, &storage, &service, &email).await.unwrap();
+            assert_eq!(service.captured().len(), 2);
+        })
+        .await;
     }
 
     struct UncertainEmail(std::sync::atomic::AtomicUsize);
@@ -434,34 +458,40 @@ mod tests {
 
     #[tokio::test]
     async fn uncertain_send_is_saved_and_never_resent() {
-        let db = store::test_support::mem_surreal().await;
-        store::test_support::seed_firm_with_brand(&db, "neon").await;
-        let service = UncertainEmail(std::sync::atomic::AtomicUsize::new(0));
-        let storage = crate::test_support::fs_storage().await;
-        let mut email = sample_email();
-        email.to = "support@neonlaw.com".into();
-        receive(&db, &storage, &service, &email).await.unwrap();
-        receive(&db, &storage, &service, &email).await.unwrap();
-        assert_eq!(service.0.load(std::sync::atomic::Ordering::SeqCst), 1);
-        let inbound = ingest_support_email(&db, &storage, &email)
-            .await
-            .unwrap()
-            .unwrap();
-        let receipt = store::inbox::acknowledgment_for(&db, inbound.message_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(receipt.delivery_state, store::inbox::delivery::UNKNOWN);
+        store::test_support::with_required_postgres(async {
+            let db = store::surreal::SurrealDb::uninitialized();
+            store::test_support::seed_firm_with_new_brand(&db, "neon").await;
+            let service = UncertainEmail(std::sync::atomic::AtomicUsize::new(0));
+            let storage = crate::test_support::fs_storage().await;
+            let mut email = sample_email();
+            email.to = "support@neonlaw.com".into();
+            receive(&db, &storage, &service, &email).await.unwrap();
+            receive(&db, &storage, &service, &email).await.unwrap();
+            assert_eq!(service.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+            let inbound = ingest_support_email(&db, &storage, &email)
+                .await
+                .unwrap()
+                .unwrap();
+            let receipt = store::inbox::acknowledgment_for(&db, inbound.message_id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(receipt.delivery_state, store::inbox::delivery::UNKNOWN);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn missing_firm_never_sends_a_receipt() {
-        let db = store::test_support::mem_surreal().await;
-        let service = crate::email::CapturingEmail::new();
-        let storage = crate::test_support::fs_storage().await;
-        let mut email = sample_email();
-        email.to = "support@neonlaw.com".into();
-        assert!(receive(&db, &storage, &service, &email).await.is_err());
-        assert!(service.captured().is_empty());
+        store::test_support::with_required_postgres(async {
+            let db = store::surreal::SurrealDb::uninitialized();
+            let service = crate::email::CapturingEmail::new();
+            let storage = crate::test_support::fs_storage().await;
+            let mut email = sample_email();
+            email.to = "support@neonlaw.com".into();
+            assert!(receive(&db, &storage, &service, &email).await.is_err());
+            assert!(service.captured().is_empty());
+        })
+        .await;
     }
 }
