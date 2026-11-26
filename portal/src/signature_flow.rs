@@ -55,10 +55,11 @@ pub(crate) async fn send_notation_for_signature(
     let notation_row = store::notations::find_by_id(ctx.surreal, notation_id)
         .await?
         .ok_or(WorkflowDriveError::TemplateMissing(notation_id))?;
-    let scoped = provider
-        .for_project(ctx.surreal, notation_row.project_id)
-        .await?;
-    let provider = crate::firm_docusign::resolved(scoped.as_ref(), provider);
+    let current_state = ctx
+        .runtime
+        .current_state(workflows::MachineKind::Workflow, notation_id)
+        .await;
+    check_signature_readiness(ctx, &notation_row, current_state.as_ref(), mode).await?;
     if crate::signature_adoption::evidence(ctx.storage.as_ref(), notation_id)
         .await
         .map_err(|_| WorkflowDriveError::Db("reading envelope evidence failed".into()))?
@@ -68,28 +69,13 @@ pub(crate) async fn send_notation_for_signature(
             state: "externally sent envelope".into(),
         });
     }
-    if notation_row.state == "lawyer_review" {
-        match ctx
-            .runtime
-            .approval_progress(notation_id, notation_row.updated_at.timestamp_micros())
-            .await?
-        {
-            Some(workflows::ApprovalProgress::Pending) => {
-                return Err(WorkflowDriveError::DocumentNotReady(notation_id));
-            }
-            Some(workflows::ApprovalProgress::Failed) => {
-                return Err(WorkflowDriveError::ApprovalRunFailed);
-            }
-            _ => {}
-        }
-    }
-    let current_state = ctx
-        .runtime
-        .current_state(workflows::MachineKind::Workflow, notation_id)
-        .await
-        .ok_or(workflows::WorkflowRuntimeError::UnknownNotation(
-            notation_id,
-        ))?;
+    let current_state = current_state.ok_or(workflows::WorkflowRuntimeError::UnknownNotation(
+        notation_id,
+    ))?;
+    let scoped = provider
+        .for_project(ctx.surreal, notation_row.project_id)
+        .await?;
+    let provider = crate::firm_docusign::resolved(scoped.as_ref(), provider);
     let existing = store::signatures::request_id_for_notation(ctx.surreal, notation_id)
         .await?
         .map(crate::signature::SignatureRequestId);
@@ -154,6 +140,46 @@ pub(crate) async fn send_notation_for_signature(
     }
 
     Ok((current_state, id))
+}
+
+async fn check_signature_readiness(
+    ctx: &SendFlowContext<'_>,
+    notation: &store::notations::Notation,
+    current_state: Option<&StateName>,
+    mode: SendMode,
+) -> Result<(), WorkflowDriveError> {
+    let state = current_state.map_or(notation.state.as_str(), StateName::as_str);
+    if mode == SendMode::Prepare && state == StateName::BEGIN {
+        return Err(WorkflowDriveError::SignatureStepRequired {
+            state: state.to_owned(),
+            next_step:
+                "Complete the questionnaire and approve the notation before preparing its envelope.",
+        });
+    }
+    if notation.state == "lawyer_review" {
+        match ctx
+            .runtime
+            .approval_progress(notation.id, notation.updated_at.timestamp_micros())
+            .await?
+        {
+            Some(workflows::ApprovalProgress::Pending) => {
+                return Err(WorkflowDriveError::DocumentNotReady(notation.id));
+            }
+            Some(workflows::ApprovalProgress::Failed) => {
+                return Err(WorkflowDriveError::ApprovalRunFailed);
+            }
+            _ => {}
+        }
+    }
+    if mode == SendMode::Prepare
+        && (state == "lawyer_review" || state.starts_with("lawyer_review__"))
+    {
+        return Err(WorkflowDriveError::SignatureStepRequired {
+            state: state.to_owned(),
+            next_step: "Approve the notation before preparing its envelope.",
+        });
+    }
+    Ok(())
 }
 
 async fn record_signature_draft(

@@ -1657,6 +1657,11 @@ pub enum WorkflowDriveError {
     DocumentNotReady(Uuid),
     #[error("notation is at `{state}`. Complete the questionnaire and reach lawyer review before approving.")]
     ApprovalNotReady { state: String },
+    #[error("notation is at `{state}`. {next_step}")]
+    SignatureStepRequired {
+        state: String,
+        next_step: &'static str,
+    },
     #[error("the approval run failed. Recover the original workflow before dispatch.")]
     ApprovalRunFailed,
     #[error("the workflow advanced without a recorded envelope. Check DocuSign before attempting recovery.")]
@@ -5368,6 +5373,48 @@ workflow:
 
     const GOVERNING_LAW: &str = "custom_single_choice__governing_law";
 
+    async fn assert_prepare_requires_step(
+        state: &crate::admin::AdminState,
+        notation_id: Uuid,
+        lawyer: Uuid,
+        workflow_state: &str,
+        missing_step: &str,
+    ) {
+        let ctx = super::SendFlowContext {
+            surreal: &state.surreal,
+            runtime: state.workflow_runtime.as_ref(),
+            storage: &state.storage,
+            acting: Some(lawyer),
+        };
+        let error = super::send_notation_for_signature(
+            &ctx,
+            notation_id,
+            state.signature_provider.as_ref(),
+            super::SendMode::Prepare,
+        )
+        .await
+        .unwrap_err();
+        let response = super::IntoResponse::into_response(crate::api::ApiError::from(error));
+        assert_conflict_step(response, workflow_state, missing_step).await;
+    }
+
+    async fn assert_conflict_step(
+        response: axum::response::Response,
+        workflow_state: &str,
+        missing_step: &str,
+    ) {
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let body = std::str::from_utf8(&body).unwrap();
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        assert!(
+            body.contains(workflow_state) && body.contains(missing_step),
+            "{body}"
+        );
+    }
+
     /// LAW-465: filing the last lawyer-audience answer on a one-question
     /// onboarding notation advances it out of BEGIN to lawyer review.
     #[tokio::test]
@@ -5376,6 +5423,19 @@ workflow:
             let (state, db) = postgres_walk_state().await;
             let (project, client, lawyer) = onboarding_matter(&state, &db).await;
             let notation = open_notation(&state, &db, "onboarding", client, project).await;
+            assert_prepare_requires_step(&state, notation, lawyer, "BEGIN", "questionnaire").await;
+            let mut session = crate::session::SessionData::fresh(
+                "synthetic-lawyer",
+                store::persons::Role::Lawyer,
+            );
+            session.person_id = Some(lawyer);
+            let approval = super::approve_send_post(
+                axum::extract::State(state.clone()),
+                axum::extract::Path(notation),
+                Some(axum::Extension(session)),
+            )
+            .await;
+            assert_conflict_step(approval, "BEGIN", "questionnaire").await;
             let response = post_step(
                 &state,
                 notation,
@@ -5385,6 +5445,8 @@ workflow:
             .await;
             assert!(response.status().is_redirection(), "{response:?}");
             assert_eq!(notation_state(&db, notation).await, "lawyer_review");
+            assert_prepare_requires_step(&state, notation, lawyer, "lawyer_review", "Approve")
+                .await;
         })
         .await;
     }

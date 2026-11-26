@@ -10996,6 +10996,14 @@ fn workflow_drive_error(e: crate::retainer_walk::WorkflowDriveError) -> Response
             })),
         )
             .into_response(),
+        e @ E::SignatureStepRequired { .. } => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "signature_step_required",
+                "reason": e.to_string(),
+            })),
+        )
+            .into_response(),
         e @ E::ApprovalRunFailed => (
             StatusCode::CONFLICT,
             Json(serde_json::json!({
