@@ -188,7 +188,6 @@ pub async fn revoke(surreal: &SurrealDb, token_id: Uuid) -> Result<(), TokenErro
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::mem_surreal;
     use chrono::Duration;
 
     #[test]
@@ -202,30 +201,38 @@ mod tests {
 
     #[tokio::test]
     async fn mint_then_validate_resolves_identity_and_scope() {
-        let surreal = mem_surreal().await;
-        let person = crate::persons::create(
-            &surreal,
-            &crate::persons::NewPerson::new("Libra", "git-token@example.com"),
+        let Some((options, database)) = crate::postgres_mirror::tests::fresh_schema().await else {
+            return;
+        };
+        let pg = crate::postgres_mirror::tests::connect(&options, &database).await;
+        crate::postgres::fixtures::activate_family(
+            &pg,
+            crate::postgres_backfill::family::Family::Satellites,
         )
-        .await
-        .unwrap();
-        let now = Utc::now();
-        let minted = mint(
-            &surreal,
-            person.id,
-            None,
-            SCOPE_WRITE,
-            "the-secret",
-            now + Duration::hours(1),
-        )
-        .await
-        .unwrap();
-        assert_eq!(minted.token_hash, hash_token("the-secret"));
-        let resolved = validate(&surreal, "the-secret", now)
+        .await;
+        let unavailable = crate::surreal::SurrealDb::uninitialized();
+        crate::postgres::matter::with_test_db(pg.clone(), async {
+            let (person, _, _) = crate::postgres::fixtures::workflow_fixture(&pg).await;
+            let now = Utc::now();
+            let minted = mint(
+                &unavailable,
+                person,
+                None,
+                SCOPE_WRITE,
+                "the-secret",
+                now + Duration::hours(1),
+            )
             .await
-            .unwrap()
             .unwrap();
-        assert_eq!(resolved.person_id, person.id);
-        assert_eq!(resolved.scope, SCOPE_WRITE);
+            assert_eq!(minted.token_hash, hash_token("the-secret"));
+            let resolved = validate(&unavailable, "the-secret", now)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(resolved.person_id, person);
+            assert_eq!(resolved.scope, SCOPE_WRITE);
+        })
+        .await;
+        pg.pool().close().await;
     }
 }
