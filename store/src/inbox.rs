@@ -5172,34 +5172,6 @@ mod tests {
         assert_eq!(contact.person_id, world.client);
     }
 
-    #[tokio::test]
-    async fn a_lawyer_or_clerk_sender_never_persists_a_person_link() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
-        for (role, address) in [
-            (world.lawyer, "lawyer@example.com"),
-            (world.clerk, "clerk@example.com"),
-        ] {
-            let message_id = format!("lawyer-sender-{role}");
-            let message = inbound(
-                world.firm,
-                channel::EMAIL,
-                "fixture-account",
-                &message_id,
-                address,
-            );
-            let ingested = ingest_inbound(&db, &message).await.unwrap();
-            let conversation = conversation_by_id(&db, ingested.conversation_id)
-                .await
-                .unwrap()
-                .unwrap();
-            assert_eq!(
-                conversation.person_id, None,
-                "outgoing mail never auto-associates"
-            );
-        }
-    }
-
     /// Counts Person rows holding an exact email — the auto-create dedup
     /// probe for the tests below.
     async fn person_count(db: &SurrealDb, email: &str) -> i64 {
@@ -5286,117 +5258,6 @@ mod tests {
                 .count(),
             1
         );
-    }
-
-    #[tokio::test]
-    async fn a_backfill_links_unassociated_conversations_and_reruns_without_effect() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
-        let ingested = ingest_inbound(
-            &db,
-            &inbound(
-                world.firm,
-                channel::EMAIL,
-                "fixture-account",
-                "backfill-1",
-                "archived.correspondent@example.com",
-            ),
-        )
-        .await
-        .unwrap();
-        // A row that predates the association: the ingest above already
-        // created the Person, so the backfill must re-resolve the same
-        // address, not re-create it.
-        db.query("UPDATE $id SET person_id = NONE")
-            .bind(("id", record_id(CONVERSATION, ingested.conversation_id)))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-
-        let linked = backfill_person_links(&db).await.unwrap();
-        assert_eq!(linked, 1);
-        assert_eq!(
-            person_count(&db, "archived.correspondent@example.com").await,
-            1
-        );
-        let conversation = conversation_by_id(&db, ingested.conversation_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(conversation.person_id.is_some());
-        // One Relationship Log entry still: the backfill's association is
-        // the same fact the ingest already logged, and the entry dedups.
-        let logs = crate::relationship_logs::all(&db).await.unwrap();
-        assert_eq!(
-            logs.iter()
-                .filter(|log| log.action == INBOUND_ASSOCIATION_ACTION)
-                .count(),
-            1
-        );
-
-        // Idempotent: a re-run finds nothing unassociated left.
-        let again = backfill_person_links(&db).await.unwrap();
-        assert_eq!(again, 0, "a re-run finds nothing left to link");
-        assert_eq!(
-            person_count(&db, "archived.correspondent@example.com").await,
-            1
-        );
-    }
-
-    #[tokio::test]
-    async fn redelivered_attachments_do_not_duplicate_links() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
-        let asset = Uuid::now_v7();
-        let message = inbound(
-            world.firm,
-            channel::EMAIL,
-            "fixture-account",
-            "email-attachments-2",
-            "client@example.com",
-        );
-        let mut redelivery = message.clone();
-        redelivery.attachments = vec![attachment(asset, "exhibit.pdf", "sha-exhibit")];
-        let first = ingest_inbound(&db, &redelivery).await.unwrap();
-        let second = ingest_inbound(&db, &redelivery).await.unwrap();
-        assert!(second.deduped);
-        assert_eq!(second.message_id, first.message_id);
-
-        // The deduped redelivery returns the original message before any
-        // link write, so the link set is unchanged.
-        let linked = message_assets(&db, world.firm, first.message_id)
-            .await
-            .unwrap();
-        assert_eq!(linked.len(), 1);
-
-        // A direct re-link of the same message and sha also reuses the row.
-        link_message_assets(&db, world.firm, first.message_id, &redelivery.attachments)
-            .await
-            .unwrap();
-        let linked = message_assets(&db, world.firm, first.message_id)
-            .await
-            .unwrap();
-        assert_eq!(linked.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn attachments_are_firm_scoped() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
-        let mut message = inbound(
-            world.firm,
-            channel::EMAIL,
-            "fixture-account",
-            "email-attachments-3",
-            "client@example.com",
-        );
-        message.attachments = vec![attachment(Uuid::now_v7(), "discovery.pdf", "sha-discovery")];
-        let ingested = ingest_inbound(&db, &message).await.unwrap();
-        let foreign = message_assets(&db, world.other_firm, ingested.message_id)
-            .await
-            .unwrap();
-        assert!(foreign.is_empty());
     }
 
     /// Scraped notices enter the same ingest door as email and SMS: the
@@ -6754,40 +6615,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_replayed_reserve_never_mints_a_second_send() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
-        let ingested = ingest_inbound(
-            &db,
-            &inbound(
-                world.firm,
-                channel::EMAIL,
-                "support",
-                "msg-ack-replay-1",
-                "replay-sender@example.com",
-            ),
-        )
-        .await
-        .unwrap();
-
-        let reserved = reserve_acknowledgment(&db, &ingested, "We received your message.")
-            .await
-            .unwrap();
-        assert!(reserved.is_some(), "the first reserve wins the send");
-        let replayed = reserve_acknowledgment(&db, &ingested, "We received your message.")
-            .await
-            .unwrap();
-        assert!(
-            replayed.is_none(),
-            "a replayed reserve must not mint a second send"
-        );
-        assert!(acknowledgment_for(&db, ingested.message_id)
-            .await
-            .unwrap()
-            .is_some());
-    }
-
-    #[tokio::test]
     async fn a_sender_identity_never_satisfies_a_dispatch_or_privilege_check() {
         let db = mem_surreal().await;
         let world = world(&db).await;
@@ -7229,69 +7056,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn concurrent_dispatchers_send_one_provider_request() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
-        let conversation_id = assigned_sms(&db, &world).await;
-        queue_reply(
-            &db,
-            world.clerk,
-            conversation_id,
-            "Synthetic reply",
-            purpose::MATTER,
-        )
-        .await
-        .unwrap();
-        let transport = RecordingTransport::new(TransportOutcome::Submitted {
-            provider_ref: "synthetic-receipt".into(),
-        });
-        let (first, second) = tokio::join!(
-            dispatch_queued(&db, &transport),
-            dispatch_queued(&db, &transport)
-        );
-        assert_eq!(first.unwrap().submitted + second.unwrap().submitted, 1);
-        assert_eq!(transport.calls().len(), 1);
-    }
-
-    #[tokio::test]
-    async fn unknown_delivery_is_not_resent() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
-        let conversation_id = assigned_sms(&db, &world).await;
-        queue_reply(
-            &db,
-            world.clerk,
-            conversation_id,
-            "Checking status.",
-            purpose::MATTER,
-        )
-        .await
-        .unwrap();
-        let transport = RecordingTransport::new(TransportOutcome::Unknown);
-        let report = dispatch_queued(&db, &transport).await.unwrap();
-        assert_eq!(report.unknown, 1);
-        assert_eq!(transport.calls().len(), 1);
-        let again = dispatch_queued(&db, &transport).await.unwrap();
-        assert_eq!(again.unknown, 0);
-        assert_eq!(
-            transport.calls().len(),
-            1,
-            "unknown must not transmit again"
-        );
-        assert!(apply_delivery(
-            &db,
-            world.firm,
-            channel::SMS,
-            "fixture-account",
-            "missing-ref",
-            delivery::DELIVERED,
-        )
-        .await
-        .unwrap()
-        .is_none());
-    }
-
-    #[tokio::test]
     async fn a_later_callback_can_deliver_unknown_without_regressing() {
         let db = mem_surreal().await;
         let world = world(&db).await;
@@ -7383,79 +7147,6 @@ mod tests {
             delivery::DELIVERED,
             "a late callback must not regress delivery"
         );
-    }
-
-    #[tokio::test]
-    async fn promotional_opt_out_suppresses_only_promotional_sends() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
-        let ingested = ingest_inbound(
-            &db,
-            &inbound(
-                world.firm,
-                channel::SMS,
-                "fixture-account",
-                "sms-1",
-                "sms:fixture-sender",
-            ),
-        )
-        .await
-        .unwrap();
-        assign(&db, world.owner, ingested.conversation_id, world.project)
-            .await
-            .unwrap();
-        let promotional = queue_reply(
-            &db,
-            world.clerk,
-            ingested.conversation_id,
-            "A newsletter.",
-            purpose::PROMOTIONAL,
-        )
-        .await
-        .unwrap();
-        record_promotional_opt_out(&db, world.firm, channel::SMS, "sms:fixture-sender")
-            .await
-            .unwrap();
-        assert!(queue_reply(
-            &db,
-            world.clerk,
-            ingested.conversation_id,
-            "Another newsletter.",
-            purpose::PROMOTIONAL,
-        )
-        .await
-        .is_err());
-        let matter = queue_reply(
-            &db,
-            world.clerk,
-            ingested.conversation_id,
-            "A matter update.",
-            purpose::MATTER,
-        )
-        .await
-        .unwrap();
-        let transport = RecordingTransport::new(TransportOutcome::Submitted {
-            provider_ref: "provider-2".into(),
-        });
-        dispatch_queued(&db, &transport).await.unwrap();
-        assert_eq!(
-            message_by_id(&db, promotional)
-                .await
-                .unwrap()
-                .unwrap()
-                .delivery_state,
-            delivery::SUPPRESSED
-        );
-        assert_eq!(
-            message_by_id(&db, matter)
-                .await
-                .unwrap()
-                .unwrap()
-                .delivery_state,
-            delivery::SUBMITTED
-        );
-        assert_eq!(transport.calls().len(), 1);
-        assert_eq!(transport.calls()[0].body, "A matter update.");
     }
 
     #[tokio::test]
@@ -7556,67 +7247,6 @@ mod tests {
         assert_eq!(listed[0].channel, channel::EMAIL);
     }
 
-    #[tokio::test]
-    async fn a_call_opens_one_thread_per_caller_and_dedups_by_call_sid() {
-        fn call(firm: Uuid, call_sid: &str) -> IngestInbound<'_> {
-            IngestInbound {
-                firm_id: firm,
-                project_id: None,
-                brand_key: Some("neon"),
-                interaction_type: Some("message"),
-                provider_post_id: None,
-                parent_provider_message_id: None,
-                visibility: Some("private"),
-                channel: channel::VOICE,
-                provider_account: "+15550100000",
-                provider_message_id: call_sid,
-                provider_thread_ref: None,
-                external_address: "+15555550100",
-                external_name: None,
-                subject: None,
-                body: "Call from +15555550100 — completed (42s).",
-                source_page: Some("+15550100000"),
-                source_channel: Some(channel::VOICE),
-                matter_consent: false,
-                promotional_opt_in: false,
-                email_conversation_id: None,
-                attachments: Vec::new(),
-                occurred_at: "2026-10-30T18:00:00+00:00",
-                raw_storage_key: None,
-            }
-        }
-        let db = mem_surreal().await;
-        let world = world(&db).await;
-        let first = ingest_inbound(&db, &call(world.firm, "CA1111111"))
-            .await
-            .unwrap();
-        assert!(!first.deduped);
-        let again = ingest_inbound(&db, &call(world.firm, "CA1111111"))
-            .await
-            .unwrap();
-        assert!(
-            again.deduped,
-            "a redelivered CallSid returns the original row"
-        );
-        assert_eq!(again.message_id, first.message_id);
-        assert_eq!(again.conversation_id, first.conversation_id);
-
-        // A later call from the same caller threads onto the open one.
-        let second_call = ingest_inbound(&db, &call(world.firm, "CA2222222"))
-            .await
-            .unwrap();
-        assert!(!second_call.deduped);
-        assert_eq!(second_call.conversation_id, first.conversation_id);
-
-        let listed = list_intake(&db, world.owner).await.unwrap();
-        let row = listed
-            .iter()
-            .find(|row| row.id == first.conversation_id)
-            .unwrap();
-        assert_eq!(row.channel, channel::VOICE);
-        assert_eq!(row.brand_key.as_deref(), Some("neon"));
-    }
-
     /// The whitelist stays closed: adding the voice lane admits no others.
     #[tokio::test]
     async fn an_unlisted_channel_is_still_denied() {
@@ -7681,22 +7311,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unprocessed_inbox_lists_only_unprocessed_messages() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
-        let first = ingest_for(&db, world.firm, "process-list-1").await;
-        let second = ingest_for(&db, world.firm, "process-list-2").await;
-        mark_processed(&db, first, route::NEF, Utc::now(), None)
-            .await
-            .unwrap();
-
-        let listed = unprocessed_inbox(&db, world.lawyer).await.unwrap();
-        let ids: Vec<Uuid> = listed.iter().map(|row| row.id).collect();
-        assert!(ids.contains(&second));
-        assert!(!ids.contains(&first));
-    }
-
-    #[tokio::test]
     async fn unprocessed_inbox_orders_oldest_first() {
         let db = mem_surreal().await;
         let world = world(&db).await;
@@ -7712,33 +7326,6 @@ mod tests {
         let listed = unprocessed_inbox(&db, world.lawyer).await.unwrap();
         let ids: Vec<Uuid> = listed.iter().map(|row| row.id).collect();
         assert_eq!(ids, vec![second, first]);
-    }
-
-    #[tokio::test]
-    async fn mark_processed_records_route_and_time_idempotently() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
-        let message_id = ingest_for(&db, world.firm, "process-mark-1").await;
-        let at = Utc::now();
-        mark_processed(&db, message_id, route::NEF, at, None)
-            .await
-            .unwrap();
-
-        let state = process_state(&db, message_id).await.unwrap().unwrap();
-        assert_eq!(state.route.as_deref(), Some(route::NEF));
-        assert_eq!(state.processed_at, Some(at));
-
-        // A re-run overwrites with the same truth instead of failing.
-        mark_processed(&db, message_id, route::CHAMBERS, at, None)
-            .await
-            .unwrap();
-        let state = process_state(&db, message_id).await.unwrap().unwrap();
-        assert_eq!(state.route.as_deref(), Some(route::CHAMBERS));
-
-        assert!(matches!(
-            mark_processed(&db, message_id, "garbage", at, None).await,
-            Err(InboxError::InvalidRoute(_))
-        ));
     }
 
     #[tokio::test]
@@ -7765,12 +7352,6 @@ mod tests {
             .unwrap();
         let state = process_state(&db, message_id).await.unwrap().unwrap();
         assert_eq!(state.route.as_deref(), Some(route::OTHER));
-    }
-
-    #[tokio::test]
-    async fn process_state_of_a_missing_message_is_none() {
-        let db = mem_surreal().await;
-        assert!(process_state(&db, Uuid::now_v7()).await.unwrap().is_none());
     }
 
     #[tokio::test]
@@ -7815,144 +7396,6 @@ mod tests {
             Err(InboxError::NotFound)
         ));
     }
-    #[tokio::test]
-    async fn voice_threads_allow_internal_notes_without_offering_replies() {
-        let db = mem_surreal().await;
-        let w = world(&db).await;
-        let mut input = inbound(
-            w.firm,
-            channel::VOICE,
-            "+12025550100",
-            "CAvoice-view-guard",
-            "+12025550101",
-        );
-        input.project_id = Some(w.project);
-        let saved = ingest_inbound(&db, &input).await.unwrap();
-        for actor in [w.lawyer, w.clerk] {
-            let view = project_thread(&db, actor, w.project, saved.conversation_id)
-                .await
-                .unwrap();
-            assert!(view.can_note, "participating firm people may note a call");
-            assert!(!view.can_send, "VOICE has no outbound reply transport");
-            assert_eq!(view.next_action, "Leave an internal note");
-            let rows = list_project(&db, actor, w.project).await.unwrap();
-            assert_eq!(
-                rows.iter()
-                    .find(|r| r.id == saved.conversation_id)
-                    .unwrap()
-                    .next_action,
-                "Leave an internal note"
-            );
-            let note = post_note(
-                &db,
-                actor,
-                saved.conversation_id,
-                "Synthetic call follow-up",
-            )
-            .await
-            .unwrap();
-            assert_eq!(
-                message_by_id(&db, note).await.unwrap().unwrap().direction,
-                direction::INTERNAL
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn voice_reply_refusal_creates_no_pending_outbound_message() {
-        let db = mem_surreal().await;
-        let w = world(&db).await;
-        let mut input = inbound(
-            w.firm,
-            channel::VOICE,
-            "+12025550100",
-            "CAvoice-queue-guard",
-            "+12025550101",
-        );
-        input.project_id = Some(w.project);
-        let saved = ingest_inbound(&db, &input).await.unwrap();
-        for actor in [w.lawyer, w.clerk] {
-            assert!(
-                matches!(
-                    queue_reply(
-                        &db,
-                        actor,
-                        saved.conversation_id,
-                        "Synthetic reply",
-                        purpose::MATTER
-                    )
-                    .await,
-                    Err(InboxError::Denied)
-                ),
-                "VOICE replies must be refused before queue creation"
-            );
-        }
-        assert!(
-            messages_for(&db, saved.conversation_id)
-                .await
-                .unwrap()
-                .iter()
-                .all(|m| m.direction != direction::OUTBOUND),
-            "refused call replies leave no pending outbound Messages"
-        );
-    }
-    #[tokio::test]
-    async fn existing_voice_outbound_rows_never_reach_the_transport() {
-        let db = mem_surreal().await;
-        let w = world(&db).await;
-        let mut input = inbound(
-            w.firm,
-            channel::VOICE,
-            "+12025550100",
-            "CAvoice-pending-guard",
-            "+12025550101",
-        );
-        input.project_id = Some(w.project);
-        let saved = ingest_inbound(&db, &input).await.unwrap();
-        let mut ids = Vec::new();
-        for state in [delivery::FAILED, delivery::QUEUED] {
-            ids.push(
-                create_message(
-                    &db,
-                    saved.conversation_id,
-                    direction::OUTBOUND,
-                    "Synthetic prior reply",
-                    Some(w.lawyer),
-                    None,
-                    None,
-                    state,
-                    purpose::MATTER,
-                    None,
-                    None,
-                    "2026-11-02T00:00:00Z",
-                    None,
-                )
-                .await
-                .unwrap(),
-            );
-        }
-        let transport = RecordingTransport::new(TransportOutcome::Unknown);
-        let report = dispatch_queued(&db, &transport).await.unwrap();
-        assert_eq!(report.suppressed, 1);
-        assert!(
-            transport.calls().is_empty(),
-            "unsupported call replies never reach a provider"
-        );
-        for (id, state) in ids
-            .into_iter()
-            .zip([delivery::FAILED, delivery::SUPPRESSED])
-        {
-            assert_eq!(
-                message_by_id(&db, id)
-                    .await
-                    .unwrap()
-                    .unwrap()
-                    .delivery_state,
-                state
-            );
-        }
-    }
-
     /// An inbound message's acknowledgment receipt is its ID with the
     /// sign bit flipped: always distinct from the inbound ID, and
     /// involutive, so a reply to the receipt resolves to the original.

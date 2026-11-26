@@ -594,6 +594,27 @@ async fn firm_membership_wrappers_authorize_and_guard_tenancy() {
     .await
     .unwrap_err();
     assert!(matches!(ineligible, FirmError::IneligibleAdminDriTier(_)));
+    let clerk = Uuid::new_v4();
+    sqlx::query("INSERT INTO person (id,name,email,role) VALUES ($1,'Synthetic Clerk','synthetic-clerk@example.test','clerk')")
+        .bind(clerk)
+        .execute(pg.pool())
+        .await
+        .unwrap();
+    for (person_id, name) in [(seed.client, "Client"), (clerk, "Clerk")] {
+        assert!(matches!(
+            tenancy::create_firm_on(
+                &pg,
+                &NewFirm {
+                    name: format!("{name} DRI Practice"),
+                    status: "active".into(),
+                    entity_id: seed.second_entity,
+                    admin_dri_person_id: person_id,
+                }
+            )
+            .await,
+            Err(FirmError::IneligibleAdminDriTier(id)) if id == person_id
+        ));
+    }
 
     // The happy creation derives the slug and seeds the admin DRI's
     // membership in the same transaction.
@@ -758,6 +779,11 @@ async fn firm_membership_wrappers_authorize_and_guard_tenancy() {
                     .await
                     .unwrap_err();
             assert!(matches!(denied_appointment, FirmError::NotAuthorized));
+            let admin_appointment =
+                tenancy::appoint_admin_dri(crate::persons::Role::Admin, firm.id, seed.dri)
+                    .await
+                    .unwrap_err();
+            assert!(matches!(admin_appointment, FirmError::NotAuthorized));
             let cross_firm =
                 tenancy::appoint_admin_dri(crate::persons::Role::Owner, firm.id, seed.second_admin)
                     .await
