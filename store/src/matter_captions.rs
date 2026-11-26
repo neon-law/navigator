@@ -382,7 +382,7 @@ mod tests {
         let (_, project_id) = firm_for_notation(&pg, notation).await;
         let unavailable = SurrealDb::uninitialized();
 
-        with_test_db(pg.clone(), async {
+        Box::pin(with_test_db(pg.clone(), async {
             assert!(for_project(&unavailable, project_id)
                 .await
                 .unwrap()
@@ -454,7 +454,7 @@ mod tests {
                 .await
                 .unwrap()
                 .is_none());
-        })
+        }))
         .await;
         pg.pool().close().await;
     }
