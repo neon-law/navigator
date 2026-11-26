@@ -600,6 +600,18 @@ mod tests {
     }
 
     #[test]
+    fn native_testimonial_projection_tests_are_selected() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let selection = select(root).unwrap();
+        assert!(!selection
+            .nextest_filter
+            .contains("test(/^testimonials::native_tests::/)"));
+        assert!(selection
+            .nextest_filter
+            .contains("test(/^testimonials::compatibility_tests::/)"));
+    }
+
+    #[test]
     fn native_people_and_clerk_ssr_tests_are_selected() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
         let selection = select(root).unwrap();
