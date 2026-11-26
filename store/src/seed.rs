@@ -375,7 +375,9 @@ pub const SEEDED_TEMPLATES: &[SeededTemplate] = &[
     },
     SeededTemplate {
         label: "notations/neon_law/firm/engagement_scope_amendment.md",
-        markdown: include_str!("../../templates/notations/neon_law/firm/engagement_scope_amendment.md"),
+        markdown: include_str!(
+            "../../templates/notations/neon_law/firm/engagement_scope_amendment.md"
+        ),
     },
     SeededTemplate {
         label: "notations/neon_law/offboarding__letter.md",
