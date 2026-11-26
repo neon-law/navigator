@@ -235,8 +235,14 @@ async fn glossary_and_questions_converge_in_postgres() {
         );
     })
     .await;
-    assert!(glossary::all(&surreal).await.unwrap().is_empty());
-    assert!(questions::list_all(&surreal).await.unwrap().is_empty());
+    assert!(postgres_mirror::from_source(glossary::all(&surreal))
+        .await
+        .unwrap()
+        .is_empty());
+    assert!(postgres_mirror::from_source(questions::list_all(&surreal))
+        .await
+        .unwrap()
+        .is_empty());
 }
 
 #[tokio::test]

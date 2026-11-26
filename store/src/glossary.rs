@@ -20,11 +20,8 @@
 //! here goes to PostgreSQL
 //! ([`crate::postgres::catalog`]).
 //!
-//! `glossary_terms` is a leaf reference table nothing links to and that
-//! links to nothing. The unique `glossary_term_slug` index is what
-//! enforces one row per slug; a violation has no typed detail, so
-//! [`crate::surreal::retry::unique_violation`] discriminates on that index
-//! name. PostgreSQL's `slug` key lets [`materialize`] upsert instead.
+//! `glossary_terms` is a leaf reference table. PostgreSQL's `slug` key
+//! lets [`materialize`] upsert one row per term.
 //!
 //! # The distinction that must not be collapsed
 //!
@@ -53,7 +50,7 @@ pub use model::glossary::{
 };
 
 use crate::postgres::catalog;
-use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
+use crate::surreal::{record_uuid, SurrealDb};
 
 /// The table these rows live in.
 const TABLE: &str = "glossary_term";
@@ -110,14 +107,8 @@ pub enum GlossaryError {
     /// A database operation failed.
     #[error("database: {0}")]
     Db(#[from] surrealdb::Error),
-    /// The write collided with `glossary_term_slug` — another row already
-    /// holds this slug.
-    #[error("that glossary slug is already in use")]
-    SlugTaken,
-    /// A write reported success but returned no row, or returned one
-    /// this module could not read back — see [`GlossaryTermRow::into_term`].
-    #[error("writing a glossary term returned no usable row")]
-    WriteReturnedNothing,
+    #[error("glossary writes require PostgreSQL authority")]
+    AuthorityUnavailable,
     /// The PostgreSQL catalog authority could not serve the call.
     #[error(transparent)]
     Postgres(#[from] catalog::CatalogError),
@@ -152,116 +143,31 @@ fn from_pg(row: &sqlx::postgres::PgRow) -> Result<GlossaryTerm, sqlx::Error> {
     })
 }
 
-/// Turn a write failure into the caller-correctable conflict it names,
-/// or leave it as a database fault. A unique violation carries **no
-/// typed detail** — the index name in the message is the only
-/// discriminator through the shared classifier in [`crate::surreal::retry`].
-fn classify_write(error: surrealdb::Error) -> GlossaryError {
-    if crate::surreal::retry::unique_violation(&error) == Some("glossary_term_slug") {
-        GlossaryError::SlugTaken
-    } else {
-        GlossaryError::Db(error)
-    }
-}
-
-/// Run a write under the shared retry policy
-/// ([`crate::surreal::retry`]), mapping whatever finally comes back to
-/// this module's error.
-///
-/// Only the mapping lives here. How long a lost race is re-run, and
-/// which engine conditions count as a lost race, are one policy for the
-/// whole crate.
-async fn writing<F, Q>(attempt: F) -> Result<surrealdb::IndexedResults, GlossaryError>
-where
-    F: FnMut() -> Q,
-    Q: std::future::IntoFuture<Output = Result<surrealdb::IndexedResults, surrealdb::Error>>,
-{
-    retry::writing(attempt).await.map_err(classify_write)
-}
-
 /// Materialize glossary terms — [`terms`] in the canonical seed — into
 /// `glossary_term` rows, keyed by slug.
 ///
-/// Idempotent by find-or-create plus update: re-running after an edit
-/// updates the title and body in place rather than appending a second row
-/// for the same term, so every boot converges on exactly the authored
-/// vocabulary. Race-safe without a lock: a concurrent boot that wins the
-/// `glossary_term_slug` unique index turns this call's insert into
-/// [`GlossaryError::SlugTaken`], which is re-read as the winner's row and
-/// updated in place. Returns the number of terms written.
+/// The PostgreSQL upsert converges on the authored title and body by slug.
+/// Returns the number of terms written.
 ///
 /// # Errors
 ///
 /// Propagates any database error.
-pub async fn materialize(db: &SurrealDb, terms: &[Term]) -> Result<usize, GlossaryError> {
-    if let Some(pg) = catalog::authority().await? {
-        for t in terms {
-            catalog::execute(
-                sqlx::query(PG_UPSERT)
-                    .bind(Uuid::now_v7())
-                    .bind(t.slug.clone())
-                    .bind(t.title.clone())
-                    .bind(t.body.clone()),
-                &pg,
-            )
-            .await?;
-        }
-        return Ok(terms.len());
-    }
-    for t in terms {
-        match by_slug(db, &t.slug).await? {
-            Some(existing) => {
-                if existing.title != t.title || existing.body != t.body {
-                    update(db, existing.id, t).await?;
-                }
-            }
-            None => match create(db, t).await {
-                Ok(()) => {}
-                // A concurrent boot won the slug index between the check
-                // and the insert; converge on the winner's row.
-                Err(GlossaryError::SlugTaken) => {
-                    let existing = by_slug(db, &t.slug)
-                        .await?
-                        .ok_or(GlossaryError::WriteReturnedNothing)?;
-                    update(db, existing.id, t).await?;
-                }
-                Err(error) => return Err(error),
-            },
-        }
+pub async fn materialize(_db: &SurrealDb, terms: &[Term]) -> Result<usize, GlossaryError> {
+    let pg = catalog::authority()
+        .await?
+        .ok_or(GlossaryError::AuthorityUnavailable)?;
+    for term in terms {
+        catalog::execute(
+            sqlx::query(PG_UPSERT)
+                .bind(Uuid::now_v7())
+                .bind(term.slug.clone())
+                .bind(term.title.clone())
+                .bind(term.body.clone()),
+            &pg,
+        )
+        .await?;
     }
     Ok(terms.len())
-}
-
-/// Insert one term row under a fresh v7 UUID record id.
-async fn create(db: &SurrealDb, t: &Term) -> Result<(), GlossaryError> {
-    let id = Uuid::now_v7();
-    writing(|| {
-        db.query("CREATE $id SET slug = $slug, title = $title, body = $body".to_string())
-            .bind(("id", record_id(TABLE, id)))
-            .bind(("slug", t.slug.clone()))
-            .bind(("title", t.title.clone()))
-            .bind(("body", t.body.clone()))
-    })
-    .await?;
-    crate::postgres_mirror::after_write(db, crate::postgres_mirror::MirrorKey::GlossaryTerm(id))
-        .await;
-    Ok(())
-}
-
-/// Bring an existing term row up to the authored text.
-async fn update(db: &SurrealDb, id: Uuid, t: &Term) -> Result<(), GlossaryError> {
-    writing(|| {
-        db.query(
-            "UPDATE $id SET title = $title, body = $body, updated_at = time::now()".to_string(),
-        )
-        .bind(("id", record_id(TABLE, id)))
-        .bind(("title", t.title.clone()))
-        .bind(("body", t.body.clone()))
-    })
-    .await?;
-    crate::postgres_mirror::after_write(db, crate::postgres_mirror::MirrorKey::GlossaryTerm(id))
-        .await;
-    Ok(())
 }
 
 /// Resolve one term by its slug — the lookup a composition performs when

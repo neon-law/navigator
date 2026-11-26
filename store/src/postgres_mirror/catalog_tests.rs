@@ -82,6 +82,33 @@ async fn first_global_copy_preserves_captured_rate_identity_and_replay() {
             .await
             .unwrap();
     assert_eq!(copied, (id, "synthetic-first-copy-rate".into(), 1000));
+    let glossary = Uuid::now_v7();
+    let synthetic = term("synthetic-source-refused", "Body.");
+    assert!(
+        super::super::from_source(crate::glossary::materialize(&source, &[synthetic]))
+            .await
+            .is_err()
+    );
+    source.query("CREATE $id SET slug='captured-glossary',title='Captured Glossary',body='Captured definition.'")
+        .bind(("id", record_id("glossary_term", glossary))).await.unwrap().check().unwrap();
+    let glossary_key = MirrorKey::GlossaryTerm(glossary);
+    assert_eq!(
+        mirrored(&source, &pg, &glossary_key).await,
+        Mirrored::Written
+    );
+    assert_eq!(
+        mirrored(&source, &pg, &glossary_key).await,
+        Mirrored::Unchanged
+    );
+    let held: (String, String) = sqlx::query_as("SELECT slug, body FROM glossary_term WHERE id=$1")
+        .bind(glossary)
+        .fetch_one(pg.pool())
+        .await
+        .unwrap();
+    assert_eq!(
+        held,
+        ("captured-glossary".into(), "Captured definition.".into())
+    );
     pg.pool().close().await;
 }
 
@@ -164,17 +191,22 @@ async fn catalog_rows_converge_through_their_lifecycle() {
     assert_eq!(mirrored(&surreal, &pg, &key).await, Mirrored::Written);
 
     // Glossary Term: materialized, then edited in place.
-    crate::glossary::materialize(&surreal, &[term("synthetic-term", "First.")])
-        .await
-        .unwrap();
-    let glossary = crate::glossary::by_slug(&surreal, "synthetic-term")
+    let glossary = Uuid::now_v7();
+    surreal
+        .query("CREATE $id SET slug='synthetic-term',title='Synthetic Term',body='First.'")
+        .bind(("id", record_id("glossary_term", glossary)))
         .await
         .unwrap()
+        .check()
         .unwrap();
-    let key = MirrorKey::GlossaryTerm(glossary.id);
+    let key = MirrorKey::GlossaryTerm(glossary);
     assert_eq!(mirrored(&surreal, &pg, &key).await, Mirrored::Written);
-    crate::glossary::materialize(&surreal, &[term("synthetic-term", "Second.")])
+    surreal
+        .query("UPDATE $id SET body='Second.',updated_at=time::now()")
+        .bind(("id", record_id("glossary_term", glossary)))
         .await
+        .unwrap()
+        .check()
         .unwrap();
     assert_eq!(mirrored(&surreal, &pg, &key).await, Mirrored::Written);
     assert_eq!(mirrored(&surreal, &pg, &key).await, Mirrored::Unchanged);
@@ -300,17 +332,18 @@ async fn only_the_first_backfill_copies_the_catalog_and_reconcile_stays_unclean_
     let authority = crate::authorities::record(&surreal, &new_authority("2 Synth. 2 (2026)"))
         .await
         .unwrap();
-    crate::glossary::materialize(&surreal, &[term("synthetic-gated", "Body.")])
-        .await
-        .unwrap();
-    let glossary = crate::glossary::by_slug(&surreal, "synthetic-gated")
+    let glossary = Uuid::now_v7();
+    surreal
+        .query("CREATE $id SET slug='synthetic-gated',title='Synthetic Term',body='Body.'")
+        .bind(("id", record_id("glossary_term", glossary)))
         .await
         .unwrap()
+        .check()
         .unwrap();
     let rate = rate(&surreal, "synthetic_gated_rate").await;
     let keys = [
         MirrorKey::Authority(authority.id),
-        MirrorKey::GlossaryTerm(glossary.id),
+        MirrorKey::GlossaryTerm(glossary),
         MirrorKey::NotationRate(rate),
     ];
     for key in &keys {
@@ -361,7 +394,7 @@ async fn only_the_first_backfill_copies_the_catalog_and_reconcile_stays_unclean_
     .await
     .unwrap();
     sqlx::query("DELETE FROM glossary_term WHERE id = $1")
-        .bind(glossary.id)
+        .bind(glossary)
         .execute(&pg.0)
         .await
         .unwrap();
@@ -369,7 +402,7 @@ async fn only_the_first_backfill_copies_the_catalog_and_reconcile_stays_unclean_
     assert!(reconcile(&surreal, &pg).await.unwrap().is_clean());
     let held: bool =
         sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM glossary_term WHERE id = $1)")
-            .bind(glossary.id)
+            .bind(glossary)
             .fetch_one(&pg.0)
             .await
             .unwrap();
