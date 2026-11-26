@@ -1,7 +1,6 @@
 use super::*;
 use crate::authorities::{AuthorityLookup, AuthorityPatch, NewAuthority};
 use crate::glossary::Term;
-use crate::notation_packages::NewNotationPackage;
 use crate::postgres_mirror::tests::{connect, fresh_schema};
 use crate::questions::NewQuestion;
 use crate::test_support::mem_surreal;
@@ -11,6 +10,54 @@ async fn mirrored(surreal: &SurrealDb, pg: &PostgresDb, key: &MirrorKey) -> Mirr
     super::super::during_initial_copy(super::super::mirror(surreal, pg, key))
         .await
         .unwrap()
+}
+
+#[tokio::test]
+async fn captured_package_membership_copies_parents_and_replays() {
+    let Some((options, database)) = fresh_schema().await else {
+        return;
+    };
+    let pg = connect(&options, &database).await;
+    let source = mem_surreal().await;
+    let package = Uuid::now_v7();
+    let template = Uuid::now_v7();
+    let member = Uuid::now_v7();
+    let package_input = crate::notation_packages::NewNotationPackage::new(
+        "source-refused",
+        "Source refused",
+        "simple",
+        100,
+    );
+    assert!(
+        super::super::from_source(crate::notation_packages::create(&source, &package_input))
+            .await
+            .is_err()
+    );
+    assert!(
+        super::super::from_source(crate::notation_packages::add_template(
+            &source, package, template, 0, true
+        ))
+        .await
+        .is_err()
+    );
+    source.query("CREATE $package SET code='captured-package',title='Captured package',complexity='simple',starting_price_cents=100; CREATE $template SET code='captured-package-template',title='Captured template',respondent_type='person',is_current=true,current_key=$current_key; CREATE $member SET package_id=$package,template_id=$template,position=0,required=true")
+        .bind(("package", record_id("notation_package", package)))
+        .bind(("template", record_id("template", template)))
+        .bind(("current_key", crate::templates::current_key_in(crate::templates::Scope::Shared, "captured-package-template")))
+        .bind(("member", record_id("notation_package_template", member)))
+        .await.unwrap().check().unwrap();
+    let key = MirrorKey::NotationPackageTemplate(member);
+    assert_eq!(mirrored(&source, &pg, &key).await, Mirrored::Written);
+    assert_eq!(mirrored(&source, &pg, &key).await, Mirrored::Unchanged);
+    let held: (Uuid, Uuid, i32) = sqlx::query_as(
+        "SELECT package_id, template_id, position FROM notation_package_template WHERE id=$1",
+    )
+    .bind(member)
+    .fetch_one(pg.pool())
+    .await
+    .unwrap();
+    assert_eq!(held, (package, template, 0));
+    pg.pool().close().await;
 }
 
 fn rows(report: &ParityReport) -> Vec<usize> {
@@ -200,45 +247,22 @@ async fn catalog_rows_converge_through_their_lifecycle() {
     assert_eq!(audience, "lawyer");
 
     // A package template brings its package with it.
-    let package = crate::notation_packages::create(
-        &surreal,
-        &NewNotationPackage::new("synthetic-package", "Synthetic package", "simple", 10_000),
-    )
-    .await
-    .unwrap();
-    let template = crate::templates::save_version(
-        &surreal,
-        None,
-        "onboarding__synthetic_catalog",
-        crate::templates::Version {
-            title: "Synthetic Draft".into(),
-            respondent_type: "person".into(),
-            asset_id: None,
-            form_code: None,
-            kind: None,
-            source_commit_sha: None,
-        },
-    )
-    .await
-    .unwrap()
-    .into_model()
-    .id;
-    crate::notation_packages::add_template(&surreal, package.id, template, 0, true)
-        .await
-        .unwrap();
-    let mut response = surreal
-        .query("SELECT VALUE id FROM notation_package_template")
-        .await
-        .unwrap();
-    let members: Vec<RecordId> = response.take(0).unwrap();
-    let member = record_uuid(&members[0]).unwrap();
+    let package = Uuid::now_v7();
+    let template = Uuid::now_v7();
+    let member = Uuid::now_v7();
+    surreal.query("CREATE $package SET code='synthetic-package', title='Synthetic package', complexity='simple', starting_price_cents=10000; CREATE $template SET code='onboarding__synthetic_catalog', title='Synthetic Draft', respondent_type='person', is_current=true, current_key=$current_key; CREATE $member SET package_id=$package, template_id=$template, position=0, required=true")
+        .bind(("package", record_id("notation_package", package)))
+        .bind(("template", record_id("template", template)))
+        .bind(("current_key", crate::templates::current_key_in(crate::templates::Scope::Shared, "onboarding__synthetic_catalog")))
+        .bind(("member", record_id("notation_package_template", member)))
+        .await.unwrap().check().unwrap();
     let member_key = MirrorKey::NotationPackageTemplate(member);
     assert_eq!(
         mirrored(&surreal, &pg, &member_key).await,
         Mirrored::Written
     );
     assert_eq!(
-        mirrored(&surreal, &pg, &MirrorKey::NotationPackage(package.id)).await,
+        mirrored(&surreal, &pg, &MirrorKey::NotationPackage(package)).await,
         Mirrored::Unchanged
     );
 

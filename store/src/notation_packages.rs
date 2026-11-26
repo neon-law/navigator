@@ -21,7 +21,6 @@ use crate::surreal::{record_id, record_uuid, SurrealDb};
 
 const PACKAGE_TABLE: &str = "notation_package";
 const MEMBER_TABLE: &str = "notation_package_template";
-const TEMPLATE_TABLE: &str = "template";
 
 /// One client-facing bundle of one or more notation templates.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -139,8 +138,8 @@ impl NewNotationPackage {
 pub enum NotationPackageError {
     #[error("database: {0}")]
     Db(#[from] surrealdb::Error),
-    #[error("writing a notation package returned no usable row")]
-    WriteReturnedNothing,
+    #[error("notation package writes require PostgreSQL authority")]
+    AuthorityUnavailable,
     /// The PostgreSQL catalog authority could not serve the call.
     #[error(transparent)]
     Postgres(#[from] catalog::CatalogError),
@@ -200,50 +199,25 @@ fn one(
 /// Insert a package catalog entry. Package templates are attached separately
 /// with [`add_template`] so their order is explicit.
 pub async fn create(
-    db: &SurrealDb,
+    _db: &SurrealDb,
     new: &NewNotationPackage,
 ) -> Result<NotationPackage, NotationPackageError> {
-    let id = Uuid::now_v7();
-    if let Some(pg) = catalog::authority().await? {
-        let row = catalog::row(
-            sqlx::query(PG_INSERT)
-                .bind(id)
-                .bind(new.code.clone())
-                .bind(new.title.clone())
-                .bind(new.description.clone())
-                .bind(new.complexity.clone())
-                .bind(new.starting_price_cents)
-                .bind(new.currency.clone()),
-            &pg,
-        )
-        .await?;
-        return Ok(package_from_pg(&row)?);
-    }
-    let mut response = db
-        .query(format!(
-            "CREATE $id SET code = $code, title = $title, description = $description, \
-             complexity = $complexity, starting_price_cents = $starting_price_cents, \
-             currency = $currency RETURN {PACKAGE_SELECT}"
-        ))
-        .bind(("id", record_id(PACKAGE_TABLE, id)))
-        .bind(("code", new.code.clone()))
-        .bind(("title", new.title.clone()))
-        .bind(("description", new.description.clone()))
-        .bind(("complexity", new.complexity.clone()))
-        .bind(("starting_price_cents", new.starting_price_cents))
-        .bind(("currency", new.currency.clone()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<PackageRow> = response.take(0)?;
-    let package = row
-        .and_then(PackageRow::into_model)
-        .ok_or(NotationPackageError::WriteReturnedNothing)?;
-    crate::postgres_mirror::after_write(
-        db,
-        crate::postgres_mirror::MirrorKey::NotationPackage(package.id),
+    let pg = catalog::authority()
+        .await?
+        .ok_or(NotationPackageError::AuthorityUnavailable)?;
+    let row = catalog::row(
+        sqlx::query(PG_INSERT)
+            .bind(Uuid::now_v7())
+            .bind(new.code.clone())
+            .bind(new.title.clone())
+            .bind(new.description.clone())
+            .bind(new.complexity.clone())
+            .bind(new.starting_price_cents)
+            .bind(new.currency.clone()),
+        &pg,
     )
-    .await;
-    Ok(package)
+    .await?;
+    Ok(package_from_pg(&row)?)
 }
 
 /// Add a template to a package at its explicit assembly position.
@@ -251,42 +225,25 @@ pub async fn create(
 /// The schema rejects duplicate template membership and duplicate positions
 /// within a package.
 pub async fn add_template(
-    db: &SurrealDb,
+    _db: &SurrealDb,
     package_id: Uuid,
     template_id: Uuid,
     position: i32,
     required: bool,
 ) -> Result<(), NotationPackageError> {
-    let id = Uuid::now_v7();
-    if let Some(pg) = catalog::authority().await? {
-        catalog::execute(
-            sqlx::query(PG_ADD_TEMPLATE)
-                .bind(id)
-                .bind(package_id)
-                .bind(template_id)
-                .bind(position)
-                .bind(required),
-            &pg,
-        )
-        .await?;
-        return Ok(());
-    }
-    db.query(
-        "CREATE $id SET package_id = $package_id, \
-         template_id = $template_id, position = $position, required = $required",
+    let pg = catalog::authority()
+        .await?
+        .ok_or(NotationPackageError::AuthorityUnavailable)?;
+    catalog::execute(
+        sqlx::query(PG_ADD_TEMPLATE)
+            .bind(Uuid::now_v7())
+            .bind(package_id)
+            .bind(template_id)
+            .bind(position)
+            .bind(required),
+        &pg,
     )
-    .bind(("id", record_id(MEMBER_TABLE, id)))
-    .bind(("package_id", record_id(PACKAGE_TABLE, package_id)))
-    .bind(("template_id", record_id(TEMPLATE_TABLE, template_id)))
-    .bind(("position", position))
-    .bind(("required", required))
-    .await
-    .and_then(surrealdb::IndexedResults::check)?;
-    crate::postgres_mirror::after_write(
-        db,
-        crate::postgres_mirror::MirrorKey::NotationPackageTemplate(id),
-    )
-    .await;
+    .await?;
     Ok(())
 }
 
@@ -334,12 +291,14 @@ pub async fn templates(
 #[cfg(test)]
 mod tests {
     use super::{add_template, create, find_by_code, templates, NewNotationPackage};
-    use crate::surreal::test_support::mem;
+    use crate::surreal::SurrealDb;
+    use crate::test_support;
     use uuid::Uuid;
 
     #[tokio::test]
     async fn a_package_keeps_its_starting_price_and_template_assembly_order() {
-        let db = mem().await;
+        test_support::with_required_postgres(async {
+        let db = SurrealDb::uninitialized();
         let package = create(
             &db,
             &NewNotationPackage::new("estate-package", "Estate package", "complex", 10_000),
@@ -348,6 +307,11 @@ mod tests {
         .unwrap();
         let first = Uuid::now_v7();
         let second = Uuid::now_v7();
+        let pg = crate::postgres::PostgresDb::configured().await.unwrap().unwrap();
+        for (id, code) in [(first, "synthetic-first"), (second, "synthetic-second")] {
+            sqlx::query("INSERT INTO template (id, code, title, respondent_type, is_current, inserted_at, updated_at) VALUES ($1, $2, 'Synthetic', 'person', false, now(), now())")
+                .bind(id).bind(code).execute(pg.pool()).await.unwrap();
+        }
         add_template(&db, package.id, second, 1, false)
             .await
             .unwrap();
@@ -365,5 +329,6 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![(first, true), (second, false)]
         );
+            }).await;
     }
 }
