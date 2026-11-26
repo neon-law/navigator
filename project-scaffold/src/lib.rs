@@ -273,6 +273,8 @@ name: gate
 
 on:
   pull_request:
+  push:
+    branches: [main]
 
 jobs:
   gate:
@@ -291,7 +293,7 @@ jobs:
       - name: navigator project gate
         run: navigator project gate --ci
 "#,
-        checkout = forgejo_checkout_step("check out the pull request"),
+        checkout = forgejo_checkout_step("check out the event ref"),
         install = forgejo_install_step(),
     )
 }
@@ -614,6 +616,11 @@ mod tests {
         let workflow = forgejo_gate_workflow();
         let parsed: serde_yaml::Value = serde_yaml::from_str(&workflow).unwrap();
         assert_eq!(parsed["name"].as_str(), Some("gate"));
+        assert!(parsed["on"].get("pull_request").is_some());
+        assert_eq!(
+            parsed["on"]["push"]["branches"].as_sequence().unwrap(),
+            &[serde_yaml::Value::String("main".into())]
+        );
         assert!(workflow.contains(FORGEJO_REQUIRED_CHECK));
         // Rendered, not templated: no Rust format braces survive.
         assert!(!workflow.contains("{{{"), "{workflow}");

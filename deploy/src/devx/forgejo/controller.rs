@@ -1107,6 +1107,9 @@ mod tests {
             );
         }
         assert!(expr("ForgejoMetricsAbsent").contains("forgejo"));
+        let main_gate = expr("ForgejoGateFailedOnMain");
+        assert!(main_gate.contains(r#""forgejo.event"="push""#));
+        assert!(main_gate.contains(r#""forgejo.workflow"="gate.yml""#));
         let text = serde_yaml::to_string(&rules).unwrap();
         for content in ["title", "commit message", "head_branch"] {
             assert!(!text.contains(content), "{content}");

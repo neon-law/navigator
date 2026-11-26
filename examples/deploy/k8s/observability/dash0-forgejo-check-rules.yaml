@@ -78,7 +78,7 @@ spec:
         - alert: ForgejoGateFailedOnMain
           expr: |
             sum by ("forgejo.repository", "forgejo.workflow") (
-              increase({otel_metric_name="navigator.forgejo.run.finished", outcome="failure", "forgejo.event"!="pull_request", "forgejo.workflow"!="cd.yml"}[15m])
+              increase({otel_metric_name="navigator.forgejo.run.finished", outcome="failure", "forgejo.event"="push", "forgejo.workflow"="gate.yml"}[15m])
             ) > 0
           for: 0m
           annotations:
