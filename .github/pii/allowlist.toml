@@ -185,6 +185,14 @@ reason = "A Neon Law team member, by name; published on the public /team page."
 values = ["Waleed Amer"]
 
 [[names]]
+reason = "The Guieb & Shook website's Our Story page tells where the firm's name comes from: Waleed Amer's grandfather and Nicholas Shook's parents, named there by the partners themselves (approved by Waleed Amer, 2026-11-26)."
+values = ["Teodulo Florendo Guieb", "Richard", "Me Ray", "Richard and Me Ray"]
+
+[[names]]
+reason = "A law school's name (William S. Boyd School of Law, UNLV), in Nicholas Shook's education on the Guieb & Shook website."
+values = ["William S. Boyd"]
+
+[[names]]
 reason = "Copyright and credit attributions: photographers, type designers, artists."
 values = [
   "Karl Solano",
