@@ -1,28 +1,12 @@
 use super::*;
 use crate::external_identities::ExternalSystem;
+use crate::delegations::{Basis, NewDelegation, NoticeChannel};
 use crate::postgres_mirror::tests::{connect, fresh_schema};
 use crate::postgres_mirror::tests::{
     import_predecessor_histories, sealed_prior_family_histories as sealed_old_histories,
     verified_family_capture as verified_capture,
 };
 use crate::test_support::mem_surreal;
-
-async fn source_delegation(
-    source: &SurrealDb,
-    holder: Uuid,
-    subject: Uuid,
-    notified: Option<&str>,
-) -> Uuid {
-    let id = Uuid::now_v7();
-    source
-        .query("CREATE $id SET delegate_person_id=$holder, subject_person_id=$subject, basis='assistant', granted_by_person_id=$holder, granted_at='2026-01-01T00:00:00Z', subject_notified_at=$notified, inserted_at='2026-01-01T00:00:00Z', updated_at='2026-01-01T00:00:00Z'")
-        .bind(("id", crate::surreal::record_id("person_delegate", id)))
-        .bind(("holder", crate::surreal::record_id("person", holder)))
-        .bind(("subject", crate::surreal::record_id("person", subject)))
-        .bind(("notified", notified.map(str::to_owned)))
-        .await.unwrap().check().unwrap();
-    id
-}
 
 async fn person(source: &SurrealDb) -> Uuid {
     super::super::from_source(crate::persons::create(
@@ -267,7 +251,22 @@ async fn details(
             .bind(("hash", crate::git_access_tokens::hash_token("synthetic-plaintext-token")))
             .bind(("expires", surrealdb::types::Datetime::from(Utc::now() + chrono::Duration::hours(1))))
             .await.unwrap().check().unwrap();
-        let delegate = source_delegation(source, holder, subject, None).await;
+        let delegate = crate::delegations::grant(
+            source,
+            &NewDelegation {
+                delegate_person_id: holder,
+                subject_person_id: subject,
+                basis: Basis::Assistant,
+                instrument_reference: None,
+                granted_by_person_id: holder,
+                subject_notified_at: None,
+                subject_notified_channel: None,
+            },
+>>>>>>> 1dd8b7e39 (refactor(store): require PostgreSQL for external identity writes)
+        )
+        .await
+        .unwrap()
+        .id;
         let external = crate::external_identities::link(
             source,
             holder,

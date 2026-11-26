@@ -57,19 +57,8 @@
 //! than a security incident — which is what makes reconciliation,
 //! webhooks, and drift detection out of scope rather than missing.
 //!
-//! # Two engine facts this module is shaped around
-//!
-//! **The engine does not validate a link.** `record<person>` accepts a
-//! link to a row that was never written, exactly as
-//! [`crate::credentials`] documents. [`link`] reads the person back
-//! through [`crate::persons::find_by_id`] before writing, and that check
-//! is the only thing between a typo and an identity attached to nobody.
-//!
-//! **The key-value layer is optimistic, so a write can lose a race.**
-//! The loser is rolled back and the engine reports
-//! `QueryError::TransactionConflict`, so [`writing`] re-runs under the
-//! crate's one retry policy, [`crate::surreal::retry`], rather than
-//! reporting a simultaneous save as a database fault.
+//! PostgreSQL owns identity writes. The explicit Source importer reads
+//! captured identities directly, and Source read access remains available.
 
 use chrono::{DateTime, Utc};
 use surrealdb::types::SurrealValue;
@@ -79,7 +68,7 @@ use sqlx::{postgres::PgRow, AssertSqlSafe, Row};
 
 use crate::persons::{self, PersonError};
 use crate::postgres::identity::{self as authority, AuthorityError};
-use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
+use crate::surreal::{record_id, record_uuid, SurrealDb};
 
 /// The table these rows live in.
 const TABLE: &str = "person_external_identity";
@@ -212,8 +201,7 @@ pub enum ExternalIdentityError {
     /// Reading the person a write links to failed.
     #[error(transparent)]
     Person(#[from] PersonError),
-    /// The person named by a write does not exist. The engine would have
-    /// accepted the dangling link; this is the check that does not.
+    /// The Person named by a write does not exist.
     #[error("no person {0}")]
     NoSuchPerson(Uuid),
     /// Another person already holds this account — the write collided
@@ -282,41 +270,14 @@ async fn pg_one(
         .map_err(|error| pg_error(error, system))
 }
 
-/// Turn a write failure into the caller-correctable conflict it names,
-/// or leave it as a database fault. A unique violation carries **no**
-/// typed detail — the index name in the message is the only
-/// discriminator through the shared classifier in [`crate::surreal::retry`],
-/// and the two
-/// indexes on this table mean two different corrections, so they are
-/// separated here rather than collapsed into one "taken".
-fn classify_write(error: surrealdb::Error, system: ExternalSystem) -> ExternalIdentityError {
-    match crate::surreal::retry::unique_violation(&error) {
-        Some("person_external_identity_account") => ExternalIdentityError::AccountTaken { system },
-        Some("person_external_identity_person_system") => {
-            ExternalIdentityError::SystemAlreadyLinked { system }
-        }
-        _ => ExternalIdentityError::Db(error),
-    }
-}
-
-/// Run a write under the shared retry policy
-/// ([`crate::surreal::retry`]), mapping whatever finally comes back to
-/// this module's error.
-///
-/// Only the mapping lives here. How long a lost race is re-run, and
-/// which engine conditions count as a lost race, are one policy for the
-/// whole crate.
-async fn writing<F, Q>(
-    system: ExternalSystem,
-    attempt: F,
-) -> Result<surrealdb::IndexedResults, ExternalIdentityError>
-where
-    F: FnMut() -> Q,
-    Q: std::future::IntoFuture<Output = Result<surrealdb::IndexedResults, surrealdb::Error>>,
-{
-    retry::writing(attempt)
-        .await
-        .map_err(|error| classify_write(error, system))
+/// External identity writes require admitted PostgreSQL identity authority.
+async fn write_authority() -> Result<crate::postgres::PostgresDb, ExternalIdentityError> {
+    authority::authority().await?.ok_or_else(|| {
+        AuthorityError::Unavailable(
+            "external identity writes are unavailable in Source context".into(),
+        )
+        .into()
+    })
 }
 
 /// One Person's account on one external system.
@@ -380,12 +341,12 @@ const SELECT: &str = "id, person_id, system, external_id, handle, inserted_at, u
 /// # Errors
 ///
 /// [`ExternalIdentityError::NoSuchPerson`] when the person does not
-/// exist — checked here because the engine would accept the dangling
-/// link. [`ExternalIdentityError::AccountTaken`] when another person
-/// already holds this account, and
+/// exist — checked before the database foreign key.
+/// [`ExternalIdentityError::AccountTaken`] when another person already
+/// holds this account, and
 /// [`ExternalIdentityError::SystemAlreadyLinked`] when this person
-/// already holds one on this system. [`ExternalIdentityError::Db`] for
-/// anything else.
+/// already holds one on this system. [`ExternalIdentityError::Authority`]
+/// reports PostgreSQL failures.
 pub async fn link(
     db: &SurrealDb,
     person_id: Uuid,
@@ -393,61 +354,27 @@ pub async fn link(
     external_id: &str,
     handle: Option<&str>,
 ) -> Result<ExternalIdentity, ExternalIdentityError> {
+    let pg = write_authority().await?;
     if persons::find_by_id(db, person_id).await?.is_none() {
         return Err(ExternalIdentityError::NoSuchPerson(person_id));
     }
 
     let id = Uuid::now_v7();
-    if let Some(pg) = authority::authority().await? {
-        let row = sqlx::query(AssertSqlSafe(format!(
-            "INSERT INTO {TABLE} (id, person_id, system, external_id, handle) \
+    let row = sqlx::query(AssertSqlSafe(format!(
+        "INSERT INTO {TABLE} (id, person_id, system, external_id, handle) \
              VALUES ($1, $2, $3, $4, $5) RETURNING {SELECT}"
-        )))
-        .bind(id)
-        .bind(person_id)
-        .bind(system.as_str())
-        .bind(external_id.trim())
-        .bind(handle)
-        .fetch_one(&pg.0)
-        .await
-        .map_err(|error| pg_error(error, system))?;
-        let identity = from_pg(&row).map_err(|error| pg_error(error, system))?;
+    )))
+    .bind(id)
+    .bind(person_id)
+    .bind(system.as_str())
+    .bind(external_id.trim())
+    .bind(handle)
+    .fetch_one(&pg.0)
+    .await
+    .map_err(|error| pg_error(error, system))?;
+    let identity = from_pg(&row).map_err(|error| pg_error(error, system))?;
 
-        return Ok(identity);
-    }
-    let mut response = writing(system, || {
-        db.query(format!(
-            "CREATE $id SET \
-             person_id = $person_id, \
-             system = $system, \
-             external_id = $external_id, \
-             handle = $handle \
-             RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind(("person_id", record_id(PERSON_TABLE, person_id)))
-        .bind(("system", system.as_str().to_string()))
-        .bind(("external_id", external_id.trim().to_string()))
-        .bind(("handle", handle.map(str::to_string)))
-    })
-    .await?;
-
-    let row: Option<ExternalIdentityRow> = response.take(0)?;
-    let identity = row
-        .and_then(ExternalIdentityRow::into_identity)
-        .ok_or(ExternalIdentityError::WriteReturnedNothing)?;
-    mirror(db, id).await;
     Ok(identity)
-}
-
-/// Mirror one identity into PostgreSQL after its Surreal write. Never
-/// fails the write; see [`crate::postgres_mirror::after_write`].
-async fn mirror(db: &SurrealDb, id: Uuid) {
-    crate::postgres_mirror::after_write(
-        db,
-        crate::postgres_mirror::MirrorKey::ExternalIdentity(id),
-    )
-    .await;
 }
 
 /// This person's account on this system, if one is recorded. The pair is
@@ -676,13 +603,14 @@ pub async fn find_or_link(
 ///
 /// [`ExternalIdentityError::NoSuchPerson`] when the Person does not exist,
 /// [`ExternalIdentityError::AccountTaken`] when another Person holds the
-/// account, or [`ExternalIdentityError::Db`] for another database failure.
+/// account, or [`ExternalIdentityError::Authority`] for a PostgreSQL failure.
 pub async fn set_for_person(
     db: &SurrealDb,
     person_id: Uuid,
     system: ExternalSystem,
     external_id: Option<&str>,
 ) -> Result<Option<ExternalIdentity>, ExternalIdentityError> {
+    let pg = write_authority().await?;
     if persons::find_by_id(db, person_id).await?.is_none() {
         return Err(ExternalIdentityError::NoSuchPerson(person_id));
     }
@@ -700,35 +628,18 @@ pub async fn set_for_person(
         if identity.external_id == external_id {
             return Ok(Some(identity));
         }
-        if let Some(pg) = authority::authority().await? {
-            let row = sqlx::query(AssertSqlSafe(format!(
-                "UPDATE {TABLE} SET external_id = $2, updated_at = now() \
+        let row = sqlx::query(AssertSqlSafe(format!(
+            "UPDATE {TABLE} SET external_id = $2, updated_at = now() \
                  WHERE id = $1 RETURNING {SELECT}"
-            )))
-            .bind(identity.id)
-            .bind(external_id)
-            .fetch_optional(&pg.0)
-            .await
-            .map_err(|error| pg_error(error, system))?
-            .ok_or(ExternalIdentityError::WriteReturnedNothing)?;
-            let updated = from_pg(&row).map_err(|error| pg_error(error, system))?;
+        )))
+        .bind(identity.id)
+        .bind(external_id)
+        .fetch_optional(&pg.0)
+        .await
+        .map_err(|error| pg_error(error, system))?
+        .ok_or(ExternalIdentityError::WriteReturnedNothing)?;
+        let updated = from_pg(&row).map_err(|error| pg_error(error, system))?;
 
-            return Ok(Some(updated));
-        }
-        let mut response = writing(system, || {
-            db.query(format!(
-                "UPDATE $id SET external_id = $external_id, updated_at = time::now() \
-                 RETURN {SELECT}"
-            ))
-            .bind(("id", record_id(TABLE, identity.id)))
-            .bind(("external_id", external_id.to_string()))
-        })
-        .await?;
-        let row: Option<ExternalIdentityRow> = response.take(0)?;
-        let updated = row
-            .and_then(ExternalIdentityRow::into_identity)
-            .ok_or(ExternalIdentityError::WriteReturnedNothing)?;
-        mirror(db, identity.id).await;
         return Ok(Some(updated));
     }
 
@@ -742,22 +653,14 @@ pub async fn set_for_person(
 ///
 /// # Errors
 ///
-/// [`ExternalIdentityError::Db`] if the delete fails.
-pub async fn unlink(db: &SurrealDb, identity_id: Uuid) -> Result<(), ExternalIdentityError> {
-    if let Some(pg) = authority::authority().await? {
-        sqlx::query(AssertSqlSafe(format!("DELETE FROM {TABLE} WHERE id = $1")))
-            .bind(identity_id)
-            .execute(&pg.0)
-            .await
-            .map_err(AuthorityError::from)?;
-
-        return Ok(());
-    }
-    db.query("DELETE $id")
-        .bind(("id", record_id(TABLE, identity_id)))
+/// [`ExternalIdentityError::Authority`] if the delete fails.
+pub async fn unlink(_db: &SurrealDb, identity_id: Uuid) -> Result<(), ExternalIdentityError> {
+    let pg = write_authority().await?;
+    sqlx::query(AssertSqlSafe(format!("DELETE FROM {TABLE} WHERE id = $1")))
+        .bind(identity_id)
+        .execute(&pg.0)
         .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    mirror(db, identity_id).await;
+        .map_err(AuthorityError::from)?;
     Ok(())
 }
 
@@ -832,284 +735,320 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn source_context_refuses_identity_writes() {
+        let db = SurrealDb::uninitialized();
+        let id = Uuid::now_v7();
+        crate::postgres_mirror::from_source(async {
+            assert!(matches!(
+                link(&db, id, ExternalSystem::Github, "synthetic", None).await,
+                Err(ExternalIdentityError::Authority(_))
+            ));
+            assert!(matches!(
+                set_for_person(&db, id, ExternalSystem::Github, Some("synthetic")).await,
+                Err(ExternalIdentityError::Authority(_))
+            ));
+            assert!(matches!(
+                unlink(&db, id).await,
+                Err(ExternalIdentityError::Authority(_))
+            ));
+        })
+        .await;
+    }
+
+    #[tokio::test]
     async fn a_linked_identity_reads_back_by_person_and_by_account() {
-        let db = mem().await;
-        let person_id = a_person(&db, "scorpio@example.com", Role::Lawyer).await;
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let person_id = a_person(&db, "scorpio@example.com", Role::Lawyer).await;
 
-        let linked = link(
-            &db,
-            person_id,
-            ExternalSystem::Github,
-            "12345",
-            Some("scorpio"),
-        )
-        .await
-        .unwrap();
+            let linked = link(
+                &db,
+                person_id,
+                ExternalSystem::Github,
+                "12345",
+                Some("scorpio"),
+            )
+            .await
+            .unwrap();
 
-        assert_eq!(linked.person_id, person_id);
-        assert_eq!(linked.system, ExternalSystem::Github);
-        assert_eq!(linked.external_id, "12345");
-        assert_eq!(linked.handle.as_deref(), Some("scorpio"));
+            assert_eq!(linked.person_id, person_id);
+            assert_eq!(linked.system, ExternalSystem::Github);
+            assert_eq!(linked.external_id, "12345");
+            assert_eq!(linked.handle.as_deref(), Some("scorpio"));
 
-        assert_eq!(
-            find_by_person_and_system(&db, person_id, ExternalSystem::Github)
-                .await
-                .unwrap(),
-            Some(linked.clone())
-        );
-        assert_eq!(
-            find_by_account(&db, ExternalSystem::Github, "12345")
-                .await
-                .unwrap(),
-            Some(linked.clone()),
-            "the reverse lookup is what a provisioning call resolves through"
-        );
-        assert_eq!(for_person(&db, person_id).await.unwrap(), vec![linked]);
+            assert_eq!(
+                find_by_person_and_system(&db, person_id, ExternalSystem::Github)
+                    .await
+                    .unwrap(),
+                Some(linked.clone())
+            );
+            assert_eq!(
+                find_by_account(&db, ExternalSystem::Github, "12345")
+                    .await
+                    .unwrap(),
+                Some(linked.clone()),
+                "the reverse lookup is what a provisioning call resolves through"
+            );
+            assert_eq!(for_person(&db, person_id).await.unwrap(), vec![linked]);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn notion_user_ids_resolve_to_people_by_stable_id_only() {
-        let db = mem().await;
-        let person_id = a_person(&db, "notion@example.com", Role::Lawyer).await;
-        link(
-            &db,
-            person_id,
-            ExternalSystem::Notion,
-            "notion-user-123",
-            Some("Renamed"),
-        )
-        .await
-        .unwrap();
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let person_id = a_person(&db, "notion@example.com", Role::Lawyer).await;
+            link(
+                &db,
+                person_id,
+                ExternalSystem::Notion,
+                "notion-user-123",
+                Some("Renamed"),
+            )
+            .await
+            .unwrap();
 
-        assert_eq!(
-            find_person_by_account(&db, ExternalSystem::Notion, "notion-user-123")
-                .await
-                .unwrap()
-                .unwrap()
-                .id,
-            person_id
-        );
-        assert!(
-            find_person_by_account(&db, ExternalSystem::Notion, "Renamed")
-                .await
-                .unwrap()
-                .is_none(),
-            "a Notion display name is never a relation key"
-        );
-        assert!(
-            find_person_by_account(&db, ExternalSystem::Notion, "notion@example.com")
-                .await
-                .unwrap()
-                .is_none(),
-            "a Person email is never a Notion relation key"
-        );
+            assert_eq!(
+                find_person_by_account(&db, ExternalSystem::Notion, "notion-user-123")
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .id,
+                person_id
+            );
+            assert!(
+                find_person_by_account(&db, ExternalSystem::Notion, "Renamed")
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "a Notion display name is never a relation key"
+            );
+            assert!(
+                find_person_by_account(&db, ExternalSystem::Notion, "notion@example.com")
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "a Person email is never a Notion relation key"
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn notion_identity_correction_preserves_uniqueness_and_supports_clearing() {
-        let db = mem().await;
-        let first = a_person(&db, "first@example.com", Role::Lawyer).await;
-        let second = a_person(&db, "second@example.com", Role::Lawyer).await;
-        set_for_person(&db, first, ExternalSystem::Notion, Some("notion-1"))
-            .await
-            .unwrap();
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let first = a_person(&db, "first@example.com", Role::Lawyer).await;
+            let second = a_person(&db, "second@example.com", Role::Lawyer).await;
+            set_for_person(&db, first, ExternalSystem::Notion, Some("notion-1"))
+                .await
+                .unwrap();
 
-        let duplicate = set_for_person(&db, second, ExternalSystem::Notion, Some("notion-1")).await;
-        assert!(matches!(
-            duplicate,
-            Err(ExternalIdentityError::AccountTaken {
-                system: ExternalSystem::Notion
-            })
-        ));
+            let duplicate =
+                set_for_person(&db, second, ExternalSystem::Notion, Some("notion-1")).await;
+            assert!(matches!(
+                duplicate,
+                Err(ExternalIdentityError::AccountTaken {
+                    system: ExternalSystem::Notion
+                })
+            ));
 
-        set_for_person(&db, first, ExternalSystem::Notion, Some("notion-2"))
-            .await
-            .unwrap();
-        assert!(find_by_account(&db, ExternalSystem::Notion, "notion-1")
-            .await
-            .unwrap()
-            .is_none());
-        set_for_person(&db, first, ExternalSystem::Notion, None)
-            .await
-            .unwrap();
-        assert!(
-            find_by_person_and_system(&db, first, ExternalSystem::Notion)
+            set_for_person(&db, first, ExternalSystem::Notion, Some("notion-2"))
+                .await
+                .unwrap();
+            assert!(find_by_account(&db, ExternalSystem::Notion, "notion-1")
                 .await
                 .unwrap()
-                .is_none()
-        );
+                .is_none());
+            set_for_person(&db, first, ExternalSystem::Notion, None)
+                .await
+                .unwrap();
+            assert!(
+                find_by_person_and_system(&db, first, ExternalSystem::Notion)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn project_lead_notion_ids_include_every_attorney_dri() {
-        let db = mem().await;
-        let first = a_person(&db, "first@example.com", Role::Lawyer).await;
-        let second = a_person(&db, "second@example.com", Role::Admin).await;
-        let unrelated = a_person(&db, "unrelated@example.com", Role::Lawyer).await;
-        let project = crate::projects::create(
-            &db,
-            &crate::projects::NewProject {
-                code: "sample-notion-leads".into(),
-                name: "Sample".into(),
-                status: "open".into(),
-                entity_id: Uuid::now_v7(),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        let project_id = project.id;
-        for person_id in [first, second] {
-            crate::projects::designate_dri_in_surreal(
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let first = a_person(&db, "first@example.com", Role::Lawyer).await;
+            let second = a_person(&db, "second@example.com", Role::Admin).await;
+            let unrelated = a_person(&db, "unrelated@example.com", Role::Lawyer).await;
+            let project =
+                crate::test_support::seed_project_on_firm(&db, None, "Sample Notion Leads").await;
+            let project_id = project.id;
+            for person_id in [first, second] {
+                crate::projects::designate_dri_in_surreal(
+                    &db,
+                    project_id,
+                    person_id,
+                    crate::projects::DriSide::Lawyer,
+                )
+                .await
+                .unwrap();
+            }
+            link(&db, first, ExternalSystem::Notion, "notion-z", None)
+                .await
+                .unwrap();
+            link(&db, second, ExternalSystem::Notion, "notion-a", None)
+                .await
+                .unwrap();
+            link(
                 &db,
-                project_id,
-                person_id,
-                crate::projects::DriSide::Lawyer,
+                unrelated,
+                ExternalSystem::Notion,
+                "notion-unrelated",
+                None,
             )
             .await
             .unwrap();
-        }
-        link(&db, first, ExternalSystem::Notion, "notion-z", None)
-            .await
-            .unwrap();
-        link(&db, second, ExternalSystem::Notion, "notion-a", None)
-            .await
-            .unwrap();
-        link(
-            &db,
-            unrelated,
-            ExternalSystem::Notion,
-            "notion-unrelated",
-            None,
-        )
-        .await
-        .unwrap();
 
-        assert_eq!(
-            notion_user_ids_for_project_leads(&db, project_id)
-                .await
-                .unwrap(),
-            ["notion-a", "notion-z"]
-        );
+            assert_eq!(
+                notion_user_ids_for_project_leads(&db, project_id)
+                    .await
+                    .unwrap(),
+                ["notion-a", "notion-z"]
+            );
+        })
+        .await;
     }
 
     /// The immutable id is the key and the handle is not, so a rename
     /// leaves the mapping intact — the failure mode `github_handle` had.
     #[tokio::test]
     async fn the_account_lookup_keys_on_the_id_and_not_the_handle() {
-        let db = mem().await;
-        let person_id = a_person(&db, "scorpio@example.com", Role::Lawyer).await;
-        link(
-            &db,
-            person_id,
-            ExternalSystem::Github,
-            "12345",
-            Some("old-handle"),
-        )
-        .await
-        .unwrap();
-
-        assert!(find_by_account(&db, ExternalSystem::Github, "12345")
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let person_id = a_person(&db, "scorpio@example.com", Role::Lawyer).await;
+            link(
+                &db,
+                person_id,
+                ExternalSystem::Github,
+                "12345",
+                Some("old-handle"),
+            )
             .await
-            .unwrap()
-            .is_some());
-        assert!(
-            find_by_account(&db, ExternalSystem::Github, "old-handle")
+            .unwrap();
+
+            assert!(find_by_account(&db, ExternalSystem::Github, "12345")
                 .await
                 .unwrap()
-                .is_none(),
-            "the handle is display only and must not resolve an account"
-        );
+                .is_some());
+            assert!(
+                find_by_account(&db, ExternalSystem::Github, "old-handle")
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "the handle is display only and must not resolve an account"
+            );
+        })
+        .await;
     }
 
     /// The `(system, external_id)` unique: two Persons cannot claim one
     /// account.
     #[tokio::test]
     async fn a_second_person_claiming_one_account_is_refused() {
-        let db = mem().await;
-        let first = a_person(&db, "first@example.com", Role::Lawyer).await;
-        let second = a_person(&db, "second@example.com", Role::Lawyer).await;
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let first = a_person(&db, "first@example.com", Role::Lawyer).await;
+            let second = a_person(&db, "second@example.com", Role::Lawyer).await;
 
-        link(&db, first, ExternalSystem::Github, "12345", None)
-            .await
-            .unwrap();
-        let duplicate = link(&db, second, ExternalSystem::Github, "12345", None).await;
+            link(&db, first, ExternalSystem::Github, "12345", None)
+                .await
+                .unwrap();
+            let duplicate = link(&db, second, ExternalSystem::Github, "12345", None).await;
 
-        assert!(
-            matches!(
-                duplicate,
-                Err(ExternalIdentityError::AccountTaken {
-                    system: ExternalSystem::Github
-                })
-            ),
-            "the unique `person_external_identity_account` index is the gate, got {duplicate:?}"
-        );
-        assert!(for_person(&db, second).await.unwrap().is_empty());
+            assert!(
+                matches!(
+                    duplicate,
+                    Err(ExternalIdentityError::AccountTaken {
+                        system: ExternalSystem::Github
+                    })
+                ),
+                "the unique system/account constraint is the gate, got {duplicate:?}"
+            );
+            assert!(for_person(&db, second).await.unwrap().is_empty());
+        })
+        .await;
     }
 
     /// The `(person_id, system)` unique: one Person holds at most one
     /// account per system.
     #[tokio::test]
     async fn a_second_account_for_one_person_on_one_system_is_refused() {
-        let db = mem().await;
-        let person_id = a_person(&db, "scorpio@example.com", Role::Lawyer).await;
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let person_id = a_person(&db, "scorpio@example.com", Role::Lawyer).await;
 
-        link(&db, person_id, ExternalSystem::Github, "12345", None)
-            .await
-            .unwrap();
-        let duplicate = link(&db, person_id, ExternalSystem::Github, "67890", None).await;
+            link(&db, person_id, ExternalSystem::Github, "12345", None)
+                .await
+                .unwrap();
+            let duplicate = link(&db, person_id, ExternalSystem::Github, "67890", None).await;
 
-        assert!(
-            matches!(
-                duplicate,
-                Err(ExternalIdentityError::SystemAlreadyLinked {
-                    system: ExternalSystem::Github
-                })
-            ),
-            "the unique `person_external_identity_person_system` index is the gate, \
+            assert!(
+                matches!(
+                    duplicate,
+                    Err(ExternalIdentityError::SystemAlreadyLinked {
+                        system: ExternalSystem::Github
+                    })
+                ),
+                "the unique person/system constraint is the gate, \
              got {duplicate:?}"
-        );
-        assert_eq!(for_person(&db, person_id).await.unwrap().len(), 1);
+            );
+            assert_eq!(for_person(&db, person_id).await.unwrap().len(), 1);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn one_person_may_hold_an_account_on_every_system() {
-        let db = mem().await;
-        let person_id = a_person(&db, "scorpio@example.com", Role::Lawyer).await;
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let person_id = a_person(&db, "scorpio@example.com", Role::Lawyer).await;
 
-        for (index, system) in ExternalSystem::ALL.iter().enumerate() {
-            link(&db, person_id, *system, &format!("id-{index}"), None)
-                .await
-                .unwrap();
-        }
+            for (index, system) in ExternalSystem::ALL.iter().enumerate() {
+                link(&db, person_id, *system, &format!("id-{index}"), None)
+                    .await
+                    .unwrap();
+            }
 
-        assert_eq!(
-            for_person(&db, person_id).await.unwrap().len(),
-            ExternalSystem::ALL.len()
-        );
+            assert_eq!(
+                for_person(&db, person_id).await.unwrap().len(),
+                ExternalSystem::ALL.len()
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn an_identity_for_a_person_who_does_not_exist_is_refused() {
-        let db = mem().await;
-        let nobody = Uuid::now_v7();
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let nobody = Uuid::now_v7();
 
-        // The engine would accept this link — `record<person>` is not
-        // validated against an existing row. This check is the only
-        // thing that refuses it.
-        let refused = link(&db, nobody, ExternalSystem::Github, "12345", None).await;
-        assert!(matches!(
-            refused,
-            Err(ExternalIdentityError::NoSuchPerson(id)) if id == nobody
-        ));
+            // The accessor identifies the missing Person before the foreign key rejects it.
+            let refused = link(&db, nobody, ExternalSystem::Github, "12345", None).await;
+            assert!(matches!(
+                refused,
+                Err(ExternalIdentityError::NoSuchPerson(id)) if id == nobody
+            ));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn the_engine_itself_would_have_accepted_the_dangling_link() {
         let db = mem().await;
 
-        // Pins the reason `link` checks: writing the same row without
-        // the guard succeeds, so nothing below this module catches it.
+        // Captured Source rows may have dangling links; import must handle them.
         db.query("CREATE $id SET person_id = $person, system = 'github', external_id = '12345'")
             .bind(("id", record_id("person_external_identity", Uuid::now_v7())))
             .bind(("person", record_id(PERSON_TABLE, Uuid::now_v7())))
@@ -1139,22 +1078,25 @@ mod tests {
 
     #[tokio::test]
     async fn find_or_link_is_idempotent_on_the_person_system_pair() {
-        let db = mem().await;
-        let person_id = a_person(&db, "scorpio@example.com", Role::Lawyer).await;
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let person_id = a_person(&db, "scorpio@example.com", Role::Lawyer).await;
 
-        let first = find_or_link(&db, person_id, ExternalSystem::Slack, "U123", Some("s"))
-            .await
-            .unwrap();
-        let second = find_or_link(&db, person_id, ExternalSystem::Slack, "U999", Some("t"))
-            .await
-            .unwrap();
+            let first = find_or_link(&db, person_id, ExternalSystem::Slack, "U123", Some("s"))
+                .await
+                .unwrap();
+            let second = find_or_link(&db, person_id, ExternalSystem::Slack, "U999", Some("t"))
+                .await
+                .unwrap();
 
-        assert_eq!(first, second, "the second call returns the existing row");
-        assert_eq!(
-            second.external_id, "U123",
-            "an existing identity is returned as it stands, not repointed"
-        );
-        assert_eq!(for_person(&db, person_id).await.unwrap().len(), 1);
+            assert_eq!(first, second, "the second call returns the existing row");
+            assert_eq!(
+                second.external_id, "U123",
+                "an existing identity is returned as it stands, not repointed"
+            );
+            assert_eq!(for_person(&db, person_id).await.unwrap().len(), 1);
+        })
+        .await;
     }
 
     /// An account another person holds is a real conflict, not a race,
@@ -1162,55 +1104,64 @@ mod tests {
     /// swallows its own index collision.
     #[tokio::test]
     async fn find_or_link_still_reports_an_account_another_person_holds() {
-        let db = mem().await;
-        let first = a_person(&db, "first@example.com", Role::Lawyer).await;
-        let second = a_person(&db, "second@example.com", Role::Lawyer).await;
-        link(&db, first, ExternalSystem::Github, "12345", None)
-            .await
-            .unwrap();
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let first = a_person(&db, "first@example.com", Role::Lawyer).await;
+            let second = a_person(&db, "second@example.com", Role::Lawyer).await;
+            link(&db, first, ExternalSystem::Github, "12345", None)
+                .await
+                .unwrap();
 
-        let refused = find_or_link(&db, second, ExternalSystem::Github, "12345", None).await;
-        assert!(matches!(
-            refused,
-            Err(ExternalIdentityError::AccountTaken {
-                system: ExternalSystem::Github
-            })
-        ));
+            let refused = find_or_link(&db, second, ExternalSystem::Github, "12345", None).await;
+            assert!(matches!(
+                refused,
+                Err(ExternalIdentityError::AccountTaken {
+                    system: ExternalSystem::Github
+                })
+            ));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn an_identity_is_scoped_to_its_own_person() {
-        let db = mem().await;
-        let linked = a_person(&db, "linked@example.com", Role::Lawyer).await;
-        let unlinked = a_person(&db, "unlinked@example.com", Role::Lawyer).await;
-        link(&db, linked, ExternalSystem::Github, "12345", None)
-            .await
-            .unwrap();
-
-        assert!(for_person(&db, unlinked).await.unwrap().is_empty());
-        assert_eq!(
-            find_by_person_and_system(&db, unlinked, ExternalSystem::Github)
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let linked = a_person(&db, "linked@example.com", Role::Lawyer).await;
+            let unlinked = a_person(&db, "unlinked@example.com", Role::Lawyer).await;
+            link(&db, linked, ExternalSystem::Github, "12345", None)
                 .await
-                .unwrap(),
-            None
-        );
+                .unwrap();
+
+            assert!(for_person(&db, unlinked).await.unwrap().is_empty());
+            assert_eq!(
+                find_by_person_and_system(&db, unlinked, ExternalSystem::Github)
+                    .await
+                    .unwrap(),
+                None
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn unlinking_forgets_the_identity_and_is_idempotent() {
-        let db = mem().await;
-        let person_id = a_person(&db, "scorpio@example.com", Role::Lawyer).await;
-        let linked = link(&db, person_id, ExternalSystem::Github, "12345", None)
-            .await
-            .unwrap();
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let person_id = a_person(&db, "scorpio@example.com", Role::Lawyer).await;
+            let linked = link(&db, person_id, ExternalSystem::Github, "12345", None)
+                .await
+                .unwrap();
 
-        unlink(&db, linked.id).await.unwrap();
-        assert!(for_person(&db, person_id).await.unwrap().is_empty());
+            unlink(&db, linked.id).await.unwrap();
+            assert!(for_person(&db, person_id).await.unwrap().is_empty());
 
-        // Unlinking again, and unlinking one that never existed, are
-        // no-ops.
-        unlink(&db, linked.id).await.unwrap();
-        unlink(&db, Uuid::now_v7()).await.unwrap();
+            // Unlinking again, and unlinking one that never existed, are
+            // no-ops.
+            unlink(&db, linked.id).await.unwrap();
+            unlink(&db, Uuid::now_v7()).await.unwrap();
+        })
+        .await;
     }
 
     /// An account released by one person can be recorded for another —
@@ -1218,19 +1169,22 @@ mod tests {
     /// gone.
     #[tokio::test]
     async fn a_released_account_can_be_claimed_by_someone_else() {
-        let db = mem().await;
-        let leaver = a_person(&db, "leaver@example.com", Role::Lawyer).await;
-        let joiner = a_person(&db, "joiner@example.com", Role::Lawyer).await;
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let leaver = a_person(&db, "leaver@example.com", Role::Lawyer).await;
+            let joiner = a_person(&db, "joiner@example.com", Role::Lawyer).await;
 
-        let held = link(&db, leaver, ExternalSystem::Github, "12345", None)
-            .await
-            .unwrap();
-        unlink(&db, held.id).await.unwrap();
+            let held = link(&db, leaver, ExternalSystem::Github, "12345", None)
+                .await
+                .unwrap();
+            unlink(&db, held.id).await.unwrap();
 
-        let reclaimed = link(&db, joiner, ExternalSystem::Github, "12345", None)
-            .await
-            .unwrap();
-        assert_eq!(reclaimed.person_id, joiner);
+            let reclaimed = link(&db, joiner, ExternalSystem::Github, "12345", None)
+                .await
+                .unwrap();
+            assert_eq!(reclaimed.person_id, joiner);
+        })
+        .await;
     }
 
     /// The glossary rule, held as behaviour: a Clerk "never receives
@@ -1240,48 +1194,51 @@ mod tests {
     /// answer is the same before and after the row exists.
     #[tokio::test]
     async fn a_clerk_carrying_a_github_identity_is_granted_no_git_authority() {
-        let db = mem().await;
-        let clerk = a_person(&db, "clerk@example.com", Role::Clerk).await;
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let clerk = a_person(&db, "clerk@example.com", Role::Clerk).await;
 
-        // The Git transport's own authority is a token, and a Clerk who
-        // was never minted one has none — before the identity, and
-        // after it.
-        let before = git_access_tokens::validate(&db, "not-a-token", chrono::Utc::now())
+            // The Git transport's own authority is a token, and a Clerk who
+            // was never minted one has none — before the identity, and
+            // after it.
+            let before = git_access_tokens::validate(&db, "not-a-token", chrono::Utc::now())
+                .await
+                .unwrap();
+            assert!(before.is_none());
+
+            let identity = link(
+                &db,
+                clerk,
+                ExternalSystem::Github,
+                "12345",
+                Some("clerk-handle"),
+            )
             .await
             .unwrap();
-        assert!(before.is_none());
 
-        let identity = link(
-            &db,
-            clerk,
-            ExternalSystem::Github,
-            "12345",
-            Some("clerk-handle"),
-        )
-        .await
-        .unwrap();
+            assert!(
+                git_access_tokens::validate(&db, "not-a-token", chrono::Utc::now())
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "an external identity is not a Git credential"
+            );
+            assert!(
+                git_access_tokens::validate(&db, &identity.external_id, chrono::Utc::now())
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "the account id must not authenticate anything"
+            );
 
-        assert!(
-            git_access_tokens::validate(&db, "not-a-token", chrono::Utc::now())
-                .await
-                .unwrap()
-                .is_none(),
-            "an external identity is not a Git credential"
-        );
-        assert!(
-            git_access_tokens::validate(&db, &identity.external_id, chrono::Utc::now())
-                .await
-                .unwrap()
-                .is_none(),
-            "the account id must not authenticate anything"
-        );
-
-        // And the tier is untouched: the row records who they are, it
-        // does not promote them.
-        assert_eq!(
-            persons::find_by_id(&db, clerk).await.unwrap().unwrap().role,
-            Role::Clerk
-        );
+            // And the tier is untouched: the row records who they are, it
+            // does not promote them.
+            assert_eq!(
+                persons::find_by_id(&db, clerk).await.unwrap().unwrap().role,
+                Role::Clerk
+            );
+        })
+        .await;
     }
 
     /// The other half of the same rule, from ENG-45 and
@@ -1292,28 +1249,30 @@ mod tests {
     /// alone.
     #[tokio::test]
     async fn linking_an_identity_creates_no_participation() {
-        let db = mem().await;
-        let client = a_person(&db, "client@example.com", Role::Client).await;
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let client = a_person(&db, "client@example.com", Role::Client).await;
 
-        link(&db, client, ExternalSystem::Google, "sub-12345", None)
-            .await
-            .unwrap();
+            link(&db, client, ExternalSystem::Google, "sub-12345", None)
+                .await
+                .unwrap();
 
-        let participations: Vec<surrealdb::types::RecordId> = db
-            .query("SELECT VALUE id FROM person_project_role")
-            .await
-            .unwrap()
-            .check()
-            .unwrap()
-            .take(0)
-            .unwrap();
-        assert!(
-            participations.is_empty(),
-            "scope comes from person_project_role, and an identity row writes none"
-        );
+            let pg = crate::postgres::PostgresDb::application().await.unwrap();
+            let participations: i64 =
+                sqlx::query_scalar("SELECT count(*) FROM person_project_role WHERE person_id = $1")
+                    .bind(client)
+                    .fetch_one(pg.pool())
+                    .await
+                    .unwrap();
+            assert_eq!(
+                participations, 0,
+                "an identity row creates no participation"
+            );
 
-        // One row, in one table, and it is this one.
-        assert_eq!(for_person(&db, client).await.unwrap().len(), 1);
+            // One row, in one table, and it is this one.
+            assert_eq!(for_person(&db, client).await.unwrap().len(), 1);
+        })
+        .await;
     }
 
     /// This change adds a vocabulary; it does not touch the one that
