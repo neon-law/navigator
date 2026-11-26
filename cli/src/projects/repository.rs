@@ -281,42 +281,7 @@ const FORBIDDEN_COMPONENTS: &[&str] = &[
 const FORBIDDEN_CREDENTIAL_EXTENSIONS: &[&str] = &["env", "key", "pem", "p12", "pfx"];
 const FORBIDDEN_DOCUMENT_EXTENSIONS: &[&str] = &["doc", "docx", "odt", "pdf"];
 
-/// The skill catalog synced into every Project repository, embedded at build
-/// time from Navigator's own canonical `.agents/skills/` — never read from a
-/// live checkout at runtime, so a downloaded release binary can write it with
-/// no wider clone. Kept intentionally small: every skill synced here is one
-/// to keep true in every repository that carries it. A Project's portal is
-/// client-facing legal copy — an engagement summary, a documents tab, a
-/// matter timeline — so the two review councils that critique exactly that,
-/// plus the general engineering council, are the initial set. `stay-in-repo`
-/// joins them as the shared scope rule every Project repository's `AGENTS.md`
-/// used to hand-write on its own, three times, in three different voices.
-/// `legal-writing` (LAW-58) is the writing discipline both review councils
-/// and the litigation filing gate assume the underlying prose already
-/// meets — every Project repository drafts memos, letters, and briefs, so
-/// it is fleet-wide rather than repo-local. `case-downloader` (LAW-94) is the
-/// verified-source procedure for filing the authority a matter relies on as
-/// an Authority pointer, with the bytes kept out of Git. `deadline` (LAW-126)
-/// records a date once through `navigator project deadline` and makes the
-/// matter page and the private Slack channel views of that one row.
-/// `browser-handoff` (LAW-129) borrows the attorney's own signed-in browser for
-/// a third-party download, never handles a credential, and files the result.
-/// `case-timeline` (LAW-133) keeps a litigation case record as Docket Entries
-/// through `navigator project docket`, never as a hand-edited memo.
-/// `opposing-communication-review` gives every Project the recipient-side
-/// review discipline for opposing-party correspondence. `pull-changes` is the
-/// one meaning of "pull changes": rebase the branch onto the latest `origin/main`.
-/// `push-changes` carries the outbound loop through a ready PR and verified merge.
-/// `word-editing` (LAW-229) carries a lawyer's edits in local Word back into
-/// the notation template, with the template kept the source of truth.
-/// `analyze-memo` (LAW-237) reviews a finished memo or letter and reports
-/// findings before any correction is applied.
-/// `court-filing-drafts` (LAW-239) marks every draft of a court filing
-/// counsel will sign and clears the marks to finalize it.
-/// `matter-calendar-events` names every matter calendar after its Project
-/// code and titles each event with that code, a colon, and then the event.
-/// The canonical bytes live in `project-scaffold` so this CLI's scaffold and
-/// the server-side repository seeding write the same copies.
+/// The Project Agent Skills emitted by both the CLI and server scaffold.
 pub use project_scaffold::SYNCED_SKILLS;
 
 #[derive(Debug)]
@@ -3416,6 +3381,23 @@ pub fn repair_skills_for(
             restore_canonical(&root, &relative, &contents, &mut repaired)?;
         }
     }
+    for (name, canonical) in project_scaffold::WORKSPACE_SKILLS {
+        if project_scaffold::workspace_skills::MIGRATED_WORKSPACE_SKILLS.contains(name) {
+            let relative = format!(".agents/skills/{name}/SKILL.md");
+            let file = root.join(&relative);
+            if file.ancestors().take(4).all(|path| {
+                path.symlink_metadata()
+                    .is_ok_and(|metadata| !metadata.is_symlink())
+            }) && fs::read_to_string(&file).is_ok_and(|contents| contents == *canonical)
+            {
+                fs::remove_file(&file)?;
+                if let Some(directory) = file.parent() {
+                    let _ = fs::remove_dir(directory);
+                }
+                repaired.push(relative);
+            }
+        }
+    }
     for name in RETIRED_SYNCED_SKILLS {
         remove_retired_skill(&root, name, &mut repaired)?;
     }
@@ -4365,23 +4347,8 @@ jobs:
         }
     }
 
-    /// LAW-239: every Project repository carries `court-filing-drafts`, and
-    /// the marker it tells an author to write is the one the renders read.
     #[test]
-    fn court_filing_drafts_is_synced_and_names_the_rendered_marker() {
-        let (_, skill) = SYNCED_SKILLS
-            .iter()
-            .find(|(name, _)| *name == "court-filing-drafts")
-            .expect("court-filing-drafts is a synced skill");
-        assert!(skill.contains(word::paper::COUNSEL_SIGNATURE));
-    }
-
-    #[test]
-    fn analyze_memo_is_restored_and_admitted_by_the_project_gate() {
-        let (_, canonical) = SYNCED_SKILLS
-            .iter()
-            .find(|(name, _)| *name == "analyze-memo")
-            .expect("analyze-memo is a synced skill");
+    fn workspace_skill_repair_retires_the_canonical_copy_and_preserves_local_shadows() {
         let root = tempfile::tempdir().unwrap();
         emit_scaffold(
             root.path(),
@@ -4391,27 +4358,28 @@ jobs:
             "client@example.com",
         )
         .unwrap();
-        let path = root.path().join(".agents/skills/analyze-memo/SKILL.md");
-        assert_eq!(fs::read_to_string(&path).unwrap(), *canonical);
-        fs::write(&path, "drift").unwrap();
+        let old_dir = root.path().join(".agents/skills/analyze-memo");
+        let custom_dir = root.path().join(".agents/skills/record-search");
+        assert!(!old_dir.exists());
+        assert!(!custom_dir.exists());
+        for dir in [&old_dir, &custom_dir] {
+            fs::create_dir_all(dir).unwrap();
+        }
+        let (_, canonical) = project_scaffold::WORKSPACE_SKILLS
+            .iter()
+            .find(|(name, _)| *name == "analyze-memo")
+            .unwrap();
+        fs::write(old_dir.join("SKILL.md"), canonical).unwrap();
+        fs::write(custom_dir.join("SKILL.md"), "Local review procedure\n").unwrap();
+        repair_skills(root.path()).unwrap();
+        assert!(!old_dir.join("SKILL.md").exists());
+        assert_eq!(
+            fs::read_to_string(custom_dir.join("SKILL.md")).unwrap(),
+            "Local review procedure\n"
+        );
         let mut findings = Vec::new();
         validate_skills(root.path(), &mut findings);
-        assert!(findings
-            .iter()
-            .any(|finding| finding.message.contains("analyze-memo")));
-        repair_skills(root.path()).unwrap();
-        assert_eq!(fs::read_to_string(&path).unwrap(), *canonical);
-        findings.clear();
-        validate_skills(root.path(), &mut findings);
         assert!(findings.is_empty(), "{findings:?}");
-        assert_eq!(
-            validate_gate(root.path(), Some("matter-one"), false).errors,
-            0
-        );
-        fs::remove_file(&path).unwrap();
-        repair_skills(root.path()).unwrap();
-        assert_eq!(fs::read_to_string(&path).unwrap(), *canonical);
-        assert!(AGENT_CONTRACT_BASE.contains(".agents/skills/analyze-memo/SKILL.md"));
     }
 
     #[test]
@@ -4491,7 +4459,7 @@ jobs:
     /// skill, and never keeps a memo.
     #[test]
     fn case_timeline_is_synced_and_records_through_project_docket() {
-        let (_, canonical) = SYNCED_SKILLS
+        let (_, canonical) = project_scaffold::WORKSPACE_SKILLS
             .iter()
             .find(|(name, _)| *name == "case-timeline")
             .expect("case-timeline is a synced skill");
@@ -4591,34 +4559,6 @@ jobs:
                 "skill must not direct `{retired}`"
             );
         }
-    }
-
-    #[test]
-    fn record_search_is_repaired_and_drift_fails_the_project_gate() {
-        let root = tempfile::tempdir().unwrap();
-        emit_scaffold(
-            root.path(),
-            "matter-one",
-            "staging.neonlaw.com",
-            "lawyer@example.com",
-            "client@example.com",
-        )
-        .unwrap();
-        let path = root.path().join(".agents/skills/record-search/SKILL.md");
-        let (_, canonical) = SYNCED_SKILLS
-            .iter()
-            .find(|(name, _)| *name == "record-search")
-            .unwrap();
-        assert_eq!(fs::read_to_string(&path).unwrap(), *canonical);
-
-        fs::write(&path, "drift\n").unwrap();
-        assert!(validate_gate(root.path(), Some("matter-one"), false).errors > 0);
-        repair_skills(root.path()).unwrap();
-        assert_eq!(fs::read_to_string(&path).unwrap(), *canonical);
-        assert_eq!(
-            validate_gate(root.path(), Some("matter-one"), false).errors,
-            0
-        );
     }
 
     /// ENG-870 named this doc specifically: it still documented the

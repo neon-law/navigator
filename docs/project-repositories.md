@@ -1320,6 +1320,11 @@ The same sync maintains the root around the checkouts in two layers:
 | `.claude/skills/` | Links to the generic skills and to `<firm-slug>-<skill>` | Sync |
 | `<code>/.claude/skills/` | Links to the generic skills plus that Project's Firm skills | Sync |
 
+Workspace skills cover shared review and drafting procedures. A Project carries skills tied to its own repository,
+including the Project setup, Deadline and delivery procedures. Run `navigator sync` at the workspace root to update
+workspace skills. A Project skill with the same name takes precedence in that checkout, and sync reports the shadow.
+`navigator project repository sync-skills` removes matching copies of skills now supplied by the workspace.
+
 Sync reads every checkout's `navigator.yaml`, groups them by `host`, and asks each host for the signed-in person's Firms
 and their Firm Library repositories (`GET /app/api/firm-libraries`). A checkout's Firm is its manifest `firm`, or the
 only Firm that host lists. Each Firm's library is cloned or fast-forwarded with `jj`; one with local edits is not moved.

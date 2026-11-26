@@ -71,52 +71,11 @@ pub const FORGEJO_GATE_WORKFLOW: &str = ".forgejo/workflows/gate.yml";
 /// branch protection requires: `<workflow name> / <job> (<event>)`.
 pub const FORGEJO_REQUIRED_CHECK: &str = "gate / gate (pull_request)";
 
-/// The Agent Skills every Project repository carries a synced copy of. The
-/// canonical copies live in Navigator's own `.agents/skills/`; a scaffold
-/// writes and `sync-skills` restores exactly these bytes.
-///
-/// `case-timeline` (LAW-133) keeps a litigation case record as Docket Entries
-/// through `navigator project docket`, never as a hand-edited memo.
-/// `opposing-communication-review` gives every Project the recipient-side
-/// review discipline for opposing-party correspondence. `pull-changes` is the
-/// one meaning of "pull changes": rebase the branch onto the latest `origin/main`.
-/// `push-changes` carries the outbound loop through a ready PR and verified merge.
-/// `word-editing` (LAW-229) carries a lawyer's edits in local Word back into
-/// the notation template, with the template kept the source of truth.
-/// `analyze-memo` (LAW-237) reviews a finished memo or letter and reports
-/// findings before any correction is applied.
-/// `court-filing-drafts` (LAW-239) marks every draft of a court filing
-/// counsel will sign and clears the marks to finalize it.
-/// `matter-calendar-events` names every matter calendar after its Project
-/// code and titles each event with that code, a colon, and then the event.
+/// The embedded Agent Skills whose procedures use a Project checkout's coordinates.
 pub const SYNCED_SKILLS: &[(&str, &str)] = &[
-    (
-        "council",
-        include_str!("../../.agents/skills/council/SKILL.md"),
-    ),
-    (
-        "legal-council",
-        include_str!("../../.agents/skills/legal-council/SKILL.md"),
-    ),
-    (
-        "analyze-memo",
-        include_str!("../../.agents/skills/analyze-memo/SKILL.md"),
-    ),
-    (
-        "client-council",
-        include_str!("../../.agents/skills/client-council/SKILL.md"),
-    ),
-    (
-        "human-readable",
-        include_str!("../../.agents/skills/human-readable/SKILL.md"),
-    ),
     (
         "stay-in-repo",
         include_str!("../../.agents/skills/stay-in-repo/SKILL.md"),
-    ),
-    (
-        "legal-writing",
-        include_str!("../../.agents/skills/legal-writing/SKILL.md"),
     ),
     (
         "case-downloader",
@@ -130,27 +89,6 @@ pub const SYNCED_SKILLS: &[(&str, &str)] = &[
         "deadline",
         include_str!("../../.agents/skills/deadline/SKILL.md"),
     ),
-    (
-        "browser-handoff",
-        include_str!("../../.agents/skills/browser-handoff/SKILL.md"),
-    ),
-    (
-        "case-timeline",
-        include_str!("../../.agents/skills/case-timeline/SKILL.md"),
-    ),
-    (
-        "opposing-communication-review",
-        include_str!("../../.agents/skills/opposing-communication-review/SKILL.md"),
-    ),
-    (
-        "record-search",
-        include_str!("../../.agents/skills/record-search/SKILL.md"),
-    ),
-    (
-        "message-processing",
-        include_str!("../../.agents/skills/message-processing/SKILL.md"),
-    ),
-    ("ocr", include_str!("../../.agents/skills/ocr/SKILL.md")),
     (
         "working-notes",
         include_str!("../../.agents/skills/working-notes/SKILL.md"),
@@ -168,20 +106,8 @@ pub const SYNCED_SKILLS: &[(&str, &str)] = &[
         include_str!("../../.agents/skills/push-to-navigator/SKILL.md"),
     ),
     (
-        "word-editing",
-        include_str!("../../.agents/skills/word-editing/SKILL.md"),
-    ),
-    (
-        "court-filing-drafts",
-        include_str!("../../.agents/skills/court-filing-drafts/SKILL.md"),
-    ),
-    (
         "matter-calendar-events",
         include_str!("../../.agents/skills/matter-calendar-events/SKILL.md"),
-    ),
-    (
-        "calendar-conflict-check",
-        include_str!("../../.agents/skills/calendar-conflict-check/SKILL.md"),
     ),
 ];
 

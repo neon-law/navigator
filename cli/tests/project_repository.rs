@@ -1497,7 +1497,7 @@ fn gate_fails_on_a_drifted_synced_skill() {
     scaffold(dir.path(), "example-project");
 
     fs::write(
-        dir.path().join(".agents/skills/council/SKILL.md"),
+        dir.path().join(".agents/skills/stay-in-repo/SKILL.md"),
         "drifted content",
     )
     .unwrap();
@@ -1505,7 +1505,7 @@ fn gate_fails_on_a_drifted_synced_skill() {
     gate(dir.path())
         .failure()
         .code(1)
-        .stderr(str::contains("synced skill `council` has drifted"));
+        .stderr(str::contains("synced skill `stay-in-repo` has drifted"));
 }
 
 /// A repository carrying the full canonical catalog gates green with no
@@ -1516,7 +1516,7 @@ fn gate_passes_with_the_full_skill_catalog() {
     scaffold(dir.path(), "example-project");
     assert!(
         dir.path()
-            .join(".agents/skills/record-search/SKILL.md")
+            .join(".agents/skills/stay-in-repo/SKILL.md")
             .is_file(),
         "the shell must include every synced skill"
     );
@@ -1568,23 +1568,15 @@ fn gate_fails_when_agents_exists_without_the_catalog() {
     let dir = TempDir::new().unwrap();
     scaffold(dir.path(), "example-project");
     fs::remove_dir_all(dir.path().join(".agents/skills/deadline")).unwrap();
-    fs::remove_dir_all(dir.path().join(".agents/skills/record-search")).unwrap();
-    fs::remove_dir_all(dir.path().join(".agents/skills/browser-handoff")).unwrap();
-    fs::remove_dir_all(
-        dir.path()
-            .join(".agents/skills/opposing-communication-review"),
-    )
-    .unwrap();
+    fs::remove_dir_all(dir.path().join(".agents/skills/stay-in-repo")).unwrap();
+    fs::remove_dir_all(dir.path().join(".agents/skills/project-setup")).unwrap();
 
     gate(dir.path())
         .failure()
         .code(1)
         .stderr(str::contains("missing synced skill `deadline`"))
-        .stderr(str::contains("missing synced skill `record-search`"))
-        .stderr(str::contains("missing synced skill `browser-handoff`"))
-        .stderr(str::contains(
-            "missing synced skill `opposing-communication-review`",
-        ));
+        .stderr(str::contains("missing synced skill `stay-in-repo`"))
+        .stderr(str::contains("missing synced skill `project-setup`"));
 }
 
 /// An older `AGENTS.md` fails the gate. `sync-skills` rewrites that file to the

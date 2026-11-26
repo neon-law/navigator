@@ -253,6 +253,21 @@ fn link_checkout(
     } else if preserve.contains(&checkout.code) {
         links.extend(existing_firm_links(&checkout.dir.join(CLAUDE_SKILLS)));
     }
+    for (name, _) in generic {
+        if checkout
+            .dir
+            .join(SKILLS)
+            .join(name)
+            .join("SKILL.md")
+            .is_file()
+        {
+            links.remove(*name);
+            io.report.notes.push(format!(
+                "{}: Project skill {name} shadows the workspace skill",
+                checkout.code
+            ));
+        }
+    }
     // This checkout's own Firm's rules, loaded the same way its skills
     // are: one link into `.firm/<its slug>/AGENTS.md`. A Firm with no
     // rules file links none, and no checkout ever links another Firm's.
@@ -897,6 +912,53 @@ mod tests {
         )
         .unwrap();
         std::fs::write(dir.join(".gitignore"), ".claude/skills/\n.claude/rules/\n").unwrap();
+    }
+
+    #[test]
+    fn workspace_skill_updates_both_checkouts_and_reports_a_project_shadow() {
+        let root = tempfile::tempdir().unwrap();
+        project(root.path(), "alpha-matter", "firm-a");
+        project(root.path(), "beta-matter", "firm-b");
+        let path = root
+            .path()
+            .join("beta-matter/.agents/skills/analyze-memo/SKILL.md");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "Project review").unwrap();
+        let sync = |text| {
+            materialize(
+                root.path(),
+                &[("analyze-memo", text)],
+                &BTreeMap::new(),
+                &BTreeSet::new(),
+                false,
+            )
+            .unwrap()
+        };
+        let report = sync("First review");
+        assert!(report
+            .notes
+            .iter()
+            .any(|note| note.contains("beta-matter: Project skill analyze-memo")));
+        sync("Revised review");
+        let root_link = root.path().join(CLAUDE_SKILLS).join("analyze-memo");
+        let alpha_link = root
+            .path()
+            .join("alpha-matter")
+            .join(CLAUDE_SKILLS)
+            .join("analyze-memo");
+        let beta_link = root
+            .path()
+            .join("beta-matter")
+            .join(CLAUDE_SKILLS)
+            .join("analyze-memo");
+        assert_eq!(skill_text(&root_link), "Revised review");
+        assert_eq!(skill_text(&alpha_link), "Revised review");
+        assert!(!beta_link.exists());
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "Project review");
+        assert!(!root
+            .path()
+            .join("alpha-matter/.agents/skills/analyze-memo")
+            .exists());
     }
 
     fn firm_skill(root: &Path, slug: &str, name: &str, body: &str) {
