@@ -1,5 +1,4 @@
 use super::*;
-use crate::external_identities::ExternalSystem;
 use crate::postgres_mirror::tests::{connect, fresh_schema};
 use crate::postgres_mirror::tests::{
     import_predecessor_histories, sealed_prior_family_histories as sealed_old_histories,
@@ -20,7 +19,23 @@ async fn source_delegation(
         .bind(("holder", crate::surreal::record_id("person", holder)))
         .bind(("subject", crate::surreal::record_id("person", subject)))
         .bind(("notified", notified.map(str::to_owned)))
-        .await.unwrap().check().unwrap();
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
+    id
+}
+
+async fn source_external_identity(source: &SurrealDb, person: Uuid) -> Uuid {
+    let id = Uuid::now_v7();
+    source
+        .query("CREATE $id SET person_id=$person, system='github', external_id='synthetic-1001', handle='captured-handle'")
+        .bind(("id", crate::surreal::record_id("person_external_identity", id)))
+        .bind(("person", crate::surreal::record_id("person", person)))
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
     id
 }
 
@@ -268,16 +283,7 @@ async fn details(
             .bind(("expires", surrealdb::types::Datetime::from(Utc::now() + chrono::Duration::hours(1))))
             .await.unwrap().check().unwrap();
         let delegate = source_delegation(source, holder, subject, None).await;
-        let external = crate::external_identities::link(
-            source,
-            holder,
-            ExternalSystem::Github,
-            "synthetic-1001",
-            Some("captured-handle"),
-        )
-        .await
-        .unwrap()
-        .id;
+        let external = source_external_identity(source, holder).await;
         vec![
             MirrorKey::Address(address),
             MirrorKey::Credential(credential),
