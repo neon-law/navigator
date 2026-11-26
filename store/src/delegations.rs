@@ -995,148 +995,178 @@ mod tests {
 
     #[tokio::test]
     async fn grant_round_trips_and_names_who_recorded_it() {
-        let db = mem_surreal().await;
-        let h = household(&db).await;
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let h = household(&db).await;
 
-        let granted = grant(&db, &assistant(&h)).await.unwrap();
+            let granted = grant(&db, &assistant(&h)).await.unwrap();
 
-        assert_eq!(granted.delegate_person_id, h.delegate);
-        assert_eq!(granted.subject_person_id, h.subject);
-        assert_eq!(granted.basis, Basis::Assistant);
-        assert_eq!(
-            granted.granted_by_person_id, h.firm,
-            "the row must name the firm member who wrote it",
-        );
-        assert!(!granted.is_revoked());
-        assert!(
-            !granted.subject_was_notified(),
-            "a grant does not itself notify the subject",
-        );
+            assert_eq!(granted.delegate_person_id, h.delegate);
+            assert_eq!(granted.subject_person_id, h.subject);
+            assert_eq!(granted.basis, Basis::Assistant);
+            assert_eq!(
+                granted.granted_by_person_id, h.firm,
+                "the row must name the firm member who wrote it",
+            );
+            assert!(!granted.is_revoked());
+            assert!(
+                !granted.subject_was_notified(),
+                "a grant does not itself notify the subject",
+            );
 
-        let reloaded = find_by_id(&db, granted.id).await.unwrap().unwrap();
-        assert_eq!(reloaded, granted);
+            let reloaded = find_by_id(&db, granted.id).await.unwrap().unwrap();
+            assert_eq!(reloaded, granted);
+        })
+        .await;
     }
 
     // --- Nick's constraint: client on both sides, refused at the write path.
 
     #[tokio::test]
     async fn a_non_client_delegate_is_refused_for_every_firm_tier() {
-        for role in [Role::Owner, Role::Admin, Role::Lawyer, Role::Clerk] {
-            let db = mem_surreal().await;
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
             let h = household(&db).await;
-            let firm_side = person_at(&db, "Firm Side", "firm-side@example.com", role).await;
+            for role in [Role::Owner, Role::Admin, Role::Lawyer, Role::Clerk] {
+                let firm_side = person_at(
+                    &db,
+                    "Firm Side",
+                    &format!("firm-{}@example.com", role.as_str()),
+                    role,
+                )
+                .await;
 
-            let error = grant(
-                &db,
-                &NewDelegation {
-                    delegate_person_id: firm_side,
-                    ..assistant(&h)
-                },
-            )
-            .await
-            .expect_err("a firm-side person must not be a delegate");
+                let error = grant(
+                    &db,
+                    &NewDelegation {
+                        delegate_person_id: firm_side,
+                        ..assistant(&h)
+                    },
+                )
+                .await
+                .expect_err("a firm-side person must not be a delegate");
 
-            assert!(
-                matches!(error, DelegationError::DelegateNotClient(id, named)
+                assert!(
+                    matches!(error, DelegationError::DelegateNotClient(id, named)
                     if id == firm_side && named == role.as_str()),
-                "expected DelegateNotClient for {}, got {error:?}",
-                role.as_str(),
-            );
-        }
+                    "expected DelegateNotClient for {}, got {error:?}",
+                    role.as_str(),
+                );
+            }
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_non_client_subject_is_refused_for_every_firm_tier() {
-        for role in [Role::Owner, Role::Admin, Role::Lawyer, Role::Clerk] {
-            let db = mem_surreal().await;
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
             let h = household(&db).await;
-            let firm_side = person_at(&db, "Firm Side", "firm-side@example.com", role).await;
+            for role in [Role::Owner, Role::Admin, Role::Lawyer, Role::Clerk] {
+                let firm_side = person_at(
+                    &db,
+                    "Firm Side",
+                    &format!("firm-{}@example.com", role.as_str()),
+                    role,
+                )
+                .await;
 
-            let error = grant(
-                &db,
-                &NewDelegation {
-                    subject_person_id: firm_side,
-                    ..assistant(&h)
-                },
-            )
-            .await
-            .expect_err("a firm-side person must not be a delegation subject");
+                let error = grant(
+                    &db,
+                    &NewDelegation {
+                        subject_person_id: firm_side,
+                        ..assistant(&h)
+                    },
+                )
+                .await
+                .expect_err("a firm-side person must not be a delegation subject");
 
-            assert!(
-                matches!(error, DelegationError::SubjectNotClient(id, named)
+                assert!(
+                    matches!(error, DelegationError::SubjectNotClient(id, named)
                     if id == firm_side && named == role.as_str()),
-                "expected SubjectNotClient for {}, got {error:?}",
-                role.as_str(),
-            );
-        }
+                    "expected SubjectNotClient for {}, got {error:?}",
+                    role.as_str(),
+                );
+            }
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn the_firm_member_recording_a_grant_need_not_be_a_client() {
-        let db = mem_surreal().await;
-        let h = household(&db).await;
-        // `h.firm` is a Lawyer, and it is the `granted_by` on every grant in
-        // these tests — so this passing is the assertion that the client-only
-        // rule binds the two linked sides and not the recorder.
-        grant(&db, &assistant(&h))
-            .await
-            .expect("a lawyer must be able to record a delegation between clients");
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let h = household(&db).await;
+            // `h.firm` is a Lawyer, and it is the `granted_by` on every grant in
+            // these tests — so this passing is the assertion that the client-only
+            // rule binds the two linked sides and not the recorder.
+            grant(&db, &assistant(&h))
+                .await
+                .expect("a lawyer must be able to record a delegation between clients");
+        })
+        .await;
     }
 
     // --- Role changes. The behaviour the design chose deliberately.
 
     #[tokio::test]
     async fn promoting_a_party_makes_the_grant_dormant_not_live() {
-        let db = mem_surreal().await;
-        let h = household(&db).await;
-        let granted = grant(&db, &assistant(&h)).await.unwrap();
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let h = household(&db).await;
+            let granted = grant(&db, &assistant(&h)).await.unwrap();
 
-        assert_eq!(
-            live_for_delegate(&db, h.delegate).await.unwrap(),
-            vec![granted.clone()],
-        );
+            assert_eq!(
+                live_for_delegate(&db, h.delegate).await.unwrap(),
+                vec![granted.clone()],
+            );
 
-        // The hole Nick's constraint closes: a linked client is hired by the
-        // firm. No cascade runs — `set_role` knows nothing about this table —
-        // so the read path is what must refuse.
-        set_role_to(&db, h.delegate, Role::Clerk).await;
+            // The hole Nick's constraint closes: a linked client is hired by the
+            // firm. No cascade runs — `set_role` knows nothing about this table —
+            // so the read path is what must refuse.
+            set_role_to(&db, h.delegate, Role::Clerk).await;
 
-        assert!(
-            live_for_delegate(&db, h.delegate).await.unwrap().is_empty(),
-            "a clerk must not act through a delegation",
-        );
-        assert!(
-            live_for_subject(&db, h.subject).await.unwrap().is_empty(),
-            "and the subject side must agree",
-        );
+            assert!(
+                live_for_delegate(&db, h.delegate).await.unwrap().is_empty(),
+                "a clerk must not act through a delegation",
+            );
+            assert!(
+                live_for_subject(&db, h.subject).await.unwrap().is_empty(),
+                "and the subject side must agree",
+            );
 
-        // Dormant, not revoked — the distinction a surface needs in order to
-        // say *why* the row is not in force.
-        let reloaded = find_by_id(&db, granted.id).await.unwrap().unwrap();
-        assert!(!reloaded.is_revoked(), "dormancy is not revocation");
-        assert_eq!(
-            reloaded.state(Role::Clerk, Role::Client),
-            DelegationState::Dormant,
-        );
-        assert_eq!(
-            all_for_delegate(&db, h.delegate).await.unwrap(),
-            vec![reloaded],
-            "the administrative view still shows a dormant row",
-        );
+            // Dormant, not revoked — the distinction a surface needs in order to
+            // say *why* the row is not in force.
+            let reloaded = find_by_id(&db, granted.id).await.unwrap().unwrap();
+            assert!(!reloaded.is_revoked(), "dormancy is not revocation");
+            assert_eq!(
+                reloaded.state(Role::Clerk, Role::Client),
+                DelegationState::Dormant,
+            );
+            assert_eq!(
+                all_for_delegate(&db, h.delegate).await.unwrap(),
+                vec![reloaded],
+                "the administrative view still shows a dormant row",
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn promoting_the_subject_alone_also_makes_the_grant_dormant() {
-        let db = mem_surreal().await;
-        let h = household(&db).await;
-        grant(&db, &assistant(&h)).await.unwrap();
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let h = household(&db).await;
+            grant(&db, &assistant(&h)).await.unwrap();
 
-        set_role_to(&db, h.subject, Role::Lawyer).await;
+            set_role_to(&db, h.subject, Role::Lawyer).await;
 
-        assert!(
-            live_for_delegate(&db, h.delegate).await.unwrap().is_empty(),
-            "a delegation must never be a route into a firm-side account",
-        );
+            assert!(
+                live_for_delegate(&db, h.delegate).await.unwrap().is_empty(),
+                "a delegation must never be a route into a firm-side account",
+            );
+        })
+        .await;
     }
 
     /// The deliberate, debatable half of the role-change decision: because
@@ -1147,20 +1177,23 @@ mod tests {
     /// instead changes this test and adds an explicit revoke on role change.
     #[tokio::test]
     async fn returning_a_party_to_client_makes_a_dormant_grant_live_again() {
-        let db = mem_surreal().await;
-        let h = household(&db).await;
-        let granted = grant(&db, &assistant(&h)).await.unwrap();
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let h = household(&db).await;
+            let granted = grant(&db, &assistant(&h)).await.unwrap();
 
-        set_role_to(&db, h.delegate, Role::Clerk).await;
-        assert!(live_for_delegate(&db, h.delegate).await.unwrap().is_empty());
+            set_role_to(&db, h.delegate, Role::Clerk).await;
+            assert!(live_for_delegate(&db, h.delegate).await.unwrap().is_empty());
 
-        set_role_to(&db, h.delegate, Role::Client).await;
-        assert_eq!(
-            live_for_delegate(&db, h.delegate).await.unwrap(),
-            vec![granted],
-            "dormancy tracks the current roles; ending a delegation for good \
+            set_role_to(&db, h.delegate, Role::Client).await;
+            assert_eq!(
+                live_for_delegate(&db, h.delegate).await.unwrap(),
+                vec![granted],
+                "dormancy tracks the current roles; ending a delegation for good \
              is `revoke`, which is a recorded act",
-        );
+            );
+        })
+        .await;
     }
 
     /// `persons::edit` is a second door onto the role column, and
@@ -1168,356 +1201,410 @@ mod tests {
     /// cover one of the three; read-time re-validation covers all of them.
     #[tokio::test]
     async fn a_role_change_through_the_edit_door_is_also_caught() {
-        let db = mem_surreal().await;
-        let h = household(&db).await;
-        grant(&db, &assistant(&h)).await.unwrap();
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let h = household(&db).await;
+            grant(&db, &assistant(&h)).await.unwrap();
 
-        edit_role_to(&db, h.delegate, Role::Admin).await;
+            edit_role_to(&db, h.delegate, Role::Admin).await;
 
-        assert!(
-            live_for_delegate(&db, h.delegate).await.unwrap().is_empty(),
-            "the read path must not care which door changed the role",
-        );
+            assert!(
+                live_for_delegate(&db, h.delegate).await.unwrap().is_empty(),
+                "the read path must not care which door changed the role",
+            );
+        })
+        .await;
     }
 
     // --- Revocation.
 
     #[tokio::test]
     async fn revoke_records_who_and_when_and_never_deletes() {
-        let db = mem_surreal().await;
-        let h = household(&db).await;
-        let granted = grant(&db, &assistant(&h)).await.unwrap();
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let h = household(&db).await;
+            let granted = grant(&db, &assistant(&h)).await.unwrap();
 
-        let revoked = revoke(&db, granted.id, h.firm).await.unwrap();
+            let revoked = revoke(&db, granted.id, h.firm).await.unwrap();
 
-        assert!(revoked.is_revoked());
-        assert_eq!(revoked.revoked_by_person_id, Some(h.firm));
-        assert!(revoked.revoked_at.is_some());
-        assert!(
-            live_for_delegate(&db, h.delegate).await.unwrap().is_empty(),
-            "a revoked delegation is not in force",
-        );
-        assert!(
-            find_by_id(&db, granted.id).await.unwrap().is_some(),
-            "the row survives revocation, because `this link existed and was \
+            assert!(revoked.is_revoked());
+            assert_eq!(revoked.revoked_by_person_id, Some(h.firm));
+            assert!(revoked.revoked_at.is_some());
+            assert!(
+                live_for_delegate(&db, h.delegate).await.unwrap().is_empty(),
+                "a revoked delegation is not in force",
+            );
+            assert!(
+                find_by_id(&db, granted.id).await.unwrap().is_some(),
+                "the row survives revocation, because `this link existed and was \
              withdrawn on this date` is the fact an inquiry needs",
-        );
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn revocation_does_not_require_the_credential_holder() {
-        let db = mem_surreal().await;
-        let h = household(&db).await;
-        let granted = grant(&db, &assistant(&h)).await.unwrap();
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let h = household(&db).await;
+            let granted = grant(&db, &assistant(&h)).await.unwrap();
 
-        // `h.firm` is neither the delegate nor the subject. The firm can end a
-        // delegation without the person holding the login cooperating, which
-        // is the control that protects a client whose credential is held by
-        // someone else.
-        revoke(&db, granted.id, h.firm)
-            .await
-            .expect("the firm must be able to revoke unilaterally");
+            // `h.firm` is neither the delegate nor the subject. The firm can end a
+            // delegation without the person holding the login cooperating, which
+            // is the control that protects a client whose credential is held by
+            // someone else.
+            revoke(&db, granted.id, h.firm)
+                .await
+                .expect("the firm must be able to revoke unilaterally");
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn revoking_twice_is_refused_rather_than_silently_restamped() {
-        let db = mem_surreal().await;
-        let h = household(&db).await;
-        let granted = grant(&db, &assistant(&h)).await.unwrap();
-        revoke(&db, granted.id, h.firm).await.unwrap();
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let h = household(&db).await;
+            let granted = grant(&db, &assistant(&h)).await.unwrap();
+            revoke(&db, granted.id, h.firm).await.unwrap();
 
-        let error = revoke(&db, granted.id, h.firm)
-            .await
-            .expect_err("a second revocation must not move the recorded date");
-        assert!(matches!(error, DelegationError::AlreadyRevoked(id) if id == granted.id));
+            let error = revoke(&db, granted.id, h.firm)
+                .await
+                .expect_err("a second revocation must not move the recorded date");
+            assert!(matches!(error, DelegationError::AlreadyRevoked(id) if id == granted.id));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_revoked_grant_stays_revoked_whatever_the_roles_become() {
-        let db = mem_surreal().await;
-        let h = household(&db).await;
-        let granted = grant(&db, &assistant(&h)).await.unwrap();
-        let revoked = revoke(&db, granted.id, h.firm).await.unwrap();
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let h = household(&db).await;
+            let granted = grant(&db, &assistant(&h)).await.unwrap();
+            let revoked = revoke(&db, granted.id, h.firm).await.unwrap();
 
-        assert_eq!(
-            revoked.state(Role::Client, Role::Client),
-            DelegationState::Revoked,
-            "revocation wins over dormancy",
-        );
+            assert_eq!(
+                revoked.state(Role::Client, Role::Client),
+                DelegationState::Revoked,
+                "revocation wins over dormancy",
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_pair_may_be_granted_again_after_a_revocation() {
-        let db = mem_surreal().await;
-        let h = household(&db).await;
-        let first = grant(&db, &assistant(&h)).await.unwrap();
-        revoke(&db, first.id, h.firm).await.unwrap();
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let h = household(&db).await;
+            let first = grant(&db, &assistant(&h)).await.unwrap();
+            revoke(&db, first.id, h.firm).await.unwrap();
 
-        let second = grant(&db, &assistant(&h))
-            .await
-            .expect("a withdrawn delegation must not lock the pair out forever");
+            let second = grant(&db, &assistant(&h))
+                .await
+                .expect("a withdrawn delegation must not lock the pair out forever");
 
-        assert_ne!(second.id, first.id, "re-granting writes a new row");
-        assert_eq!(
-            all_for_delegate(&db, h.delegate).await.unwrap().len(),
-            2,
-            "both the withdrawn row and the new one remain on the table",
-        );
-        assert_eq!(
-            live_for_delegate(&db, h.delegate).await.unwrap(),
-            vec![second],
-        );
+            assert_ne!(second.id, first.id, "re-granting writes a new row");
+            assert_eq!(
+                all_for_delegate(&db, h.delegate).await.unwrap().len(),
+                2,
+                "both the withdrawn row and the new one remain on the table",
+            );
+            assert_eq!(
+                live_for_delegate(&db, h.delegate).await.unwrap(),
+                vec![second],
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_second_live_grant_for_one_pair_is_refused() {
-        let db = mem_surreal().await;
-        let h = household(&db).await;
-        grant(&db, &assistant(&h)).await.unwrap();
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let h = household(&db).await;
+            grant(&db, &assistant(&h)).await.unwrap();
 
-        let error = grant(&db, &assistant(&h))
-            .await
-            .expect_err("one live delegation per pair");
-        assert!(matches!(error, DelegationError::AlreadyGranted));
+            let error = grant(&db, &assistant(&h))
+                .await
+                .expect_err("one live delegation per pair");
+            assert!(matches!(error, DelegationError::AlreadyGranted));
+        })
+        .await;
     }
 
     // --- The remaining write-path refusals.
 
     #[tokio::test]
     async fn self_delegation_is_refused() {
-        let db = mem_surreal().await;
-        let h = household(&db).await;
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let h = household(&db).await;
 
-        let error = grant(
-            &db,
-            &NewDelegation {
-                subject_person_id: h.delegate,
-                ..assistant(&h)
-            },
-        )
-        .await
-        .expect_err("a person cannot be their own delegate");
-        assert!(matches!(error, DelegationError::SelfDelegation));
+            let error = grant(
+                &db,
+                &NewDelegation {
+                    subject_person_id: h.delegate,
+                    ..assistant(&h)
+                },
+            )
+            .await
+            .expect_err("a person cannot be their own delegate");
+            assert!(matches!(error, DelegationError::SelfDelegation));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_basis_claiming_an_instrument_must_name_one() {
-        let db = mem_surreal().await;
-        let h = household(&db).await;
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let h = household(&db).await;
 
-        for basis in [
-            Basis::PowerOfAttorney,
-            Basis::Guardian,
-            Basis::Executor,
-            Basis::Trustee,
-            Basis::ParentOfMinor,
-        ] {
-            assert!(basis.claims_an_instrument(), "{}", basis.as_str());
+            for basis in [
+                Basis::PowerOfAttorney,
+                Basis::Guardian,
+                Basis::Executor,
+                Basis::Trustee,
+                Basis::ParentOfMinor,
+            ] {
+                assert!(basis.claims_an_instrument(), "{}", basis.as_str());
 
-            let error = grant(
-                &db,
-                &NewDelegation {
-                    basis,
-                    instrument_reference: None,
-                    ..assistant(&h)
-                },
-            )
-            .await
-            .expect_err("a legal-instrument basis must cite its instrument");
-            assert!(
-                matches!(error, DelegationError::InstrumentReferenceRequired(named)
+                let error = grant(
+                    &db,
+                    &NewDelegation {
+                        basis,
+                        instrument_reference: None,
+                        ..assistant(&h)
+                    },
+                )
+                .await
+                .expect_err("a legal-instrument basis must cite its instrument");
+                assert!(
+                    matches!(error, DelegationError::InstrumentReferenceRequired(named)
                     if named == basis.as_str()),
-                "expected InstrumentReferenceRequired for {}, got {error:?}",
-                basis.as_str(),
-            );
+                    "expected InstrumentReferenceRequired for {}, got {error:?}",
+                    basis.as_str(),
+                );
 
-            // Whitespace is not a citation.
-            let error = grant(
-                &db,
-                &NewDelegation {
-                    basis,
-                    instrument_reference: Some("   ".to_string()),
-                    ..assistant(&h)
-                },
-            )
-            .await
-            .expect_err("blank is not a citation");
-            assert!(matches!(
-                error,
-                DelegationError::InstrumentReferenceRequired(_)
-            ));
-        }
+                // Whitespace is not a citation.
+                let error = grant(
+                    &db,
+                    &NewDelegation {
+                        basis,
+                        instrument_reference: Some("   ".to_string()),
+                        ..assistant(&h)
+                    },
+                )
+                .await
+                .expect_err("blank is not a citation");
+                assert!(matches!(
+                    error,
+                    DelegationError::InstrumentReferenceRequired(_)
+                ));
+            }
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn an_assistant_needs_no_instrument_because_it_asserts_none() {
-        let db = mem_surreal().await;
-        let h = household(&db).await;
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let h = household(&db).await;
 
-        assert!(!Basis::Assistant.claims_an_instrument());
-        let granted = grant(&db, &assistant(&h)).await.unwrap();
-        assert_eq!(granted.instrument_reference, None);
+            assert!(!Basis::Assistant.claims_an_instrument());
+            let granted = grant(&db, &assistant(&h)).await.unwrap();
+            assert_eq!(granted.instrument_reference, None);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_cited_instrument_round_trips() {
-        let db = mem_surreal().await;
-        let h = household(&db).await;
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let h = household(&db).await;
 
-        let granted = grant(
-            &db,
-            &NewDelegation {
-                basis: Basis::PowerOfAttorney,
-                instrument_reference: Some("Durable POA dated 2026-03-14".to_string()),
-                ..assistant(&h)
-            },
-        )
-        .await
-        .unwrap();
+            let granted = grant(
+                &db,
+                &NewDelegation {
+                    basis: Basis::PowerOfAttorney,
+                    instrument_reference: Some("Durable POA dated 2026-03-14".to_string()),
+                    ..assistant(&h)
+                },
+            )
+            .await
+            .unwrap();
 
-        assert_eq!(granted.basis, Basis::PowerOfAttorney);
-        assert_eq!(
-            granted.instrument_reference.as_deref(),
-            Some("Durable POA dated 2026-03-14"),
-        );
+            assert_eq!(granted.basis, Basis::PowerOfAttorney);
+            assert_eq!(
+                granted.instrument_reference.as_deref(),
+                Some("Durable POA dated 2026-03-14"),
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_missing_person_on_any_leg_is_refused() {
-        let db = mem_surreal().await;
-        let h = household(&db).await;
-        let ghost = Uuid::now_v7();
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let h = household(&db).await;
+            let ghost = Uuid::now_v7();
 
-        for input in [
-            NewDelegation {
-                delegate_person_id: ghost,
-                ..assistant(&h)
-            },
-            NewDelegation {
-                subject_person_id: ghost,
-                ..assistant(&h)
-            },
-            NewDelegation {
-                granted_by_person_id: ghost,
-                ..assistant(&h)
-            },
-        ] {
-            let error = grant(&db, &input)
-                .await
-                .expect_err("every person on the row must exist");
-            assert!(
-                matches!(error, DelegationError::NoSuchPerson(id) if id == ghost),
-                "got {error:?}",
-            );
-        }
+            for input in [
+                NewDelegation {
+                    delegate_person_id: ghost,
+                    ..assistant(&h)
+                },
+                NewDelegation {
+                    subject_person_id: ghost,
+                    ..assistant(&h)
+                },
+                NewDelegation {
+                    granted_by_person_id: ghost,
+                    ..assistant(&h)
+                },
+            ] {
+                let error = grant(&db, &input)
+                    .await
+                    .expect_err("every person on the row must exist");
+                assert!(
+                    matches!(error, DelegationError::NoSuchPerson(id) if id == ghost),
+                    "got {error:?}",
+                );
+            }
+        })
+        .await;
     }
 
     // --- Notice to the subject.
 
     #[tokio::test]
     async fn subject_notice_is_recorded_with_the_channel_it_travelled_on() {
-        let db = mem_surreal().await;
-        let h = household(&db).await;
-        let granted = grant(&db, &assistant(&h)).await.unwrap();
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let h = household(&db).await;
+            let granted = grant(&db, &assistant(&h)).await.unwrap();
 
-        // The motivating case: the subject has no mailbox, so the firm
-        // telephones them and records that it did.
-        let notified = record_subject_notice(&db, granted.id, NoticeChannel::Telephone)
-            .await
-            .unwrap();
+            // The motivating case: the subject has no mailbox, so the firm
+            // telephones them and records that it did.
+            let notified = record_subject_notice(&db, granted.id, NoticeChannel::Telephone)
+                .await
+                .unwrap();
 
-        assert!(notified.subject_was_notified());
-        assert_eq!(
-            notified.subject_notified_channel,
-            Some(NoticeChannel::Telephone),
-        );
-        assert!(notified.subject_notified_at.is_some());
+            assert!(notified.subject_was_notified());
+            assert_eq!(
+                notified.subject_notified_channel,
+                Some(NoticeChannel::Telephone),
+            );
+            assert!(notified.subject_notified_at.is_some());
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn notice_can_be_recorded_at_grant_time_too() {
-        let db = mem_surreal().await;
-        let h = household(&db).await;
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let h = household(&db).await;
 
-        let granted = grant(
-            &db,
-            &NewDelegation {
-                subject_notified_at: Some("2026-03-14T17:00:00Z".to_string()),
-                subject_notified_channel: Some(NoticeChannel::InPerson),
-                ..assistant(&h)
-            },
-        )
-        .await
-        .unwrap();
+            let granted = grant(
+                &db,
+                &NewDelegation {
+                    subject_notified_at: Some("2026-03-14T17:00:00Z".to_string()),
+                    subject_notified_channel: Some(NoticeChannel::InPerson),
+                    ..assistant(&h)
+                },
+            )
+            .await
+            .unwrap();
 
-        assert!(granted.subject_was_notified());
-        assert_eq!(
-            granted.subject_notified_channel,
-            Some(NoticeChannel::InPerson),
-        );
+            assert!(granted.subject_was_notified());
+            assert_eq!(
+                granted.subject_notified_channel,
+                Some(NoticeChannel::InPerson),
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn recording_notice_on_a_missing_delegation_is_refused() {
-        let db = mem_surreal().await;
-        let ghost = Uuid::now_v7();
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let ghost = Uuid::now_v7();
 
-        let error = record_subject_notice(&db, ghost, NoticeChannel::Telephone)
-            .await
-            .expect_err("no such delegation");
-        assert!(matches!(error, DelegationError::NoSuchDelegation(id) if id == ghost));
+            let error = record_subject_notice(&db, ghost, NoticeChannel::Telephone)
+                .await
+                .expect_err("no such delegation");
+            assert!(matches!(error, DelegationError::NoSuchDelegation(id) if id == ghost));
+        })
+        .await;
     }
 
     // --- Reads.
 
     #[tokio::test]
     async fn the_subject_side_answers_who_can_act_as_me() {
-        let db = mem_surreal().await;
-        let h = household(&db).await;
-        let other = client(&db, "Second Delegate", "second@example.com").await;
-        let first = grant(&db, &assistant(&h)).await.unwrap();
-        let second = grant(
-            &db,
-            &NewDelegation {
-                delegate_person_id: other,
-                ..assistant(&h)
-            },
-        )
-        .await
-        .unwrap();
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let h = household(&db).await;
+            let other = client(&db, "Second Delegate", "second@example.com").await;
+            let first = grant(&db, &assistant(&h)).await.unwrap();
+            let second = grant(
+                &db,
+                &NewDelegation {
+                    delegate_person_id: other,
+                    ..assistant(&h)
+                },
+            )
+            .await
+            .unwrap();
 
-        let mut live = live_for_subject(&db, h.subject).await.unwrap();
-        live.sort_by_key(|row| row.id);
-        let mut expected = vec![first, second];
-        expected.sort_by_key(|row| row.id);
-        assert_eq!(
-            live, expected,
-            "a client must be able to learn who may act as them without \
+            let mut live = live_for_subject(&db, h.subject).await.unwrap();
+            live.sort_by_key(|row| row.id);
+            let mut expected = vec![first, second];
+            expected.sort_by_key(|row| row.id);
+            assert_eq!(
+                live, expected,
+                "a client must be able to learn who may act as them without \
              holding a credential themselves",
-        );
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_person_with_no_delegations_reads_empty_rather_than_erroring() {
-        let db = mem_surreal().await;
-        let lonely = client(&db, "Unlinked", "unlinked@example.com").await;
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let lonely = client(&db, "Unlinked", "unlinked@example.com").await;
 
-        assert!(all_for_delegate(&db, lonely).await.unwrap().is_empty());
-        assert!(all_for_subject(&db, lonely).await.unwrap().is_empty());
-        assert!(live_for_delegate(&db, lonely).await.unwrap().is_empty());
-        assert!(live_for_subject(&db, lonely).await.unwrap().is_empty());
+            assert!(all_for_delegate(&db, lonely).await.unwrap().is_empty());
+            assert!(all_for_subject(&db, lonely).await.unwrap().is_empty());
+            assert!(live_for_delegate(&db, lonely).await.unwrap().is_empty());
+            assert!(live_for_subject(&db, lonely).await.unwrap().is_empty());
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn reading_a_missing_person_is_an_error_not_an_empty_list() {
-        let db = mem_surreal().await;
-        let ghost = Uuid::now_v7();
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let ghost = Uuid::now_v7();
 
-        let error = live_for_delegate(&db, ghost).await.expect_err(
-            "a delegate who does not exist is not the same as one with no \
+            let error = live_for_delegate(&db, ghost).await.expect_err(
+                "a delegate who does not exist is not the same as one with no \
              delegations",
-        );
-        assert!(matches!(error, DelegationError::NoSuchPerson(id) if id == ghost));
+            );
+            assert!(matches!(error, DelegationError::NoSuchPerson(id) if id == ghost));
+        })
+        .await;
     }
 
     /// `record<person>` is not validated against a live row, and
@@ -1551,41 +1638,47 @@ mod tests {
 
     #[tokio::test]
     async fn find_live_for_pair_sees_only_the_live_row() {
-        let db = mem_surreal().await;
-        let h = household(&db).await;
-        let first = grant(&db, &assistant(&h)).await.unwrap();
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let h = household(&db).await;
+            let first = grant(&db, &assistant(&h)).await.unwrap();
 
-        assert_eq!(
-            find_live_for_pair(&db, h.delegate, h.subject)
+            assert_eq!(
+                find_live_for_pair(&db, h.delegate, h.subject)
+                    .await
+                    .unwrap(),
+                vec![first.clone()],
+            );
+
+            revoke(&db, first.id, h.firm).await.unwrap();
+            assert!(find_live_for_pair(&db, h.delegate, h.subject)
                 .await
-                .unwrap(),
-            vec![first.clone()],
-        );
-
-        revoke(&db, first.id, h.firm).await.unwrap();
-        assert!(find_live_for_pair(&db, h.delegate, h.subject)
-            .await
-            .unwrap()
-            .is_empty());
+                .unwrap()
+                .is_empty());
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_delegation_is_directional() {
-        let db = mem_surreal().await;
-        let h = household(&db).await;
-        grant(&db, &assistant(&h)).await.unwrap();
+        crate::test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let h = household(&db).await;
+            grant(&db, &assistant(&h)).await.unwrap();
 
-        assert!(
-            find_live_for_pair(&db, h.subject, h.delegate)
-                .await
-                .unwrap()
-                .is_empty(),
-            "helping someone does not entitle them to help you back",
-        );
-        assert!(
-            live_for_delegate(&db, h.subject).await.unwrap().is_empty(),
-            "the subject gains nothing as a delegate",
-        );
+            assert!(
+                find_live_for_pair(&db, h.subject, h.delegate)
+                    .await
+                    .unwrap()
+                    .is_empty(),
+                "helping someone does not entitle them to help you back",
+            );
+            assert!(
+                live_for_delegate(&db, h.subject).await.unwrap().is_empty(),
+                "the subject gains nothing as a delegate",
+            );
+        })
+        .await;
     }
 
     // --- Enum round-trips, so a stored spelling and its type cannot drift.
