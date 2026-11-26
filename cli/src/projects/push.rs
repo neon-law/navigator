@@ -16,7 +16,7 @@ use std::future::Future;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use chrono::Utc;
 
 use super::forge::{ArmOutcome, CheckVerdict, DeploymentRun, Forge, ReviewRef, ReviewRequest};
@@ -122,6 +122,7 @@ async fn run_jj(
         check_signing(dir)?;
         if mirror {
             configured_mirror_url(dir)?;
+            check_mirror_reachable(dir).await?;
         }
         run_document_preflight(dir).await?;
 
@@ -326,6 +327,9 @@ where
     println!("  commit signing is on");
     let pin = check_version_pin(require_manifest(dir).as_deref(), env!("CARGO_PKG_VERSION"))?;
     println!("  {pin}");
+    if github && has_forgejo_remote(dir)? {
+        check_mirror_reachable(dir).await?;
+    }
 
     let target = branch.map_or_else(
         || branch_slug(title, Utc::now().date_naive()),
@@ -514,6 +518,25 @@ fn has_forgejo_remote(dir: &Path) -> Result<bool> {
     Ok(git_text(dir, &["remote"])?
         .lines()
         .any(|name| name == "forgejo"))
+}
+
+async fn check_mirror_reachable(dir: &Path) -> Result<()> {
+    super::workspace::git(dir, &["ls-remote", "--refs", "forgejo", "refs/heads/main"])
+        .await
+        .map(|_| ())
+        .map_err(|_| {
+            let project = manifest::read(dir)
+                .and_then(|manifest| manifest.project)
+                .filter(|code| model::projects::is_valid_code(code))
+                .map_or_else(
+                    || "Project checkout".to_owned(),
+                    |code| format!("Project {code}"),
+                );
+            anyhow::anyhow!(
+                "{project}: the configured Forgejo push destination is missing or unreadable. \
+                 Check access or run navigator project repository repair-mirror --dry-run."
+            )
+        })
 }
 
 fn sync_github_mirror(
@@ -1460,6 +1483,46 @@ mod tests {
         assert!(error.to_string().contains("Forgejo did not receive"));
         assert!(forge.opened.lock().unwrap().is_empty());
         assert!(super::git_text(&origin, &["rev-parse", "refs/heads/push/the-change"]).is_ok());
+    }
+
+    #[tokio::test]
+    async fn github_push_names_a_missing_forgejo_destination_before_publishing() {
+        let checkout = TempCheckout::new().with_signing();
+        let mirror = checkout.dual_remote();
+        std::fs::rename(&mirror, mirror.with_extension("offline")).unwrap();
+        let dir = checkout.path();
+        std::fs::write(
+            dir.join("navigator.yaml"),
+            format!(
+                "project: synthetic-push\nversion: \"{}\"\n",
+                env!("CARGO_PKG_VERSION")
+            ),
+        )
+        .unwrap();
+        let forge = MockForge::green_after(1);
+        let error = super::run(
+            dir,
+            "main",
+            Some("push/the-change"),
+            "the change",
+            None,
+            false,
+            true,
+            &forge,
+            instant_sleep,
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("Project synthetic-push"), "{error}");
+        assert!(error.contains("Forgejo push destination"), "{error}");
+        assert_eq!(
+            super::git_text(dir, &["branch", "--show-current"]).unwrap(),
+            "main"
+        );
+        let origin = checkout.temp.path().join("origin.git");
+        assert!(super::git_text(&origin, &["rev-parse", "refs/heads/push/the-change"]).is_err());
+        assert!(forge.opened.lock().unwrap().is_empty());
     }
 
     #[test]
