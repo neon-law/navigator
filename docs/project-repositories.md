@@ -861,6 +861,9 @@ the same origin as the plain URL; a remote with an embedded password is refused.
 the error names its source and asks for a new sign-in. A git credential that lacks API scope fails there; the Forgejo
 token lifecycle is ENG-1233.
 
+On a GitHub checkout with a configured Forgejo mirror, the push checks that the mirror is readable before publishing the
+topic. If the mirror cannot be read, the error names the Project and directs the operator to check access or repair it.
+
 `navigator project repository push` checks the live document ledger with the local site session before it branches,
 stages files, or opens a pull request. The check writes nothing. It prints every Pointer path it would create or repair,
 including paths Git currently ignores, and stops for review. If a root ignore rule hides a Pointer, restore canonical
