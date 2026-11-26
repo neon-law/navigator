@@ -20,6 +20,59 @@ use serde::{Deserialize, Serialize};
 use crate::components::{Badge, BadgeTone, Empty, Field, FormCard, Heading};
 use crate::portal_project_detail::TrustView;
 
+#[cfg(feature = "server")]
+pub(crate) async fn read_claims(
+    surreal: &store::surreal::SurrealDb,
+    pg: &store::postgres::PostgresDb,
+    project: &store::projects::Project,
+    viewer: store::access::MatterViewer,
+    role: store::persons::Role,
+    person: Option<uuid::Uuid>,
+) -> Result<Vec<PlanClaimRow>, ServerFnError> {
+    use crate::lawyer_project_detail::server_error;
+    use crate::portal_project_detail::format_usd;
+    use store::firm_capability::FirmCapability;
+
+    let Some(firm) = project.firm_id.filter(|_| viewer.is_firm_side()) else {
+        return Ok(Vec::new());
+    };
+    if !FirmCapability::ViewDirectory
+        .resolve(surreal, role, person, firm)
+        .await
+        .map_err(server_error)?
+        .is_allowed()
+    {
+        return Ok(Vec::new());
+    }
+    let mut connection = pg.pool().acquire().await.map_err(server_error)?;
+    Ok(
+        store::plan_claims::for_matter_billing(&mut connection, project, firm)
+            .await
+            .map_err(server_error)?
+            .into_iter()
+            .map(|claim| {
+                let billing = claim.billing;
+                PlanClaimRow {
+                    id: billing.id,
+                    plan: claim.plan_name,
+                    case_number: claim.plan_case_number,
+                    benefit: billing.benefit,
+                    service_date: billing.performed_on.to_string(),
+                    minutes: claim.attorney_minutes,
+                    status: crate::sections::instruments::words(&billing.status),
+                    projected: billing.projected_fee_cents.map(format_usd),
+                    filed: billing
+                        .filed_cents
+                        .map(|cents| format_usd(i64::from(cents))),
+                    outstanding: billing.approved_outstanding_cents.map(format_usd),
+                    received: format_usd(billing.net_cash_received_cents),
+                    time_entry_ids: claim.time_entry_ids,
+                }
+            })
+            .collect(),
+    )
+}
+
 /// One time entry on the matter, for the tab's table.
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct TimeEntryRow {
@@ -41,6 +94,23 @@ pub struct TimeEntryRow {
     /// The stored word: `unbilled`, `reserved`, `invoiced`, or `written_off`
     /// (`store::time_entries::BillingStatus::as_str`).
     pub billing_status: String,
+}
+
+/// A Legal Plan Claim snapshot, including the Time Entries used to measure its work.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanClaimRow {
+    id: uuid::Uuid,
+    plan: String,
+    case_number: String,
+    benefit: String,
+    service_date: String,
+    minutes: Option<i32>,
+    status: String,
+    projected: Option<String>,
+    filed: Option<String>,
+    outstanding: Option<String>,
+    received: String,
+    time_entry_ids: Vec<uuid::Uuid>,
 }
 
 /// Source and service date awaiting a lawyer's billing decision.
@@ -355,6 +425,7 @@ pub fn BillingTab(
     confirming: bool,
     timer: Option<TimerView>,
     entries: Vec<TimeEntryRow>,
+    #[props(default)] claims: Vec<PlanClaimRow>,
     #[props(default)] annotations: Vec<AnnotationRow>,
     fees: FeeStructureView,
     invoices: Vec<InvoiceRow>,
@@ -365,6 +436,15 @@ pub fn BillingTab(
     /// Today as `yyyy-mm-dd`, pre-filling the log-time form's date.
     today: String,
 ) -> Element {
+    let linked_claims: std::collections::HashMap<_, _> = claims
+        .iter()
+        .flat_map(|claim| {
+            claim
+                .time_entry_ids
+                .iter()
+                .map(move |entry| (entry.to_string(), claim.id))
+        })
+        .collect();
     let error_shown = error.is_some();
     let rate_error = error.as_deref().is_some_and(|message| {
         message.contains("hourly rate") || message.contains("rate for this matter")
@@ -518,7 +598,11 @@ pub fn BillingTab(
                                     tr {
                                         td { "{row.performed_on}" }
                                         td { "{row.attorney}" }
-                                        td { "{row.description}" }
+                                        td { "{row.description}"
+                                            if let Some(claim_id) = linked_claims.get(&row.id) {
+                                                " " a { href: "#claim-{claim_id}", "Included in plan claim" }
+                                            }
+                                        }
                                         td { "{row.minutes}" }
                                         td {
                                             if row.billable {
@@ -536,6 +620,40 @@ pub fn BillingTab(
                                     }
                                 }
                             }
+                        }
+                    }
+                }
+            }
+
+            if !claims.is_empty() {
+                section { class: "lawyer-detail__subsection",
+                    h3 { "Legal plan claims" }
+                    div { class: "nav-table-wrap",
+                        table { class: "nav-table matter-billing-claims",
+                            thead { tr {
+                                th { scope: "col", "Plan / case number" }
+                                th { scope: "col", "Benefit" }
+                                th { scope: "col", "Service date" }
+                                th { scope: "col", "Actual minutes" }
+                                th { scope: "col", "Claim status" }
+                                th { scope: "col", "Projected fee" }
+                                th { scope: "col", "Filed amount" }
+                                th { scope: "col", "Approved outstanding" }
+                                th { scope: "col", "Net cash received" }
+                            } }
+                            tbody { for claim in &claims {
+                                tr { key: "{claim.id}", id: "claim-{claim.id}",
+                                    th { scope: "row", "{claim.plan}" br {} "{claim.case_number}" }
+                                    td { "{claim.benefit}" }
+                                    td { "{claim.service_date}" }
+                                    td { if let Some(minutes) = claim.minutes { "{minutes}" } else { "—" } }
+                                    td { "{claim.status}" }
+                                    td { {claim.projected.as_deref().unwrap_or("Unverified")} }
+                                    td { {claim.filed.as_deref().unwrap_or("—")} }
+                                    td { {claim.outstanding.as_deref().unwrap_or("—")} }
+                                    td { "{claim.received}" }
+                                }
+                            } }
                         }
                     }
                 }
