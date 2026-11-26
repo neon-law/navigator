@@ -191,6 +191,7 @@ impl DeadlineTabView {
 /// The rendered lawyer workbench — every field wasm-safe (plain scalars; no
 /// `store`/`SeaORM`/`cloud`/`repos` type crosses to the client build).
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
+#[allow(clippy::struct_excessive_bools)] // Independent facts about one matter page.
 pub struct LawyerDetailView {
     /// The matter's one tab strip: Overview, its synced `pages:` through the
     /// lawyer lens, then the workbench built-ins.
@@ -281,7 +282,7 @@ pub struct LawyerDetailView {
     #[serde(default)]
     pub upload_limits: crate::lawyer_project_documents::UploadFormLimits,
     #[serde(default)]
-    pub client_preview_link: Option<String>,
+    pub client_preview_new_tab: bool,
     pub csrf_token: String,
     #[serde(default)]
     pub deadline_view: DeadlineTabView,
@@ -928,7 +929,7 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         crate::project_resources::verified_drive_links(&surreal, person_id, role, id).await;
 
     Ok(LawyerDetailView {
-        client_preview_link: crate::brand_website::client_preview_link(&project).await,
+        client_preview_new_tab: crate::brand_website::client_preview_elsewhere(&project).await,
         page_tabs,
         onboarding,
         id: project.id.to_string(),
@@ -1153,7 +1154,7 @@ pub fn LawyerProjectDetail() -> Element {
                         }
                     }
                     crate::components::dri_view::ViewAsClient {
-                        code: view.code.clone(), csrf: csrf.clone(), portal_link: view.client_preview_link.clone(), icon: true,
+                        code: view.code.clone(), csrf: csrf.clone(), new_tab: view.client_preview_new_tab, icon: true,
                     }
                 }
                 // The reader's open Timer — on every tab, because time runs
