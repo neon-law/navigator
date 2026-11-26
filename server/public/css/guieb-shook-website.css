@@ -213,6 +213,11 @@ h2.split span:first-child {
     max-width: none;
     padding: 0 clamp(24px,3.5vw,72px);
   }
+
+  /* The menu sits on the right beside Sign in, as in the supplied design. */
+  .site-header .nav {
+    margin-left: auto;
+  }
 }
 
 .brand {
