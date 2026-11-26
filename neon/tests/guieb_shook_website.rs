@@ -56,6 +56,7 @@ async fn the_new_site_publish_routes_and_navigator_entry_points_are_brand_scoped
             "{path} keeps Sign in in the primary navigation row"
         );
         assert!(html.contains("guieb-shook-website.css"));
+        assert!(html.contains(r#"href="/public/brand/guieb-shook/favicon.svg""#));
         assert!(!html.contains(r#".html""#), "{path} links a .html path");
         if path == "/" {
             assert!(html.contains(r#"class="nav-slide-dot is-active""#));
