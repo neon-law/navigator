@@ -523,10 +523,21 @@ async fn relationship_typed_endpoints_and_provenance_round_trip_from_surreal_on_
     };
     let pg = connect(&options, &database).await;
     let surreal = mem_surreal().await;
+    // Complete a real empty global import before the stale Source edge appears.
+    surreal
+        .query("DELETE brand")
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
+    let run = crate::postgres_backfill::start(&surreal, &pg, 500, None)
+        .await
+        .unwrap();
+    assert!(run.is_clean(), "{run:?}");
+
     let person_id = Uuid::now_v7();
     let entity_id = Uuid::now_v7();
     let log_id = Uuid::now_v7();
-    // A captured Source edge is independent of the application writer.
     surreal.query("RELATE $person->relationship->$entity SET kind='adverse_to', confidence_pct=91, source_kind='llm', source_id=$log, detail='synthetic typed-link fixture', inserted_at=time::now(), updated_at=time::now()")
         .bind(("person", crate::surreal::record_id("person", person_id)))
         .bind(("entity", crate::surreal::record_id("entity", entity_id)))
@@ -547,8 +558,9 @@ async fn relationship_typed_endpoints_and_provenance_round_trip_from_surreal_on_
     let MirrorKey::RecordString { id, .. } = &key else {
         panic!("relationship record has a string identity");
     };
+    // The per-row recovery path remains available after global completion.
     assert_eq!(
-        super::super::during_initial_copy(mirror_string(&surreal, &pg, relation_table.name, id))
+        mirror_string(&surreal, &pg, relation_table.name, id)
             .await
             .unwrap(),
         Mirrored::Written
@@ -557,13 +569,87 @@ async fn relationship_typed_endpoints_and_provenance_round_trip_from_surreal_on_
         target(&pg, relation_table).await.unwrap().get(&key),
         Some(&expected)
     );
+
+    // A separate unactivated target receives and replays the original capture.
+    let (options, database) = fresh_schema().await.unwrap();
+    let first_pg = connect(&options, &database).await;
     assert_eq!(
-        super::super::during_initial_copy(mirror_string(&surreal, &pg, relation_table.name, id))
-            .await
-            .unwrap(),
+        super::super::during_initial_copy(mirror_string(
+            &surreal,
+            &first_pg,
+            relation_table.name,
+            id
+        ))
+        .await
+        .unwrap(),
+        Mirrored::Written
+    );
+    assert_eq!(
+        target(&first_pg, relation_table).await.unwrap().get(&key),
+        Some(&expected)
+    );
+    assert_eq!(
+        super::super::during_initial_copy(mirror_string(
+            &surreal,
+            &first_pg,
+            relation_table.name,
+            id
+        ))
+        .await
+        .unwrap(),
         Mirrored::Unchanged
     );
+    assert_failed_relationship_recovery(&surreal, relation_table, &key, id, &expected).await;
+    first_pg.pool().close().await;
     pg.0.close().await;
+}
+
+async fn assert_failed_relationship_recovery(
+    surreal: &crate::surreal::SurrealDb,
+    relation_table: &'static Table,
+    key: &MirrorKey,
+    id: &str,
+    expected: &serde_json::Value,
+) {
+    // Probe retry after a real global run recorded this row as failed.
+    let (options, database) = fresh_schema().await.unwrap();
+    let retry_pg = connect(&options, &database).await;
+    sqlx::query("ALTER TABLE relationship ADD CONSTRAINT synthetic_relationship_failure CHECK (kind <> 'adverse_to') NOT VALID")
+        .execute(retry_pg.pool()).await.unwrap();
+    let failed = crate::postgres_backfill::start(surreal, &retry_pg, 500, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        failed.status,
+        crate::postgres_backfill::RunStatus::Completed
+    );
+    let failures: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM mirror_backfill_failure WHERE run_id=$1 AND row_table='relationship'",
+    )
+    .bind(failed.run_id)
+    .fetch_one(retry_pg.pool())
+    .await
+    .unwrap();
+    assert_eq!(
+        failures, 1,
+        "the real global run records the failed relationship"
+    );
+    sqlx::query("ALTER TABLE relationship DROP CONSTRAINT synthetic_relationship_failure")
+        .execute(retry_pg.pool())
+        .await
+        .unwrap();
+    // The existing explicit per-row path can repair a recorded failure.
+    assert_eq!(
+        mirror_string(surreal, &retry_pg, relation_table.name, id)
+            .await
+            .unwrap(),
+        Mirrored::Written
+    );
+    assert_eq!(
+        target(&retry_pg, relation_table).await.unwrap().get(key),
+        Some(expected)
+    );
+    retry_pg.pool().close().await;
 }
 
 #[tokio::test]
