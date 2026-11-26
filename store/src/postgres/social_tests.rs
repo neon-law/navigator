@@ -819,8 +819,12 @@ async fn the_mirror_leaves_postgres_alone() {
     .await
     .unwrap()
     .post_id;
-    crate::postgres_mirror::from_source(social_handles::set(&surreal, &brand, "x", "Legacy"))
+    surreal
+        .query("CREATE social_handle SET brand_key=$brand, provider='x', handle='Legacy'")
+        .bind(("brand", brand.clone()))
         .await
+        .unwrap()
+        .check()
         .unwrap();
     let key = MirrorKey::Post(legacy);
     with_test_db(
