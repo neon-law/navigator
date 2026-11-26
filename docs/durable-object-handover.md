@@ -101,7 +101,26 @@ have no pending invocations in either staging or production, including paused or
 drain or receive an explicit disposition and restart on DBOS with the same idempotency key. A selector, a PostgreSQL row
 count, or a matching capture digest is not drain evidence. The code does not replay or purge retained work.
 
-## Recovery acceptance remains separate
+## Cut over without a capture
+
+An operator who explicitly discards retained Restate state can establish DBOS ownership in an enrolled PostgreSQL
+deployment. Stop legacy writers and keep them stopped through the DBOS-only rollout. The command checks authenticated
+aggregate counts and refuses unfinished invocations or failed outcomes. It reads no retained object or journal body.
+
+```bash
+hudson ops restate object-handover activate-without-capture \
+  --environment ENVIRONMENT --operator-writers-held --acknowledge-discard
+```
+
+Use the operator PostgreSQL connection described above. The transaction records the decision and gives existing Projects
+unresolved client-view evidence. It holds main-push notices for those Projects because old event keys cannot be
+deduplicated. New Projects use native delivery records. A historical Notation whose machine is missing cannot restart
+from BEGIN. Existing PostgreSQL machines remain available. The command never replays Restate invocations.
+
+Verify staging completes new DBOS work with the legacy route unavailable. After restarting the executor, verify the same
+workflow identity and committed effects before changing production caller routing.
+
+## Recovery acceptance
 
 Object parity is one cutover requirement. Retained invocations, journals, timers, promises, locks, queued work and
 uncertain external effects still require preservation and reconciliation. Other retained services are outside this

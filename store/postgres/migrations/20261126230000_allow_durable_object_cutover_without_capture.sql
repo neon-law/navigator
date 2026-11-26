@@ -1,0 +1,12 @@
+ALTER TABLE durable_object_handover
+    DROP CONSTRAINT durable_object_handover_origin_check,
+    DROP CONSTRAINT durable_object_handover_check,
+    ADD CONSTRAINT durable_object_handover_origin_check
+        CHECK (origin IN ('captured_source', 'fresh_native', 'source_discarded')),
+    ADD CONSTRAINT durable_object_handover_check CHECK (
+        (origin = 'captured_source' AND source_environment IS NOT NULL AND capture_sha256 IS NOT NULL)
+        OR (origin = 'fresh_native' AND source_environment IS NULL AND capture_sha256 IS NULL
+            AND notation_machines = 0 AND slack_projects = 0 AND slack_posted_events = 0)
+        OR (origin = 'source_discarded' AND source_environment IS NOT NULL AND capture_sha256 IS NULL
+            AND notation_machines = 0 AND slack_posted_events = 0)
+    );

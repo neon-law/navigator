@@ -5964,3 +5964,17 @@ ALTER TABLE project ADD CONSTRAINT project_plan_benefit_contested_cap_check CHEC
 
 ALTER TABLE project ADD CONSTRAINT project_plan_benefit_rates_shape_check CHECK (plan_cap_shape IS NOT NULL OR (plan_rate_cents_per_hour IS NULL AND plan_paralegal_rate_cents_per_hour IS NULL));
 ALTER TABLE project ADD CONSTRAINT project_plan_benefit_rates_check CHECK (COALESCE(plan_rate_cents_per_hour, 0) >= 0 AND COALESCE(plan_paralegal_rate_cents_per_hour, 0) >= 0);
+
+-- Migration: 20261126230000_allow_durable_object_cutover_without_capture.sql
+ALTER TABLE durable_object_handover
+    DROP CONSTRAINT durable_object_handover_origin_check,
+    DROP CONSTRAINT durable_object_handover_check,
+    ADD CONSTRAINT durable_object_handover_origin_check
+        CHECK (origin IN ('captured_source', 'fresh_native', 'source_discarded')),
+    ADD CONSTRAINT durable_object_handover_check CHECK (
+        (origin = 'captured_source' AND source_environment IS NOT NULL AND capture_sha256 IS NOT NULL)
+        OR (origin = 'fresh_native' AND source_environment IS NULL AND capture_sha256 IS NULL
+            AND notation_machines = 0 AND slack_projects = 0 AND slack_posted_events = 0)
+        OR (origin = 'source_discarded' AND source_environment IS NOT NULL AND capture_sha256 IS NULL
+            AND notation_machines = 0 AND slack_posted_events = 0)
+    );

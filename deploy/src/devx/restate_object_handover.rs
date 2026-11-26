@@ -99,6 +99,17 @@ pub enum Operation {
         #[arg(long)]
         operator_writers_held: bool,
     },
+    /// Activate DBOS ownership with historical source objects left behind.
+    ActivateWithoutCapture {
+        #[arg(long)]
+        environment: String,
+        /// Confirm legacy writers are stopped and remain stopped through the launch.
+        #[arg(long)]
+        operator_writers_held: bool,
+        /// Confirm retained object state and replay evidence will not transfer.
+        #[arg(long)]
+        acknowledge_discard: bool,
+    },
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -243,6 +254,16 @@ pub(super) fn run(operation: Operation) -> Result<()> {
             operator_writers_held,
             ..
         } => require_hold(*operator_writers_held)?,
+        Operation::ActivateWithoutCapture {
+            operator_writers_held,
+            acknowledge_discard,
+            ..
+        } => {
+            require_hold(*operator_writers_held)?;
+            if !acknowledge_discard {
+                bail!("explicit acknowledge-discard is required for a cutover without capture");
+            }
+        }
         Operation::Import { .. } => {}
     }
     let runtime = tokio::runtime::Runtime::new()
@@ -283,6 +304,18 @@ pub(super) fn run(operation: Operation) -> Result<()> {
                 }).await?;
                 println!("{}",serde_json::json!({"format_version":1,"capture_id":captured.capture.capture_id,"native_activation":true,"limitation":"Object parity only. Independent writer hold, paused-work reconciliation and recovery acceptance remain required."}));
             },
+            Operation::ActivateWithoutCapture { environment, .. } => {
+                object_handover::check_environment(&environment)?;
+                super::restate_handover::require_drained(&environment)?;
+                let postgres = store::postgres::PostgresDb::application().await
+                    .map_err(|_| anyhow::anyhow!("admitted PostgreSQL unavailable"))?;
+                let projects = store::durable_object_handover::activate_without_capture(&postgres, &environment).await?;
+                println!("{}", serde_json::json!({
+                    "origin": "source_discarded",
+                    "native_activation": true,
+                    "historical_projects": projects,
+                }));
+            }
         }
         Ok(())
     })
@@ -308,6 +341,17 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("operator-writers-held"));
+    }
+
+    #[test]
+    fn no_capture_requires_explicit_discard_before_connections() {
+        let error = run(Operation::ActivateWithoutCapture {
+            environment: "synthetic".into(),
+            operator_writers_held: true,
+            acknowledge_discard: false,
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("acknowledge-discard"));
     }
 
     fn refusal(operation: Operation) -> String {
