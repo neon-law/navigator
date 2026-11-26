@@ -524,6 +524,30 @@ async fn deadline_inventory_matches_dashboard_firm_scope_and_open_projects() {
     codes.sort_unstable();
     assert_eq!(codes, ["synthetic-no-checkout", "synthetic-onboarding"]);
 
+    for project_id in [fx.project, sibling, outside] {
+        sqlx::query("INSERT INTO project_deadlines(id,project_id,due_at,authority_kind,authority,source,status,calendar_role,category,inserted_at,updated_at) VALUES ($1,$2,'2028-05-03T12:00:00Z','internal','Synthetic authority','lawyer','open','firm','internal','2028-05-01T12:00:00Z','2028-05-01T12:00:00Z')")
+            .bind(Uuid::now_v7()).bind(project_id).execute(pool).await.unwrap();
+    }
+    let batch = json(
+        fx.get(
+            "/app/api/lawyer/deadline-projects?include_deadlines=true",
+            Some(Role::Lawyer),
+            Some(fx.lawyer),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(batch["projects"].as_array().unwrap().len(), 2);
+    let deadline_projects = batch["deadlines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["project_id"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(deadline_projects.len(), 2);
+    assert!(deadline_projects.contains(&fx.project.to_string().as_str()));
+    assert!(deadline_projects.contains(&sibling.to_string().as_str()));
+
     sqlx::query("UPDATE project SET status='pitch' WHERE id=$1")
         .bind(sibling)
         .execute(pool)
