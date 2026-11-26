@@ -35,6 +35,12 @@ struct Group {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
+pub enum BillingPage {
+    ChooseDay { attorney: Option<Uuid> },
+    Day(Box<BillingDay>),
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 pub struct BillingDay {
     day: chrono::NaiveDate,
     actor: Uuid,
@@ -49,26 +55,30 @@ pub struct BillingDay {
     error: Option<String>,
 }
 
+#[cfg(feature = "server")]
+#[derive(Deserialize)]
+struct BillingFilter {
+    attorney: Option<Uuid>,
+    day: Option<chrono::NaiveDate>,
+    flash: Option<String>,
+    error: Option<String>,
+}
+
 #[server]
-pub async fn get_billing_day() -> Result<BillingDay, ServerFnError> {
+pub async fn get_billing_day() -> Result<BillingPage, ServerFnError> {
     use crate::lawyer_project_detail::server_error;
     use dioxus_fullstack_core::FullstackContext;
-
-    #[derive(Deserialize)]
-    struct Filter {
-        attorney: Option<Uuid>,
-        day: Option<chrono::NaiveDate>,
-        flash: Option<String>,
-        error: Option<String>,
-    }
-
     let role = crate::admin_listing::require_lawyer().await?;
     let actor = crate::admin_listing::injected_person_id()
         .await
         .ok_or_else(|| ServerFnError::new("A signed-in attorney is required."))?;
     let axum::extract::Query(query) =
-        FullstackContext::extract::<axum::extract::Query<Filter>, _>().await?;
-    let day = query.day.unwrap_or_else(|| chrono::Utc::now().date_naive());
+        FullstackContext::extract::<axum::extract::Query<BillingFilter>, _>().await?;
+    let Some(day) = query.day else {
+        return Ok(BillingPage::ChooseDay {
+            attorney: query.attorney,
+        });
+    };
     let db = consume_context::<store::surreal::SurrealDb>();
     let brand = crate::app_chrome::request_brand().await;
     let mut projects = store::access::visible_lawyer_projects_for_brand(
@@ -138,7 +148,7 @@ pub async fn get_billing_day() -> Result<BillingDay, ServerFnError> {
         .collect();
     let axum::Extension(csrf) =
         FullstackContext::extract::<axum::Extension<crate::csrf::CsrfToken>, _>().await?;
-    Ok(BillingDay {
+    Ok(BillingPage::Day(Box::new(BillingDay {
         actor,
         selected,
         day,
@@ -150,7 +160,7 @@ pub async fn get_billing_day() -> Result<BillingDay, ServerFnError> {
         error: query.error,
         tokens: crate::app_chrome::app_tokens_href_from_context().await,
         logo: crate::app_chrome::app_logo_from_context().await,
-    })
+    })))
 }
 
 #[cfg(any(feature = "server", test))]
@@ -175,7 +185,22 @@ pub fn DailyBilling() -> Element {
     let result = use_server_future(get_billing_day)?;
     let day = result.read();
     match &*day {
-        Some(Ok(view)) => billing_body(view),
+        Some(Ok(BillingPage::Day(view))) => billing_body(view),
+        Some(Ok(BillingPage::ChooseDay { attorney })) => rsx! {
+            document::Title { "Daily billing" }
+            document::Stylesheet { href: crate::components::THEME_STYLESHEET_HREF }
+            document::Script { src: "/public/js/billing-work-date.js", defer: true }
+            main { class: "nav-theme daily-billing",
+                h1 { "Daily billing" }
+                form { method: "get", action: PATH,
+                    if let Some(id) = attorney { input { r#type: "hidden", name: "attorney", value: "{id}" } }
+                    label { class: "nav-label", "Work date"
+                        input { class: "nav-input", r#type: "date", name: "day", required: true }
+                    }
+                    button { class: "nav-btn nav-btn--secondary", r#type: "submit", "View entries" }
+                }
+            }
+        },
         Some(Err(_)) => rsx! { main { p { role: "alert", "Billing is unavailable." } } },
         None => rsx! { main { p { "Loading billing…" } } },
     }
@@ -217,10 +242,10 @@ fn billing_body(view: &BillingDay) -> Element {
                             select { class: "nav-select", name: "project", required: true,
                                 option { value: "", "Choose a Project" }
                                 for p in &view.projects {
-                                    option { value: "{p.code}", disabled: p.rate.is_none(),
+                                    option { value: "{p.code}",
                                         "{p.name} ({p.code}) · "
                                         if let Some(rate) = p.rate { "{format_usd(i64::from(rate))}/hr" }
-                                        else { "No hourly rate" }
+                                        else { "No hourly rate · No-charge work only" }
                                     }
                                 }
                             }
@@ -228,8 +253,12 @@ fn billing_body(view: &BillingDay) -> Element {
                         label { class: "nav-label", "Work performed"
                             textarea { class: "nav-input", name: "description", rows: 2, maxlength: 2000, required: true }
                         }
-                        label { class: "nav-label", "Hours"
-                            input { class: "nav-input", r#type: "number", name: "hours", min: "0.1", max: "24", step: "0.1", inputmode: "decimal", placeholder: "0.0", required: true }
+                        label { class: "nav-label", "Minutes"
+                            input { class: "nav-input", r#type: "number", name: "minutes", min: "1", max: "1440", step: "1", inputmode: "numeric", required: true }
+                        }
+                        label { class: "nav-label",
+                            input { class: "nav-checkbox", r#type: "checkbox", name: "billable", checked: true }
+                            "Billable"
                         }
                         button { class: "nav-btn nav-btn--primary", r#type: "submit", "Add entry" }
                     }
@@ -307,8 +336,13 @@ mod tests {
         };
         let own = dioxus_ssr::render_element(billing_body(&day));
         assert!(own.contains("method=\"post\""));
-        assert!(own.contains("step=\"0.1\""));
+        assert!(own.contains("name=\"minutes\""), "enter actual minutes");
+        assert!(own.contains("name=\"billable\""), "choose whether to bill");
         assert!(own.contains("$325.00/hr"));
+        day.projects[0].rate = None;
+        let unrated = dioxus_ssr::render_element(billing_body(&day));
+        let option = unrated.split("value=\"sample\"").nth(1).unwrap();
+        assert!(!option.split('>').next().unwrap().contains("disabled"));
         day.selected = other;
         let review = dioxus_ssr::render_element(billing_body(&day));
         assert!(!review.contains("aria-label=\"Add my time\""));

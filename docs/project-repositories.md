@@ -1351,10 +1351,11 @@ question. The attorney supplies the description and time.
 | A client uploaded documents | “Which documents did you review that day, and for how long?” |
 | No files changed | “Was there a call, meeting, or other work you want to enter for this Project?” |
 
-On that host, open `/app/lawyer/billing`, choose the Project, describe the work, and enter hours in tenths. The Project
-picker shows the attorney's effective rate. Review entries by attorney and work date. Each Project has one subtotal even
-when its entries were added between entries for other Projects. The last row totals the hours and amounts for that
-attorney and date.
+On that host, open `/app/lawyer/billing`. The work date defaults to the attorney's local date. Select another date to
+review or enter work for that day. Choose a Project, describe the work, and enter whole minutes. The Project picker
+shows the attorney's hourly rate for the selected date. Clear **Billable** for no-charge work, including on Projects
+without an hourly rate. Review entries by attorney and work date. Each Project has one subtotal even when its entries
+were added between entries for other Projects. The last row totals the hours and amounts for that attorney and date.
 
 ## Verifying a machine
 
