@@ -188,7 +188,7 @@ reason = "Explicitly requested release wasm client built from repository source;
 [[allow]]
 class = "phone"
 match = "(?:9174097950|7754714068)"
-paths = ["server/sites/guieb-shook/attorneys/", ".github/pii/allowlist.toml"]
+paths = ["server/sites/guieb-shook/attorneys/"]
 reason = "Each attorney's direct business line, published on that attorney's page of the firm's own website (approved by Waleed Amer, 2026-11-26)."
 
 [[allow]]

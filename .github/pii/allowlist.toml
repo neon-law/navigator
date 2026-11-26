@@ -19,6 +19,17 @@ values = [
   "server/sites/guieb-shook/assets/*.svg",
 ]
 
+# Names and phones in this file count everywhere, so the website's own people are
+# exempted by page, never by value: a client who shares a name or number with them
+# is still found (Waleed Amer, 2026-11-26).
+[[paths]]
+reason = "Pages of the Guieb & Shook website that name its people on purpose: the Our Story page tells where the firm's name comes from (Waleed Amer's grandfather, Nicholas Shook's parents), and each attorney page gives that attorney's direct business line and education (approved by Waleed Amer, 2026-11-26)."
+values = [
+  "server/sites/guieb-shook/our-story.html",
+  "server/sites/guieb-shook/attorneys/waleed-amer.html",
+  "server/sites/guieb-shook/attorneys/nicholas-shook.html",
+]
+
 [[paths]]
 reason = "Vendored third-party code, generated inventories, and the scanner itself."
 values = [
@@ -134,10 +145,6 @@ reason = "The firm's published voice line."
 values = ["+1 510 800 2090"]
 
 [[phones]]
-reason = "Guieb & Shook attorneys' direct business lines, published on their pages of the firm's website (server/sites/guieb-shook/attorneys/)."
-values = ["+1 917 409 7950", "+1 775 471 4068"]
-
-[[phones]]
 reason = "The published voice line of Lex Tecnica, Ltd. (lextecnica.com/contact/)."
 values = ["+1 725 239 8413"]
 
@@ -183,14 +190,6 @@ values = ["Nick Shook", "Nicholas Shook", "Nicholas Richard Shook"]
 [[names]]
 reason = "A Neon Law team member, by name; published on the public /team page."
 values = ["Waleed Amer"]
-
-[[names]]
-reason = "The Guieb & Shook website's Our Story page tells where the firm's name comes from: Waleed Amer's grandfather and Nicholas Shook's parents, named there by the partners themselves (approved by Waleed Amer, 2026-11-26)."
-values = ["Teodulo Florendo Guieb", "Richard", "Me Ray", "Richard and Me Ray"]
-
-[[names]]
-reason = "A law school's name (William S. Boyd School of Law, UNLV), in Nicholas Shook's education on the Guieb & Shook website."
-values = ["William S. Boyd"]
 
 [[names]]
 reason = "Copyright and credit attributions: photographers, type designers, artists."
