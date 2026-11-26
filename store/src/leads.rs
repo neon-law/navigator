@@ -956,7 +956,10 @@ mod tests {
             assert_eq!(written.consent_version, "first email disclosure");
             let history = consent_history(&db, written.id).await.unwrap();
             assert_eq!(history.len(), 3);
-            assert_eq!(history[0].consented_at, first_at);
+            assert_eq!(
+                history[0].consented_at.timestamp_micros(),
+                first_at.timestamp_micros()
+            );
             assert_eq!(history[0].phone.as_deref(), Some("+1 (555) 010-1111"));
             assert!(history[0].call_opt_in);
             assert!(!history[2].call_opt_in);
