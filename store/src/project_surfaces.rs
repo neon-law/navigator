@@ -748,11 +748,29 @@ pub async fn forgejo_for_firm(
         missing.push("the Firm's forgejo_access_token integration secret");
     }
     match (root, firm, token) {
-        (Some(root), Some(firm), Some(token)) if missing.is_empty() => Ok(
-            cloud::ForgejoForge::new(&root, &firm.slug, token.expose_for_provider_call())?,
-        ),
+        (Some(root), Some(firm), Some(token)) if missing.is_empty() => {
+            let namespace = forgejo_namespace(firm.id, firm.slug).await?;
+            Ok(cloud::ForgejoForge::new(
+                &root,
+                &namespace,
+                token.expose_for_provider_call(),
+            )?)
+        }
         _ => Err(SurfaceError::ForgejoUnavailable(missing.join(", "))),
     }
+}
+
+async fn forgejo_namespace(firm: Uuid, slug: String) -> Result<String, SurfaceError> {
+    let Some(pg) = crate::postgres::PostgresDb::configured()
+        .await
+        .map_err(|error| SurfaceError::Db(error.to_string()))?
+    else {
+        return Ok(slug);
+    };
+    let recorded = crate::firms::forgejo_organization::find(&pg, firm)
+        .await
+        .map_err(|error| SurfaceError::Db(error.to_string()))?;
+    Ok(recorded.map_or(slug, |record| record.organization))
 }
 
 /// The deployment's GitHub forge, or `None` when every forge opt-in key is
@@ -837,6 +855,38 @@ async fn record_provisioned_repository(
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn forgejo_namespace_uses_the_recorded_organization_for_the_selected_firm() {
+        use crate::postgres::PostgresDb;
+        use crate::postgres_mirror::tests::{connect, fresh_schema};
+
+        let Some((options, database)) = fresh_schema().await else {
+            return;
+        };
+        let pg = connect(&options, &database).await;
+        let first = uuid::Uuid::new_v4();
+        let second = uuid::Uuid::new_v4();
+        sqlx::query("INSERT INTO firm (id, name, slug, status) VALUES ($1, 'Synthetic A', 'synthetic-a', 'active'), ($2, 'Synthetic B', 'synthetic-b', 'active')")
+            .bind(first).bind(second).execute(pg.pool()).await.unwrap();
+        sqlx::query("INSERT INTO firm_forgejo_organization (firm_id, organization, forgejo_id, owner_login) VALUES ($1, 'verified-a', 1, 'fixture')")
+            .bind(first).execute(pg.pool()).await.unwrap();
+        PostgresDb::with_test_db(pg, async {
+            assert_eq!(
+                super::forgejo_namespace(first, "synthetic-a".into())
+                    .await
+                    .unwrap(),
+                "verified-a"
+            );
+            assert_eq!(
+                super::forgejo_namespace(second, "synthetic-b".into())
+                    .await
+                    .unwrap(),
+                "synthetic-b"
+            );
+        })
+        .await;
+    }
+
     use super::{
         read_handles, reconcile, reconcile_forgejo, source_state, ForgeSite, ProjectSurfaces,
         ScaffoldInputs, SourceState, SurfaceError, SurfaceStatus,
