@@ -559,15 +559,22 @@ async fn write_hook_probe() {
     )
     .await
     .unwrap();
-    let mailroom = crate::mailrooms::create(&surreal, "Synthetic HQ", address.id)
+    let mailroom_id = Uuid::now_v7();
+    surreal
+        .query("CREATE $id SET name = 'Synthetic HQ', address_id = $address")
+        .bind(("id", crate::surreal::record_id("mailroom", mailroom_id)))
+        .bind(("address", crate::surreal::record_id("address", address.id)))
         .await
+        .unwrap()
+        .check()
         .unwrap();
+    after_write(&surreal, MirrorKey::Mailroom(mailroom_id)).await;
     let incoming_id = Uuid::new_v4();
     crate::letters::record_with_id(
         &surreal,
         incoming_id,
         &crate::letters::NewLetter {
-            mailroom_id: mailroom.id,
+            mailroom_id,
             project_id: None,
             direction: "incoming".into(),
             sender: "Synthetic Sender".into(),
@@ -581,7 +588,7 @@ async fn write_hook_probe() {
     let outgoing = crate::letters::record(
         &surreal,
         &crate::letters::NewLetter {
-            mailroom_id: mailroom.id,
+            mailroom_id,
             project_id: Some(dangling_project_id),
             direction: "outgoing".into(),
             sender: "Synthetic Sender".into(),
