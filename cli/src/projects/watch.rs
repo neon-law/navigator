@@ -839,23 +839,6 @@ mod tests {
             )
         };
         sync().await?;
-        let existing_root = dir.join("existing");
-        std::fs::create_dir(&existing_root)?;
-        command(
-            &existing_root,
-            "git",
-            &["clone", origin.to_str().unwrap(), "matter"],
-        )
-        .await?;
-        super::update_checkout(
-            &existing_root,
-            &project,
-            origin.to_str().unwrap(),
-            FetchRemotes::Verified(mirror.to_str().unwrap()),
-            "https://site.example.test",
-        )
-        .await?;
-        assert!(existing_root.join("matter/.jj").is_dir());
         let checkout = dir.join("matter");
         assert!(checkout.join(".jj").is_dir());
         assert!(checkout.join(".git").is_dir());
@@ -932,6 +915,34 @@ mod tests {
             .to_string()
             .contains("jj metadata"));
         assert!(!outside.exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn sync_colocates_an_existing_git_checkout() -> Result<()> {
+        if !jj_available() {
+            return Ok(());
+        }
+        let temp = tempfile::tempdir()?;
+        let dir = temp.path().canonicalize()?;
+        let (project, origin, mirror) = seed_checkout_forges(&dir, "site.example.test").await?;
+        let existing_root = dir.join("existing");
+        std::fs::create_dir(&existing_root)?;
+        command(
+            &existing_root,
+            "git",
+            &["clone", origin.to_str().unwrap(), "matter"],
+        )
+        .await?;
+        super::update_checkout(
+            &existing_root,
+            &project,
+            origin.to_str().unwrap(),
+            FetchRemotes::Verified(mirror.to_str().unwrap()),
+            "https://site.example.test",
+        )
+        .await?;
+        assert!(existing_root.join("matter/.jj").is_dir());
         Ok(())
     }
 
