@@ -54,6 +54,7 @@ async fn seed_supervised_project(
     clerk_id: Uuid,
     lawyer_id: Uuid,
 ) -> store::projects::Project {
+    store::test_support::seed_compiled_brands_postgres(surreal).await;
     let project = store::projects::create(
         surreal,
         &store::projects::NewProject {
@@ -151,6 +152,9 @@ async fn render_clerk_list(
 ) -> (StatusCode, String) {
     let _bundle = staged_bundle();
     let (viewer, person) = injections(role, person_id);
+    let pg = store::postgres::PostgresDb::application()
+        .await
+        .expect("fixture pool");
     let router: Router = Router::<FullstackState>::new()
         .route("/app/projects", get(render_handler))
         .with_state(FullstackState::new(
@@ -158,7 +162,8 @@ async fn render_clerk_list(
             webapp::clerk::ClerkProjects,
         ))
         .layer(person)
-        .layer(viewer);
+        .layer(viewer)
+        .layer(axum::Extension(pg));
     fetch(router, "/app/projects").await
 }
 
@@ -170,6 +175,9 @@ async fn render_clerk_detail(
 ) -> (StatusCode, String) {
     let _bundle = staged_bundle();
     let (viewer, person) = injections(role, person_id);
+    let pg = store::postgres::PostgresDb::application()
+        .await
+        .expect("fixture pool");
     let router: Router = Router::<FullstackState>::new()
         .route("/app/projects/{code}", get(render_handler))
         .with_state(FullstackState::new(
@@ -177,220 +185,236 @@ async fn render_clerk_detail(
             webapp::clerk::ClerkProjectDetail,
         ))
         .layer(person)
-        .layer(viewer);
+        .layer(viewer)
+        .layer(axum::Extension(pg));
     fetch(router, &format!("/app/projects/{project_code}")).await
 }
 
 #[tokio::test]
 async fn clerk_list_ssrs_supervised_matters_and_names_the_supervisor() {
-    let surreal = store::test_support::mem_surreal().await;
-    let lawyer = insert_person(
-        &surreal,
-        "Aries Attorney",
-        "aries@test.invalid",
-        store::persons::Role::Lawyer,
-    )
-    .await;
-    let clerk = insert_person(
-        &surreal,
-        "Cleo Clerk",
-        "cleo@test.invalid",
-        store::persons::Role::Clerk,
-    )
-    .await;
-    let project = seed_supervised_project(&surreal, "Atlas LLC", clerk, lawyer).await;
+    store::test_support::with_required_postgres(async {
+        let surreal = store::surreal::SurrealDb::uninitialized();
+        let lawyer = insert_person(
+            &surreal,
+            "Aries Attorney",
+            "aries@test.invalid",
+            store::persons::Role::Lawyer,
+        )
+        .await;
+        let clerk = insert_person(
+            &surreal,
+            "Cleo Clerk",
+            "cleo@test.invalid",
+            store::persons::Role::Clerk,
+        )
+        .await;
+        let project = seed_supervised_project(&surreal, "Atlas LLC", clerk, lawyer).await;
 
-    let (status, html) =
-        render_clerk_list(&surreal, webapp::people::ViewerRole::Clerk, Some(clerk)).await;
+        let (status, html) =
+            render_clerk_list(&surreal, webapp::people::ViewerRole::Clerk, Some(clerk)).await;
 
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        html.contains(">Atlas LLC<"),
-        "matter name in the SSR: {html}"
-    );
-    assert!(
-        html.contains("Supervising lawyer") && html.contains(">Aries Attorney<"),
-        "the supervising lawyer must be named on every card: {html}",
-    );
-    assert!(
-        html.contains(&format!("href=\"/app/projects/{}\"", project.code)),
-        "each card links to the matter detail: {html}",
-    );
-    // The lawyer workbench never leaks onto the Clerk lens. The *path* can no
-    // longer carry that guarantee — the card above links to the same
-    // `/app/projects/{code}` a lawyer uses — so assert on what the workbench
-    // renders instead.
-    for workbench in [
-        "Participation ledger",
-        r#"id="lawyer-project""#,
-        r#"class="lawyer-detail__section project-participations""#,
-        "Documents",
-        r#"class="lawyer-detail__section project-close""#,
-        "Repository",
-    ] {
+        assert_eq!(status, StatusCode::OK);
         assert!(
-            !html.contains(workbench),
-            "the Clerk lens must not carry `{workbench}`: {html}"
+            html.contains(">Atlas LLC<"),
+            "matter name in the SSR: {html}"
         );
-    }
-    // The brand-font download is a firm-wide asset, not a matter surface, so it
-    // is a card on the shared `/app/team` home rather than a list item here.
-    // The route still admits a Clerk; only the link moved.
-    assert!(
-        !html.contains("/app/lawyer/fonts/gorp-serif.zip"),
-        "the brand-font download lives on `/app/team`, not the matter list: {html}",
-    );
+        assert!(
+            html.contains("Supervising lawyer") && html.contains(">Aries Attorney<"),
+            "the supervising lawyer must be named on every card: {html}",
+        );
+        assert!(
+            html.contains(&format!("href=\"/app/projects/{}\"", project.code)),
+            "each card links to the matter detail: {html}",
+        );
+        // The lawyer workbench never leaks onto the Clerk lens. The *path* can no
+        // longer carry that guarantee — the card above links to the same
+        // `/app/projects/{code}` a lawyer uses — so assert on what the workbench
+        // renders instead.
+        for workbench in [
+            "Participation ledger",
+            r#"id="lawyer-project""#,
+            r#"class="lawyer-detail__section project-participations""#,
+            "Documents",
+            r#"class="lawyer-detail__section project-close""#,
+            "Repository",
+        ] {
+            assert!(
+                !html.contains(workbench),
+                "the Clerk lens must not carry `{workbench}`: {html}"
+            );
+        }
+        // The brand-font download is a firm-wide asset, not a matter surface, so it
+        // is a card on the shared `/app/team` home rather than a list item here.
+        // The route still admits a Clerk; only the link moved.
+        assert!(
+            !html.contains("/app/lawyer/fonts/gorp-serif.zip"),
+            "the brand-font download lives on `/app/team`, not the matter list: {html}",
+        );
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn clerk_list_empty_state_explains_how_a_matter_appears() {
-    let surreal = store::test_support::mem_surreal().await;
-    let clerk = insert_person(
-        &surreal,
-        "Cleo Clerk",
-        "cleo@test.invalid",
-        store::persons::Role::Clerk,
-    )
+    store::test_support::with_required_postgres(async {
+        let surreal = store::surreal::SurrealDb::uninitialized();
+        let clerk = insert_person(
+            &surreal,
+            "Cleo Clerk",
+            "cleo@test.invalid",
+            store::persons::Role::Clerk,
+        )
+        .await;
+
+        let (status, html) =
+            render_clerk_list(&surreal, webapp::people::ViewerRole::Clerk, Some(clerk)).await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert!(
+            html.contains("No supervised projects are assigned to you."),
+            "the empty state must explain how a matter appears: {html}",
+        );
+        assert!(
+            !html.contains("/app/lawyer/fonts/gorp-serif.zip"),
+            "the empty list carries no brand-asset section either: {html}",
+        );
+    })
     .await;
-
-    let (status, html) =
-        render_clerk_list(&surreal, webapp::people::ViewerRole::Clerk, Some(clerk)).await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        html.contains("No supervised projects are assigned to you."),
-        "the empty state must explain how a matter appears: {html}",
-    );
-    assert!(
-        !html.contains("/app/lawyer/fonts/gorp-serif.zip"),
-        "the empty list carries no brand-asset section either: {html}",
-    );
 }
 
 #[tokio::test]
 async fn clerk_list_is_not_found_for_a_lawyer() {
-    let surreal = store::test_support::mem_surreal().await;
-    let lawyer = insert_person(
-        &surreal,
-        "Aries Attorney",
-        "aries@test.invalid",
-        store::persons::Role::Lawyer,
-    )
-    .await;
-    let clerk = insert_person(
-        &surreal,
-        "Cleo Clerk",
-        "cleo@test.invalid",
-        store::persons::Role::Clerk,
-    )
-    .await;
-    seed_supervised_project(&surreal, "Atlas LLC", clerk, lawyer).await;
+    store::test_support::with_required_postgres(async {
+        let surreal = store::surreal::SurrealDb::uninitialized();
+        let lawyer = insert_person(
+            &surreal,
+            "Aries Attorney",
+            "aries@test.invalid",
+            store::persons::Role::Lawyer,
+        )
+        .await;
+        let clerk = insert_person(
+            &surreal,
+            "Cleo Clerk",
+            "cleo@test.invalid",
+            store::persons::Role::Clerk,
+        )
+        .await;
+        seed_supervised_project(&surreal, "Atlas LLC", clerk, lawyer).await;
 
-    // A lawyer does not use the Clerk surface: it is hidden from them, not
-    // merely refused. Admin's general embedded Rego policy bypass must not reach it either, so
-    // the loader repeats the exact-role check rather than trusting the gate.
-    for (label, role) in [
-        ("lawyer", webapp::people::ViewerRole::Lawyer),
-        ("admin", webapp::people::ViewerRole::Admin),
-        ("client", webapp::people::ViewerRole::Client),
-    ] {
-        let (status, html) = render_clerk_list(&surreal, role, Some(lawyer)).await;
-        assert_eq!(status, StatusCode::NOT_FOUND, "{label}: {html}");
-        assert!(!html.contains("Atlas LLC"), "{label}: {html}");
-    }
+        // A lawyer does not use the Clerk surface: it is hidden from them, not
+        // merely refused. Admin's general embedded Rego policy bypass must not reach it either, so
+        // the loader repeats the exact-role check rather than trusting the gate.
+        for (label, role) in [
+            ("lawyer", webapp::people::ViewerRole::Lawyer),
+            ("admin", webapp::people::ViewerRole::Admin),
+            ("client", webapp::people::ViewerRole::Client),
+        ] {
+            let (status, html) = render_clerk_list(&surreal, role, Some(lawyer)).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{label}: {html}");
+            assert!(!html.contains("Atlas LLC"), "{label}: {html}");
+        }
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn clerk_detail_shows_the_matter_facts_and_the_limited_access_notice() {
-    let surreal = store::test_support::mem_surreal().await;
-    let lawyer = insert_person(
-        &surreal,
-        "Aries Attorney",
-        "aries@test.invalid",
-        store::persons::Role::Lawyer,
-    )
-    .await;
-    let clerk = insert_person(
-        &surreal,
-        "Cleo Clerk",
-        "cleo@test.invalid",
-        store::persons::Role::Clerk,
-    )
-    .await;
-    let project = seed_supervised_project(&surreal, "Atlas LLC", clerk, lawyer).await;
+    store::test_support::with_required_postgres(async {
+        let surreal = store::surreal::SurrealDb::uninitialized();
+        let lawyer = insert_person(
+            &surreal,
+            "Aries Attorney",
+            "aries@test.invalid",
+            store::persons::Role::Lawyer,
+        )
+        .await;
+        let clerk = insert_person(
+            &surreal,
+            "Cleo Clerk",
+            "cleo@test.invalid",
+            store::persons::Role::Clerk,
+        )
+        .await;
+        let project = seed_supervised_project(&surreal, "Atlas LLC", clerk, lawyer).await;
 
-    let (status, html) = render_clerk_detail(
-        &surreal,
-        &project.code,
-        webapp::people::ViewerRole::Clerk,
-        Some(clerk),
-    )
-    .await;
+        let (status, html) = render_clerk_detail(
+            &surreal,
+            &project.code,
+            webapp::people::ViewerRole::Clerk,
+            Some(clerk),
+        )
+        .await;
 
-    assert_eq!(status, StatusCode::OK);
-    assert!(html.contains(">Atlas LLC<"), "{html}");
-    assert!(html.contains(">open<"), "the matter status: {html}");
-    assert!(html.contains(">Aries Attorney<"), "the supervisor: {html}");
-    assert!(
-        html.contains("Read-only coordination view") && html.contains("Limited access."),
-        "the limited-access disclosure must survive the migration: {html}",
-    );
-    // The retired Portal is linked from no lens.
-    assert!(!html.contains("Client portal"), "{html}");
-    assert!(
-        !html.contains(&format!("/app/projects/{}/portal", project.code)),
-        "the clerk lens links the retired Portal: {html}"
-    );
-    // None of the lawyer work controls exist on this surface.
-    assert!(!html.contains("git-token"), "{html}");
-    assert!(!html.contains("documents/upload"), "{html}");
-    assert!(html.contains("href=\"/app/projects\""), "back link: {html}");
+        assert_eq!(status, StatusCode::OK);
+        assert!(html.contains(">Atlas LLC<"), "{html}");
+        assert!(html.contains(">open<"), "the matter status: {html}");
+        assert!(html.contains(">Aries Attorney<"), "the supervisor: {html}");
+        assert!(
+            html.contains("Read-only coordination view") && html.contains("Limited access."),
+            "the limited-access disclosure must survive the migration: {html}",
+        );
+        // The retired Portal is linked from no lens.
+        assert!(!html.contains("Client portal"), "{html}");
+        assert!(
+            !html.contains(&format!("/app/projects/{}/portal", project.code)),
+            "the clerk lens links the retired Portal: {html}"
+        );
+        // None of the lawyer work controls exist on this surface.
+        assert!(!html.contains("git-token"), "{html}");
+        assert!(!html.contains("documents/upload"), "{html}");
+        assert!(html.contains("href=\"/app/projects\""), "back link: {html}");
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn clerk_detail_is_not_found_for_an_unsupervised_matter() {
-    let surreal = store::test_support::mem_surreal().await;
-    let lawyer = insert_person(
-        &surreal,
-        "Aries Attorney",
-        "aries@test.invalid",
-        store::persons::Role::Lawyer,
-    )
-    .await;
-    let clerk = insert_person(
-        &surreal,
-        "Cleo Clerk",
-        "cleo@test.invalid",
-        store::persons::Role::Clerk,
-    )
-    .await;
-    let other_clerk = insert_person(
-        &surreal,
-        "Otto Clerk",
-        "otto@test.invalid",
-        store::persons::Role::Clerk,
-    )
-    .await;
-    let project = seed_supervised_project(&surreal, "Atlas LLC", other_clerk, lawyer).await;
+    store::test_support::with_required_postgres(async {
+        let surreal = store::surreal::SurrealDb::uninitialized();
+        let lawyer = insert_person(
+            &surreal,
+            "Aries Attorney",
+            "aries@test.invalid",
+            store::persons::Role::Lawyer,
+        )
+        .await;
+        let clerk = insert_person(
+            &surreal,
+            "Cleo Clerk",
+            "cleo@test.invalid",
+            store::persons::Role::Clerk,
+        )
+        .await;
+        let other_clerk = insert_person(
+            &surreal,
+            "Otto Clerk",
+            "otto@test.invalid",
+            store::persons::Role::Clerk,
+        )
+        .await;
+        let project = seed_supervised_project(&surreal, "Atlas LLC", other_clerk, lawyer).await;
 
-    // Another Clerk's matter is not merely refused — it does not exist here.
-    let (status, html) = render_clerk_detail(
-        &surreal,
-        &project.code,
-        webapp::people::ViewerRole::Clerk,
-        Some(clerk),
-    )
-    .await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "{html}");
-    assert!(!html.contains("Atlas LLC"), "{html}");
+        // Another Clerk's matter is not merely refused — it does not exist here.
+        let (status, html) = render_clerk_detail(
+            &surreal,
+            &project.code,
+            webapp::people::ViewerRole::Clerk,
+            Some(clerk),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{html}");
+        assert!(!html.contains("Atlas LLC"), "{html}");
 
-    // So is an id that resolves to no matter at all.
-    let (status, _) = render_clerk_detail(
-        &surreal,
-        "missing-project",
-        webapp::people::ViewerRole::Clerk,
-        Some(clerk),
-    )
+        // So is an id that resolves to no matter at all.
+        let (status, _) = render_clerk_detail(
+            &surreal,
+            "missing-project",
+            webapp::people::ViewerRole::Clerk,
+            Some(clerk),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    })
     .await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
 }

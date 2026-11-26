@@ -155,6 +155,11 @@ pub struct PeopleView {
 /// so the admin surface renders the per-row action column.
 #[server]
 pub async fn list_admin_people() -> Result<PeopleView, ServerFnError> {
+    crate::server_store::with_request_store(Box::pin(list_admin_people_data())).await
+}
+
+#[cfg(feature = "server")]
+async fn list_admin_people_data() -> Result<PeopleView, ServerFnError> {
     let axum::extract::Query(query) =
         dioxus_fullstack_core::FullstackContext::extract::<axum::extract::Query<PeopleQuery>, _>()
             .await?;
