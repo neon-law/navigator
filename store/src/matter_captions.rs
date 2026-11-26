@@ -325,81 +325,137 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_sync_replaces_the_block_and_an_empty_block_removes_it() {
+    async fn source_caption_round_trips_nested_fields_and_removes_an_empty_block() {
         let surreal = crate::surreal::test_support::mem().await;
-        let project_id = crate::test_support::seed_project_surreal(&surreal, "caption").await;
-        assert!(for_project(&surreal, project_id).await.unwrap().is_none());
+        let project_id = crate::postgres_mirror::from_source(
+            crate::test_support::seed_project_surreal(&surreal, "source-caption"),
+        )
+        .await;
+        let declared = matter("00CV000006");
 
-        let stored = replace_for_project(&surreal, project_id, Some(&matter("00CV000001")))
-            .await
-            .unwrap()
-            .expect("a declared block is stored");
-        assert_eq!(stored.matter, matter("00CV000001"));
-        assert!(!stored.synced_at.is_empty());
-
-        replace_for_project(&surreal, project_id, Some(&matter("00CV000002")))
-            .await
-            .unwrap();
-        let read = for_project(&surreal, project_id).await.unwrap().unwrap();
-        assert_eq!(read.matter.case_number, "00CV000002", "one row per Project");
-
-        let cleared = replace_for_project(&surreal, project_id, Some(&Matter::default()))
-            .await
-            .unwrap();
-        assert!(cleared.is_none());
-        assert!(for_project(&surreal, project_id).await.unwrap().is_none());
-    }
-
-    #[tokio::test]
-    async fn a_partial_block_round_trips_with_its_gaps() {
-        let surreal = crate::surreal::test_support::mem().await;
-        let project_id = crate::test_support::seed_project_surreal(&surreal, "partial").await;
-        let partial = Matter {
-            case_number: "00CV000003".into(),
-            ..Matter::default()
-        };
-        let stored = replace_for_project(&surreal, project_id, Some(&partial))
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(stored.matter, partial);
-    }
-
-    /// LAW-242: the signing date survives a sync round trip, including the
-    /// decision to declare none.
-    #[tokio::test]
-    async fn the_signature_date_round_trips_through_the_store() {
-        let surreal = crate::surreal::test_support::mem().await;
-        let project_id = crate::test_support::seed_project_surreal(&surreal, "signed_on").await;
-        let mut dated = matter("00CV000005");
-        dated.signed_on = Some("2026-11-11".into());
-
-        let stored = replace_for_project(&surreal, project_id, Some(&dated))
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(stored.matter.signed_on.as_deref(), Some("2026-11-11"));
-
-        replace_for_project(&surreal, project_id, Some(&matter("00CV000005")))
-            .await
-            .unwrap();
-        let read = for_project(&surreal, project_id).await.unwrap().unwrap();
+        let stored = crate::postgres_mirror::from_source(replace_for_project(
+            &surreal,
+            project_id,
+            Some(&declared),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(stored.matter, declared);
         assert_eq!(
-            read.matter.signed_on, None,
-            "an unsigned matter stores no date"
+            crate::postgres_mirror::from_source(for_project(&surreal, project_id))
+                .await
+                .unwrap(),
+            Some(stored)
+        );
+
+        assert!(crate::postgres_mirror::from_source(replace_for_project(
+            &surreal,
+            project_id,
+            Some(&Matter::default()),
+        ))
+        .await
+        .unwrap()
+        .is_none());
+        assert!(
+            crate::postgres_mirror::from_source(for_project(&surreal, project_id))
+                .await
+                .unwrap()
+                .is_none()
         );
     }
 
     #[tokio::test]
-    async fn the_matter_delete_cascade_removes_the_caption() {
-        let surreal = crate::surreal::test_support::mem().await;
-        let project_id = crate::test_support::seed_project_surreal(&surreal, "cascade").await;
-        replace_for_project(&surreal, project_id, Some(&matter("00CV000004")))
-            .await
-            .unwrap();
-        super::delete_for_project(&surreal, project_id)
-            .await
-            .unwrap();
-        assert!(for_project(&surreal, project_id).await.unwrap().is_none());
+    async fn a_sync_replaces_the_block_and_an_empty_block_removes_it() {
+        use crate::postgres::fixtures::{activate_family, firm_for_notation, workflow_fixture};
+        use crate::postgres::{matter::with_test_db, PostgresDb};
+        use crate::postgres_backfill::family::Family;
+        use crate::postgres_mirror::tests::{connect, fresh_schema};
+        use crate::surreal::SurrealDb;
+
+        let Some((options, database)) = fresh_schema().await else {
+            panic!("PostgreSQL-backed caption tests require the disposable test server");
+        };
+        let pg: PostgresDb = connect(&options, &database).await;
+        activate_family(&pg, Family::Satellites).await;
+        let (_, notation, _) = workflow_fixture(&pg).await;
+        let (_, project_id) = firm_for_notation(&pg, notation).await;
+        let unavailable = SurrealDb::uninitialized();
+
+        with_test_db(pg.clone(), async {
+            assert!(for_project(&unavailable, project_id)
+                .await
+                .unwrap()
+                .is_none());
+
+            let stored = replace_for_project(&unavailable, project_id, Some(&matter("00CV000001")))
+                .await
+                .unwrap()
+                .expect("a declared block is stored");
+            assert_eq!(stored.matter, matter("00CV000001"));
+            assert!(!stored.synced_at.is_empty());
+
+            replace_for_project(&unavailable, project_id, Some(&matter("00CV000002")))
+                .await
+                .unwrap();
+            let read = for_project(&unavailable, project_id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(read.matter.case_number, "00CV000002", "one row per Project");
+
+            let partial = Matter {
+                case_number: "00CV000003".into(),
+                ..Matter::default()
+            };
+            let stored = replace_for_project(&unavailable, project_id, Some(&partial))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(stored.matter, partial);
+
+            // LAW-242: the signing date survives a sync round trip, including
+            // the decision to declare none.
+            let mut dated = matter("00CV000005");
+            dated.signed_on = Some("2026-11-11".into());
+            let stored = replace_for_project(&unavailable, project_id, Some(&dated))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(stored.matter.signed_on.as_deref(), Some("2026-11-11"));
+            replace_for_project(&unavailable, project_id, Some(&matter("00CV000005")))
+                .await
+                .unwrap();
+            let read = for_project(&unavailable, project_id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                read.matter.signed_on, None,
+                "an unsigned matter stores no date"
+            );
+
+            replace_for_project(&unavailable, project_id, Some(&matter("00CV000004")))
+                .await
+                .unwrap();
+            super::delete_for_project(&unavailable, project_id)
+                .await
+                .unwrap();
+            assert!(for_project(&unavailable, project_id)
+                .await
+                .unwrap()
+                .is_none());
+
+            let cleared = replace_for_project(&unavailable, project_id, Some(&Matter::default()))
+                .await
+                .unwrap();
+            assert!(cleared.is_none());
+            assert!(for_project(&unavailable, project_id)
+                .await
+                .unwrap()
+                .is_none());
+        })
+        .await;
+        pg.pool().close().await;
     }
 }

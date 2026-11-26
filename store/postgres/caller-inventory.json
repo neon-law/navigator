@@ -10647,6 +10647,7 @@
       "store/src/git_repositories.rs",
       "store/src/glossary.rs",
       "store/src/glossary_postgres_tests.rs",
+      "store/src/matter_captions.rs",
       "store/src/matter_projections.rs",
       "store/src/matter_record_links.rs",
       "store/src/notarizations.rs",
