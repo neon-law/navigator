@@ -1389,8 +1389,7 @@ impl BrandKey {
         if matches!(
             path,
             "/our-story" | "/our-story.html" | "/contact.html" | "/index.html"
-        )
-            || path.starts_with("/practice/")
+        ) || path.starts_with("/practice/")
             || path.starts_with("/attorneys/")
             || path.starts_with("/legal/")
         {
