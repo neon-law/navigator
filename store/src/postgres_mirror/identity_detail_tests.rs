@@ -242,17 +242,13 @@ async fn details(
             .await
             .unwrap()
             .id;
-        let token = crate::email_tokens::mint(
-            source,
-            holder,
-            "captured@example.com",
-            crate::email_tokens::PURPOSE_EMAIL_CONFIRM,
-            "synthetic-plaintext-token",
-            Utc::now() + chrono::Duration::hours(1),
-        )
-        .await
-        .unwrap()
-        .id;
+        let token = Uuid::now_v7();
+        source.query("CREATE $id SET person_id=$person, email='captured@example.com', purpose='email_confirm', token_hash=$hash, expires_at=$expires")
+            .bind(("id", record_id("email_token", token)))
+            .bind(("person", record_id("person", holder)))
+            .bind(("hash", crate::git_access_tokens::hash_token("synthetic-plaintext-token")))
+            .bind(("expires", surrealdb::types::Datetime::from(Utc::now() + chrono::Duration::hours(1))))
+            .await.unwrap().check().unwrap();
         let delegate = crate::delegations::grant(
             source,
             &NewDelegation {

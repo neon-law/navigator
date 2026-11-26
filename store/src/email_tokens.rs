@@ -12,31 +12,17 @@
 //! The hash is shared with [`crate::git_access_tokens::hash_token`] so
 //! there is one token-hashing seam in the workspace, not two.
 //!
-//! # This table lives in SurrealDB
-//!
-//! `email_token` is the first table the phase-3 port moved (#1093,
-//! #1159). Two consequences are visible in the signatures below.
-//!
-//! `person_id` is a `record<person>` link now that the person row exists
-//! in this engine (ENG-19). It stays a [`Uuid`] in this module's
-//! signatures: a caller logging `person_id` or passing one in should not
-//! have to know how the engine spells a key. Note the engine does not
-//! validate a link against an existing row, so a token minted for a
-//! person that was never written is accepted here.
-//!
-//! The instants are native `datetime` rather than RFC 3339 strings, so the
-//! engine parses them on write and an unparseable stored timestamp is
-//! unrepresentable. Nothing downstream has to treat one as expired.
+//! PostgreSQL is the authority for email tokens. Source imports read captured
+//! rows through the explicit identity importer.
 
 use chrono::{DateTime, Utc};
-use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
 use sqlx::{postgres::PgRow, AssertSqlSafe, Row};
 
 use crate::git_access_tokens::hash_token;
 use crate::postgres::identity::{self as authority, AuthorityError};
-use crate::surreal::{record_id, SurrealDb};
+use crate::surreal::SurrealDb;
 
 /// The token in a "reset your password" email. Claiming it lets the
 /// holder set a new password in Identity Platform for the account.
@@ -47,22 +33,10 @@ pub const PURPOSE_EMAIL_CONFIRM: &str = "email_confirm";
 
 /// The table these rows live in.
 const TABLE: &str = "email_token";
-/// The table `person_id` links into.
-const PERSON_TABLE: &str = "person";
 
 /// Errors minting, validating, or consuming a token.
 #[derive(Debug, thiserror::Error)]
 pub enum TokenError {
-    /// A database operation failed.
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
-    /// `CREATE` reported success but returned no row, or returned one
-    /// whose record id is not a native UUID key. Neither is a state a
-    /// caller can act on, and neither is reachable through this
-    /// module's own writes — it means the row was written by something
-    /// that bypassed [`crate::surreal::record_id`].
-    #[error("minting an email token returned no usable row")]
-    MintReturnedNothing,
     /// PostgreSQL identity authority is configured and failed.
     #[error(transparent)]
     Authority(#[from] AuthorityError),
@@ -82,11 +56,6 @@ fn from_pg(row: &PgRow) -> Result<EmailToken, sqlx::Error> {
 }
 
 /// A minted token row, as callers read it back.
-///
-/// `id` and `person_id` are `Uuid` at this boundary even though the
-/// engine stores the record id as a native UUID record key — a caller
-/// logging `person_id` or passing `id` back to [`consume`] should not
-/// have to know which engine answered.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EmailToken {
     pub id: Uuid,
@@ -99,37 +68,11 @@ pub struct EmailToken {
     pub inserted_at: DateTime<Utc>,
 }
 
-/// The row as the engine reads and writes it. Separate from
-/// [`EmailToken`] because the SDK owns its own `Uuid` and `Datetime`,
-/// and the conversion belongs at this seam rather than in every caller.
-#[derive(SurrealValue)]
-struct EmailTokenRow {
-    id: surrealdb::types::RecordId,
-    person_id: surrealdb::types::RecordId,
-    email: String,
-    purpose: String,
-    token_hash: String,
-    expires_at: surrealdb::types::Datetime,
-    used_at: Option<surrealdb::types::Datetime>,
-    inserted_at: surrealdb::types::Datetime,
-}
-
-impl EmailTokenRow {
-    /// `None` when the record id is not a native UUID key — a row
-    /// written with the string spelling [`crate::surreal::record_id`]
-    /// cannot produce. See that module for why the two differ.
-    fn into_token(self) -> Option<EmailToken> {
-        Some(EmailToken {
-            id: crate::surreal::record_uuid(&self.id)?,
-            person_id: crate::surreal::record_uuid(&self.person_id)?,
-            email: self.email,
-            purpose: self.purpose,
-            token_hash: self.token_hash,
-            expires_at: self.expires_at.into(),
-            used_at: self.used_at.map(Into::into),
-            inserted_at: self.inserted_at.into(),
-        })
-    }
+/// Tokens require admitted PostgreSQL authority, including in Source contexts.
+async fn required_authority() -> Result<crate::postgres::PostgresDb, TokenError> {
+    authority::authority().await?.ok_or_else(|| {
+        AuthorityError::Unavailable("email tokens are unavailable in Source context".into()).into()
+    })
 }
 
 /// Persist a freshly minted token and return the stored row. The caller
@@ -138,9 +81,9 @@ impl EmailTokenRow {
 /// [`PURPOSE_EMAIL_CONFIRM`] constants.
 ///
 /// # Errors
-/// [`TokenError::Db`] if the insert fails.
+/// [`TokenError::Authority`] if the insert fails.
 pub async fn mint(
-    db: &SurrealDb,
+    _db: &SurrealDb,
     person_id: Uuid,
     email: &str,
     purpose: &str,
@@ -148,50 +91,22 @@ pub async fn mint(
     expires_at: DateTime<Utc>,
 ) -> Result<EmailToken, TokenError> {
     let id = Uuid::now_v7();
-    if let Some(pg) = authority::authority().await? {
-        let row = sqlx::query(AssertSqlSafe(format!(
-            "INSERT INTO {TABLE} (id, person_id, email, purpose, token_hash, expires_at) \
+    let pg = required_authority().await?;
+    let row = sqlx::query(AssertSqlSafe(format!(
+        "INSERT INTO {TABLE} (id, person_id, email, purpose, token_hash, expires_at) \
              VALUES ($1, $2, $3, $4, $5, $6) RETURNING {SELECT}"
-        )))
-        .bind(id)
-        .bind(person_id)
-        .bind(email)
-        .bind(purpose)
-        .bind(hash_token(plaintext))
-        .bind(expires_at)
-        .fetch_one(&pg.0)
-        .await
-        .map_err(AuthorityError::from)?;
-        let token = from_pg(&row).map_err(AuthorityError::from)?;
+    )))
+    .bind(id)
+    .bind(person_id)
+    .bind(email)
+    .bind(purpose)
+    .bind(hash_token(plaintext))
+    .bind(expires_at)
+    .fetch_one(&pg.0)
+    .await
+    .map_err(AuthorityError::from)?;
+    let token = from_pg(&row).map_err(AuthorityError::from)?;
 
-        return Ok(token);
-    }
-    let mut response = db
-        .query(format!(
-            "CREATE $id SET \
-             person_id = $person_id, \
-             email = $email, \
-             purpose = $purpose, \
-             token_hash = $token_hash, \
-             expires_at = $expires_at, \
-             used_at = NONE \
-             RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind(("person_id", record_id(PERSON_TABLE, person_id)))
-        .bind(("email", email.to_string()))
-        .bind(("purpose", purpose.to_string()))
-        .bind(("token_hash", hash_token(plaintext)))
-        .bind(("expires_at", surrealdb::types::Datetime::from(expires_at)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-
-    let row: Option<EmailTokenRow> = response.take(0)?;
-    let token = row
-        .and_then(EmailTokenRow::into_token)
-        .ok_or(TokenError::MintReturnedNothing)?;
-    crate::postgres_mirror::after_write(db, crate::postgres_mirror::MirrorKey::EmailToken(id))
-        .await;
     Ok(token)
 }
 
@@ -203,50 +118,30 @@ pub async fn mint(
 /// never be used to probe which case occurred.
 ///
 /// # Errors
-/// [`TokenError::Db`] if the lookup fails.
+/// [`TokenError::Authority`] if the lookup fails.
 pub async fn validate(
-    db: &SurrealDb,
+    _db: &SurrealDb,
     plaintext: &str,
     purpose: &str,
     now: DateTime<Utc>,
 ) -> Result<Option<EmailToken>, TokenError> {
-    // Single use and expiry are both engine-side: `used_at = NONE` and
-    // `expires_at > $now` are the two gates, applied in the query rather
-    // than in Rust after loading the row.
-    if let Some(pg) = authority::authority().await? {
-        let row = sqlx::query(AssertSqlSafe(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE token_hash = $1 AND purpose = $2 \
+    // Apply single-use and expiry gates in the query.
+    let pg = required_authority().await?;
+    let row = sqlx::query(AssertSqlSafe(format!(
+        "SELECT {SELECT} FROM {TABLE} WHERE token_hash = $1 AND purpose = $2 \
              AND used_at IS NULL AND expires_at > $3 LIMIT 1"
-        )))
-        .bind(hash_token(plaintext))
-        .bind(purpose)
-        .bind(now)
-        .fetch_optional(&pg.0)
-        .await
-        .map_err(AuthorityError::from)?;
-        return Ok(row
-            .as_ref()
-            .map(from_pg)
-            .transpose()
-            .map_err(AuthorityError::from)?);
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} \
-             WHERE token_hash = $hash \
-             AND purpose = $purpose \
-             AND used_at IS NONE \
-             AND expires_at > $now \
-             LIMIT 1"
-        ))
-        .bind(("hash", hash_token(plaintext)))
-        .bind(("purpose", purpose.to_string()))
-        .bind(("now", surrealdb::types::Datetime::from(now)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-
-    let rows: Vec<EmailTokenRow> = response.take(0)?;
-    Ok(rows.into_iter().next().and_then(EmailTokenRow::into_token))
+    )))
+    .bind(hash_token(plaintext))
+    .bind(purpose)
+    .bind(now)
+    .fetch_optional(&pg.0)
+    .await
+    .map_err(AuthorityError::from)?;
+    Ok(row
+        .as_ref()
+        .map(from_pg)
+        .transpose()
+        .map_err(AuthorityError::from)?)
 }
 
 /// Mark a token spent by stamping `used_at = now`. Single-use is then
@@ -255,32 +150,22 @@ pub async fn validate(
 /// harmless, and stamping one that does not exist is a no-op.
 ///
 /// # Errors
-/// [`TokenError::Db`] if the update fails.
-pub async fn consume(db: &SurrealDb, token_id: Uuid, now: DateTime<Utc>) -> Result<(), TokenError> {
-    if let Some(pg) = authority::authority().await? {
-        sqlx::query(AssertSqlSafe(format!(
-            "UPDATE {TABLE} SET used_at = $2, updated_at = $2 WHERE id = $1"
-        )))
-        .bind(token_id)
-        .bind(now)
-        .execute(&pg.0)
-        .await
-        .map_err(AuthorityError::from)?;
-
-        return Ok(());
-    }
-    db.query(format!(
-        "UPDATE $id SET used_at = $now, updated_at = $now RETURN {SELECT}"
-    ))
-    .bind(("id", record_id(TABLE, token_id)))
-    .bind(("now", surrealdb::types::Datetime::from(now)))
+/// [`TokenError::Authority`] if the update fails.
+pub async fn consume(
+    _db: &SurrealDb,
+    token_id: Uuid,
+    now: DateTime<Utc>,
+) -> Result<(), TokenError> {
+    let pg = required_authority().await?;
+    sqlx::query(AssertSqlSafe(format!(
+        "UPDATE {TABLE} SET used_at = $2, updated_at = $2 WHERE id = $1"
+    )))
+    .bind(token_id)
+    .bind(now)
+    .execute(&pg.0)
     .await
-    .and_then(surrealdb::IndexedResults::check)?;
-    crate::postgres_mirror::after_write(
-        db,
-        crate::postgres_mirror::MirrorKey::EmailToken(token_id),
-    )
-    .await;
+    .map_err(AuthorityError::from)?;
+
     Ok(())
 }
 
@@ -291,51 +176,30 @@ pub async fn consume(db: &SurrealDb, token_id: Uuid, now: DateTime<Utc>) -> Resu
 /// mailbox.
 ///
 /// # Errors
-/// [`TokenError::Db`] if the lookup fails.
+/// [`TokenError::Authority`] if the lookup fails.
 pub async fn has_live_token_since(
-    db: &SurrealDb,
+    _db: &SurrealDb,
     person_id: Uuid,
     purpose: &str,
     since: DateTime<Utc>,
     now: DateTime<Utc>,
 ) -> Result<bool, TokenError> {
-    if let Some(pg) = authority::authority().await? {
-        return Ok(sqlx::query_scalar(AssertSqlSafe(format!(
-            "SELECT EXISTS (SELECT 1 FROM {TABLE} WHERE person_id = $1 AND purpose = $2 \
+    let pg = required_authority().await?;
+    Ok(sqlx::query_scalar(AssertSqlSafe(format!(
+        "SELECT EXISTS (SELECT 1 FROM {TABLE} WHERE person_id = $1 AND purpose = $2 \
              AND used_at IS NULL AND expires_at > $3 AND inserted_at >= $4)"
-        )))
-        .bind(person_id)
-        .bind(purpose)
-        .bind(now)
-        .bind(since)
-        .fetch_one(&pg.0)
-        .await
-        .map_err(AuthorityError::from)?);
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT VALUE count() FROM {TABLE} \
-             WHERE person_id = $person_id \
-             AND purpose = $purpose \
-             AND used_at IS NONE \
-             AND expires_at > $now \
-             AND inserted_at >= $since \
-             GROUP ALL"
-        ))
-        .bind(("person_id", record_id(PERSON_TABLE, person_id)))
-        .bind(("purpose", purpose.to_string()))
-        .bind(("now", surrealdb::types::Datetime::from(now)))
-        .bind(("since", surrealdb::types::Datetime::from(since)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-
-    let counts: Vec<i64> = response.take(0)?;
-    Ok(counts.first().is_some_and(|count| *count > 0))
+    )))
+    .bind(person_id)
+    .bind(purpose)
+    .bind(now)
+    .bind(since)
+    .fetch_one(&pg.0)
+    .await
+    .map_err(AuthorityError::from)?)
 }
 
 /// The projection every read shares, so one field list describes the
-/// row and a new column cannot reach [`EmailTokenRow`] from only one
-/// query.
+/// row and a new column is read consistently.
 const SELECT: &str = "id, person_id, email, purpose, token_hash, expires_at, used_at, inserted_at";
 
 #[cfg(test)]
@@ -355,6 +219,40 @@ mod tests {
         .await
         .unwrap()
         .id
+    }
+
+    #[tokio::test]
+    async fn source_context_cannot_access_tokens() {
+        let db = SurrealDb::uninitialized();
+        let now = Utc::now();
+        crate::postgres_mirror::from_source(async {
+            let id = Uuid::now_v7();
+            assert!(matches!(
+                mint(
+                    &db,
+                    id,
+                    "synthetic@example.test",
+                    PURPOSE_EMAIL_CONFIRM,
+                    "synthetic",
+                    now
+                )
+                .await,
+                Err(TokenError::Authority(_))
+            ));
+            assert!(matches!(
+                validate(&db, "synthetic", PURPOSE_EMAIL_CONFIRM, now).await,
+                Err(TokenError::Authority(_))
+            ));
+            assert!(matches!(
+                consume(&db, id, now).await,
+                Err(TokenError::Authority(_))
+            ));
+            assert!(matches!(
+                has_live_token_since(&db, id, PURPOSE_EMAIL_CONFIRM, now, now).await,
+                Err(TokenError::Authority(_))
+            ));
+        })
+        .await;
     }
 
     #[tokio::test]
