@@ -1635,10 +1635,18 @@ mod tests {
     /// wait.
     macro_rules! with_native_triage_fixture {
         ($db:ident, $pg:ident, $body:block) => {
-            crate::test_support::with_native_application_fixture(|$db, fixture_pg| async move {
+            crate::test_support::with_postgres(async {
+                let pg = crate::postgres::PostgresDb::application()
+                    .await
+                    .expect("required PostgreSQL application fixture");
                 #[allow(unused_variables)]
-                let $pg = fixture_pg;
-                $body
+                let $pg = pg.clone();
+                crate::postgres::PostgresDb::with_application_db(pg, async move {
+                    let $db = crate::surreal::SurrealDb::uninitialized();
+                    $body
+                })
+                .await
+                .expect("native PostgreSQL application fixture is admitted");
             })
             .await
         };
@@ -1648,7 +1656,7 @@ mod tests {
     async fn unclassified_email_lands_needs_human() {
         #[rustfmt::skip]
         with_native_triage_fixture!(db, pg, {
-let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+let firm = crate::test_support::seed_firm_with_new_brand(&db, "neon").await.0;
         let message = inbound(&db, firm, "email", "triage-uncertain").await;
         let label = privilege_label("email", true, None);
         assert_eq!(label, PrivilegeLabel::Uncertain);
@@ -1683,7 +1691,7 @@ let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
     async fn social_triage_settles_without_a_model() {
         #[rustfmt::skip]
         with_native_triage_fixture!(db, pg, {
-let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+let firm = crate::test_support::seed_firm_with_new_brand(&db, "neon").await.0;
         let message = inbound(&db, firm, "instagram", "triage-social").await;
         let label = privilege_label("instagram", true, None);
         assert_eq!(label, PrivilegeLabel::NotPrivileged);
@@ -1715,7 +1723,7 @@ let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
     async fn cross_firm_project_suggestions_are_refused() {
         #[rustfmt::skip]
         with_native_triage_fixture!(db, pg, {
-let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+let firm = crate::test_support::seed_firm_with_new_brand(&db, "neon").await.0;
         // The suggestion check compares Project ownership, so the second
         // Firm needs no Brand — just itself and a Project.
         let other_admin = crate::persons::create(
@@ -1773,7 +1781,7 @@ let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
     async fn a_replayed_triage_does_not_overwrite_the_first() {
         #[rustfmt::skip]
         with_native_triage_fixture!(db, pg, {
-let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+let firm = crate::test_support::seed_firm_with_new_brand(&db, "neon").await.0;
         let message = inbound(&db, firm, "email", "triage-replay").await;
         let first = record(
             &db,
@@ -1899,8 +1907,8 @@ let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
     async fn the_queue_lists_awaiting_rows_and_hides_the_rest() {
         #[rustfmt::skip]
         with_native_triage_fixture!(db, pg, {
-let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
-        let other = crate::test_support::seed_firm_with_brand(&db, "summons").await;
+let firm = crate::test_support::seed_firm_with_new_brand(&db, "neon").await.0;
+        let other = crate::test_support::seed_firm_with_new_brand(&db, "summons").await.0;
         let owner = person(&db, "Queue Owner", Role::Owner).await;
         let lawyer = person(&db, "Queue Lawyer", Role::Lawyer).await;
         member(&db, lawyer, firm, FirmMembership::Lawyer).await;
@@ -1952,7 +1960,7 @@ let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
     async fn an_owner_confirms_the_suggested_project() {
         #[rustfmt::skip]
         with_native_triage_fixture!(db, pg, {
-let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+let firm = crate::test_support::seed_firm_with_new_brand(&db, "neon").await.0;
         let owner = person(&db, "Confirm Owner", Role::Owner).await;
         let project =
             crate::test_support::seed_project_on_firm(&db, Some(firm), "Confirm Target").await;
@@ -2045,7 +2053,7 @@ let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
     async fn confirm_takes_the_suggested_project_only() {
         #[rustfmt::skip]
         with_native_triage_fixture!(db, pg, {
-let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+let firm = crate::test_support::seed_firm_with_new_brand(&db, "neon").await.0;
         let owner = person(&db, "Confirm Strict Owner", Role::Owner).await;
         let suggested =
             crate::test_support::seed_project_on_firm(&db, Some(firm), "Suggested Matter").await;
@@ -2068,7 +2076,7 @@ let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
     async fn a_lawyer_confirms_only_while_participating() {
         #[rustfmt::skip]
         with_native_triage_fixture!(db, pg, {
-let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+let firm = crate::test_support::seed_firm_with_new_brand(&db, "neon").await.0;
         let project =
             crate::test_support::seed_project_on_firm(&db, Some(firm), "Participation Matter")
                 .await;
@@ -2137,7 +2145,7 @@ let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
     async fn an_override_records_the_correction_as_a_labeled_example() {
         #[rustfmt::skip]
         with_native_triage_fixture!(db, pg, {
-let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+let firm = crate::test_support::seed_firm_with_new_brand(&db, "neon").await.0;
         let owner = person(&db, "Override Owner", Role::Owner).await;
         let suggested =
             crate::test_support::seed_project_on_firm(&db, Some(firm), "Wrong Suggestion").await;
@@ -2170,7 +2178,7 @@ let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
         assert_eq!(conversation.project_id, Some(corrected.id));
 
         // The correction crosses Firms at its own peril.
-        let other = crate::test_support::seed_firm_with_brand(&db, "summons").await;
+        let other = crate::test_support::seed_firm_with_new_brand(&db, "summons").await.0;
         let foreign =
             crate::test_support::seed_project_on_firm(&db, Some(other), "Foreign Matter").await;
         let (open_row, _) = needs_human_with_suggestion(&db, firm, "override-foreign", None).await;
@@ -2188,7 +2196,7 @@ let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
     async fn resolving_privilege_keeps_the_rule_layer_authoritative() {
         #[rustfmt::skip]
         with_native_triage_fixture!(db, pg, {
-let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+let firm = crate::test_support::seed_firm_with_new_brand(&db, "neon").await.0;
         let owner = person(&db, "Resolve Owner", Role::Owner).await;
 
         // The human may settle client email either way.
@@ -2301,7 +2309,7 @@ let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
     async fn a_private_social_message_waits_for_privilege_review_after_assignment() {
         #[rustfmt::skip]
         with_native_triage_fixture!(db, pg, {
-let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+let firm = crate::test_support::seed_firm_with_new_brand(&db, "neon").await.0;
         let owner = person(&db, "Private Review Owner", Role::Owner).await;
         let project =
             crate::test_support::seed_project_on_firm(&db, Some(firm), "Private Review Matter")
@@ -2376,7 +2384,7 @@ let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
     async fn a_rerun_returns_a_resolved_row_to_the_queue() {
         #[rustfmt::skip]
         with_native_triage_fixture!(db, pg, {
-let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+let firm = crate::test_support::seed_firm_with_new_brand(&db, "neon").await.0;
         let owner = person(&db, "Rerun Owner", Role::Owner).await;
         let project =
             crate::test_support::seed_project_on_firm(&db, Some(firm), "Rerun Matter").await;
@@ -2431,8 +2439,8 @@ let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
     async fn an_admin_cannot_decide_another_firms_triage() {
         #[rustfmt::skip]
         with_native_triage_fixture!(db, pg, {
-let own_firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
-        let other_firm = crate::test_support::seed_firm_with_brand(&db, "vesta").await;
+let own_firm = crate::test_support::seed_firm_with_new_brand(&db, "neon").await.0;
+        let other_firm = crate::test_support::seed_firm_with_new_brand(&db, "vesta").await.0;
         let admin = person(&db, "Scoped Admin", Role::Admin).await;
         member(&db, admin, own_firm, FirmMembership::Admin).await;
         let project =
@@ -2475,7 +2483,7 @@ let own_firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
     async fn automated_private_social_claims_cannot_bypass_the_store_rules() {
         #[rustfmt::skip]
         with_native_triage_fixture!(db, pg, {
-let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+let firm = crate::test_support::seed_firm_with_new_brand(&db, "neon").await.0;
         let message = inbound(&db, firm, "x", "private-store-claim").await;
         sqlx::query("UPDATE message SET visibility = 'private' WHERE id = $1")
             .bind(message.message_id)
@@ -2504,8 +2512,8 @@ let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
     async fn a_triage_record_cannot_claim_another_messages_firm() {
         #[rustfmt::skip]
         with_native_triage_fixture!(db, pg, {
-let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
-        let other = crate::test_support::seed_firm_with_brand(&db, "summons").await;
+let firm = crate::test_support::seed_firm_with_new_brand(&db, "neon").await.0;
+        let other = crate::test_support::seed_firm_with_new_brand(&db, "summons").await.0;
         let message = inbound(&db, firm, "email", "foreign-record-claim").await;
         let result = record(
             &db,
@@ -2531,7 +2539,7 @@ let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
     async fn target_participation_does_not_authorize_taking_another_matter_conversation() {
         #[rustfmt::skip]
         with_native_triage_fixture!(db, pg, {
-let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+let firm = crate::test_support::seed_firm_with_new_brand(&db, "neon").await.0;
         let owner = person(&db, "Assignment Owner", Role::Owner).await;
         let lawyer = person(&db, "Target Reviewer", Role::Lawyer).await;
         let source =
@@ -2586,7 +2594,7 @@ let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
     async fn firm_membership_does_not_authorize_review_of_an_unseen_assigned_matter() {
         #[rustfmt::skip]
         with_native_triage_fixture!(db, pg, {
-let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+let firm = crate::test_support::seed_firm_with_new_brand(&db, "neon").await.0;
         let owner = person(&db, "Scope Owner", Role::Owner).await;
         let lawyer = person(&db, "synthetic reviewer", Role::Lawyer).await;
         member(&db, lawyer, firm, FirmMembership::Lawyer).await;
@@ -2634,7 +2642,7 @@ let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
     async fn assigned_matter_audit_content_requires_project_participation() {
         #[rustfmt::skip]
         with_native_triage_fixture!(db, pg, {
-let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+let firm = crate::test_support::seed_firm_with_new_brand(&db, "neon").await.0;
         let project =
             crate::test_support::seed_project_on_firm(&db, Some(firm), "Private Audit Project")
                 .await;
