@@ -730,3 +730,7 @@ pub(crate) async fn reset_fact_differences(
 #[cfg(test)]
 #[path = "workflow_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "notation_event_import_tests.rs"]
+mod notation_event_import_tests;

@@ -63,11 +63,25 @@ async fn both_endpoint_kinds_converge_and_source_deletion_removes_the_mirror() {
     };
     let pg = connect(&options, &database).await;
     let surreal = mem_surreal().await;
-    let rows = fixture(&surreal).await;
+    let rows = super::super::from_source(fixture(&surreal)).await;
 
-    assert_mirrors(&surreal, &pg, &rows).await;
-    assert_reconcile_repairs_drift(&surreal, &pg, &rows).await;
-    delete_source_person_reference(&surreal, &pg, &rows).await;
+    crate::postgres_graph::with_test_authority(
+        None,
+        super::super::from_source(super::super::during_initial_copy(async {
+            assert_mirrors(&surreal, &pg, &rows).await;
+            assert!(crate::project_references::reference(
+                &surreal,
+                rows.project_id,
+                Party::person(rows.person_id),
+                REASON_COUNTERPARTY_OFFICER,
+            )
+            .await
+            .is_err());
+            assert_reconcile_repairs_drift(&surreal, &pg, &rows).await;
+            delete_source_person_reference(&surreal, &pg, &rows).await;
+        })),
+    )
+    .await;
 }
 
 struct Fixture {
@@ -92,21 +106,21 @@ async fn fixture(surreal: &SurrealDb) -> Fixture {
     .await
     .unwrap()
     .id;
-    let person_reference = crate::project_references::reference(
+    surreal.query("RELATE $project->project_reference->$person SET reason=$person_reason,inserted_at=time::now(),updated_at=time::now(); RELATE $project->project_reference->$entity SET reason=$entity_reason,inserted_at=time::now(),updated_at=time::now()")
+        .bind(("project", record_id("project", project_id)))
+        .bind(("person", record_id("person", person)))
+        .bind(("entity", record_id("entity", entity_id)))
+        .bind(("person_reason", REASON_COUNTERPARTY_OFFICER.to_string()))
+        .bind(("entity_reason", REASON_COUNTERPARTY_ENTITY.to_string()))
+        .await.unwrap().check().unwrap();
+    let person_reference = crate::postgres_mirror::from_source(crate::project_references::find(
         surreal,
         project_id,
         Party::person(person),
         REASON_COUNTERPARTY_OFFICER,
-    )
+    ))
     .await
-    .unwrap();
-    crate::project_references::reference(
-        surreal,
-        project_id,
-        Party::entity(entity_id),
-        REASON_COUNTERPARTY_ENTITY,
-    )
-    .await
+    .unwrap()
     .unwrap();
     Fixture {
         project_id,
@@ -209,8 +223,14 @@ async fn the_age_engine_holds_the_graph_tables_and_the_mirror_stands_down() {
     let surreal = mem_surreal().await;
     // The Surreal-era rows, mirrored before the cutover: PostgreSQL now
     // holds the Project, the Person, the Entity, and both references.
-    let rows = fixture(&surreal).await;
-    assert_mirrors(&surreal, &pg, &rows).await;
+    let rows = super::super::from_source(fixture(&surreal)).await;
+    crate::postgres_graph::with_test_authority(
+        None,
+        super::super::from_source(super::super::during_initial_copy(assert_mirrors(
+            &surreal, &pg, &rows,
+        ))),
+    )
+    .await;
     let MirrorKey::ProjectReference {
         party_id: entity_id,
         ..
@@ -224,7 +244,9 @@ async fn the_age_engine_holds_the_graph_tables_and_the_mirror_stands_down() {
         // A Surreal-era row still copies across, but a row SurrealDB lacks
         // deletes nothing PostgreSQL holds.
         assert_eq!(
-            mirror(&surreal, &pg, &rows.entity_key).await.unwrap(),
+            super::super::from_source(mirror(&surreal, &pg, &rows.entity_key))
+                .await
+                .unwrap(),
             Mirrored::Unchanged
         );
         surreal

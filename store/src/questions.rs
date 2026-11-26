@@ -1,36 +1,8 @@
 //! The questionnaire's question catalog — one prompt presented to a
 //! respondent during template traversal — and every query against it.
 //!
-//! # Where this table lives
-//!
-//! PostgreSQL holds it wherever it is configured: every read and write
-//! here goes to PostgreSQL
-//! ([`crate::postgres::catalog`]).
-//!
-//! `questions` moved with wave five of #1093 (ENG-121), together with
-//! [`crate::answers`], because `answers.question_id` couples them: porting
-//! one without the other would leave the walker's hottest read spanning
-//! two engines.
-//!
-//! Rows are written by `cli import` out of template frontmatter and by the
-//! canonical seed, and read by every questionnaire surface — the lawyer
-//! walker, the client magic link, and the `/app/admin/questions` transparency
-//! listing.
-//!
-//! # Engine facts this module is shaped around
-//!
-//! **A unique violation carries no typed detail.** It arrives as an
-//! internal error with the index name in the message, so
-//! [`crate::surreal::retry::unique_violation`] discriminates on
-//! `question_code` — a `DEFINE INDEX` identifier this
-//! workspace chose in `store/src/schema/navigator.surql`, not prose.
-//!
-//! **The key-value layer is optimistic, so a write can lose a race.**
-//! [`writing`] re-runs the statement under the crate's one retry policy,
-//! [`crate::surreal::retry`]. That matters more here than it looks:
-//! `cli import` and the seed both run [`find_or_create`] on every boot, and
-//! the cucumber suite shares one engine across concurrent scenarios, so a
-//! writer that assumed exclusivity would flake rather than fail.
+//! PostgreSQL holds the catalog. Explicit Source reads support historical
+//! import, while application writes use the admitted catalog authority.
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -38,7 +10,7 @@ use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
 use crate::postgres::catalog;
-use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
+use crate::surreal::{record_id, record_uuid, SurrealDb};
 
 /// The table these rows live in.
 const TABLE: &str = "question";
@@ -133,6 +105,8 @@ pub enum QuestionError {
     /// module could not read back — see [`QuestionRow::into_question`].
     #[error("writing a question returned no usable row")]
     WriteReturnedNothing,
+    #[error("question writes require PostgreSQL authority")]
+    AuthorityUnavailable,
     /// The PostgreSQL catalog authority could not serve the call.
     #[error(transparent)]
     Postgres(#[from] catalog::CatalogError),
@@ -173,33 +147,6 @@ fn from_pg(row: &sqlx::postgres::PgRow) -> Result<Question, sqlx::Error> {
         inserted_at: row.try_get("inserted_at")?,
         updated_at: row.try_get("updated_at")?,
     })
-}
-
-/// Turn a write failure into the caller-correctable conflict it names, or
-/// leave it as a database fault. A unique violation carries **no typed
-/// detail** — the index name in the message is the only discriminator,
-/// identified by the shared classifier in [`crate::surreal::retry`].
-fn classify_write(error: surrealdb::Error) -> QuestionError {
-    if crate::surreal::retry::unique_violation(&error) == Some("question_code") {
-        QuestionError::CodeTaken
-    } else {
-        QuestionError::Db(error)
-    }
-}
-
-/// Run a write under the shared retry policy
-/// ([`crate::surreal::retry`]), mapping whatever finally comes back to
-/// this module's error.
-///
-/// Only the mapping lives here. How long a lost race is re-run, and
-/// which engine conditions count as a lost race, are one policy for the
-/// whole crate.
-async fn writing<F, Q>(attempt: F) -> Result<surrealdb::IndexedResults, QuestionError>
-where
-    F: FnMut() -> Q,
-    Q: std::future::IntoFuture<Output = Result<surrealdb::IndexedResults, surrealdb::Error>>,
-{
-    retry::writing(attempt).await.map_err(classify_write)
 }
 
 /// The fields a new question row carries.
@@ -369,53 +316,26 @@ pub async fn list_all(db: &SurrealDb) -> Result<Vec<Question>, QuestionError> {
 /// [`QuestionError::CodeTaken`] when another row already holds this code,
 /// and [`QuestionError::Db`] for anything else — including the schema
 /// ASSERT refusing an `audience` outside `lawyer`/`client`/`both`.
-pub async fn create(db: &SurrealDb, input: &NewQuestion) -> Result<Question, QuestionError> {
-    let id = Uuid::now_v7();
-    if let Some(pg) = catalog::authority().await? {
-        let row = catalog::row(
-            sqlx::query(PG_INSERT)
-                .bind(id)
-                .bind(input.code.trim().to_string())
-                .bind(input.prompt.clone())
-                .bind(input.answer_type.clone())
-                .bind(input.audience.clone()),
-            &pg,
-        )
-        .await
-        .map_err(catalog::CatalogError::from);
-        return match row {
-            Ok(row) => Ok(from_pg(&row)?),
-            Err(error) if error.violates("question_code_key") => Err(QuestionError::CodeTaken),
-            Err(error) => Err(error.into()),
-        };
-    }
-    let mut response = writing(|| {
-        db.query(format!(
-            "CREATE $id SET \
-             code = $code, \
-             prompt = $prompt, \
-             answer_type = $answer_type, \
-             audience = $audience \
-             RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind(("code", input.code.trim().to_string()))
-        .bind(("prompt", input.prompt.clone()))
-        .bind(("answer_type", input.answer_type.clone()))
-        .bind(("audience", input.audience.clone()))
-    })
-    .await?;
-
-    let row: Option<QuestionRow> = response.take(0)?;
-    let question = row
-        .and_then(QuestionRow::into_question)
-        .ok_or(QuestionError::WriteReturnedNothing)?;
-    crate::postgres_mirror::after_write(
-        db,
-        crate::postgres_mirror::MirrorKey::Question(question.id),
+pub async fn create(_db: &SurrealDb, input: &NewQuestion) -> Result<Question, QuestionError> {
+    let pg = catalog::authority()
+        .await?
+        .ok_or(QuestionError::AuthorityUnavailable)?;
+    let row = catalog::row(
+        sqlx::query(PG_INSERT)
+            .bind(Uuid::now_v7())
+            .bind(input.code.trim().to_string())
+            .bind(input.prompt.clone())
+            .bind(input.answer_type.clone())
+            .bind(input.audience.clone()),
+        &pg,
     )
-    .await;
-    Ok(question)
+    .await
+    .map_err(catalog::CatalogError::from);
+    match row {
+        Ok(row) => Ok(from_pg(&row)?),
+        Err(error) if error.violates("question_code_key") => Err(QuestionError::CodeTaken),
+        Err(error) => Err(error.into()),
+    }
 }
 
 /// Narrow the question holding `code` to `audience`, the seed's path for
@@ -426,38 +346,21 @@ pub async fn create(db: &SurrealDb, input: &NewQuestion) -> Result<Question, Que
 /// [`QuestionError::Db`] if the write fails, including the schema ASSERT
 /// refusing an `audience` outside `lawyer`/`client`/`both`.
 pub async fn set_audience(
-    db: &SurrealDb,
+    _db: &SurrealDb,
     code: &str,
     audience: &str,
 ) -> Result<Option<Question>, QuestionError> {
-    if let Some(pg) = catalog::authority().await? {
-        let row = catalog::maybe_row(
-            sqlx::query(PG_SET_AUDIENCE)
-                .bind(code.to_string())
-                .bind(audience.to_string()),
-            &pg,
-        )
-        .await?;
-        return Ok(row.as_ref().map(from_pg).transpose()?);
-    }
-    let response = writing(|| {
-        db.query(format!(
-            "UPDATE {TABLE} SET audience = $audience, updated_at = time::now() \
-             WHERE code = $code RETURN {SELECT}"
-        ))
-        .bind(("code", code.to_string()))
-        .bind(("audience", audience.to_string()))
-    })
-    .await?;
-    let updated = many(response)?;
-    crate::postgres_mirror::after_writes(
-        db,
-        updated
-            .iter()
-            .map(|question| crate::postgres_mirror::MirrorKey::Question(question.id)),
+    let pg = catalog::authority()
+        .await?
+        .ok_or(QuestionError::AuthorityUnavailable)?;
+    let row = catalog::maybe_row(
+        sqlx::query(PG_SET_AUDIENCE)
+            .bind(code.to_string())
+            .bind(audience.to_string()),
+        &pg,
     )
-    .await;
-    Ok(updated.into_iter().next())
+    .await?;
+    Ok(row.as_ref().map(from_pg).transpose()?)
 }
 
 /// Find the question holding `input.code`, creating it if absent.
@@ -499,7 +402,7 @@ mod tests {
         is_client_facing, list_all, NewQuestion, QuestionError, AUDIENCE_BOTH, AUDIENCE_CLIENT,
         AUDIENCE_LAWYER,
     };
-    use crate::surreal::test_support::mem;
+    use crate::test_support;
 
     #[test]
     fn audience_filters_the_client_visible_set() {
@@ -512,53 +415,62 @@ mod tests {
 
     #[tokio::test]
     async fn a_created_question_reads_back_whole() {
-        let db = mem().await;
-        let written = create(
-            &db,
-            &NewQuestion::new("client_name", "Your name?", "string"),
-        )
-        .await
-        .unwrap();
+        test_support::with_required_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            let written = create(
+                &db,
+                &NewQuestion::new("client_name", "Your name?", "string"),
+            )
+            .await
+            .unwrap();
 
-        assert_eq!(written.code, "client_name");
-        assert_eq!(written.prompt, "Your name?");
-        assert_eq!(written.answer_type, "string");
-        assert_eq!(
-            written.audience, AUDIENCE_BOTH,
-            "a question defaults to both sides of the intake"
-        );
-        assert_eq!(find_by_id(&db, written.id).await.unwrap(), Some(written));
+            assert_eq!(written.code, "client_name");
+            assert_eq!(written.prompt, "Your name?");
+            assert_eq!(written.answer_type, "string");
+            assert_eq!(
+                written.audience, AUDIENCE_BOTH,
+                "a question defaults to both sides of the intake"
+            );
+            assert_eq!(find_by_id(&db, written.id).await.unwrap(), Some(written));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_question_is_found_by_its_code() {
-        let db = mem().await;
-        let written = create(&db, &NewQuestion::new("trustee_name", "Who?", "string"))
-            .await
-            .unwrap();
+        test_support::with_required_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            let written = create(&db, &NewQuestion::new("trustee_name", "Who?", "string"))
+                .await
+                .unwrap();
 
-        assert_eq!(
-            find_by_code(&db, "trustee_name").await.unwrap(),
-            Some(written)
-        );
-        assert_eq!(find_by_code(&db, "no_such_code").await.unwrap(), None);
+            assert_eq!(
+                find_by_code(&db, "trustee_name").await.unwrap(),
+                Some(written)
+            );
+            assert_eq!(find_by_code(&db, "no_such_code").await.unwrap(), None);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_duplicate_code_is_refused_by_the_index() {
-        let db = mem().await;
-        create(
-            &db,
-            &NewQuestion::new("client_name", "Your name?", "string"),
-        )
-        .await
-        .unwrap();
+        test_support::with_required_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            create(
+                &db,
+                &NewQuestion::new("client_name", "Your name?", "string"),
+            )
+            .await
+            .unwrap();
 
-        let again = create(&db, &NewQuestion::new("client_name", "Again?", "string")).await;
-        assert!(
-            matches!(again, Err(QuestionError::CodeTaken)),
-            "a second row under one code must be refused; got {again:?}"
-        );
+            let again = create(&db, &NewQuestion::new("client_name", "Again?", "string")).await;
+            assert!(
+                matches!(again, Err(QuestionError::CodeTaken)),
+                "a second row under one code must be refused; got {again:?}"
+            );
+        })
+        .await;
     }
 
     /// The seed and `cli import` both run on every boot, so a second pass
@@ -566,121 +478,139 @@ mod tests {
     /// the template-authored prompt.
     #[tokio::test]
     async fn find_or_create_is_idempotent_and_leaves_the_existing_row_alone() {
-        let db = mem().await;
-        let first = find_or_create(
-            &db,
-            &NewQuestion::new("client_name", "Your name?", "string"),
-        )
-        .await
-        .unwrap();
-        let second = find_or_create(
-            &db,
-            &NewQuestion::new("client_name", "A DIFFERENT PROMPT", "int"),
-        )
-        .await
-        .unwrap();
+        test_support::with_required_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            let first = find_or_create(
+                &db,
+                &NewQuestion::new("client_name", "Your name?", "string"),
+            )
+            .await
+            .unwrap();
+            let second = find_or_create(
+                &db,
+                &NewQuestion::new("client_name", "A DIFFERENT PROMPT", "int"),
+            )
+            .await
+            .unwrap();
 
-        assert_eq!(first, second, "the second pass returns the existing row");
-        assert_eq!(second.prompt, "Your name?");
-        assert_eq!(list_all(&db).await.unwrap().len(), 1);
+            assert_eq!(first, second, "the second pass returns the existing row");
+            assert_eq!(second.prompt, "Your name?");
+            assert_eq!(list_all(&db).await.unwrap().len(), 1);
+        })
+        .await;
     }
 
     /// The cucumber suite runs concurrent scenarios against one engine, so
     /// a seeder that assumed exclusivity would flake rather than fail.
     #[tokio::test]
     async fn concurrent_find_or_create_on_one_code_settles_on_one_row() {
-        let db = mem().await;
-        let racers: Vec<_> = (0..6)
-            .map(|_| {
+        test_support::with_required_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            let racers = (0..6).map(|_| {
                 let db = db.clone();
-                tokio::spawn(async move {
+                async move {
                     find_or_create(
                         &db,
                         &NewQuestion::new("client_name", "Your name?", "string"),
                     )
                     .await
-                })
-            })
-            .collect();
-
-        let mut ids = Vec::new();
-        for racer in racers {
-            ids.push(
-                racer
-                    .await
-                    .expect("task must not panic")
                     .expect("every racer resolves to a row")
-                    .id,
+                    .id
+                }
+            });
+            let ids = futures::future::join_all(racers).await;
+            assert!(
+                ids.windows(2).all(|w| w[0] == w[1]),
+                "the racers disagreed about which row won: {ids:?}"
             );
-        }
-        assert!(
-            ids.windows(2).all(|w| w[0] == w[1]),
-            "the racers disagreed about which row won: {ids:?}"
-        );
-        assert_eq!(
-            list_all(&db).await.unwrap().len(),
-            1,
-            "one question, not six"
-        );
+            assert_eq!(
+                list_all(&db).await.unwrap().len(),
+                1,
+                "one question, not six"
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn an_audience_outside_the_closed_set_is_refused_by_the_schema() {
-        let db = mem().await;
-        // A typo'd audience would silently hide the question from the
-        // client rather than fail, which is why the schema ASSERTs it.
-        let refused = create(
-            &db,
-            &NewQuestion::new("client_name", "Your name?", "string").with_audience("clientt"),
-        )
+        test_support::with_required_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            // A typo'd audience would silently hide the question from the
+            // client rather than fail, which is why the schema ASSERTs it.
+            let refused = create(
+                &db,
+                &NewQuestion::new("client_name", "Your name?", "string").with_audience("clientt"),
+            )
+            .await;
+            assert!(refused.is_err(), "the engine accepted audience `clientt`");
+        })
         .await;
-        assert!(refused.is_err(), "the engine accepted audience `clientt`");
     }
 
     #[tokio::test]
     async fn a_client_only_question_keeps_its_audience() {
-        let db = mem().await;
-        let written = create(
-            &db,
-            &NewQuestion::new("client_name", "Your name?", "string").with_audience(AUDIENCE_CLIENT),
-        )
-        .await
-        .unwrap();
-        assert!(is_client_facing(&written.audience));
+        test_support::with_required_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            let written = create(
+                &db,
+                &NewQuestion::new("client_name", "Your name?", "string")
+                    .with_audience(AUDIENCE_CLIENT),
+            )
+            .await
+            .unwrap();
+            assert!(is_client_facing(&written.audience));
 
-        let lawyer_only = create(
-            &db,
-            &NewQuestion::new("internal_note", "Note", "string").with_audience(AUDIENCE_LAWYER),
-        )
-        .await
-        .unwrap();
-        assert!(!is_client_facing(&lawyer_only.audience));
+            let lawyer_only = create(
+                &db,
+                &NewQuestion::new("internal_note", "Note", "string").with_audience(AUDIENCE_LAWYER),
+            )
+            .await
+            .unwrap();
+            assert!(!is_client_facing(&lawyer_only.audience));
+            let narrowed = super::set_audience(&db, "client_name", AUDIENCE_LAWYER)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(narrowed.audience, AUDIENCE_LAWYER);
+            assert!(super::set_audience(&db, "missing", AUDIENCE_CLIENT)
+                .await
+                .unwrap()
+                .is_none());
+            assert!(super::set_audience(&db, "client_name", "invalid")
+                .await
+                .is_err());
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn batched_lookups_resolve_by_code_and_by_id() {
-        let db = mem().await;
-        let a = create(&db, &NewQuestion::new("aaa", "A?", "string"))
-            .await
-            .unwrap();
-        let b = create(&db, &NewQuestion::new("bbb", "B?", "string"))
-            .await
-            .unwrap();
-        create(&db, &NewQuestion::new("ccc", "C?", "string"))
-            .await
-            .unwrap();
+        test_support::with_required_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            let a = create(&db, &NewQuestion::new("aaa", "A?", "string"))
+                .await
+                .unwrap();
+            let b = create(&db, &NewQuestion::new("bbb", "B?", "string"))
+                .await
+                .unwrap();
+            create(&db, &NewQuestion::new("ccc", "C?", "string"))
+                .await
+                .unwrap();
 
-        let by_code = find_by_codes(&db, &["bbb".into(), "aaa".into(), "nope".into()])
-            .await
-            .unwrap();
-        assert_eq!(
-            by_code,
-            vec![a.clone(), b.clone()],
-            "an unmatched code is simply absent"
-        );
+            let by_code = find_by_codes(&db, &["bbb".into(), "aaa".into(), "nope".into()])
+                .await
+                .unwrap();
+            assert_eq!(
+                by_code,
+                vec![a.clone(), b.clone()],
+                "an unmatched code is simply absent"
+            );
 
-        let by_id = find_by_ids(&db, &[b.id, a.id]).await.unwrap();
-        assert_eq!(by_id, vec![a, b]);
+            let by_id = find_by_ids(&db, &[b.id, a.id]).await.unwrap();
+            assert_eq!(by_id, vec![a, b]);
+        })
+        .await;
     }
 
     #[tokio::test]
@@ -692,18 +622,21 @@ mod tests {
 
     #[tokio::test]
     async fn the_catalog_lists_in_code_order() {
-        let db = mem().await;
-        for code in ["ccc", "aaa", "bbb"] {
-            create(&db, &NewQuestion::new(code, "?", "string"))
+        test_support::with_required_postgres(async {
+            let db = crate::surreal::SurrealDb::uninitialized();
+            for code in ["ccc", "aaa", "bbb"] {
+                create(&db, &NewQuestion::new(code, "?", "string"))
+                    .await
+                    .unwrap();
+            }
+            let codes: Vec<String> = list_all(&db)
                 .await
-                .unwrap();
-        }
-        let codes: Vec<String> = list_all(&db)
-            .await
-            .unwrap()
-            .into_iter()
-            .map(|q| q.code)
-            .collect();
-        assert_eq!(codes, ["aaa", "bbb", "ccc"]);
+                .unwrap()
+                .into_iter()
+                .map(|q| q.code)
+                .collect();
+            assert_eq!(codes, ["aaa", "bbb", "ccc"]);
+        })
+        .await;
     }
 }

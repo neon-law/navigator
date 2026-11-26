@@ -645,9 +645,24 @@ async fn entity_role_first_global_copy_preserves_its_explicit_endpoints_and_repl
     let source = super::super::from_source(mem_surreal()).await;
     let holder = person(&source).await;
     let entity = crate::postgres_mirror::tests::synthetic_entity(&source).await;
-    let captured = crate::entity_roles::grant_in_surreal(&source, holder, entity, "manages")
-        .await
-        .unwrap();
+    let error = super::super::from_source(crate::entity_roles::grant(
+        &source, holder, entity, "manages",
+    ))
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(error, crate::entity_roles::EntityRoleError::Engine(message) if message.contains("require PostgreSQL graph authority"))
+    );
+    source.query("RELATE $holder->entity_role->$entity SET role='manages',inserted_at=time::now(),updated_at=time::now()")
+        .bind(("holder", record_id("person", holder)))
+        .bind(("entity", record_id("entity", entity)))
+        .await.unwrap().check().unwrap();
+    let captured = super::super::from_source(crate::entity_roles::find(
+        &source, holder, entity, "manages",
+    ))
+    .await
+    .unwrap()
+    .unwrap();
     let key = MirrorKey::EntityRole {
         person_id: holder,
         entity_id: entity,

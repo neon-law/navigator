@@ -1,15 +1,7 @@
 //! Physical mail, and every query against a `letter` row.
 //!
-//! # This table lives in SurrealDB
-//!
-//! `letters` moved with wave two of the flat-table ports (#1093;
-//! ENG-20) — the last hop of the `letter -> mailroom -> address` chain,
-//! which is why all three moved in one PR: split across waves, each link
-//! would have spent a release as a uuid Rust had to resolve.
-//!
-//! **The engine does not validate a link.** `mailroom_id` is a
-//! `record<mailroom>`, but a link to a mailroom that was never written
-//! is accepted. The read-back in [`record`] is the check.
+//! PostgreSQL enforces each Letter's Mailroom relationship. Source reads
+//! remain available for historical import.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -17,11 +9,11 @@ use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
 use crate::mailrooms::{self, MailroomError};
-use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
+use crate::surreal::{record_id, record_uuid, SurrealDb};
 
 /// The table these rows live in.
 pub(crate) const TABLE: &str = "letter";
-/// The table `mailroom_id` links into.
+/// The Source table linked by `mailroom_id`.
 const MAILROOM_TABLE: &str = "mailroom";
 
 /// Mail arriving at a mailroom.
@@ -119,29 +111,13 @@ pub enum LetterError {
     ReplayConflict,
 }
 
-/// Run a write under the shared retry policy
-/// ([`crate::surreal::retry`]), mapping whatever finally comes back to
-/// this module's error.
-///
-/// Only the mapping lives here. How long a lost race is re-run, and
-/// which engine conditions count as a lost race, are one policy for the
-/// whole crate.
-async fn writing<F, Q>(attempt: F) -> Result<surrealdb::IndexedResults, LetterError>
-where
-    F: FnMut() -> Q,
-    Q: std::future::IntoFuture<Output = Result<surrealdb::IndexedResults, surrealdb::Error>>,
-{
-    retry::writing(attempt).await.map_err(LetterError::Db)
-}
-
 /// Log one piece of mail at its mailroom.
 ///
 /// # Errors
 ///
 /// [`LetterError::NoSuchMailroom`] when the mailroom does not exist —
-/// checked here because the engine would accept the dangling link — and
-/// [`LetterError::Db`] if the insert fails, including the schema
-/// `ASSERT` when `direction` is neither `incoming` nor `outgoing`.
+/// checked before writing — and
+/// a database error if the insert fails, including an invalid direction.
 pub async fn record(db: &SurrealDb, new: &NewLetter) -> Result<Letter, LetterError> {
     record_with_id(db, Uuid::now_v7(), new).await
 }
@@ -156,81 +132,44 @@ pub async fn record_with_id(
     id: Uuid,
     new: &NewLetter,
 ) -> Result<Letter, LetterError> {
-    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
-        if mailrooms::find_by_id(db, new.mailroom_id).await?.is_none() {
-            return Err(LetterError::NoSuchMailroom(new.mailroom_id));
-        }
-        let row: serde_json::Value = sqlx::query_scalar(
-            "INSERT INTO letter AS r (id,mailroom_id,project_id,direction,sender,recipient,summary)
-             VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (id) DO NOTHING RETURNING to_jsonb(r)",
-        )
-        .bind(id)
-        .bind(new.mailroom_id)
-        .bind(new.project_id)
-        .bind(&new.direction)
-        .bind(&new.sender)
-        .bind(&new.recipient)
-        .bind(&new.summary)
-        .fetch_optional(pg.pool())
-        .await
-        .map_err(crate::postgres::matter::MatterAuthorityError::from)?
-        .unwrap_or(serde_json::Value::Null);
-        let existing: Letter = if row.is_null() {
-            crate::postgres::matter::find(&pg, TABLE, serde_json::json!({"id": id}))
-                .await?
-                .ok_or(LetterError::WriteReturnedNothing)?
-        } else {
-            serde_json::from_value(row)
-                .map_err(crate::postgres::matter::MatterAuthorityError::from)?
-        };
-        if existing.mailroom_id != new.mailroom_id
-            || existing.project_id != new.project_id
-            || existing.direction != new.direction
-            || existing.sender != new.sender
-            || existing.recipient != new.recipient
-            || existing.summary != new.summary
-        {
-            return Err(LetterError::ReplayConflict);
-        }
-        return Ok(existing);
-    }
-
+    let pg = crate::postgres::matter::authority_for(TABLE)
+        .await?
+        .ok_or(crate::postgres::matter::MatterAuthorityError::Unavailable)?;
     if mailrooms::find_by_id(db, new.mailroom_id).await?.is_none() {
         return Err(LetterError::NoSuchMailroom(new.mailroom_id));
     }
-
-    let mut response = writing(|| {
-        db.query(format!(
-            "CREATE $id SET \
-             mailroom_id = $mailroom_id, \
-             project_id = $project_id, \
-             direction = $direction, \
-             sender = $sender, \
-             recipient = $recipient, \
-             summary = $summary \
-             RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind(("mailroom_id", record_id(MAILROOM_TABLE, new.mailroom_id)))
-        .bind((
-            "project_id",
-            new.project_id
-                .map(|p| record_id(crate::projects::PROJECT_TABLE, p)),
-        ))
-        .bind(("direction", new.direction.clone()))
-        .bind(("sender", new.sender.clone()))
-        .bind(("recipient", new.recipient.clone()))
-        .bind(("summary", new.summary.clone()))
-    })
-    .await?;
-
-    let row: Option<LetterRow> = response.take(0)?;
-    let letter = row
-        .and_then(LetterRow::into_letter)
-        .ok_or(LetterError::WriteReturnedNothing)?;
-    crate::postgres_mirror::after_write(db, crate::postgres_mirror::MirrorKey::Letter(letter.id))
-        .await;
-    Ok(letter)
+    let row: serde_json::Value = sqlx::query_scalar(
+        "INSERT INTO letter AS r (id,mailroom_id,project_id,direction,sender,recipient,summary)
+         VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (id) DO NOTHING RETURNING to_jsonb(r)",
+    )
+    .bind(id)
+    .bind(new.mailroom_id)
+    .bind(new.project_id)
+    .bind(&new.direction)
+    .bind(&new.sender)
+    .bind(&new.recipient)
+    .bind(&new.summary)
+    .fetch_optional(pg.pool())
+    .await
+    .map_err(crate::postgres::matter::MatterAuthorityError::from)?
+    .unwrap_or(serde_json::Value::Null);
+    let existing: Letter = if row.is_null() {
+        crate::postgres::matter::find(&pg, TABLE, serde_json::json!({"id": id}))
+            .await?
+            .ok_or(LetterError::WriteReturnedNothing)?
+    } else {
+        serde_json::from_value(row).map_err(crate::postgres::matter::MatterAuthorityError::from)?
+    };
+    if existing.mailroom_id != new.mailroom_id
+        || existing.project_id != new.project_id
+        || existing.direction != new.direction
+        || existing.sender != new.sender
+        || existing.recipient != new.recipient
+        || existing.summary != new.summary
+    {
+        return Err(LetterError::ReplayConflict);
+    }
+    Ok(existing)
 }
 
 /// One letter by id.
@@ -349,13 +288,13 @@ struct CountRow {
 #[cfg(test)]
 mod tests {
     use super::{
-        count, find_by_id, find_by_mailroom_sender_summary, list_all, record, LetterError,
-        NewLetter, DIRECTION_INCOMING, DIRECTION_OUTGOING,
+        count, find_by_id, find_by_mailroom_sender_summary, list_all, record, record_with_id,
+        LetterError, NewLetter, DIRECTION_INCOMING, DIRECTION_OUTGOING,
     };
     use crate::addresses::{self, NewAddress};
     use crate::mailrooms;
-    use crate::surreal::test_support::mem;
     use crate::surreal::SurrealDb;
+    use crate::test_support;
     use crate::test_support::seed_project_surreal;
     use uuid::Uuid;
 
@@ -389,40 +328,60 @@ mod tests {
 
     #[tokio::test]
     async fn a_recorded_letter_reads_back_by_id() {
-        let db = mem().await;
-        let mailroom_id = a_mailroom(&db, "HQ").await;
+        test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let mailroom_id = a_mailroom(&db, "HQ").await;
 
-        let written = record(&db, &a_letter(mailroom_id, "Form 990 reminder"))
-            .await
-            .unwrap();
-        assert_eq!(written.mailroom_id, mailroom_id);
-        assert_eq!(written.project_id, None);
-        assert_eq!(written.summary, "Form 990 reminder");
-        assert_eq!(written.direction, DIRECTION_INCOMING);
-        assert_eq!(find_by_id(&db, written.id).await.unwrap(), Some(written));
+            let written = record(&db, &a_letter(mailroom_id, "Form 990 reminder"))
+                .await
+                .unwrap();
+            assert_eq!(written.mailroom_id, mailroom_id);
+            assert_eq!(written.project_id, None);
+            assert_eq!(written.summary, "Form 990 reminder");
+            assert_eq!(written.direction, DIRECTION_INCOMING);
+            assert_eq!(
+                find_by_id(&db, written.id).await.unwrap(),
+                Some(written.clone())
+            );
+            let input = a_letter(mailroom_id, "Form 990 reminder");
+            assert_eq!(
+                record_with_id(&db, written.id, &input).await.unwrap(),
+                written
+            );
+            let conflict = a_letter(mailroom_id, "Different letter");
+            assert!(matches!(
+                record_with_id(&db, written.id, &conflict).await,
+                Err(LetterError::ReplayConflict)
+            ));
+        })
+        .await;
     }
 
     /// ENG-310: a letter recorded for a known matter carries it through the
     /// round trip untouched.
     #[tokio::test]
     async fn a_letter_scoped_to_a_project_reads_back_with_it() {
-        let db = mem().await;
-        let mailroom_id = a_mailroom(&db, "HQ").await;
-        let project_id = seed_project_surreal(&db, "matter").await;
+        test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let mailroom_id = a_mailroom(&db, "HQ").await;
+            test_support::seed_compiled_brands_postgres(&db).await;
+            let project_id = seed_project_surreal(&db, "matter").await;
 
-        let mut letter = a_letter(mailroom_id, "Engagement notice");
-        letter.project_id = Some(project_id);
-        let written = record(&db, &letter).await.unwrap();
+            let mut letter = a_letter(mailroom_id, "Engagement notice");
+            letter.project_id = Some(project_id);
+            let written = record(&db, &letter).await.unwrap();
 
-        assert_eq!(written.project_id, Some(project_id));
-        assert_eq!(
-            find_by_id(&db, written.id)
-                .await
-                .unwrap()
-                .unwrap()
-                .project_id,
-            Some(project_id)
-        );
+            assert_eq!(written.project_id, Some(project_id));
+            assert_eq!(
+                find_by_id(&db, written.id)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .project_id,
+                Some(project_id)
+            );
+        })
+        .await;
     }
 
     /// ENG-310: a row written before this field existed has no value for it
@@ -430,8 +389,8 @@ mod tests {
     /// reader must tolerate that rather than fail the whole row.
     #[tokio::test]
     async fn a_historical_letter_with_no_project_id_reads_as_none() {
-        let db = mem().await;
-        let mailroom_id = a_mailroom(&db, "HQ").await;
+        let db = crate::surreal::test_support::mem().await;
+        let mailroom_id = Uuid::now_v7();
         let id = Uuid::now_v7();
         db.query(
             "CREATE $id SET mailroom_id = $mailroom_id, direction = $direction, \
@@ -440,7 +399,7 @@ mod tests {
         .bind(("id", crate::surreal::record_id(super::TABLE, id)))
         .bind((
             "mailroom_id",
-            crate::surreal::record_id(super::MAILROOM_TABLE, mailroom_id),
+            crate::surreal::record_id("mailroom", mailroom_id),
         ))
         .bind(("direction", DIRECTION_INCOMING.to_string()))
         .bind(("sender", "IRS".to_string()))
@@ -449,100 +408,118 @@ mod tests {
         .await
         .unwrap();
 
-        let read = find_by_id(&db, id).await.unwrap().expect("row reads back");
+        let read = crate::postgres_mirror::from_source(find_by_id(&db, id))
+            .await
+            .unwrap()
+            .expect("row reads back");
         assert_eq!(read.project_id, None);
     }
 
     #[tokio::test]
     async fn a_letter_at_a_mailroom_that_does_not_exist_is_refused() {
-        let db = mem().await;
-        let nowhere = Uuid::now_v7();
+        test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let nowhere = Uuid::now_v7();
 
-        // The engine would accept this link — `record<mailroom>` is not
-        // validated — so the read-back is what refuses it.
-        let refused = record(&db, &a_letter(nowhere, "Ghost mail")).await;
-        assert!(matches!(
-            refused,
-            Err(LetterError::NoSuchMailroom(id)) if id == nowhere
-        ));
+            let refused = record(&db, &a_letter(nowhere, "Ghost mail")).await;
+            assert!(matches!(
+                refused,
+                Err(LetterError::NoSuchMailroom(id)) if id == nowhere
+            ));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn an_unknown_direction_is_refused_by_the_schema() {
-        let db = mem().await;
-        let mailroom_id = a_mailroom(&db, "HQ").await;
-        let mut sideways = a_letter(mailroom_id, "Sideways mail");
-        sideways.direction = "sideways".into();
+        test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let mailroom_id = a_mailroom(&db, "HQ").await;
+            let mut sideways = a_letter(mailroom_id, "Sideways mail");
+            sideways.direction = "sideways".into();
 
-        // The ASSERT makes a typo a write-time error instead of a row
-        // that vanishes from every surface that filters on direction.
-        let refused = record(&db, &sideways).await;
-        assert!(
-            matches!(refused, Err(LetterError::Db(_))),
-            "got {refused:?}"
-        );
+            // A typo must fail before it can become a recorded letter.
+            let refused = record(&db, &sideways).await;
+            assert!(
+                matches!(refused, Err(LetterError::Postgres(_))),
+                "got {refused:?}"
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn both_directions_are_accepted() {
-        let db = mem().await;
-        let mailroom_id = a_mailroom(&db, "HQ").await;
-        for direction in [DIRECTION_INCOMING, DIRECTION_OUTGOING] {
-            let mut letter = a_letter(mailroom_id, direction);
-            letter.direction = direction.to_string();
-            let written = record(&db, &letter).await.unwrap();
-            assert_eq!(written.direction, direction);
-        }
-        assert_eq!(count(&db).await.unwrap(), 2);
+        test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let mailroom_id = a_mailroom(&db, "HQ").await;
+            for direction in [DIRECTION_INCOMING, DIRECTION_OUTGOING] {
+                let mut letter = a_letter(mailroom_id, direction);
+                letter.direction = direction.to_string();
+                let written = record(&db, &letter).await.unwrap();
+                assert_eq!(written.direction, direction);
+            }
+            assert_eq!(count(&db).await.unwrap(), 2);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn the_seeders_natural_key_finds_only_that_letter() {
-        let db = mem().await;
-        let mailroom_id = a_mailroom(&db, "HQ").await;
-        let written = record(&db, &a_letter(mailroom_id, "Form 990 reminder"))
-            .await
-            .unwrap();
+        test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let mailroom_id = a_mailroom(&db, "HQ").await;
+            let written = record(&db, &a_letter(mailroom_id, "Form 990 reminder"))
+                .await
+                .unwrap();
 
-        assert_eq!(
-            find_by_mailroom_sender_summary(&db, mailroom_id, "IRS", "Form 990 reminder")
-                .await
-                .unwrap(),
-            Some(written)
-        );
-        assert_eq!(
-            find_by_mailroom_sender_summary(&db, mailroom_id, "IRS", "Something else")
-                .await
-                .unwrap(),
-            None
-        );
+            assert_eq!(
+                find_by_mailroom_sender_summary(&db, mailroom_id, "IRS", "Form 990 reminder")
+                    .await
+                    .unwrap(),
+                Some(written)
+            );
+            assert_eq!(
+                find_by_mailroom_sender_summary(&db, mailroom_id, "IRS", "Something else")
+                    .await
+                    .unwrap(),
+                None
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn a_letter_is_scoped_to_its_own_mailroom() {
-        let db = mem().await;
-        let hq = a_mailroom(&db, "HQ").await;
-        let annex = a_mailroom(&db, "Annex").await;
-        record(&db, &a_letter(hq, "Form 990 reminder"))
-            .await
-            .unwrap();
-
-        assert_eq!(
-            find_by_mailroom_sender_summary(&db, annex, "IRS", "Form 990 reminder")
+        test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let hq = a_mailroom(&db, "HQ").await;
+            let annex = a_mailroom(&db, "Annex").await;
+            record(&db, &a_letter(hq, "Form 990 reminder"))
                 .await
-                .unwrap(),
-            None,
-            "the same sender and summary at another mailroom is another letter"
-        );
+                .unwrap();
+
+            assert_eq!(
+                find_by_mailroom_sender_summary(&db, annex, "IRS", "Form 990 reminder")
+                    .await
+                    .unwrap(),
+                None,
+                "the same sender and summary at another mailroom is another letter"
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn counting_an_empty_table_is_zero_rather_than_an_error() {
-        let db = mem().await;
-        assert_eq!(count(&db).await.unwrap(), 0);
-        let mailroom_id = a_mailroom(&db, "HQ").await;
-        record(&db, &a_letter(mailroom_id, "One")).await.unwrap();
-        assert_eq!(count(&db).await.unwrap(), 1);
-        assert_eq!(list_all(&db).await.unwrap().len(), 1);
+        test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            assert_eq!(count(&db).await.unwrap(), 0);
+            let mailroom_id = a_mailroom(&db, "HQ").await;
+            record(&db, &a_letter(mailroom_id, "One")).await.unwrap();
+            assert_eq!(count(&db).await.unwrap(), 1);
+            assert_eq!(list_all(&db).await.unwrap().len(), 1);
+        })
+        .await;
     }
 }

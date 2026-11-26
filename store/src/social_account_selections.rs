@@ -42,37 +42,22 @@ pub async fn save(
     if !crate::social_handles::is_valid_handle(identity) {
         return Err(SocialAccountError::MissingAccountIdentity);
     }
-    if let Some(pg) = authority::authority().await? {
-        // One destination per Brand and provider: a later save replaces it.
-        let query = sqlx::query(
-            "INSERT INTO social_account_selection (id, firm_id, brand_key, provider, \
-             provider_account_id, inserted_at, updated_at) VALUES ($1, $2, $3, $4, $5, now(), now()) \
-             ON CONFLICT (brand_key, provider) DO UPDATE SET firm_id = EXCLUDED.firm_id, \
-             provider_account_id = EXCLUDED.provider_account_id, updated_at = now()",
-        )
-        .bind(format!("{brand}:{}", provider.as_str()))
-        .bind(firm)
-        .bind(brand.to_owned())
-        .bind(provider.as_str())
-        .bind(identity.to_owned());
-        authority::execute(&pg, query).await?;
-        return Ok(());
-    }
-    let id = surrealdb::types::RecordId::new(
-        "social_account_selection",
-        format!("{brand}:{}", provider.as_str()),
-    );
-    db.query("UPSERT $id SET brand_key = $brand, firm_id = $firm, provider = $provider, provider_account_id = $identity, updated_at = time::now()")
-        .bind(("firm", crate::surreal::record_id("firm", firm)))
-        .bind(("id", id)).bind(("brand", brand.to_string())).bind(("provider", provider.as_str().to_string())).bind(("identity", identity.to_string())).await?.check()?;
-    crate::postgres_mirror::after_write(
-        db,
-        crate::postgres_mirror::MirrorKey::SocialAccountSelection {
-            brand_key: brand.to_string(),
-            provider: provider.as_str().to_string(),
-        },
+    let pg = authority::authority()
+        .await?
+        .ok_or(authority::SocialAuthorityError::Unavailable)?;
+    // One destination per Brand and provider: a later save replaces it.
+    let query = sqlx::query(
+        "INSERT INTO social_account_selection (id, firm_id, brand_key, provider, \
+         provider_account_id, inserted_at, updated_at) VALUES ($1, $2, $3, $4, $5, now(), now()) \
+         ON CONFLICT (brand_key, provider) DO UPDATE SET firm_id = EXCLUDED.firm_id, \
+         provider_account_id = EXCLUDED.provider_account_id, updated_at = now()",
     )
-    .await;
+    .bind(format!("{brand}:{}", provider.as_str()))
+    .bind(firm)
+    .bind(brand.to_owned())
+    .bind(provider.as_str())
+    .bind(identity.to_owned());
+    authority::execute(&pg, query).await?;
     Ok(())
 }
 
@@ -148,61 +133,64 @@ mod tests {
 
     #[tokio::test]
     async fn saved_destinations_reload_without_authorization_and_remain_brand_scoped() {
-        let db = crate::test_support::mem_surreal().await;
-        let (_, actor, brand) = practice(&db, "selected").await;
-        let (_, other_actor, other_brand) = practice(&db, "other").await;
-        save(
-            &db,
-            Role::Admin,
-            actor,
-            &brand,
-            SocialProvider::Facebook,
-            "page-99",
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            for_brand(&db, &brand).await.unwrap()[0].provider_account_id,
-            "page-99"
-        );
-        assert!(for_brand(&db, &other_brand).await.unwrap().is_empty());
-        assert!(save(
-            &db,
-            Role::Admin,
-            other_actor,
-            &brand,
-            SocialProvider::Facebook,
-            "stolen"
-        )
-        .await
-        .is_err());
-        assert!(save(
-            &db,
-            Role::Admin,
-            actor,
-            &brand,
-            SocialProvider::Facebook,
-            "not an identity"
-        )
-        .await
-        .is_err());
-        assert!(crate::social_accounts::for_actor(&db, Role::Admin, actor)
+        test_support::with_required_postgres(async {
+            let db = SurrealDb::uninitialized();
+            let (_, actor, brand) = practice(&db, "selected").await;
+            let (_, other_actor, other_brand) = practice(&db, "other").await;
+            save(
+                &db,
+                Role::Admin,
+                actor,
+                &brand,
+                SocialProvider::Facebook,
+                "page-99",
+            )
             .await
-            .unwrap()
-            .is_empty());
-        save(
-            &db,
-            Role::Admin,
-            actor,
-            &brand,
-            SocialProvider::Facebook,
-            "page-100",
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            for_brand(&db, &brand).await.unwrap()[0].provider_account_id,
-            "page-100"
-        );
+            .unwrap();
+            assert_eq!(
+                for_brand(&db, &brand).await.unwrap()[0].provider_account_id,
+                "page-99"
+            );
+            assert!(for_brand(&db, &other_brand).await.unwrap().is_empty());
+            assert!(save(
+                &db,
+                Role::Admin,
+                other_actor,
+                &brand,
+                SocialProvider::Facebook,
+                "stolen"
+            )
+            .await
+            .is_err());
+            assert!(save(
+                &db,
+                Role::Admin,
+                actor,
+                &brand,
+                SocialProvider::Facebook,
+                "not an identity"
+            )
+            .await
+            .is_err());
+            assert!(crate::social_accounts::for_actor(&db, Role::Admin, actor)
+                .await
+                .unwrap()
+                .is_empty());
+            save(
+                &db,
+                Role::Admin,
+                actor,
+                &brand,
+                SocialProvider::Facebook,
+                "page-100",
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                for_brand(&db, &brand).await.unwrap()[0].provider_account_id,
+                "page-100"
+            );
+        })
+        .await;
     }
 }

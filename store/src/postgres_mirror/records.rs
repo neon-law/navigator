@@ -1793,9 +1793,8 @@ fn authoritative(table: &Table) -> bool {
         || crate::postgres::signatures::TABLES.contains(&table.name)
 }
 
-/// PostgreSQL holds the matter records authoritatively, so a SurrealDB row
-/// is no evidence for them: outside the first Mirror Backfill the mirror
-/// neither writes nor deletes one.
+/// PostgreSQL ownership fences Source import. Scoped families follow their
+/// enrollment contracts; authoritative matter records admit only first copy.
 async fn require_source_authority(pg: &PostgresDb, table: &Table) -> Result<(), MirrorError> {
     if crate::postgres_backfill::family::Family::for_table(table.name).is_some() {
         return match crate::postgres_backfill::family::import_mode(pg, table.name).await? {
@@ -2257,7 +2256,9 @@ fn upsert_sql(table: &Table) -> Result<String, MirrorError> {
             "INSERT INTO \"{name}\" ({columns}) SELECT {projection} FROM jsonb_populate_record(NULL::\"{name}\", $1::jsonb) r ON CONFLICT DO NOTHING"
         ));
     }
-    if authoritative(table) && !crate::postgres_backfill::family::importing(table.name) {
+    if table.name == "relationship"
+        || (authoritative(table) && !crate::postgres_backfill::family::importing(table.name))
+    {
         let name = table.name;
         return Ok(format!(
             "INSERT INTO \"{name}\" ({columns}) SELECT {projection} FROM jsonb_populate_record(NULL::\"{name}\", $1::jsonb) r ON CONFLICT (id) DO NOTHING"
@@ -2647,3 +2648,7 @@ pub async fn reconcile(
 #[cfg(test)]
 #[path = "records_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "relationship_recovery_tests.rs"]
+mod relationship_recovery_tests;

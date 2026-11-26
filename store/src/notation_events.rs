@@ -137,10 +137,6 @@ pub enum NotationEventError {
     Db(#[from] surrealdb::Error),
     #[error("notation: {0}")]
     Notation(#[from] crate::notations::NotationError),
-    /// A write reported success but returned no row, or returned one this
-    /// module could not read back.
-    #[error("writing a notation event returned no usable row")]
-    WriteReturnedNothing,
 }
 
 fn many(mut response: surrealdb::IndexedResults) -> Result<Vec<NotationEvent>, NotationEventError> {
@@ -210,71 +206,21 @@ pub(crate) async fn append_on(
 /// # Errors
 ///
 /// [`NotationEventError::Notation`] if the referenced notation does not
-/// exist, or [`NotationEventError::Db`] for anything else.
+/// exist, or a PostgreSQL error if its authority or write is unavailable.
 pub async fn append_event(
-    db: &SurrealDb,
+    _db: &SurrealDb,
     record: TransitionRecord<'_>,
 ) -> Result<NotationEvent, NotationEventError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        let (respondent, template_id) =
-            crate::postgres::notations::notation_context(&pg, record.notation_id)
-                .await?
-                .ok_or(crate::notations::NotationError::NotFound(
-                    record.notation_id,
-                ))?;
-        return Ok(
-            matter::upsert(&pg, TABLE, &native_event(record, respondent, template_id)).await?,
-        );
-    }
-    let notation = crate::notations::find_by_id(db, record.notation_id)
+    let pg = matter::authority_for(TABLE)
         .await?
-        .ok_or(crate::notations::NotationError::NotFound(
-            record.notation_id,
-        ))?;
-    let template_id = notation.template_id;
-    let acting_person_id = resolve_acting_person(&record, notation.person_id);
-    let payload = record.payload_json.or_else(|| {
-        (record.machine_kind == MACHINE_WORKFLOW)
-            .then(|| workflow_payload(acting_person_id, template_id))
-    });
-    let id = Uuid::now_v7();
-    let mut response = db
-        .query(format!(
-            "CREATE $id SET \
-             notation_id = $notation_id, \
-             acting_person_id = $acting_person_id, \
-             template_version_id = $template_version_id, \
-             machine_kind = $machine_kind, \
-             from_state = $from_state, \
-             to_state = $to_state, \
-             condition = $condition, \
-             payload = $payload, \
-             recorded_at = $recorded_at \
-             RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind((
-            "notation_id",
-            record_id(crate::notations::TABLE, record.notation_id),
-        ))
-        .bind(("acting_person_id", record_id("person", acting_person_id)))
-        .bind(("template_version_id", record_id("template", template_id)))
-        .bind(("machine_kind", record.machine_kind.to_string()))
-        .bind(("from_state", record.from_state.to_string()))
-        .bind(("to_state", record.to_state.to_string()))
-        .bind(("condition", record.condition.to_string()))
-        .bind(("payload", payload))
-        .bind(("recorded_at", record.recorded_at.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-
-    let row: Option<NotationEventRow> = response.take(0)?;
-    let event = row
-        .and_then(NotationEventRow::into_event)
-        .ok_or(NotationEventError::WriteReturnedNothing)?;
-    crate::postgres_mirror::after_write(db, crate::postgres_mirror::MirrorKey::NotationEvent(id))
-        .await;
-    Ok(event)
+        .ok_or(matter::MatterAuthorityError::Unavailable)?;
+    let (respondent, template_id) =
+        crate::postgres::notations::notation_context(&pg, record.notation_id)
+            .await?
+            .ok_or(crate::notations::NotationError::NotFound(
+                record.notation_id,
+            ))?;
+    Ok(matter::upsert(&pg, TABLE, &native_event(record, respondent, template_id)).await?)
 }
 
 /// Read the latest event for a `(notation_id, machine_kind)` pair — the
@@ -433,10 +379,11 @@ mod tests {
         answer_payload, append_event, for_notation, is_complete, latest_for_kind, workflow_payload,
         TransitionRecord, MACHINE_QUESTIONNAIRE, MACHINE_WORKFLOW,
     };
-    use crate::surreal::test_support::mem;
+    use crate::test_support;
     use uuid::Uuid;
 
     async fn seed_notation(surreal: &crate::surreal::SurrealDb) -> (Uuid, Uuid, Uuid) {
+        test_support::seed_compiled_brands_postgres(surreal).await;
         let project = crate::test_support::seed_project_surreal(surreal, "matter").await;
         let tmpl = crate::templates::save_version(
             surreal,
@@ -471,205 +418,116 @@ mod tests {
 
     #[tokio::test]
     async fn append_event_inserts_one_row_with_the_expected_columns() {
-        let surreal = mem().await;
-        let (nid, person_id, template_id) = seed_notation(&surreal).await;
-        let row = append_event(
-            &surreal,
-            TransitionRecord {
-                notation_id: nid,
-                acting_person_id: Some(person_id),
-                machine_kind: MACHINE_QUESTIONNAIRE,
-                from_state: "BEGIN",
-                to_state: "client_name",
-                condition: "_",
-                payload_json: Some(answer_payload("Libra")),
-                recorded_at: "2026-05-21T10:00:00+00:00",
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(row.machine_kind, MACHINE_QUESTIONNAIRE);
-        assert_eq!(row.acting_person_id, person_id);
-        assert_eq!(row.template_version_id, template_id);
-        assert_eq!(row.payload.as_deref(), Some(r#"{"answer_value":"Libra"}"#));
-    }
-
-    #[tokio::test]
-    async fn append_event_preserves_insert_order_across_repeated_calls() {
-        let surreal = mem().await;
-        let (nid, person_id, _) = seed_notation(&surreal).await;
-        for (from, to) in [
-            ("BEGIN", "client_name"),
-            ("client_name", "client_email"),
-            ("client_email", "project_name"),
-        ] {
-            append_event(
-                &surreal,
-                TransitionRecord {
-                    notation_id: nid,
-                    acting_person_id: Some(person_id),
-                    machine_kind: MACHINE_QUESTIONNAIRE,
-                    from_state: from,
-                    to_state: to,
-                    condition: "_",
-                    payload_json: None,
-                    recorded_at: "2026-05-21T10:00:00+00:00",
-                },
-            )
-            .await
-            .unwrap();
-        }
-        let rows = for_notation(&surreal, nid).await.unwrap();
-        assert_eq!(rows.len(), 3);
-        assert_eq!(rows[2].to_state, "project_name");
-    }
-
-    #[tokio::test]
-    async fn workflow_event_payload_records_actor_and_pinned_template_version() {
-        let surreal = mem().await;
-        let (nid, person_id, template_id) = seed_notation(&surreal).await;
-        let row = append_event(
-            &surreal,
-            TransitionRecord {
-                notation_id: nid,
-                acting_person_id: Some(person_id),
-                machine_kind: MACHINE_WORKFLOW,
-                from_state: "BEGIN",
-                to_state: "lawyer_review",
-                condition: "intake_submitted",
-                payload_json: None,
-                recorded_at: "2026-05-21T10:00:00+00:00",
-            },
-        )
-        .await
-        .unwrap();
-        let payload: serde_json::Value =
-            serde_json::from_str(row.payload.as_deref().unwrap()).unwrap();
-        assert_eq!(
-            payload["acting_person_id"].as_str().unwrap(),
-            person_id.to_string()
-        );
-        assert_eq!(
-            payload["template_version_id"].as_str().unwrap(),
-            template_id.to_string()
-        );
-        assert_eq!(
-            workflow_payload(person_id, template_id),
-            row.payload.unwrap()
-        );
-    }
-
-    #[tokio::test]
-    async fn a_questionnaire_event_without_an_actor_falls_back_to_the_respondent() {
-        let surreal = mem().await;
-        let (nid, person_id, _) = seed_notation(&surreal).await;
-        let row = append_event(
-            &surreal,
-            TransitionRecord {
-                notation_id: nid,
-                acting_person_id: None,
-                machine_kind: MACHINE_QUESTIONNAIRE,
-                from_state: "BEGIN",
-                to_state: "client_name",
-                condition: "_",
-                payload_json: None,
-                recorded_at: "2026-05-21T10:00:00+00:00",
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(row.acting_person_id, person_id);
-    }
-
-    #[tokio::test]
-    async fn a_workflow_event_without_an_actor_still_falls_back_but_is_recorded() {
-        let surreal = mem().await;
-        let (nid, person_id, _) = seed_notation(&surreal).await;
-        let row = append_event(
-            &surreal,
-            TransitionRecord {
-                notation_id: nid,
-                acting_person_id: None,
-                machine_kind: MACHINE_WORKFLOW,
-                from_state: "lawyer_review",
-                to_state: "generate_pdf__retainer_pdf",
-                condition: "approved",
-                payload_json: None,
-                recorded_at: "2026-05-21T10:00:00+00:00",
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            row.acting_person_id, person_id,
-            "the missing actor still falls back to the respondent"
-        );
-    }
-
-    #[tokio::test]
-    async fn latest_for_kind_reads_the_newest_row_and_is_complete_reflects_end() {
-        let surreal = mem().await;
-        let (nid, person_id, _) = seed_notation(&surreal).await;
-        assert!(latest_for_kind(&surreal, nid, MACHINE_QUESTIONNAIRE)
-            .await
-            .unwrap()
-            .is_none());
-        assert!(!is_complete(&surreal, nid, MACHINE_QUESTIONNAIRE)
-            .await
-            .unwrap());
-
-        for (from, to) in [("BEGIN", "client_name"), ("client_name", "END")] {
-            append_event(
-                &surreal,
-                TransitionRecord {
-                    notation_id: nid,
-                    acting_person_id: Some(person_id),
-                    machine_kind: MACHINE_QUESTIONNAIRE,
-                    from_state: from,
-                    to_state: to,
-                    condition: "_",
-                    payload_json: None,
-                    recorded_at: "2026-05-21T10:00:00+00:00",
-                },
-            )
-            .await
-            .unwrap();
-        }
-        assert_eq!(
-            latest_for_kind(&surreal, nid, MACHINE_QUESTIONNAIRE)
-                .await
-                .unwrap()
-                .unwrap()
-                .to_state,
-            "END"
-        );
-        assert!(is_complete(&surreal, nid, MACHINE_QUESTIONNAIRE)
-            .await
-            .unwrap());
-    }
-
-    #[tokio::test]
-    async fn notation_events_are_isolated_across_notations() {
-        let surreal = mem().await;
-        let (a, person_id, template_id) = seed_notation(&surreal).await;
-        let project = crate::test_support::seed_project_surreal(&surreal, "second").await;
-        let b = crate::notations::create(
-            &surreal,
-            &crate::notations::NewNotation::new(template_id, person_id, project, "BEGIN"),
-        )
-        .await
-        .unwrap()
-        .id;
-
-        for (nid, to) in [(a, "client_name"), (b, "client_email")] {
-            append_event(
+        test_support::with_required_postgres(async {
+            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let (nid, person_id, template_id) = seed_notation(&surreal).await;
+            let row = append_event(
                 &surreal,
                 TransitionRecord {
                     notation_id: nid,
                     acting_person_id: Some(person_id),
                     machine_kind: MACHINE_QUESTIONNAIRE,
                     from_state: "BEGIN",
-                    to_state: to,
+                    to_state: "client_name",
+                    condition: "_",
+                    payload_json: Some(answer_payload("Libra")),
+                    recorded_at: "2026-05-21T10:00:00+00:00",
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(row.machine_kind, MACHINE_QUESTIONNAIRE);
+            assert_eq!(row.acting_person_id, person_id);
+            assert_eq!(row.template_version_id, template_id);
+            assert_eq!(row.payload.as_deref(), Some(r#"{"answer_value":"Libra"}"#));
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn append_event_preserves_insert_order_across_repeated_calls() {
+        test_support::with_required_postgres(async {
+            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let (nid, person_id, _) = seed_notation(&surreal).await;
+            for (from, to) in [
+                ("BEGIN", "client_name"),
+                ("client_name", "client_email"),
+                ("client_email", "project_name"),
+            ] {
+                append_event(
+                    &surreal,
+                    TransitionRecord {
+                        notation_id: nid,
+                        acting_person_id: Some(person_id),
+                        machine_kind: MACHINE_QUESTIONNAIRE,
+                        from_state: from,
+                        to_state: to,
+                        condition: "_",
+                        payload_json: None,
+                        recorded_at: "2026-05-21T10:00:00+00:00",
+                    },
+                )
+                .await
+                .unwrap();
+            }
+            let rows = for_notation(&surreal, nid).await.unwrap();
+            assert_eq!(rows.len(), 3);
+            assert_eq!(rows[2].to_state, "project_name");
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn workflow_event_payload_records_actor_and_pinned_template_version() {
+        test_support::with_required_postgres(async {
+            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let (nid, person_id, template_id) = seed_notation(&surreal).await;
+            let row = append_event(
+                &surreal,
+                TransitionRecord {
+                    notation_id: nid,
+                    acting_person_id: Some(person_id),
+                    machine_kind: MACHINE_WORKFLOW,
+                    from_state: "BEGIN",
+                    to_state: "lawyer_review",
+                    condition: "intake_submitted",
+                    payload_json: None,
+                    recorded_at: "2026-05-21T10:00:00+00:00",
+                },
+            )
+            .await
+            .unwrap();
+            let payload: serde_json::Value =
+                serde_json::from_str(row.payload.as_deref().unwrap()).unwrap();
+            assert_eq!(
+                payload["acting_person_id"].as_str().unwrap(),
+                person_id.to_string()
+            );
+            assert_eq!(
+                payload["template_version_id"].as_str().unwrap(),
+                template_id.to_string()
+            );
+            assert_eq!(
+                workflow_payload(person_id, template_id),
+                row.payload.unwrap()
+            );
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn a_questionnaire_event_without_an_actor_falls_back_to_the_respondent() {
+        test_support::with_required_postgres(async {
+            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let (nid, person_id, _) = seed_notation(&surreal).await;
+            let row = append_event(
+                &surreal,
+                TransitionRecord {
+                    notation_id: nid,
+                    acting_person_id: None,
+                    machine_kind: MACHINE_QUESTIONNAIRE,
+                    from_state: "BEGIN",
+                    to_state: "client_name",
                     condition: "_",
                     payload_json: None,
                     recorded_at: "2026-05-21T10:00:00+00:00",
@@ -677,47 +535,160 @@ mod tests {
             )
             .await
             .unwrap();
-        }
-        assert_eq!(
-            latest_for_kind(&surreal, a, MACHINE_QUESTIONNAIRE)
+            assert_eq!(row.acting_person_id, person_id);
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn a_workflow_event_without_an_actor_still_falls_back_but_is_recorded() {
+        test_support::with_required_postgres(async {
+            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let (nid, person_id, _) = seed_notation(&surreal).await;
+            let row = append_event(
+                &surreal,
+                TransitionRecord {
+                    notation_id: nid,
+                    acting_person_id: None,
+                    machine_kind: MACHINE_WORKFLOW,
+                    from_state: "lawyer_review",
+                    to_state: "generate_pdf__retainer_pdf",
+                    condition: "approved",
+                    payload_json: None,
+                    recorded_at: "2026-05-21T10:00:00+00:00",
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                row.acting_person_id, person_id,
+                "the missing actor still falls back to the respondent"
+            );
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn latest_for_kind_reads_the_newest_row_and_is_complete_reflects_end() {
+        test_support::with_required_postgres(async {
+            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let (nid, person_id, _) = seed_notation(&surreal).await;
+            assert!(latest_for_kind(&surreal, nid, MACHINE_QUESTIONNAIRE)
                 .await
                 .unwrap()
-                .unwrap()
-                .to_state,
-            "client_name"
-        );
-        assert_eq!(
-            latest_for_kind(&surreal, b, MACHINE_QUESTIONNAIRE)
+                .is_none());
+            assert!(!is_complete(&surreal, nid, MACHINE_QUESTIONNAIRE)
                 .await
-                .unwrap()
-                .unwrap()
-                .to_state,
-            "client_email"
-        );
+                .unwrap());
+
+            for (from, to) in [("BEGIN", "client_name"), ("client_name", "END")] {
+                append_event(
+                    &surreal,
+                    TransitionRecord {
+                        notation_id: nid,
+                        acting_person_id: Some(person_id),
+                        machine_kind: MACHINE_QUESTIONNAIRE,
+                        from_state: from,
+                        to_state: to,
+                        condition: "_",
+                        payload_json: None,
+                        recorded_at: "2026-05-21T10:00:00+00:00",
+                    },
+                )
+                .await
+                .unwrap();
+            }
+            assert_eq!(
+                latest_for_kind(&surreal, nid, MACHINE_QUESTIONNAIRE)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .to_state,
+                "END"
+            );
+            assert!(is_complete(&surreal, nid, MACHINE_QUESTIONNAIRE)
+                .await
+                .unwrap());
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn notation_events_are_isolated_across_notations() {
+        test_support::with_required_postgres(async {
+            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let (a, person_id, template_id) = seed_notation(&surreal).await;
+            let project = crate::test_support::seed_project_surreal(&surreal, "second").await;
+            let b = crate::notations::create(
+                &surreal,
+                &crate::notations::NewNotation::new(template_id, person_id, project, "BEGIN"),
+            )
+            .await
+            .unwrap()
+            .id;
+
+            for (nid, to) in [(a, "client_name"), (b, "client_email")] {
+                append_event(
+                    &surreal,
+                    TransitionRecord {
+                        notation_id: nid,
+                        acting_person_id: Some(person_id),
+                        machine_kind: MACHINE_QUESTIONNAIRE,
+                        from_state: "BEGIN",
+                        to_state: to,
+                        condition: "_",
+                        payload_json: None,
+                        recorded_at: "2026-05-21T10:00:00+00:00",
+                    },
+                )
+                .await
+                .unwrap();
+            }
+            assert_eq!(
+                latest_for_kind(&surreal, a, MACHINE_QUESTIONNAIRE)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .to_state,
+                "client_name"
+            );
+            assert_eq!(
+                latest_for_kind(&surreal, b, MACHINE_QUESTIONNAIRE)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .to_state,
+                "client_email"
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn appending_for_an_unknown_notation_reports_not_found() {
-        let surreal = mem().await;
-        let err = append_event(
-            &surreal,
-            TransitionRecord {
-                notation_id: Uuid::now_v7(),
-                acting_person_id: Some(Uuid::now_v7()),
-                machine_kind: MACHINE_QUESTIONNAIRE,
-                from_state: "BEGIN",
-                to_state: "client_name",
-                condition: "_",
-                payload_json: None,
-                recorded_at: "2026-05-21T10:00:00+00:00",
-            },
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(
-            err,
-            super::NotationEventError::Notation(crate::notations::NotationError::NotFound(_))
-        ));
+        test_support::with_required_postgres(async {
+            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let err = append_event(
+                &surreal,
+                TransitionRecord {
+                    notation_id: Uuid::now_v7(),
+                    acting_person_id: Some(Uuid::now_v7()),
+                    machine_kind: MACHINE_QUESTIONNAIRE,
+                    from_state: "BEGIN",
+                    to_state: "client_name",
+                    condition: "_",
+                    payload_json: None,
+                    recorded_at: "2026-05-21T10:00:00+00:00",
+                },
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                super::NotationEventError::Notation(crate::notations::NotationError::NotFound(_))
+            ));
+        })
+        .await;
     }
 
     /// Structurally pins the append-only guarantee: this module must never

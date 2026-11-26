@@ -559,38 +559,27 @@ async fn write_hook_probe() {
     )
     .await
     .unwrap();
-    let mailroom = crate::mailrooms::create(&surreal, "Synthetic HQ", address.id)
+    let mailroom_id = Uuid::now_v7();
+    surreal
+        .query("CREATE $id SET name = 'Synthetic HQ', address_id = $address")
+        .bind(("id", crate::surreal::record_id("mailroom", mailroom_id)))
+        .bind(("address", crate::surreal::record_id("address", address.id)))
         .await
+        .unwrap()
+        .check()
         .unwrap();
+    after_write(&surreal, MirrorKey::Mailroom(mailroom_id)).await;
     let incoming_id = Uuid::new_v4();
-    crate::letters::record_with_id(
-        &surreal,
-        incoming_id,
-        &crate::letters::NewLetter {
-            mailroom_id: mailroom.id,
-            project_id: None,
-            direction: "incoming".into(),
-            sender: "Synthetic Sender".into(),
-            recipient: "Synthetic Recipient".into(),
-            summary: "Synthetic incoming summary".into(),
-        },
-    )
-    .await
-    .unwrap();
+    let outgoing_id = Uuid::new_v4();
     let dangling_project_id = Uuid::new_v4();
-    let outgoing = crate::letters::record(
-        &surreal,
-        &crate::letters::NewLetter {
-            mailroom_id: mailroom.id,
-            project_id: Some(dangling_project_id),
-            direction: "outgoing".into(),
-            sender: "Synthetic Sender".into(),
-            recipient: "Synthetic Recipient".into(),
-            summary: "Synthetic outgoing summary".into(),
-        },
-    )
-    .await
-    .unwrap();
+    surreal.query("CREATE $incoming SET mailroom_id=$mailroom, direction='incoming', sender='Synthetic Sender', recipient='Synthetic Recipient', summary='Synthetic incoming summary'; CREATE $outgoing SET mailroom_id=$mailroom, project_id=$project, direction='outgoing', sender='Synthetic Sender', recipient='Synthetic Recipient', summary='Synthetic outgoing summary'")
+        .bind(("incoming", crate::surreal::record_id("letter", incoming_id)))
+        .bind(("outgoing", crate::surreal::record_id("letter", outgoing_id)))
+        .bind(("mailroom", crate::surreal::record_id("mailroom", mailroom_id)))
+        .bind(("project", crate::surreal::record_id("project", dangling_project_id)))
+        .await.unwrap().check().unwrap();
+    after_write(&surreal, MirrorKey::Letter(incoming_id)).await;
+    after_write(&surreal, MirrorKey::Letter(outgoing_id)).await;
     let replay = after_write(&surreal, MirrorKey::Post(post)).await;
     match case.as_str() {
         "disabled" => {
@@ -609,7 +598,7 @@ async fn write_hook_probe() {
             assert!(mail.is_clean(), "{mail:?}");
             let stored: (Option<Uuid>, String) =
                 sqlx::query_as("SELECT project_id,direction FROM letter WHERE id=$1")
-                    .bind(outgoing.id)
+                    .bind(outgoing_id)
                     .fetch_one(&pg.0)
                     .await
                     .unwrap();
@@ -868,35 +857,23 @@ async fn write_hook_probe() {
             .await
             .unwrap()
             .id;
-            crate::notation_events::append_event(
-                &surreal,
-                crate::notation_events::TransitionRecord {
-                    notation_id: notation,
-                    acting_person_id: None,
-                    machine_kind: crate::notation_events::MACHINE_QUESTIONNAIRE,
-                    from_state: "BEGIN",
-                    to_state: "END",
-                    condition: "_",
-                    payload_json: None,
-                    recorded_at: "2026-01-02T00:00:00+00:00",
-                },
-            )
-            .await
-            .unwrap();
+            let event = Uuid::now_v7();
+            surreal.query("CREATE $id SET notation_id=$notation, acting_person_id=$actor, template_version_id=$template, machine_kind='questionnaire', from_state='BEGIN', to_state='END', condition='_', recorded_at='2026-01-02T00:00:00+00:00'")
+                .bind(("id", crate::surreal::record_id("notation_event", event)))
+                .bind(("notation", crate::surreal::record_id("notation", notation)))
+                .bind(("actor", crate::surreal::record_id("person", admin)))
+                .bind(("template", crate::surreal::record_id("template", replacement)))
+                .await.unwrap().check().unwrap();
+            after_write(&surreal, MirrorKey::NotationEvent(event)).await;
+            let question = Uuid::now_v7();
+            surreal.query("CREATE $id SET code='synthetic_hooked',prompt='Synthetic?',answer_type='string',audience='both'")
+                .bind(("id", crate::surreal::record_id("question", question)))
+                .await.unwrap().check().unwrap();
+            after_write(&surreal, MirrorKey::Question(question)).await;
             crate::answers::record(
                 &surreal,
                 &crate::answers::NewAnswer::new(
-                    crate::questions::create(
-                        &surreal,
-                        &crate::questions::NewQuestion::new(
-                            "synthetic_hooked",
-                            "Synthetic?",
-                            "string",
-                        ),
-                    )
-                    .await
-                    .unwrap()
-                    .id,
+                    question,
                     admin,
                     crate::answers::primitive("Synthetic"),
                 )
@@ -1146,6 +1123,76 @@ async fn source_social_handle_import_replays_and_deletes() {
     );
 }
 
+async fn captured_publication(surreal: &SurrealDb, post: Uuid, provider: &str) {
+    let key = crate::social_publications::publication_key(post, provider);
+    surreal
+        .query("CREATE $id SET post_id=$post,provider=$provider,state='sending',attempt_count=1")
+        .bind((
+            "id",
+            surrealdb::types::RecordId::new("social_publication", key),
+        ))
+        .bind(("post", crate::surreal::record_id("post", post)))
+        .bind(("provider", provider.to_owned()))
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn captured_publication_admission_replays_without_reopening_send() {
+    let Some((options, database)) = fresh_database().await else {
+        return;
+    };
+    let pg = connect(&options, &database).await;
+    let surreal = test_support::mem_surreal().await;
+    let post = Uuid::now_v7();
+    sqlx::query("INSERT INTO post (id,brand_key,slug,title,description,status) VALUES ($1,$2,$3,'Synthetic','','draft')")
+        .bind(post).bind(BRAND).bind(post.to_string()).execute(pg.pool()).await.unwrap();
+    assert!(
+        from_source(crate::social_publications::admit(&surreal, post, "x"))
+            .await
+            .is_err()
+    );
+    captured_publication(&surreal, post, "x").await;
+    let key = MirrorKey::SocialPublication {
+        post_id: post,
+        provider: "x".into(),
+    };
+    during_initial_copy(async {
+        assert_eq!(
+            mirror(&surreal, &pg, &key).await.unwrap(),
+            Mirrored::Written
+        );
+        assert_eq!(
+            mirror(&surreal, &pg, &key).await.unwrap(),
+            Mirrored::Unchanged
+        );
+    })
+    .await;
+    sqlx::query("UPDATE social_publication SET state='unknown' WHERE post_id=$1 AND provider='x'")
+        .bind(post)
+        .execute(pg.pool())
+        .await
+        .unwrap();
+    crate::postgres::social::with_test_db(pg.clone(), async {
+        assert_eq!(
+            mirror(&surreal, &pg, &key).await.unwrap(),
+            Mirrored::Unchanged
+        );
+    })
+    .await;
+    let state: String = sqlx::query_scalar(
+        "SELECT state FROM social_publication WHERE post_id=$1 AND provider='x'",
+    )
+    .bind(post)
+    .fetch_one(pg.pool())
+    .await
+    .unwrap();
+    assert_eq!(state, "unknown");
+    pg.pool().close().await;
+}
+
 #[tokio::test]
 #[expect(
     clippy::too_many_lines,
@@ -1217,9 +1264,7 @@ async fn create_update_and_delete_converge_and_replays_write_nothing() {
         post_id: post,
         provider: "x".into(),
     };
-    crate::social_publications::admit(&surreal, post, "x")
-        .await
-        .unwrap();
+    captured_publication(&surreal, post, "x").await;
     assert_eq!(
         mirror(&surreal, &pg, &publication).await.unwrap(),
         Mirrored::Written
@@ -1433,9 +1478,7 @@ async fn a_reused_slug_replaces_the_stale_postgres_post() {
     mirror(&surreal, &pg, &MirrorKey::Post(first))
         .await
         .unwrap();
-    crate::social_publications::admit(&surreal, first, "x")
-        .await
-        .unwrap();
+    captured_publication(&surreal, first, "x").await;
     mirror(
         &surreal,
         &pg,

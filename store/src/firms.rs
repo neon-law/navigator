@@ -2019,3 +2019,7 @@ mod calendar_tests;
 #[cfg(test)]
 #[path = "firms/compatibility_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "firms/native_tests.rs"]
+mod native_tests;

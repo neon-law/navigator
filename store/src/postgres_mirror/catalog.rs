@@ -821,3 +821,7 @@ pub async fn reconcile(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityRep
 #[cfg(test)]
 #[path = "catalog_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "question_import_tests.rs"]
+mod question_import_tests;

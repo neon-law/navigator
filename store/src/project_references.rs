@@ -9,9 +9,7 @@
 //! works at a government office must be durable
 //! so the Conflict-Check Graph can collide a future matter with them.
 //! A reference grants no participation or access to the matter. The row
-//! is its own row — a PostgreSQL `project_reference` wherever PostgreSQL is
-//! configured, else a Surreal `project->project_reference->(person|entity)`
-//! relation ([`crate::postgres_graph::graph_authority`]) — carrying
+//! is its own PostgreSQL `project_reference` row, carrying
 //! only a `reason`. `store::access` and the embedded Rego policy never
 //! read it. The lawyer party roster lists references under "Referenced,
 //! no standing on the matter"; the client lens never loads or renders
@@ -42,7 +40,7 @@ use uuid::Uuid;
 use crate::postgres::PostgresDb;
 use crate::postgres_graph::graph_authority;
 use crate::relationships::{Endpoint, NewRelationship, Relationship};
-use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
+use crate::surreal::{record_id, record_uuid, SurrealDb};
 pub use model::project_references::{is_reason, REASONS};
 pub use model::project_references::{
     REASON_ADVERSE_PARTY, REASON_COUNTERPARTY_ENTITY, REASON_COUNTERPARTY_OFFICER,
@@ -168,13 +166,9 @@ pub enum ProjectReferenceError {
     /// The authoritative PostgreSQL store refused the read or write.
     #[error("PostgreSQL: {0}")]
     Postgres(#[from] sqlx::Error),
-    /// PostgreSQL is configured but unreachable.
+    /// PostgreSQL graph authority is unavailable.
     #[error("{0}")]
     Engine(String),
-}
-
-fn is_duplicate_tie(error: &surrealdb::Error) -> bool {
-    retry::unique_violation(error) == Some("project_reference_tie")
 }
 
 fn many(
@@ -198,7 +192,7 @@ fn many(
 /// [`REASONS`]; [`ProjectReferenceError::Db`] if the lookup or the write
 /// fails, including a `project_id` or party with no row behind it.
 pub async fn reference(
-    db: &SurrealDb,
+    _db: &SurrealDb,
     project_id: Uuid,
     party: Party,
     reason: &str,
@@ -207,75 +201,26 @@ pub async fn reference(
     if !is_reason(reason) {
         return Err(ProjectReferenceError::UnknownReason(reason.to_string()));
     }
-    if let Some(postgres) = authority().await? {
-        // A concurrent writer's row wins the partial unique index; either
-        // way the one row is read back.
-        sqlx::query(sqlx::AssertSqlSafe(format!(
-            "INSERT INTO project_reference (project_id, {}, reason, inserted_at, updated_at) \
-             VALUES ($1, $2, $3, now(), now()) ON CONFLICT DO NOTHING",
-            party.column()
-        )))
-        .bind(project_id)
-        .bind(party.id)
-        .bind(reason)
-        .execute(&postgres.0)
-        .await?;
-        return find_in_postgres(&postgres, project_id, party, reason)
-            .await?
-            .ok_or(ProjectReferenceError::WriteReturnedNothing);
-    }
-    if let Some(existing) = find(db, project_id, party, reason).await? {
-        mirror_reference(db, &existing).await;
-        return Ok(existing);
-    }
-
-    let written = retry::writing(|| {
-        db.query(format!(
-            "RELATE $project->{TABLE}->$party \
-             SET reason = $reason, inserted_at = time::now(), updated_at = time::now() \
-             RETURN {SELECT}"
-        ))
-        .bind(("project", record_id(PROJECT_TABLE, project_id)))
-        .bind(("party", party.record()))
-        .bind(("reason", reason.to_string()))
-    })
-    .await;
-
-    match written {
-        Ok(mut response) => {
-            let rows: Vec<ProjectReferenceRow> = response.take(0)?;
-            let reference = rows
-                .into_iter()
-                .next()
-                .and_then(ProjectReferenceRow::into_reference)
-                .ok_or(ProjectReferenceError::WriteReturnedNothing)?;
-            mirror_reference(db, &reference).await;
-            Ok(reference)
-        }
-        // Another writer minted the same reference between the read above
-        // and this write. Its row is the answer.
-        Err(error) if is_duplicate_tie(&error) => {
-            let reference = find(db, project_id, party, reason)
-                .await?
-                .ok_or(ProjectReferenceError::WriteReturnedNothing)?;
-            mirror_reference(db, &reference).await;
-            Ok(reference)
-        }
-        Err(error) => Err(ProjectReferenceError::Db(error)),
-    }
-}
-
-async fn mirror_reference(db: &SurrealDb, reference: &ProjectReference) {
-    let _ = crate::postgres_mirror::after_write(
-        db,
-        crate::postgres_mirror::MirrorKey::ProjectReference {
-            project_id: reference.project_id,
-            party_kind: reference.party.kind.table().to_owned(),
-            party_id: reference.party.id,
-            reason: reference.reason.clone(),
-        },
-    )
-    .await;
+    let postgres = authority().await?.ok_or_else(|| {
+        ProjectReferenceError::Engine(
+            "Project Reference writes require PostgreSQL authority".into(),
+        )
+    })?;
+    // A concurrent writer's row wins the partial unique index; either
+    // way the one row is read back.
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "INSERT INTO project_reference (project_id, {}, reason, inserted_at, updated_at) \
+         VALUES ($1, $2, $3, now(), now()) ON CONFLICT DO NOTHING",
+        party.column()
+    )))
+    .bind(project_id)
+    .bind(party.id)
+    .bind(reason)
+    .execute(&postgres.0)
+    .await?;
+    find_in_postgres(&postgres, project_id, party, reason)
+        .await?
+        .ok_or(ProjectReferenceError::WriteReturnedNothing)
 }
 
 /// The one reference matching all three parts of the natural key, if any.
@@ -543,7 +488,7 @@ mod tests {
     };
     use crate::persons::{NewPerson, Role};
     use crate::relationships::{Endpoint, KIND_ADVERSE_TO, SOURCE_MANUAL};
-    use crate::test_support::{mem_surreal, seed_entity, seed_project};
+    use crate::test_support::{self, seed_entity, seed_project};
 
     async fn counterparty(surreal: &crate::surreal::SurrealDb) -> uuid::Uuid {
         crate::persons::create(
@@ -557,55 +502,61 @@ mod tests {
 
     #[tokio::test]
     async fn a_reference_is_idempotent_and_grants_no_participation() {
-        let surreal = mem_surreal().await;
-        let project = seed_project(&surreal, "Widget matter").await;
-        let agent = counterparty(&surreal).await;
+        test_support::with_required_postgres(async {
+            let surreal = crate::surreal::SurrealDb::uninitialized();
+            test_support::seed_compiled_brands_postgres(&surreal).await;
+            let project = seed_project(&surreal, "Widget matter").await;
+            let agent = counterparty(&surreal).await;
 
-        let first = reference(
-            &surreal,
-            project.id,
-            Party::person(agent),
-            REASON_REGISTERED_AGENT,
-        )
-        .await
-        .unwrap();
-        let again = reference(
-            &surreal,
-            project.id,
-            Party::person(agent),
-            REASON_REGISTERED_AGENT,
-        )
-        .await
-        .unwrap();
-        assert_eq!(first, again, "the second write finds the first row");
-        assert_eq!(for_project(&surreal, project.id).await.unwrap().len(), 1);
-        assert!(is_referenced(&surreal, project.id, Party::person(agent))
-            .await
-            .unwrap());
-        assert!(
-            find(
+            let first = reference(
                 &surreal,
                 project.id,
                 Party::person(agent),
-                REASON_ADVERSE_PARTY
+                REASON_REGISTERED_AGENT,
             )
             .await
-            .unwrap()
-            .is_none(),
-            "a reference is keyed by its reason too"
-        );
-        assert!(
-            crate::projects::participation_for_person(&surreal, agent, project.id)
+            .unwrap();
+            let again = reference(
+                &surreal,
+                project.id,
+                Party::person(agent),
+                REASON_REGISTERED_AGENT,
+            )
+            .await
+            .unwrap();
+            assert_eq!(first, again, "the second write finds the first row");
+            assert_eq!(for_project(&surreal, project.id).await.unwrap().len(), 1);
+            assert!(is_referenced(&surreal, project.id, Party::person(agent))
+                .await
+                .unwrap());
+            assert!(
+                find(
+                    &surreal,
+                    project.id,
+                    Party::person(agent),
+                    REASON_ADVERSE_PARTY
+                )
                 .await
                 .unwrap()
                 .is_none(),
-            "a reference writes no participation row"
-        );
+                "a reference is keyed by its reason too"
+            );
+            assert!(
+                crate::projects::participation_for_person(&surreal, agent, project.id)
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "a reference writes no participation row"
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn every_schema_reason_is_writable_and_an_unknown_one_is_refused() {
-        let surreal = mem_surreal().await;
+        test_support::with_required_postgres(async {
+        let surreal = crate::surreal::SurrealDb::uninitialized();
+        test_support::seed_compiled_brands_postgres(&surreal).await;
         let project = seed_project(&surreal, "Widget matter").await;
         let party = Party::entity(seed_entity(&surreal).await);
         for reason in REASONS {
@@ -619,103 +570,115 @@ mod tests {
         assert!(
             matches!(refused, ProjectReferenceError::UnknownReason(word) if word == "co_counsel")
         );
+            }).await;
     }
 
     #[tokio::test]
     async fn adversity_requires_a_reference_and_then_lands_a_sourced_manual_edge() {
-        let surreal = mem_surreal().await;
-        let project = seed_project(&surreal, "Widget matter").await;
-        let opponent = Party::entity(seed_entity(&surreal).await);
-        let command = RecordAdversityCommand {
-            project_id: project.id,
-            party: opponent,
-            subject: AdversitySubject::Entity,
-            actor_person_id: None,
-        };
+        test_support::with_required_postgres(async {
+            let surreal = crate::surreal::SurrealDb::uninitialized();
+            test_support::seed_compiled_brands_postgres(&surreal).await;
+            let project = seed_project(&surreal, "Widget matter").await;
+            let opponent = Party::entity(seed_entity(&surreal).await);
+            let command = RecordAdversityCommand {
+                project_id: project.id,
+                party: opponent,
+                subject: AdversitySubject::Entity,
+                actor_person_id: None,
+            };
 
-        let refused = record_adversity(&surreal, &command)
-            .await
-            .expect_err("adversity is asserted against a referenced party only");
-        assert!(matches!(refused, AdversityError::PartyNotReferenced));
+            let refused = record_adversity(&surreal, &command)
+                .await
+                .expect_err("adversity is asserted against a referenced party only");
+            assert!(matches!(refused, AdversityError::PartyNotReferenced));
 
-        reference(&surreal, project.id, opponent, REASON_COUNTERPARTY_ENTITY)
-            .await
-            .unwrap();
-        let edge = record_adversity(&surreal, &command).await.unwrap();
-        assert_eq!(edge.from, Endpoint::Entity);
-        assert_eq!(edge.from_id, project.entity_id);
-        assert_eq!(edge.to_id, opponent.id);
-        assert_eq!(edge.kind, KIND_ADVERSE_TO);
-        assert_eq!(edge.confidence_pct, 100);
-        assert_eq!(edge.source_kind, SOURCE_MANUAL);
+            reference(&surreal, project.id, opponent, REASON_COUNTERPARTY_ENTITY)
+                .await
+                .unwrap();
+            let edge = record_adversity(&surreal, &command).await.unwrap();
+            assert_eq!(edge.from, Endpoint::Entity);
+            assert_eq!(edge.from_id, project.entity_id);
+            assert_eq!(edge.to_id, opponent.id);
+            assert_eq!(edge.kind, KIND_ADVERSE_TO);
+            assert_eq!(edge.confidence_pct, 100);
+            assert_eq!(edge.source_kind, SOURCE_MANUAL);
 
-        let log = crate::relationship_logs::for_project(&surreal, project.id)
-            .await
-            .unwrap()
-            .into_iter()
-            .find(|row| row.action == ADVERSITY_RECORDED_ACTION)
-            .expect("the write appends a log row on the project");
-        assert_eq!(
-            edge.source_id,
-            Some(log.id),
-            "the edge is sourced to the matter's log row"
-        );
-        assert_eq!(log.project_id, Some(project.id));
+            let log = crate::relationship_logs::for_project(&surreal, project.id)
+                .await
+                .unwrap()
+                .into_iter()
+                .find(|row| row.action == ADVERSITY_RECORDED_ACTION)
+                .expect("the write appends a log row on the project");
+            assert_eq!(
+                edge.source_id,
+                Some(log.id),
+                "the edge is sourced to the matter's log row"
+            );
+            assert_eq!(log.project_id, Some(project.id));
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn adversity_from_the_client_dri_needs_one_designated() {
-        let surreal = mem_surreal().await;
-        let project = seed_project(&surreal, "Widget matter").await;
-        let opponent = Party::person(counterparty(&surreal).await);
-        reference(&surreal, project.id, opponent, REASON_ADVERSE_PARTY)
+        test_support::with_required_postgres(async {
+            let surreal = crate::surreal::SurrealDb::uninitialized();
+            test_support::seed_compiled_brands_postgres(&surreal).await;
+            let project = seed_project(&surreal, "Widget matter").await;
+            let opponent = Party::person(counterparty(&surreal).await);
+            reference(&surreal, project.id, opponent, REASON_ADVERSE_PARTY)
+                .await
+                .unwrap();
+            let command = RecordAdversityCommand {
+                project_id: project.id,
+                party: opponent,
+                subject: AdversitySubject::ClientDri,
+                actor_person_id: None,
+            };
+            let refused = record_adversity(&surreal, &command)
+                .await
+                .expect_err("no client DRI yet");
+            assert!(matches!(refused, AdversityError::NoClientDri));
+
+            let client = crate::persons::create(
+                &surreal,
+                &NewPerson::with_role("Client Example", "client@example.com", Role::Client),
+            )
+            .await
+            .unwrap()
+            .id;
+            crate::projects::designate_dri_in_surreal(
+                &surreal,
+                project.id,
+                client,
+                crate::projects::DriSide::Client,
+            )
             .await
             .unwrap();
-        let command = RecordAdversityCommand {
-            project_id: project.id,
-            party: opponent,
-            subject: AdversitySubject::ClientDri,
-            actor_person_id: None,
-        };
-        let refused = record_adversity(&surreal, &command)
-            .await
-            .expect_err("no client DRI yet");
-        assert!(matches!(refused, AdversityError::NoClientDri));
-
-        let client = crate::persons::create(
-            &surreal,
-            &NewPerson::with_role("Client Example", "client@example.com", Role::Client),
-        )
-        .await
-        .unwrap()
-        .id;
-        crate::projects::designate_dri_in_surreal(
-            &surreal,
-            project.id,
-            client,
-            crate::projects::DriSide::Client,
-        )
-        .await
-        .unwrap();
-        let edge = record_adversity(&surreal, &command).await.unwrap();
-        assert_eq!(edge.from, Endpoint::Person);
-        assert_eq!(edge.from_id, client);
+            let edge = record_adversity(&surreal, &command).await.unwrap();
+            assert_eq!(edge.from, Endpoint::Person);
+            assert_eq!(edge.from_id, client);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn adversity_on_an_unknown_project_is_refused() {
-        let surreal = mem_surreal().await;
-        let refused = record_adversity(
-            &surreal,
-            &RecordAdversityCommand {
-                project_id: uuid::Uuid::now_v7(),
-                party: Party::person(uuid::Uuid::now_v7()),
-                subject: AdversitySubject::Entity,
-                actor_person_id: None,
-            },
-        )
-        .await
-        .expect_err("no project");
-        assert!(matches!(refused, AdversityError::ProjectNotFound));
+        test_support::with_required_postgres(async {
+            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let refused = record_adversity(
+                &surreal,
+                &RecordAdversityCommand {
+                    project_id: uuid::Uuid::now_v7(),
+                    party: Party::person(uuid::Uuid::now_v7()),
+                    subject: AdversitySubject::Entity,
+                    actor_person_id: None,
+                },
+            )
+            .await
+            .expect_err("no project");
+            assert!(matches!(refused, AdversityError::ProjectNotFound));
+        })
+        .await;
     }
 }
