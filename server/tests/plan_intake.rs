@@ -179,6 +179,9 @@ async fn check_review() {
         policy: portal::policy::PolicyClient::embedded().unwrap(),
         ..portal::test_support::app_state(db.clone()).await
     };
+    store::test_support::seed_notation_catalog(&db, &state.storage)
+        .await
+        .unwrap();
     let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
     let queue = "/app/plan-intake";
     let accept = format!("{queue}/{staged_id}/accept");
@@ -226,5 +229,16 @@ async fn check_review() {
         .unwrap();
     assert_eq!(project.plan_case_number.as_deref(), Some("400001"));
     assert_eq!(project.plan_member_id.as_deref(), Some("9900001"));
+    let notations = store::notations::list_by_project(&db, project.id)
+        .await
+        .unwrap();
+    let [notation] = notations.as_slice() else {
+        panic!("one onboarding Notation per accepted referral");
+    };
+    let template = store::templates::find_by_id(&db, notation.template_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(template.code, "onboarding__legalease");
     assert!(email.captured().is_empty());
 }

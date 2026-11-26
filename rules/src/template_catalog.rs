@@ -10,6 +10,13 @@ use include_dir::{include_dir, Dir};
 /// dir so it tracks the tree at the workspace root.
 pub static TEMPLATES: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../templates");
 
+/// Whether a catalog path belongs to the Firm workflow templates.
+#[must_use]
+pub fn is_firm_template_path(path: &std::path::Path) -> bool {
+    path.ancestors()
+        .any(|part| part.ends_with("notations/neon_law/firm"))
+}
+
 /// Every file in the embedded `templates/` tree as `(repository-relative
 /// path, bytes)`, in a stable depth-first order.
 ///

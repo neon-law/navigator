@@ -15,6 +15,14 @@
 use anyhow::Context as _;
 use uuid::Uuid;
 
+/// Load the bundled Questions and Notation templates into a synthetic store.
+pub async fn seed_notation_catalog(
+    surreal: &crate::surreal::SurrealDb,
+    storage: &std::sync::Arc<dyn cloud::StorageService>,
+) -> anyhow::Result<()> {
+    crate::seed::seed_notation_catalog(surreal, storage).await
+}
+
 /// Seed validated completed enrollment evidence for a synthetic PostgreSQL fixture.
 /// This writes the same scoped ledger rows unit fixtures use; accessors still
 /// validate the receipt rather than skipping their readiness checks.
