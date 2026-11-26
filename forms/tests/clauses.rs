@@ -270,3 +270,138 @@ fn every_dispute_clause_in_the_catalog_names_the_aaa_and_never_jams() {
         assert!(!snapshot.contains("JAMS"));
     }
 }
+fn plan_clause_fixture(reference: &str, bindings: &str, choices: &str) -> String {
+    format!(
+        "---\nkind: onboarding\nquestionnaire:\n  BEGIN: {{_: jurisdiction__law}}\n  jurisdiction__law: {{_: END}}\n  END: {{}}\nchoices:\n{choices}\nclauses:\n  arbitration:\n    source: engagement_arbitration@1\n    inputs:\n      law: jurisdiction__law\n      seat: jurisdiction__seat\n  terms:\n    source: {reference}\n    inputs:\n{bindings}\n---\n{{{{> terms}}}}\n{{{{> arbitration}}}}\n"
+    )
+}
+
+fn compile_plan_clause(source: &str) -> String {
+    let file = rules::SourceFile {
+        path: "synthetic-onboarding.md".into(),
+        contents: source.to_owned(),
+    };
+    assert!(rules::Rule::lint(&rules::clauses::ClauseReferences::default(), &file).is_empty());
+    assert!(
+        rules::clauses::compile(&source.replace("kind: onboarding", "kind: agreement")).is_err()
+    );
+    let snapshot = rules::clauses::compile(source).unwrap();
+    let compiled = rules::SourceFile {
+        path: file.path,
+        contents: snapshot.clone(),
+    };
+    let findings = rules::Rule::lint(&rules::f115::F115PathResolution, &compiled);
+    assert!(findings.is_empty(), "{findings:?}");
+    rules::frontmatter::split(&snapshot).unwrap().1.to_owned()
+}
+
+#[test]
+fn arag_renders_each_benefit_and_requires_its_plan_fee() {
+    let source = plan_clause_fixture(
+        "legal_plan_arag@1",
+        "      benefit: custom_single_choice__benefit\n      plan_fee: custom_usd__plan_fee",
+        "  benefit:\n    flat_fee: Flat fee\n    consult_only: Consultation only",
+    );
+    assert!(
+        rules::clauses::compile(&source.replace("      plan_fee: custom_usd__plan_fee\n", ""))
+            .is_err()
+    );
+    let body = compile_plan_clause(&source);
+    for (benefit, covered) in [
+        ("flat_fee", "as a flat fee"),
+        ("consult_only", "initial consultation"),
+    ] {
+        let rendered = forms::notation::fill(
+            &body,
+            &BTreeMap::from([
+                ("custom_single_choice__benefit".into(), benefit.into()),
+                ("custom_usd__plan_fee".into(), "$90.00".into()),
+            ]),
+        );
+        assert!(rendered.contains(covered), "{rendered}");
+        assert!(rendered.contains("$90.00"));
+        assert!(rendered.contains("ARAG pays no costs"));
+        assert!(rendered.contains("in writing"));
+    }
+}
+
+#[test]
+fn legalease_renders_each_cap_and_member_billing_combination() {
+    let source = plan_clause_fixture(
+        "legal_plan_legalease@1",
+        concat!(
+            "      cap_shape: custom_single_choice__cap_shape\n",
+            "      member_billing: custom_single_choice__member_billing\n",
+            "      plan_cap: custom_usd__plan_cap\n",
+            "      plan_rate: custom_usd__plan_rate\n",
+            "      paralegal_rate: custom_usd__paralegal_rate\n",
+            "      overage_rate: custom_usd__overage_rate\n",
+            "      contested_cap: custom_usd__contested_cap\n",
+            "      uncontested_cap: custom_usd__uncontested_cap\n",
+            "      current_scope: custom_single_choice__current_scope",
+        ),
+        concat!(
+            "  cap_shape:\n    hourly_cap: Hours\n    dollar_cap: Dollars\n",
+            "    contested_uncontested: Contested and uncontested\n    consult_only: Consultation only\n",
+            "  member_billing:\n    paid_in_full: Paid in full\n    overage_at_discount: Discounted overage\n",
+            "  current_scope:\n    uncontested: Uncontested\n    contested: Contested",
+        ),
+    );
+    let body = compile_plan_clause(&source);
+    for (cap_shape, expected) in [
+        ("hourly_cap", "authorized hours"),
+        ("dollar_cap", "pays up to $800.00"),
+        ("contested_uncontested", "The uncontested cap applies now."),
+        ("consult_only", "covers only the initial consultation"),
+    ] {
+        for member_billing in ["paid_in_full", "overage_at_discount"] {
+            let mut answers = BTreeMap::from([
+                ("custom_single_choice__cap_shape".into(), cap_shape.into()),
+                (
+                    "custom_single_choice__member_billing".into(),
+                    member_billing.into(),
+                ),
+                (
+                    "custom_single_choice__current_scope".into(),
+                    "uncontested".into(),
+                ),
+                ("custom_usd__plan_cap".into(), "$800.00".into()),
+                ("custom_usd__plan_rate".into(), "$90.00".into()),
+                ("custom_usd__paralegal_rate".into(), "$45.00".into()),
+                ("custom_usd__contested_cap".into(), "$900.00".into()),
+                ("custom_usd__uncontested_cap".into(), "$600.00".into()),
+            ]);
+            if member_billing == "overage_at_discount" {
+                answers.insert("custom_usd__overage_rate".into(), "$70.00".into());
+            }
+            let rendered = forms::notation::fill(&body, &answers);
+            let normalized = rendered.split_whitespace().collect::<Vec<_>>().join(" ");
+            assert!(normalized.contains(expected), "{normalized}");
+            assert!(normalized.contains("LegalEASE pays no costs"));
+            assert!(normalized.contains("must approve work beyond the benefit in advance"));
+            if member_billing == "paid_in_full" {
+                assert!(normalized.contains("We will not bill you for legal fees on this matter."));
+                assert!(!normalized.contains("discounted rate"));
+                assert!(!normalized.contains("overage_rate"));
+            } else {
+                assert!(normalized.contains("beyond the benefit is $70.00 per hour"));
+            }
+        }
+    }
+}
+
+#[test]
+fn technology_clause_renders_the_jurisdiction_and_lawyer_review() {
+    let body = compile_plan_clause(&plan_clause_fixture(
+        "engagement_technology@1",
+        "      law: jurisdiction__law",
+        "  {}",
+    ));
+    let rendered = forms::notation::fill(
+        &body,
+        &BTreeMap::from([("jurisdiction__law".into(), "Nevada".into())]),
+    );
+    let normalized = rendered.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(normalized.contains("our professional obligations in Nevada"));
+    assert!(normalized.contains("A lawyer reviews"));
+}
