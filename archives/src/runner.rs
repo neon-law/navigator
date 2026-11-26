@@ -98,7 +98,7 @@ pub(crate) async fn open_surreal_source(
 /// no fallback to `NAVIGATOR_STORAGE_BUCKET`. A deployment that forgets the
 /// key fails the run instead of quietly filling the exports bucket with
 /// archive objects nothing later reads.
-async fn open_storage() -> Result<Arc<dyn StorageService>> {
+pub(crate) async fn open_storage() -> Result<Arc<dyn StorageService>> {
     cloud::archives_from_env()
         .await
         .context("open object storage")
@@ -106,6 +106,7 @@ async fn open_storage() -> Result<Arc<dyn StorageService>> {
 
 /// Snapshot the selected `SurrealDB` source, or preserve the scheduled slot
 /// without `SurrealDB` rows when only PostgreSQL is selected.
+#[cfg(any(test, feature = "restate-compatibility"))]
 pub(crate) async fn snapshot_selected(
     db: Option<&SurrealDb>,
     storage: &dyn StorageService,

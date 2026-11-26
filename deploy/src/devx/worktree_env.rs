@@ -393,7 +393,7 @@ fn up_locked(
     let slug = slug_for(root)?;
     let (cfg, db_name, slot) =
         reserve_worktree_tier(root, &slug, runtime, base_cfg, demo_image.is_some())?;
-    if runtime == Runtime::Kind && super::native_profile::selected(root, &cfg)? {
+    if runtime == Runtime::Kind {
         super::orchestrate::up_native_in(root, &cfg, no_deps)?;
         if let Some(image) = demo_image {
             super::orchestrate::deploy_native_image(root, &cfg, image)?;
@@ -407,27 +407,20 @@ fn up_locked(
         return Ok(());
     }
 
-    let sample_project_refreshed =
-        provision_compatibility_tier(root, slot, &cfg, &db_name, runtime, no_deps)?;
-
-    if !sample_project_refreshed {
-        super::sample_project::run_for_root(false, root)?;
+    if no_deps {
+        super::native::restore_environment(root)?;
+    } else {
+        super::native::up(root, slot, &cfg, &db_name)?;
     }
+    super::sample_project::run_for_root(false, root)?;
 
     let mut env_body = super::render_env_for(&cfg, &db_name, cfg.web_port, root);
-    if runtime == Runtime::Native {
-        super::native::append_environment(&mut env_body, slot, &db_name);
-    } else {
-        env_body.push_str(&super::postgres_fixture::read_environment(root)?);
-    }
+    super::native::append_environment(&mut env_body, slot, &db_name);
     write_worktree_env(root, &env_body)?;
-
-    if runtime == Runtime::Native {
-        if !no_deps {
-            super::native::start_workflows(root, slot, cfg.restate_admin_port)?;
-        }
-        ensure_native_deps_ready(&cfg, slot)?;
+    if !no_deps {
+        super::native::start_workflows(root, slot, cfg.restate_admin_port)?;
     }
+    ensure_native_deps_ready(&cfg, slot)?;
 
     print_dev_summary(&slug, &db_name, runtime, &cfg);
     Ok(())
@@ -534,57 +527,6 @@ fn reserve_worktree_tier(
         },
     )?;
     Ok((cfg, db_name, slot))
-}
-
-/// Provision or restore the explicitly selected compatibility topology.
-fn provision_compatibility_tier(
-    root: &Path,
-    slot: u16,
-    cfg: &KindConfig,
-    db_name: &str,
-    runtime: Runtime,
-    no_deps: bool,
-) -> Result<bool> {
-    let mut sample_project_refreshed = false;
-    match runtime {
-        Runtime::Kind => {
-            if !no_deps && !kind_fixture_ready(root, cfg) {
-                eprintln!(
-                    "==> isolated deps need reconciliation for {}; applying its KIND fixture",
-                    cfg.cluster
-                );
-                super::up_in(root, cfg)?;
-                sample_project_refreshed = true;
-            }
-            // Pin this worktree's isolated KIND context before touching the cluster.
-            // The fresh-boot branch above reaches it through `up_in` →
-            // `configure_worktree_kubeconfig`, but a reused cluster skips `up_in`
-            // entirely — and `hydrate_seaweedfs_environment` then execs `seaweedfs-0` over
-            // bare `kubectl`, inheriting whatever context is ambient. On an operator
-            // pointed at prod that is a `kubectl exec` in the production cluster, so
-            // the pin is unconditional here rather than gated on the boot branch.
-            ensure_kind_transports(root, cfg, no_deps)?;
-            // Unconditional for the same reason as the kubeconfig pin above: the
-            // fresh-boot branch aligns Rauthy inside `up_in`, but a *reused* cluster
-            // skips `up_in` entirely. Re-applying an unchanged public URL starts no
-            // rollout, so the reused path pays nothing.
-            super::align_rauthy_public_url(cfg)?;
-            super::hydrate_seaweedfs_environment(cfg)?;
-        }
-        Runtime::Native => {
-            // `--no-deps` means the same thing on both lanes: the tier is
-            // already up, so don't provision it. The readiness gate still
-            // runs, because "already up" is a claim worth checking.
-            if !no_deps {
-                super::native::up(root, slot, cfg, db_name)?;
-            }
-            if no_deps {
-                super::native::restore_environment(root)?;
-            }
-        }
-    }
-
-    Ok(sample_project_refreshed)
 }
 
 /// Missing or foreign native state never falls through to legacy cleanup.
@@ -965,34 +907,7 @@ fn gate_members(cfg: &KindConfig) -> [(&'static str, u16); 10] {
     ]
 }
 
-fn ensure_kind_transports(root: &Path, cfg: &KindConfig, no_deps: bool) -> Result<()> {
-    super::configure_worktree_kubeconfig(root, cfg)?;
-    super::orchestrate::verify_fixture_port(cfg)?;
-    if no_deps && !worktree_deps_ready(cfg) {
-        super::orchestrate::restore_dependency_forwards(root, cfg)?;
-    }
-    ensure_worktree_deps_ready(cfg)
-}
-
-fn kind_fixture_ready(root: &Path, cfg: &KindConfig) -> bool {
-    worktree_deps_ready(cfg)
-        && super::rauthy_deployment_exists(cfg)
-        && super::postgres_fixture::environment_path(root).is_file()
-        && port_listening(cfg.postgres_port)
-}
-
-fn worktree_deps_ready(cfg: &KindConfig) -> bool {
-    gate_members(cfg)
-        .into_iter()
-        .all(|(_, port)| port_listening(port))
-}
-
-/// Wait for every gate member the native lane supervises, then say which
-/// ones it does not.
-///
-/// The cluster counterpart is [`ensure_worktree_deps_ready`]. This one
-/// covers a strict subset of the same table — not a shorter table — and
-/// reports the difference instead of leaving `up` looking complete.
+/// Wait for each dependency the host-process compatibility lane supervises.
 fn ensure_native_deps_ready(cfg: &KindConfig, slot: u16) -> Result<()> {
     for (name, port) in gate_members(cfg) {
         if super::native::SUPERVISED.contains(&name) {
@@ -1005,22 +920,6 @@ fn ensure_native_deps_ready(cfg: &KindConfig, slot: u16) -> Result<()> {
     }
     super::wait_for_tcp("127.0.0.1", super::native::worker_listen_port(slot))
         .context("the native workflows-service listener must be reachable")?;
-    Ok(())
-}
-
-fn ensure_worktree_deps_ready(cfg: &KindConfig) -> Result<()> {
-    for (name, port) in [
-        ("Restate ingress", cfg.restate_ingress_port),
-        ("Restate admin", cfg.restate_admin_port),
-        ("Rauthy", cfg.rauthy_port),
-        ("SeaweedFS", cfg.seaweedfs_s3_port),
-        ("OpenObserve", cfg.openobserve_port),
-        ("OpenObserve OTLP", cfg.openobserve_otlp_port),
-        ("ClamAV", cfg.clamav_port),
-    ] {
-        super::wait_for_tcp("127.0.0.1", port)
-            .with_context(|| format!("the worktree KIND {name} forward must be reachable"))?;
-    }
     Ok(())
 }
 
@@ -3749,37 +3648,6 @@ mod tests {
         // Port 1 is privileged and unserved on a development host or runner.
         assert!(!port_listening(1));
         assert_eq!(yes_no(false), "no");
-    }
-
-    #[test]
-    fn the_readiness_gate_needs_every_member_listening() {
-        let listeners: Vec<std::net::TcpListener> = (0..10)
-            .map(|_| std::net::TcpListener::bind("127.0.0.1:0").unwrap())
-            .collect();
-        let ports: Vec<u16> = listeners
-            .iter()
-            .map(|listener| listener.local_addr().unwrap().port())
-            .collect();
-        let mut cfg = KindConfig::from_env();
-        cfg.ingress_http_port = ports[0];
-        cfg.ingress_https_port = ports[1];
-        cfg.restate_ingress_port = ports[2];
-        cfg.restate_admin_port = ports[3];
-        cfg.rauthy_port = ports[4];
-        cfg.seaweedfs_s3_port = ports[5];
-        cfg.openobserve_port = ports[6];
-        cfg.openobserve_otlp_port = ports[7];
-        cfg.clamav_port = ports[8];
-        cfg.surreal_port = ports[9];
-
-        assert!(worktree_deps_ready(&cfg));
-        ensure_worktree_deps_ready(&cfg).expect("every forwarded member answers");
-
-        cfg.surreal_port = 1;
-        assert!(
-            !worktree_deps_ready(&cfg),
-            "one silent member keeps the gate closed"
-        );
     }
 
     #[test]

@@ -351,9 +351,25 @@ pub async fn export_configured<F: Fn(&str) -> Option<String>>(
         Err(error) => {
             return Some(PostgresExport::Failed {
                 error: error.to_string(),
-            })
+            });
         }
     };
+    export_for_source(source, get, storage).await
+}
+
+/// Export the admitted PostgreSQL databases for a DBOS archive run.
+pub(crate) async fn export_admitted(
+    get: impl Fn(&str) -> Option<String>,
+    storage: &dyn StorageService,
+) -> Option<PostgresExport> {
+    export_for_source(crate::source::ArchiveSource::Postgres, get, storage).await
+}
+
+async fn export_for_source(
+    source: crate::source::ArchiveSource,
+    get: impl Fn(&str) -> Option<String>,
+    storage: &dyn StorageService,
+) -> Option<PostgresExport> {
     let host = get("NAVIGATOR_POSTGRES_HOST").filter(|host| !host.trim().is_empty());
     if host.is_none() {
         return if matches!(source, crate::source::ArchiveSource::Postgres)
@@ -1195,6 +1211,19 @@ mod tests {
         assert_eq!(Kind::from_pg("label_id"), Some(Kind::Text));
         assert_eq!(Kind::from_pg("label_kind"), Some(Kind::Text));
         assert_eq!(Kind::from_pg("vector"), None);
+    }
+
+    #[tokio::test]
+    async fn dbos_export_requires_postgres_even_with_a_compatibility_source_setting() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = FsStorage::new(dir.path()).await.unwrap();
+        let result = export_admitted(
+            |key| (key == "NAVIGATOR_ARCHIVE_SOURCE").then(|| "all".into()),
+            &storage,
+        )
+        .await;
+        assert!(matches!(result, Some(PostgresExport::Failed { .. })));
+        assert!(storage.list("").await.unwrap().is_empty());
     }
 
     #[tokio::test]

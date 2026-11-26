@@ -34,50 +34,6 @@ pub(super) fn up(path: Option<&Path>, cfg: &KindConfig) -> Result<()> {
     super::worktree_env::up_kind(&checkout_root(path)?, cfg)
 }
 
-/// Bring up a KIND dependency tier whose state belongs to `root`.
-///
-/// `dev worktree-env --path` may target a checkout other than the CLI's
-/// current directory, so the port-forward PID ledger must live with the
-/// target worktree rather than whichever checkout invoked the command.
-pub(super) fn up_in(root: &Path, cfg: &KindConfig) -> Result<()> {
-    require_tools(&["kind", "kubectl", "docker", "helm"])?;
-    let state = StateDir::new(root)?;
-
-    kind_up_steps(root, cfg)?;
-    // The worker stays in KIND so Restate discovers and registers it through
-    // the same RestateDeployment as production. Build its image from this
-    // checkout instead of consulting the private Artifact Registry: ordinary
-    // local development must work with an empty `.env` and must not run a
-    // worker from a different release than host-side `web`.
-    build_and_load_worker(root, cfg)?;
-    ensure_namespace(&cfg.namespace)?;
-    seaweedfs::prepare(&cfg.namespace)?;
-    retire_legacy_identity_provider(cfg)?;
-    retire_legacy_object_store(cfg)?;
-    eprintln!("==> applying dependency manifests (skipping k8s/base/web)");
-    apply_kustomize(root, &cfg.deps_overlay)?;
-    // Before `wait_for_dep_rollouts` below, so the rollout this may trigger is
-    // the one that wait already covers, and every port-forward opened after it
-    // lands on the final pod.
-    align_rauthy_public_url(cfg)?;
-    wait_rollout("statefulset", "seaweedfs", cfg)?;
-    hydrate_seaweedfs_environment(cfg)?;
-    bootstrap_postgres_in(root, cfg, "navigator")?;
-    restore_dependency_forwards(root, cfg)?;
-
-    // Development always refreshes every sample matter's application before
-    // the environment is written. The generated variable below then points the
-    // host-side web process at this exact set of staged bundles.
-    super::sample_project::run_for_root(false, root)?;
-
-    let mut environment = render_env(cfg, root);
-    environment.push_str(&super::postgres_fixture::read_environment(root)?);
-    state.write_env(&environment)?;
-
-    print_chrome_summary(cfg);
-    Ok(())
-}
-
 /// Verify the exact existing origin before another local service changes a
 /// database-targeted roles Job. This performs no provisioning or restamping.
 pub(super) fn verified_native_database(root: &Path, cfg: &KindConfig) -> Result<String> {
@@ -474,84 +430,6 @@ fn seed_native_application(
     Ok(())
 }
 
-/// Restore only this verified tier's host transports, without rebuilding or importing data.
-pub(super) fn restore_dependency_forwards(root: &Path, cfg: &KindConfig) -> Result<()> {
-    super::worktree_env::verify_postgres_fixture_target(root, cfg)?;
-    verify_fixture_port(cfg)?;
-    let state = StateDir::new(root)?;
-    wait_for_dep_rollouts(cfg)?;
-
-    eprintln!("==> opening port-forwards");
-    state.kill_pids();
-    let mut pids = Vec::new();
-    let forwards = (|| -> Result<()> {
-        // Restate lives in its own `restate` namespace (the Operator's
-        // CR places the StatefulSet there). The other deps run in
-        // `navigator`. Forward both Restate ports — ingress (8080) for
-        // the workflow client, admin (9070) for `restate-cli` /
-        // dashboard.
-        pids.push(port_forward_two_in(
-            "restate",
-            "svc/restate",
-            cfg.restate_ingress_port,
-            8080,
-            cfg.restate_admin_port,
-            9070,
-            &state,
-        )?);
-        pids.push(port_forward(
-            "svc/clamav",
-            cfg.clamav_port,
-            3310,
-            cfg,
-            &state,
-        )?);
-        pids.push(port_forward(
-            "svc/navigator-seaweedfs",
-            cfg.seaweedfs_s3_port,
-            8333,
-            cfg,
-            &state,
-        )?);
-        // Legacy compatibility callers and the worker share this service.
-        // This forward lets the host application reach that same fixture.
-        pids.push(port_forward(
-            "svc/surreal",
-            cfg.surreal_port,
-            super::surreal::SERVICE_PORT,
-            cfg,
-            &state,
-        )?);
-        // OpenObserve serves its UI and direct OTLP gRPC listener from one
-        // Rust process. Host `web` exports to the latter; the operator opens
-        // the former.
-        pids.push(port_forward_two_in(
-            &cfg.namespace,
-            "svc/openobserve",
-            cfg.openobserve_port,
-            5080,
-            cfg.openobserve_otlp_port,
-            5081,
-            &state,
-        )?);
-        state.write_pids(&pids)
-    })();
-    if let Err(err) = forwards {
-        StateDir::kill(&pids);
-        return Err(err);
-    }
-
-    // Sanity check: probe each port the local `web` will use.
-    wait_for_tcp("127.0.0.1", cfg.restate_ingress_port)?;
-    wait_for_tcp("127.0.0.1", cfg.clamav_port)?;
-    wait_for_tcp("127.0.0.1", cfg.rauthy_port)?;
-    wait_for_tcp("127.0.0.1", cfg.seaweedfs_s3_port)?;
-    wait_for_tcp("127.0.0.1", cfg.surreal_port)?;
-    wait_for_tcp("127.0.0.1", cfg.openobserve_otlp_port)?;
-
-    Ok(())
-}
-
 /// Rebuild the current checkout's worker image and replace the running KIND
 /// worker. This is the focused edit loop for `workflows-service` and shared
 /// workflow code; host-side `web` edits do not need an image rebuild.
@@ -562,7 +440,7 @@ pub(super) fn reload_worker(cfg: &KindConfig) -> Result<()> {
     // it. `build_and_load_worker` loads the image into `cfg.cluster` by name,
     // but the pod delete and readiness wait use whatever kubeconfig context is
     // ambient, so a stale or unrelated context would restart the wrong worker
-    // and leave the rebuilt image unused. This mirrors how `up_in` pins its own
+    // and leave the rebuilt image unused. The development tier also pins its own
     // kubectl operations via `kind_up_steps`.
     configure_worktree_kubeconfig(&root, cfg)?;
     build_and_load_worker(&root, cfg)?;
@@ -1463,25 +1341,6 @@ fn apply_kustomize(root: &Path, overlay: &str) -> Result<()> {
         .arg(root.join(overlay)))
 }
 
-fn wait_for_dep_rollouts(cfg: &KindConfig) -> Result<()> {
-    eprintln!("==> waiting for rollouts");
-    for dep in ["surreal", "rauthy", "openobserve", "clamav"] {
-        wait_rollout("deployment", dep, cfg)?;
-    }
-    // Restate runs in its own `restate` namespace and the Operator
-    // names the underlying StatefulSet from the CR spec, not literally
-    // "restate". `workflows-service` is also a Restate Operator CR
-    // (RestateDeployment), not a plain Deployment. Wait on each CR's
-    // own `Ready` condition — that's the contract the Operator
-    // exposes.
-    wait_for_condition("restate", "restatecluster/restate", "Ready")?;
-    wait_for_condition(
-        &cfg.namespace,
-        "restatedeployment/workflows-service",
-        "Ready",
-    )
-}
-
 pub(super) fn wait_for_condition(namespace: &str, resource: &str, condition: &str) -> Result<()> {
     if let Some(state) = terminating_state(namespace, resource) {
         bail!("{}", terminating_wedge_message(namespace, resource, &state));
@@ -1598,7 +1457,7 @@ pub(super) fn verify_native_teardown(root: &Path, cfg: &KindConfig) -> Result<()
 }
 
 /// Tear down a KIND dependency tier whose port-forward state belongs to
-/// `root`. See [`up_in`] for why this cannot rely on the caller's CWD.
+/// `root`, which can differ from the caller’s current directory.
 pub(super) fn down_in(root: &Path, cfg: &KindConfig) -> Result<()> {
     let state = StateDir::new(root)?;
     eprintln!("==> killing port-forwards");
@@ -1652,70 +1511,6 @@ pub(super) fn status(cfg: &KindConfig) {
     }
 }
 
-fn print_chrome_summary(cfg: &KindConfig) {
-    let web = cfg.web_port;
-    eprintln!();
-    eprintln!("===========================================================");
-    eprintln!(" devx up — full Neon Law Navigator stack running in KIND");
-    eprintln!("===========================================================");
-    eprintln!();
-    eprintln!("Start the web server on the host:");
-    eprintln!();
-    eprintln!("    set -a; source .devx/env; set +a");
-    eprintln!("    cargo run -p neon");
-    eprintln!();
-    eprintln!("Walk the retainer in Chrome:");
-    eprintln!("  http://localhost:{web}                    — navigator home");
-    eprintln!("  http://localhost:{web}/auth/login  — OIDC flow");
-    eprintln!("  http://localhost:{web}/app/lawyer/retainers/new — start a stepwise walk");
-    eprintln!();
-    eprintln!("Inspect the workflow journal directly from the host:");
-    eprintln!();
-    eprintln!(
-        "    surreal sql --endpoint ws://localhost:{} --namespace navigator --database navigator \\",
-        cfg.surreal_port
-    );
-    eprintln!("        --pretty <<<'SELECT * FROM notation_event ORDER BY id'");
-    eprintln!();
-    eprintln!("Other admin UIs:");
-    eprintln!(
-        "  http://localhost:{}/auth/v1/admin    — Rauthy admin (nick@neonlaw.com/admin)",
-        cfg.rauthy_port
-    );
-    eprintln!(
-        "  http://localhost:{}                   — SeaweedFS S3 endpoint",
-        cfg.seaweedfs_s3_port
-    );
-    eprintln!(
-        "  http://localhost:{}                  — SurrealDB HTTP/health",
-        cfg.surreal_port
-    );
-    eprintln!(
-        "      in-cluster: {}  (workflows-service shares this engine)",
-        super::surreal::IN_CLUSTER_ENDPOINT
-    );
-    eprintln!(
-        "  http://localhost:{}/services         — Restate admin (registered services)",
-        cfg.restate_admin_port
-    );
-    eprintln!(
-        "  http://localhost:{}                   — OpenObserve UI",
-        cfg.openobserve_port
-    );
-    eprintln!();
-    eprintln!(
-        "Telemetry: host `web` exports directly to OpenObserve at \
-         http://localhost:{} (set in .devx/env).",
-        cfg.openobserve_otlp_port
-    );
-    eprintln!(
-        "Open OpenObserve and select the default organization and stream to inspect service.name."
-    );
-    eprintln!();
-    eprintln!("Tear down with: cargo run --release -p hudson -- dev down");
-    eprintln!();
-}
-
 fn yes_no(b: bool) -> &'static str {
     if b {
         "yes"
@@ -1750,28 +1545,6 @@ fn port_forward(
             "port-forward",
             target,
             &format!("{host_port}:{svc_port}"),
-        ],
-        state,
-    )
-}
-
-fn port_forward_two_in(
-    namespace: &str,
-    target: &str,
-    host_a: u16,
-    svc_a: u16,
-    host_b: u16,
-    svc_b: u16,
-    state: &StateDir,
-) -> Result<u32> {
-    spawn_port_forward(
-        &[
-            "--namespace",
-            namespace,
-            "port-forward",
-            target,
-            &format!("{host_a}:{svc_a}"),
-            &format!("{host_b}:{svc_b}"),
         ],
         state,
     )

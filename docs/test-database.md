@@ -62,11 +62,9 @@ successful fixture or local startup is not retained-work handover or recovery ac
 
 ## Captured compatibility
 
-Existing legacy KIND descriptors retain captured-source enrollment. Explicit `--runtime native` selects the separate
-host-process compatibility topology, not fresh PostgreSQL authority. Compatibility bootstrap holds web and worker
-writers, captures the existing Source export, and enrolls required scopes before sample seeding. First enrollment
-requires the source tables to exist with only fixture metadata populated. Startup leaves source definitions and rows
-untouched. A valid PostgreSQL enrollment can be reused after the source fixture loses its in-memory schema.
+Use a fresh worktree when an existing KIND descriptor points to a captured tier. Standard development startup rejects
+that descriptor and leaves its database and files intact. The explicit `--runtime native` option runs the host-process
+compatibility topology.
 
 ## Native deploy browser gate
 
