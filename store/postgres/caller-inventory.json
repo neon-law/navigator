@@ -9158,7 +9158,6 @@
       "rules/src/project_skill.rs",
       "rules/src/source_archive.rs",
       "rules/src/workflow_steps.rs",
-      "store/src/addresses.rs",
       "store/src/assets.rs",
       "store/src/brand_letterheads.rs",
       "store/src/cases.rs",
