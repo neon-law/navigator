@@ -405,6 +405,10 @@ pub fn run(host: Option<&str>, project_code: Option<&str>) -> ExitCode {
     diagnosis
         .checks
         .extend(project_code.and_then(|code| drive_link_check(code, local.as_ref())));
+    diagnosis.checks.extend(
+        project_code
+            .and_then(|code| firm_link_check(code, local.as_ref(), std::path::Path::new("."))),
+    );
     report(&diagnosis)
 }
 
@@ -443,6 +447,103 @@ fn now_secs() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
+}
+
+/// The Firm a checkout's materialized links point at, read from the
+/// sync-written links that reach into a Firm library: the rules link into
+/// `.firm/` and each Firm skill link into the `.agents/skills/<slug>/`
+/// namespace. Generic skill links (no Firm slug) contribute nothing. Empty
+/// when no Firm link is present.
+fn linked_firms(checkout: &std::path::Path) -> Vec<String> {
+    use crate::projects::workspace_skills::{FIRM_DIRECTORY, PROJECT_LINK};
+    let mut slugs = std::collections::BTreeSet::new();
+    for dir in [".claude/rules", ".claude/skills"] {
+        for entry in std::fs::read_dir(checkout.join(dir))
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            let Ok(target) = std::fs::read_link(entry.path()) else {
+                continue;
+            };
+            let target = target.to_string_lossy();
+            if let Some(rest) = target.split(&format!("{FIRM_DIRECTORY}/")).nth(1) {
+                if let Some(slug) = rest.split('/').next().filter(|slug| !slug.is_empty()) {
+                    slugs.insert(slug.to_string());
+                }
+            } else if let Some(rest) = target.strip_prefix(PROJECT_LINK) {
+                let mut segments = rest.split('/');
+                if let (Some(slug), Some(_)) = (segments.next(), segments.next()) {
+                    slugs.insert(slug.to_string());
+                }
+            }
+        }
+    }
+    slugs.into_iter().collect()
+}
+
+/// Whether a checkout's materialized Firm links agree with the `firm:` its
+/// `navigator.yaml` names. Sync derives both from the manifest, so a
+/// disagreement means a stale link set or a hand-edited manifest — and the
+/// checkout would load another Firm's rules or skills. Fixing is one command
+/// or one manifest edit, and the check only reports when run inside the
+/// checkout of `code`.
+fn firm_link_check(
+    code: &str,
+    local: Option<&crate::projects::manifest::Manifest>,
+    checkout: &std::path::Path,
+) -> Option<Check> {
+    let local = local.filter(|manifest| manifest.project.as_deref() == Some(code))?;
+    let declared = crate::projects::manifest::non_empty(local.firm.as_deref());
+    let linked = linked_firms(checkout);
+    match (declared, linked.as_slice()) {
+        // Outside a Firm workspace there is nothing to compare.
+        (None, []) => None,
+        (Some(declared), [linked]) if linked == &declared => Some(Check::ok(
+            "firm links",
+            format!("skills and rules point at Firm `{declared}`, matching navigator.yaml"),
+        )),
+        (Some(declared), [linked]) => Some(Check::fail(
+            "firm links",
+            format!(
+                "the checkout's Firm links point at Firm `{linked}` but navigator.yaml names \
+                 `{declared}` — the checkout would load the wrong Firm's rules. Re-run \
+                 `navigator sync` in the workspace root, or correct the manifest `firm:` if it \
+                 is wrong"
+            ),
+        )),
+        (Some(declared), []) => Some(Check::warn(
+            "firm links",
+            format!(
+                "navigator.yaml names Firm `{declared}` but no Firm rules are linked at \
+                 `.claude/rules/AGENTS.md`; run `navigator sync` in the workspace root"
+            ),
+        )),
+        (Some(_), linked) => Some(Check::fail(
+            "firm links",
+            format!(
+                "the checkout's Firm links point at more than one Firm ({}) but navigator.yaml \
+                 names one — re-run `navigator sync` in the workspace root",
+                linked.join(", ")
+            ),
+        )),
+        (None, [linked]) => Some(Check::warn(
+            "firm links",
+            format!(
+                "Firm links point at Firm `{linked}` but navigator.yaml names no `firm`; set \
+                 `firm: {linked}` in the manifest, or re-run `navigator sync` in the workspace \
+                 root"
+            ),
+        )),
+        (None, linked) => Some(Check::warn(
+            "firm links",
+            format!(
+                "Firm links point at more than one Firm ({}) but navigator.yaml names no `firm`; \
+                 re-run `navigator sync` in the workspace root",
+                linked.join(", ")
+            ),
+        )),
+    }
 }
 
 #[cfg(test)]
@@ -901,5 +1002,93 @@ mod tests {
         );
         assert!(drive_link_check("other", Some(&linked)).is_none());
         assert!(drive_link_check("acme", None).is_none());
+    }
+
+    /// The manifest a `firm_link_check` reads, written to a tempdir the way a
+    /// checkout of `acme` carries one.
+    fn checkout_manifest(yaml: &str) -> crate::projects::manifest::Manifest {
+        let root = tempfile::TempDir::new().unwrap();
+        std::fs::write(root.path().join("navigator.yaml"), yaml).unwrap();
+        crate::projects::manifest::read(root.path()).unwrap()
+    }
+
+    fn linked_checkout(
+        root: &tempfile::TempDir,
+        rules_target: Option<&str>,
+        skill_targets: &[&str],
+    ) {
+        let rules = root.path().join(".claude/rules");
+        let skills = root.path().join(".claude/skills");
+        std::fs::create_dir_all(&rules).unwrap();
+        std::fs::create_dir_all(&skills).unwrap();
+        if let Some(target) = rules_target {
+            symlink(target, rules.join("AGENTS.md")).unwrap();
+        }
+        for (index, target) in skill_targets.iter().enumerate() {
+            symlink(target, skills.join(format!("skill-{index}"))).unwrap();
+        }
+    }
+
+    use std::os::unix::fs::symlink;
+
+    #[test]
+    fn a_checkout_whose_firm_links_disagree_with_its_manifest_fails_with_the_fix() {
+        let root = tempfile::TempDir::new().unwrap();
+        linked_checkout(
+            &root,
+            Some("../../../.firm/other-firm/AGENTS.md"),
+            &["../../../.agents/skills/other-firm/intake"],
+        );
+        let manifest =
+            checkout_manifest("version: 26.11.1\nproject:\n  host: https://example.test\n  name: acme\n  firm: firm-a\n");
+
+        let check = firm_link_check("acme", Some(&manifest), root.path()).unwrap();
+        assert_eq!(check.status, Status::Fail);
+        assert!(check.detail.contains("`other-firm`"), "{}", check.detail);
+        assert!(check.detail.contains("`firm-a`"), "{}", check.detail);
+        assert!(check.detail.contains("navigator sync"), "{}", check.detail);
+        assert!(check.detail.contains("`firm:`"), "{}", check.detail);
+        // A different Project code reports nothing.
+        assert!(firm_link_check("other", Some(&manifest), root.path()).is_none());
+    }
+
+    #[test]
+    fn matching_firm_links_are_ok_and_missing_ones_warn_toward_sync() {
+        let linked = tempfile::TempDir::new().unwrap();
+        linked_checkout(&linked, Some("../../../.firm/firm-a/AGENTS.md"), &[]);
+        let manifest =
+            checkout_manifest("version: 26.11.1\nproject:\n  host: https://example.test\n  name: acme\n  firm: firm-a\n");
+        let check = firm_link_check("acme", Some(&manifest), linked.path()).unwrap();
+        assert_eq!(check.status, Status::Ok);
+
+        let bare = tempfile::TempDir::new().unwrap();
+        let check = firm_link_check("acme", Some(&manifest), bare.path()).unwrap();
+        assert_eq!(check.status, Status::Warn);
+        assert!(check.detail.contains(".claude/rules/AGENTS.md"));
+        assert!(check.detail.contains("navigator sync"));
+    }
+
+    #[test]
+    fn links_pointing_at_two_firms_fail_even_when_the_manifest_names_one_of_them() {
+        let root = tempfile::TempDir::new().unwrap();
+        linked_checkout(
+            &root,
+            Some("../../../.firm/firm-a/AGENTS.md"),
+            &["../../../.agents/skills/firm-b/intake"],
+        );
+        let manifest =
+            checkout_manifest("version: 26.11.1\nproject:\n  host: https://example.test\n  name: acme\n  firm: firm-a\n");
+        let check = firm_link_check("acme", Some(&manifest), root.path()).unwrap();
+        assert_eq!(check.status, Status::Fail);
+        assert!(check.detail.contains("more than one Firm"));
+    }
+
+    #[test]
+    fn a_checkout_with_no_firm_anywhere_reports_nothing() {
+        let root = tempfile::TempDir::new().unwrap();
+        let manifest = checkout_manifest(
+            "version: 26.11.1\nproject:\n  host: https://example.test\n  name: acme\n",
+        );
+        assert!(firm_link_check("acme", Some(&manifest), root.path()).is_none());
     }
 }

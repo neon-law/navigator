@@ -18,6 +18,8 @@ use assert_cmd::Command;
 use predicates::{prelude::PredicateBooleanExt, str};
 use tempfile::TempDir;
 
+use project_scaffold::ROOT_GITIGNORE;
+
 fn navigator() -> Command {
     let mut command = Command::cargo_bin("navigator").unwrap();
     command.env_remove("GITHUB_REPOSITORY");
@@ -31,8 +33,6 @@ const FIXTURE_PIN: &str = env!("CARGO_PKG_VERSION");
 
 const CODEOWNERS: &str = "# CODEOWNERS\n\n* @shicholas\n";
 const GITATTRIBUTES: &str = "* text=auto eol=lf\n";
-/// The canonical root `.gitignore`; it ignores `documents/` outright.
-const ROOT_GITIGNORE: &str = "# Document bytes staged for or pulled down by `navigator project sync`.\n# Each document's pointer is committed under blobs/; its bytes never are.\n/documents/\n\n# Legal files and handoff notes never enter a Project repository.\n*.pdf\n*.docx\n*.local\n\n# Call notes and memos for `navigator project communication create --body-file`.\n# The Communication's body lives in Navigator's store, never in Git.\n/notes/\n\n# Email bodies, drafts, and saved copies of sent mail. Matter facts, never Git.\n/mail/\n\n# Per-machine agent and operating-system state.\n.claude/settings.local.json\n.claude/worktrees/\n# Skill links `navigator sync` scopes to this Project's Firm.\n.claude/skills/\n.agents/settings.local.json\n.agents/worktrees/\n.DS_Store\n";
 /// A pointer as `project sync` writes one, for the fixtures below.
 const POINTER_YAML: &str = "kind: exhibit\nvisibility: internal\ncurrent_version:\n  version: 1\n  asset_id: 0199b9e4-14b7-7ad0-87a5-71ef24a46d40\n  created_at: 2026-09-05T12:00:00Z\n  sha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n  size_bytes: 42\n";
 
