@@ -1362,6 +1362,23 @@ fn canonical_document(base: &str) -> Value {
                            "404": { "description": "Active key unavailable to caller" } }
           }
         },
+        "/app/api/firms/{id}/forgejo-parity": {
+          "get": {
+            "operationId": "readFirmForgejoParity",
+            "summary": "Compare live Project repository main revisions for a Firm",
+            "description": "Read-only. An interactive administrator with Firm integration access receives a bounded page of Project repository statuses, including Projects without local checkouts. The response contains projects and a nullable next cursor. Forgejo-only Projects report their verified Forgejo main.",
+            "parameters": [
+              { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+              { "name": "after", "in": "query", "schema": { "type": "string", "format": "uuid" } }
+            ],
+            "responses": {
+              "200": { "description": "Project statuses and the next inventory cursor", "content": { "application/json": { "schema": { "type": "object" } } } },
+              "401": { "description": "No authenticated session" },
+              "403": { "description": "Caller is not an interactive administrator" },
+              "404": { "description": "Firm unavailable to this caller" }
+            }
+          }
+        },
         "/app/api/firms/{id}/forgejo-organization": {
           "post": {
             "operationId": "provisionFirmForgejoOrganization",
