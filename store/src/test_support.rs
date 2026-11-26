@@ -1327,6 +1327,27 @@ pub fn with_postgres(
     with_postgres_history(test, FixtureHistory::Native)
 }
 
+/// Run a legacy store behavior test with PostgreSQL as its sole database
+/// authority and expose both handles for native fixture setup.
+pub async fn with_native_application_fixture<F, Fut>(test: F)
+where
+    F: FnOnce(crate::surreal::SurrealDb, crate::postgres::PostgresDb) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    with_postgres(async move {
+        let pg = crate::postgres::PostgresDb::application()
+            .await
+            .expect("required PostgreSQL application fixture");
+        let fixture_pg = pg.clone();
+        let db = crate::surreal::SurrealDb::uninitialized();
+        seed_compiled_brands_postgres(&db).await;
+        crate::postgres::PostgresDb::with_application_db(pg, test(db, fixture_pg))
+            .await
+            .expect("native PostgreSQL application fixture is admitted");
+    })
+    .await;
+}
+
 /// [`with_postgres`] under the name `hudson ops surreal-free-tests` reads: an
 /// integration test that calls it keeps its file in the coverage measurement.
 ///

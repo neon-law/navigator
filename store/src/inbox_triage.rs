@@ -1633,10 +1633,22 @@ mod tests {
     /// No classifier output: the email is Uncertain and the row waits for a
     /// person. Ingest itself is never blocked — the triage row records the
     /// wait.
+    macro_rules! with_native_triage_fixture {
+        ($db:ident, $pg:ident, $body:block) => {
+            crate::test_support::with_native_application_fixture(|$db, fixture_pg| async move {
+                #[allow(unused_variables)]
+                let $pg = fixture_pg;
+                $body
+            })
+            .await
+        };
+    }
+
     #[tokio::test]
     async fn unclassified_email_lands_needs_human() {
-        let db = crate::test_support::mem_surreal().await;
-        let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+        #[rustfmt::skip]
+        with_native_triage_fixture!(db, pg, {
+let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
         let message = inbound(&db, firm, "email", "triage-uncertain").await;
         let label = privilege_label("email", true, None);
         assert_eq!(label, PrivilegeLabel::Uncertain);
@@ -1661,14 +1673,17 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(found, row);
+
+        });
     }
 
     /// A social-origin message settles at the rule layer: NotPrivileged with
     /// a suggested Project, and no model fields.
     #[tokio::test]
     async fn social_triage_settles_without_a_model() {
-        let db = crate::test_support::mem_surreal().await;
-        let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+        #[rustfmt::skip]
+        with_native_triage_fixture!(db, pg, {
+let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
         let message = inbound(&db, firm, "instagram", "triage-social").await;
         let label = privilege_label("instagram", true, None);
         assert_eq!(label, PrivilegeLabel::NotPrivileged);
@@ -1690,14 +1705,17 @@ mod tests {
         assert_eq!(row.privilege, PrivilegeLabel::NotPrivileged);
         assert_eq!(row.disposition, TriageDisposition::Suggested);
         assert_eq!(row.privilege_confidence, None);
+
+        });
     }
 
     /// A suggested Project from another Firm is a tenancy violation, not a
     /// suggestion — refused before the row exists.
     #[tokio::test]
     async fn cross_firm_project_suggestions_are_refused() {
-        let db = crate::test_support::mem_surreal().await;
-        let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+        #[rustfmt::skip]
+        with_native_triage_fixture!(db, pg, {
+let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
         // The suggestion check compares Project ownership, so the second
         // Firm needs no Brand — just itself and a Project.
         let other_admin = crate::persons::create(
@@ -1745,14 +1763,17 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+
+        });
     }
 
     /// One Message has one triage row: a replayed write is refused and the
     /// first decision stands.
     #[tokio::test]
     async fn a_replayed_triage_does_not_overwrite_the_first() {
-        let db = crate::test_support::mem_surreal().await;
-        let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+        #[rustfmt::skip]
+        with_native_triage_fixture!(db, pg, {
+let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
         let message = inbound(&db, firm, "email", "triage-replay").await;
         let first = record(
             &db,
@@ -1783,6 +1804,8 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(found, first);
+
+        });
     }
 
     // -- The human review queue -------------------------------------------------
@@ -1874,8 +1897,9 @@ mod tests {
 
     #[tokio::test]
     async fn the_queue_lists_awaiting_rows_and_hides_the_rest() {
-        let db = crate::test_support::mem_surreal().await;
-        let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+        #[rustfmt::skip]
+        with_native_triage_fixture!(db, pg, {
+let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
         let other = crate::test_support::seed_firm_with_brand(&db, "summons").await;
         let owner = person(&db, "Queue Owner", Role::Owner).await;
         let lawyer = person(&db, "Queue Lawyer", Role::Lawyer).await;
@@ -1920,12 +1944,15 @@ mod tests {
             list_for_review(&db, client).await,
             Err(InboxError::Denied)
         ));
+
+        });
     }
 
     #[tokio::test]
     async fn an_owner_confirms_the_suggested_project() {
-        let db = crate::test_support::mem_surreal().await;
-        let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+        #[rustfmt::skip]
+        with_native_triage_fixture!(db, pg, {
+let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
         let owner = person(&db, "Confirm Owner", Role::Owner).await;
         let project =
             crate::test_support::seed_project_on_firm(&db, Some(firm), "Confirm Target").await;
@@ -2010,12 +2037,15 @@ mod tests {
             list_for_review(&db, owner).await.unwrap().len() == 1,
             "an attributed row still awaits privilege review"
         );
+
+        });
     }
 
     #[tokio::test]
     async fn confirm_takes_the_suggested_project_only() {
-        let db = crate::test_support::mem_surreal().await;
-        let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+        #[rustfmt::skip]
+        with_native_triage_fixture!(db, pg, {
+let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
         let owner = person(&db, "Confirm Strict Owner", Role::Owner).await;
         let suggested =
             crate::test_support::seed_project_on_firm(&db, Some(firm), "Suggested Matter").await;
@@ -2030,12 +2060,15 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(conversation.project_id, None);
+
+        });
     }
 
     #[tokio::test]
     async fn a_lawyer_confirms_only_while_participating() {
-        let db = crate::test_support::mem_surreal().await;
-        let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+        #[rustfmt::skip]
+        with_native_triage_fixture!(db, pg, {
+let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
         let project =
             crate::test_support::seed_project_on_firm(&db, Some(firm), "Participation Matter")
                 .await;
@@ -2096,12 +2129,15 @@ mod tests {
             confirm_project(&db, client, outside_id, project.id).await,
             Err(InboxError::Denied)
         ));
+
+        });
     }
 
     #[tokio::test]
     async fn an_override_records_the_correction_as_a_labeled_example() {
-        let db = crate::test_support::mem_surreal().await;
-        let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+        #[rustfmt::skip]
+        with_native_triage_fixture!(db, pg, {
+let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
         let owner = person(&db, "Override Owner", Role::Owner).await;
         let suggested =
             crate::test_support::seed_project_on_firm(&db, Some(firm), "Wrong Suggestion").await;
@@ -2144,12 +2180,15 @@ mod tests {
         let (blank_row, _) = needs_human_with_suggestion(&db, firm, "override-blank", None).await;
         let error = override_project(&db, owner, blank_row, corrected.id, "  ").await;
         assert!(matches!(error, Err(InboxError::Invalid(_))));
+
+        });
     }
 
     #[tokio::test]
     async fn resolving_privilege_keeps_the_rule_layer_authoritative() {
-        let db = crate::test_support::mem_surreal().await;
-        let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+        #[rustfmt::skip]
+        with_native_triage_fixture!(db, pg, {
+let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
         let owner = person(&db, "Resolve Owner", Role::Owner).await;
 
         // The human may settle client email either way.
@@ -2254,26 +2293,25 @@ mod tests {
             .await,
             Err(InboxError::Denied)
         ));
+
+        });
     }
 
     #[tokio::test]
     async fn a_private_social_message_waits_for_privilege_review_after_assignment() {
-        let db = crate::test_support::mem_surreal().await;
-        let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+        #[rustfmt::skip]
+        with_native_triage_fixture!(db, pg, {
+let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
         let owner = person(&db, "Private Review Owner", Role::Owner).await;
         let project =
             crate::test_support::seed_project_on_firm(&db, Some(firm), "Private Review Matter")
                 .await;
         participate(&db, owner, project.id).await;
         let inbound = inbound(&db, firm, "x", "private-review").await;
-        db.query("UPDATE $message SET visibility = 'private'")
-            .bind((
-                "message",
-                crate::surreal::record_id("message", inbound.message_id),
-            ))
+        sqlx::query("UPDATE message SET visibility = 'private' WHERE id = $1")
+            .bind(inbound.message_id)
+            .execute(pg.pool())
             .await
-            .unwrap()
-            .check()
             .unwrap();
         let row = record(
             &db,
@@ -2330,12 +2368,15 @@ mod tests {
         let audit = settled.rationale.unwrap();
         assert!(audit.contains("corrected attribution after review"));
         assert!(audit.contains("confirmed private legal advice"));
+
+        });
     }
 
     #[tokio::test]
     async fn a_rerun_returns_a_resolved_row_to_the_queue() {
-        let db = crate::test_support::mem_surreal().await;
-        let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+        #[rustfmt::skip]
+        with_native_triage_fixture!(db, pg, {
+let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
         let owner = person(&db, "Rerun Owner", Role::Owner).await;
         let project =
             crate::test_support::seed_project_on_firm(&db, Some(firm), "Rerun Matter").await;
@@ -2382,12 +2423,15 @@ mod tests {
         let social_rerun = rerun(&db, owner, social.id).await.unwrap();
         assert_eq!(social_rerun.privilege, PrivilegeLabel::NotPrivileged);
         assert_eq!(social_rerun.disposition, TriageDisposition::Suggested);
+
+        });
     }
 
     #[tokio::test]
     async fn an_admin_cannot_decide_another_firms_triage() {
-        let db = crate::test_support::mem_surreal().await;
-        let own_firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+        #[rustfmt::skip]
+        with_native_triage_fixture!(db, pg, {
+let own_firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
         let other_firm = crate::test_support::seed_firm_with_brand(&db, "vesta").await;
         let admin = person(&db, "Scoped Admin", Role::Admin).await;
         member(&db, admin, own_firm, FirmMembership::Admin).await;
@@ -2423,21 +2467,20 @@ mod tests {
                 TriageDisposition::NeedsHuman
             );
         }
+
+        });
     }
 
     #[tokio::test]
     async fn automated_private_social_claims_cannot_bypass_the_store_rules() {
-        let db = crate::test_support::mem_surreal().await;
-        let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+        #[rustfmt::skip]
+        with_native_triage_fixture!(db, pg, {
+let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
         let message = inbound(&db, firm, "x", "private-store-claim").await;
-        db.query("UPDATE $id SET visibility = 'private'")
-            .bind((
-                "id",
-                crate::surreal::record_id("message", message.message_id),
-            ))
+        sqlx::query("UPDATE message SET visibility = 'private' WHERE id = $1")
+            .bind(message.message_id)
+            .execute(pg.pool())
             .await
-            .unwrap()
-            .check()
             .unwrap();
         let mut input = new_triage(
             message.message_id,
@@ -2453,12 +2496,15 @@ mod tests {
         assert_eq!(row.disposition, TriageDisposition::NeedsHuman);
         assert!(row.model_id.is_none());
         assert!(row.raw_output.is_none());
+
+        });
     }
 
     #[tokio::test]
     async fn a_triage_record_cannot_claim_another_messages_firm() {
-        let db = crate::test_support::mem_surreal().await;
-        let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+        #[rustfmt::skip]
+        with_native_triage_fixture!(db, pg, {
+let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
         let other = crate::test_support::seed_firm_with_brand(&db, "summons").await;
         let message = inbound(&db, firm, "email", "foreign-record-claim").await;
         let result = record(
@@ -2477,12 +2523,15 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+
+        });
     }
 
     #[tokio::test]
     async fn target_participation_does_not_authorize_taking_another_matter_conversation() {
-        let db = crate::test_support::mem_surreal().await;
-        let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+        #[rustfmt::skip]
+        with_native_triage_fixture!(db, pg, {
+let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
         let owner = person(&db, "Assignment Owner", Role::Owner).await;
         let lawyer = person(&db, "Target Reviewer", Role::Lawyer).await;
         let source =
@@ -2529,12 +2578,15 @@ mod tests {
                 .project_id,
             Some(target.id)
         );
+
+        });
     }
 
     #[tokio::test]
     async fn firm_membership_does_not_authorize_review_of_an_unseen_assigned_matter() {
-        let db = crate::test_support::mem_surreal().await;
-        let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+        #[rustfmt::skip]
+        with_native_triage_fixture!(db, pg, {
+let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
         let owner = person(&db, "Scope Owner", Role::Owner).await;
         let lawyer = person(&db, "synthetic reviewer", Role::Lawyer).await;
         member(&db, lawyer, firm, FirmMembership::Lawyer).await;
@@ -2574,12 +2626,15 @@ mod tests {
             rerun(&db, lawyer, row).await.unwrap().privilege,
             PrivilegeLabel::Uncertain
         );
+
+        });
     }
 
     #[tokio::test]
     async fn assigned_matter_audit_content_requires_project_participation() {
-        let db = crate::test_support::mem_surreal().await;
-        let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+        #[rustfmt::skip]
+        with_native_triage_fixture!(db, pg, {
+let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
         let project =
             crate::test_support::seed_project_on_firm(&db, Some(firm), "Private Audit Project")
                 .await;
@@ -2611,5 +2666,7 @@ mod tests {
         let visible = list_for_review(&db, lawyer).await.unwrap();
         assert_eq!(visible[0].triage.rationale, input.rationale);
         assert_eq!(visible[0].triage.raw_output, input.raw_output);
+
+        });
     }
 }
