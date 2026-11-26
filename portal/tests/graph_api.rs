@@ -84,6 +84,7 @@ async fn seed_firm(
 }
 
 async fn seed_matter(db: &store::surreal::SurrealDb, code: &str) -> Uuid {
+    store::test_support::seed_compiled_brands_postgres(db).await;
     store::projects::create(
         db,
         &store::projects::NewProject {
@@ -101,103 +102,115 @@ async fn seed_matter(db: &store::surreal::SurrealDb, code: &str) -> Uuid {
 
 #[tokio::test]
 async fn graph_depth_above_the_ceiling_is_a_client_error() {
-    let db = store::test_support::mem_surreal().await;
-    let lawyer = lawyer(&db, "Depth Lawyer").await;
-    let app = graph_app(db).await;
-    let bearer = bearer(lawyer.id, Role::Lawyer);
-    let seed = Uuid::now_v7();
+    store::test_support::with_required_postgres(async {
+        let db = store::surreal::SurrealDb::uninitialized();
+        let lawyer = lawyer(&db, "Depth Lawyer").await;
+        let app = graph_app(db).await;
+        let bearer = bearer(lawyer.id, Role::Lawyer);
+        let seed = Uuid::now_v7();
 
-    // The cap is enforced before any store read: even an out-of-scope seed
-    // gets the validation error, never a tenancy signal.
-    for (query, expected) in [
-        ("?depth=4", "depth_out_of_range"),
-        ("?depth=0", "depth_out_of_range"),
-        ("?depth=abc", "invalid_depth"),
-        ("?depth=", "invalid_depth"),
-    ] {
-        let (status, body) = get(
-            &app,
-            &format!("/app/api/graph/project/{seed}{query}"),
-            &bearer,
-        )
-        .await;
-        assert_eq!(status, StatusCode::BAD_REQUEST, "{query}: {body:?}");
-        assert_eq!(body["error"], expected, "{query}");
-    }
+        // The cap is enforced before any store read: even an out-of-scope seed
+        // gets the validation error, never a tenancy signal.
+        for (query, expected) in [
+            ("?depth=4", "depth_out_of_range"),
+            ("?depth=0", "depth_out_of_range"),
+            ("?depth=abc", "invalid_depth"),
+            ("?depth=", "invalid_depth"),
+        ] {
+            let (status, body) = get(
+                &app,
+                &format!("/app/api/graph/project/{seed}{query}"),
+                &bearer,
+            )
+            .await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{query}: {body:?}");
+            assert_eq!(body["error"], expected, "{query}");
+        }
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn a_matter_outside_the_callers_scope_is_a_bare_404() {
-    let db = store::test_support::mem_surreal().await;
-    let outsider = lawyer(&db, "Outsider Lawyer").await;
-    let matter = seed_matter(&db, "outgraph").await;
-    let app = graph_app(db).await;
-    let bearer = bearer(outsider.id, Role::Lawyer);
+    store::test_support::with_required_postgres(async {
+        let db = store::surreal::SurrealDb::uninitialized();
+        let outsider = lawyer(&db, "Outsider Lawyer").await;
+        let matter = seed_matter(&db, "outgraph").await;
+        let app = graph_app(db).await;
+        let bearer = bearer(outsider.id, Role::Lawyer);
 
-    let (status, body) = get(&app, &format!("/app/api/graph/project/{matter}"), &bearer).await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "{body:?}");
-    assert_eq!(body["error"], "not_found");
+        let (status, body) = get(&app, &format!("/app/api/graph/project/{matter}"), &bearer).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{body:?}");
+        assert_eq!(body["error"], "not_found");
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn a_firm_view_outside_the_callers_directory_is_a_bare_404() {
-    let db = store::test_support::mem_surreal().await;
-    // The firm's admin DRI holds the membership; the caller holds none.
-    let member = admin(&db, "Firm Member").await;
-    let firm = seed_firm(&db, "Out of Reach Firm", member.id).await;
-    let outsider = lawyer(&db, "Firm Outsider").await;
-    let app = graph_app(db).await;
-    let bearer = bearer(outsider.id, Role::Lawyer);
+    store::test_support::with_required_postgres(async {
+        let db = store::surreal::SurrealDb::uninitialized();
+        // The firm's admin DRI holds the membership; the caller holds none.
+        let member = admin(&db, "Firm Member").await;
+        let firm = seed_firm(&db, "Out of Reach Firm", member.id).await;
+        let outsider = lawyer(&db, "Firm Outsider").await;
+        let app = graph_app(db).await;
+        let bearer = bearer(outsider.id, Role::Lawyer);
 
-    let (status, body) = get(&app, &format!("/app/api/graph/firm/{}", firm.id), &bearer).await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "{body:?}");
-    assert_eq!(body["error"], "not_found");
+        let (status, body) = get(&app, &format!("/app/api/graph/firm/{}", firm.id), &bearer).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{body:?}");
+        assert_eq!(body["error"], "not_found");
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn a_lawyer_view_of_another_firms_person_is_a_bare_404() {
-    let db = store::test_support::mem_surreal().await;
-    let member = admin(&db, "Directed Admin").await;
-    let target = lawyer(&db, "Directed Target").await;
-    let firm = seed_firm(&db, "Directed Firm", member.id).await;
-    store::firms::add_membership(
-        &db,
-        &store::firms::NewPersonFirmRole {
-            person_id: target.id,
-            firm_id: firm.id,
-            membership: FirmMembership::Lawyer,
-            is_dri: false,
-        },
-    )
-    .await
-    .unwrap();
-    // The caller belongs to a different firm with no directory reach into
-    // the target's.
-    let other_member = admin(&db, "Other Firm Admin").await;
-    let other_firm = seed_firm(&db, "Other Firm", other_member.id).await;
-    let caller = lawyer(&db, "Unrelated Caller").await;
-    store::firms::add_membership(
-        &db,
-        &store::firms::NewPersonFirmRole {
-            person_id: caller.id,
-            firm_id: other_firm.id,
-            membership: FirmMembership::Lawyer,
-            is_dri: false,
-        },
-    )
-    .await
-    .unwrap();
-    let app = graph_app(db).await;
-    let bearer = bearer(caller.id, Role::Lawyer);
+    store::test_support::with_required_postgres(async {
+        let db = store::surreal::SurrealDb::uninitialized();
+        let member = admin(&db, "Directed Admin").await;
+        let target = lawyer(&db, "Directed Target").await;
+        let firm = seed_firm(&db, "Directed Firm", member.id).await;
+        store::firms::add_membership(
+            &db,
+            &store::firms::NewPersonFirmRole {
+                person_id: target.id,
+                firm_id: firm.id,
+                membership: FirmMembership::Lawyer,
+                is_dri: false,
+            },
+        )
+        .await
+        .unwrap();
+        // The caller belongs to a different firm with no directory reach into
+        // the target's.
+        let other_member = admin(&db, "Other Firm Admin").await;
+        let other_firm = seed_firm(&db, "Other Firm", other_member.id).await;
+        let caller = lawyer(&db, "Unrelated Caller").await;
+        store::firms::add_membership(
+            &db,
+            &store::firms::NewPersonFirmRole {
+                person_id: caller.id,
+                firm_id: other_firm.id,
+                membership: FirmMembership::Lawyer,
+                is_dri: false,
+            },
+        )
+        .await
+        .unwrap();
+        let app = graph_app(db).await;
+        let bearer = bearer(caller.id, Role::Lawyer);
 
-    let (status, body) = get(
-        &app,
-        &format!("/app/api/graph/lawyer/{}", target.id),
-        &bearer,
-    )
+        let (status, body) = get(
+            &app,
+            &format!("/app/api/graph/lawyer/{}", target.id),
+            &bearer,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{body:?}");
+        assert_eq!(body["error"], "not_found");
+    })
     .await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "{body:?}");
-    assert_eq!(body["error"], "not_found");
 }
 
 /// The 200 path needs a configured PostgreSQL graph; without one the door
@@ -218,50 +231,99 @@ async fn assert_view_or_unconfigured(app: &axum::Router, path: &str, bearer: &st
 
 #[tokio::test]
 async fn a_lawyer_reads_their_own_neighborhood() {
-    let db = store::test_support::mem_surreal().await;
-    let lawyer = lawyer(&db, "Self View Lawyer").await;
-    let app = graph_app(db).await;
-    let bearer = bearer(lawyer.id, Role::Lawyer);
+    store::test_support::with_required_postgres(async {
+        let db = store::surreal::SurrealDb::uninitialized();
+        let lawyer = lawyer(&db, "Self View Lawyer").await;
+        let app = graph_app(db).await;
+        let bearer = bearer(lawyer.id, Role::Lawyer);
 
-    assert_view_or_unconfigured(
-        &app,
-        &format!("/app/api/graph/lawyer/{}", lawyer.id),
-        &bearer,
-    )
+        assert_view_or_unconfigured(
+            &app,
+            &format!("/app/api/graph/lawyer/{}", lawyer.id),
+            &bearer,
+        )
+        .await;
+    })
     .await;
 }
 
 #[tokio::test]
 async fn a_directory_authorized_caller_reads_a_firm_view() {
-    let db = store::test_support::mem_surreal().await;
-    let admin = admin(&db, "Firm Admin").await;
-    let firm = seed_firm(&db, "Readable Firm", admin.id).await;
-    let app = graph_app(db).await;
-    let bearer = bearer(admin.id, Role::Admin);
+    store::test_support::with_required_postgres(async {
+        let db = store::surreal::SurrealDb::uninitialized();
+        let admin = admin(&db, "Firm Admin").await;
+        let firm = seed_firm(&db, "Readable Firm", admin.id).await;
+        let app = graph_app(db).await;
+        let bearer = bearer(admin.id, Role::Admin);
 
-    assert_view_or_unconfigured(&app, &format!("/app/api/graph/firm/{}", firm.id), &bearer).await;
+        assert_view_or_unconfigured(&app, &format!("/app/api/graph/firm/{}", firm.id), &bearer)
+            .await;
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn an_unauthenticated_or_client_caller_is_refused_before_scope() {
-    let db = store::test_support::mem_surreal().await;
-    let matter = seed_matter(&db, "nograph").await;
-    let client = store::persons::create(
-        &db,
-        &NewPerson::with_role("Graph Client", "graph-client@example.com", Role::Client),
-    )
-    .await
-    .unwrap();
-    let app = graph_app(db.clone()).await;
+    store::test_support::with_required_postgres(async {
+        let db = store::surreal::SurrealDb::uninitialized();
+        let matter = seed_matter(&db, "nograph").await;
+        let client = store::persons::create(
+            &db,
+            &NewPerson::with_role("Graph Client", "graph-client@example.com", Role::Client),
+        )
+        .await
+        .unwrap();
+        let app = graph_app(db.clone()).await;
 
-    let (status, body) = get(&app, &format!("/app/api/graph/project/{matter}"), "").await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED, "{body:?}");
+        let (status, body) = get(&app, &format!("/app/api/graph/project/{matter}"), "").await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{body:?}");
 
+        let (status, body) = get(
+            &app,
+            &format!("/app/api/graph/project/{matter}"),
+            &bearer(client.id, Role::Client),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body:?}");
+    })
+    .await;
+}
+
+/// A separate process guarantees no application PostgreSQL configuration or
+/// inherited task-local pool, even when the parent runs the native fixtures.
+#[tokio::test]
+async fn unavailable_graph_answers_503_for_an_authorized_self_view() {
+    const CHILD: &str = "NAV_GRAPH_UNAVAILABLE_TEST_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+        child.args([
+            "--exact",
+            "unavailable_graph_answers_503_for_an_authorized_self_view",
+            "--nocapture",
+        ]);
+        child.env(CHILD, "1");
+        for key in [
+            "NAVIGATOR_POSTGRES_HOST",
+            "NAVIGATOR_POSTGRES_PORT",
+            "NAVIGATOR_POSTGRES_USER",
+            "NAVIGATOR_POSTGRES_PASSWORD",
+            "NAVIGATOR_POSTGRES_DATABASE",
+            "NAVIGATOR_POSTGRES_SSLMODE",
+            "NAVIGATOR_POSTGRES_ROOT_CERT",
+        ] {
+            child.env_remove(key);
+        }
+        assert!(child.status().unwrap().success());
+        return;
+    }
+    let actor = Uuid::now_v7();
+    let app = graph_app(store::surreal::SurrealDb::uninitialized()).await;
     let (status, body) = get(
         &app,
-        &format!("/app/api/graph/project/{matter}"),
-        &bearer(client.id, Role::Client),
+        &format!("/app/api/graph/lawyer/{actor}"),
+        &bearer(actor, Role::Lawyer),
     )
     .await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "{body:?}");
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body:?}");
+    assert_eq!(body["error"], "graph_requires_postgresql");
 }

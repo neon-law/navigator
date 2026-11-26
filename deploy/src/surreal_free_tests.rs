@@ -585,6 +585,18 @@ mod tests {
     }
 
     #[test]
+    fn native_graph_api_tests_are_selected() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let selection = select(root).unwrap();
+        assert!(!selection
+            .nextest_filter
+            .contains("(package(portal) & kind(test) & binary(=graph_api))"));
+        assert!(!selection
+            .coverage_ignore
+            .contains("portal/tests/graph_api\\.rs"));
+    }
+
+    #[test]
     fn compatibility_tests_do_not_suppress_mock_http_tiktok_tests() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
         let selection = select(root).unwrap();
