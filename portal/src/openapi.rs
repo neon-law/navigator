@@ -4958,9 +4958,9 @@ fn canonical_document(base: &str) -> Value {
             "summary": "Read a notation's envelope status",
             "description":
               "Read-only status of the notation's signature envelope: the provider, the envelope-wide \
-               lifecycle state (`requested`, `completed`, `declined`, `voided`, or `expired`), and each \
-               declared signer's own step. Composed from the same durable signature record the inbound \
-               completion webhook stamps, so this read and the notation page's status card agree. Same \
+               lifecycle state, and each declared signer's own step. Reads the signature record stamped by \
+               the inbound webhook and asks the provider to distinguish a draft, sent, or terminal envelope \
+               while the record is requested. Same \
                authorization as the dispatch `POST` (lawyer/admin + matter scope; out-of-scope or unknown \
                is 404). A notation that has never been prepared or sent answers 200 with nulls and an empty \
                signer list — no envelope yet is an answer, not an error.",
@@ -7114,7 +7114,7 @@ fn canonical_document(base: &str) -> Value {
               "provider":             { "type": "string", "nullable": true,
                                         "description": "The provider that executed the request (e.g. `docusign`)." },
               "state":                { "type": "string", "nullable": true,
-                                        "description": "Envelope-wide lifecycle state: `requested`, `completed`, `declined`, `voided`, or `expired`." },
+                                        "description": "Envelope-wide lifecycle state: `draft`, `sent`, `requested`, `completed`, `declined`, `voided`, or `expired`." },
               "sender_view_href":     { "type": "string", "nullable": true,
                                         "description": "Portal route that mints the lawyer's sender-view window on this envelope — the one-click 'open in DocuSign' link; null before the first prepare or send." },
               "signers":              { "type": "array",

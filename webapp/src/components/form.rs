@@ -1074,7 +1074,7 @@ pub fn question_fields(
                 .map(|person| person.id.clone());
             vec![Field::person_picker(
                 prompt,
-                "value",
+                "id",
                 "Choose a person…",
                 context.person_candidates.clone(),
                 selected,

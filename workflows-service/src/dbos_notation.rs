@@ -35,9 +35,9 @@ use workflows::{
 use crate::journal::{answer_payload, append_event, TransitionRecord};
 use crate::notation_logic::{
     advance, questionnaire_back_target, record_notation_funnel_step,
-    resolve_review_notification_plan, review_notification_hop, review_notification_target,
-    send_review_notification, validate_questionnaire_spec, validate_workflow_spec,
-    NotationLogicError, ReviewNotificationHop, WorkflowFunnelStep,
+    resolve_review_notification_plan, review_notification_hop, send_review_notification,
+    validate_questionnaire_spec, validate_workflow_spec, NotationLogicError, ReviewNotificationHop,
+    WorkflowFunnelStep,
 };
 
 /// The DBOS workflow name the transition workflow registers under.
@@ -592,19 +592,16 @@ async fn send_notification_step(
 ) -> dbos::Result<(), NotationTransitionError> {
     dbos::step_with("send-review-notification", retryable_steps(), move || {
         let application_store = context.application_store.clone();
+        let postgres = context.postgres.clone();
         let email = Arc::clone(&context.email);
         async move {
-            let target = review_notification_target(&application_store, project_id, recipient_id)
-                .await
-                .map_err(NotationTransitionError::from_logic)
-                .map_err(dbos::Error::Application)?;
             send_review_notification(
-                Arc::clone(&email),
+                &application_store,
+                &postgres,
+                email.as_ref(),
                 notation_id,
                 project_id,
-                &target.project_code,
                 recipient_id,
-                &target.address,
                 hop,
             )
             .await

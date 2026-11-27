@@ -28,7 +28,7 @@
 //! — survives verbatim, wrapped in a yellow highlight, so an unfinished
 //! document is unmistakably unfinished rather than looking like prose.
 
-use pulldown_cmark::{Alignment, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{Alignment, Event, HeadingLevel, Tag, TagEnd};
 
 /// Convert a Markdown `body` to Typst markup suitable for
 /// [`crate::render`].
@@ -37,10 +37,7 @@ use pulldown_cmark::{Alignment, Event, HeadingLevel, Options, Parser, Tag, TagEn
 /// caller wraps it in an [`crate::OutputFormat`] chrome preamble.
 #[must_use]
 pub fn to_typst(body: &str) -> String {
-    let mut opts = Options::empty();
-    opts.insert(Options::ENABLE_STRIKETHROUGH);
-    opts.insert(Options::ENABLE_TABLES);
-    let parser = Parser::new_ext(body, opts);
+    let parser = word::paper::document_events(body);
 
     let mut out = String::with_capacity(body.len() + body.len() / 8);
     // Ordered-list counters, one per nesting level. `None` marks an

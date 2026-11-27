@@ -1381,9 +1381,8 @@ mod tests {
         let (status, html, _) = get(&app, "/app/projects/acme/memo?lens=lawyer").await;
         assert_eq!(status, StatusCode::OK);
         assert!(html.contains("id=\"document-body\""), "{html}");
-        assert!(html.contains("Synthetic review"), "{html}");
-        assert!(html.contains("notation-unit__heading"), "{html}");
-        assert!(html.contains("<ul"), "{html}");
+        assert!(html.contains("<h2>Scope</h2>"), "{html}");
+        assert!(html.contains("<ul>\n<li>Synthetic review</li>"), "{html}");
         assert!(!html.contains("No draft is attached"), "{html}");
         let (status, html, _) = get(&app, "/app/projects/acme/memo?lens=client").await;
         assert_eq!(status, StatusCode::NOT_FOUND);

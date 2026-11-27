@@ -90,6 +90,7 @@ pub fn notation_document(
             marker: unit.marker.clone(),
             path: unit.path.clone(),
             quoted: unit.kind == UnitKind::Subsection,
+            heading_level: unit.heading_level,
             heading: runs(&unit.markdown),
             blocks: node.blocks.iter().map(|&i| block(&units[i])).collect(),
             sections: node
@@ -100,9 +101,18 @@ pub fn notation_document(
         }
     }
 
+    if let Some(markdown) = doc.plain_markdown().filter(|body| !body.trim().is_empty()) {
+        return NotationDocumentData {
+            title: doc.title.clone(),
+            html: Some(views::markdown::render_document(markdown)),
+            ..Default::default()
+        };
+    }
+
     let tree = outline::outline_tree(doc);
     NotationDocumentData {
         title: doc.title.clone(),
+        html: None,
         numbering: doc.numbering.map(|numbering| numbering.label().to_string()),
         preamble: tree
             .preamble

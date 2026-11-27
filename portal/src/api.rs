@@ -6659,7 +6659,7 @@ async fn status_notation_signature(
         &notation,
     )
     .await;
-    crate::signature_status::read_signer_identities(
+    crate::signature_status::refresh_envelope_status(
         &mut report,
         &state.application_store,
         notation.project_id,

@@ -223,6 +223,7 @@ fn review_body(view: &IntakeReviewView) -> Element {
     rsx! {
         document::Title { "{view.firm_name} | Lawyer | Notations | Review" }
         document::Stylesheet { href: crate::components::THEME_STYLESHEET_HREF }
+        document::Stylesheet { href: crate::components::NOTATION_DOCUMENT_STYLESHEET_HREF }
         document::Stylesheet { href: "{view.tokens_href}" }
         nav { class: "lawyer-nav",
             a { class: "nav-link", href: "/app/projects", "Portal" }
@@ -313,6 +314,7 @@ fn review_body(view: &IntakeReviewView) -> Element {
 /// The envelope's lifecycle state as the lawyer reads it.
 fn state_label(state: &str) -> &'static str {
     match state {
+        "draft" => "Draft: not sent",
         "requested" => "Sent — waiting for signatures.",
         "completed" => "Completed — every signer has executed the envelope.",
         "declined" => "Declined — a signer refused the envelope.",

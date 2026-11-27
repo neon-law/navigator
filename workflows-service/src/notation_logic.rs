@@ -8,8 +8,6 @@
 //! Workflow inputs carry identifiers and transition conditions. Steps resolve mailboxes and project
 //! codes at execution time.
 
-use std::sync::Arc;
-
 use serde::{Deserialize, Serialize};
 use workflows::{email::OutboundEmail, EmailService, QuestionnaireSpec, StateName, WorkflowSpec};
 
@@ -311,9 +309,9 @@ pub(crate) async fn resolve_review_notification_plan(
 }
 
 /// What one send needs that the journaled plan deliberately does not carry.
-pub(crate) struct ReviewNotificationTarget {
+struct ReviewNotificationTarget {
     pub(crate) address: String,
-    pub(crate) project_code: String,
+    pub(crate) project: store::projects::Project,
 }
 
 /// Read the recipient's mailbox and the matter's code at send time.
@@ -321,7 +319,7 @@ pub(crate) struct ReviewNotificationTarget {
 /// Both are client identifiers, so they are resolved here rather than frozen
 /// into [`ReviewNotificationPlan`]: this runs inside the send step, whose
 /// journaled value is `()`.
-pub(crate) async fn review_notification_target(
+async fn review_notification_target(
     application_store: &store::application_store::ApplicationStore,
     project_id: uuid::Uuid,
     recipient_id: uuid::Uuid,
@@ -340,39 +338,97 @@ pub(crate) async fn review_notification_target(
         })?;
     Ok(ReviewNotificationTarget {
         address: person.email,
-        project_code: project.code,
+        project,
     })
 }
 
+async fn lawyer_review_message(
+    db: &store::application_store::ApplicationStore,
+    pg: &store::postgres::PostgresDb,
+    notation_id: uuid::Uuid,
+    target: &ReviewNotificationTarget,
+) -> Result<Option<OutboundEmail>, NotationLogicError> {
+    use views::brand::{self, BrandKey};
+
+    let Some(key) = BrandKey::parse(&target.project.brand).filter(|key| key.is_live()) else {
+        tracing::warn!(
+            target: "audit",
+            %notation_id,
+            project_id = %target.project.id,
+            outcome = "skipped_no_host",
+            "lawyer review notification skipped: Project Brand has no serving host"
+        );
+        return Ok(None);
+    };
+    let deployment = workflows::email::base_url_from_env();
+    let base =
+        brand::project_origin(key.as_str(), &deployment).unwrap_or_else(|| key.public_home_href());
+    let row = store::brands::find_by_key(db, key.as_str())
+        .await
+        .map_err(|_| NotationLogicError::Store("review notification Brand lookup failed".into()))?;
+    let mut contact = None;
+    if let Some(row) = row.as_ref() {
+        let stored = store::brand_letterheads::find(pg, row.id)
+            .await
+            .map_err(|_| {
+                NotationLogicError::Store("review notification letterhead lookup failed".into())
+            })?;
+        contact = store::brand_letterheads::resolve(row, stored.as_ref()).email;
+    }
+    let branding = key.resolve_branding(&brand::DEFAULT_BRANDING);
+    let contact = contact.as_deref().unwrap_or(branding.firm_email);
+    let copy = review_copy(ReviewNotificationHop::Lawyer);
+    let link = format!("{base}/app/lawyer/notations/{notation_id}/review");
+    let body = format!("{}\n\n{link}", copy.body);
+    let html = brand::scope(branding, async {
+        workflows::email::layout::render_email_html_with_contact(
+            &format!("{}\n\n<{link}>", copy.body),
+            &base,
+            row.as_ref(),
+            contact,
+        )
+    })
+    .await;
+    let mut message = OutboundEmail::new(&target.address, copy.subject, body).with_html(html);
+    message.from = brand::sender_email_for_host(
+        base.strip_prefix("https://")
+            .unwrap_or(key.canonical_host()),
+    );
+    message.from_name = Some(branding.firm.site_name.into());
+    Ok(Some(message))
+}
+
 pub(crate) async fn send_review_notification(
-    email: Arc<dyn EmailService>,
+    db: &store::application_store::ApplicationStore,
+    pg: &store::postgres::PostgresDb,
+    email: &dyn EmailService,
     notation_id: uuid::Uuid,
     project_id: uuid::Uuid,
-    project_code: &str,
     recipient_id: uuid::Uuid,
-    recipient_email: &str,
     hop: ReviewNotificationHop,
 ) -> Result<(), NotationLogicError> {
-    let copy = review_copy(hop);
-    let base_url = workflows::email::base_url_from_env();
-    let path = match hop {
+    let target = review_notification_target(db, project_id, recipient_id).await?;
+    let outbound = match hop {
         ReviewNotificationHop::Lawyer => {
-            format!("/app/lawyer/notations/{notation_id}/review")
+            let Some(message) = lawyer_review_message(db, pg, notation_id, &target).await? else {
+                return Ok(());
+            };
+            message
         }
-        ReviewNotificationHop::Client => format!("/app/projects/{project_code}"),
+        ReviewNotificationHop::Client => {
+            let copy = review_copy(hop);
+            let base_url = workflows::email::base_url_from_env();
+            let body = format!(
+                "{}\n\n{}/app/projects/{}",
+                copy.body,
+                base_url.trim_end_matches('/'),
+                target.project.code,
+            );
+            let html = workflows::email::render_email_html(&body, &base_url);
+            OutboundEmail::new(target.address, copy.subject, body).with_html(html)
+        }
     };
-    let body = format!(
-        "{}\n\n{}{}",
-        copy.body,
-        base_url.trim_end_matches('/'),
-        path
-    );
-    // Every person-addressed Navigator email carries the inline-styled firm
-    // layout as its `text/html` alternative beside the plain part, so a rich
-    // client shows the wordmark rather than a bare URL.
-    let html = workflows::email::render_email_html(&body, &base_url);
-    let outbound = OutboundEmail::new(recipient_email, copy.subject, body)
-        .with_html(html)
+    let outbound = outbound
         .with_template(format!("notation-review-{}", hop.as_str()))
         .with_person(recipient_id.to_string());
     match email.send(outbound).await {

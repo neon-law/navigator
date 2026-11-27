@@ -21,7 +21,6 @@ dotenvy.workspace = true
 dbos = { workspace = true, optional = true }
 mail-parser.workspace = true
 pdf.workspace = true
-pulldown-cmark.workspace = true
 # `create_notation_from_repo` reads a Project repo's template through the
 # shared engine (`store::template_source`), which takes a `RepoStore`.
 repos.workspace = true

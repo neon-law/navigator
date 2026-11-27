@@ -50,9 +50,9 @@
 //!
 //! [recipient view]: https://developers.docusign.com/docs/esign-rest-api/reference/envelopes/envelopeviews/createrecipient/
 
-use axum::extract::{Path as AxumPath, State};
+use axum::extract::{OriginalUri, Path as AxumPath, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
-use axum::response::{IntoResponse, Response};
+use axum::response::{Html, IntoResponse, Response};
 use axum::Extension;
 use uuid::Uuid;
 
@@ -321,7 +321,9 @@ pub async fn sender_view_get(
     State(state): State<AdminState>,
     Extension(session): Extension<SessionData>,
     headers: HeaderMap,
+    OriginalUri(uri): OriginalUri,
     AxumPath(notation_id): AxumPath<Uuid>,
+    Query(query): Query<std::collections::BTreeMap<String, String>>,
 ) -> Response {
     // A client session has no sender view to open. Same refusal
     // discipline as the identity gate below: `404`, never `403` —
@@ -372,38 +374,26 @@ pub async fn sender_view_get(
             .into_response();
     };
 
-    // Back to the lawyer's own step page when the console closes — a
-    // courtesy, same as the signer's `return_url`, never a mechanism.
-    let base = crate::openapi::base_url_for(
-        headers
-            .get(header::HOST)
-            .and_then(|value| value.to_str().ok()),
-    );
-    let return_url = format!(
-        "{}/app/lawyer/notations/{notation_id}/step",
-        base.trim_end_matches('/')
-    );
-
-    let Ok(scoped) = state
+    let scoped = match state
         .signature_provider
         .for_project(&state.application_store, notation_row.project_id)
         .await
-    else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Signature provider unavailable",
-        )
-            .into_response();
+    {
+        Ok(scoped) => scoped,
+        Err(error) => return sender_view_failure(notation_id, &error),
     };
     let provider =
         crate::firm_docusign::resolved(scoped.as_ref(), state.signature_provider.as_ref());
-    match provider
-        .create_sender_view(
-            &crate::signature::SignatureRequestId(request_id),
-            &return_url,
-        )
-        .await
-    {
+    let request_id = crate::signature::SignatureRequestId(request_id);
+    if query.contains_key("returned") {
+        return sender_return(&state, &notation_row, provider, &request_id).await;
+    }
+
+    let return_url = match sender_return_origin(&state, &headers, &uri, &notation_row).await {
+        Ok(origin) => format!("{origin}/app/lawyer/notations/{notation_id}/sender-view?returned=1"),
+        Err(error) => return sender_view_failure(notation_id, &error),
+    };
+    match provider.create_sender_view(&request_id, &return_url).await {
         Ok(view_url) => redirect_to_provider(&view_url).unwrap_or_else(|| {
             tracing::error!(
                 %notation_id,
@@ -415,15 +405,139 @@ pub async fn sender_view_get(
             )
                 .into_response()
         }),
-        Err(e) => {
-            tracing::error!(error = %e, %notation_id, "esign_view: sender view failed");
-            (
-                StatusCode::BAD_GATEWAY,
-                "could not open the sender view; please retry",
-            )
-                .into_response()
+        Err(error) => sender_view_failure(notation_id, &error),
+    }
+}
+
+async fn sender_return_origin(
+    state: &AdminState,
+    headers: &HeaderMap,
+    uri: &axum::http::Uri,
+    notation: &store::notations::Notation,
+) -> Result<String, String> {
+    use views::brand::{self, BrandKey};
+
+    let project = store::projects::find_by_id(&state.application_store, notation.project_id)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "Project not found".to_owned())?;
+    let key = BrandKey::parse(&project.brand)
+        .filter(|key| key.is_live())
+        .ok_or_else(|| "Project Brand has no serving host".to_owned())?;
+    let authority = uri.authority().cloned().or_else(|| {
+        headers
+            .get(header::HOST)?
+            .to_str()
+            .ok()?
+            .parse::<axum::http::uri::Authority>()
+            .ok()
+    });
+    if let Some(authority) = authority.as_ref() {
+        let host = authority.host();
+        if brand::admitted_brand_key(host) == Some(key) {
+            return Ok(format!("https://{authority}"));
+        }
+        if brand::admitted_brand_key(host).is_some()
+            || brand::admitted_brand_key_for_apex(host).is_some()
+        {
+            return Ok(key.public_home_href_for(Some(host)));
+        }
+        if matches!(host, "localhost" | "127.0.0.1" | "[::1]") {
+            let local = format!("http://{authority}");
+            return Ok(brand::project_origin(&project.brand, &local).unwrap_or(local));
         }
     }
+    let base =
+        crate::openapi::base_url_for(authority.as_ref().map(axum::http::uri::Authority::as_str));
+    Ok(brand::project_origin(&project.brand, &base).unwrap_or_else(|| key.public_home_href()))
+}
+
+async fn sender_return(
+    state: &AdminState,
+    notation: &store::notations::Notation,
+    provider: &dyn crate::signature::SignatureProvider,
+    request_id: &crate::signature::SignatureRequestId,
+) -> Response {
+    use crate::signature::html_escape;
+    use std::fmt::Write as _;
+
+    let result = match provider.sender_envelope_status(request_id).await {
+        Ok(result) => result,
+        Err(error) => return sender_view_failure(notation.id, &error),
+    };
+    let label = match result.state.as_str() {
+        "created" | "prepared" => "Draft: not sent",
+        "sent" | "delivered" | "signed" => "Sent",
+        "completed" => "Completed",
+        "voided" => "Voided",
+        "declined" => "Declined",
+        "expired" => "Expired",
+        _ => return sender_view_failure(notation.id, &"unrecognized envelope state"),
+    };
+    if matches!(
+        result.state.as_str(),
+        "sent" | "delivered" | "signed" | "completed"
+    ) || result.sent_at.is_some()
+    {
+        if let Err(error) = crate::signature_flow::record_observed_dispatch(
+            &state.application_store,
+            state.workflow_runtime.as_ref(),
+            notation,
+        )
+        .await
+        {
+            return sender_view_failure(notation.id, &error);
+        }
+    }
+    let timing = result.sent_at.map_or_else(String::new, |time| {
+        format!("<p>Sent at {}</p>", html_escape(&time))
+    });
+    let mut signers = String::new();
+    for signer in &result.signers {
+        let _ = write!(
+            signers,
+            "<li>{} &lt;{}&gt;</li>",
+            html_escape(&signer.name),
+            html_escape(&signer.email)
+        );
+    }
+    let id = notation.id;
+    let preview = match crate::retainer_walk::render_assembled_document(
+        &crate::retainer_walk::render_deps(state),
+        id,
+    )
+    .await
+    {
+        Ok(html) => format!("<section><h2>Notation preview</h2>{html}</section>"),
+        Err(error) => {
+            tracing::warn!(notation_id = %id, %error, "DocuSign return preview unavailable");
+            String::new()
+        }
+    };
+    let tokens = webapp::brand_style::brand_tokens_href(views::brand::brand_key().as_str());
+    (
+        [(header::CACHE_CONTROL, "no-store")],
+        Html(format!(
+            "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
+             <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
+             <title>Signature envelope</title><link rel=\"stylesheet\" href=\"/public/css/theme.css\">\
+             <link rel=\"stylesheet\" href=\"{tokens}\">\
+             <link rel=\"stylesheet\" href=\"/public/css/harvard-outline.css\"></head>\
+             <body><main class=\"nav-theme signature-return\"><h1>Signature envelope</h1>\
+             <p>{label}</p>{timing}<h2>Signers</h2><ul>{signers}</ul>\
+             <p><a href=\"/app/lawyer/notations/{id}/review\">Return to notation review</a></p>\
+             {preview}</main></body></html>"
+        )),
+    ).into_response()
+}
+
+fn sender_view_failure(notation_id: Uuid, error: &dyn std::fmt::Display) -> Response {
+    tracing::error!(%notation_id, %error, "DocuSign sender view failed");
+    (
+        StatusCode::BAD_GATEWAY,
+        "Could not verify the envelope with DocuSign. Return to Navigator and check its status.",
+    )
+        .into_response()
 }
 
 /// The envelope ids the fake mints (`fake-<notation uuid>-<sequence>`) are

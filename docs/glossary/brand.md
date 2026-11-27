@@ -26,6 +26,9 @@ host, an unknown declared key, or a declaration that disagrees with the host. A 
 routable host or compiled letterhead. The live Project's Firm/Brand pair is checked separately against [Firm
 Brand](firm-brand.md); a valid host does not grant ownership or Project access.
 
+A Lawyer Review notification uses the Project Brand's serving host for its link and assets, and its letterhead contact
+for the footer. When the Project Brand has no serving host, the workflow logs the skipped notification.
+
 Keep an executed or filed artifact's original identity and bytes. Changing the current host or Brand does not authorize
 restyling a signed engagement. New drafts use the current resolved identity; the signed artifact remains its own record.
 

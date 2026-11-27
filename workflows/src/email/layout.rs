@@ -1,8 +1,6 @@
 //! HTML email uses inline brand colors and font stacks so the message remains
 //! legible in clients that strip stylesheets or block hosted fonts and images.
 
-use pulldown_cmark::{html, Options, Parser};
-
 /// Env var carrying the public origin the logo PNG is served from.
 /// Mirrors `portal::openapi`'s base-URL knob so a single value drives
 /// both the OpenAPI doc and email assets.
@@ -58,6 +56,17 @@ pub fn render_branded_email_html(
     base_url: &str,
     brand: Option<&store::brands::Brand>,
 ) -> String {
+    render_email_html_with_contact(content_markdown, base_url, brand, support_email())
+}
+
+/// Render a Brand's layout with its resolved contact address.
+#[must_use]
+pub fn render_email_html_with_contact(
+    content_markdown: &str,
+    base_url: &str,
+    brand: Option<&store::brands::Brand>,
+    contact: &str,
+) -> String {
     let key = views::brand::brand_key();
     let (face, palette) = views::brand::resolve_presentation(
         brand.and_then(|b| b.typeface.as_deref()),
@@ -76,19 +85,14 @@ pub fn render_branded_email_html(
     let muted = scheme.text_muted.unwrap_or("#59636f");
     let border = scheme.border.unwrap_or("#dee2e6");
 
-    let mut content_html = String::new();
-    html::push_html(
-        &mut content_html,
-        Parser::new_ext(content_markdown, Options::empty()),
-    );
-    let content_html =
-        content_html.replace("<a href=", &format!(r#"<a style="color:{link};" href="#));
+    let content_html = views::markdown::render_document(content_markdown)
+        .replace("<a href=", &format!(r#"<a style="color:{link};" href="#));
     let alt = escape_attribute(brand_name());
-    let support = escape_attribute(support_email());
+    let support = escape_attribute(contact);
     let uploaded = brand
         .filter(|b| b.logo_content_type.as_deref() == Some("image/png"))
         .and_then(|b| b.logo_object_key.as_deref())
-        .map(views::assets::bucket_asset_url);
+        .map(|key| format!("/assets/{key}"));
     let logo = uploaded
         .as_deref()
         .unwrap_or(views::brand::FIRM_BRAND.social_image);

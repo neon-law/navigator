@@ -100,8 +100,8 @@ pub struct EnvelopeStatusReport {
     pub signature_request_id: Option<String>,
     /// The provider that executed the request (stored string form).
     pub provider: Option<String>,
-    /// Envelope-wide lifecycle state: `requested`, `completed`,
-    /// `declined`, `voided`, or `expired`.
+    /// Envelope-wide lifecycle state. A live provider read can distinguish
+    /// `draft` and `sent` while the durable Signature is `requested`.
     pub state: Option<String>,
     /// The portal route that mints the lawyer's sender-view window on
     /// this envelope — the one-click "open in DocuSign" link. `None`
@@ -195,6 +195,44 @@ pub(crate) async fn read_signer_identities(
     else {
         return;
     };
+    attach_signer_identities(report, &recipients);
+}
+
+pub(crate) async fn refresh_envelope_status(
+    report: &mut EnvelopeStatusReport,
+    db: &store::application_store::ApplicationStore,
+    project_id: uuid::Uuid,
+    provider: &dyn crate::signature::SignatureProvider,
+) {
+    let Some(request_id) = report.signature_request_id.clone() else {
+        return;
+    };
+    let Ok(scoped) = provider.for_project(db, project_id).await else {
+        return;
+    };
+    let provider = crate::firm_docusign::resolved(scoped.as_ref(), provider);
+    let request_id = crate::signature::SignatureRequestId(request_id);
+    if report.state.as_deref() == Some("requested") {
+        if let Ok(status) = provider.sender_envelope_status(&request_id).await {
+            report.state = Some(match status.state.as_str() {
+                "created" | "prepared" => "draft".to_owned(),
+                "sent" | "delivered" | "signed" => "sent".to_owned(),
+                "completed" | "voided" | "declined" | "expired" => status.state,
+                _ => "requested".to_owned(),
+            });
+            attach_signer_identities(report, &status.signers);
+            return;
+        }
+    }
+    if let Ok(recipients) = provider.notation_signers(&request_id).await {
+        attach_signer_identities(report, &recipients);
+    }
+}
+
+fn attach_signer_identities(
+    report: &mut EnvelopeStatusReport,
+    recipients: &[crate::signature::ExternalSigner],
+) {
     for signer in &mut report.signers {
         let Some(order) = signer.routing_order else {
             continue;

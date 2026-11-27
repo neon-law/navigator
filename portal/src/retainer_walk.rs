@@ -2415,15 +2415,24 @@ pub async fn send_post(
 /// REST status door serves. A notation with no envelope carries no card.
 fn envelope_card(
     status: &crate::signature_status::EnvelopeStatusReport,
-    notation_id: Uuid,
+    notation: &store::notations::Notation,
 ) -> Option<webapp::intake_review::EnvelopeCard> {
+    let state = status.state.as_deref().unwrap_or_default();
+    let state = if state == "requested"
+        && (notation.state.starts_with("lawyer_review")
+            || notation.state.starts_with("generate_pdf"))
+    {
+        "draft"
+    } else {
+        state
+    };
     status
         .signature_request_id
         .clone()
         .map(|request_id| webapp::intake_review::EnvelopeCard {
             request_id,
             provider: status.provider.clone().unwrap_or_default(),
-            state: status.state.clone().unwrap_or_default(),
+            state: state.to_owned(),
             signers: status
                 .signers
                 .iter()
@@ -2433,7 +2442,7 @@ fn envelope_card(
                 })
                 .collect(),
             updated_at: status.updated_at.clone(),
-            sender_view_href: format!("/app/lawyer/notations/{notation_id}/sender-view"),
+            sender_view_href: format!("/app/lawyer/notations/{}/sender-view", notation.id),
         })
 }
 
@@ -2487,7 +2496,7 @@ pub(crate) async fn resolve_intake_review(
         &notation_row,
     )
     .await;
-    let envelope = envelope_card(&status, notation_id);
+    let envelope = envelope_card(&status, &notation_row);
 
     let rendered_html = match render_assembled_document(&render_deps(state), notation_id).await {
         Ok(html) => html,
@@ -3062,7 +3071,7 @@ pub async fn reask_post(
 
 /// Re-render a notation's assembled document (template body + custom
 /// clauses + answers) to the HTML preview, for the result page.
-async fn render_assembled_document(
+pub(crate) async fn render_assembled_document(
     deps: &RenderDeps<'_>,
     notation_id: Uuid,
 ) -> Result<String, WorkflowDriveError> {

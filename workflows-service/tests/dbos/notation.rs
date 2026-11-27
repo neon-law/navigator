@@ -171,10 +171,13 @@ where
 #[tokio::test]
 async fn persisted_review_hops_journal_the_actor_and_capture_both_notifications() {
     with_persisted(|fixture| async move {
+        use views::brand::BrandKey;
         let notation = store::notations::find_by_id(&fixture.application_store, fixture.id)
             .await
             .unwrap()
             .unwrap();
+        let brand = BrandKey::Vesta;
+        use_review_brand(&fixture, notation.project_id, brand).await;
         for row in store::projects::participations_for_project(&fixture.application_store, notation.project_id)
             .await
             .unwrap()
@@ -220,6 +223,20 @@ async fn persisted_review_hops_journal_the_actor_and_capture_both_notifications(
             "lawyer_review__draft"
         );
         assert_eq!(fixture.email.captured().len(), 1);
+        let mail = &fixture.email.captured()[0];
+        let origin = brand.public_home_href();
+        let url = format!("{origin}/app/lawyer/notations/{}/review", fixture.id);
+        assert!(mail.body.contains(&url));
+        let html = mail.html_body.as_deref().unwrap();
+        assert!(html.contains(&url));
+        assert!(html.contains(&format!("{origin}/public/brand/vesta.png")));
+        assert!(!html.contains("your-domain.example"));
+        let branding = brand.resolve_branding(&views::brand::DEFAULT_BRANDING);
+        assert!(html.contains(branding.firm_email));
+        assert_eq!(
+            mail.from,
+            views::brand::sender_email_for_host(brand.canonical_host())
+        );
         assert_eq!(
             fixture.email.captured()[0].subject,
             "A draft is ready for your review"
@@ -758,10 +775,57 @@ async fn completing_the_firm_signature_state_closes_the_persisted_matter() {
     }).await;
 }
 
+async fn use_review_brand(
+    fixture: &PersistedNotation,
+    project: uuid::Uuid,
+    brand: views::brand::BrandKey,
+) {
+    let db = &fixture.application_store;
+    let (firm_id, _) = store::test_support::seed_firm_with_new_brand(db, brand.as_str()).await;
+    store::projects::update_project(
+        db,
+        project,
+        &store::projects::UpdateProjectCommand {
+            firm_id: Some(firm_id),
+            brand: Some(brand.as_str().to_owned()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn review_notification_is_skipped_if_the_project_brand_has_no_host() {
+    with_persisted(|fixture| async move {
+        let project = notation_project(&fixture).await;
+        let lawyer = review_lawyer(&fixture, "Synthetic Reviewer").await;
+        store::projects::designate_dri(
+            &fixture.application_store,
+            project,
+            lawyer.id,
+            store::projects::DriSide::Lawyer,
+        )
+        .await
+        .unwrap();
+        fixture.start(
+            MachineKind::Workflow,
+            "BEGIN:\n  _: lawyer_review__draft\nlawyer_review__draft:\n  approved: END\nEND: {}\n",
+        ).await;
+        assert_eq!(
+            fixture.signal(MachineKind::Workflow, "_", None).await,
+            "lawyer_review__draft"
+        );
+        assert!(fixture.email.captured().is_empty());
+    })
+    .await;
+}
+
 #[tokio::test]
 async fn a_demoted_review_dri_falls_back_to_a_current_lawyer() {
     with_persisted(|fixture| async move {
         let project = notation_project(&fixture).await;
+        use_review_brand(&fixture, project, views::brand::BrandKey::Vesta).await;
         let stale = review_lawyer(&fixture, "Former Reviewer").await;
         store::projects::designate_dri(
             &fixture.application_store,
