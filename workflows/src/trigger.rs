@@ -415,11 +415,7 @@ pub fn service_target(
     dbos_ingress_token: Option<String>,
 ) -> Result<ServiceTarget, ServiceTargetError> {
     if crate::flags::flag_enabled(flag, enabled)? {
-        let (ingress, token) = dbos_ingress(&|key| match key {
-            DBOS_INGRESS_URL_ENV => dbos_ingress_url.clone(),
-            DBOS_INGRESS_TOKEN_ENV => dbos_ingress_token.clone(),
-            _ => None,
-        })?;
+        let (ingress, token) = parse_dbos_ingress(dbos_ingress_url, dbos_ingress_token)?;
         Ok(ServiceTarget::Dbos { ingress, token })
     } else {
         Ok(ServiceTarget::Restate)
@@ -430,11 +426,18 @@ pub fn service_target(
 pub fn dbos_ingress(
     get: &impl Fn(&str) -> Option<String>,
 ) -> Result<(String, String), ServiceTargetError> {
-    let ingress = get(DBOS_INGRESS_URL_ENV)
+    parse_dbos_ingress(get(DBOS_INGRESS_URL_ENV), get(DBOS_INGRESS_TOKEN_ENV))
+}
+
+fn parse_dbos_ingress(
+    ingress: Option<String>,
+    token: Option<String>,
+) -> Result<(String, String), ServiceTargetError> {
+    let ingress = ingress
         .map(|url| url.trim().trim_end_matches('/').to_owned())
         .filter(|url| !url.is_empty())
         .ok_or(ServiceTargetError::Missing(DBOS_INGRESS_URL_ENV))?;
-    let token = get(DBOS_INGRESS_TOKEN_ENV)
+    let token = token
         .map(|token| token.trim().to_owned())
         .filter(|token| !token.is_empty())
         .ok_or(ServiceTargetError::Missing(DBOS_INGRESS_TOKEN_ENV))?;
