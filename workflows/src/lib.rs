@@ -133,5 +133,3 @@ pub use specs::{
 };
 pub use step::{client_phrase_for, step_kind_for, ClientActor, ClientPhrase, StepKind};
 pub use trigger::TriggerError;
-
-pub mod object_handover;

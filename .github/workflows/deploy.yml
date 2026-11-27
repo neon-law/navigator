@@ -178,8 +178,7 @@ permissions:
 # in this workflow. Every deployment's assets bucket is private and served
 # same-origin through the live site's `/assets` proxy, so the only URL that
 # can verify publication is the deployment's own public host. That host is
-# checked by `ops ship` after a full or image-only roll, once the rollout and
-# Restate re-registration have completed; a failed check prevents ship from
+# checked by `ops ship` after a full or image-only roll, once the rollout is ready; a failed check prevents ship from
 # reporting success. The operator upload lane and `ops ship`'s direct
 # slide-media NAVIGATOR_ASSETS_BUCKET preflight still catch missing bytes
 # before mutation, while the KIND image bakes stubbed placeholders and the
@@ -869,7 +868,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: 1.98.0
-      - name: verify the CLI glossary without SurrealDB
+      - name: verify the standalone CLI glossary
         run: cargo run -p cli --locked --quiet -- glossary show Jurisdiction
 
   # ---------- Stage 1: KIND end-to-end integration ----------

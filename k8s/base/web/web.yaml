@@ -1,5 +1,4 @@
-# navigator-web Deployment. Connects to the in-cluster SurrealDB, SeaweedFS,
-# Rauthy, and Restate by their service DNS names.
+# navigator-web Deployment. Runs DBOS and connects to PostgreSQL, SeaweedFS, and Rauthy.
 
 apiVersion: v1
 kind: Secret

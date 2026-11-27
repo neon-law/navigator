@@ -177,10 +177,6 @@ mod tests {
             ),
             ("NAVIGATOR_TELEMETRY_BUCKET", "example-project-telemetry"),
             ("NAVIGATOR_ARCHIVES_BUCKET", "example-project-archives"),
-            (
-                "NAVIGATOR_SURREAL_ARCHIVES_BUCKET",
-                "example-project-archives",
-            ),
         ] {
             assert_eq!(get(key), Some(bucket), "{key}");
         }

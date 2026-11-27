@@ -3,10 +3,10 @@
 This page describes the common cloud operating model. Public docs are the shared surface every LLM and human maintainer
 should read first.
 
-Neon Law Navigator is GCP-wired and provider-agnostic. The production path uses GKE Autopilot, a hosted SurrealDB, GCS,
-Secret Manager, OpenObserve for direct OTLP telemetry, BigQuery billing export, and Restate Cloud. The application code
-keeps the cloud boundary behind traits, protocols, and env vars: `cloud::StorageService`, SurrealDB, OIDC, embedded
-Rego, Restate, SendGrid, Kubernetes, and `portal::agent_router::AgentRouter`.
+Neon Law Navigator is GCP-wired and provider-agnostic. The production path uses GKE Autopilot, PostgreSQL, GCS, Secret
+Manager, OpenObserve for direct OTLP telemetry, BigQuery billing export, and DBOS. The application code keeps the cloud
+boundary behind traits, protocols, and env vars: `cloud::StorageService`, PostgreSQL, OIDC, embedded Rego, DBOS,
+SendGrid, Kubernetes, and `portal::agent_router::AgentRouter`.
 
 ## Coverage
 
@@ -52,9 +52,9 @@ cargo run -p neon                                  # Ctrl-C and re-run to iterat
 cargo run --release -p hudson -- dev down                # full teardown — only for a clean rebuild, not routine cleanup
 ```
 
-`dev up` brings up SurrealDB, Rauthy, SeaweedFS, Restate, `workflows-service`, and OpenObserve in KIND. It writes
-`.devx/env` for the host-side `web` process. The cluster is a **persistent dev fixture**: leave it up between sessions
-and re-run `dev up` to restore port-forwards after a sleep or reboot (it reuses the existing cluster). See
+`dev up` brings up PostgreSQL, Rauthy, SeaweedFS, and OpenObserve in KIND. It writes `.devx/env` for the host-side `web`
+process. The cluster is a **persistent dev fixture**: leave it up between sessions and re-run `dev up` to restore
+port-forwards after a sleep or reboot (it reuses the existing cluster). See
 [`kind-local-dev`](../.agents/skills/kind-local-dev/SKILL.md).
 
 Scratch artifacts go under `/tmp`, never the repo. Screenshots normally go under `/tmp/navigator-screenshots/`.
@@ -83,7 +83,7 @@ The remaining hosting work is deliberately adjacent, not a missing setup stage:
 | --- | --- |
 | DNS | `hudson ops dns setup`; the provider may sit outside GCP, so setup only reserves the Gateway IP. |
 | TLS and Gateway manifests | `hudson ops ship` renders and applies the Gateway, certificate, and routes. |
-| Restate | The Restate operator and its manifests provision the broker; `ops ship` re-registers the worker. |
+| PostgreSQL and DBOS | PostgreSQL credentials come from the service Secrets. DBOS starts with `web`. |
 | Secret values | `hudson ops secrets apply`; decrypts and writes Secret Manager plus the Kubernetes Secret. |
 | Gmail OAuth client | A console step; see [Gmail for mail](mail-cli.md#provision-gmail-for-navigator-mail). |
 
@@ -174,9 +174,9 @@ Code reaches production through PRs and dated images:
 `hudson ops ship --deployment <name> --tag YY.M.D` is the self-contained reconcile: every coordinate comes from
 `deployments/<name>/config.toml`, so a stale shell cannot select the wrong deployment. `--dry-run` builds an offline
 plan: it checks required local settings, validates the supplied tag, parses the rendered manifests, and lists intended
-operations. It does not authenticate or contact cloud services, the cluster, image registries, Secret Manager, Restate,
-or public endpoints; live drift and readiness remain unverified. A real ship performs authenticated context, IAM, image,
-asset, Secret, and service-object preflights before writing, then reconciles the CLI-embedded GKE manifest tree
+operations. It does not authenticate or contact cloud services, the cluster, image registries, Secret Manager, or public
+endpoints; live drift and readiness remain unverified. A real ship performs authenticated context, IAM, image, asset,
+Secret, and service-object preflights before writing, then reconciles the CLI-embedded GKE manifest tree
 unconditionally. Merged manifest changes reach the cluster, and both Navigator Deployments use one release tag. For
 rendering, see [`gke-prod.md`](gke-prod.md#manifest-delivery); [`manual-roll.md`](manual-roll.md) lists live checks
 before a hand roll.
@@ -219,26 +219,10 @@ commits, or PR bodies.
 
 ## Production database
 
-Production is a hosted SurrealDB. Ad-hoc access goes through the deployment's own `NAVIGATOR_SURREAL_*` credentials,
-read from its encrypted secrets rather than pasted from anywhere else.
-
-Read-only `SELECT`s are allowed when the user asks for inspection. Before any `CREATE`, `UPDATE`, `DELETE`, or `DEFINE`:
-
-- Write the exact SurrealQL to a timestamped file under `/tmp/navigator-prod-sql/`. Show the user the path and contents.
-  Wait for explicit approval for that exact statement. Scope the write with a guard on the old value. Verify it
-  afterwards.
-
-The canonical seed is idempotent: it inserts missing rows and does not update existing production rows.
-`store::schema::apply()` may perform a narrow, idempotent, guarded backfill when the missing value has an unambiguous
-write-time default and the operation is cheap enough for every boot and test. It currently materializes the historical
-defaults for `person.email_confirmed`, `person.is_admitted`, and `project.brand`, and it points a Project whose
-`firm_id` is empty at the anchor Firm when one exists. A live data fix that is expensive, destructive, or requires human
-judgment about the old value remains an operator-approved one-shot job or an explicit application seam.
-
-`person.email_confirmed`, `person.is_admitted`, `project.brand`, and an empty `project.firm_id` therefore do not need a
-separate production-SQL approval step for their automatic path: `apply()` owns that guarded repair. The approval
-procedure above still governs manual fixes, including any update whose value cannot be inferred safely from the old row.
-Never fold a judgment-dependent fix into the canonical seed.
+Production stores application data and DBOS workflow state in PostgreSQL. Inspect it using the deployment's read-only
+access. For a manual production write, save the exact SQL to a timestamped file under `/tmp/navigator-prod-sql/` and
+obtain explicit approval for that statement. Guard against changes to the old value and verify the result. Versioned
+PostgreSQL migrations own schema changes.
 
 ## Spend reporting
 
@@ -288,7 +272,7 @@ Safe telemetry fields include ids, service names, outcomes, durations, status co
 client names, email addresses, answer bodies, document bodies, privileged facts, and full request or tool arguments.
 This rule applies in local and Cloud OpenObserve, Cloud Logging, BigQuery, and any future sink.
 
-Use `hudson ops doctor`, OpenObserve, the Restate console, and the six-hourly Heartbeat Slack line to debug missing
+Use `hudson ops doctor`, OpenObserve, DBOS execution records, and the six-hourly Heartbeat Slack line to debug missing
 periodic jobs or durable workflow failures. The architecture details live in [`observability.md`](observability.md) and
 [`durable-workflows.md`](durable-workflows.md).
 
@@ -328,30 +312,6 @@ Thirty days of PostgreSQL backups always keeps two or more base backups and all 
 
 Telemetry Parquet in `<deployment>-telemetry` is neither: it is a 90-day landing zone the nightly lane promotes into the
 archive.
-
-### Staging: confirm a store credential is dead
-
-The store password lives at the SurrealDB provider. Setup creates no Cloud SQL instance, and `ops secrets apply` writes
-no `DATABASE_URL`. Confirm on `$NAVIGATOR_STAGING_DEPLOYMENT` that those objects are absent; an empty result is the
-rotation.
-
-Pin `gcloud` to staging and confirm, without printing payloads:
-
-```bash
-gcloud config set project "$NAVIGATOR_STAGING_DEPLOYMENT"
-gcloud sql instances list
-gcloud secrets list --filter='name~DATABASE_URL'
-```
-
-An empty instance list and no `DATABASE_URL` secret is the whole rotation: the credential is dead. If the secret still
-exists, destroy it (`gcloud secrets delete DATABASE_URL`) rather than minting a replacement. Do not reuse the value.
-
-Cloud Logging holds stdout. Search by metadata only (`insertId`, timestamp, `logName`), never `textPayload` or
-`jsonPayload` in the output format, then delete matching entries if the bucket allows it. If retention is locked, record
-the `retentionDays` from `gcloud logging buckets describe _Default --location=global` as the expiry. The same check
-applies to objects in `gs://example-bucket`: list names and timestamps, do not `cat` them.
-
-Production remains propose-only. Run the same confirmation there yourself.
 
 ## Website publication
 

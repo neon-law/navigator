@@ -2,7 +2,7 @@
 # `XeroBillingProvider` + `StubBillingProvider` + Xero client-credentials
 # auth). Extracted from `web` so the worker-side billing workflows in
 # `billing-workflows` can reach the same provider; `web` re-exports it as
-# `web::billing` / `web::xero_auth`. No Restate, no axum — a small lib.
+# `web::billing` / `web::xero_auth`. Billing library shared by runtime callers.
 [package]
 name = "billing"
 version.workspace = true

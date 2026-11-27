@@ -114,7 +114,7 @@ pub enum ReviewDocumentError {
 /// `review_document_notation_kind` slot, and the first backoff window.
 ///
 /// Not the transaction-conflict retry — that is one policy for the whole
-/// crate, in [`crate::surreal::retry`], and this module's [`writing`]
+/// crate, in `crate::surreal::retry`, and this module's [`writing`]
 /// defers to it. This bound is around a *unique index* violation, where
 /// re-running is pointless and the loop exists to re-read the winner's
 /// row instead. A loser that still finds nothing after these attempts

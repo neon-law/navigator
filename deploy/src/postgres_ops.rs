@@ -25,6 +25,18 @@ pub enum PostgresCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Activate DBOS ownership without copying workflow state.
+    ActivateDbos {
+        /// Environment label recorded in the ownership receipt.
+        #[arg(long)]
+        environment: String,
+        /// Confirm previous writers are stopped and pending work drained.
+        #[arg(long, required = true)]
+        operator_writers_held: bool,
+        /// Acknowledge discarding retained source workflow state.
+        #[arg(long, required = true)]
+        acknowledge_discard: bool,
+    },
     /// Verify or rebuild the Apache AGE projection from PostgreSQL.
     #[command(subcommand)]
     Graph(GraphCmd),
@@ -70,7 +82,46 @@ pub fn run(command: PostgresCmd) -> ExitCode {
             }
         }
         PostgresCmd::Ready { json } => crate::postgres_admission::run(json),
+        PostgresCmd::ActivateDbos {
+            environment,
+            operator_writers_held: true,
+            acknowledge_discard: true,
+        } => activate_dbos(&environment),
+        PostgresCmd::ActivateDbos { .. } => ExitCode::from(UNAVAILABLE),
         PostgresCmd::Graph(command) => run_graph(&command),
+    }
+}
+
+fn activate_dbos(environment: &str) -> ExitCode {
+    let result =
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .context("start DBOS activation runtime")
+            .and_then(|runtime| {
+                runtime.block_on(async {
+                    let postgres = PostgresDb::application()
+                        .await
+                        .map_err(|_| anyhow::anyhow!("admitted PostgreSQL unavailable"))?;
+                    Ok(store::durable_object_handover::activate_without_capture(
+                        &postgres,
+                        environment,
+                    )
+                    .await?)
+                })
+            });
+    match result {
+        Ok(projects) => {
+            println!(
+                "{}",
+                json!({ "native_activation": true, "historical_projects": projects })
+            );
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("hudson: DBOS activation failed: {error:#}");
+            ExitCode::from(UNAVAILABLE)
+        }
     }
 }
 

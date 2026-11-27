@@ -43,7 +43,7 @@ cannot decay the way the old seven-line stub did.
   and restore.
 - [DBOS durability](dbos-durability.md) — DBOS system schema, the effect-key rule, and the Restate port order.
 - [DBOS workflow entry points](dbos-cutover-matrix.md) — DBOS workflow inventory and entry points.
-- [Durable object handover](durable-object-handover.md) — capture, parity, import, and native object ownership.
+- [Durable object handover](durable-object-handover.md) — PostgreSQL ownership for Notation and Project Slack workflows.
 - [Project Slack reconciliation](project-slack-reconciliation.md) — attributed decisions for unresolved delivery
   evidence.
 - [`forgejo-deployment.md`](forgejo-deployment.md) — the Forgejo deployment foundation and account-admission gates.

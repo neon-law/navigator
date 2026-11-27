@@ -409,6 +409,27 @@ mod help_tests {
         .is_ok());
     }
 
+    #[test]
+    fn dbos_activation_requires_both_acknowledgements() {
+        let invocation = [
+            "hudson",
+            "ops",
+            "postgres",
+            "activate-dbos",
+            "--environment",
+            "example-row",
+        ];
+        for acknowledgement in ["--operator-writers-held", "--acknowledge-discard"] {
+            assert!(Cli::try_parse_from(invocation.into_iter().chain([acknowledgement])).is_err());
+        }
+        assert!(Cli::try_parse_from(
+            invocation
+                .into_iter()
+                .chain(["--operator-writers-held", "--acknowledge-discard"]),
+        )
+        .is_ok());
+    }
+
     fn assert_headlines(command: &clap::Command) {
         for text in [command.get_about(), command.get_long_about()]
             .into_iter()
@@ -779,8 +800,7 @@ enum Command {
     /// Read and update a Person in the deployment's own store, directly.
     ///
     /// Distinct from `navigator site …` verbs, which speak HTTP to a running
-    /// site: these open the `SurrealDB` coordinates `NAVIGATOR_SURREAL_*`
-    /// names — the same handle the web app uses.
+    /// site: these open the application PostgreSQL connection.
     #[command(hide = true)]
     Person {
         #[command(subcommand)]
@@ -1253,7 +1273,7 @@ enum SiteCmd {
     /// (`store::synthetic_portfolio`). Connects to whatever store and
     /// storage the environment names — the same seam `site seed` uses —
     /// so applying to persistent staging is an explicit operator action
-    /// with the right `NAVIGATOR_SURREAL_*`/storage env pointed there.
+    /// with PostgreSQL and object storage pointed there.
     ///
     /// Refuses before any write unless `--target staging` is given exactly
     /// and the deployment has already disclosed
@@ -2164,7 +2184,7 @@ enum EmailSummaryCmd {
         receipt: uuid::Uuid,
         /// Vouch that the receipt's `confirmed` Slack post was a
         /// provider-failure notice, and name the operator. Reopens the
-        /// delivery only after selected-engine recovery admission. An interrupted
+        /// delivery only after DBOS recovery admission. An interrupted
         /// DBOS run preserves its confirmed delivery rather than reopening it.
         #[arg(long, value_name = "ACTOR")]
         after_failed_result: Option<String>,
@@ -2178,8 +2198,7 @@ enum EmailSummaryCmd {
     /// List every delivery currently quarantined in `UNKNOWN`, the state
     /// `deliver_summary` records when Slack's response is lost, times out,
     /// or comes back a retryable HTTP status — an operator can't reconcile
-    /// what they can't see. Reads `NAVIGATOR_SURREAL_*` only; changes
-    /// nothing.
+    /// what they can't see. Reads delivery receipts from PostgreSQL.
     Quarantined,
     /// Record that a quarantined delivery's Slack post actually succeeded,
     /// moving it to `confirmed` so replay stops treating it as in doubt.
