@@ -8061,7 +8061,7 @@ mod tests {
             "staging.navigator.example.invalid",
         ] {
             let bindings = additional_brand_bindings(public_host);
-            let annotation = managed_certificates_annotation(public_host, &bindings, true);
+            let annotation = managed_certificates_annotation(public_host, &bindings);
             let names = annotation
                 .trim()
                 .trim_start_matches("networking.gke.io/managed-certificates: ")
