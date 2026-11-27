@@ -689,6 +689,14 @@ async fn import_one(
             outcome.disposition = "imported".into();
             outcome.cost_id = Some(cost.id);
         }
+        Err(costs::ProjectCostError::SourceTaken) => {
+            if let Ok(Some(existing)) =
+                costs::find_by_source_reference(context.pg, project_id, &source_reference).await
+            {
+                outcome.cost_id = Some(existing.id);
+            }
+            skip(&mut outcome, "already_imported");
+        }
         Err(_) => skip(&mut outcome, "cost_rejected"),
     }
     outcome

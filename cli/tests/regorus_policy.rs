@@ -537,9 +537,10 @@ fn regorus_matches_every_checked_in_policy_decision() {
     // The CLax report token route admits Lawyer and denies Client and anonymous callers: 721 + 3 = 724.
     // Firm envelope read and void admit Lawyer and deny Client, Clerk, CI, and other methods: 724 + 2 = 726.
     // Firm Forgejo parity admits interactive administrators and denies lawyers, clients, and CI.
+    // Receipt-backed cost posting admits lawyers and denies clients, clerks, and anonymous callers.
     assert_eq!(
         test_names.len(),
-        727,
+        728,
         "the policy decision inventory changed; review every new or removed rule"
     );
 

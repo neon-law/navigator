@@ -5932,7 +5932,7 @@ struct NotationStatus {
 /// error routes answer with a JSON `{error, reason}` body (the council's
 /// "no opaque 500" point); fall back to the first line of a plain-text
 /// body when the response isn't that shape.
-fn server_error(status: reqwest::StatusCode, body: &str) -> String {
+pub(crate) fn server_error(status: reqwest::StatusCode, body: &str) -> String {
     if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
         let error = v.get("error").and_then(serde_json::Value::as_str);
         let reason = v

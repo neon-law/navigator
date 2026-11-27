@@ -3367,6 +3367,14 @@ test_admin_can_reach_the_task_collection_door if {
 	authz.allow with input as {"path": ["app", "api", "projects", "p1", "tasks"], "method": "POST", "session": admin_session}
 }
 
+test_post_cost_from_receipt_requires_a_lawyer_session if {
+    path := ["app", "api", "projects", "p1", "costs", "from-receipt"]
+    authz.allow with input as {"path": path, "method": "POST", "session": lawyer_session}
+    not authz.allow with input as {"path": path, "method": "POST", "session": clerk_session}
+    not authz.allow with input as {"path": path, "method": "POST", "session": client_session}
+    not authz.allow with input as {"path": path, "method": "POST", "session": null}
+}
+
 # Clerk and client are denied the create door at the boundary. The list read
 # (GET) rides the matter-read-cluster rule, which admits any authenticated
 # session to five-segment /app/api/projects sub-reads and leaves the tier

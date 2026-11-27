@@ -15,6 +15,8 @@ pub enum ProjectCostError {
     Invalid(&'static str),
     #[error("receipt is already recorded for this Project")]
     ReceiptTaken,
+    #[error("source transaction is already recorded for this Project")]
+    SourceTaken,
     #[error("idempotency key has different content")]
     Conflict,
     #[error("Project cost was not found")]
@@ -228,7 +230,18 @@ pub async fn create(
     crate::projects::find_by_id(application_store, project_id)
         .await?
         .ok_or(ProjectCostError::Invalid("Project not found"))?;
-    let asset = crate::assets::find_by_id(application_store, input.receipt_document_id)
+    live_document(application_store, project_id, input.receipt_document_id).await?;
+    create_postgres(pg, project_id, actor_id, input, false)
+        .await
+        .map(|(cost, _)| cost)
+}
+
+async fn live_document(
+    application_store: &ApplicationStore,
+    project_id: Uuid,
+    document_id: Uuid,
+) -> Result<crate::assets::Asset, ProjectCostError> {
+    let asset = crate::assets::find_by_id(application_store, document_id)
         .await?
         .ok_or(ProjectCostError::Invalid("receipt Document not found"))?;
     if asset.project_id != Some(project_id)
@@ -240,7 +253,55 @@ pub async fn create(
             "receipt must be a live Document on this Project",
         ));
     }
-    create_postgres(pg, project_id, actor_id, input).await
+    Ok(asset)
+}
+
+/// Post a confirmed cost from a filed Receipt Document. Returns the cost and
+/// whether a new row was created for its source transaction.
+pub async fn create_from_receipt(
+    application_store: &ApplicationStore,
+    pg: &PostgresDb,
+    project_id: Uuid,
+    actor_id: Uuid,
+    receipt_document_id: Uuid,
+    occurred_on: NaiveDate,
+) -> Result<(ProjectCost, bool), ProjectCostError> {
+    use model::documents::{ExpenseCategory, ReceiptMetadata};
+
+    let asset = live_document(application_store, project_id, receipt_document_id).await?;
+    if asset.kind.as_deref() != Some("receipt") {
+        return Err(ProjectCostError::Invalid("Document kind must be receipt"));
+    }
+    let receipt = ReceiptMetadata::from_asset_metadata("receipt", asset.metadata.as_ref())
+        .map_err(|_| ProjectCostError::Invalid("invalid receipt metadata"))?
+        .ok_or(ProjectCostError::Invalid("receipt metadata is required"))?;
+    let source_reference = receipt
+        .transaction_id
+        .filter(|reference| validate_source_reference(reference))
+        .ok_or(ProjectCostError::Invalid(
+            "receipt transaction_id must be a canonical mercury::<transaction-id>",
+        ))?;
+    let description = match receipt.category {
+        ExpenseCategory::CourtFilingFee => "Court filing fee",
+        ExpenseCategory::EFilingServiceFee => "E-filing service fee",
+        ExpenseCategory::DepositionAndCourtReporter => "Deposition and court reporter",
+        ExpenseCategory::Transcript => "Transcript",
+        ExpenseCategory::CertifiedMailAndPostage => "Certified mail and postage",
+        ExpenseCategory::ProcessService => "Process service",
+        ExpenseCategory::Other => "Other expense",
+    };
+    let input = NewProjectCost {
+        receipt_document_id,
+        occurred_on,
+        payee: receipt.payee,
+        description: description.into(),
+        amount_cents: receipt.amount_cents,
+        currency: receipt.currency,
+        amount_status: "confirmed".into(),
+        idempotency_key: format!("receipt::{source_reference}"),
+        source_reference,
+    };
+    create_postgres(pg, project_id, actor_id, &input, true).await
 }
 
 async fn create_postgres(
@@ -248,7 +309,8 @@ async fn create_postgres(
     project_id: Uuid,
     actor_id: Uuid,
     input: &NewProjectCost,
-) -> Result<ProjectCost, ProjectCostError> {
+    skip_existing_source: bool,
+) -> Result<(ProjectCost, bool), ProjectCostError> {
     validate(input)?;
     let id = Uuid::new_v4();
     let now = Utc::now();
@@ -268,16 +330,26 @@ async fn create_postgres(
         .ok_or(ProjectCostError::Invalid(
             "Project is not mirrored to PostgreSQL",
         ))?;
+    // Every insert locks the Project before probing the source, including
+    // Mercury imports, so concurrent posting paths cannot double-charge it.
+    let source_taken = match find_source(&mut *tx, project_id, &input.source_reference).await? {
+        Some(cost) if skip_existing_source => return Ok((cost, false)),
+        Some(_) => true,
+        None => false,
+    };
     let existing = sqlx::query("SELECT id,project_id,occurred_on,payee,description,amount_cents,currency,amount_status,billing_status,receipt_document_id,source_reference,xero_invoice_id,inserted_at,updated_at FROM project_costs WHERE project_id=$1 AND idempotency_key=$2 FOR UPDATE")
         .bind(project_id).bind(input.idempotency_key.trim()).fetch_optional(&mut *tx).await?.as_ref().map(from_row).transpose()?;
     if let Some(cost) = existing {
         let payload: Option<(sqlx::types::Json<serde_json::Value>,)> = sqlx::query_as("SELECT after_state->'request' FROM project_cost_events WHERE project_cost_id=$1 AND event_kind='created' ORDER BY occurred_at,id LIMIT 1")
             .bind(cost.id).fetch_optional(&mut *tx).await?;
         return if payload.is_some_and(|(stored,)| stored.0 == desired) {
-            Ok(cost)
+            Ok((cost, false))
         } else {
             Err(ProjectCostError::Conflict)
         };
+    }
+    if source_taken {
+        return Err(ProjectCostError::SourceTaken);
     }
     set_audit_context(&mut tx, actor_id, "created", None).await?;
     let result = sqlx::query("INSERT INTO project_costs(id,project_id,occurred_on,payee,description,amount_cents,currency,amount_status,billing_status,receipt_document_id,source_reference,idempotency_key,idempotency_payload,inserted_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'unbilled',$9,$10,$11,$12,$13,$13)")
@@ -291,7 +363,7 @@ async fn create_postgres(
         return Err(ProjectCostError::Database(error));
     }
     tx.commit().await?;
-    fetch(pg, id).await
+    fetch(pg, id).await.map(|cost| (cost, true))
 }
 
 /// Confirm a pending amount. The prior amount and state remain in the event log.
@@ -508,10 +580,18 @@ pub async fn find_by_source_reference(
     project_id: Uuid,
     source_reference: &str,
 ) -> Result<Option<ProjectCost>, ProjectCostError> {
-    sqlx::query("SELECT id,project_id,occurred_on,payee,description,amount_cents,currency,amount_status,billing_status,receipt_document_id,source_reference,xero_invoice_id,inserted_at,updated_at FROM project_costs WHERE project_id=$1 AND source_reference=$2")
+    find_source(&pg.0, project_id, source_reference).await
+}
+
+async fn find_source<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
+    project_id: Uuid,
+    source_reference: &str,
+) -> Result<Option<ProjectCost>, ProjectCostError> {
+    sqlx::query("SELECT id,project_id,occurred_on,payee,description,amount_cents,currency,amount_status,billing_status,receipt_document_id,source_reference,xero_invoice_id,inserted_at,updated_at FROM project_costs WHERE project_id=$1 AND source_reference=$2 ORDER BY inserted_at,id LIMIT 1")
         .bind(project_id)
         .bind(source_reference)
-        .fetch_optional(&pg.0)
+        .fetch_optional(executor)
         .await?
         .as_ref()
         .map(from_row)

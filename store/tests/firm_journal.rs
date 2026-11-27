@@ -91,6 +91,99 @@ async fn entity(db: &store::application_store::ApplicationStore) -> Uuid {
     .id
 }
 
+#[tokio::test]
+async fn filed_receipts_post_one_confirmed_unbilled_cost_per_transaction() {
+    use store::{documents, project_costs as costs};
+
+    store::test_support::with_postgres(async {
+        let pg = PostgresDb::application().await.unwrap();
+        let db = store::application_store::ApplicationStore::uninitialized();
+        let firm = firm(&db).await;
+        let actor = store::firms::memberships_for_firm(&db, firm).await.unwrap()[0].person_id;
+        let project = store::projects::create(
+            &db,
+            &store::projects::NewProject {
+                code: format!("expense-{}", Uuid::now_v7().simple()),
+                name: "Synthetic expense Project".into(),
+                status: "open".into(),
+                entity_id: entity(&db).await,
+                brand: project_brand(&db, firm).await,
+                firm_id: Some(firm),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .id;
+        let tmp = tempfile::tempdir().unwrap();
+        let storage: std::sync::Arc<dyn cloud::StorageService> = std::sync::Arc::new(
+            cloud::FsStorage::new(tmp.path().to_path_buf())
+                .await
+                .unwrap(),
+        );
+        let source = costs::mercury_source_reference(Uuid::now_v7());
+        let identity = documents::DocumentIdentity {
+            metadata: Some(serde_json::json!({"receipt": {
+                "amount_cents": 845,
+                "currency": "USD",
+                "payee": "Synthetic postal vendor",
+                "category": "certified_mail_and_postage",
+                "transaction_id": source,
+            }})),
+            ..Default::default()
+        };
+        let mut receipts = Vec::new();
+        for filename in ["receipt.txt", "receipt-copy.txt"] {
+            let filed = documents::ingest_bytes_as(
+                &db,
+                &storage,
+                &documents::IngestArgs {
+                    project_id: project,
+                    source: "upload",
+                    filename,
+                    kind: "receipt",
+                    content_type: "text/plain",
+                    description: None,
+                    secondary_storage_key: None,
+                    visibility: documents::visibility::INTERNAL,
+                },
+                &identity,
+                filename.as_bytes(),
+            )
+            .await
+            .unwrap();
+            receipts.push(filed.asset_id);
+        }
+        assert!(costs::list_for_project(&pg, project)
+            .await
+            .unwrap()
+            .is_empty());
+
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 10, 1).unwrap();
+        let post = |receipt| costs::create_from_receipt(&db, &pg, project, actor, receipt, date);
+        let (first, second) = tokio::join!(post(receipts[0]), post(receipts[1]));
+        let (first, created_first) = first.unwrap();
+        let (second, created_second) = second.unwrap();
+        assert_ne!(created_first, created_second);
+        assert_eq!(first, second);
+        assert_eq!(first.occurred_on, date);
+        assert_eq!(first.payee, "Synthetic postal vendor");
+        assert_eq!(first.description, "Certified mail and postage");
+        assert_eq!(first.amount_cents, 845);
+        assert_eq!(first.currency, "USD");
+        assert_eq!(first.amount_status, "confirmed");
+        assert_eq!(first.billing_status, "unbilled");
+        assert_eq!(first.source_reference.as_deref(), Some(source.as_str()));
+        assert_eq!(post(receipts[0]).await.unwrap(), (first.clone(), false));
+        assert_eq!(costs::list_events(&pg, first.id).await.unwrap().len(), 1);
+        assert_eq!(
+            costs::list_for_project(&pg, project).await.unwrap(),
+            [first]
+        );
+    })
+    .await;
+}
+
 #[test]
 fn exact_units_never_balance_unlike_assets_or_accept_overprecision() {
     assert_eq!(parse_decimal("0.000000000000000001", 18).unwrap(), "1");

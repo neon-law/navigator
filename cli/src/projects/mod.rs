@@ -15,6 +15,7 @@
 pub(crate) mod calendar;
 pub mod cli_docs;
 pub mod communication;
+pub mod cost;
 pub mod deadline;
 pub mod deadline_brief;
 pub mod deadline_proposal;

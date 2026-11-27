@@ -1097,6 +1097,11 @@ pub enum ProjectsCmd {
         #[command(subcommand)]
         action: FinanceCmd,
     },
+    /// Post receipt-backed Project Costs.
+    Cost {
+        #[command(subcommand)]
+        action: projects::cost::CostCmd,
+    },
     /// Open the onboarding letter for this Project, deriving its code and client from navigator.yaml.
     Onboard {
         #[command(flatten)]
@@ -3374,6 +3379,7 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
                 host,
             } => projects::finance::show(host.host.as_deref(), project_code.as_deref(), json).await,
         },
+        ProjectsCmd::Cost { action } => projects::cost::run(action).await,
         ProjectsCmd::Onboard {
             host,
             answers_from,

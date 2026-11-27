@@ -3117,8 +3117,26 @@ fn canonical_document(base: &str) -> Value {
             "summary": "Record a receipt-backed Project cost",
             "description": "Creates one Project cost and an immutable creation audit event. The receipt must be a live Document on the same Project; internal receipts are allowed for lawyers, but clients see the cost only while the receipt is client-visible. Replaying the same idempotency_key and content returns the original row; changed content conflicts. Authorization: lawyer tier and Project participation.",
             "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
-            "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["occurred_on", "payee", "description", "amount_cents", "currency", "amount_status", "receipt_document_id", "idempotency_key"], "properties": { "occurred_on": { "type": "string", "format": "date" }, "payee": { "type": "string" }, "description": { "type": "string" }, "amount_cents": { "type": "integer", "minimum": 1 }, "currency": { "type": "string", "pattern": "^[A-Z]{3}$" }, "amount_status": { "type": "string", "enum": ["estimated", "confirmed"] }, "receipt_document_id": { "type": "string", "format": "uuid" }, "idempotency_key": { "type": "string" } } } } } },
-            "responses": { "401": { "description": "Authenticated session required" }, "403": { "description": "Lawyer tier required" }, "404": { "description": "No such Project or the caller does not participate" }, "201": { "description": "Stored cost", "content": { "application/json": { "schema": { "type": "object" } } } }, "409": { "description": "Idempotency conflict or receipt already recorded", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "422": { "description": "Invalid cost or receipt", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } } }
+            "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["occurred_on", "payee", "description", "amount_cents", "currency", "amount_status", "receipt_document_id", "idempotency_key", "source_reference"], "properties": { "occurred_on": { "type": "string", "format": "date" }, "payee": { "type": "string" }, "description": { "type": "string" }, "amount_cents": { "type": "integer", "minimum": 1 }, "currency": { "type": "string", "pattern": "^[A-Z]{3}$" }, "amount_status": { "type": "string", "enum": ["estimated", "confirmed"] }, "receipt_document_id": { "type": "string", "format": "uuid" }, "idempotency_key": { "type": "string" }, "source_reference": { "type": "string", "description": "Canonical Mercury transaction reference (mercury::<transaction-id>)" } } } } } },
+            "responses": { "401": { "description": "Authenticated session required" }, "403": { "description": "Lawyer tier required" }, "404": { "description": "No such Project or the caller does not participate" }, "201": { "description": "Stored cost", "content": { "application/json": { "schema": { "type": "object" } } } }, "409": { "description": "Idempotency conflict, receipt already recorded, or source transaction already recorded", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "422": { "description": "Invalid cost or receipt", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } } }
+          }
+        },
+        "/app/api/projects/{id}/costs/from-receipt": {
+          "post": {
+            "summary": "Post a confirmed Project cost from a filed Receipt Document",
+            "description": "Copies expense details from the live Receipt Document on the same Project and uses its canonical Mercury transaction ID as the Cost Source Reference. An existing cost for that transaction is returned without a new row or audit event. Authorization requires the lawyer tier and firm-side Project participation.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["receipt_document_id", "occurred_on"], "properties": { "receipt_document_id": { "type": "string", "format": "uuid" }, "occurred_on": { "type": "string", "format": "date" } }, "additionalProperties": false } } } },
+            "responses": {
+              "200": { "description": "Existing cost for the source transaction", "content": { "application/json": { "schema": { "type": "object" } } } },
+              "201": { "description": "New confirmed, unbilled cost", "content": { "application/json": { "schema": { "type": "object" } } } },
+              "401": { "description": "Authenticated session required" },
+              "403": { "description": "Lawyer tier required" },
+              "404": { "description": "No such Project or no firm-side participation" },
+              "409": { "description": "Receipt already recorded for a different source transaction" },
+              "422": { "description": "Invalid charge date, receipt, or Mercury transaction ID" },
+              "503": { "description": "PostgreSQL is unavailable" }
+            }
           }
         },
         "/app/api/projects/{id}/costs/{cost_id}/confirm": {

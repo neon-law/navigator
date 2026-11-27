@@ -716,6 +716,11 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
         ),
         (
             "POST",
+            "/app/api/projects/{id}/costs/from-receipt",
+            post(crate::project_costs_api::create_from_receipt),
+        ),
+        (
+            "POST",
             "/app/api/projects/{id}/costs/{cost_id}/confirm",
             post(crate::project_costs_api::confirm),
         ),
