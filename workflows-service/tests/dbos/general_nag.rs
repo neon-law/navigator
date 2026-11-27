@@ -14,13 +14,23 @@ use workflows::{CapturingSlackBot, SlackBot, SlackBotError, SlackChannel, SlackM
 
 use crate::support::{database, APP_VERSION, DEADLINE};
 
+fn counts() -> Vec<store::projects::BrandOpenPitch> {
+    vec![store::projects::BrandOpenPitch {
+        brand: "Neon Law".to_owned(),
+        open: 3,
+        pitches: 1,
+    }]
+}
+
+const FOLLOWUP: &str = "Total open matters: 3, pitches: 1\n• Neon Law: 3 open, pitches: 1";
+
 #[derive(Clone)]
-struct FixedCounts((usize, usize));
+struct FixedCounts(Vec<store::projects::BrandOpenPitch>);
 
 #[async_trait::async_trait]
 impl CountSource for FixedCounts {
-    async fn read(&self) -> Result<(usize, usize), GeneralNagError> {
-        Ok(self.0)
+    async fn read(&self) -> Result<Vec<store::projects::BrandOpenPitch>, GeneralNagError> {
+        Ok(self.0.clone())
     }
 }
 
@@ -96,12 +106,12 @@ impl SlackBot for FailOnceBot {
 
 #[async_trait::async_trait]
 impl CountSource for HeldCounts {
-    async fn read(&self) -> Result<(usize, usize), GeneralNagError> {
+    async fn read(&self) -> Result<Vec<store::projects::BrandOpenPitch>, GeneralNagError> {
         if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
             self.reached.notify_one();
             std::future::pending::<()>().await;
         }
-        Ok((3, 1))
+        Ok(counts())
     }
 }
 
@@ -114,7 +124,7 @@ fn context(slack: Arc<dyn SlackBot>) -> Context {
         slack,
         channel_id: "C_GENERAL".to_owned(),
         simulated: true,
-        counts: Arc::new(FixedCounts((3, 1))),
+        counts: Arc::new(FixedCounts(counts())),
     }
 }
 
@@ -199,10 +209,7 @@ async fn a_real_deployment_posts_the_counts_followup_as_a_second_message() {
                 "C_GENERAL".to_owned(),
                 "Nobody Cares, Work Harder".to_owned()
             ),
-            (
-                "C_GENERAL".to_owned(),
-                "Total open matters: 3, pitches: 1".to_owned(),
-            ),
+            ("C_GENERAL".to_owned(), FOLLOWUP.to_owned(),),
         ]
     );
 }
@@ -276,7 +283,7 @@ async fn recovery_reuses_the_first_notice_checkpoint_and_finishes_the_counts_pos
     let recovered = dbos::DBOS::new(dbos_engine::config(&db.url, APP_VERSION));
     let mut ctx = context(Arc::new(bot.clone()));
     ctx.simulated = false;
-    ctx.counts = Arc::new(FixedCounts((3, 1)));
+    ctx.counts = Arc::new(FixedCounts(counts()));
     let _workflow = general_nag::register(&recovered, ctx).expect("register recovery");
     recovered.launch().await.expect("relaunch same version");
     let report = report_of(&recovered, &id).await;
@@ -290,10 +297,7 @@ async fn recovery_reuses_the_first_notice_checkpoint_and_finishes_the_counts_pos
                 "C_GENERAL".to_owned(),
                 "Nobody Cares, Work Harder".to_owned()
             ),
-            (
-                "C_GENERAL".to_owned(),
-                "Total open matters: 3, pitches: 1".to_owned(),
-            ),
+            ("C_GENERAL".to_owned(), FOLLOWUP.to_owned(),),
         ],
         "recovery must reuse the first step checkpoint",
     );

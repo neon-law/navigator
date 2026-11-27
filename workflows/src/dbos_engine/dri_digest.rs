@@ -11,9 +11,11 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use dbos::{CancellationToken, StepOptions, WorkflowHandle, WorkflowRef, DBOS};
 use serde::{Deserialize, Serialize};
-use store::projects::ProjectDriSummary;
+use store::projects::{BrandOpenPitch, ProjectDriSummary};
 
 pub use crate::dri_digest::dri_digest_message;
+use crate::dri_digest::{open_matters_message, slack_firm_open_pitch_counts};
+use crate::firm_slack::{DeploymentSlackFirm, SLACK_FIRM_ENV};
 use crate::Notifier;
 
 pub const WORKFLOW: &str = "DriDigest";
@@ -44,10 +46,10 @@ pub enum DriDigestError {
 #[async_trait::async_trait]
 pub trait DriDigestSource: Send + Sync {
     async fn projects(&self) -> Result<Vec<ProjectDriSummary>, DriDigestError>;
-    async fn open_pitch_counts(&self) -> Result<(usize, usize), DriDigestError>;
+    async fn open_pitch_counts(&self) -> Result<Vec<BrandOpenPitch>, DriDigestError>;
 }
 
-struct SurrealDriDigestSource(store::surreal::SurrealDb);
+struct SurrealDriDigestSource(store::surreal::SurrealDb, DeploymentSlackFirm);
 
 #[async_trait::async_trait]
 impl DriDigestSource for SurrealDriDigestSource {
@@ -57,8 +59,8 @@ impl DriDigestSource for SurrealDriDigestSource {
             .map_err(|_| DriDigestError::Projects)
     }
 
-    async fn open_pitch_counts(&self) -> Result<(usize, usize), DriDigestError> {
-        store::projects::matter_open_pitch_counts(&self.0)
+    async fn open_pitch_counts(&self) -> Result<Vec<BrandOpenPitch>, DriDigestError> {
+        slack_firm_open_pitch_counts(&self.0, self.1)
             .await
             .map_err(|_| DriDigestError::Counts)
     }
@@ -67,6 +69,7 @@ impl DriDigestSource for SurrealDriDigestSource {
 struct ApplicationDriDigestSource {
     surreal: store::surreal::SurrealDb,
     postgres: store::postgres::PostgresDb,
+    firm: DeploymentSlackFirm,
 }
 
 #[async_trait::async_trait]
@@ -80,10 +83,10 @@ impl DriDigestSource for ApplicationDriDigestSource {
         .map_err(|_| DriDigestError::Projects)?
         .map_err(|_| DriDigestError::Projects)
     }
-    async fn open_pitch_counts(&self) -> Result<(usize, usize), DriDigestError> {
+    async fn open_pitch_counts(&self) -> Result<Vec<BrandOpenPitch>, DriDigestError> {
         store::postgres::PostgresDb::with_application_db(
             self.postgres.clone(),
-            store::projects::matter_open_pitch_counts(&self.surreal),
+            slack_firm_open_pitch_counts(&self.surreal, self.firm),
         )
         .await
         .map_err(|_| DriDigestError::Counts)?
@@ -107,7 +110,11 @@ impl Context {
         simulated: bool,
     ) -> Self {
         Self::with_source(
-            Arc::new(ApplicationDriDigestSource { surreal, postgres }),
+            Arc::new(ApplicationDriDigestSource {
+                surreal,
+                postgres,
+                firm: DeploymentSlackFirm::DefaultBrand,
+            }),
             notifier,
             simulated,
         )
@@ -126,9 +133,11 @@ impl Context {
     where
         F: Fn(&str) -> Option<String>,
     {
+        let firm = DeploymentSlackFirm::from_lookup(&lookup)
+            .map_err(|_| super::SettingsError::Invalid(SLACK_FIRM_ENV))?;
         let channel = super::required_channel(lookup, "SLACK_GENERAL_CHANNEL_ID")?;
         Ok(Self {
-            source: Arc::new(SurrealDriDigestSource(surreal)),
+            source: Arc::new(SurrealDriDigestSource(surreal, firm)),
             notifier: Arc::new(crate::notify::ChannelNotifier::new(bot, channel)),
             simulated,
         })
@@ -208,7 +217,7 @@ pub fn register(dbos: &DBOS, context: Context) -> dbos::Result<DriDigestWorkflow
 
             if !context.simulated {
                 let source = Arc::clone(&context.source);
-                let (open, pitches) = dbos::step("counts", move || {
+                let brands = dbos::step("counts", move || {
                     let source = Arc::clone(&source);
                     async move {
                         source
@@ -219,7 +228,7 @@ pub fn register(dbos: &DBOS, context: Context) -> dbos::Result<DriDigestWorkflow
                 })
                 .await?;
                 let notifier = Arc::clone(&context.notifier);
-                let followup = format!("Total open matters: {open}, pitches: {pitches}");
+                let followup = open_matters_message(&brands);
                 dbos::step_with(
                     "notify_counts",
                     StepOptions {
@@ -400,9 +409,11 @@ mod tests {
                 .await
                 .unwrap();
             }
+            let slack_firm = crate::firm_slack::DeploymentSlackFirm::Configured(firm);
             let source = super::ApplicationDriDigestSource {
                 surreal: surreal.clone(),
                 postgres: pg.clone(),
+                firm: slack_firm,
             };
             let rows = source.projects().await.unwrap();
             assert_eq!(rows.len(), 2);
@@ -412,10 +423,16 @@ mod tests {
             let unassigned = rows.iter().find(|row| row.code == unassigned.code).unwrap();
             assert!(unassigned.lawyer_dris.is_empty());
             assert!(unassigned.client_dris.is_empty());
-            assert_eq!(source.open_pitch_counts().await.unwrap(), (0, 0));
-            let strict_source = super::SurrealDriDigestSource(surreal);
+            // The Slack Firm's one Brand counts every matter not closed:
+            // the two open Projects and the archived one.
+            let open = |lines: Vec<store::projects::BrandOpenPitch>| {
+                assert_eq!(lines.len(), 1, "{lines:?}");
+                lines[0].open
+            };
+            assert_eq!(open(source.open_pitch_counts().await.unwrap()), 3);
+            let strict_source = super::SurrealDriDigestSource(surreal, slack_firm);
             assert_eq!(strict_source.projects().await.unwrap().len(), 2);
-            assert_eq!(strict_source.open_pitch_counts().await.unwrap(), (0, 0));
+            assert_eq!(open(strict_source.open_pitch_counts().await.unwrap()), 3);
             pg.pool().close().await;
             assert!(matches!(
                 source.projects().await,

@@ -233,9 +233,15 @@ async fn detached_native_handlers_use_captured_effects_and_the_owned_postgres_st
         let invoice = seed_invoice(&source, &providers).await;
         let nag = providers.general_nag(source.clone(), pg.clone());
         assert_eq!(
-            nag.counts.read().await.unwrap(),
-            (0, 0),
-            "foreign-brand counts stay excluded"
+            nag.counts
+                .read()
+                .await
+                .unwrap()
+                .iter()
+                .map(|line| line.open)
+                .sum::<usize>(),
+            0,
+            "another Firm's matters stay excluded"
         );
         let dri = providers.dri_digest(source.clone(), pg.clone());
         let reconcile = providers

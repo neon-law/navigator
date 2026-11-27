@@ -97,9 +97,9 @@ pub struct OpenMatter {
     pub line: MatterLine,
 }
 
-/// Open matters per line — the firm-scoped replacement for
-/// `store::projects::matter_open_pitch_counts`, which is hard-scoped to brand
-/// `"neon"`. A line absent from the result has no open matters.
+/// Open matters per line; `store::projects::matter_open_pitch_counts` splits
+/// a Firm's open matters per Brand instead. A line absent from the result has
+/// no open matters.
 ///
 /// # Errors
 ///

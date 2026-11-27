@@ -13,10 +13,20 @@ use workflows::{CapturingNotifier, Notifier, NotifyError};
 
 use crate::support::{database, APP_VERSION, DEADLINE};
 
+fn counts() -> Vec<store::projects::BrandOpenPitch> {
+    vec![store::projects::BrandOpenPitch {
+        brand: "Neon Law".to_owned(),
+        open: 3,
+        pitches: 1,
+    }]
+}
+
+const FOLLOWUP: &str = "Total open matters: 3, pitches: 1\n• Neon Law: 3 open, pitches: 1";
+
 #[derive(Clone)]
 struct FixedSource {
     projects: Vec<store::projects::ProjectDriSummary>,
-    counts: (usize, usize),
+    counts: Vec<store::projects::BrandOpenPitch>,
 }
 
 #[async_trait::async_trait]
@@ -25,8 +35,10 @@ impl DriDigestSource for FixedSource {
         Ok(self.projects.clone())
     }
 
-    async fn open_pitch_counts(&self) -> Result<(usize, usize), DriDigestError> {
-        Ok(self.counts)
+    async fn open_pitch_counts(
+        &self,
+    ) -> Result<Vec<store::projects::BrandOpenPitch>, DriDigestError> {
+        Ok(self.counts.clone())
     }
 }
 
@@ -42,12 +54,14 @@ impl DriDigestSource for HeldCounts {
         Ok(vec![project()])
     }
 
-    async fn open_pitch_counts(&self) -> Result<(usize, usize), DriDigestError> {
+    async fn open_pitch_counts(
+        &self,
+    ) -> Result<Vec<store::projects::BrandOpenPitch>, DriDigestError> {
         if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
             self.reached.notify_one();
             std::future::pending::<()>().await;
         }
-        Ok((3, 1))
+        Ok(counts())
     }
 }
 
@@ -80,7 +94,7 @@ fn project() -> store::projects::ProjectDriSummary {
 fn fixed_source() -> Arc<dyn DriDigestSource> {
     Arc::new(FixedSource {
         projects: vec![project()],
-        counts: (3, 1),
+        counts: counts(),
     })
 }
 
@@ -268,7 +282,7 @@ async fn recovery_reuses_the_project_and_digest_checkpoints_before_counts() {
     let recovered = dbos::DBOS::new(dbos_engine::config(&db.url, APP_VERSION));
     let source = Arc::new(FixedSource {
         projects: vec![project()],
-        counts: (3, 1),
+        counts: counts(),
     });
     let workflow = dri_digest::register(
         &recovered,
@@ -286,7 +300,7 @@ async fn recovery_reuses_the_project_and_digest_checkpoints_before_counts() {
     let notices = notifier.captured();
     assert_eq!(notices.len(), 2, "one digest and one counts follow-up");
     assert!(notices[0].contains("Project DRI digest"));
-    assert_eq!(notices[1], "Total open matters: 3, pitches: 1");
+    assert_eq!(notices[1], FOLLOWUP);
 }
 
 #[tokio::test]

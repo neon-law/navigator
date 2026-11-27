@@ -1,6 +1,8 @@
 //! Shared rendering for the nightly project DRI operations notice.
 
-use store::projects::ProjectDriSummary;
+use store::projects::{BrandOpenPitch, ProjectDriSummary};
+
+use crate::firm_slack::DeploymentSlackFirm;
 
 /// Render the nightly digest using the project code, status, and assigned DRI
 /// markers. The display name is intentionally omitted from this internal
@@ -22,6 +24,42 @@ pub fn dri_digest_message(projects: &[ProjectDriSummary], _simulated: bool) -> S
     out.trim_end().to_owned()
 }
 
+/// The nightly open-matters notice: the Slack Firm's total, then one line per
+/// Brand it owns.
+#[must_use]
+pub fn open_matters_message(brands: &[BrandOpenPitch]) -> String {
+    use std::fmt::Write as _;
+
+    let open: usize = brands.iter().map(|line| line.open).sum();
+    let pitches: usize = brands.iter().map(|line| line.pitches).sum();
+    let mut out = format!("Total open matters: {open}, pitches: {pitches}");
+    for line in brands {
+        let _ = write!(
+            out,
+            "\n• {}: {} open, pitches: {}",
+            line.brand, line.open, line.pitches
+        );
+    }
+    out
+}
+
+/// The open/pitch counts of every Brand the deployment's Slack Firm owns —
+/// the Firm whose channel reads the notice. No Slack Firm counts nothing.
+///
+/// # Errors
+/// The Firm lookup or the count read failed.
+pub async fn slack_firm_open_pitch_counts(
+    surreal: &store::surreal::SurrealDb,
+    firm: DeploymentSlackFirm,
+) -> Result<Vec<BrandOpenPitch>, String> {
+    let Some(firm_id) = firm.resolve(surreal).await.map_err(|e| e.to_string())? else {
+        return Ok(Vec::new());
+    };
+    store::projects::matter_open_pitch_counts(surreal, firm_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 fn names_or_none(names: &[String]) -> String {
     if names.is_empty() {
         "none".to_owned()
@@ -32,8 +70,26 @@ fn names_or_none(names: &[String]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::dri_digest_message;
-    use store::projects::ProjectDriSummary;
+    use super::{dri_digest_message, open_matters_message};
+    use store::projects::{BrandOpenPitch, ProjectDriSummary};
+
+    #[test]
+    fn open_matters_notice_totals_the_brands_then_lists_each() {
+        let line = |brand: &str, open, pitches| BrandOpenPitch {
+            brand: brand.into(),
+            open,
+            pitches,
+        };
+        assert_eq!(
+            open_matters_message(&[line("Neon Law", 3, 1), line("Same Day Legal", 0, 0)]),
+            "Total open matters: 3, pitches: 1\n• Neon Law: 3 open, pitches: 1\n\
+             • Same Day Legal: 0 open, pitches: 0"
+        );
+        assert_eq!(
+            open_matters_message(&[]),
+            "Total open matters: 0, pitches: 0"
+        );
+    }
 
     #[test]
     fn renders_both_dri_sides_and_omits_project_display_names() {
