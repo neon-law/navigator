@@ -153,6 +153,8 @@ pub struct InboxPage {
     pub title: String,
     pub rows: Vec<InboxRowView>,
     pub base_href: String,
+    #[serde(default)]
+    pub next_page_href: Option<String>,
     pub channel_filter: Option<String>,
     #[serde(default)]
     pub unread_only: bool,
@@ -1000,6 +1002,33 @@ async fn compose_action(role: ViewerRole) -> Option<String> {
         .map(|_| format!("{INBOX_PATH}/texts"))
 }
 
+#[cfg(feature = "server")]
+async fn intake_cursor() -> Result<Option<store::inbox::IntakeCursor>, ServerFnError> {
+    #[derive(serde::Deserialize)]
+    struct PageQuery {
+        after: Option<String>,
+    }
+    let after =
+        dioxus_fullstack_core::FullstackContext::extract::<axum::extract::Query<PageQuery>, _>()
+            .await
+            .map_err(|_| ServerFnError::new("invalid inbox page"))?
+            .0
+            .after;
+    after.as_deref().map(parse_intake_cursor).transpose()
+}
+
+#[cfg(feature = "server")]
+fn parse_intake_cursor(raw: &str) -> Result<store::inbox::IntakeCursor, ServerFnError> {
+    let invalid = || ServerFnError::new("invalid inbox page cursor");
+    let (date, id) = raw.split_once(',').ok_or_else(invalid)?;
+    Ok(store::inbox::IntakeCursor {
+        activity_at: chrono::DateTime::parse_from_rfc3339(date)
+            .map_err(|_| invalid())?
+            .to_utc(),
+        id: id.parse().map_err(|_| invalid())?,
+    })
+}
+
 /// Owner list.
 #[server]
 pub async fn owner_inbox_page() -> Result<InboxPage, ServerFnError> {
@@ -1020,32 +1049,46 @@ pub async fn owner_inbox_page() -> Result<InboxPage, ServerFnError> {
         .map_err(|error| ServerFnError::new(error.to_string()))?;
     let brand_filter = brand_filter.filter(|brand| brands.contains(brand));
     let brands = brand_options(&application_store, brands).await;
-    let scoped_rows = match brand_filter.as_deref() {
-        Some(brand) => store::inbox::list_intake_in_brand(&application_store, actor, brand).await,
-        None => store::inbox::list_intake(&application_store, actor).await,
-    }
+    let page = store::inbox::intake_page(
+        &application_store,
+        actor,
+        store::inbox::IntakeFilters {
+            brand: brand_filter.as_deref(),
+            channel: channel_filter.as_deref(),
+            direction: direction_filter.as_deref(),
+            unread_only,
+            attachments_only,
+            sent_only,
+            trash_only,
+        },
+        intake_cursor().await?,
+        50,
+    )
+    .await
     .map_err(|error| ServerFnError::new(error.to_string()))?;
-    let mut rows = scoped_rows
-        .into_iter()
-        .filter(|row| {
-            row.trashed == trash_only
-                && row_matches(
-                    row,
-                    channel_filter.as_deref(),
-                    brand_filter.as_deref(),
-                    unread_only,
-                    direction_filter.as_deref(),
-                    attachments_only,
-                    sent_only,
-                )
-        })
-        .collect::<Vec<_>>();
-    rows.sort_by_key(|row| std::cmp::Reverse(row.email_sent_at.unwrap_or(row.updated_at)));
+    let next_page_href = page.next.map(|next| {
+        let href = Filters {
+            channel: channel_filter.as_deref(),
+            brand: brand_filter.as_deref(),
+            direction: direction_filter.as_deref(),
+            unread: unread_only,
+            attachments: attachments_only,
+            sent: sent_only,
+            trash: trash_only,
+        }
+        .href(INBOX_PATH);
+        let cursor = format!("{},{}", next.activity_at.to_rfc3339(), next.id);
+        let cursor =
+            percent_encoding::utf8_percent_encode(&cursor, percent_encoding::NON_ALPHANUMERIC);
+        let separator = if href.contains('?') { '&' } else { '?' };
+        format!("{href}{separator}after={cursor}")
+    });
     let (logo, tokens_href, firm_name) = chrome().await;
     Ok(InboxPage {
         role,
         title: "Inbox".into(),
         base_href: INBOX_PATH.into(),
+        next_page_href,
         channel_filter,
         unread_only,
         brand_filter,
@@ -1059,7 +1102,8 @@ pub async fn owner_inbox_page() -> Result<InboxPage, ServerFnError> {
         project_client: None,
         project_tabs: Vec::new(),
         logged_communications_href: None,
-        rows: rows
+        rows: page
+            .rows
             .iter()
             .map(|row| row_view(row, format!("/app/inbox/{}", row.id)))
             .collect(),
@@ -1333,6 +1377,7 @@ pub async fn project_inbox_page() -> Result<InboxPage, ServerFnError> {
         role,
         title: format!("{} inbox", project.name),
         base_href: format!("/app/projects/{project_code}/inbox"),
+        next_page_href: None,
         channel_filter,
         unread_only,
         brand_filter,
@@ -1796,6 +1841,9 @@ fn inbox_list(
                         tbody { {items} }
                     }
                 }
+            }
+            if let Some(href) = page.next_page_href.as_ref() {
+                a { class: "nav-link", rel: "next", href: "{href}", "Next page" }
             }
         }
     }
@@ -2814,6 +2862,7 @@ mod tests {
             title: "Inbox".into(),
             rows,
             base_href: "/app/inbox".into(),
+            next_page_href: None,
             channel_filter: None,
             unread_only: false,
             brand_filter: None,

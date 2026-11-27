@@ -1450,6 +1450,7 @@ mod tests {
             ("20261126230000_allow_durable_object_cutover_without_capture.sql", include_str!("../postgres/migrations/20261126230000_allow_durable_object_cutover_without_capture.sql")),
             ("20261127010000_add_firm_drive_settings.sql", include_str!("../postgres/migrations/20261127010000_add_firm_drive_settings.sql")),
             ("20261127193400_deadline_scheduling.sql", include_str!("../postgres/migrations/20261127193400_deadline_scheduling.sql")),
+            ("20261127200000_index_inbox_message_order.sql", include_str!("../postgres/migrations/20261127200000_index_inbox_message_order.sql")),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());
