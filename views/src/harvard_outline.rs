@@ -700,10 +700,8 @@ pub fn unit_html(unit: &Unit) -> String {
         out.push_str("</span>\n");
     }
     if let Some(level) = unit.heading_level {
-        out.push_str(&format!(
-            "<h{level}>{}</h{level}>\n",
-            inline_html(&unit.markdown)
-        ));
+        use std::fmt::Write as _;
+        let _ = writeln!(out, "<h{level}>{}</h{level}>", inline_html(&unit.markdown));
     } else {
         out.push_str(&markdown::render_document(&unit.markdown));
     }

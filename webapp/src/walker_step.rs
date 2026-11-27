@@ -459,6 +459,7 @@ mod tests {
         let html = render(&view_with_person_candidates("", people));
         assert!(html.contains("Aquarius Lumen"), "{html}");
         assert!(html.contains("Gemini Hollow"), "{html}");
+        assert!(html.contains(r#"name="id""#), "{html}");
         // Not a bare text box: the picker is a select, not `type="text"`.
         assert!(!html.contains(r#"type="text""#), "{html}");
     }

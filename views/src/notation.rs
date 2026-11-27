@@ -86,6 +86,15 @@ pub fn render_filled_in_with_display(
 
 fn markdown_answer(value: &str) -> String {
     use std::fmt::Write;
+    // Preserve a URL that can safely occupy a CommonMark autolink.
+    if value
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || b":/.-_~?=&%#@+".contains(&byte))
+        && url::Url::parse(value)
+            .is_ok_and(|url| matches!(url.scheme(), "https" | "http") && url.has_host())
+    {
+        return value.to_owned();
+    }
     let mut escaped = String::new();
     for character in value.chars() {
         if character.is_ascii_punctuation() {
@@ -247,6 +256,16 @@ The retainer covers the project {{project_name}}.";
             html.contains("Hello &lt;Libra &amp; Co.&gt;."),
             "got: {html}"
         );
+    }
+
+    #[test]
+    fn a_resolved_portal_url_stays_a_clickable_markdown_autolink() {
+        let origin = "https://example.test/app/projects";
+        let html = render_filled_in(
+            "Sign in at <{{firm.portal_url}}>.",
+            &ctx(&[("firm.portal_url", origin)]),
+        );
+        assert!(html.contains(&format!("<a href=\"{origin}\">{origin}</a>")));
     }
 
     #[test]

@@ -3,7 +3,7 @@ use scraper::{Html, Selector};
 use std::collections::BTreeMap;
 use std::path::Path;
 
-const DOCUMENT: &str = r#"# Title
+const DOCUMENT: &str = "# Title
 
 ## Section
 
@@ -28,7 +28,7 @@ const DOCUMENT: &str = r#"# Title
 - [Link](https://example.test)
 
 {{client.signature}} {{firm.initials}} {{firm.date}}
-"#;
+";
 
 #[test]
 fn notation_markdown_surfaces_preserve_document_structure() {

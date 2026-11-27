@@ -44,7 +44,7 @@ fn render_document_events(src: &str, section: Option<impl Fn(usize) -> String>) 
                 Event::Start(mut tag) => {
                     match &mut tag {
                         Tag::Link { dest_url, .. } | Tag::Image { dest_url, .. } => {
-                            safe_destination(dest_url)
+                            safe_destination(dest_url);
                         }
                         _ => {}
                     }
